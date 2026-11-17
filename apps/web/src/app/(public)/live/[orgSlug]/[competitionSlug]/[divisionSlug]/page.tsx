@@ -24,7 +24,7 @@ import { publicScheduleCopy, publicSitsOutLines, publicWatchCopy } from "@/serve
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -119,6 +119,8 @@ export default async function DivisionHomePage({ params }: Props) {
   // `inTheField` filter on the entrants tab below: this page now holds
   // EVERYONE, and each consumer says which question it is asking.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
+  const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // Badge chips (v3/03 §5 + PROMPT-60): the entrant's own badge_url wins,
   // then team → club logo resolved by the view.
   const entrantLogos = Object.fromEntries(
@@ -327,7 +329,7 @@ export default async function DivisionHomePage({ params }: Props) {
                     dict={dict}
                     qualification={qualification}
                     rules={stage.table_rules}
-                    swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                    swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
                     stageKind={stage.kind}
                     locale={orgLocale}
                     tz={tz}

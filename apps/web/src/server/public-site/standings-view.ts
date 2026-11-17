@@ -626,11 +626,20 @@ export function rowMarkers(
   if (facts.joinedRound !== null) {
     const last = facts.joinedRound - 1;
     const missed = last <= 1 ? "1" : `1\u2013${last}`;
-    out.push({
-      kind: "late",
-      text: msg("table.marker.late", { round: facts.joinedRound }),
-      title: msg("table.marker.lateTitle", { round: facts.joinedRound, missed }),
-    });
+    // W5 T5b (X-CU-10, owner R24 pick 2 A): a round-robin late entrant's rounds are caught up, not unplayed - its own words.
+    out.push(
+      facts.catchUp === true
+        ? {
+            kind: "late",
+            text: msg("table.marker.joined", { round: facts.joinedRound }),
+            title: msg("table.marker.joinedTitle", { round: facts.joinedRound }),
+          }
+        : {
+            kind: "late",
+            text: msg("table.marker.late", { round: facts.joinedRound }),
+            title: msg("table.marker.lateTitle", { round: facts.joinedRound, missed }),
+          },
+    );
   }
   if (facts.byeRounds.length > 0) {
     const rounds = facts.byeRounds.join("/");

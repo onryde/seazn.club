@@ -16,6 +16,12 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),
 }));
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
+// W5 T5b: the ledger read is the one DB door the table-facts module opens; the league case below hands the page a ledger row.
+const loadRrLateJoins = vi.fn<(...a: unknown[]) => Promise<unknown[]>>(async () => []);
+vi.mock("@/server/public-site/table-row-facts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/public-site/table-row-facts")>()),
+  loadRrLateJoins: (...a: unknown[]) => loadRrLateJoins(...a),
+}));
 
 import { StandingsTable } from "@/components/public-site/standings-table";
 import type { PublicEntrant } from "@/server/public-site/data";
@@ -124,5 +130,43 @@ describe("public division page - a Swiss bye and a late join reach the standings
     const html = await standingsHtml([]);
     expect([...html.matchAll(/<th scope="row"/g)].length, "rows checked").toBe(3);
     expect(html).not.toContain("data-marker=");
+  });
+});
+
+// W5 T5b (X-CU-10): the same page, a LEAGUE stage - a late entrant's "Joined round N" reaches the table only if this page asks the ledger
+// (`loadRrLateJoins`) and hands the joins and every entrant's status on (`rowFactsFor`). The words are pinned beside the producer in
+// `public-site/__tests__/joined-round-marker.test.ts`; this pins that the page passes them at all (class 1: the inert seam).
+describe("public division page - a league's late entrant reads Joined round N while catch-up lines remain", () => {
+  const leagueData = (status: string) => {
+    const d = divisionData([
+      fixture("g1", 1, "rr-r1-c1-L1", "a", "b", win("a", "b")),
+      fixture("g2", 6, "rr-cu-r6-c1-L1", "c", "a", null),
+    ]);
+    (d.fixtures[1] as { status: string }).status = "scheduled";
+    d.stages = [{ id: "sw", division_id: "d1", seq: 1, kind: "league", name: "Table", status: "active", swiss_rounds: 0 }] as never;
+    d.entrants = [entrant("a", NAMES.a, 1), entrant("b", NAMES.b, 2), { ...entrant("c", NAMES.c, 3), status } as PublicEntrant];
+    return d;
+  };
+  const html = async (status: string) => {
+    getPublicDivision.mockResolvedValue(leagueData(status));
+    const root = await DivisionHomePage({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }) });
+    const tables = elements(root).filter((el) => el.type === StandingsTable);
+    expect(tables).toHaveLength(1);
+    return renderToStaticMarkup(tables[0]!);
+  };
+
+  it("the late row is marked, the others are not; a withdrawn late entrant is not", async () => {
+    loadRrLateJoins.mockResolvedValue([{ stageId: "sw", entrantId: "c", joinedRound: 3 }]);
+    const marked = await html("confirmed");
+    expect(loadRrLateJoins).toHaveBeenCalledWith("d1", expect.any(Array));
+    expect(nameCell(marked, NAMES.c)).toContain("Joined round 3");
+    expect(nameCell(marked, NAMES.a)).not.toContain("data-marker=");
+    expect(nameCell(marked, NAMES.b)).not.toContain("data-marker=");
+    expect(nameCell(await html("withdrawn"), NAMES.c), "the page hands the entrants' statuses on").not.toContain("Joined round");
+  });
+
+  it("empty case: no ledger row marks nobody", async () => {
+    loadRrLateJoins.mockResolvedValue([]);
+    expect(await html("confirmed")).not.toContain("data-marker=");
   });
 });

@@ -12,7 +12,7 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
@@ -87,6 +87,8 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // `patchEntrant` accepts it, so a disqualified entrant reached the standings
   // ranked among the competing and styled exactly like them.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
+  const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // PROMPT-60: the entrant's own badge_url wins over the team logo.
   const entrantLogos = Object.fromEntries(
     entrants.map((e) => [
@@ -244,7 +246,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               dict={dict}
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}
-              swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+              swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
               stageKind={stage.kind}
               locale={orgLocale}
               tz={tz}

@@ -11240,6 +11240,8 @@ export type DictionaryKey =
   | "table.level"
   | "table.marker.bye"
   | "table.marker.byeTitle"
+  | "table.marker.joined"
+  | "table.marker.joinedTitle"
   | "table.marker.late"
   | "table.marker.lateTitle"
   | "table.more"

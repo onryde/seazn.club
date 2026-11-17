@@ -125,7 +125,7 @@ import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
 import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
-import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
@@ -267,6 +267,8 @@ export default async function DivisionPage({
   // ranked among the competing and styled exactly like them.
   // `listEntrants` already selects `status`, so this costs no extra query.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
+  const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
   // delete, so these ids are still in `entrantNames` and in a ladder's
   // persisted order — which is exactly how a <select> came to offer a choice
@@ -1198,7 +1200,7 @@ export default async function DivisionPage({
                         dict={publicDict}
                         qualification={qualification}
                         rules={stageOrder(stage.id)}
-                        swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                        swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
                         stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}

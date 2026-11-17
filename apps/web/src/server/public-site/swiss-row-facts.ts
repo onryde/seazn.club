@@ -17,6 +17,9 @@ export interface SwissRowFacts {
   /** The first round this entrant played in, when it joined AFTER round 1 (rounds `1..joinedRound-1` are its absent rounds,
    *  unplayed); null for an entrant who was there from the start. */
   readonly joinedRound: number | null;
+  /** W5 T5b (X-CU-10, RB5-L5): a ROUND-ROBIN row's join, which reads "Joined round N" - the rounds before it are owed as catch-up
+   *  matches, not scored as losses. Set only by `tableRowFacts`; absent on a Swiss row, whose join reads "From R{N}". */
+  readonly catchUp?: boolean;
 }
 
 /** The columns of a fixture row this reads: `swissAbsentRounds`' own, plus the stage and the status (a voided bye is no bye). */

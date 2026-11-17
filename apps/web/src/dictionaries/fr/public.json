@@ -470,6 +470,8 @@
   "table.marker.byeTitle": "Exempt au tour {rounds} : pas d'adversaire à ce tour.",
   "table.marker.late": "Dès T{round}",
   "table.marker.lateTitle": "Arrivé au tour {round}. Les tours précédents ({missed}) comptent comme non joués.",
+  "table.marker.joined": "Arrivé au tour {round}",
+  "table.marker.joinedTitle": "Arrivé au tour {round}. Les tours précédents ne comptent pas comme des défaites : ils se jouent en matchs de rattrapage.",
   "table.region": "Classement",
   "table.regionCaptioned": "Classement : {caption}",
   "landing.tabsLabel": "Onglets de la compétition",

@@ -470,6 +470,8 @@
   "table.marker.byeTitle": "Descanso en la ronda {rounds}: sin rival en esa ronda.",
   "table.marker.late": "Desde R{round}",
   "table.marker.lateTitle": "Se incorporó en la ronda {round}. Las rondas anteriores ({missed}) cuentan como no jugadas.",
+  "table.marker.joined": "Se unió en la ronda {round}",
+  "table.marker.joinedTitle": "Se incorporó en la ronda {round}. Las rondas anteriores no cuentan como derrotas: se juegan como partidos de recuperación.",
   "table.region": "Clasificación",
   "table.regionCaptioned": "Clasificación: {caption}",
   "landing.tabsLabel": "Pestañas de la competición",

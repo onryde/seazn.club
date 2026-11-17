@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
 
 /**
  * Format matrix W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21) — the smoke proof, over real HTTP against a live
@@ -21,12 +21,15 @@ import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
  * appended rounds (6, 7) — and every earlier line stays as it was (main refused the add 422; Task 4's interim accepted it with no
  * seat). Undo across the add is then refused by name (RR_LATE_ENTRY_NOT_UNDOABLE) and moves nothing.
  *
+ * T5b (X-CU-10; RB5-L5): the same late player's row in the PUBLIC hub document reads "Joined round 3" while her catch-up lines are
+ * undecided (`tables[].rows[].markers`, read anonymously); main marked no league row at all.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
   // T2: 2 (4 -> 6 reconciles by pair; a 5-team league persists its byes). T3: 1 (Add match lands in the round both sides are free).
-  // T5: 2 (a late player's catch-up lines; Undo across the add refused by name).
-  const EXPECTED_CHECKS = 5;
+  // T5: 2 (a late player's catch-up lines; Undo across the add refused by name). T5b: 1 (her hub row reads Joined round 3).
+  const EXPECTED_CHECKS = 6;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -52,9 +55,9 @@ export async function w5RoundRobinASuite(): Promise<void> {
   type StageOut = { id: string; config: { round_byes?: { round_no: number; leg: number; entrant_id: string }[] } };
 
   /** A generic league of `n` entrants, generated once. */
-  async function league(label: string, n: number) {
+  async function league(label: string, n: number, compId: string | undefined = comp?.id) {
     const divId = v1data<{ id: string } | undefined>(
-      await v1(owner, `/api/v1/competitions/${comp?.id}/divisions`, "POST", {
+      await v1(owner, `/api/v1/competitions/${compId}/divisions`, "POST", {
         name: label,
         sport_key: "generic",
         variant_key: "score",
@@ -191,6 +194,38 @@ export async function w5RoundRobinASuite(): Promise<void> {
       "w5a X-CU-13: Undo across Add late player is refused 409 RR_LATE_ENTRY_NOT_UNDOABLE and moves nothing" +
         (okUndo ? "" : ` - status ${undo.status}, code ${code}, lines ${still.length}/${after.length}`),
       okUndo,
+    );
+  }
+
+  // Check 6 - X-CU-10 / RB5-L5: the late player's row in the public hub document reads "Joined round 3" while her catch-up lines remain.
+  {
+    const pub = v1data<{ id: string; slug: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A hub ${tag}`, visibility: "public" }),
+    );
+    const l = await league("Hub", 5, pub?.id);
+    const lines = await l.fixtures();
+    await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    for (const r of [1, 2]) {
+      await v1(owner, `/api/v1/fixtures/${lines.find((f) => f.round_no === r)?.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    }
+    const addRes = await v1(owner, `/api/v1/divisions/${l.divId}/entrants`, "POST", [{ kind: "individual", display_name: `Late hub ${tag}` }]);
+    const late = (v1data<{ id: string }[] | undefined>(addRes) ?? [])[0];
+    const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+    const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/hub`);
+    type HubRow = { entrantId: string; markers?: { kind: string; text: string }[] };
+    const tables = (v1data<{ tables?: { divisionId: string; rows: HubRow[] }[] } | undefined>(hubRes)?.tables ?? []).filter((t) => t.divisionId === l.divId);
+    const rows = tables[0]?.rows ?? [];
+    const mine = rows.find((r) => r.entrantId === late?.id);
+    const others = rows.filter((r) => r.entrantId !== late?.id);
+    const ok =
+      addRes.status === 201 && late !== undefined && orgSlug !== "" && hubRes.status === 200 && tables.length === 1 && rows.length === 6 &&
+      mine?.markers?.length === 1 && mine.markers[0]?.kind === "late" && mine.markers[0]?.text === "Joined round 3" &&
+      others.length === 5 && others.every((r) => (r.markers ?? []).length === 0);
+    w5Check(
+      "w5a X-CU-10: the public hub marks a late player's row 'Joined round 3' while her catch-up lines remain, and no other row" +
+        (ok ? "" : ` - add ${addRes.status}, hub ${hubRes.status}, tables ${tables.length}, rows ${rows.length}, hers ${JSON.stringify(mine?.markers ?? null)}, others marked ${others.filter((r) => (r.markers ?? []).length > 0).length}`),
+      ok,
     );
   }
 

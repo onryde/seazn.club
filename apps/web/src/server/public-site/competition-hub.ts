@@ -91,7 +91,7 @@ import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
 import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
-import { swissRowFactsFor } from "./swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "./table-row-facts";
 import { cachedIfFound } from "./cache-found";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
@@ -985,6 +985,10 @@ export async function loadCompetitionHub(
     // a forfeit is scored by are each STAGE's (W2d Task 9: `stage.table_rules`,
     // the one loader's). Called per table with that table's own snapshot,
     // which carries its pool.
+    // W5 T5b (X-CU-10): the late entrants of a league or group still catching up, read once per division (no read at all when no
+    // catch-up line exists), and every entrant's status so a departed one is never marked.
+    const lateJoins = await loadRrLateJoins(d.id, fixtures);
+    const rowFactStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
     const qualificationFor = divisionQualification({
       module_,
       division: d,
@@ -1024,8 +1028,9 @@ export async function loadCompetitionHub(
             rules: stage.table_rules ?? null,
             dateOf: (iso) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" }),
             swissRound,
-            // W3 app-B T3 (owner Q2): the bye / late-join marks of a Swiss table, from this stage's real fixtures.
-            swissFacts: swissRowFactsFor(stage, fixtures, snap.rows),
+            // W3 app-B T3 (owner Q2): the bye / late-join marks of a Swiss table, from this stage's real fixtures; W5 T5b: a
+            // league's or group's "Joined round N" while catch-up lines remain.
+            swissFacts: rowFactsFor(stage, fixtures, snap.rows, lateJoins, rowFactStatuses),
             // owner Q2 is the Swiss table: only a Swiss stage's ladders are spelled in the table's points format
             stageKind: stage.kind,
           }),

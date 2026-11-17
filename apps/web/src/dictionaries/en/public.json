@@ -470,6 +470,8 @@
   "table.marker.byeTitle": "Bye in round {rounds}: no opponent that round.",
   "table.marker.late": "From R{round}",
   "table.marker.lateTitle": "Joined in round {round}. Earlier rounds ({missed}) count as unplayed.",
+  "table.marker.joined": "Joined round {round}",
+  "table.marker.joinedTitle": "Joined in round {round}. The rounds before it are not counted as losses: they are played as catch-up matches.",
   "table.region": "Standings",
   "table.regionCaptioned": "Standings: {caption}",
   "landing.tabsLabel": "Competition tabs",

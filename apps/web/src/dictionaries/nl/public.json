@@ -470,6 +470,8 @@
   "table.marker.byeTitle": "Bye in ronde {rounds}: geen tegenstander in die ronde.",
   "table.marker.late": "Vanaf R{round}",
   "table.marker.lateTitle": "Doet mee vanaf ronde {round}. De eerdere rondes ({missed}) tellen als niet gespeeld.",
+  "table.marker.joined": "Aangesloten in ronde {round}",
+  "table.marker.joinedTitle": "Aangesloten in ronde {round}. De eerdere rondes tellen niet als verlies: ze worden ingehaald als inhaalwedstrijden.",
   "table.region": "Stand",
   "table.regionCaptioned": "Stand: {caption}",
   "landing.tabsLabel": "Tabbladen van de competitie",
