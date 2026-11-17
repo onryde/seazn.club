@@ -175,6 +175,16 @@ function feeCell(data: MatrixData, plan: PricingPlanKey): string {
 }
 
 /**
+ * The two org-wide counts a pass takes its competition OUT of (`liveUnpassedCompetition`, usecases/entitlement-freeze:
+ * a passed competition holds neither an active slot nor a public-dashboard slot). A pass has no row for either, so a
+ * bare number in its column would be Community's, and would read as "the pass buys nothing here".
+ */
+const PASSED_EVENT_FEATURES = ["competitions.max_active", "dashboard.public.max"] as const;
+type PassedEventFeature = (typeof PASSED_EVENT_FEATURES)[number];
+const isPassedEventFeature = (feature: string): feature is PassedEventFeature =>
+  (PASSED_EVENT_FEATURES as readonly string[]).includes(feature);
+
+/**
  * Quota semantics differ per offer: free counts active comps, a pass IS one
  * competition, Pro/Pro Plus have no cap — prose beats a bare number here.
  * The `pass` cell holds a `pricing.matrix.`-prefixed dict KEY (translated
@@ -182,10 +192,10 @@ function feeCell(data: MatrixData, plan: PricingPlanKey): string {
  * number, ∞, ✓ or —). The page distinguishes the two by that prefix before
  * calling `t()`.
  */
-function competitionsRow(data: MatrixData): PricingRow {
-  const cell = data["competitions.max_active"];
+function competitionsRow(data: MatrixData, feature: PassedEventFeature): PricingRow {
+  const cell = data[feature];
   return {
-    labelKey: "pricing.matrix.competitions.max_active",
+    labelKey: `pricing.matrix.${feature}`,
     // Both rungs read the prose cell: a pass IS one competition, at either
     // size. What L buys is a bigger event, never more of them.
     cells: cellsFor((plan) =>
@@ -277,7 +287,7 @@ function isEnterpriseOnlyFeature(data: MatrixData, feature: string): boolean {
 }
 
 function buildRow(data: MatrixData, feature: string): PricingRow {
-  if (feature === "competitions.max_active") return competitionsRow(data);
+  if (isPassedEventFeature(feature)) return competitionsRow(data, feature);
   if (feature === "orgs.max_owned") return orgsRow(data);
   // registration.paid is never rendered bare — it's folded with
   // registration.fee_percent into the honest "fees" row instead.

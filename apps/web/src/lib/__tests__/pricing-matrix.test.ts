@@ -49,6 +49,8 @@ const cell = (int: number | null = null, bool: boolean | null = null) => ({
  * now enforces the claim against `plan_entitlements` whenever a DB is present.
  */
 const DATA: MatrixData = {
+  // No pass row, like competitions.max_active: a passed competition holds no public-dashboard slot.
+  "dashboard.public.max": { community: cell(2), pro: cell(10) },
   "competitions.max_active": {
     // V393 (R6): community 10 -> 3. Still no pass row — a passed competition
     // leaves the ACTIVE COUNT (server/usecases/competitions.ts) instead of
@@ -263,6 +265,16 @@ describe("buildPricingSections — the /pricing pivot", () => {
       event_pass: "pricing.matrix.passedEvent",
       pro: "∞",
     });
+  });
+
+  it("renders the prose pass cell for dashboard.public.max too, never Community's number", () => {
+    // A passed competition holds no public-dashboard slot (liveUnpassedCompetition), so the pass column borrowing
+    // Community's 2 read as "the pass buys nothing here". The subscription columns keep their own counts.
+    const row = cells("pricing.matrix.dashboard.public.max");
+    expect(row.event_pass).toBe("pricing.matrix.passedEvent");
+    expect(row.community).toMatch(/^\d+$/);
+    expect(row.pro).toMatch(/^\d+$/);
+    expect(row.pro).not.toBe(row.community);
   });
 
   it("renders ∞ for unlimited ints, never the word Unlimited", () => {
