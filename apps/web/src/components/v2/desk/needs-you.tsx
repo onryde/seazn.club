@@ -224,6 +224,16 @@ export function needsYouItems(
             action: { label: t(dict, "roundrobin.lateUnplaced.action"), href: routes.division(org, comp, d.slug, "entrants") },
           });
           break;
+        // W5 T8b review I2 (b): a withdrawal that did not finish — named; "Open entrants" lands on the row whose Withdraw
+        // (or Disqualify) runs the cascade again from the lines as they stand.
+        case "withdrawal_owed":
+          items.push({
+            key: needsYouKey(d.id, "withdrawal_owed"), severity: sev, kind: a.kind,
+            title: plural(dict, "withdrawal.owed", a.count, locale),
+            sub: t(dict, "withdrawal.owed.sub", { division: d.name, names: a.names.join(", ") }),
+            action: { label: t(dict, "withdrawal.owed.action"), href: routes.division(org, comp, d.slug, "entrants") },
+          });
+          break;
         // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own
         // Complete stage — its label is that button's key, so the row and the button it points at cannot drift.
         case "final_decided":

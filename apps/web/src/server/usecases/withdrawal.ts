@@ -738,19 +738,95 @@ export async function withdrawEntrantCascade(
  * Best-effort, like the table stale call after a score: the forfeit stands whatever happens here. A cascade that throws is
  * logged; she is still in the field (the cascade writes her status last), so the organiser's Disqualify finishes it.
  */
-export async function disqualifyFromMatch(auth: AuthCtx, fixtureId: string, by: unknown): Promise<WithdrawCascadeOut | null> {
+/**
+ * W5 T8b review I2 (a): how long after its triggering write (a registration's `withdrawn_at`, a disqualifying forfeit's
+ * `recorded_at`) a RETRY of that write may run the withdrawal again for an entrant still in the field. The cascade takes no
+ * lock, so a retry racing the first attempt (a double POST, a lost-ack resend) would run a second cascade beside it; those
+ * arrive within seconds, while a cascade that genuinely failed is still owed a minute later. Past the window the retry runs
+ * it; within it the retry answers as before. The desk's "withdrawal owed" item names her either way.
+ */
+export const CASCADE_RETRY_AFTER_MS = 60_000;
+
+/**
+ * W5 T8b review I2: has a withdrawal cascade for this entrant left its trace since `at` (the trigger: a registration withdrawn
+ * after Start, a disqualifying forfeit)? Its own events on her lines — an expunge abandon, her `withdrew` walkover — active or
+ * since voided, or a `table_withdrawal` ledger row about her (its `_voided` twin is a Reinstate's). The ONE reading of "the
+ * withdrawal this trigger owed has run", for the desk's "withdrawal did not finish" row and for both retries: a cascade that
+ * finished and was then undone by Reinstate leaves its trace, so a reinstated entrant is never read as owed — and a retry never
+ * withdraws her again over the organiser's Reinstate.
+ */
+export async function cascadeTraceSince(tx: Tx, divisionId: string, entrantId: string, at: Date): Promise<boolean> {
+  const [row] = await tx<{ hit: boolean }[]>`
+    select exists (select 1 from score_events ev join fixtures f on f.id = ev.fixture_id
+                    where f.division_id = ${divisionId} and ${entrantId} in (f.home_entrant_id, f.away_entrant_id)
+                      and ev.recorded_at >= ${at}
+                      and ((ev.type = 'core.abandon' and ev.payload ->> 'expunge' = 'true')
+                        or (ev.type = 'core.forfeit' and ev.payload ->> 'reason' = ${REASON} and ev.payload ->> 'by' = ${entrantId})))
+        or exists (select 1 from division_events de
+                    where de.division_id = ${divisionId} and de.type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})
+                      and de.payload ->> 'entrant_id' = ${entrantId} and de.created_at >= ${at}) as hit`;
+  return row?.hit === true;
+}
+
+/** The refusal an organiser's (or a scorer's) Undo of a disqualifying forfeit meets while the disqualification stands. */
+export const UNDO_DQ_USE_REINSTATE = "UNDO_DQ_USE_REINSTATE";
+
+/**
+ * W5 T8b review I1: voiding a `core.forfeit{reason: "disqualified"}` on a table stage while its entrant is departed would
+ * re-open the match and leave the withdrawal it ran in place — she stays disqualified, her other lines stay settled. So it is
+ * refused (409 UNDO_DQ_USE_REINSTATE) and Reinstate is the undo: it reverses the cascade (RB5-W6), after which this void is
+ * allowed again. A disqualifying forfeit whose entrant is still in the field (its cascade failed, see `disqualifyFromMatch`)
+ * voids as any forfeit does; a bracket's disqualifying forfeit is W4's own and is not touched here.
+ */
+export async function assertDisqualificationUndoable(auth: AuthCtx, fixtureId: string, payload: unknown): Promise<void> {
+  const eventId = (payload as { event_id?: unknown } | null)?.event_id;
+  if (typeof eventId !== "string") return; // assertUndoTarget has already refused it
+  const [target] = await withTenant(auth.orgId, (tx) =>
+    tx<{ kind: string; status: string | null }[]>`
+      select s.kind, (select en.status from entrants en where en.id::text = e.payload ->> 'by') as status
+        from score_events e
+        join fixtures f on f.id = e.fixture_id
+        join stages s on s.id = f.stage_id
+       where e.id = ${eventId} and e.fixture_id = ${fixtureId}
+         and e.type = 'core.forfeit' and e.payload ->> 'reason' = 'disqualified'`,
+  );
+  if (target === undefined || !TABLE_KINDS.has(target.kind)) return;
+  if (target.status !== null && DEPARTED_STATUSES.has(target.status)) {
+    throw new HttpError(409, "This disqualification withdrew them from the stage - use Reinstate to undo it", UNDO_DQ_USE_REINSTATE);
+  }
+}
+
+export async function disqualifyFromMatch(
+  auth: AuthCtx,
+  fixtureId: string,
+  by: unknown,
+  opts: { retry?: boolean } = {},
+): Promise<WithdrawCascadeOut | null> {
   if (typeof by !== "string") return null;
   try {
     const [line] = await withTenant(auth.orgId, (tx) =>
-      tx<{ kind: string; home: string | null; away: string | null; entrant_status: string | null }[]>`
-        select s.kind, f.home_entrant_id as home, f.away_entrant_id as away,
-               (select e.status from entrants e where e.id = ${by}) as entrant_status
+      tx<{ kind: string; division_id: string; home: string | null; away: string | null; entrant_status: string | null; forfeit_at: Date | null }[]>`
+        select s.kind, f.division_id, f.home_entrant_id as home, f.away_entrant_id as away,
+               (select e.status from entrants e where e.id = ${by}) as entrant_status,
+               (select max(ev.recorded_at) from score_events ev
+                 where ev.fixture_id = f.id and ev.type = 'core.forfeit'
+                   and ev.payload ->> 'reason' = 'disqualified' and ev.payload ->> 'by' = ${by}
+                   and not exists (select 1 from score_events v where v.fixture_id = ev.fixture_id and v.voids_event_id = ev.id)) as forfeit_at
           from fixtures f join stages s on s.id = f.stage_id
          where f.id = ${fixtureId}`,
     );
     if (line === undefined || !TABLE_KINDS.has(line.kind)) return null;
     if (by !== line.home && by !== line.away) return null;
     if (line.entrant_status === null || DEPARTED_STATUSES.has(line.entrant_status)) return null;
+    // Review I2: only a disqualification that stands is owed a withdrawal (a replay of one since undone is not).
+    if (line.forfeit_at === null) return null;
+    // Review I2 (a): a replayed write retries a cascade still owed — once the first attempt has had its window to finish.
+    if (opts.retry === true) {
+      if (Date.now() - line.forfeit_at.getTime() < CASCADE_RETRY_AFTER_MS) return null;
+      // A cascade that ran (and a Reinstate since undid) is not owed again: the organiser's Reinstate stands.
+      const forfeitAt = line.forfeit_at;
+      if (await withTenant(auth.orgId, (tx) => cascadeTraceSince(tx, line.division_id, by, forfeitAt))) return null;
+    }
     return await withdrawEntrantCascade(cascadeAuthFor(auth.orgId, auth.userId), by, { as: "disqualified" });
   } catch (err) {
     log.error(

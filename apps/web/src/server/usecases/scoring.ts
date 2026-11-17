@@ -190,6 +190,15 @@ export async function scoreEvent(
   // forever. Hence a SECOND, far more generous ceiling on the replay branch
   // only; the write path below is untouched.
   const cacheKey = input.idempotency_key ? idemKey(fixtureId, input.idempotency_key) : null;
+  // W5 T8b review I2 (a): a replayed disqualifying forfeit (the write landed, its answer was lost) retries a withdrawal its
+  // first attempt did not finish — `disqualifyFromMatch` with `retry`, idempotent (a departed entrant is left alone) and held
+  // back inside the retry window. Every replay exit below passes through it.
+  const isDqForfeit =
+    opts.writer === undefined && input.type === "core.forfeit" && (input.payload as { reason?: unknown } | null)?.reason === "disqualified";
+  const retryOwedDq = async (answer: ScoreOutcome): Promise<ScoreOutcome> => {
+    if (isDqForfeit) await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by, { retry: true });
+    return answer;
+  };
   if (cacheKey) {
     const replay = await cacheGet<ScoreOutcome>(cacheKey);
     if (replay) {
@@ -200,7 +209,7 @@ export async function scoreEvent(
       // Best-effort: the overlay only ENRICHES an answer the pad already has, and the cache fails open for the same reason
       // (a retry must not be refused because a backing store is down). A read that rejects keeps the cached answer.
       const now = await rulesVersionNow(auth.orgId, fixtureId).catch(() => null);
-      return now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }; // same answer, no double write
+      return retryOwedDq(now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }); // same answer, no double write
     }
   }
 
@@ -214,7 +223,7 @@ export async function scoreEvent(
   if (carriedReplay) {
     await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
     if (cacheKey) await cacheSet(cacheKey, carriedReplay, IDEM_TTL_SECONDS);
-    return carriedReplay;
+    return retryOwedDq(carriedReplay);
   }
 
   // Engine-split D15/D26/D31: a client whose fold epoch for this sport is BEHIND the server's would fold the ledger it
@@ -228,7 +237,7 @@ export async function scoreEvent(
   const answerReplay = async (replayed: ScoreOutcome): Promise<ScoreOutcome> => {
     await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
     if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
-    return replayed;
+    return retryOwedDq(replayed);
   };
   const clientEpoch = input.engine_epoch;
   if (clientEpoch !== undefined && sport !== null) {
@@ -245,6 +254,9 @@ export async function scoreEvent(
       if (replayed) return answerReplay(replayed);
     }
     await assertUndoTarget(auth, fixtureId, input);
+    // W5 T8b review I1: an Undo of the forfeit that disqualified her from the table, while that disqualification stands, is
+    // refused — the withdrawal it ran is undone by Reinstate, never by voiding its trigger. A cascade's own voids are exempt.
+    if (opts.writer === undefined) await (await import("./withdrawal")).assertDisqualificationUndoable(auth, fixtureId, input.payload);
   }
 
   let result;
@@ -313,7 +325,7 @@ export async function scoreEvent(
         // effort by design: cacheSet is a no-op without Redis, and the ledger
         // answer above does not depend on it.
         if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
-        return replayed;
+        return retryOwedDq(replayed);
       }
     }
     // SEQ_CONFLICT is the hot recovery path and carries no ids — skip it.
@@ -406,7 +418,7 @@ export async function scoreEvent(
   // W5 T8b (X-WDT-10, X-RT-1; ruling 289): an in-match disqualification withdraws the entrant from the stage — after the forfeit
   // committed and was published, best-effort (`disqualifyFromMatch` never throws). Never for a cascade's own write (`writer`).
   // A dynamic import: withdrawal.ts imports this module.
-  if (opts.writer === undefined && input.type === "core.forfeit" && (input.payload as { reason?: unknown } | null)?.reason === "disqualified") {
+  if (isDqForfeit) {
     await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by);
   }
   return out;

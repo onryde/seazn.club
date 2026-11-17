@@ -139,12 +139,35 @@ async function settleStartedWithdrawal(
   }
 }
 
+/**
+ * W5 T8b review I2 (a): a withdrawal POSTed again (the registrant's retry, the organiser's) for a registration already
+ * withdrawn after Start runs the table withdrawal its first attempt did not finish — the entrant still in the field — once the
+ * retry window has passed (`CASCADE_RETRY_AFTER_MS`: a double POST arrives inside it and must not run a second cascade beside
+ * the first, which takes no lock). Anything else is the idempotent no-op it always was.
+ */
+async function retryOwedWithdrawal(regId: string, divisionId: string, actorId: string | null, by: WithdrawnBy): Promise<void> {
+  const [{ CASCADE_RETRY_AFTER_MS, cascadeTraceSince }, { DEPARTED_STATUSES }] = await Promise.all([import("../withdrawal"), import("../entrants")]);
+  const [row] = await sql<{ entrant_id: string; withdrawn_at: Date | null; entrant_status: string }[]>`
+    select r.entrant_id, r.withdrawn_at, e.status as entrant_status
+      from registrations r join entrants e on e.id = r.entrant_id
+     where r.id = ${regId} and r.status = 'withdrawn'`;
+  if (row === undefined || row.withdrawn_at === null || DEPARTED_STATUSES.has(row.entrant_status)) return;
+  if (Date.now() - row.withdrawn_at.getTime() < CASCADE_RETRY_AFTER_MS) return;
+  const at = row.withdrawn_at;
+  const entrantId = row.entrant_id;
+  // Started, and no cascade has run since (one that ran and was undone by the organiser's Reinstate is not owed again).
+  const owed = await sql.begin(async (tx) => (await divisionHasStarted(tx, divisionId)) && !(await cascadeTraceSince(tx, divisionId, entrantId, at)));
+  if (!owed) return;
+  const ctx = await divisionCtx(sql, divisionId);
+  await settleStartedWithdrawal(ctx.org_id, regId, row.entrant_id, by, actorId);
+}
+
 /** WHO withdrew is an explicit fact, never inferred from `actorId`: an organiser acting through an API key has NO user id (api-v1/auth.ts),
  *  and reading that as "the registrant" sent no mail and labelled the audit row wrongly. `actorId` is only the audit's actor column. */
 export type WithdrawnBy = "organiser" | "registrant";
 
 export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null, by: WithdrawnBy): Promise<void> {
-  if (reg.status === "withdrawn") return; // idempotent
+  if (reg.status === "withdrawn") return retryOwedWithdrawal(reg.id, reg.division_id, actorId, by); // idempotent, bar an owed cascade
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
   // writer — reachable here from BOTH withdrawRegistrationOrganiser and the
   // public token-only withdrawRegistrationByRef. Without this, a rejected
@@ -225,7 +248,7 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     | null;
   // Idempotent: only the call whose transaction moved the row to `withdrawn` (under its `for update`) gets here, so a double
   // POST or a retry runs no second cascade.
-  if (!outcome) return;
+  if (!outcome) return retryOwedWithdrawal(reg.id, reg.division_id, actorId, by);
   log.info(
     { registrationId: reg.id, orgId: ctx.org_id, by },
     "registration: withdrawn",

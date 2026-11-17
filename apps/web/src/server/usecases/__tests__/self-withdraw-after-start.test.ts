@@ -20,7 +20,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
+import { getCompetitionDesk } from "../competition-desk";
+import { CASCADE_RETRY_AFTER_MS } from "../withdrawal";
 import { confirmRegistration, groupById, withdrawRegistrationByRef, withdrawRegistrationPublic } from "../registrations";
 import { startDivision } from "../schedule";
 import { createStages } from "../stages";
@@ -310,5 +312,55 @@ describe.skipIf(!HAS_DB)("X-WDT-9 the public door into the cascade: who reaches 
     const rows = await withdrawalRows(r.divisionId);
     expect(rows.map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled])).toEqual([["expunge", 2, 5]]);
     expect(await settledOnHerPage(r.registrationId, r.token), "finished by the organiser: now it is settled").toBe(true);
+  }, 180_000);
+});
+
+/** The desk's "withdrawal did not finish" rows (review I2 b, derived on read). */
+async function deskOwed(r: Rig) {
+  const desk = await getCompetitionDesk(r.auth, r.competitionId);
+  return (desk.divisions.get(r.divisionId)?.attention ?? []).filter((a) => a.kind === "withdrawal_owed");
+}
+const pastTheWindow = (registrationId: string) =>
+  sql`update registrations set withdrawn_at = withdrawn_at - make_interval(secs => ${CASCADE_RETRY_AFTER_MS / 1000 + 60}) where id = ${registrationId}`;
+
+describe.skipIf(!HAS_DB)("X-WDT-9 review I2: a failed withdrawal is shown on the desk and finished by a retry", () => {
+  it("I2 the desk names her as owed; her retry inside the window runs nothing, past it finishes the cascade, and the item clears", async () => {
+    const r = await rig(6);
+    await leaverWins(r, 2);
+    expect(await deskOwed(r), "the empty case: nobody owed").toEqual([]);
+    control.failNext = true;
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
+    expect(await deskOwed(r)).toEqual([{ kind: "withdrawal_owed", count: 1, names: ["Rae Registrant"] }]);
+    const calls = control.calls;
+    // A double POST arrives inside the window: it must not run a second cascade beside a first that may still be running.
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect(control.calls - calls, "inside the window: no cascade").toBe(0);
+    expect(await deskOwed(r), "still owed").toHaveLength(1);
+    await pastTheWindow(r.registrationId);
+    await withdrawRegistrationByRef(r.ref, r.registrationId, r.token);
+    expect(control.calls - calls, "past the window: one cascade").toBe(1);
+    expect((await entrantOf(r.leaver)).status).toBe("withdrawn");
+    expect((await withdrawalRows(r.divisionId)).map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled])).toEqual([["expunge", 2, 5]]);
+    expect(await deskOwed(r), "finished: the item clears").toEqual([]);
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect(control.calls - calls, "departed: a further retry runs none").toBe(1);
+  }, 180_000);
+
+  it("I2 a finished withdrawal, and a Reinstate after it, never read as owed (the registration stays withdrawn: m4, parked)", async () => {
+    const r = await rig(6);
+    await leaverWins(r, 2);
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect((await entrantOf(r.leaver)).status, "premise: the cascade finished").toBe("withdrawn");
+    expect(await deskOwed(r)).toEqual([]);
+    await patchEntrant(r.auth, r.leaver, { status: "registered" });
+    expect(await registrationStatus(r.registrationId), "premise (m4): the registration still reads withdrawn").toBe("withdrawn");
+    expect(await deskOwed(r), "reinstated: in the field, and not owed").toEqual([]);
+    // Nor does a retry past the window withdraw her again — her Reinstate is the organiser's last word.
+    await pastTheWindow(r.registrationId);
+    const calls = control.calls;
+    await withdrawRegistrationPublic(r.registrationId, r.token);
+    expect(control.calls - calls, "no second withdrawal over a Reinstate").toBe(0);
+    expect((await entrantOf(r.leaver)).status, "she stays reinstated").not.toBe("withdrawn");
   }, 180_000);
 });

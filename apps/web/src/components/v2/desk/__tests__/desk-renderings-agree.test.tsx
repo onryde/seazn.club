@@ -99,6 +99,9 @@ const UNREACHABLE: Record<string, string> = {
   // Rule 6's `setting_up` needs nothing played, so a started division reads `setting_up` only by rule 4: an open stage owing
   // work, whose red row leads.
   "setting_up/late_unplaced": "a finished table is played, so setting_up means an open stage owing work, whose red row leads",
+  // W5 T8b review I2 (b): an owed withdrawal exists only after Start, over a drawn table. A started division reads setting_up
+  // by rule 6 only while nothing is dated or played — and then its undated lines raise `unscheduled`, which leads (KIND_ORDER).
+  "setting_up/withdrawal_owed": "after Start a drawn table with nothing dated raises unscheduled, which leads",
 };
 
 type Shape = {
@@ -114,6 +117,8 @@ type Shape = {
   lateWaiting?: PhaseInput["lateWaiting"];
   /** W5 T6 fix round 1: players who arrived after the root table finished, per stage. */
   lateUnplaced?: PhaseInput["lateUnplaced"];
+  /** W5 T8b review I2 (b): entrants owed a withdrawal that did not finish. */
+  withdrawalOwed?: PhaseInput["withdrawalOwed"];
   entrants?: number;
 };
 
@@ -349,6 +354,25 @@ const SHAPES: Shape[] = [
     fixtures: [fxt({ id: "a" }), fxt({ id: "b", stageId: "ko", status: "in_play", hasScorer: true })],
     lateUnplaced: [{ stageName: "League", names: ["Lou Late"] }],
   },
+  // W5 T8b review I2 (b): a player's own withdrawal (or an in-match DQ) whose cascade failed — still in the field.
+  {
+    why: "scheduled/withdrawal_owed — a dated league; a player withdrew after Start and the cascade failed",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: FUTURE })],
+    withdrawalOwed: ["Rae Registrant"],
+  },
+  {
+    why: "match_day/withdrawal_owed — the league being played today; a disqualification's cascade failed",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true })],
+    withdrawalOwed: ["Rae Registrant"],
+  },
+  {
+    why: "finished/withdrawal_owed — every league match played; the last one's disqualification did not finish its withdrawal",
+    stages: [st({ status: "complete" })],
+    fixtures: [fxt({ id: "a" })],
+    withdrawalOwed: ["Rae Registrant"],
+  },
   {
     why: "finished/none — a completed season",
     stages: [st({ status: "complete" })],
@@ -368,6 +392,7 @@ function resolve(shape: Shape) {
     bansToReview: shape.bansToReview ?? 0,
     lateWaiting: shape.lateWaiting ?? [],
     lateUnplaced: shape.lateUnplaced ?? [],
+    withdrawalOwed: shape.withdrawalOwed ?? [],
   };
   const phase = resolvePhase(input);
   const attention = resolveAttention(input);

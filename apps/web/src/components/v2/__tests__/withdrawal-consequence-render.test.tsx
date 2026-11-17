@@ -44,7 +44,7 @@ const PREVIEW: WithdrawalPreview = {
 const WANT = [
   "These 3 remaining matches will be withdrawn: Bea (round 3), Cal (round 4), and Dov (round 5).",
   `${NAME} has played 2 of 5. Under the 50% rule their results will be removed.`,
-  "You can undo this with Reinstate.",
+  "The organiser can undo this with Reinstate while the stage is running.",
 ];
 const linesOf = (html: string) => [...html.matchAll(/<li data-testid="withdrawal-consequence-line">([^<]*)<\/li>/g)].map((m) => m[1]!.replaceAll("&amp;", "&"));
 const ready: ConsequenceState = { kind: "ready", preview: PREVIEW };
@@ -96,6 +96,33 @@ describe("X-WDT-10 the pad and the organiser dialog show the same copy (render b
       createElement(EndingPrompt, { sideName: NAME, canRecord: false, canVoid: true, busy: false, onRecord: () => {}, onVoid: () => {}, t, consequence: padSlot({ "e-away": ready })({ by: "e-away" }) }),
     );
     expect(linesOf(prompt)).toEqual([]);
+  });
+
+  it("X-WDT-10 review m1: an answer that is not a preview reads as unreadable — the organiser keeps ruling 260's body, the pad says it could not be read", () => {
+    const bad: unknown[] = [
+      {},
+      null,
+      "<html>",
+      { ...PREVIEW, cascade: undefined },
+      { ...PREVIEW, stages: undefined },
+      { ...PREVIEW, stages: [{ ...PREVIEW.stages[0], played: "2" }] },
+      { ...PREVIEW, stages: [{ ...PREVIEW.stages[0], mode: "walk" }] },
+      { ...PREVIEW, stages: [{ ...PREVIEW.stages[0], pending: [{ fixture_id: "f", opponent: 7, round_no: 1 }] }] },
+    ];
+    let checked = 0;
+    for (const preview of bad) {
+      const state = { kind: "ready", preview } as unknown as ConsequenceState;
+      const body = renderToStaticMarkup(createElement("div", null, disqualifyConfirmBody(state, t, "en")));
+      expect(body, JSON.stringify(preview)).toContain('data-state="failed"');
+      expect(body).toContain(t("confirm.withdrawEntrant.body").replaceAll("'", "&#x27;"));
+      expect(linesOf(body)).toEqual([]);
+      const pad = renderToStaticMarkup(createElement("div", null, createElement(WithdrawalConsequence, { state, t })));
+      expect(pad).toContain(t("withdrawal.consequence.failed").replaceAll("'", "&#x27;"));
+      checked++;
+    }
+    expect(checked).toBe(8);
+    // The positive pair: the real preview still reads as ready.
+    expect(renderToStaticMarkup(createElement("div", null, disqualifyConfirmBody(ready, t, "en")))).toContain('data-state="ready"');
   });
 
   it("X-WDT-10 loading and failed say so; a preview that settles nothing beyond the match renders nothing; failed keeps ruling 260's general body", () => {

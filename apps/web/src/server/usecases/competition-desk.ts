@@ -34,6 +34,7 @@ import { bracketAwaitsCompletion } from "@/server/engine-db/stage-finals";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
 import { DEPARTED_STATUSES } from "./entrants";
+import { cascadeTraceSince } from "./withdrawal";
 import { countsAsMatch } from "@/lib/run-sheet-groups";
 import { isCatchUpExtKey } from "@/lib/roundrobin-late-entry";
 import { listDivisions } from "./divisions";
@@ -344,7 +345,7 @@ export async function getCompetitionDesk(
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
   const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -537,7 +538,42 @@ export async function getCompetitionDesk(
              and not exists (select 1 from fixtures f where f.stage_id = s.id and e.id in (f.home_entrant_id, f.away_entrant_id))
            group by s.division_id, s.id, s.name`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced };
+    // W5 T8b review I2 (b): a withdrawal owed and not finished — DERIVED, never stored. The trigger is the entrant's registration
+    // withdrawn AFTER Start (`division_started`; before it the withdrawal is a bare flip), or a disqualifying forfeit by her that
+    // still stands on a league, group or Swiss match (its time is the FIRST such forfeit: a Reinstate's re-record is later).
+    // Owed while she is still in the field and no trace of a cascade for her follows the trigger (`cascadeTraceSince`, the one
+    // reading the retries use too): a Reinstate therefore never reads as owed. Candidates are read here, the trace per candidate.
+    const owedCandidates = ids.length
+      ? await tx<{ id: string; division_id: string; name: string; at: Date }[]>`
+          with started as (
+            select division_id, max(created_at) as at from division_events
+             where division_id = any(${ids}) and type = 'division_started' group by division_id
+          ), trig as (
+            select e.id, e.division_id, e.display_name, e.created_at,
+                   least(
+                     (select min(r.withdrawn_at) from registrations r
+                       where r.entrant_id = e.id and r.status = 'withdrawn' and r.withdrawn_at >= st.at),
+                     (select min(ev.recorded_at) from score_events ev
+                        join fixtures f on f.id = ev.fixture_id join stages s on s.id = f.stage_id
+                       where s.kind in ('league', 'group', 'swiss') and ev.type = 'core.forfeit'
+                         and ev.payload ->> 'reason' = 'disqualified' and ev.payload ->> 'by' = e.id::text
+                         and exists (select 1 from score_events a
+                                      where a.fixture_id = ev.fixture_id and a.type = 'core.forfeit'
+                                        and a.payload ->> 'reason' = 'disqualified' and a.payload ->> 'by' = e.id::text
+                                        and not exists (select 1 from score_events v where v.fixture_id = a.fixture_id and v.voids_event_id = a.id)))
+                   ) as at
+              from entrants e join started st on st.division_id = e.division_id
+             where e.status not in ${tx([...DEPARTED_STATUSES])}
+          )
+          select trig.id, trig.division_id, trig.display_name as name, trig.at from trig
+           where trig.at is not null
+           order by trig.created_at, trig.id`
+      : [];
+    const withdrawalOwed: { division_id: string; name: string }[] = [];
+    for (const c of owedCandidates) {
+      if (!(await cascadeTraceSince(tx, c.division_id, c.id, c.at))) withdrawalOwed.push({ division_id: c.division_id, name: c.name });
+    }
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed };
   });
   const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
@@ -669,6 +705,7 @@ export async function getCompetitionDesk(
         .filter((w) => w.division_id === d.id)
         .map((w) => ({ stageName: w.stage_name, count: w.count, ...(w.is_table ? { table: true as const } : {}) })),
       lateUnplaced: lateUnplaced.filter((u) => u.division_id === d.id).map((u) => ({ stageName: u.stage_name, names: u.names })),
+      withdrawalOwed: withdrawalOwed.filter((w) => w.division_id === d.id).map((w) => w.name),
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");

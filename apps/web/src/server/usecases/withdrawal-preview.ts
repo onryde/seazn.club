@@ -9,8 +9,10 @@
 // played (RB5-W4: its forfeit decides it), so it is read as decided and is not one of the remaining; on a bracket fixture the
 // forfeit is the bracket's own and nothing else follows (W4; Part 2's `disqualifyFromMatch` runs only on a table stage).
 //
-// A bracket stage lists her lines still to play (the planner walks every unsettled line of hers over, `withdrawBracketEntrant`);
-// a qualifier a lucky loser replaces (W4 T13) and the open formats (americano) are not previewed.
+// A bracket stage lists her lines still to play and says only that the bracket's rules settle them (review m3). The bracket
+// cascade's own decision is not a pure function to call here: it reads each line's ledger (held deciders, active abandons),
+// then a lucky loser may replace her (W4 T13) and a vacant final becomes a double walkover - so the copy claims no walkover it
+// cannot know. The open formats (americano) are not previewed.
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { WITHDRAWAL_PENDING_STATUSES, WITHDRAWAL_PLAYED_STATUSES } from "@/lib/table-withdrawal";

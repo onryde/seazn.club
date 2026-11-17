@@ -62,6 +62,7 @@ export const WITHDRAWAL_CONSEQUENCE_KEYS = [
   "withdrawal.consequence.undo.reinstate",
   "withdrawal.consequence.undo.rejoin",
   "withdrawal.consequence.undo.bracket",
+  "withdrawal.consequence.undo.beforeStart",
 ] as const;
 export type WithdrawalConsequenceKey = (typeof WITHDRAWAL_CONSEQUENCE_KEYS)[number];
 
@@ -105,9 +106,33 @@ export function withdrawalConsequence(name: string, stage: WithdrawalPreviewStag
 export function previewConsequence(preview: WithdrawalPreview): ConsequenceLine[] {
   if (!preview.cascade) return [];
   const reinstate: ConsequenceLine = { key: "withdrawal.consequence.undo.reinstate", vars: {} };
-  if (!preview.started) return [{ key: "withdrawal.consequence.notStarted", vars: { name: preview.name } }, reinstate];
+  // Before Start there is no stage running to scope the undo to: Reinstate simply puts her back.
+  if (!preview.started) return [{ key: "withdrawal.consequence.notStarted", vars: { name: preview.name } }, { key: "withdrawal.consequence.undo.beforeStart", vars: {} }];
   if (preview.stages.length === 0) return [{ key: "withdrawal.consequence.noRemaining", vars: { name: preview.name } }, reinstate];
   return preview.stages.flatMap((s) => withdrawalConsequence(preview.name, s));
+}
+
+const MODES: ReadonlySet<string> = new Set<ConsequenceMode>(["expunge", "award", "bracket_walkover"]);
+const UNDOS: ReadonlySet<string> = new Set<ConsequenceUndo>(["restores", "rejoins", "waits"]);
+const isCount = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n >= 0;
+const isRecord = (x: unknown): x is Record<string, unknown> => typeof x === "object" && x !== null;
+
+/** W5 T8b review m1: the wire answer is checked before it is trusted. A body that is not a preview (a proxy's page, an older
+ *  server, a shape drift) reads as "could not be read" — the confirmation then keeps ruling 260's general body — rather than
+ *  as a preview that settles nothing, which would show no consequence at all. */
+export function isWithdrawalPreview(x: unknown): x is WithdrawalPreview {
+  if (!isRecord(x)) return false;
+  if (typeof x.entrant_id !== "string" || typeof x.name !== "string") return false;
+  if (x.as !== "withdrawn" && x.as !== "disqualified") return false;
+  if (typeof x.started !== "boolean" || typeof x.cascade !== "boolean" || !Array.isArray(x.stages)) return false;
+  return x.stages.every(
+    (s: unknown) =>
+      isRecord(s) && typeof s.stage_id === "string" && typeof s.stage_kind === "string" && typeof s.mode === "string" && MODES.has(s.mode) &&
+      isCount(s.played) && isCount(s.scheduled) && typeof s.undo === "string" && UNDOS.has(s.undo) && Array.isArray(s.pending) &&
+      s.pending.every(
+        (p: unknown) => isRecord(p) && typeof p.fixture_id === "string" && (p.opponent === null || typeof p.opponent === "string") && isCount(p.round_no),
+      ),
+  );
 }
 
 type TFn = (key: string, vars?: Record<string, string | number>) => string;

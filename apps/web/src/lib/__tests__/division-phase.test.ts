@@ -848,6 +848,14 @@ describe("resolveAttention", () => {
       expect(resolveAttention(input({ divisionStatus: "setup", lateUnplaced: [{ stageName: "Table", names: ["Lou"] }] })).some((a) => a.kind === "late_unplaced")).toBe(false);
       expect(resolvePhase(input({ lateUnplaced: [{ stageName: "Table", names: ["Lou"] }] })), "orthogonal to phase").toBe(resolvePhase(input({})));
     });
+    it("W5 T8b review I2 withdrawal_owed: the empty case first, then one amber row naming who; never before Start; orthogonal to phase", () => {
+      expect(resolveAttention(input({})).some((a) => a.kind === "withdrawal_owed"), "absent").toBe(false);
+      expect(resolveAttention(input({ withdrawalOwed: [] })).some((a) => a.kind === "withdrawal_owed"), "empty").toBe(false);
+      expect(resolveAttention(input({ withdrawalOwed: ["Rae", "Sam"] }))).toContainEqual({ kind: "withdrawal_owed", count: 2, names: ["Rae", "Sam"] });
+      expect(ATTENTION_SEVERITY.withdrawal_owed).toBe("amber");
+      expect(resolveAttention(input({ divisionStatus: "setup", withdrawalOwed: ["Rae"] })).some((a) => a.kind === "withdrawal_owed"), "before Start").toBe(false);
+      expect(resolvePhase(input({ withdrawalOwed: ["Rae"] })), "orthogonal to phase").toBe(resolvePhase(input({})));
+    });
     it("is AMBER — the player is owed a place, but every match already drawn can be played", () => {
       expect(ATTENTION_SEVERITY.late_players_waiting).toBe("amber");
     });

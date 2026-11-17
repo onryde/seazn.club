@@ -642,7 +642,7 @@ test.describe("X-WDT-10 the organiser sees the consequence before disqualifying"
     expect(said[0]).toMatch(/^These 3 remaining matches will be withdrawn: .+\.$/);
     for (const f of open) expect(said[0], "each remaining match by opponent and round").toContain(`${nameOf.get(other(f))} (round ${f.round_no})`);
     expect(said[0]!.length).toBe(`These 3 remaining matches will be withdrawn: ${list}.`.length);
-    expect(said.slice(1)).toEqual([`${name} has played 2 of 5. Under the 50% rule their results will be removed.`, "You can undo this with Reinstate."]);
+    expect(said.slice(1)).toEqual([`${name} has played 2 of 5. Under the 50% rule their results will be removed.`, "The organiser can undo this with Reinstate while the stage is running."]);
     for (const [w, h] of [[1280, 900], [768, 1024], [320, 640]] as const) {
       await page.setViewportSize({ width: w, height: h });
       await expect(consequence, `@${w}`).toBeVisible();

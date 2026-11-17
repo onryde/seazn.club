@@ -111,7 +111,7 @@ const WITHDRAW_BODY = (en as Record<string, string>)["confirm.withdrawEntrant.bo
 const DQ_LINES = [
   "This remaining match will be withdrawn: Asha Rao (round 4).",
   "Rohan Nair has played 3 of 4. Under the 50% rule their results stand and the remaining matches are walked over.",
-  "You can undo this with Reinstate.",
+  "The organiser can undo this with Reinstate while the stage is running.",
 ];
 /** The confirm's body as text: the dialog renders it, so it is read the way the organiser reads it. */
 const bodyText = (body: unknown) => renderToStaticMarkup(createElement("div", null, body as ReactNode)).replace(/<\/(p|li)>/g, "$& ").replace(/<[^>]+>/g, "").replaceAll("&#x27;", "'").replace(/\s+/g, " ").trim();

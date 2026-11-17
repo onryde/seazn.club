@@ -28,9 +28,31 @@ import { createDeviceLink } from "../device-links";
 import { createEntrants, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
+import { getCompetitionDesk } from "../competition-desk";
+import { scoreEvent } from "../scoring";
+import { CASCADE_RETRY_AFTER_MS } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
+
+// Review I2: a cascade failure is simulated by making its FIRST cross-module call throw once (`replaceDepartedQualifier`, which
+// only the withdrawal cascade calls, before any write). `disqualifyFromMatch` calls the cascade inside its own module, so the
+// cascade's own export cannot be swapped; every other call is the real code.
+const control = vi.hoisted(() => ({ failNext: false, cascades: 0 }));
+vi.mock("../lucky-loser", async (io) => {
+  const real = await io<typeof import("../lucky-loser")>();
+  return {
+    ...real,
+    replaceDepartedQualifier: async (...args: Parameters<typeof real.replaceDepartedQualifier>) => {
+      control.cascades++;
+      if (control.failNext) {
+        control.failNext = false;
+        throw new Error("simulated: the cascade's first step failed");
+      }
+      return real.replaceDepartedQualifier(...args);
+    },
+  };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -88,6 +110,7 @@ const statusOf = async (id: string) => (await sql<{ status: string }[]>`select s
 
 interface Rig {
   auth: AuthCtx;
+  competitionId: string;
   divisionId: string;
   stageId: string;
   ids: string[];
@@ -107,7 +130,7 @@ async function started(n: number, s: SportCase, kind: "league" | "swiss" | "knoc
   const [stage] = await createStages(auth, d.id, { seq: 1, kind, name: "Stage", config, progression: null } as never);
   await startDivision(auth, d.id);
   if (kind === "swiss") await generateStageFixtures(auth, stage!.id); // Pair round 1
-  return { auth, divisionId: d.id, stageId: stage!.id, ids: es.map((e) => e.id) };
+  return { auth, competitionId: comp.id, divisionId: d.id, stageId: stage!.id, ids: es.map((e) => e.id) };
 }
 
 /** An ordinary walkover (not a withdrawal): `loser` did not turn up — a recorded result RB5-W4 counts as played. */
@@ -172,7 +195,7 @@ async function dqAfter(k: number, s: SportCase, via: "organiser" | "scorer") {
   const dqLine = mine[k]!;
   const send = via === "organiser" ? organiser(r.auth, dqLine.id) : await scorer(r.auth, dqLine.id);
   await disqualifyInMatch(r, s, dqLine, v, send);
-  return { r, v, mine, played, dqLine };
+  return { r, v, mine, played, dqLine, send };
 }
 
 describe.skipIf(!HAS_DB)("X-WDT-10 (RB5-W11): an in-match disqualification withdraws the entrant from the stage", () => {
@@ -281,4 +304,96 @@ describe.skipIf(!HAS_DB)("X-WDT-10 (RB5-W11): an in-match disqualification withd
     expect(await statusOf(v), "status unchanged").toBe(before);
     expect((await linesOf(r.stageId)).find((l) => l.id === line.id)!.outcome).toMatchObject({ kind: "award", loser: v, reason: "disqualified" });
   }, 180_000);
+});
+
+/** The desk's "withdrawal did not finish" rows (review I2 b, derived on read). */
+async function deskOwed(r: Rig) {
+  const desk = await getCompetitionDesk(r.auth, r.competitionId);
+  return (desk.divisions.get(r.divisionId)?.attention ?? []).filter((a) => a.kind === "withdrawal_owed");
+}
+const triggerOf = async (fixtureId: string, v: string) =>
+  (await activeEvents(fixtureId)).find((e) => e.type === "core.forfeit" && e.payload.reason === "disqualified" && e.payload.by === v);
+
+describe.skipIf(!HAS_DB)("X-WDT-10 review I1: the Undo of a disqualifying forfeit points to Reinstate", () => {
+  it("I1 an Undo of the forfeit whose disqualification withdrew her is refused 409 UNDO_DQ_USE_REINSTATE on the console and the pad, and moves nothing; after Reinstate it is allowed", async () => {
+    // 3 of 5 (half or more): the trigger forfeit stays ACTIVE under the walkover policy (an expunge voids it itself). The pad's
+    // scorer records it, so its own Undo reaches the guard (a device link may undo only its own events, a 403 before it).
+    const { r, v, dqLine, send: pad } = await dqAfter(2, BADMINTON, "scorer");
+    expect(await statusOf(v), "premise: disqualified").toBe("disqualified");
+    const trigger = await triggerOf(dqLine.id, v);
+    expect(trigger, "premise: the disqualifying forfeit stands").toBeDefined();
+    const before = await linesOf(r.stageId);
+    const seq = await tip(dqLine.id);
+    let checked = 0;
+    for (const send of [organiser(r.auth, dqLine.id), pad]) {
+      expect(await send("core.void", { event_id: trigger!.id })).toEqual({ status: 409, code: "UNDO_DQ_USE_REINSTATE" });
+      checked++;
+    }
+    expect(checked, "both doors").toBe(2);
+    expect(await linesOf(r.stageId), "nothing moved").toEqual(before);
+    expect(await tip(dqLine.id), "nothing appended").toBe(seq);
+    expect(await statusOf(v)).toBe("disqualified");
+    // Reinstate is the undo: it reverses the cascade; the trigger is then an ordinary forfeit and its void is allowed.
+    await patchEntrant(r.auth, v, { status: "registered" });
+    expect((await organiser(r.auth, dqLine.id)("core.void", { event_id: trigger!.id })).status, "after Reinstate the Undo works").toBe(201);
+    expect((await linesOf(r.stageId)).find((l) => l.id === dqLine.id)!.status, "the match is open again").toBe("in_play");
+  }, 300_000);
+
+  it("I1 the positive pair: a disqualifying forfeit whose cascade did NOT run (it failed; she is still in the field) voids as any forfeit does", async () => {
+    control.failNext = true;
+    const { r, v, dqLine } = await dqAfter(2, BADMINTON, "organiser");
+    expect(control.failNext, "premise: the simulated failure was consumed by this cascade").toBe(false);
+    expect(await statusOf(v), "premise: the cascade failed, she is in the field").not.toBe("disqualified");
+    const trigger = await triggerOf(dqLine.id, v);
+    expect((await organiser(r.auth, dqLine.id)("core.void", { event_id: trigger!.id })).status).toBe(201);
+    expect((await linesOf(r.stageId)).find((l) => l.id === dqLine.id)!.status).toBe("in_play");
+    expect(await deskOwed(r), "the forfeit no longer stands: nothing is owed").toEqual([]);
+  }, 300_000);
+});
+
+describe.skipIf(!HAS_DB)("X-WDT-10 review I2: a failed in-match cascade is shown on the desk and finished by a replay", () => {
+  it("I2 the desk names her as owed; a replay of the forfeit inside the retry window runs nothing, past it finishes the cascade, and the item clears", async () => {
+    const r = await started(6, BADMINTON);
+    const v = r.ids[0]!;
+    expect(await deskOwed(r), "the empty case: nobody owed").toEqual([]);
+    const mine = (await linesOf(r.stageId)).filter((l) => involves(l, v));
+    for (const l of mine.slice(0, 2)) await walkoverAgainst(r.auth, l.id, otherSide(l, v));
+    const dqLine = mine[2]!;
+    await post(r.auth, dqLine.id, "core.start", {});
+    await post(r.auth, dqLine.id, `${BADMINTON.key}.sanction`, { by: v, level: BADMINTON.endLevel });
+    const key = "dq-" + randomUUID();
+    const forfeit = { type: "core.forfeit", payload: { by: v, reason: "disqualified" }, idempotency_key: key };
+    control.failNext = true;
+    const first = await scoreEvent(r.auth, dqLine.id, { expected_seq: await tip(dqLine.id), ...forfeit } as never);
+    expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
+    expect(await statusOf(v), "the forfeit stands, she is still in the field").not.toBe("disqualified");
+    expect(await deskOwed(r)).toEqual([{ kind: "withdrawal_owed", count: 1, names: ["P1"] }]);
+
+    // A lost-ack resend inside the window: the same answer, and no second cascade beside a first that may still be running.
+    const cascades = control.cascades;
+    const again = await scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
+    expect(again.event_id, "the replay is the same write").toBe(first.event_id);
+    expect(control.cascades - cascades, "inside the window: no cascade").toBe(0);
+    expect(await deskOwed(r), "still owed").toHaveLength(1);
+
+    // Past the window, the resend finishes it.
+    await sql`update score_events set recorded_at = recorded_at - make_interval(secs => ${CASCADE_RETRY_AFTER_MS / 1000 + 60}) where id = ${first.event_id}`;
+    const late = await scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
+    expect(late.event_id).toBe(first.event_id);
+    expect(control.cascades - cascades, "past the window: one cascade").toBe(1);
+    expect(await statusOf(v)).toBe("disqualified");
+    expect((await withdrawalRows(r.divisionId)).map((x) => [x.payload.policy, x.payload.played_at_departure, x.payload.scheduled])).toEqual([["walkover", 3, 5]]);
+    expect(await deskOwed(r), "finished: the item clears").toEqual([]);
+    // And a further resend settles nothing twice (she has left).
+    await scoreEvent(r.auth, dqLine.id, { expected_seq: first.seq - 1, ...forfeit } as never);
+    expect(control.cascades - cascades, "departed: no second cascade").toBe(1);
+  }, 300_000);
+
+  it("I2 a Reinstate after an in-match disqualification never reads as owed", async () => {
+    const { r, v } = await dqAfter(2, BADMINTON, "organiser");
+    expect(await deskOwed(r), "a finished cascade is not owed").toEqual([]);
+    await patchEntrant(r.auth, v, { status: "registered" });
+    expect(await triggerOf((await linesOf(r.stageId)).filter((l) => involves(l, v))[2]!.id, v), "premise: the forfeit still stands").toBeDefined();
+    expect(await deskOwed(r), "reinstated: back in the field with the forfeit standing, and still not owed").toEqual([]);
+  }, 300_000);
 });

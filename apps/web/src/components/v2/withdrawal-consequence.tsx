@@ -7,7 +7,7 @@
 // A quiet amber notice under the confirmation's own sentence: it names what else changes, it is not the question. No hooks, so
 // it renders inside a confirm dialog's static body and inside the pad's plain-function sheet rows alike.
 import type { ReactNode } from "react";
-import { consequenceSentences, previewConsequence, type WithdrawalPreview } from "@/lib/withdrawal-consequence";
+import { consequenceSentences, isWithdrawalPreview, previewConsequence, type WithdrawalPreview } from "@/lib/withdrawal-consequence";
 
 type TFn = (key: string, vars?: Record<string, string | number>) => string;
 
@@ -15,8 +15,14 @@ type TFn = (key: string, vars?: Record<string, string | number>) => string;
  *  follows the event's rules; the block says so rather than staying silent). */
 export type ConsequenceState = { kind: "loading" } | { kind: "failed" } | { kind: "ready"; preview: WithdrawalPreview };
 
+/** A "ready" answer that is not a preview (review m1) is treated as unreadable. */
+function checked(state: ConsequenceState): ConsequenceState {
+  return state.kind === "ready" && !isWithdrawalPreview(state.preview) ? { kind: "failed" } : state;
+}
+
 /** Null when there is nothing to say: a ready preview that settles nothing beyond the match (`cascade: false`). */
-export function WithdrawalConsequence({ state, t, locale = "en" }: { state: ConsequenceState; t: TFn; locale?: string }): ReactNode {
+export function WithdrawalConsequence({ state: given, t, locale = "en" }: { state: ConsequenceState; t: TFn; locale?: string }): ReactNode {
+  const state = checked(given);
   const lines = state.kind === "ready" ? consequenceSentences(previewConsequence(state.preview), t, locale) : [];
   if (state.kind === "ready" && lines.length === 0) return null;
   return (
@@ -46,7 +52,8 @@ export function WithdrawalConsequence({ state, t, locale = "en" }: { state: Cons
 
 /** The Entrants → Disqualify confirmation's body: its lead sentence, then the consequence. When the preview could not be read
  *  the general per-format policy (ruling 260's body) stands in, so the confirmation is never less truthful than it was. */
-export function disqualifyConfirmBody(state: ConsequenceState, t: TFn, locale: string): ReactNode {
+export function disqualifyConfirmBody(given: ConsequenceState, t: TFn, locale: string): ReactNode {
+  const state = checked(given);
   return (
     <>
       <p>{t("confirm.disqualifyEntrant.lead")}</p>

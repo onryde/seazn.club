@@ -64,6 +64,7 @@ export const REFUSAL_KEY: Readonly<Record<string, MessageKey>> = {
   UNDO_ALREADY_VOIDED: "scorepad.refusal.undoAlready",
   UNDO_NOT_UNDOABLE: "scorepad.refusal.undoNotUndoable",
   UNDO_WICKET_NOT_LATEST: "scorepad.refusal.undoWicketNotLatest",
+  UNDO_DQ_USE_REINSTATE: "scorepad.refusal.undoDqUseReinstate",
   // The plain sentence, for a refusal that arrived without its ref;
   // `refusalText` names the match whenever the ref is there.
   NEXT_MATCH_STARTED: "scorepad.refusal.nextMatchStarted",

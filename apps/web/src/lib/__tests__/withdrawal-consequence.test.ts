@@ -1,7 +1,7 @@
 // W5 T8b Part 3 (X-WDT-10, owner ruling 289's condition) — the Disqualify confirmation's copy, from one preview, in four locales.
 // Expected English is the brief's own wording of ruling 289's condition (task-8b-brief.md, Part 3 Files: the three sentences
 // "These {n} remaining matches will be withdrawn: {list}.", "{name} has played {played} of {scheduled}. Under the 50% rule …",
-// "You can undo this with Reinstate."), typed here — never read back from en/ui.json, which is the thing under test.
+// "The organiser can undo this with Reinstate while the stage is running."), typed here — never read back from en/ui.json, which is the thing under test.
 // The numbers are the preview's (the cascade's decision, withdrawal-preview.test.ts proves that); this file proves the words.
 import { describe, expect, it } from "vitest";
 import uiEn from "@/dictionaries/en/ui.json";
@@ -51,7 +51,7 @@ describe("X-WDT-10 the Disqualify copy (ruling 289): the fixtures withdrawn, the
     expect(en(previewConsequence(preview([stage({})])))).toEqual([
       "These 3 remaining matches will be withdrawn: Bea (round 3), Cal (round 4), and Dov (round 5).",
       `${NAME} has played 2 of 5. Under the 50% rule their results will be removed.`,
-      "You can undo this with Reinstate.",
+      "The organiser can undo this with Reinstate while the stage is running.",
     ]);
   });
 
@@ -60,7 +60,7 @@ describe("X-WDT-10 the Disqualify copy (ruling 289): the fixtures withdrawn, the
     expect(en(previewConsequence(preview([one])))).toEqual([
       "This remaining match will be withdrawn: Dov (round 5).",
       `${NAME} has played 4 of 5. Under the 50% rule their results stand and the remaining matches are walked over.`,
-      "You can undo this with Reinstate.",
+      "The organiser can undo this with Reinstate while the stage is running.",
     ]);
     // The rule line moves with the count: 3 of 5 is the award, the same stage at 2 of 5 the expunge (a case where the right
     // answer differs from the wrong one's constant).
@@ -73,12 +73,13 @@ describe("X-WDT-10 the Disqualify copy (ruling 289): the fixtures withdrawn, the
     expect(en(previewConsequence(preview([stage({ mode: "award", played: 0, scheduled: 0, pending: [] })])))).toEqual([
       `${NAME} has no remaining matches.`,
       `${NAME} has played 0 of 0. Under the 50% rule their results stand and the remaining matches are walked over.`,
-      "You can undo this with Reinstate.",
+      "The organiser can undo this with Reinstate while the stage is running.",
     ]);
-    expect(en(previewConsequence(preview([])))).toEqual([`${NAME} has no remaining matches.`, "You can undo this with Reinstate."]);
+    expect(en(previewConsequence(preview([])))).toEqual([`${NAME} has no remaining matches.`, "The organiser can undo this with Reinstate while the stage is running."]);
     expect(en(previewConsequence(preview([], { started: false })))).toEqual([
       `The event has not started: ${NAME} leaves the field and no match is touched.`,
-      "You can undo this with Reinstate.",
+      // m2: before Start there is no stage to scope the undo to.
+      "The organiser can undo this with Reinstate.",
     ]);
     expect(previewConsequence(preview([stage({})], { cascade: false })), "a bracket match's own DQ, or an entrant already gone").toEqual([]);
   });
@@ -87,10 +88,10 @@ describe("X-WDT-10 the Disqualify copy (ruling 289): the fixtures withdrawn, the
     const undoOf = (s: WithdrawalPreviewStage) => en(previewConsequence(preview([s]))).at(-1);
     let checked = 0;
     for (const [s, want] of [
-      [stage({ stage_kind: "league" }), "You can undo this with Reinstate."],
-      [stage({ stage_kind: "group" }), "You can undo this with Reinstate."],
-      [stage({ stage_kind: "swiss", mode: "award", undo: "rejoins" }), "You can undo this with Reinstate: they rejoin from the next round, and rounds they missed score nothing."],
-      [stage({ stage_kind: "knockout", mode: "bracket_walkover", undo: "waits" }), "You can undo this with Reinstate: they then wait until you put them back into the draw."],
+      [stage({ stage_kind: "league" }), "The organiser can undo this with Reinstate while the stage is running."],
+      [stage({ stage_kind: "group" }), "The organiser can undo this with Reinstate while the stage is running."],
+      [stage({ stage_kind: "swiss", mode: "award", undo: "rejoins" }), "The organiser can undo this with Reinstate while the stage is running: they rejoin from the next round, and rounds they missed score nothing."],
+      [stage({ stage_kind: "knockout", mode: "bracket_walkover", undo: "waits" }), "The organiser can undo this with Reinstate while the stage is running: they then wait until they are put back into the draw."],
     ] as const) {
       expect(undoOf(s), s.stage_kind).toBe(want);
       checked++;
@@ -101,7 +102,8 @@ describe("X-WDT-10 the Disqualify copy (ruling 289): the fixtures withdrawn, the
       `${NAME} has played 2. In a Swiss their results stand and the remaining matches are walked over.`,
     );
     expect(en(previewConsequence(preview([stage({ stage_kind: "knockout", mode: "bracket_walkover", undo: "waits" })])))[1]).toBe(
-      "Their results stand and their remaining matches are walked over to their opponents.",
+      // m3: the bracket's cascade may seat a lucky loser or void a final, so the copy names no walkover.
+      "Their results stand. Their remaining matches are settled by the bracket's rules.",
     );
   });
 
