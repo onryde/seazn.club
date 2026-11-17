@@ -50,7 +50,9 @@ import { rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_sess
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { markReconnectNeeded } from "@/server/youtube/token-store";
+import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { postBeat } from "../capture-phone";
+import { postCourtStart } from "../capture-court";
 import type { ResolvedCourtCode } from "../court-stream-codes";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { resolveAnyStreamCode } from "../stream-codes";
@@ -269,6 +271,29 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(flipped, "premise: the switch went off inside the start").toBeGreaterThan(0);
     expect(await sessionsOf(A), "no session for a switched-off match").toEqual([]);
     expect((await settingsOf(A))!.auto_start_refusal, "a switch-off is not a refusal").toBeNull();
+    // Fix round 2 (item 2): the broadcast prepared at YouTube for the refused start is abandoned, not left reserved for it.
+    const bcasts = await sql<{ state: string; last_error_code: string | null }[]>`
+      select state, last_error_code from youtube_broadcasts where fixture_id = ${A}`;
+    expect(bcasts.length, "premise: a broadcast was prepared for the start").toBeGreaterThan(0);
+    expect(bcasts, "the prepared broadcast is abandoned (admission refused)").toEqual(bcasts.map(() => ({ state: "failed", last_error_code: "admission_refused" })));
+  });
+
+  it("fix round 2 (item 2): the phone's own court start (postCourtStart) on a match switched off while it was prepared → 409 no_match, no session", async () => {
+    await streamOn(A);
+    await kickoff(A, 0);
+    const court = (await resolveAnyStreamCode(qr.code, qr.tok, "start", P, clock())) as ResolvedCourtCode;
+    expect(court.kind, "premise: a court code").toBe("court");
+    const storage = ingest.storageUsage.bind(ingest);
+    let flipped = 0;
+    ingest.storageUsage = async () => {
+      if (flipped++ === 0) await setCourtStream(day.auth, A, false, clock(), deps);
+      return storage();
+    };
+    const refused = await postCourtStart(court, { phone: P }, deps).then(() => null, (e: unknown) => e);
+    expect(flipped, "premise: the switch went off inside the start").toBeGreaterThan(0);
+    expect(refused).toBeInstanceOf(CaptureRefusalError);
+    expect({ status: (refused as CaptureRefusalError).status, code: (refused as CaptureRefusalError).code }).toEqual({ status: 409, code: "no_match" });
+    expect(await sessionsOf(A), "no session for a switched-off match").toEqual([]);
   });
 
   it("a court start with the match's mode never chosen is COMPOSED: a programme input exists and the add_output effect targets it, not the camera (A2)", async () => {

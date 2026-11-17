@@ -21,10 +21,12 @@ import type { MatchDayCourtStream } from "@/lib/match-day/types";
 import { courtMinAppVersion } from "@/server/relay/config";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
-import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
+import { ACTIVE_STATES, isTerminal, type SessionState } from "@/server/relay/domain/session";
 import { autoStopDelaySeconds } from "./stream-sessions/auto-stop";
 import type { SessionDeps } from "./stream-sessions/deps";
 import { stopSession } from "./stream-sessions/stop";
+import { finishOwedStop } from "./stream-sessions/apply";
+import { endCourtBroadcastSoon } from "./stream-sessions/court-end";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
 import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
@@ -296,25 +298,26 @@ export async function setCourtStream(
   return { on };
 }
 
-/** O17: the match's court session that is not yet stopping (an `ending` one is already on its way out), stopped as the
- *  organiser's Stop stops it. One per match: a match's sessions are one at a time (`active_session`). */
+/** O17: the match's court session that is still up — stopped as the organiser's Stop stops it. One per match: a match's
+ *  sessions are one at a time (`active_session`). An `ending` one is included (fix round 2, item 1): its stop may have
+ *  committed with the provider never asked, and only `advanceCourtStop` can tell. */
 async function stopCourtSessionOf(auth: AuthCtx, fixtureId: string, deps: SessionDeps | null): Promise<void> {
   const [open] = await sql<{ id: string }[]>`
     select id from fixture_stream_sessions
      where fixture_id = ${fixtureId} and org_id = ${auth.orgId} and court_link_id is not null
-       and state in ('requested', 'provisioning', 'warming', 'live')
+       and state in ('requested', 'provisioning', 'warming', 'live', 'ending')
      order by created_at desc, id desc limit 1`;
   if (!open) return;
   if (deps === null) throw new Error("setCourtStream: switching Stream off found a court session to stop, and no session deps were given");
-  // Fix round 1 (finding 4): the switch has committed, so a stop that fails leaves the video on with the switch off. It is
-  // tried once more (stopSession is idempotent: a stop that half-landed reads `ending` and decides nothing), and a second
-  // failure is reported and rethrown — the organiser sees the error, and a second OFF finds the session and stops it.
+  // Fix round 1 (finding 4) + fix round 2 (item 1): the switch has committed, so a stop that fails leaves the video on with the
+  // switch off. It is advanced twice at most, each time from the row as it NOW stands, and a second failure is reported and
+  // rethrown — the organiser sees the error, and a second OFF finds the session (an `ending` one too) and advances it again.
   try {
-    await stopSession(auth, fixtureId, open.id, deps);
+    await advanceCourtStop(auth, fixtureId, open.id, deps);
   } catch (first) {
     log.warn({ orgId: auth.orgId, fixtureId, sid: open.id, err: String(first) }, "court stream: the Stream-off stop failed — trying once more (O17)");
     try {
-      await stopSession(auth, fixtureId, open.id, deps);
+      await advanceCourtStop(auth, fixtureId, open.id, deps);
     } catch (second) {
       log.error({ orgId: auth.orgId, fixtureId, sid: open.id, err: String(second) }, "court stream: the Stream-off stop failed twice — the switch is off, the video is not stopped (O17)");
       captureError(second, { orgId: auth.orgId, route: "court_stream.switch_off_stop", extra: { fixtureId, sid: open.id } });
@@ -322,6 +325,25 @@ async function stopCourtSessionOf(auth: AuthCtx, fixtureId: string, deps: Sessio
     }
   }
   log.info({ orgId: auth.orgId, fixtureId, sid: open.id }, "court stream: Stream switched off — the match's court session was stopped (O17)");
+}
+
+/** One step of the Stream-off stop, from the row as it stands (fix round 2, item 1):
+ *  - still up: the organiser's Stop (`stopSession`), which schedules the court's YouTube end itself once its decision and
+ *    effects have run (B1);
+ *  - `ending`: the stop's decision committed and its provider effect may not have run — `stopSession` would decide nothing
+ *    (idempotent on `ending`) and record a second tap, so the owed effect is re-run instead (`finishOwedStop`), and the YouTube
+ *    end the throwing stop never reached is scheduled here, once, only when an owed effect ran. A session draining after a
+ *    stop that landed owes nothing and schedules nothing: its own stop already did;
+ *  - terminal: nothing to do (a stop whose completion landed but whose later effect threw leaves the YouTube end to the cron's
+ *    end step, at most a firing late). */
+async function advanceCourtStop(auth: AuthCtx, fixtureId: string, sid: string, deps: SessionDeps): Promise<void> {
+  const [row] = await sql<{ state: SessionState }[]>`select state from fixture_stream_sessions where id = ${sid}`;
+  if (!row || isTerminal(row.state)) return;
+  if (row.state !== "ending") {
+    await stopSession(auth, fixtureId, sid, deps);
+    return;
+  }
+  if (await finishOwedStop(sid, deps)) endCourtBroadcastSoon(sid, deps);
 }
 
 type StoredRefusal = (typeof AUTO_START_REFUSALS)[number];

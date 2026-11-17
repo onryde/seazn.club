@@ -32,6 +32,12 @@ vi.mock("@/server/usecases/stream-sessions/stop", async (importOriginal) => {
   };
 });
 
+// Fix round 2 (item 1): B1's court YouTube end, counted per session instead of run — "scheduled exactly once per real stop".
+const courtEnds = vi.hoisted(() => ({ sids: [] as string[] }));
+vi.mock("@/server/usecases/stream-sessions/court-end", () => ({
+  endCourtBroadcastSoon: (sid: string) => { courtEnds.sids.push(sid); },
+}));
+
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
@@ -53,12 +59,13 @@ import { place, seedDay, setStatus } from "@/server/usecases/__tests__/_match-da
 import { PUT as courtStreamRoute } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const ENV = ["RELAY_KEK", "YOUTUBE_TOKEN_KEK", "COURT_MIN_APP_VERSION"] as const;
+const ENV = ["RELAY_KEK", "YOUTUBE_TOKEN_KEK", "COURT_MIN_APP_VERSION", "RELAY_IMAGE"] as const;
 const savedEnv = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 beforeAll(() => {
   process.env.RELAY_KEK = randomBytes(32).toString("hex");
   process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
   process.env.COURT_MIN_APP_VERSION = "1.0.14-1200";
+  process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:court-route-test";   // a composed start is refused without one
 });
 afterAll(async () => {
   setRelayDriversForTest(null);
@@ -79,7 +86,7 @@ async function override(orgId: string, key: string, value: boolean) {
 }
 
 /** A court-streamed match in play on Court 2, its court session open (the court phone's start), as the desk sees it. */
-async function courtSessionOpen() {
+async function courtSessionOpen(mode: "passthrough" | "composed" = "passthrough") {
   const ingest = new FakeIngest({ connectAfterMs: 0 });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };   // roomy: each test leaves a session reserving minutes
   const runner = new FakeRunner();
@@ -106,7 +113,7 @@ async function courtSessionOpen() {
   const [pairing] = await sql<{ id: string }[]>`select id from fixture_stream_pairings where phone = ${phone} and ended_at is null`;
   const { sessionId } = await startBroadcast(
     { userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId: pairing!.id }, fx,
-    { targetId: api.targetId, startCause: "operator", phone: "present", mode: "passthrough", courtLinkId: shown.id }, deps,
+    { targetId: api.targetId, startCause: "operator", phone: "present", mode, courtLinkId: shown.id }, deps,
   );
   const session = async () => (await sql<{ state: string; end_reason: string | null }[]>`
     select state, end_reason from fixture_stream_sessions where id = ${sessionId}`)[0]!;
@@ -121,7 +128,22 @@ async function courtSessionOpen() {
       { params: Promise.resolve({ id: fx }) },
     );
   };
-  return { session, switchOn, off };
+  const stopTaps = async () => (await sql<{ n: number }[]>`
+    select count(*)::int as n from fixture_stream_events where session_id = ${sessionId} and kind = 'action' and type = 'stop'`)[0]!.n;
+  return { session, switchOn, off, runner, sessionId, stopTaps };
+}
+
+/** The provider's stop fails the next `n` calls (a Fly blip), after the stop's decision has committed. */
+function failProviderStop(runner: FakeRunner, n: number) {
+  const real = runner.stop.bind(runner);
+  let left = n;
+  const calls = { n: 0 };
+  runner.stop = async (id, opts) => {
+    calls.n += 1;
+    if (left > 0) { left -= 1; throw new Error("provider stop failed (test)"); }
+    return real(id, opts);
+  };
+  return calls;
 }
 
 describe.skipIf(!HAS_DB)("PUT …/court-stream over HTTP (O17)", () => {
@@ -156,5 +178,63 @@ describe.skipIf(!HAS_DB)("PUT …/court-stream over HTTP (O17)", () => {
     stopFailures.n = 0;
     expect((await c.off()).status).toBe(200);
     expect((await c.session()).end_reason).toBe("stopped");
+  });
+
+  it("fix round 2: the provider stop throws AFTER the stop committed (`ending`) → the retry performs the provider stop once, the court end is scheduled once, one tap is recorded", async () => {
+    stopFailures.n = 0;
+    const c = await courtSessionOpen("composed");
+    const calls = failProviderStop(c.runner, 1);
+    courtEnds.sids = [];
+    const res = await c.off();
+    expect(res.status).toBe(200);
+    expect(calls.n, "the failed provider stop, then the retry's").toBe(2);
+    expect(c.runner.stops.length, "the provider stop happened, once").toBe(1);
+    expect(courtEnds.sids, "the court's YouTube end, scheduled once").toEqual([c.sessionId]);
+    expect(await c.stopTaps(), "one organiser action row, not one per retry").toBe(1);
+    expect((await c.session()).end_reason).toBe("stopped");
+    // A second OFF on the session now draining after a stop that landed owes nothing: no provider call, no second schedule.
+    expect((await c.off()).status).toBe(200);
+    expect(c.runner.stops.length).toBe(1);
+    expect(courtEnds.sids).toEqual([c.sessionId]);
+    expect(await c.stopTaps()).toBe(1);
+  });
+
+  it("fix round 2: the provider stop throws on both tries → 500 with the session `ending`; a second OFF finds it and performs the stop, scheduling the court end once", async () => {
+    stopFailures.n = 0;
+    const c = await courtSessionOpen("composed");
+    const calls = failProviderStop(c.runner, 2);
+    courtEnds.sids = [];
+    expect((await c.off()).status).toBe(500);
+    expect(calls.n).toBe(2);
+    expect(c.runner.stops.length, "the video is not stopped yet").toBe(0);
+    expect((await c.session()).state).toBe("ending");
+    expect(courtEnds.sids).toEqual([]);
+    expect((await c.off()).status).toBe(200);
+    expect(c.runner.stops.length, "the second OFF performed the provider stop").toBe(1);
+    expect(courtEnds.sids).toEqual([c.sessionId]);
+    expect(await c.stopTaps()).toBe(1);
+  });
+
+  it("fix round 2: an `ending` composed session whose Machine already exited owes no stop — a second OFF calls no provider and schedules nothing", async () => {
+    stopFailures.n = 0;
+    const c = await courtSessionOpen("composed");
+    failProviderStop(c.runner, 2);
+    courtEnds.sids = [];
+    expect((await c.off()).status).toBe(500);
+    // The Machine's exit was observed meanwhile (the table moved the runner on): nothing is left for a stop to ask of it.
+    await sql`update fixture_stream_sessions set runner_state = 'exited' where id = ${c.sessionId}`;
+    expect((await c.off()).status).toBe(200);
+    expect(c.runner.stops.length, "no provider stop for an exited Machine").toBe(0);
+    expect(courtEnds.sids, "and no court end scheduled by the OFF").toEqual([]);
+  });
+
+  it("fix round 2: a passthrough stop that lands schedules the court end once (stopSession's own schedule, not a second)", async () => {
+    stopFailures.n = 0;
+    const c = await courtSessionOpen();
+    courtEnds.sids = [];
+    expect((await c.off()).status).toBe(200);
+    expect(courtEnds.sids).toEqual([c.sessionId]);
+    expect((await c.off()).status).toBe(200);
+    expect(courtEnds.sids, "a second OFF on a stopped session schedules nothing").toEqual([c.sessionId]);
   });
 });

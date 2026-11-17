@@ -2,7 +2,7 @@ import "server-only";
 // THE seam: apply (lock, decide, persist, consume) and the post-commit effects it feeds back into (see ./index.ts).
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, relayEnvironment } from "@/server/relay/config";
+import { RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION, RUNNER_STOP_GRACE_SECONDS, RUNNER_STOP_SIGNAL, relayEnvironment } from "@/server/relay/config";
 import {
   InvalidTransition,
   decide,
@@ -181,6 +181,37 @@ async function failClosedOnOutput(s: Session, inputUid: string, err: unknown, de
       log.error({ sid: s.id, inputUid: uid, err: cleanup }, "stream session: an input of a session that failed closed was NOT deleted — the retention sweep retries it");
     });
   }
+}
+
+/**
+ * Web A fix round 2 (item 1): a stop whose decision COMMITTED (`ending`) but whose provider effect then threw. `apply` commits
+ * the decision before `runEffects`, so a throw there leaves the row `ending` with the provider never asked; the organiser's
+ * Stop is idempotent on `ending` (stop.ts) and would decide nothing again. This re-runs the ONE effect such a stop still owes:
+ *  - passthrough: `complete_now` (a passthrough session never rests in `ending`; its decision completes it at once);
+ *  - composed: the runner's `stop_machine` (SIGINT, idempotent at the provider) — owed only while the runner is `stopping` on a
+ *    known Machine and no `stop_machine` effect has been recorded `ok` after the session's transition to `ending` (the ledger's order, `seq`). A composed session
+ *    draining after a stop that did land owes nothing.
+ * Resolves true when it ran an owed effect, false when nothing was owed (not `ending`, or nothing to re-run). Throws what the
+ * effect throws. Records no action row: it is not a tap, only the rest of one.
+ */
+export async function finishOwedStop(sessionId: string, deps: SessionDeps): Promise<boolean> {
+  const row = await readRow(sessionId);
+  if (!row || row.state !== "ending") return false;
+  const s = toSession(row);
+  if (s.mode === "passthrough") {
+    // complete_now's own command, re-decided on the locked row: a session another writer finished meanwhile decides nothing.
+    await apply(sessionId, (cur) => (cur.state === "ending" ? { type: "complete" } : null), deps);
+    return true;
+  }
+  if (s.runner.state !== "stopping" || !s.runner.machineId) return false;
+  const [landed] = await sql<{ n: number }[]>`
+    select count(*)::int as n from fixture_stream_events
+     where session_id = ${sessionId} and kind = 'effect' and type = 'stop_machine' and result = 'ok'
+       and seq > (select coalesce(max(seq), 0) from fixture_stream_events
+                   where session_id = ${sessionId} and kind = 'transition' and to_state = 'ending')`;
+  if ((landed?.n ?? 0) > 0) return false;
+  await runEffects(s, [{ type: "runner", effect: { type: "stop_machine", signal: RUNNER_STOP_SIGNAL, timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } }], deps);
+  return true;
 }
 
 async function runEffects(session: Session, effects: Effect[], deps: SessionDeps): Promise<Session> {

@@ -572,6 +572,23 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       const a = await postBeat(r.code, r.tok, fbody({ sid }), r.deps, r.now());
       expect(a).toMatchObject({ state: "over", sid });
     });
+
+    it("fix round 2 (item 3): a fixture code reissued, its session then stopped outside a beat: the beat naming it hears over; the next one without a sid is 401", async () => {
+      const r = await captureRig();
+      const phone = phoneId("a3-fixture-stopped");
+      const fbody = (over: Partial<Beat> = {}) => CaptureBeat.parse({ ...body(phone, over), code: r.code, appVersion: "1.0.13-1150" });
+      const sid = await r.start(phone);
+      await reissueStreamCode(r.auth, r.fixtureId);
+      await stopSession(r.auth, r.fixtureId, sid, r.deps);
+      expect((await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sid}`)[0]!.state, "premise: stopped, nothing open").toBe("completed");
+      // One clock (database stamps are the wall's): created T0, the code reissued at T0+1 s, the session stopped at T0+2 s.
+      const t0 = r.now().getTime() - 60_000;
+      const code = (await sql<{ id: string }[]>`select id from fixture_stream_codes where code = ${r.code}`)[0]!.id;
+      await sql`update fixture_stream_sessions set created_at = ${new Date(t0)}, ended_at = ${new Date(t0 + 2000)} where id = ${sid}`;
+      await sql`update fixture_stream_codes set ended_at = ${new Date(t0 + 1000)} where id = ${code}`;
+      expect(await postBeat(r.code, r.tok, fbody({ sid, state: "publishing" }), r.deps, r.now())).toMatchObject({ state: "over", sid, endReason: "stopped" });
+      expect(await refusal(postBeat(r.code, r.tok, fbody(), r.deps, r.now()))).toBe("401:code_ended");
+    });
   });
 
   describe("web batch A4 (O17): the Stream switch off stops the match's court session now", () => {

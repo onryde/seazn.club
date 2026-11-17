@@ -285,8 +285,7 @@ async function serveCode(
     tail = { now, anchor };
   }
   const serves = codeServes({ status, callerIsOpenSessionPhone, sessionCreatedBeforeEnd, call, tail })
-    || (status === "ended" && call === "beat" && owner.releasesOnEnding === true && endedAt !== null
-      && await namesItsEndedSession(owner, namedSid, phone, endedAt));
+    || (status === "ended" && call === "beat" && endedAt !== null && await namesItsEndedSession(owner, namedSid, phone, endedAt));
   if (!serves) {
     // §5.2: "ENDED(code_ended) is written lazily when a call from the pairing is refused 401" (B6 review M-6). Only a
     // call whose tok VERIFIED speaks for a pairing, and only one C1 refuses: the C1b phone (its open session created
@@ -302,12 +301,13 @@ async function serveCode(
 }
 
 /**
- * Fix round 1 (finding 1), a released court code only: a BEAT that names a session of the owner which its caller's pairing
+ * Fix round 1 (finding 1), for a court's code; fix round 2 (item 3) for a fixture's code too: a BEAT that names a session of the owner which its caller's pairing
  * held, created before the code ended, and stopping (`ending`) or stopped at or after that end, is served as C1b serves it,
  * so it hears `over` for that session. The phone then stops naming it, and its next beat (naming nothing it holds) is
  * `401 code_ended`. Without this, a stop that landed outside a beat (the desk's Stop, the Stream switch off, the tail) answered
  * the beat that names it with 401: the phone treats a 401 while a session runs as "the code ends after this session" and
- * keeps publishing, and every later beat is 401 too.
+ * keeps publishing, and every later beat is 401 too. A fixture's code meets the same case after a reissue: its session is
+ * stopped outside a beat (the desk's Stop), so no session is open and C1b serves nothing; the beat naming it hears `over`.
  */
 async function namesItsEndedSession(owner: CodeOwner, namedSid: string | null, phone: string | null, endedAt: Date): Promise<boolean> {
   if (namedSid === null || phone === null || !UUID_RE.test(namedSid)) return false;
@@ -320,13 +320,15 @@ async function namesItsEndedSession(owner: CodeOwner, namedSid: string | null, p
 }
 
 /** A fixture's code: its own sessions, the fixture's finish and the grace after it (C2). */
-async function serveFixtureCode(row: FixtureCodeRow, call: CodeCall, phone: string | null, now: Date): Promise<ResolvedCode> {
+async function serveFixtureCode(
+  row: FixtureCodeRow, call: CodeCall, phone: string | null, now: Date, namedSid: string | null = null,
+): Promise<ResolvedCode> {
   const status = await serveCode(row, {
     view: { endedAt: row.ended_at, finishedAt: row.finished_at },
     graceMinutes: graceMinutes(),
     tailFinishedAt: row.finished_at,
     sessions: () => sql`s.fixture_id = ${row.fixture_id}`,
-  }, call, phone, now);
+  }, call, phone, now, namedSid);
   return { kind: "fixture", codeId: row.id, orgId: row.org_id, fixtureId: row.fixture_id, status, issuedBy: row.issued_by };
 }
 
@@ -396,7 +398,7 @@ export async function resolveAnyStreamCode(
       left join courts k on k.id = l.court_id
      where c.code = ${code}`;
   if (!tokMatches(row?.tok_hash ?? null, tok) || !row) throw codeEnded();
-  if (row.fixture_id !== null) return serveFixtureCode({ ...row, fixture_id: row.fixture_id }, call, phone, now);
+  if (row.fixture_id !== null) return serveFixtureCode({ ...row, fixture_id: row.fixture_id }, call, phone, now, namedSid);
   // fixture_stream_codes_one_owner (V525): no fixture means a court link, and the link's court is the org's (its FK).
   if (row.court_link_id === null || row.court_id === null || row.court_name === null || row.competition_id === null
       || row.opens_at === null || row.expires_at === null || row.target_id === null) {
