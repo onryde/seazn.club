@@ -274,6 +274,16 @@ export const PatchedEntrant = Entrant.extend({
    *  the player rejoins it (a knockout: `waiting` for the organiser's Add to bracket, or `refused` with
    *  KO_LATE_ENTRY_PLAYED_ON when their place has been played on). Absent on every other patch. */
   late_entry: LateEntryResult.optional(),
+  /** W5 B3 fix wave (m-1): a REINSTATE that reversed a league or group withdrawal (RB5-W6) — how many cascade events it took
+   *  back and results it re-recorded, and `not_restored`: the lines whose removed result could not be put back (rescored
+   *  since, or refused by the engine), left as they are for the organiser. Absent on every other patch. */
+  reinstate: z
+    .object({
+      voided: z.number().int().nonnegative(),
+      rerecorded: z.number().int().nonnegative(),
+      not_restored: z.array(z.string().uuid()),
+    })
+    .optional(),
 });
 
 /** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss or a

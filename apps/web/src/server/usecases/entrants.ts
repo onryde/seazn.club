@@ -50,7 +50,7 @@ import { admitTableLateEntrant, afterTableLateEntry, hasRootTableStage, type Tab
 import { classifyPairRosterChange } from "@/lib/pair-roster-change";
 import { roundRobinRefusal } from "./roundrobin-refusal";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
-import type { WithdrawCascadeOut } from "./withdrawal";
+import type { ReinstateTableOut, WithdrawCascadeOut } from "./withdrawal";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -1048,7 +1048,7 @@ export async function patchEntrant(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
-): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut; late_entry?: LateEntryResult }> {
+): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut; late_entry?: LateEntryResult; reinstate?: ReinstateTableOut }> {
   // W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12): judged FIRST, before any write and before the disqualification door below —
   // a roster smuggled in beside `status: "disqualified"` would otherwise be written by that door's own "rest of the patch".
   const pair = await pairRosterVerdict(auth, id, patch);
@@ -1087,30 +1087,45 @@ export async function patchEntrant(
   // W5 T8 (RB5-W6, X-WDT-8): a Reinstate — a departed entrant back in the field — reverses her league or group withdrawal
   // AFTER the status write commits (her lines still exist, so Task 6's door in `writeEntrantPatch` never makes her wait).
   // The reverse is many score writes (each its own transaction, as the cascade's are), so it cannot share the status write's
-  // transaction. It is all-or-retry instead (fix rounds 1 and 2, m2):
-  // - asked of EVERY write that leaves her in the field (`tableReinstateOwed`), never gated on the prior status — a reverse
-  //   cut off after the status write committed (the process died) is finished by the next PATCH;
-  // - a reverse that throws puts a status this PATCH changed BACK (the PATCH changed nothing a client can see), and the
-  //   reverse is idempotent (`reinstateTableEntrant`), so the retry finishes it.
-  const [prior] =
-    patch.status !== undefined && inTheField({ status: patch.status })
-      ? await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`)
-      : [];
-  const out = await writeEntrantPatch(auth, id, patch);
-  if (inTheField(out)) {
-    const { reinstateTableEntrant, tableReinstateOwed } = await import("./withdrawal");
-    if (await tableReinstateOwed(auth, id, out.division_id)) {
+  // transaction.
+  //
+  // B3 fix wave (I-1): ONLY a patch that carries a status into the field over a DEPARTED prior status is a Reinstate, and the
+  // whole of it — the prior-status read, the status write and the reverse — runs under the per-entrant cascade lock
+  // (`withCascadeLock`), the one a live withdrawal holds. Any other write (a rename, a seed, the Withdrawn card's Save) asks
+  // nothing: asked of every write, the reverse ran beside a live cascade and undid its expunges, after which the cascade wrote
+  // her departed over restored lines. A Reinstate sent during a cascade waits for it, then reads her as it left her.
+  if (patch.status === undefined || !inTheField({ status: patch.status })) return writeEntrantPatch(auth, id, patch);
+  const [home] = await withTenant(auth.orgId, (tx) => tx<{ division_id: string }[]>`select division_id from entrants where id = ${id}`);
+  if (home === undefined) return writeEntrantPatch(auth, id, patch); // its own 404
+  const { withCascadeLock, reinstateTableEntrant, tableReinstateOwed } = await import("./withdrawal");
+  return withCascadeLock(auth.orgId, home.division_id, id, async () => {
+    const [prior] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
+    const out = await writeEntrantPatch(auth, id, patch);
+    if (prior === undefined || !DEPARTED_STATUSES.has(prior.status) || !inTheField(out)) return out;
+    if (!(await tableReinstateOwed(auth, id, out.division_id))) return out;
+    // B3 m-3: a reverse cut off part-way is FINISHED, never left half-done. It is idempotent (a void already written is not
+    // active, a re-record already written is matched as a prefix), so a failed run is retried once in this request; a run that
+    // fails again puts the status this PATCH changed BACK, and the organiser's next Reinstate (prior status departed again)
+    // finishes the same reverse. A partial reverse cannot be rolled back instead: each write is its own transaction and a void
+    // is not voidable (B3 fix-wave false premise, recorded).
+    let reinstate: ReinstateTableOut;
+    try {
+      reinstate = await reinstateTableEntrant(auth, id);
+    } catch (first) {
+      log.warn({ err: String(first), entrantId: id }, "reinstate: the reverse failed part-way - retrying it once");
       try {
-        await reinstateTableEntrant(auth, id);
+        reinstate = await reinstateTableEntrant(auth, id);
       } catch (err) {
-        if (prior !== undefined && DEPARTED_STATUSES.has(prior.status)) {
-          await writeEntrantPatch(auth, id, { status: prior.status as PatchEntrant["status"] });
-        }
+        await writeEntrantPatch(auth, id, { status: prior.status as PatchEntrant["status"] });
         throw err;
       }
     }
-  }
-  return out;
+    // B3 m-1: a line whose removed result could not be put back is the organiser's to look at - said in the reply, as `cascade` is.
+    if (reinstate.not_restored.length > 0) {
+      log.warn({ entrantId: id, not_restored: reinstate.not_restored }, "reinstate: some removed results could not be re-recorded");
+    }
+    return { ...out, reinstate };
+  });
 }
 
 /** The entrant write itself — every field of a patch, in one transaction, with no routing. `patchEntrant` is the door;

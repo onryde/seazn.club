@@ -416,7 +416,10 @@ describe.skipIf(!HAS_DB)("W4 T16 fix 1: two sequential Withdraws of both finalis
     const ledger = async () => (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${final.id}`)[0]!.n;
     const rows = await ledger();
     expect(rows, "premise: the first Withdraw wrote its forfeit").toBeGreaterThan(0);
-    await withdrawEntrantCascade(s.auth, a, { as: "disqualified" });
+    // B3 fix wave (I-2, RB3-17): a departed entrant entering the door again is refused and nothing is written - the first
+    // departure governs (her status stays `withdrawn`).
+    await expect(withdrawEntrantCascade(s.auth, a, { as: "disqualified" })).rejects.toMatchObject({ status: 409 });
+    expect((await sql<{ status: string }[]>`select status from entrants where id = ${a}`)[0]!.status).toBe("withdrawn");
     expect(await ledger(), "the walkover is not voided and re-written: b is still in").toBe(rows);
     expect((await fixtureRow(final.id)).outcome, "b still holds the walkover").toMatchObject({ kind: "award", winner: b, reason: "withdrew" });
     checked++;

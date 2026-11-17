@@ -277,7 +277,11 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     if (locked.entrant_id && !cascadeOwed) {
       // W5 T6 review m2: a player waiting for a table place (`table_waiting_stage_id`) stops waiting as they leave — this write
       // never reaches `writeEntrantPatch`, which clears it on every other departure.
-      await tx`update entrants set status = 'withdrawn', table_waiting_stage_id = null where id = ${locked.entrant_id}`;
+      // B3 fix wave (I-2): never over a departure already written - a disqualified entrant stays disqualified (the first
+      // departure governs, RB3-17); the registration itself still withdraws by its own rules above and below.
+      const { DEPARTED_STATUSES } = await import("../entrants");
+      await tx`update entrants set status = 'withdrawn', table_waiting_stage_id = null
+                where id = ${locked.entrant_id} and status not in ${tx([...DEPARTED_STATUSES])}`;
     }
     // RS009: if this entry is a solo sign-up placed on someone else's team,
     // withdrawing must take them OFF that roster. Marking their own entrant

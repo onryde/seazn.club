@@ -2,7 +2,7 @@
 // so it cannot share the status write's transaction. It is all-or-retry instead: a reverse that throws part-way puts the
 // status BACK (the PATCH changed nothing a client can see), and the reverse is idempotent, so a retry finishes it and writes
 // nothing twice. The throw is forced on the cascade's SECOND re-record (its voids and one re-recorded event have landed), so
-// the retry must pick up exactly where it stopped.
+// the retry must pick up exactly where it stopped. B3 fix wave (m-3): that retry now runs once inside the same request.
 // Its own file: the throw is a module mock of `../scoring`, which every other suite needs real.
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -73,35 +73,37 @@ async function rig() {
 }
 
 describe.skipIf(!HAS_DB)("m2: a Reinstate that fails part-way changes nothing, and its retry finishes the job", () => {
-  // Round 2 (m2): the process died after the status write committed — she reads `registered` with her lines still out. The
-  // next PATCH finishes the reverse: it is asked of any write that leaves her in the field, never gated on the prior status.
-  // differential: round 1 gated on a departed prior status, so this PATCH did nothing.
-  it("a PATCH after a reverse cut off by the process dying finishes it", async () => {
-    const { auth, p1, mine, signed, pre } = await rig();
+  // Round 2 (m2) had any write that leaves her in the field finish a reverse the process died in. B3 fix wave (I-1, controller
+  // ruling): withdrawn - asked of every write, the reverse ran beside a LIVE cascade (cascade-lock-doors.test.ts). Only a status
+  // into the field over a DEPARTED prior status is a Reinstate now, so this re-asserted status (prior: registered) reverses
+  // nothing. differential: round 2 finished the reverse here.
+  it("a status re-asserted over a prior status already in the field reverses nothing (B3 I-1: a Reinstate needs a departed prior status)", async () => {
+    const { auth, p1, mine, signed } = await rig();
     await withdrawEntrantCascade(auth, p1);
     await writeEntrantPatch(auth, p1, { status: "registered" });
     expect((await lineState(signed.id)).status, "rig: registered, the line still out").toBe("abandoned");
+    const before = Object.fromEntries(await Promise.all(mine.map(async (l) => [l.id, await lineState(l.id)] as const)));
     await patchEntrant(auth, p1, { status: "registered" });
     let checked = 0;
     for (const l of mine) {
-      expect(await lineState(l.id), "finished: the line as before the withdrawal").toEqual(pre[l.id]);
+      expect(await lineState(l.id), "untouched").toEqual(before[l.id]);
       checked++;
     }
     expect(checked).toBe(3);
   }, 180_000);
 
-  it("a forced throw part-way through the re-record leaves her withdrawn; the retry restores every line exactly once", async () => {
+  // B3 m-3: one failed write is retried inside the same request (the reverse is idempotent), so the PATCH succeeds and the
+  // retry picks up exactly where the first run stopped. A reverse that keeps failing (she stays withdrawn, the next Reinstate
+  // finishes it) is cascade-lock-doors.test.ts's. differential: round 1 refused this PATCH and left her withdrawn.
+  it("a forced throw part-way through the re-record is retried in the request; every line restored exactly once", async () => {
     const { auth, p1, mine, signed, pre } = await rig();
     await withdrawEntrantCascade(auth, p1);
     expect((await lineState(signed.id)).status, "rig: expunged").toBe("abandoned");
 
     arm.throwOnRerecord = true;
-    await expect(patchEntrant(auth, p1, { status: "registered" })).rejects.toThrow(/forced/);
+    const back = await patchEntrant(auth, p1, { status: "registered" });
     expect(arm.thrown, "rig: the throw fired after one re-record landed").toBe(1);
-    const [me] = await sql<{ status: string }[]>`select status from entrants where id = ${p1}`;
-    expect(me!.status, "the failed Reinstate left her withdrawn").toBe("withdrawn");
-
-    await patchEntrant(auth, p1, { status: "registered" });
+    expect(back.status).toBe("registered");
     let checked = 0;
     for (const l of mine) {
       expect(await lineState(l.id), "the retry restores the line exactly, nothing written twice").toEqual(pre[l.id]);

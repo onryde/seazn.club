@@ -417,7 +417,7 @@ async function cancelSettledBoardInvites(auth: AuthCtx, fixtureIds: readonly str
  *  separate" (rulebook §12) — so every board is settled exactly as a withdrawal settles it (the same `withdrew` walkover;
  *  ruling 115 still decides credit) and only the final status differs. `patchEntrant` routes a `status: "disqualified"`
  *  patch of an entrant still in the field here; this function writes its status through `writeEntrantPatch`, which never
- *  routes back (controller ruling C6). Asked for the status the entrant already holds, it refuses 409: nothing is owed. */
+ *  routes back (controller ruling C6). Asked of an entrant already departed (either status, B3 I-2), it refuses 409: nothing is owed. */
 /** W5 T8b (X-WDT-9, ruling 288): who started a withdrawal that no staff user made, written on its `table_withdrawal` rows.
  *  Server-only, like `writer`: no request field reaches it. */
 export type CascadeActor = { kind: "registrant"; registration_id: string };
@@ -470,28 +470,38 @@ async function releaseCascadeLock(orgId: string, divisionId: string, entrantId: 
              and org_id = ${orgId} and holder = ${holder}`;
 }
 
+/**
+ * B3 fix wave (I-1): the per-entrant cascade lock around `fn` — shared by the withdrawal cascade and a Reinstate's reverse, the
+ * two writers that move her lines in bulk. `fn` must re-read her status itself: the status read before the wait is stale once
+ * another holder (a live cascade, a Reinstate) has finished. Waits (polling, nothing held) up to `CASCADE_LOCK_WAIT_MS`, then
+ * refuses 409.
+ */
+export async function withCascadeLock<T>(orgId: string, divisionId: string, entrantId: string, fn: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + CASCADE_LOCK_WAIT_MS;
+  let holder = await acquireCascadeLock(orgId, divisionId, entrantId);
+  while (holder === null) {
+    if (Date.now() > deadline) throw new HttpError(409, "A withdrawal of this entrant is already running - try again in a moment");
+    await new Promise((r) => setTimeout(r, CASCADE_LOCK_POLL_MS));
+    holder = await acquireCascadeLock(orgId, divisionId, entrantId);
+  }
+  try {
+    return await fn();
+  } finally {
+    try {
+      await releaseCascadeLock(orgId, divisionId, entrantId, holder);
+    } catch (err) {
+      log.error({ err, entrantId }, "withdrawal: releasing the cascade lock failed (it expires on its own)");
+    }
+  }
+}
+
 export async function withdrawEntrantCascade(
   auth: AuthCtx,
   entrantId: string,
   opts: { as?: "withdrawn" | "disqualified"; actor?: CascadeActor } = {},
 ): Promise<WithdrawCascadeOut> {
   const { division_id: divisionId } = await getEntrant(auth, entrantId);
-  const deadline = Date.now() + CASCADE_LOCK_WAIT_MS;
-  let holder = await acquireCascadeLock(auth.orgId, divisionId, entrantId);
-  while (holder === null) {
-    if (Date.now() > deadline) throw new HttpError(409, "A withdrawal of this entrant is already running - try again in a moment");
-    await new Promise((r) => setTimeout(r, CASCADE_LOCK_POLL_MS));
-    holder = await acquireCascadeLock(auth.orgId, divisionId, entrantId);
-  }
-  try {
-    return await runWithdrawEntrantCascade(auth, entrantId, opts);
-  } finally {
-    try {
-      await releaseCascadeLock(auth.orgId, divisionId, entrantId, holder);
-    } catch (err) {
-      log.error({ err, entrantId }, "withdrawal: releasing the cascade lock failed (it expires on its own)");
-    }
-  }
+  return withCascadeLock(auth.orgId, divisionId, entrantId, () => runWithdrawEntrantCascade(auth, entrantId, opts));
 }
 
 /**
@@ -532,8 +542,13 @@ async function runWithdrawEntrantCascade(
 ): Promise<WithdrawCascadeOut> {
   const as = opts.as ?? "withdrawn";
   const entrant = await getEntrant(auth, entrantId);
-  if (entrant.status === as) {
-    throw new HttpError(409, `entrant is already ${as}`);
+  // B3 fix wave (I-2; RB3-17 - a disqualification is "withdrawal from that moment", so the FIRST departure governs): an entrant
+  // already out of the field (withdrawn OR disqualified) is owed nothing by any door, whatever status it asks for - no settle, no
+  // `table_withdrawal` row, her status unchanged (a DQ is never downgraded to `withdrawn`). Read inside the lock, so a door that
+  // waited behind a cascade meets her as that cascade left her. Every automatic door reads this 409 as "already gone"; an
+  // organiser's deliberate status change between the two departed statuses is `patchEntrant`'s plain write (C6), not this door.
+  if (DEPARTED_STATUSES.has(entrant.status)) {
+    throw new HttpError(409, `entrant is already ${entrant.status}`);
   }
   const division = await getDivision(auth, entrant.division_id);
   const out: WithdrawCascadeOut = {
@@ -567,8 +582,9 @@ async function runWithdrawEntrantCascade(
   // generated) are regenerated from the field anyway — plain status flip.
   // W3 T15: "started" is T9's one predicate (`divisionHasStarted`, controller ruling C17), read here rather than restated.
   if (await withTenant(auth.orgId, (tx) => divisionHasStarted(tx, division.id))) {
-    // Re-review (I): a run cut off part-way left settles behind; take them back so this run decides as the first did.
-    if (!DEPARTED_STATUSES.has(entrant.status)) await reversePartialCascade(auth, entrantId, division.id);
+    // Re-review (I): a run cut off part-way left settles behind; take them back so this run decides as the first did. (She is in
+    // the field here: a departed entrant was refused above.)
+    await reversePartialCascade(auth, entrantId, division.id);
     // W4 T13 (RB4-V2, X-LL-1): a qualifier whose main-draw round-1 line has not started takes a lucky loser in her seat
     // FIRST, so the line below is no longer hers and walks nobody over. Its own transaction, committed before the
     // settles (ruling 101), and published like any seat write.
@@ -1214,7 +1230,7 @@ export interface ReinstateTableOut {
  *
  * Skipped: a line whose other side is still departed (the shared line of two withdrawals stays out until both are back)
  * and a stage already complete (RB5-L8: a finished table takes no one, and its lines are not reopened). Called by
- * `patchEntrant` whenever she is in the field and `tableReinstateOwed` says the reverse is not finished.
+ * `patchEntrant` for a Reinstate (a departed prior status), under the cascade lock, when `tableReinstateOwed` says a reverse is owed.
  */
 export async function reinstateTableEntrant(auth: AuthCtx, entrantId: string): Promise<ReinstateTableOut> {
   const entrant = await getEntrant(auth, entrantId);
@@ -1290,9 +1306,9 @@ async function tableWithdrawalLedger(auth: AuthCtx, divisionId: string) {
 /**
  * Fix round 2 (m2): is a Reinstate's reverse still owed for this entrant? True while one of her lines in an unfinished league
  * or group stage still carries an active cascade event (`core.abandon{expunge}` or her `withdrew` forfeit) against a side
- * still in the field, or while her `table_withdrawal` row for such a stage is still active. `patchEntrant` asks this of an
- * entrant in the field on every write — never the prior status — so a reverse cut off part-way (the process died after the
- * status write) is finished by the next PATCH.
+ * still in the field, or while her `table_withdrawal` row for such a stage is still active. `patchEntrant` asks this only for a
+ * Reinstate (a status into the field over a departed prior status), under the cascade lock (B3 I-1): asked of every write it
+ * ran beside a live cascade, whose own expunges made it true.
  */
 export async function tableReinstateOwed(auth: AuthCtx, entrantId: string, divisionId: string): Promise<boolean> {
   const [hit] = await withTenant(auth.orgId, (tx) =>
