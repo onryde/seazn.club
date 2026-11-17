@@ -240,8 +240,8 @@ function LiveArt({ dict }: ArtProps) {
           </span>
         </div>
         <p className="mkf-cap">{t(dict, "home.flow.live.streamCap")}</p>
-        {/* Owner 2026-11-16: the price of streaming is the thing to see here. No figure: pack prices are not final
-            (lib/stream-credit-packs.ts STREAM_PACK_PRICES_FINAL), and a number typed here would drift from them. */}
+        {/* Owner 2026-11-16: the price of streaming is the thing to see here. No figure: the pack prices live in one
+            table (lib/stream-credit-packs.ts), and a number typed here would drift from it. */}
         <div className="mkf-offer" data-testid="flow-stream-offer">
           <strong className="mk-cond">{t(dict, "home.flow.live.offer")}</strong>
           <span>{t(dict, "home.flow.live.offerDetail")}</span>

@@ -6,7 +6,8 @@
 //     the old price archived — never a thrown "fix it by hand" as the old script did;
 //   * a MISSING currency option is a change too, and re-mints;
 //   * the product is found by `metadata.kind = "stream_credits"`, oldest match wins;
-//   * a LIVE key skips the packs, loudly, while STREAM_PACK_PRICES_FINAL is false; a test key always syncs them.
+//   * a LIVE key skips the packs, loudly, when the table is not final (the flag is true since 2026-11-17, so the live
+//     default now syncs); a test key always syncs them.
 //
 // Every Stripe call goes through a stub passed as a PARAMETER, so nothing here needs a key or a network. The amounts
 // the stub is checked against come from the owner's GBP literals and the declared FX table, never from the builder
@@ -213,8 +214,8 @@ describe("ensureStreamPackProduct — found by its tag, oldest match wins", () =
 });
 
 describe("syncStreamPacks — the live-key guard (STREAM_PACK_PRICES_FINAL)", () => {
-  it("the table is NOT final today: its prices are sandbox placeholders (owner, Addendum S)", () => {
-    expect(STREAM_PACK_PRICES_FINAL).toBe(false);
+  it("the table IS final: the owner called the prices real on 2026-11-17 (pinned in stream-pack-prices-final.test.ts)", () => {
+    expect(STREAM_PACK_PRICES_FINAL).toBe(true);
   });
 
   it("a key is live unless it is a test key — an unrecognised key is treated as live, so the guard fails safe", () => {
@@ -241,11 +242,14 @@ describe("syncStreamPacks — the live-key guard (STREAM_PACK_PRICES_FINAL)", ()
       checked++;
     }
     expect(checked).toBe(2);
-    // The default reads the constant: with no third argument a live key is skipped today.
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const f = fakeStripe();
-    expect(await syncStreamPacks(f.stripe, "sk_live_abc")).toEqual({ skipped: true, prices: [] });
-    expect(f.calls).toEqual([]);
+  });
+
+  it("the default reads the constant: with no third argument a live key now SYNCS the packs", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const f = fakeStripe({ products: [{ id: "prod_old", created: 1, metadata: { kind: "stream_credits" } }] });
+    const out = await syncStreamPacks(f.stripe, "sk_live_abc");
+    expect(out.skipped).toBe(false);
+    expect(f.calls.filter((c) => c.startsWith("prices.create"))).toHaveLength(STREAM_CREDIT_PACKS.length);
   });
 
   it("TEST key: always syncs every pack; LIVE key once final: syncs too", async () => {

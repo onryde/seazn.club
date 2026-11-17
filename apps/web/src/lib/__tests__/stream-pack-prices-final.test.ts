@@ -23,7 +23,12 @@ type OwnerFinalPrices = Readonly<Record<StreamPackSize, Readonly<Record<string, 
  * write the ruled values here AS LITERALS, in the same change. Do not copy them from `stream-credit-packs.ts`: typing
  * them from the ruling is the whole check.
  */
-const OWNER_FINAL_PRICES: OwnerFinalPrices | null = null;
+// Owner, 2026-11-17 ("real"): the prices set on 2026-11-16 are final for live Stripe. Minor units.
+const OWNER_FINAL_PRICES: OwnerFinalPrices | null = {
+  1: { gbp: 300, eur: 350, usd: 399, inr: 19900 },
+  5: { gbp: 1200, eur: 1400, usd: 1500, inr: 79900 },
+  20: { gbp: 4000, eur: 4500, usd: 4900, inr: 249900 },
+};
 
 interface TablePack {
   size: StreamPackSize;
