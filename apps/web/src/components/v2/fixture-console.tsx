@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useRouter } from "next/navigation";
 import type { PadSpec } from "@seazn/engine/sport";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import type { WithdrawalPreview } from "@/lib/withdrawal-consequence";
 import { runVoidBack } from "@/lib/cricket-wicket-void";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -94,6 +95,9 @@ import { StartTossQuestion, useStartWithToss } from "@/components/v2/scorepad/v3
 import { runTossThenStart } from "@/lib/start-with-toss";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
+
+/** W5 T8b (ruling 289): the stage kinds whose in-match disqualification withdraws the side from the stage. */
+const TABLE_STAGE_KINDS: ReadonlySet<string> = new Set(["league", "group", "swiss"]);
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -899,6 +903,13 @@ export function FixtureConsole({
       return r.ok ? r : { ok: false, message: r.message ?? msg("score.failed") };
     },
     [post, msg],
+  );
+
+  // W5 T8b (X-WDT-10, ruling 289): what a disqualification picked in the forfeit dialog would do to the side (table stages).
+  const previewDisqualification = useCallback(
+    (entrantId: string) =>
+      apiV1<WithdrawalPreview>(`/api/v1/fixtures/${fixture.id}/withdrawal-preview?entrant=${encodeURIComponent(entrantId)}`),
+    [fixture.id],
   );
 
   // W2b Task 11 (spec §7): the forfeit dialog shows a refusal on the console, like the settle dialog's.
@@ -2059,6 +2070,7 @@ export function FixtureConsole({
           home={{ id: home.id, name: homeName! }}
           away={{ id: away.id, name: awayName! }}
           forfeit={forfeit}
+          previewDisqualification={TABLE_STAGE_KINDS.has(stageKind ?? "") ? previewDisqualification : undefined}
           onClose={() => setForfeitOpen(null)}
           onRefused={(message) => {
             setForfeitOpen(null);

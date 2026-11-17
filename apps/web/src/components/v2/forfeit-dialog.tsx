@@ -18,6 +18,9 @@ import { forfeitAdmission, playRecorded, unplayedForfeitEvent, type ForfeitAward
 import type { AnySportModule } from "@seazn/engine/sport";
 import { isCascadeOnlyForfeitReason, type WriterForfeitReason } from "@/lib/forfeit-phase-refusal";
 import type { MessageKey } from "@/lib/messages";
+import type { WithdrawalPreview } from "@/lib/withdrawal-consequence";
+import { useLocaleOrDefault } from "@/components/i18n/dict-provider";
+import { WithdrawalConsequence, type ConsequenceState } from "@/components/v2/withdrawal-consequence";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -220,6 +223,10 @@ interface DialogProps {
   onClose: () => void;
   /** Spec §7: a refused forfeit CLOSES the dialog and the reason shows on the console (`forfeit-refusal`). */
   onRefused: (message: string) => void;
+  /** W5 T8b (X-WDT-10, ruling 289): on a league, group or Swiss line a disqualification here withdraws the side from the
+   *  stage, so the dialog reads what that does (`GET /fixtures/{id}/withdrawal-preview`) and shows it in place of ruling 258's
+   *  "this match only" hint. Absent (a bracket line): the hint, which is still true there (W4). */
+  previewDisqualification?: (entrantId: string) => Promise<WithdrawalPreview>;
 }
 
 const FORFEIT_DIALOG_TITLE_ID = "forfeit-dialog-title";
@@ -229,6 +236,22 @@ export function ForfeitDialog(props: DialogProps) {
   const { msg, model } = props;
   const [sel, setSel] = useState<ForfeitSelection>(NO_FORFEIT_PICK);
   const [sending, setSending] = useState(false);
+  const locale = useLocaleOrDefault();
+  const [dqPreviews, setDqPreviews] = useState<Readonly<Record<string, ConsequenceState>>>({});
+  const dqEntrant = sel.reason === "disqualified" && (sel.who === "home" || sel.who === "away") ? props[sel.who].id : null;
+  const previewDisqualification = props.previewDisqualification;
+  useEffect(() => {
+    if (dqEntrant === null || previewDisqualification === undefined) return;
+    // Only the answer is stored; an entrant not yet answered reads as loading below.
+    let live = true;
+    previewDisqualification(dqEntrant).then(
+      (preview) => live && setDqPreviews((p) => ({ ...p, [dqEntrant]: { kind: "ready", preview } })),
+      () => live && setDqPreviews((p) => ({ ...p, [dqEntrant]: { kind: "failed" } })),
+    );
+    return () => {
+      live = false;
+    };
+  }, [dqEntrant, previewDisqualification]);
   // The synchronous guard: a double click lands its second event before React re-renders `sending`.
   const sendingRef = useRef(false);
   const onCloseRef = useRef(props.onClose);
@@ -359,10 +382,20 @@ export function ForfeitDialog(props: DialogProps) {
             </div>
             {/* Ruling 258: the owner picked "disqualified" here and the player was paired again in round 2 - this reason
                 is an award on THIS match; the event-wide removal is Entrants' Disqualify (the withdrawal cascade). */}
-            {sel.reason === "disqualified" && (
+            {sel.reason === "disqualified" && props.previewDisqualification === undefined && (
               <p data-testid="forfeit-dq-scope-hint" className="mt-2 text-sm text-slate-600">
                 {msg("forfeitDialog.dqScopeHint")}
               </p>
+            )}
+            {/* W5 T8b (ruling 289): on a table stage the disqualification withdraws the side from it - say what that does. */}
+            {props.previewDisqualification !== undefined && dqEntrant !== null && (
+              <div className="mt-2">
+                <WithdrawalConsequence
+                  state={dqPreviews[dqEntrant] ?? { kind: "loading" }}
+                  t={msg as (k: string, v?: Record<string, string | number>) => string}
+                  locale={locale}
+                />
+              </div>
             )}
           </fieldset>
         )}

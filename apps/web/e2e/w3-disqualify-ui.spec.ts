@@ -95,9 +95,15 @@ async function disqualifyThroughTheScreen(page: Page, request: APIRequestContext
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible({ timeout: STEP_MS });
   await expect(dialog, "the confirm names the entrant").toContainText(fill("confirm.disqualifyEntrant.title", { name }));
-  // Ruling 260: the lead, then WITHDRAW's own body (the same cascade, said once) - read from the dictionary, never retyped here.
+  // Ruling 260: the lead (the same cascade as a withdrawal) - read from the dictionary, never retyped here. W5 T8b (ruling 289):
+  // under it THIS entrant's consequence, read from the cascade's own decision before the write (its sentences are pinned in
+  // w5-round-robin-app-a.spec.ts and the unit suites); Withdraw's general body stands in only when that cannot be read.
   await expect(dialog, "and says it is the withdrawal's effect on their matches").toContainText(uiEn["confirm.disqualifyEntrant.lead"]!);
-  await expect(dialog, "in Withdraw's own words").toContainText(uiEn["confirm.withdrawEntrant.body"]!);
+  const consequence = dialog.getByTestId("withdrawal-consequence");
+  await expect(consequence, "ruling 289: the consequence, before confirming").toHaveAttribute("data-state", "ready", { timeout: STEP_MS });
+  const undo = await consequence.getByTestId("withdrawal-consequence-line").last().textContent();
+  expect([uiEn["withdrawal.consequence.undo.reinstate"], uiEn["withdrawal.consequence.undo.rejoin"]], "it says how it is undone").toContain(undo);
+  await expect(dialog, "the per-entrant copy replaces the general body").not.toContainText(uiEn["confirm.withdrawEntrant.body"]!);
   await expect(dialog, "and not the first draft's untrue promise").not.toContainText("Results already played stand");
   const go = dialog.getByRole("button", { name: uiEn["confirm.disqualifyEntrant.label"]!, exact: true });
   await expect(go).toBeEnabled({ timeout: STEP_MS });

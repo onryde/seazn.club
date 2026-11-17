@@ -183,6 +183,8 @@ const RULES: RouteRule[] = [
   { method: "PATCH", path: "/entrants/:id", scope: "manage", pin: "entrant" },
   { method: "DELETE", path: "/entrants/:id", scope: "manage", pin: "entrant" },
   { method: "POST", path: "/entrants/:id/withdraw", scope: "manage", pin: "entrant" },
+  // W5 T8b (ruling 289): what a withdrawal or disqualification WOULD do, read-only (the organiser's confirmation)
+  { method: "GET", path: "/entrants/:id/withdrawal-preview", scope: "read", pin: "entrant" },
   { method: "POST", path: "/entrants/:id/roster/sync", scope: "manage", pin: "entrant" },
 
   // fixtures — events + state are the scoreboard surface
@@ -207,6 +209,9 @@ const RULES: RouteRule[] = [
   { method: "PUT", path: "/fixtures/:id/lineups/:entrantId", scope: "manage", pin: "fixture" },
   { method: "PATCH", path: "/fixtures/:id/officials", scope: "manage", pin: "fixture" },
   { method: "GET", path: "/fixtures/:id/state", scope: "read", pin: "fixture" },
+  // W5 T8b (ruling 289): what a disqualification recorded in this match would do — read before the scorer confirms it, so the
+  // door is the scorer's (requireFixtureActor "score")
+  { method: "GET", path: "/fixtures/:id/withdrawal-preview", scope: "score", pin: "fixture" },
 
   // format preview: POST but a pure computation — read keys may plan
   { method: "POST", path: "/format-preview", scope: "read" },

@@ -599,3 +599,61 @@ test.describe("X-WDT-9 a player withdraws after Start and the table follows the 
     }
   });
 });
+
+// W5 app PR A, Task 8b Part 3 (X-WDT-10, owner ruling 289's condition: "clear instruction when DQ"). The organiser's Entrants →
+// Disqualify used to confirm in general words (ruling 260: the per-format policy, the same for every entrant). It now names THIS
+// entrant's consequence before the write: her remaining matches by opponent and round, her own count under the 50 percent rule,
+// and the undo — then the cascade does exactly that. Expected copy is the brief's wording (Part 3 Files), typed here.
+test.describe("X-WDT-10 the organiser sees the consequence before disqualifying", () => {
+  test("2 of 5 played: the confirmation names her 3 remaining matches, the 50% outcome and Reinstate; confirmed, the cascade takes those out", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const { divisionId, stageId, ids } = await seedLeague(request, "DqCopy", 6);
+    // A realistic long name (43 characters) on the entrant the dialog names.
+    const name = "Alexandria Montgomery-Featherstonehaugh III";
+    const renamed = await apiJson(request, `/api/v1/entrants/${ids[0]}`, "PATCH", { display_name: name });
+    expect(renamed.status, JSON.stringify(renamed.error)).toBe(200);
+    expect((await generate(request, stageId)).status).toBe(200);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    const v = ids[0]!;
+    const lines = ((await stageFixtures(request, divisionId, stageId)) as Pairing[]).filter((f) => f.home_entrant_id === v || f.away_entrant_id === v);
+    expect(lines, "five lines each in a league of six").toHaveLength(5);
+    const other = (f: Pairing) => (f.home_entrant_id === v ? f.away_entrant_id! : f.home_entrant_id!);
+    // She wins two by walkover: 2 of 5 played, under half (RB5-W2).
+    for (const f of lines.slice(0, 2)) {
+      const ev = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: other(f), reason: "walkover" } });
+      expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+    }
+    const open = lines.slice(2).sort((a, b) => a.round_no - b.round_no || a.seq_in_round - b.seq_in_round);
+    const named = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`);
+    const nameOf = new Map(named.data!.map((e) => [e.id, e.display_name]));
+    const list = new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(open.map((f) => `${nameOf.get(other(f))} (round ${f.round_no})`));
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+    await dismissCookieBanner(page);
+    const row = page.locator("tbody tr").filter({ hasText: name });
+    await expect(row).toHaveCount(1, { timeout: 20_000 });
+    await row.getByTestId("entrant-row-disqualify").click();
+    const dialog = page.getByRole("alertdialog");
+    const consequence = dialog.getByTestId("withdrawal-consequence");
+    await expect(consequence, "read before the confirmation opens").toHaveAttribute("data-state", "ready", { timeout: 20_000 });
+    const said = await consequence.getByTestId("withdrawal-consequence-line").allTextContents();
+    // The list's order is the preview's (her lines in fixture order); compare the sentence's members, then its frame.
+    expect(said[0]).toMatch(/^These 3 remaining matches will be withdrawn: .+\.$/);
+    for (const f of open) expect(said[0], "each remaining match by opponent and round").toContain(`${nameOf.get(other(f))} (round ${f.round_no})`);
+    expect(said[0]!.length).toBe(`These 3 remaining matches will be withdrawn: ${list}.`.length);
+    expect(said.slice(1)).toEqual([`${name} has played 2 of 5. Under the 50% rule their results will be removed.`, "You can undo this with Reinstate."]);
+    for (const [w, h] of [[1280, 900], [768, 1024], [320, 640]] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await expect(consequence, `@${w}`).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    const sent = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/entrants/${v}` && res.request().method() === "PATCH", { timeout: 20_000 });
+    await dialog.getByRole("button", { name: "Disqualify", exact: true }).click();
+    expect((await sent).status()).toBe(200);
+    const after = ((await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[]).filter((f) => f.home_entrant_id === v || f.away_entrant_id === v);
+    expect(after.map((f) => f.status), "all five of her lines taken out, as the confirmation said").toEqual(["abandoned", "abandoned", "abandoned", "abandoned", "abandoned"]);
+  });
+});

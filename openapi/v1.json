@@ -14839,6 +14839,255 @@
         ]
       }
     },
+    "/api/v1/entrants/{id}/withdrawal-preview": {
+      "get": {
+        "summary": "What withdrawing or disqualifying this entrant WOULD do, read-only (W5, owner ruling 289): `cascade` false when nothing beyond a status is settled (she has already left); `started` false before Start (a plain status flip, no match touched); else one row per stage she plays in — a league or group: `mode` `expunge` (under half of her scheduled matches played: every result removed, the rest void) or `award` (half or more: results stand, the rest walk over), with her `played` and `scheduled` counts; a Swiss: always `award`; a bracket: `bracket_walkover` — with `pending` (the matches still to play: id, opponent name or null for an open seat, round) and `undo` (`restores`: Reinstate reverses it; `rejoins`: a Swiss Reinstate rejoins her; `waits`: a knockout Reinstate waits for the organiser to place her). The counts are the withdrawal's own decision, so the write then acts on them. A finished league or group is not listed. 422 when `as` is neither withdrawn nor disqualified",
+        "tags": [
+          "entrants"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "withdrawn",
+                "disqualified"
+              ]
+            },
+            "description": "The departure previewed"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/entrants/{id}/roster/sync": {
       "post": {
         "summary": "Replace the entrant roster with the linked team's current squad (enrollment snapshots once — this is the explicit re-sync; sport filter + kind cap apply). A squad holding a person already on another entrant of the division is 409 PERSON_ON_OTHER_TEAM (error.conflicts), the roster unchanged",
@@ -69888,6 +70137,252 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/withdrawal-preview": {
+      "get": {
+        "summary": "What a disqualification recorded IN this match would do to `entrant` (W5, owner ruling 289): the body of /entrants/{id}/withdrawal-preview with this match counted as played, read before the pad's sanction ending is confirmed. Any actor who may score the fixture (an organiser, an accepted official, its device link). `cascade` false on a bracket fixture (its disqualification is that match's forfeit, nothing more). 404 when `entrant` does not sit on this fixture; 422 without `entrant`",
+        "tags": [
+          "scoring"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entrant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The side being disqualified"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
             "content": {
               "application/json": {
                 "schema": {

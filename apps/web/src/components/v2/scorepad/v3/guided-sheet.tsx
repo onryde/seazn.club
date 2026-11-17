@@ -654,7 +654,13 @@ const confirmButtonClass =
  * are the loudest thing on the sheet. Confirm shares the number step's `pad-sheet-confirm` testid and its
  * `scorepad.action.confirm` label, which is what the bench driver's `confirm` TapStep targets.
  */
-function renderConfirmStep(step: SheetConfirmStep, answers: Readonly<Record<string, string>>, t: TFn, onConfirm: () => void) {
+function renderConfirmStep(
+  step: SheetConfirmStep,
+  answers: Readonly<Record<string, string>>,
+  t: TFn,
+  onConfirm: () => void,
+  extra: ReactNode = null,
+) {
   return (
     <div className="flex flex-col gap-3">
       <p
@@ -663,6 +669,7 @@ function renderConfirmStep(step: SheetConfirmStep, answers: Readonly<Record<stri
       >
         {step.summary(answers)}
       </p>
+      {extra}
       <button
         type="button"
         data-testid="pad-sheet-confirm"
@@ -698,6 +705,9 @@ export interface GuidedSheetProps {
    *  constraint). Optional: a caller not yet wired to remove this sheet
    *  from the tree can omit it with no crash. */
   onCancel?: () => void;
+  /** W5 T8b (X-WDT-10, ruling 289) — more to read under a confirm step's read-back, from the payload the Confirm would send
+   *  (the host shows a disqualification's consequence for the side it names). Absent: the read-back alone. */
+  confirmExtra?: (payload: Record<string, unknown>) => ReactNode;
 }
 
 /**
@@ -711,7 +721,7 @@ export interface GuidedSheetProps {
  * wizard — the same "reset, don't carry stale state forward" posture
  * DetailDock takes on a new `heldId` (render-phase reset, its own header).
  */
-export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel }: GuidedSheetProps) {
+export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel, confirmExtra }: GuidedSheetProps) {
   const [state, setState] = useState<GuidedSheetState>(() => initialSheetState());
   const step = currentStep(spec, state);
 
@@ -788,7 +798,7 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
           : step.kind === "number"
             ? renderNumberStep(step, numberEditValue, t, setNumberEditValue, () => handleAnswer(String(numberEditValue)))
             : step.kind === "confirm"
-              ? renderConfirmStep(step, state.answers, t, () => handleAnswer("confirmed"))
+              ? renderConfirmStep(step, state.answers, t, () => handleAnswer("confirmed"), confirmExtra?.(spec.buildPayload(state.answers)) ?? null)
               : renderPersonStep(step, views[step.side], personNames, t, handleAnswer, emptyText)}
       </div>
       <div className="flex justify-end px-4 pb-3">

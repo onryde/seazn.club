@@ -51,6 +51,7 @@ import {
   WITHDRAWAL_PENDING_STATUSES,
   WITHDRAWAL_PLAYED_STATUSES,
   tableWithdrawalInputs,
+  type WithdrawalFixtureRow,
 } from "@/lib/table-withdrawal";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -66,6 +67,44 @@ import { replaceDepartedQualifier } from "./lucky-loser";
 import { afterScheduleWrite } from "./schedule";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
+
+/** W5 T8b Part 3 (ruling 289): what a table withdrawal decides for one stage — the engine's `withdrawTableEntrant` over the ONE
+ *  reading of the rows (`tableWithdrawalInputs`). */
+export interface TableWithdrawalDecision {
+  /** RB5-W2: under half played → `expunge` (every result removed, the rest void); RB5-W3, and every Swiss → `walkover`. */
+  mode: "expunge" | "walkover";
+  /** RB5-W4: lines with a recorded result. */
+  played: number;
+  /** played + pending: the lines the 50 percent rule is counted against (a cancelled line is neither). */
+  scheduled: number;
+  /** The lines still to play, each with the opponent's id ("" for a seat not yet filled). */
+  pending: { id: string; opponent: string }[];
+  /** The engine's settles, in its order. */
+  updates: FixtureUpdate[];
+}
+
+/**
+ * The table withdrawal's decision for `entrantId` in one league, group or Swiss stage, from the rows of that stage that seat
+ * her. Pure. The cascade APPLIES it (`withdrawEntrantCascade`) and the Disqualify confirmation PREVIEWS it
+ * (`withdrawal-preview.ts`) — one decision, two readers, so the copy's count is the count the rule then acts on.
+ */
+export function decideTableWithdrawal(
+  stage: { id: string; kind: "league" | "group" | "swiss" },
+  entrantId: string,
+  mine: readonly WithdrawalFixtureRow[],
+): TableWithdrawalDecision {
+  const { played, pending } = tableWithdrawalInputs(entrantId, mine);
+  // The policy only counts involvement: it reads the stage's id and kind alone (W2d T8 narrowed its parameter to those two).
+  const result = withdrawTableEntrant(stage, entrantId, { played, pending });
+  const mode = result.events[0]?.type === "entrant_withdrawn" ? result.events[0].mode : undefined;
+  return {
+    mode: mode === "expunge" ? "expunge" : "walkover",
+    played: played.length,
+    scheduled: played.length + pending.length,
+    pending,
+    updates: result.updates,
+  };
+}
 /** W5 T8: the round-robin tables whose withdrawal is written to the ledger for the footnote (RB5-W7) and reversed by Reinstate
  *  (RB5-W6). A Swiss withdrawal always walks over (owner ruling 2026-09-24) and its own Reinstate is W3's, so it is not one. */
 const ROUND_ROBIN_KINDS: ReadonlySet<string> = new Set(["league", "group"]);
@@ -444,20 +483,10 @@ export async function withdrawEntrantCascade(
       // precedent below (`stage.status === "complete"`).
       if (ROUND_ROBIN_KINDS.has(stage.kind) && stage.status === "complete") continue;
       if (TABLE_KINDS.has(stage.kind)) {
-        // lib/table-withdrawal: the ONE reading of these rows into the policy's
-        // input (the qualification builder reads the same verdict, ruling F1).
-        const { played, pending } = tableWithdrawalInputs(entrantId, mine);
-        const result = withdrawTableEntrant(
-          {
-            id: stage.id,
-            kind: stage.kind as "league" | "group" | "swiss",
-            // The policy only counts involvement: it reads the stage's id and
-            // kind alone (W2d T8 narrowed its parameter to those two).
-          },
-          entrantId,
-          { played, pending },
-        );
-        const mode = result.events[0]?.type === "entrant_withdrawn" ? result.events[0].mode : undefined;
+        // lib/table-withdrawal: the ONE reading of these rows into the policy's input (the qualification builder reads the same
+        // verdict, ruling F1); `decideTableWithdrawal` is the one decision (the Disqualify preview calls it too, ruling 289).
+        const decision = decideTableWithdrawal({ id: stage.id, kind: stage.kind as "league" | "group" | "swiss" }, entrantId, mine);
+        const mode = decision.mode;
         out.policy = mode === "expunge" ? "expunge" : out.policy === "expunge" ? "expunge" : "walkover";
         // W5 T8: a cancelled line of theirs is left as it is (neither played nor pending, RB5-W4 does not count it).
         out.skipped_cancelled += mine.filter((f) => f.status === "cancelled").length;
@@ -466,14 +495,14 @@ export async function withdrawEntrantCascade(
           ledgerRows.push({
             entrant_id: entrantId,
             stage_id: stage.id,
-            policy: mode === "expunge" ? "expunge" : "walkover",
-            played_at_departure: played.length,
-            scheduled: played.length + pending.length,
+            policy: mode,
+            played_at_departure: decision.played,
+            scheduled: decision.scheduled,
             removed: {},
             ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
           });
         }
-        for (const u of result.updates) {
+        for (const u of decision.updates) {
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
         }

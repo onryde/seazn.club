@@ -35,6 +35,8 @@ import {
 // violation shape.
 import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
+import { disqualifyConfirmBody, type ConsequenceState } from "@/components/v2/withdrawal-consequence";
+import type { WithdrawalPreview } from "@/lib/withdrawal-consequence";
 import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
 import {
   swissFinishConfirm,
@@ -900,12 +902,19 @@ export function EntrantsPanel({
                   // DIFFERENT door - `PATCH /entrants/{id}` with `status: "disqualified"` (`patchEntrant`), not
                   // `POST .../withdraw`. Ruling 259: no reason or notes field. Before Start the server does the bare
                   // status flip, so there is no started-ness branch here.
+                  // W5 T8b (X-WDT-10, ruling 289): the confirmation names THIS entrant's consequence before the write — her
+                  // remaining matches, her played count under the 50 percent rule, and the undo — read from the cascade's own
+                  // decision (`GET .../withdrawal-preview`). Ruling 260's general body stands in only when it cannot be read.
+                  let consequence: ConsequenceState;
+                  try {
+                    const preview = await apiV1<WithdrawalPreview>(`/api/v1/entrants/${e.id}/withdrawal-preview?as=disqualified`);
+                    consequence = { kind: "ready", preview };
+                  } catch {
+                    consequence = { kind: "failed" };
+                  }
                   const ok = await confirmDialog({
                     title: msg("confirm.disqualifyEntrant.title", { name: e.display_name }),
-                    // Ruling 260: a disqualification runs the SAME cascade as a withdrawal, so its confirm is as truthful as
-                    // Withdraw's - one lead sentence, then Withdraw's own body (one authority per fact: the per-format policy
-                    // is spelled out once, in `confirm.withdrawEntrant.body`).
-                    body: `${msg("confirm.disqualifyEntrant.lead")} ${msg("confirm.withdrawEntrant.body")}`,
+                    body: disqualifyConfirmBody(consequence, msg as (k: string, v?: Record<string, string | number>) => string, locale),
                     confirmLabel: msg("confirm.disqualifyEntrant.label"),
                     tone: "danger",
                   });

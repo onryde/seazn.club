@@ -47,7 +47,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // T8: 1 (a leaver's signed-off result is removed, the hub's footnote names the rule; Reinstate restores her unplayed lines).
   // T8b Part 1: 1 (a registrant's own public withdrawal after Start runs the table withdrawal).
   // T8b Part 2: 1 (an in-match disqualification withdraws the entrant from the league).
-  const EXPECTED_CHECKS = 10;
+  // T8b Part 3: 1 (the Disqualify preview's numbers are the ones the cascade then acts on).
+  const EXPECTED_CHECKS = 11;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -409,6 +410,40 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-WDT-10: a disqualification recorded in a match withdraws the entrant from the league — at 1 of 3 played all 3 of her lines are taken out and she reads disqualified" +
         (ok ? "" : ` - ${l.created}, start ${started.status}, hers ${hers.length}, start ${go.status}, forfeit ${dq.status} ${JSON.stringify(dq.json).slice(0, 200)}, after ${after.map((f) => f.status).join(",")}, status ${status}`),
+      ok,
+    );
+  }
+
+  // Check 11 - X-WDT-10 (ruling 289's condition): what Disqualify WOULD do, read before the write, is what it then does. A league
+  // of five: Fay wins two by walkover, so she has played 2 of 4 — half: her results stand and her other two walk over. The
+  // preview says award, 2 of 4, and names those two lines; the PATCH's own report then walks exactly two over.
+  {
+    const l = await league("DqPreview", 5, own?.id ?? "no-own-competition");
+    const fay = l.entrants[0]?.id;
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const hers = (await l.fixtures()).filter((f) => f.home_entrant_id === fay || f.away_entrant_id === fay);
+    const walks: number[] = [];
+    for (const f of hers.slice(0, 2)) {
+      const opp = f.home_entrant_id === fay ? f.away_entrant_id : f.home_entrant_id;
+      walks.push((await v1(owner, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: opp, reason: "walkover" } })).status);
+    }
+    type Pv = { cascade?: boolean; stages?: { mode: string; played: number; scheduled: number; pending: { fixture_id: string }[] }[] };
+    const pvRes = await v1(owner, `/api/v1/entrants/${fay}/withdrawal-preview?as=disqualified`);
+    const pv = v1data<Pv | undefined>(pvRes);
+    const stage = pv?.stages?.[0];
+    const bad = await v1(owner, `/api/v1/entrants/${fay}/withdrawal-preview?as=gone`);
+    const dq = await v1(owner, `/api/v1/entrants/${fay}`, "PATCH", { status: "disqualified" });
+    const report = v1data<{ cascade?: { policy?: string; walkovers?: number } } | undefined>(dq)?.cascade;
+    const after = (await l.fixtures()).filter((f) => stage?.pending.some((p) => p.fixture_id === f.id));
+    const open = hers.slice(2).map((f) => f.id).sort().join(",");
+    const ok =
+      started.status === 200 && hers.length === 4 && walks.join(",") === "201,201" && pvRes.status === 200 && pv?.cascade === true &&
+      stage?.mode === "award" && stage.played === 2 && stage.scheduled === 4 &&
+      stage.pending.map((p) => p.fixture_id).sort().join(",") === open && bad.status === 422 &&
+      dq.status === 200 && report?.policy === "walkover" && report.walkovers === 2 && after.length === 2 && after.every((f) => f.status === "forfeited");
+    w5Check(
+      "w5a X-WDT-10: the Disqualify preview says award at 2 of 4 and names her 2 open lines; the PATCH then walks exactly those over; as=gone is 422" +
+        (ok ? "" : ` - ${l.created}, start ${started.status}, hers ${hers.length}, walks ${walks.join(",")}, preview ${pvRes.status} ${JSON.stringify(pv ?? null).slice(0, 300)}, bad ${bad.status}, dq ${dq.status} ${JSON.stringify(report ?? null)}, after ${after.map((f) => f.status).join(",")}`),
       ok,
     );
   }
