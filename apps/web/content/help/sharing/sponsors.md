@@ -38,7 +38,7 @@ A **deal** is one sponsor on one package. Open a sponsor on the **Sponsors** tab
 
 **How it is paid**
 
-- **Online invoice** (Pro, or an Event Pass on that competition). We email the sponsor a numbered invoice with a **Pay by card** button. Money settles to your connected account, and the platform keeps the same fee as entry fees ([the rate for your plan](/help/billing/plans#the-platform-fee-on-entry-fees)). You need **Get paid (Stripe Connect)** set up, the same onboarding used for card entry fees.
+- **Online invoice** (Pro, or an Event Pass on that competition). We email the sponsor a numbered invoice with a **Pay by card** button. Money settles to your connected account, and the platform keeps a fixed **5%** of each sponsorship paid by card, on every plan (this is separate from the entry-fee rate, which depends on your plan). You need **Get paid (Stripe Connect)** set up, the same onboarding used for card entry fees.
 - **Offline.** Bank transfer or cash. The deal has a numbered invoice too, with your bank details on it. You mark the deal paid when the money arrives.
 - **Complimentary.** No payment.
 

@@ -1,11 +1,15 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
+import { canSeeDeveloperDocs } from "@/lib/developer-docs";
 
 export const metadata: Metadata = {
   title: { default: "Developers — Seazn Club", template: "%s — Seazn Club Developers" },
   description:
     "Build on the seazn.club platform API: scoped keys, live scoring, standings, registrations. REST, OpenAPI 3.1, versioned.",
+  // Switched on per organisation (lib/developer-docs.ts), so there is nothing here for a search engine to list.
+  robots: { index: false, follow: false },
 };
 
 const NAV = [
@@ -15,7 +19,10 @@ const NAV = [
   { href: "/developers/changelog", label: "Changelog" },
 ];
 
-export default function DevelopersLayout({ children }: { children: React.ReactNode }) {
+export default async function DevelopersLayout({ children }: { children: React.ReactNode }) {
+  // Off for everyone by default (owner, 2026-11-16). Not found rather than "ask for access": to anyone without the
+  // switch, the docs do not exist.
+  if (!(await canSeeDeveloperDocs())) notFound();
   return (
     <div className="flex min-h-screen flex-col bg-white">
       <MarketingShell>

@@ -177,7 +177,7 @@ describe.skipIf(!HAS_DB)("an Event Pass grants its match credits once, when boug
     const declared = await v426();
     // The one literal in this file: the owner's numbers, verbatim. Every other
     // assertion reads V426, so this line is what notices the numbers moving.
-    expect(Object.fromEntries(PASS_KEYS.map((k) => [k, declared.get(k)]))).toEqual({ event_pass: 1, event_pass_l: 5 });
+    expect(Object.fromEntries(PASS_KEYS.map((k) => [k, declared.get(k)]))).toEqual({ event_pass: 3, event_pass_l: 5 });
   });
 
   it("buying each rung grants ITS V426 amount — one never-expiring PACK grant, keyed on the pass", async () => {

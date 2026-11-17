@@ -51,13 +51,21 @@ function fmt(iso: string | null, never: string): string {
 export function ApiKeysPanel({
   orgId,
   competitions,
+  developerDocs = false,
+  writeEnabled = false,
 }: {
+  /** Whether this organisation may mint score and manage keys (`api.write`, switched on per organisation on request).
+   *  Off greys those two choices out; the server refuses them either way (usecases/api-keys.ts). */
+  writeEnabled?: boolean;
   orgId: string;
+  /** Whether to link to the developer docs — only for an organisation that has them switched on. */
+  developerDocs?: boolean;
   /** Org competitions offered as an optional key pin (v3/08 §2). */
   competitions: { id: string; name: string }[];
 }) {
   const msg = useMsg();
   const confirmDialog = useConfirm();
+  const isLocked = (s: ScopeChoice) => s !== "read" && !writeEnabled;
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -221,10 +229,14 @@ export function ApiKeysPanel({
             {SCOPES.map((s) => (
               <label
                 key={s}
-                className={`cursor-pointer rounded-xl border p-3 transition ${
-                  scope === s
-                    ? "border-purple-400 bg-purple-50/60 ring-1 ring-purple-200"
-                    : "border-slate-200 hover:border-slate-300"
+                data-scope-locked={isLocked(s)}
+                aria-disabled={isLocked(s) || undefined}
+                className={`rounded-xl border p-3 transition ${
+                  isLocked(s)
+                    ? "cursor-not-allowed border-slate-200 bg-slate-50 opacity-60"
+                    : scope === s
+                      ? "cursor-pointer border-purple-400 bg-purple-50/60 ring-1 ring-purple-200"
+                      : "cursor-pointer border-slate-200 hover:border-slate-300"
                 }`}
               >
                 <span className="flex items-center gap-2 text-sm font-medium text-slate-800">
@@ -233,6 +245,7 @@ export function ApiKeysPanel({
                     name="key-scope"
                     value={s}
                     checked={scope === s}
+                    disabled={isLocked(s)}
                     onChange={() => setScope(s)}
                   />
                   {msg(`apiKeys.scope.${s}.label`)}
@@ -240,6 +253,11 @@ export function ApiKeysPanel({
                 <span className="mt-1 block text-xs leading-relaxed text-slate-500">
                   {msg(`apiKeys.scope.${s}.line`)}
                 </span>
+                {isLocked(s) && (
+                  <span className="mt-1.5 block text-xs font-medium text-slate-600">
+                    {msg("apiKeys.scope.onRequest")}
+                  </span>
+                )}
               </label>
             ))}
           </div>
@@ -328,12 +346,14 @@ export function ApiKeysPanel({
         </ul>
       )}
 
-      <p className="text-xs text-slate-500">
-        {msg("apiKeys.docs.prefix")}{" "}
-        <Link href="/developers" className="font-medium text-purple-600 hover:underline">
-          {msg("apiKeys.docs.link")} →
-        </Link>
-      </p>
+      {developerDocs && (
+        <p className="text-xs text-slate-500" data-testid="api-keys-docs-link">
+          {msg("apiKeys.docs.prefix")}{" "}
+          <Link href="/developers" className="font-medium text-purple-600 hover:underline">
+            {msg("apiKeys.docs.link")} →
+          </Link>
+        </p>
+      )}
 
       {revoked.length > 0 && (
         <details className="text-sm text-slate-500">

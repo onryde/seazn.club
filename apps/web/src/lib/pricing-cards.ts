@@ -138,12 +138,15 @@ export const PASS_CARD_BULLETS: readonly CardBullet[] = [
 // bigger competition is exactly the one that needs more AI scheduling.
 //
 // W2 T12 (owner ruling 2026-09-03) re-cut L from 50 to 35, in the same pass
-// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V395). The
+// that took Pro's monthly grant 35 -> 25 and its trial 20 -> 15 (V395; V526 later took both to 8). The
 // rungs still differ — that is the whole point of pricing the grant — but L is
 // no longer double M. Every figure in the copy that quotes it moved with this
 // line; `passCreditGrantFaults` / `passCreditProseFaults` /
 // `localeCreditGrantFaults` (lib/copy-truth.ts) read the constant, so a half
 // update reds rather than shipping.
+//
+// Owner ruling 2026-11-16 (V526): AI use is priced low across the board — Free 3 a month, the pass a one-time 5,
+// Pro 8 a month. The ruling named one pass figure; L (not on sale) is set to Pro's 8 so the rungs still differ.
 //
 // A `Record` keyed by `PassKey`, not two constants and not a lookup with a
 // default: `tsc` then enumerates every reader the day a third rung is added,
@@ -156,8 +159,8 @@ export const PASS_CARD_BULLETS: readonly CardBullet[] = [
 // The only thing that pulls them back is a refund of the pass itself
 // (`recordPassRefund`), which is money returned rather than a grant expiring.
 export const PASS_CREDIT_GRANT: Record<PassKey, number> = {
-  event_pass: 25,
-  event_pass_l: 35,
+  event_pass: 5,
+  event_pass_l: 8,
 };
 
 export const PRO_CARD_BULLETS: readonly CardBullet[] = [

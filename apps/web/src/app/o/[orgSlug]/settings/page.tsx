@@ -12,6 +12,7 @@ import { redirect } from "next/navigation";
 import { routes, searchOf } from "@/lib/routes";
 import { sql } from "@/lib/db";
 import { hasFeature, hasFeatureOnAnyPass } from "@/lib/entitlements";
+import { developerDocsEnabledFor } from "@/lib/developer-docs";
 import { type OrgMember } from "@/lib/types";
 import { OrgTeam } from "@/components/org-team";
 import { OrgLogo } from "@/components/org-logo";
@@ -430,7 +431,12 @@ export default async function SettingsPage({
                     {t(dict, "settings.api.noAccess")}
                   </p>
                 ) : hasApiAccess ? (
-                  <ApiKeysPanel orgId={active.id} competitions={pinnableCompetitions} />
+                  <ApiKeysPanel
+                    orgId={active.id}
+                    competitions={pinnableCompetitions}
+                    developerDocs={await developerDocsEnabledFor([active.id])}
+                    writeEnabled={await hasFeature(active.id, "api.write")}
+                  />
                 ) : (
                   <p className="flex items-center gap-2 text-sm text-slate-500">
                     <PlanBadge feature="api.access" />

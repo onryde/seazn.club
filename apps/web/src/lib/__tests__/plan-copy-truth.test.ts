@@ -255,7 +255,7 @@ describe.skipIf(!HAS_DB)("stripe-plans.json quotes the numbers the matrix enforc
     // the absence of a `ai.credits.monthly` row is still what makes
     // PASS_CREDIT_GRANT its single source — what moved is that there are now
     // two sources, one per rung.
-    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 25, event_pass_l: 35 });
+    expect(PASS_CREDIT_GRANT).toEqual({ event_pass: 5, event_pass_l: 8 });
     for (const { key } of passRungs) {
       const [row] = await sql<{ int_value: number | null }[]>`
         select int_value from plan_entitlements

@@ -407,7 +407,7 @@ function decideCell(s: Session, c: Command, now: Date): Decision {
       if (s.state !== "warming") throw illegal();
       // I2 (Task 2A review, orchestrator ruling — money/safety): Task 10 re-decides `credit_refused` after
       // NoCreditsError. A COMPOSED session's Machine is already up and broadcasting, so failing the row alone
-      // would leave it pushing to the destination, unpaid, until the 5 h deadline. Tear it down exactly as the
+      // would leave it pushing to the destination, unpaid, until the 3 h deadline. Tear it down exactly as the
       // composed `warming_timeout` does — the runner's `session_stop` step (its stop effect), then fail, dropping
       // the stop step's SessionEnding (P1-F-b) — and mark desiredState `ending` so nothing re-wants it live.
       // Passthrough is unchanged. Killer (Task 2C carry C3): session.test.ts "C3 (I2): a COMPOSED credit refusal…".

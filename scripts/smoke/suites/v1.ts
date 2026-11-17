@@ -459,13 +459,9 @@ export async function v1Suite(admin: Session, orgId: string, orgSlug: string): P
     console.log("v1 API-key positive path skipped (DATABASE_URL not set)");
   }
 
-  // Spec is served and matches the implemented surface.
-  const spec = (await fetch(BASE + "/api/v1/openapi.json").then((r) => r.json())) as {
-    openapi: string;
-    paths: Record<string, unknown>;
-  };
-  check(
-    "v1 openapi served",
-    spec.openapi === "3.1.0" && !!spec.paths["/api/v1/fixtures/{id}/events"],
-  );
+  // The API map sits behind the developer-docs switch (owner, 2026-11-17): not found signed out. What it contains is
+  // pinned by the openapi unit suites and the CI drift check; that it renders for a switched-on organisation is
+  // e2e/developer-reference.spec.ts.
+  const spec = await fetch(BASE + "/api/v1/openapi.json");
+  check("v1 openapi is not found signed out", spec.status === 404);
 }

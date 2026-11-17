@@ -4,6 +4,7 @@
 // them through here, grouped by ENTITLEMENT_DOMAINS so /pricing and
 // /admin/entitlements tell the same story.
 import { ENTITLEMENT_DOMAINS } from "@/lib/entitlement-domains";
+import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import {
   ALL_PLAN_KEYS,
   HIDDEN_PASS_KEYS,
@@ -174,6 +175,16 @@ function feeCell(data: MatrixData, plan: PricingPlanKey): string {
 }
 
 /**
+ * The two org-wide counts a pass takes its competition OUT of (`liveUnpassedCompetition`, usecases/entitlement-freeze:
+ * a passed competition holds neither an active slot nor a public-dashboard slot). A pass has no row for either, so a
+ * bare number in its column would be Community's, and would read as "the pass buys nothing here".
+ */
+const PASSED_EVENT_FEATURES = ["competitions.max_active", "dashboard.public.max"] as const;
+type PassedEventFeature = (typeof PASSED_EVENT_FEATURES)[number];
+const isPassedEventFeature = (feature: string): feature is PassedEventFeature =>
+  (PASSED_EVENT_FEATURES as readonly string[]).includes(feature);
+
+/**
  * Quota semantics differ per offer: free counts active comps, a pass IS one
  * competition, Pro/Pro Plus have no cap — prose beats a bare number here.
  * The `pass` cell holds a `pricing.matrix.`-prefixed dict KEY (translated
@@ -181,10 +192,10 @@ function feeCell(data: MatrixData, plan: PricingPlanKey): string {
  * number, ∞, ✓ or —). The page distinguishes the two by that prefix before
  * calling `t()`.
  */
-function competitionsRow(data: MatrixData): PricingRow {
-  const cell = data["competitions.max_active"];
+function competitionsRow(data: MatrixData, feature: PassedEventFeature): PricingRow {
+  const cell = data[feature];
   return {
-    labelKey: "pricing.matrix.competitions.max_active",
+    labelKey: `pricing.matrix.${feature}`,
     // Both rungs read the prose cell: a pass IS one competition, at either
     // size. What L buys is a bigger event, never more of them.
     cells: cellsFor((plan) =>
@@ -225,6 +236,40 @@ function orgsRow(data: MatrixData): PricingRow {
   };
 }
 
+/** A one-time amount an Event Pass adds, as against the monthly count beside it: "+3", never a bare "3". */
+function oneOffCell(amount: number | null | undefined): string {
+  return amount == null || amount <= 0 ? DASH : `+${amount}`;
+}
+
+/**
+ * Free match streams. A subscription column is a MONTHLY grant; a pass column is the ONE-OFF amount granted when the
+ * pass is bought (usecases/stream-credits.ts `streamMonthlyRate`: a pass key never grants monthly). So a pass reads
+ * its OWN row and never falls through to community — a pass with no row adds nothing, which is what "—" says.
+ */
+function streamCreditsRow(data: MatrixData): PricingRow {
+  const cell = data["streaming.credits.monthly"];
+  return {
+    labelKey: "pricing.matrix.streaming.credits.monthly",
+    noteKey: "pricing.matrix.streaming.credits.monthly.note",
+    cells: cellsFor((plan) => (PASS_PLANS.has(plan) ? oneOffCell(cell?.[plan]?.int_value) : intCell(cell?.[plan]))),
+  };
+}
+
+/**
+ * AI credits. Monthly on a subscription column, from `ai.credits.monthly`. The Event Pass has no row for that key: its
+ * top-up is one-time and lives in `PASS_CREDIT_GRANT`, the constant the grant itself reads.
+ */
+function aiCreditsRow(data: MatrixData): PricingRow {
+  const cell = data["ai.credits.monthly"];
+  return {
+    labelKey: "pricing.matrix.ai.credits.monthly",
+    noteKey: "pricing.matrix.ai.credits.monthly.note",
+    cells: cellsFor((plan) =>
+      PASS_PLANS.has(plan) ? oneOffCell(PASS_CREDIT_GRANT[plan as keyof typeof PASS_CREDIT_GRANT]) : intCell(cell?.[plan]),
+    ),
+  };
+}
+
 /**
  * Whether a feature is reachable by NO purchasable plan and IS granted on
  * enterprise — the self-serve-unreachable class (design §4: today just
@@ -242,11 +287,13 @@ function isEnterpriseOnlyFeature(data: MatrixData, feature: string): boolean {
 }
 
 function buildRow(data: MatrixData, feature: string): PricingRow {
-  if (feature === "competitions.max_active") return competitionsRow(data);
+  if (isPassedEventFeature(feature)) return competitionsRow(data, feature);
   if (feature === "orgs.max_owned") return orgsRow(data);
   // registration.paid is never rendered bare — it's folded with
   // registration.fee_percent into the honest "fees" row instead.
   if (feature === "registration.paid") return feesRow(data);
+  if (feature === "streaming.credits.monthly") return streamCreditsRow(data);
+  if (feature === "ai.credits.monthly") return aiCreditsRow(data);
   const fmt = cellFormatter(feature);
   // The routing note (W3 fix round 2, item 3): of 56 rows, exactly one today
   // has every purchasable cell dashed with nowhere for the reader to go —

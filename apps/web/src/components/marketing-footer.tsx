@@ -27,20 +27,14 @@ const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
       { key: "nav.pricing", href: "/pricing" },
       { key: "footer.link.liveNow", href: "/live" },
       { key: "footer.link.games", href: "/games" },
+      { key: "footer.link.help", href: "/help" },
       // Only while the Revshare program is live (NEXT_PUBLIC_REVSHARE_ENABLED=1) —
       // see footerCols(); the /affiliates page 404s otherwise.
       { key: "footer.link.affiliates", href: "/affiliates", requiresRevshare: true },
     ],
   },
-  {
-    headKey: "footer.col.developers",
-    links: [
-      { key: "footer.link.apiRef", href: "/developers/reference" },
-      { key: "footer.link.guides", href: "/developers/guides" },
-      { key: "footer.link.changelog", href: "/developers/changelog" },
-      { key: "footer.link.help", href: "/help" },
-    ],
-  },
+  // No Developers column (owner, 2026-11-16): the developer docs are switched on per organisation and are not found
+  // for everyone else (lib/developer-docs.ts), so a public footer must not link to them. Help moved to Explore.
   {
     headKey: "footer.col.legal",
     links: [
@@ -64,7 +58,7 @@ export async function MarketingFooter({ lang = "en" }: { lang?: string }) {
   return (
     <footer className="bg-[var(--mk-night)]">
       <div className="mx-auto max-w-6xl px-4 py-12">
-        <div className="grid gap-8 text-center sm:grid-cols-2 sm:text-left lg:grid-cols-4">
+        <div className="grid gap-8 text-center sm:grid-cols-3 sm:text-left">
           {footerCols(revshareEnabled()).map((col) => (
             <div key={col.headKey}>
               <p className="mk-display mb-3 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--mk-cream)]">

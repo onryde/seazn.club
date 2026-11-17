@@ -39,7 +39,7 @@ const uniq = () => randomUUID().slice(0, 8);
  *  V393 community 5 / pro 35 / enterprise 500, V395 pro 25) and a typed number
  *  stops testing the arithmetic the moment it drifts. */
 const rate: Record<string, number> = {};
-/** Same rule for the one-time trial grant, which V395 moved to 15 on PRO ONLY
+/** Same rule for the one-time trial grant, which V395 moved to 15 and V526 to 8, on PRO ONLY
  *  — enterprise keeps 20, deliberately (its numbers are set per deal), so the
  *  two rungs must be read separately and never assumed equal. */
 const trial: Record<string, number> = {};
@@ -172,7 +172,9 @@ describe.skipIf(!HAS_DB)("ai credit wallet — grants", () => {
       const granted = await grantTrial(orgId);
       expect(granted).toBe(trial.pro);
       expect(await balance(subId)).toBe(trial.pro);
-      // V395 (W2 T12) cut PRO's trial to 15 and left enterprise at 20 — an
+      // Owner 2026-11-16 (V526): a trial never hands out more than a paid month of the same plan does.
+      expect(trial.pro, "pro's trial grant against its monthly grant").toBeLessThanOrEqual(rate.pro!);
+      // V395 (W2 T12) cut PRO's trial below enterprise's 20 (V526 took it to 8) — an
       // asymmetry the owner confirmed deliberately, because enterprise numbers
       // are set per deal. Pinned so a later wave "tidying" the two back into
       // one number reds here instead of shipping.

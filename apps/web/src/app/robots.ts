@@ -29,10 +29,9 @@ export default function robots(): MetadataRoute.Robots {
   return {
     rules: [
       { userAgent: "*", allow: ["/", "/pricing", "/product/", "/sports/", "/legal/"], disallow: PRIVATE },
-      // Named AI search crawlers ignore the `*` group, so they carry the private paths too.
-      { userAgent: [...AI_SEARCH_CRAWLERS], allow: "/", disallow: PRIVATE },
-      // One rule per AI crawler, refusing the whole site (see AI_CRAWLERS).
-      ...AI_CRAWLERS.map((userAgent) => ({ userAgent, disallow: "/" })),
+      // Named AI crawlers — search and training alike (owner, 2026-11-17) — are allowed the public site. A crawler
+      // that matches a named group ignores the `*` group, so they carry the private paths too.
+      { userAgent: [...AI_SEARCH_CRAWLERS, ...AI_CRAWLERS], allow: "/", disallow: PRIVATE },
     ],
     sitemap: `${origin}/sitemap.xml`,
   };

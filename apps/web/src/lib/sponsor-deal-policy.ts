@@ -11,3 +11,8 @@ import type { SponsorTier } from "./sponsor-tiers";
 export function placementNeedsTiers(tier: SponsorTier, competitionId: string | null): boolean {
   return tier !== "partner" || competitionId !== null;
 }
+
+/** Owner ruling 2026-11-16: the platform keeps a FIXED 5% of a sponsorship paid by card, on every plan. It is not the
+ *  entry-fee rate (`registration.fee_percent`, which varies by plan and is locked per competition) and does not move
+ *  with it. Read by `mintDealCheckout` for the Stripe application fee and by the copy that states the rate. */
+export const SPONSOR_PLATFORM_FEE_PERCENT = 5;

@@ -44,6 +44,9 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
   { slug: "scheduling", features: [
     "scheduling.board", "scheduling.constraints", "scheduling.multi_division",
     "scheduling.ai",
+    // The wallet `scheduling.ai` spends from (owner, 2026-11-16: "update the pricing page"). A count per month on a
+    // subscription column; the Event Pass column shows its one-time top-up instead (pricing-matrix.ts `aiCreditsRow`).
+    "ai.credits.monthly",
     "schedule.checkpoints.max", "schedule.versioning",
   ]},
   // W1 (entitlements v18, owner ruling 2026-08-30): `scoring.ball_by_ball`,
@@ -66,6 +69,12 @@ export const ENTITLEMENT_DOMAINS: { slug: string; features: string[] }[] = [
     // player rows together; the `dashboard.` prefix is not a domain signal
     // (dashboard.public.max sits under scale, dashboard.branding under brand).
     "dashboard.player_profiles",
+  ]},
+  // Streaming joined the comparison on 2026-11-16 (owner: "need to update the pricing page"). Until then the three keys
+  // were deliberately in NO section (Task 14b left /pricing as an owner question). Both flags are true on every plan —
+  // the all-true precedent of `formats.double_elim` — and the credits row is the one that differs.
+  { slug: "streaming", features: [
+    "streaming.relay", "streaming.overlay", "streaming.credits.monthly",
   ]},
   // officials.per_fixture.max is absent: V319 makes it ∞ on every plan, so a
   // comparison row would read ∞/∞/∞/∞ and tell no story. The roles_multi/marks

@@ -11,7 +11,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SPONSOR_TIERS } from "@/lib/sponsor-tiers";
-import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
+import { placementNeedsTiers, SPONSOR_PLATFORM_FEE_PERCENT } from "@/lib/sponsor-deal-policy";
 
 /** Spec §10 Q1: the placements a club places with no `sponsors.tiers`. One pair: partner, whole org (scope null). */
 const FREE_PLACEMENTS: ReadonlyArray<readonly [string, string | null]> = [["partner", null]];
@@ -49,5 +49,28 @@ describe("placementNeedsTiers — spec §10 Q1 (one predicate for sponsors, pack
     expect(src).not.toMatch(/\brequire\(/);
     expect(src).not.toMatch(/\bimport\(/);
     expect(src).not.toMatch(/["']server-only["']/);
+  });
+});
+
+// Owner ruling 2026-11-16: a sponsorship paid by card carries a FIXED cut, on every plan. The number is typed in two
+// places a person reads (the package list's note, in four languages, and the help article), so each is read back
+// against the constant the checkout charges.
+describe("the fixed sponsorship fee is the one the copy states", () => {
+  it("is 5%, and is not the entry-fee rate of any self-serve paid plan", () => {
+    expect(SPONSOR_PLATFORM_FEE_PERCENT).toBe(5);
+  });
+
+  it("every locale's package note and the help article quote it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const quoted = new RegExp(`(?<![\\d.])${SPONSOR_PLATFORM_FEE_PERCENT}\\s?%`);
+    let checked = 0;
+    for (const locale of ["en", "fr", "es", "nl"]) {
+      const ui = JSON.parse(readFileSync(join(process.cwd(), "src/dictionaries", locale, "ui.json"), "utf8")) as Record<string, string>;
+      expect(ui["sponsors.pkg.onlineNote"], locale).toMatch(quoted);
+      checked++;
+    }
+    expect(readFileSync(join(process.cwd(), "content/help/sharing/sponsors.md"), "utf8")).toMatch(quoted);
+    expect(checked + 1).toBe(5);
   });
 });

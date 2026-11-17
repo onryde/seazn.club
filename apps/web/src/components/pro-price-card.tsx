@@ -152,7 +152,7 @@ export function ProPriceCard({
       {feeLine && (
         <p
           data-pro-fee-pill
-          className="mb-5 inline-flex w-fit items-baseline gap-1 whitespace-nowrap rounded border border-purple-200 bg-purple-100/60 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-purple-700"
+          className="mb-5 inline-flex w-fit max-w-full items-baseline gap-1 rounded border border-purple-200 bg-purple-100/60 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-purple-700"
         >
           {feeLine}
         </p>

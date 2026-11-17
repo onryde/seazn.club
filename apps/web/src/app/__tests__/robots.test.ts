@@ -1,8 +1,6 @@
-// robots.txt (app/robots.ts) — bot hardening, 2026-09-25. Three things are
-// pinned: the two paths every crawler is now told to skip, one `Disallow: /`
-// rule per AI crawler (read from AI_CRAWLERS, never retyped here), and the
-// positive pair — search and link-preview bots are NOT refused, so shared
-// links keep their previews and public pages stay indexed.
+// robots.txt (app/robots.ts). Pinned: the private paths every crawler is told to skip, and that every named AI
+// crawler — search AND training (owner, 2026-11-17: "Let's AI scrape our site") — is allowed the public site with
+// those same paths closed. The lists are read from robots-policy, never retyped here.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { MetadataRoute } from "next";
@@ -69,26 +67,29 @@ describe("robots.txt: AI crawlers", () => {
     expect(new Set(AI_CRAWLERS).size).toBe(AI_CRAWLERS.length);
   });
 
-  it.each(AI_CRAWLERS.map((bot) => [bot]))("%s has one rule of its own, refusing the whole site", (bot) => {
+  // Owner, 2026-11-17: "Let's AI scrape our site". Training crawlers used to carry one `Disallow: /` each; they are
+  // now allowed the public site and, like every other crawler, kept out of the private paths.
+  it.each(AI_CRAWLERS.map((bot) => [bot]))("%s is allowed the site but keeps the private paths closed", (bot) => {
     const found = rulesFor(bot);
     expect(found).toHaveLength(1);
-    expect(list(found[0]!.userAgent)).toEqual([bot]);
-    expect(list(found[0]!.disallow)).toEqual(["/"]);
-    expect(list(found[0]!.allow)).toEqual([]);
+    expect(list(found[0]!.allow)).toEqual(["/"]);
+    expect(list(found[0]!.disallow)).toEqual(list(star().disallow));
+    expect(list(found[0]!.disallow)).not.toContain("/");
   });
 
-  it("every rule other than `*` and the search group is an AI crawler's: nothing else is refused", () => {
-    const search = new Set<string>(AI_SEARCH_CRAWLERS);
-    const others = rules().flatMap((r) => list(r.userAgent)).filter((a) => a !== "*" && !search.has(a));
-    expect(others.sort()).toEqual([...AI_CRAWLERS].sort());
+  it("no crawler at all is refused the whole site on production", () => {
+    const all = rules();
+    expect(all.length).toBeGreaterThan(1);
+    for (const r of all) expect(list(r.disallow), String(r.userAgent)).not.toContain("/");
   });
 
-  it("no crawler is both refused and allowed", () => {
-    const refused = new Set<string>(AI_CRAWLERS);
-    for (const bot of AI_SEARCH_CRAWLERS) expect(refused.has(bot), bot).toBe(false);
+  it("every named rule is an AI crawler's or an AI search crawler's, and no crawler is named twice", () => {
+    const named = rules().flatMap((r) => list(r.userAgent)).filter((a) => a !== "*");
+    expect(named.sort()).toEqual([...AI_CRAWLERS, ...AI_SEARCH_CRAWLERS].sort());
+    expect(new Set(named).size).toBe(named.length);
   });
 
-  // The positive pair: these must reach the `*` rule, not a refusal.
+  // Search and link-preview bots carry no rule of their own: they fall under `*`.
   it.each([
     "Googlebot",
     "Bingbot",
@@ -99,7 +100,7 @@ describe("robots.txt: AI crawlers", () => {
     "TelegramBot",
     "Discordbot",
     "LinkedInBot",
-  ])("%s is not refused: no rule of its own, so it falls under `*`", (bot) => {
+  ])("%s has no rule of its own, so it falls under `*`", (bot) => {
     expect(AI_CRAWLERS.map((a) => a.toLowerCase())).not.toContain(bot.toLowerCase());
     expect(rulesFor(bot)).toEqual([]);
   });

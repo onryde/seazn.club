@@ -32,13 +32,13 @@ export function isStagingOrigin(origin: string): boolean {
 }
 
 /**
- * AI-training crawlers, each refused the whole site with a
- * rule of its own. Search engines (Googlebot, Bingbot) and link-preview bots
- * (facebookexternalhit, WhatsApp, Twitterbot, Slackbot, TelegramBot,
- * Discordbot, LinkedInBot) are deliberately NOT listed: they fall under the
- * `*` rule, so shared links keep their previews and public pages stay indexed.
- * `Google-Extended` and `Applebot-Extended` are opt-out tokens for AI use
- * only — blocking them does not touch Googlebot or Applebot search crawling.
+ * AI-training crawlers: ALLOWED the public site (owner, 2026-11-17: "Let's AI scrape our site"), with the private
+ * paths closed like everyone else. Until then each carried a `Disallow: /` of its own. They stay NAMED so the choice
+ * is explicit and reversible in one place. `Google-Extended` and `Applebot-Extended` are AI-use tokens only: they
+ * never affected Googlebot or Applebot search crawling.
+ *
+ * robots.txt is half of it: Cloudflare can still block these user agents at the edge (a custom rule did, as of
+ * 2026-11-17), and a blocked crawler never reads this file.
  */
 export const AI_CRAWLERS = [
   "GPTBot",

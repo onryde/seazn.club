@@ -440,13 +440,13 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     expect(link).toMatch(/stripe_event_id/);
   });
 
-  it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is still 300 (the Task 7 amend, Task 2B review M4)", async () => {
+  it("max_duration_minutes: 0 is refused by check (max_duration_minutes > 0) — domain/expiry.ts deadlineOf would read a stored 0 as 300; 1 lands, and the default is config.ts's MAX_DURATION_MINUTES (the Task 7 amend, Task 2B review M4)", async () => {
     const r = await rig();
     const sid = await insertSession(r, "requested");
     const minutes = async () =>
       (await sql<{ max_duration_minutes: number }[]>`
         select max_duration_minutes from fixture_stream_sessions where id = ${sid}`)[0]!.max_duration_minutes;
-    expect(await minutes()).toBe(300);
+    expect(await minutes()).toBe(MAX_DURATION_MINUTES);
     await expect(
       sql`update fixture_stream_sessions set max_duration_minutes = 0 where id = ${sid}`,
     ).rejects.toMatchObject({ code: "23514" });
@@ -455,7 +455,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
     await expect(
       sql`update fixture_stream_sessions set max_duration_minutes = -1 where id = ${sid}`,
     ).rejects.toMatchObject({ code: "23514" });
-    expect(await minutes()).toBe(300);
+    expect(await minutes()).toBe(MAX_DURATION_MINUTES);
     await sql`update fixture_stream_sessions set max_duration_minutes = 1 where id = ${sid}`;
     expect(await minutes()).toBe(1);
   });
@@ -464,14 +464,14 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
   // from this number — `relayTokenExpiry` (a ~69-day relay token), `MACHINE_MINUTES_BOUND`, and `RunnerSpec.deadlineAt`
   // (a Fly Machine whose hard stop is 69 days out). The ceiling lives in the DDL rather than only in a usecase because
   // a constraint is the only guard that survives a second writer.
-  it("max_duration_minutes: the CEILING is real — 301 refused and 300 accepted, with 1 still accepted and 0 / -1 still refused; and the DDL's ceiling EQUALS config.ts's MAX_DURATION_MINUTES, so moving the constant reds this instead of leaving the CHECK on yesterday's number (gap g2)", async () => {
+  it("max_duration_minutes: the CEILING is real — one past it refused and the ceiling itself accepted, with 1 still accepted and 0 / -1 still refused; and the DDL's ceiling EQUALS config.ts's MAX_DURATION_MINUTES, so moving the constant reds this instead of leaving the CHECK on yesterday's number (gap g2)", async () => {
     const r = await rig();
     const sid = await insertSession(r, "requested");
     const minutes = async () =>
       (await sql<{ max_duration_minutes: number }[]>`
         select max_duration_minutes from fixture_stream_sessions where id = ${sid}`)[0]!.max_duration_minutes;
     // Refused, both ends. 301 is the row the old CHECK could not see at all.
-    for (const bad of [301, 100000, 0, -1]) {
+    for (const bad of [MAX_DURATION_MINUTES + 1, 100000, 0, -1]) {
       await expect(
         sql`update fixture_stream_sessions set max_duration_minutes = ${bad} where id = ${sid}`, String(bad),
       ).rejects.toMatchObject({ code: "23514" });

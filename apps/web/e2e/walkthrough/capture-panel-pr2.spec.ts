@@ -76,6 +76,11 @@ const TAKEOVER_S = tunedEnv("DEAD_PHONE_TAKEOVER_SECONDS", DEAD_PHONE_TAKEOVER_S
 /** §7.1's figure as the SERVER states it: config.ts's AUTO_STOP_AFTER_RESULT_SECONDS through `tunable`, in whole minutes
  *  (≥ 1) — the constant's own meaning, not the panel's arithmetic read back. */
 const AUTO_STOP_MIN = Math.max(1, Math.round(tunedEnv("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS) / 60));
+/** Live's line names the OPEN session's own delay as the server serves it (#1240): in seconds under a minute, in whole
+ *  minutes from there. CI runs the server with the constant tuned short, so the line there is the seconds form. */
+const AUTO_STOP_S = tunedEnv("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS);
+const autoLiveLine = (): string =>
+  AUTO_STOP_S < 60 ? enPlural("stream.auto.liveLineSeconds", AUTO_STOP_S) : enPlural("stream.auto.liveLine", AUTO_STOP_MIN);
 
 /** How often this file's phone beats: faster than the real cadence, so a reading changes on screen within a poll. */
 const BEAT_MS = 2_500;
@@ -467,7 +472,7 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
   await untilLive(body);
 
   // §7.1: the read-only line, the server's figure.
-  await expect(body.getByTestId("stream-auto-live")).toHaveText(enPlural("stream.auto.liveLine", AUTO_STOP_MIN), { timeout: POLL_WAIT_MS });
+  await expect(body.getByTestId("stream-auto-live")).toHaveText(autoLiveLine(), { timeout: POLL_WAIT_MS });
 
   // §7.4: the line, from the readings the phone sent — slate.
   await expect(strip).toHaveText(healthLinePattern({ percent: 78, charging: true, mbps: "2.4" }), { timeout: BEAT_POLL_MS });
@@ -525,7 +530,7 @@ test("T10/T11 live: 'Automatic: stops about N minutes after the result'; the hea
   reading = { ...reading, mode: "operator" };
   await expect(body.getByTestId("stream-auto-live"), "the phone in Operator: no automatic stop, no line").toHaveCount(0, { timeout: BEAT_POLL_MS });
   reading = { ...reading, mode: "automatic" };
-  await expect(body.getByTestId("stream-auto-live"), "back in Automatic").toHaveText(enPlural("stream.auto.liveLine", AUTO_STOP_MIN), { timeout: BEAT_POLL_MS });
+  await expect(body.getByTestId("stream-auto-live"), "back in Automatic").toHaveText(autoLiveLine(), { timeout: BEAT_POLL_MS });
 
   // W8: the phone falls silent while its video still arrives — not responding after NOT_RESPONDING_BEATS cadences.
   stop();

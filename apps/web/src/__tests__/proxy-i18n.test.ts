@@ -77,3 +77,30 @@ describe("marketing [lang] rewrite honors the resolved locale", () => {
     ).toBe("/nl");
   });
 });
+
+/**
+ * The static root layout serves `<html lang="en">` for every locale (app/layout.tsx says why), so the page's language
+ * is also declared in the Content-Language response header, which needs no script and costs no rendering.
+ */
+describe("Content-Language on marketing pages", () => {
+  const lang = (res: Response) => res.headers.get("content-language");
+
+  it("a prefixed marketing URL declares its own locale, whatever the visitor's cookie says", () => {
+    let checked = 0;
+    for (const l of ["en", "fr", "es", "nl"]) for (const path of ["", "/pricing", "/product/match-day", "/sports/cricket", "/sports"]) {
+      expect(lang(proxy(req(`/${l}${path}`, { cookie: "seazn_locale=es" }))), `/${l}${path}`).toBe(l);
+      checked++;
+    }
+    expect(checked).toBe(20);
+  });
+
+  it("an unprefixed marketing URL declares the locale it is served in", () => {
+    expect(lang(proxy(req("/product/match-day")))).toBe("en");
+    expect(lang(proxy(req("/product/match-day", { cookie: "seazn_locale=fr" })))).toBe("fr");
+    expect(lang(proxy(req("/", { acceptLanguage: "nl" })))).toBe("nl");
+  });
+
+  it("pages outside the marketing tree, and a path that only looks like a locale, declare nothing", () => {
+    for (const path of ["/dashboard", "/login", "/help", "/free", "/esports", "/nlx/pricing"]) expect(lang(proxy(req(path))), path).toBeNull();
+  });
+});

@@ -619,10 +619,10 @@ export async function passGrantsSuite(): Promise<void> {
     ent.entitlements["dashboard.player_profiles"]?.enabled === false,
   );
   check(
-    `pass grants/scope: every quota stays at the community figure org-wide (64/4/5 entrants/divisions/AI credits, fee ${communityFee}%)`,
+    `pass grants/scope: every quota stays at the community figure org-wide (64/4/3 entrants/divisions/AI credits, fee ${communityFee}%)`,
     ent.entitlements["entrants.per_division.max"]?.limit === 64 &&
       ent.entitlements["divisions.per_competition.max"]?.limit === 4 &&
-      ent.entitlements["ai.credits.monthly"]?.limit === 5 &&
+      ent.entitlements["ai.credits.monthly"]?.limit === 3 &&
       // The org's own row, read out of the matrix above — never the literal.
       // This is the LEAK half: the passed competition resolves `passFee`, and
       // the org must still resolve its own, whatever V398 (or its successor)

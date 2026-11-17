@@ -307,17 +307,17 @@ describe("relay tokens", () => {
   it("relayTokenExpiry = the session's OWN deadline + the token grace, agreeing with domain deadlineOf", () => {
     // The literals below are only legitimate while these two hold.
     expect(TOKEN_GRACE_MINUTES).toBe(30);
-    expect(MAX_DURATION_MINUTES).toBe(300);
+    expect(MAX_DURATION_MINUTES).toBe(180);
     const createdAt = new Date("2026-09-13T10:00:00.000Z");
     const unstarted = (maxDurationMinutes: number) => ({ createdAt, startedAt: null, maxDurationMinutes });
-    expect(relayTokenExpiry(unstarted(300)).toISOString()).toBe("2026-09-13T15:30:00.000Z");
+    expect(relayTokenExpiry(unstarted(180)).toISOString()).toBe("2026-09-13T13:30:00.000Z");
     // A 90-minute booking: the differential that kills "always the constant".
     expect(relayTokenExpiry(unstarted(90)).toISOString()).toBe("2026-09-13T12:00:00.000Z");
     // 0 is not "no time": deadlineOf reads a falsy max_duration as the default
     // (expiry.ts:28), and a token that expires before its own session's hard
     // stop kills a paid stream mid-flight.
-    expect(relayTokenExpiry(unstarted(0)).toISOString()).toBe("2026-09-13T15:30:00.000Z");
-    for (const maxDurationMinutes of [300, 90, 1, 0]) {
+    expect(relayTokenExpiry(unstarted(0)).toISOString()).toBe("2026-09-13T13:30:00.000Z");
+    for (const maxDurationMinutes of [180, 90, 1, 0]) {
       expect(relayTokenExpiry(unstarted(maxDurationMinutes)).getTime(), `max_duration ${maxDurationMinutes}`).toBe(
         deadlineOf(unstarted(maxDurationMinutes)).getTime() + TOKEN_GRACE_MINUTES * 60_000,
       );

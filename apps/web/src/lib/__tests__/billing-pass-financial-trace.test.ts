@@ -536,18 +536,20 @@ describe.skipIf(!HAS_DB)("Event Pass claws back its credits on refund/dispute", 
     expect(await packBalance(walletId)).toBe(0);
   });
 
-  it("after spending 10 it claws only the 15 unspent — floors at 0, never negative, never touches the spent 10", async () => {
+  it("after spending part of the grant it claws only the unspent rest — floors at 0, never negative, never touches what was spent", async () => {
     const { orgId, compId } = await seedPassBuyer();
     const walletId = await walletIdFor(orgId);
     const intent = "pi_partial_" + uniq();
 
     await recordPassPurchase({ orgId, competitionId: compId, passKey: "event_pass", paymentIntent: intent });
-    // Consume 10 of the 25 (a real AI run's hold from the pack bucket).
-    await reserve(walletId, orgId, 10);
-    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass - 10); // 15 left
+    // Consume part of the grant (a real AI run's hold from the pack bucket), leaving some to claw back.
+    const spent = 2;
+    expect(spent, "the case needs an unspent remainder").toBeLessThan(PASS_CREDIT_GRANT.event_pass);
+    await reserve(walletId, orgId, spent);
+    expect(await balance(walletId)).toBe(PASS_CREDIT_GRANT.event_pass - spent);
 
     expect(await revokePassForRefundedCharge(refundedCharge(intent))).toBe(true);
-    // Claws only the 15 unspent; the 10 already consumed is gone (not retro-
+    // Claws only the unspent rest; what was already consumed is gone (not retro-
     // charged), so the wallet floors at exactly 0 — never negative.
     expect(await balance(walletId)).toBe(0);
     expect(await packBalance(walletId)).toBe(0);

@@ -5,7 +5,7 @@ import {
 
 // =====================================================================
 // v3 content + API wave (PROMPT-35/37/39): markdown descriptions render
-// through the one prose pipeline, /help + /developers are live, API keys
+// through the one prose pipeline, /help is live and /developers is off by default, API keys
 // carry scopes + pins + rate headers, OG/poster/embed/sponsors work on the
 // pro path and gate/degrade honestly on the free path.
 // =====================================================================
@@ -77,15 +77,14 @@ export async function v3ContentApiSuite(
     "v3: help search index has waitlist",
     helpIndex.some((d) => d.slug === "registration/waitlist"),
   );
-  const dev = await html(newSession(), "/developers");
-  check("v3: /developers renders", dev.status === 200 && dev.body.includes("scope"));
-  const pubSpec = (await (await fetch(BASE + "/api/v1/openapi.json?published=1")).json()) as {
-    paths: Record<string, unknown>;
-  };
-  check(
-    "v3: published spec excludes key management",
-    !Object.keys(pubSpec.paths).some((p) => p.includes("api-keys")),
-  );
+  // Developer docs are off by default (owner, 2026-11-16): switched on per organisation by a staff override on
+  // `developers.docs`, and not found for everyone else — a signed-out visitor, and the Pro org's own admin.
+  const devAnon = await html(newSession(), "/developers");
+  check("v3: /developers is not found signed out", devAnon.status === 404);
+  const devAdmin = await html(admin, "/developers");
+  check("v3: /developers is not found for an org without the switch", devAdmin.status === 404);
+  const pubSpec = await fetch(BASE + "/api/v1/openapi.json?published=1");
+  check("v3: published spec is not found signed out", pubSpec.status === 404);
 
   // Scoped API keys (PROMPT-37): read key reads with rate headers, 403s on
   // writes; pinned key stays inside its competition.

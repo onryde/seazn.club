@@ -18,6 +18,7 @@
 //   - every refusal beside its accepted twin.
 // "Another sport" is not applicable (sponsors read no sport key); online selling is one plan's (Pro, `sponsors.monetize`), and
 // community's refusal is covered in sponsor-deals.test.ts.
+import { SPONSOR_PLATFORM_FEE_PERCENT } from "@/lib/sponsor-deal-policy";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
@@ -377,8 +378,9 @@ describe.skipIf(!HAS_DB)("an online deal's invoice is one reusable Checkout sess
       success_url: `${hub}?sponsorship=success`,
       cancel_url: `${hub}?sponsorship=cancelled`,
       payment_intent_data: {
-        // Pro's entry-fee percent is 2: 2% of 25000.
-        application_fee_amount: 500,
+        // The sponsorship cut is fixed (owner 2026-11-16), not the plan's entry-fee rate: Pro's is 2%, and 2% of 25000
+        // would be 500.
+        application_fee_amount: (25_000 * SPONSOR_PLATFORM_FEE_PERCENT) / 100,
         transfer_data: { destination: expect.stringMatching(/^acct_/) },
         metadata: { kind: "sponsor", order_id: id, org_id: o.orgId },
       },

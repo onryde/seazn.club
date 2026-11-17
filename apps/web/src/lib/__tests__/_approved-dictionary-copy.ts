@@ -63,24 +63,13 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
-    key: "pricing.pass.crossover",
-    why: "which of the two offers is cheaper, and the volume of entry fees at which that flips. Every figure is interpolated live — the two prices from config/stripe-plans.json via lib/currency's passPrice/proPrice, both rates from registration.fee_percent in plan_entitlements (V398: pass 4, pro 2), and the crossing itself from lib/pricing-crossover.ts's feeCrossoverMinor. So the NUMBERS cannot rot; the WORDS decide which side of the threshold each offer is on, and a reword that swaps them sells the one-time sku to the organisers the recurring one is cheaper for. Suppressed entirely when a rate is unreadable or the ladder stops crossing, so this sentence never appears without both rates behind it. THE DURATION CLAUSE IS LOAD-BEARING and was missing for a wave: feeCrossoverMinor solves a one-time pass against ONE MONTH of Pro, so the threshold is only the answer for a competition of about that length. Read without it the line recommended Pro to a three-month event at $300/mo of entry fees — $62.97 on Pro against $47.99 on the pass — i.e. it was wrong for exactly the long seasons it matters most to. The page has no duration input and must not invent one; the sentence states its own assumption instead, and pricing-crossover.test.ts scans all four locales for a competition tied to a month in one clause. IT USED TO NAME ITS RUNG TOO, for a wave, because the figure is solved for ONE rung (`lowestPricedRung` over SELLABLE_PASS_KEYS in lib/currency.ts — the entry rung, which the in-app picker pre-selects; it read PASS_KEYS until the L rung came off sale on 2026-09-05) while the card then sold BOTH, and “this is the cheaper option” was therefore printed beside an L rung it is false of — L at 4499 is dearer than a month of Pro at 1499 AND dearer per pound, so the two never cross at any volume and `feeCrossoverMinor` returns null for that shape. `{rung}` was how the claim and its subject stayed pinned together while that was true. PREMISE CHANGED 2026-09-05 (entitlements v18 W3): the L rung is now off sale, SELLABLE_PASS_KEYS (lib/currency.ts) holds only event_pass, and the owner separately approved dropping the rung suffix from every customer-facing selling surface — pricing/page.tsx's ticket stub and its comparison-table column header both now read plain \"Event Pass\" (pricing-page.test.tsx, \"no rung suffix on a selling surface\"). Naming a rung letter here that appears nowhere else on the page is exactly the confusion that ruling removed, so `{rung}` came out of this string; `{pass}` — the price, not the letter — stays, and with one rung sellable it alone still identifies which offer the claim is about, unambiguously. THIS IS NOT A REVERT of the original fix: the rule that stops a crossing being solved for a rung the checkout would refuse is unchanged (feeCrossoverMinor is still called with `lowestPricedRung` over SELLABLE_PASS_KEYS, never PASS_KEYS), and the guard that used to require `{rung}` now requires it again the moment SELLABLE_PASS_KEYS holds more than one key — see `rungNamingRequired`/`rungFaults` in pricing-crossover.test.ts, which derive the requirement from SELLABLE_PASS_KEYS.length rather than a literal, and pricing-page.test.tsx's \"names no rung\" test, which reads the same rule off the rendered paragraph.",
-    text: {
-      en: "On a competition running about a month, the pass ({pass}) is the cheaper option up to about {amount} of entry fees; above that it is Pro at {pro}/mo — a {proFee}% platform fee against {passFee}%. The pass is one-time, so a longer competition puts that threshold higher.",
-      es: "En una competición de aproximadamente un mes, el pase ({pass}) es la opción más barata hasta unos {amount} de cuotas de inscripción; por encima de eso lo es Pro a {pro}/mes: una comisión de plataforma del {proFee}% frente al {passFee}%. El pase es de pago único, así que una competición más larga sitúa ese umbral más alto.",
-      fr: "Sur une compétition d’environ un mois, le pass ({pass}) est l’option la moins chère jusqu’à environ {amount} de frais d’inscription ; au-delà, c’est Pro à {pro}/mois — {proFee} % de frais de plateforme contre {passFee} %. Le pass est ponctuel : une compétition plus longue place ce seuil plus haut.",
-      nl: "Bij een competitie van ongeveer een maand is de pass ({pass}) de goedkoopste keuze tot ongeveer {amount} aan inschrijfgelden; daarboven is dat Pro voor {pro}/mnd — {proFee}% platformkosten tegen {passFee}%. De pass is eenmalig, dus bij een langere competitie ligt die grens hoger.",
-    },
-  },
-  {
-    file: "marketing",
     key: "pricing.faq.eventPass.a",
-    why: "what the pass buys, for how long, and the size of the one-time credit grant. REWRITTEN 2026-09-05 (owner decision: the L rung comes off sale): the answer described two sizes and told the reader to 'pick the size at checkout', and there is one size on sale, so both halves were describing a purchase that cannot be made. It now describes the rung a buyer can actually reach. Every figure re-read against the code before this text was pinned: caps from plan_entitlements (event_pass = 10 divisions, 128 entrants per division), the grant from PASS_CREDIT_GRANT.event_pass in lib/pricing-cards.ts (25), the 4% / 5% fee pair from registration.fee_percent on event_pass and on community (V398), the duration from V328/V334. Pinned per locale by 'the Event Pass answer quotes the live caps of every rung on sale' in dictionary-copy-truth, which reads SELLABLE_PASS_KEYS and additionally forbids the HIDDEN rung's numbers appearing here — the L rung said 'no entrant limit at all' in all four locales for a whole wave after V393 gave it a real 512-entrant cap, so no rule anywhere lets a cap go back to a word. The rung's own matrix is still checked (pricing-matrix.test.ts, entitlements-sql-parity.test.ts): dormant, not deleted.",
+    why: "what the pass buys, for how long, and the size of the one-time credit grant. REWRITTEN 2026-09-05 (owner decision: the L rung comes off sale): the answer described two sizes and told the reader to 'pick the size at checkout', and there is one size on sale, so both halves were describing a purchase that cannot be made. It now describes the rung a buyer can actually reach. Every figure re-read against the code before this text was pinned: caps from plan_entitlements (event_pass = 10 divisions, 128 entrants per division), the grant from PASS_CREDIT_GRANT.event_pass in lib/pricing-cards.ts (25), the 3% / 5% fee pair from registration.fee_percent on event_pass and on community (V398), the duration from V328/V334. Pinned per locale by 'the Event Pass answer quotes the live caps of every rung on sale' in dictionary-copy-truth, which reads SELLABLE_PASS_KEYS and additionally forbids the HIDDEN rung's numbers appearing here — the L rung said 'no entrant limit at all' in all four locales for a whole wave after V393 gave it a real 512-entrant cap, so no rule anywhere lets a cap go back to a word. The rung's own matrix is still checked (pricing-matrix.test.ts, entitlements-sql-parity.test.ts): dormant, not deleted.",
     text: {
-      en: "One competition, for as long as it’s running. The pass ({pass}) gives that competition 10 divisions and 128 entrants per division. You also get advanced formats, exports and realtime, a one-time AI credit top-up (+25 AI credits), and a 4% platform fee on its entry fees instead of Community’s 5% — and it stops counting against your free active-competition slot. A competition holds one pass and keeps it. Your club logo and card entry fees work on every plan already, pass or no pass. Other competitions in your org stay on Community limits.",
-      es: "Una competición, mientras está en curso. El pase ({pass}) le da a esa competición 10 divisiones y 128 participantes por división. Además obtienes formatos avanzados, exportaciones y tiempo real, una recarga de créditos de IA de una sola vez (+25 créditos de IA), y una comisión de plataforma del 4% sobre sus cuotas de inscripción en lugar del 5% de Community — y deja de contar en tu cupo gratuito de competiciones activas. Una competición tiene un solo pase y lo conserva. El logotipo de tu club y las cuotas con tarjeta ya funcionan en todos los planes, con pase o sin él. Otras competiciones de tu organización se mantienen con los límites de Community.",
-      fr: "Une compétition, tant qu’elle est en cours. Le pass ({pass}) donne à cette compétition 10 divisions et 128 participants par division. Vous bénéficiez aussi des formats avancés, des exports et du temps réel, d’une recharge ponctuelle de crédits IA (+25 crédits IA), ainsi que de 4 % de frais de plateforme sur ses frais d’inscription au lieu des 5 % de Communauté — et elle cesse de compter dans votre quota gratuit de compétition active. Une compétition détient un seul pass et le conserve. Le logo de votre club et les frais d’inscription par carte fonctionnent déjà sur tous les forfaits, avec ou sans pass. Les autres compétitions de votre organisation restent soumises aux limites Communauté.",
-      nl: "Één competitie, zolang ze loopt. De pass ({pass}) geeft die competitie 10 divisies en 128 deelnemers per divisie. Je krijgt ook geavanceerde formats, exports en realtime, een eenmalige AI-creditbijboeking (+25 AI-credits), plus 4% platformkosten op de inschrijfgelden in plaats van de 5% van Community — en telt de competitie niet meer mee voor je gratis actieve-competitieplek. Een competitie heeft één pass en houdt die. Het logo van je club en inschrijfgelden per kaart werken al bij elk abonnement, met of zonder pass. Andere competities in je organisatie blijven op de Community-limieten.",
+      en: "One competition, for as long as it’s running. The pass ({pass}) gives that competition 10 divisions and 128 entrants per division. You also get advanced formats, exports and realtime, a one-time AI credit top-up (+5 AI credits), and a 3% platform fee on its entry fees instead of Community’s 5% — and it stops counting against your free active-competition slot. A competition holds one pass and keeps it. Your club logo and card entry fees work on every plan already, pass or no pass. Other competitions in your org stay on Community limits.",
+      es: "Una competición, mientras está en curso. El pase ({pass}) le da a esa competición 10 divisiones y 128 participantes por división. Además obtienes formatos avanzados, exportaciones y tiempo real, una recarga de créditos de IA de una sola vez (+5 créditos de IA), y una comisión de plataforma del 3% sobre sus cuotas de inscripción en lugar del 5% de Community — y deja de contar en tu cupo gratuito de competiciones activas. Una competición tiene un solo pase y lo conserva. El logotipo de tu club y las cuotas con tarjeta ya funcionan en todos los planes, con pase o sin él. Otras competiciones de tu organización se mantienen con los límites de Community.",
+      fr: "Une compétition, tant qu’elle est en cours. Le pass ({pass}) donne à cette compétition 10 divisions et 128 participants par division. Vous bénéficiez aussi des formats avancés, des exports et du temps réel, d’une recharge ponctuelle de crédits IA (+5 crédits IA), ainsi que de 3 % de frais de plateforme sur ses frais d’inscription au lieu des 5 % de Communauté — et elle cesse de compter dans votre quota gratuit de compétition active. Une compétition détient un seul pass et le conserve. Le logo de votre club et les frais d’inscription par carte fonctionnent déjà sur tous les forfaits, avec ou sans pass. Les autres compétitions de votre organisation restent soumises aux limites Communauté.",
+      nl: "Één competitie, zolang ze loopt. De pass ({pass}) geeft die competitie 10 divisies en 128 deelnemers per divisie. Je krijgt ook geavanceerde formats, exports en realtime, een eenmalige AI-creditbijboeking (+5 AI-credits), plus 3% platformkosten op de inschrijfgelden in plaats van de 5% van Community — en telt de competitie niet meer mee voor je gratis actieve-competitieplek. Een competitie heeft één pass en houdt die. Het logo van je club en inschrijfgelden per kaart werken al bij elk abonnement, met of zonder pass. Andere competities in je organisatie blijven op de Community-limieten.",
     },
   },
   {
@@ -195,6 +184,50 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // the sentence stops meaning what it meant. `PRICING_KEY_DISPOSITION` in
   // dictionary-copy-truth.test.ts now makes every `pricing.*` key either pinned
   // here or exempt with a reason, so this list cannot quietly stop growing.
+  {
+    file: "marketing",
+    key: "pricing.streams.perMonth.one",
+    why: "the Community and Pro streaming-credit chips (owner 2026-11-16: the cards promote streaming credits, not AI credits). The COUNT is interpolated live from streaming.credits.monthly; the pin guards the CADENCE: a subscription column is granted every month.",
+    text: {
+      en: "{count} streaming credit / month",
+      es: "{count} crédito de retransmisión / mes",
+      fr: "{count} crédit de diffusion / mois",
+      nl: "{count} streamingcredit / maand",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.streams.perMonth.other",
+    why: "the Community and Pro streaming-credit chips (owner 2026-11-16: the cards promote streaming credits, not AI credits). The COUNT is interpolated live from streaming.credits.monthly; the pin guards the CADENCE: a subscription column is granted every month.",
+    text: {
+      en: "{count} streaming credits / month",
+      es: "{count} créditos de retransmisión / mes",
+      fr: "{count} crédits de diffusion / mois",
+      nl: "{count} streamingcredits / maand",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.streams.passGrant.one",
+    why: "the Event Pass streaming-credit chip. A pass's streaming.credits.monthly row is a ONE-OFF amount granted when the pass is bought (usecases/stream-credits.ts: a pass key never grants monthly), so \"one-time\" is the load-bearing word.",
+    text: {
+      en: "+{count} streaming credit, one-time",
+      es: "+{count} crédito de retransmisión, una sola vez",
+      fr: "+{count} crédit de diffusion, une seule fois",
+      nl: "+{count} streamingcredit, eenmalig",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.streams.passGrant.other",
+    why: "the Event Pass streaming-credit chip. A pass's streaming.credits.monthly row is a ONE-OFF amount granted when the pass is bought (usecases/stream-credits.ts: a pass key never grants monthly), so \"one-time\" is the load-bearing word.",
+    text: {
+      en: "+{count} streaming credits, one-time",
+      es: "+{count} créditos de retransmisión, una sola vez",
+      fr: "+{count} crédits de diffusion, une seule fois",
+      nl: "+{count} streamingcredits, eenmalig",
+    },
+  },
   {
     file: "marketing",
     key: "pricing.credits.perMonth",
@@ -324,10 +357,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "pricing.card.feePill",
     why: "the platform-fee pill on the Free and Pro cards (R14). The NUMBER is interpolated live from registration.fee_percent (community 5, pro 2 — V398), so the pin guards the two words around it: dropping \"platform\" would read as the REGISTRANT'S fee rather than the org's platform cut, which is the exact distinction pricing.matrix.fees / feeCell already draws in the comparison table.",
     text: {
-      en: "{fee}% platform fee",
-      es: "{fee}% de comisión de plataforma",
-      fr: "{fee} % de frais de plateforme",
-      nl: "{fee}% platformkosten",
+      en: "{fee}% fee on card entry fees",
+      es: "{fee}% de comisión en inscripciones con tarjeta",
+      fr: "{fee} % de frais sur les inscriptions par carte",
+      nl: "{fee}% kosten op inschrijfgeld per kaart",
     },
   },
   // ── THE IN-APP COMPARISON PANEL (fix round 4) ─────────────────────────────
@@ -556,13 +589,24 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // no Stripe rate — that is Stripe's to change.
   {
     file: "marketing",
+    key: "pricing.everyPlan",
+    why: "what every plan includes, the free one too: Match Day, remote scoring from any phone, and live streaming from a phone per match or per court. Source of truth: plan_entitlements holds scoring.device_links (V488), streaming.relay and streaming.overlay as true on every plan; Match Day carries no entitlement gate. Owner ruling 2026-11-16.",
+    text: {
+      en: "On every plan, the free one included: Match Day, remote scoring from any phone, and live streaming from a phone, per match or per court.",
+      es: "En todos los planes, incluido el gratuito: Match Day, puntuación remota desde cualquier teléfono y retransmisión en directo desde un teléfono, por partido o por pista.",
+      fr: "Dans chaque offre, la gratuite comprise : Match Day, le score à distance depuis n'importe quel téléphone et la diffusion en direct depuis un téléphone, par match ou par terrain.",
+      nl: "In elk abonnement, ook het gratis: Match Day, scoren op afstand vanaf elke telefoon en livestreaming vanaf een telefoon, per wedstrijd of per baan.",
+    },
+  },
+  {
+    file: "marketing",
     key: "pricing.matrix.fees.note",
     why: "that the platform-fee percentage is ADDITIVE — charged on top of Stripe's own processing fees, not instead of them. Source of truth: V398 (the fee ladder became pure platform margin) and the design doc's note that competitors state this explicitly and we did not. Names no specific Stripe rate, which is Stripe's to change.",
     text: {
-      en: "Our cut, charged on top of Stripe's processing fees",
-      es: "Nuestra comisión, además de las tarifas de procesamiento de Stripe",
-      fr: "Notre commission, en plus des frais de traitement de Stripe",
-      nl: "Onze commissie, boven op de verwerkingskosten van Stripe",
+      en: "Our cut of each entry fee taken by card, on top of Stripe's processing fees",
+      es: "Nuestra parte de cada cuota pagada con tarjeta, además de las tarifas de procesamiento de Stripe",
+      fr: "Notre part de chaque frais d'inscription payé par carte, en plus des frais de traitement de Stripe",
+      nl: "Ons deel van elk inschrijfgeld dat met kaart wordt betaald, boven op de verwerkingskosten van Stripe",
     },
   },
   // W3 fix round 2, item 6: the dedicated Platform fee FAQ entry — the FAQ
@@ -762,10 +806,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "pricing.community.f4",
     why: "that Community can take online registrations AND card entry fees, at a rate. registration.fee_percent on 'community' is interpolated (live 5); registration.paid and registration.enabled are the boolean rows behind the claim, pinned by CARD_SURFACES in lib/__tests__/pricing-cards.test.ts. V310: charging entry fees is free on every plan and only the platform cut differs, so this must not read as though payment were a paid unlock.",
     text: {
-      en: "Online registration & entry fees ({fee}% fee)",
-      es: "Inscripción en línea y cuotas de inscripción (comisión del {fee}%)",
-      fr: "Inscription en ligne et frais d’inscription ({fee} % de commission)",
-      nl: "Online inschrijving & inschrijfgelden ({fee}% kosten)",
+      en: "Online registration & entry fees ({fee}% fee on card payments)",
+      es: "Inscripción en línea; comisión de plataforma del {fee}% sobre las cuotas pagadas con tarjeta",
+      fr: "Inscription en ligne ; {fee} % de frais de plateforme sur les frais d’inscription payés par carte",
+      nl: "Online inschrijving; {fee}% platformkosten op inschrijfgelden die met kaart worden betaald",
     },
   },
   {
@@ -828,10 +872,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "pricing.pass.f4",
     why: "the pass's platform fee, AS A SAVING. Both rates are interpolated — registration.fee_percent on 'event_pass' and on 'community' (live 4 against 5, V398's additive ladder 5/4/2/1). Two rows on purpose: quoting only the pass's own rate would survive Community's moving and stop being a saving at all, and this is the bullet a buyer does the arithmetic with.",
     text: {
-      en: "{fee}% platform fee on entry fees, not {communityFee}%",
-      es: "Comisión de plataforma del {fee}% sobre las cuotas de inscripción, no del {communityFee}%",
-      fr: "{fee} % de frais de plateforme sur les frais d’inscription, au lieu de {communityFee} %",
-      nl: "{fee}% platformkosten op inschrijfgelden, niet {communityFee}%",
+      en: "{fee}% platform fee on entry fees taken by card, not {communityFee}%",
+      es: "Comisión de plataforma del {fee}% sobre las cuotas de inscripción pagadas con tarjeta, no del {communityFee}%",
+      fr: "{fee} % de frais de plateforme sur les frais d’inscription payés par carte, au lieu de {communityFee} %",
+      nl: "{fee}% platformkosten op inschrijfgelden die met kaart worden betaald, niet {communityFee}%",
     },
   },
   {
@@ -894,10 +938,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "pricing.pro.f3",
     why: "Pro's platform fee. registration.fee_percent on 'pro' (live 2), interpolated. Stated as a rate on entry fees rather than as an unlock — taking entry fees is free on every plan since V310.",
     text: {
-      en: "Entry fees at a {fee}% platform fee",
-      es: "Cuotas de inscripción con una comisión de plataforma del {fee}%",
-      fr: "Frais d’inscription avec {fee} % de frais de plateforme",
-      nl: "Inschrijfgelden met {fee}% platformkosten",
+      en: "{fee}% platform fee on entry fees taken by card",
+      es: "Comisión de plataforma del {fee}% sobre las cuotas de inscripción pagadas con tarjeta",
+      fr: "{fee} % de frais de plateforme sur les frais d’inscription payés par carte",
+      nl: "{fee}% platformkosten op inschrijfgelden die met kaart worden betaald",
     },
   },
   {

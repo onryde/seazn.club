@@ -24,10 +24,10 @@ const DISABLE = { type: "disable_phone_input" } as const;
 const S = (over: Partial<Session> = {}): Session => ({
   id: "s1", fixtureId: "f1", orgId: "o1", mode: "passthrough", state: "requested", desiredState: "live",
   failReason: null, endReason: null, runner: RUNNER_NONE, runnerRetries: 0, createdAt: T0, startedAt: null, endedAt: null,
-  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null,
+  heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null,
   startCause: "organiser", warmingAt: null, ...over,
 });
-const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: 300, maxDurationMinutes: 300, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding, mode: "passthrough" as Mode, composedUnavailable: false };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding, mode: "passthrough" as Mode, composedUnavailable: false };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once. Order amended by owner ruling

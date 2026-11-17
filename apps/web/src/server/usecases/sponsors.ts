@@ -36,14 +36,14 @@ import {
 import { log } from "@/server/logger";
 import { expireCompetitionShell, fireOrgRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { applicationFeeCents, feePercentFor } from "./registrations";
+import { applicationFeeCents } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { orgOwnerRecipient } from "./org-owner";
 import { routes } from "@/lib/routes";
 import { dealHref, sponsorsHref } from "@/lib/sponsors-hub";
 import type { DealPaidNext, SponsorInvoiceArgs } from "@/lib/email-templates";
 import { SPONSOR_TIERS, type SponsorTier } from "@/lib/sponsor-tiers";
-import { placementNeedsTiers } from "@/lib/sponsor-deal-policy";
+import { placementNeedsTiers, SPONSOR_PLATFORM_FEE_PERCENT } from "@/lib/sponsor-deal-policy";
 import { assertPlacementAllowed } from "@/server/sponsors/deal-gates";
 import { ensureOrgStreamSettings } from "@/server/sponsors/stream-settings";
 import { blocksArchive, DealRuleError, statusAfterPaid, type DealStatus, type PaymentStatus, type SponsorDeal } from "@/lib/sponsor-deals";
@@ -737,7 +737,7 @@ function stripeUnavailable(what: string, err: unknown, deal: { id: string }): Ht
 
 /**
  * Mint a deal's Checkout session: a destination charge on the org's connected account (the amount to the org, the platform's
- * entry-fee application fee kept), exactly like a registration's. Outside any transaction (house rule). `attempt` is the send
+ * fixed sponsorship fee kept, SPONSOR_PLATFORM_FEE_PERCENT), on the same rail as a registration's. Outside any transaction (house rule). `attempt` is the send
  * number, so the Stripe idempotency key `sponsor-deal-<id>-<attempt>` pins a retried send to ONE session and a later send to a
  * new one. Success and cancel return to the org's public hub, `routes.publicHub(slug)` (`/live/<slug>`, F25). Any Stripe
  * failure is a 502 (`stripe_unavailable`).
@@ -749,7 +749,7 @@ export async function mintDealCheckout(
   attempt: number,
 ): Promise<DealSession> {
   const returnBase = `${origin}${routes.publicHub(org.slug)}`;
-  const fee = applicationFeeCents(deal.amount_cents, await feePercentFor(org.id, deal.competition_id ?? undefined));
+  const fee = applicationFeeCents(deal.amount_cents, SPONSOR_PLATFORM_FEE_PERCENT);
   let session: Stripe.Checkout.Session;
   try {
     session = await getStripe().checkout.sessions.create(
