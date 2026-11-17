@@ -138,8 +138,9 @@ const sweepTick = (r: CaptureRig, sid: string) => tickSession(sid, r.deps, "swee
 // ---------------------------------------------------------------------------------------------------------------------
 describe("the tunable is read at the call site (AGENTS.md #20)", () => {
   const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-  it("stream-sessions/ reads AUTO_STOP_AFTER_RESULT_SECONDS only through tunable(NAME, NAME)", () => {
-    const name = "AUTO_STOP_AFTER_RESULT_SECONDS";
+  // Both delays: the per-fixture code's, and the court's own tail (O15). `\b` does not see the shorter name inside the longer
+  // (`_` is a word character), so each is judged on its own.
+  it.each(["AUTO_STOP_AFTER_RESULT_SECONDS", "COURT_AUTO_STOP_AFTER_RESULT_SECONDS"])("stream-sessions/ reads %s only through tunable(NAME, NAME)", (name) => {
     // Every module of the folder (it was one file), each stripped of comments and imports before they are joined.
     const code = streamSessionsSource((text) => strip(text).replace(/^import[\s\S]*?\bfrom\s*"[^"]*";?/gm, ""));
     const viaTunable = new RegExp(`tunable\\(\\s*"${name}"\\s*,\\s*${name}\\s*\\)`, "g");
