@@ -24,8 +24,8 @@
 //
 // ONE table, for however many readers arrive (P14: the panel's own
 // CREDIT_PACKS display table was a second authority and is gone). Prices as the owner
-// set them on 2026-11-16 (£3 / £12 / £40, each other currency typed); `STREAM_PACK_PRICES_FINAL` stays false until
-// the owner calls them final for live Stripe. A lookup key is never an env value, so `_INDEX.md` can record the
+// set them on 2026-11-16 (£3 / £12 / £40, each other currency typed); the owner called them final for live Stripe on
+// 2026-11-17 (`STREAM_PACK_PRICES_FINAL` is true, and stream-pack-prices-final.test.ts pins every amount). A lookup key is never an env value, so `_INDEX.md` can record the
 // names.
 //
 // MATCH credits are NOT the AI credit wallet. That currency is
@@ -80,7 +80,7 @@ export interface StreamCreditPack {
  * says so loudly — a placeholder must never become a live price because someone synced plans. With a test key the
  * packs always sync. The owner flips this to true in the same change that sets the real prices, then runs sync.
  */
-export const STREAM_PACK_PRICES_FINAL = false;
+export const STREAM_PACK_PRICES_FINAL = true;
 
 export const STREAM_CREDIT_PACKS: readonly StreamCreditPack[] = [
   { size: 1, credits: 1, lookupKey: "seazn_stream_pack_1", gbpPence: 300, options: { eur: 350, usd: 399, inr: 19900 }, labelKey: "stream.credits.pack1", popular: false },
