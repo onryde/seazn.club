@@ -946,7 +946,18 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
         // An automatic arrival: never a waiting flag on a fed knockout (it is no entry stage), seated nowhere in it.
         const arrival = await registerAndConfirm(rig, "Arrival");
         expect(await waitingOn(arrival), "RB4-L2: no flag points at a fed knockout").toBeNull();
-        expect(await deskLate(rig), "the desk raises no late-player row").toEqual([]);
+        // W5 X-CU-8 (RB5-L10, V526): on a running ROOT table the arrival waits on the TABLE, flagged on the desk with
+        // `table: true` and the table's name; a Swiss root takes no flag (it seats the arrival itself). Never the knockout.
+        const [tw] = await sql<{ w: string | null }[]>`select table_waiting_stage_id as w from entrants where id = ${arrival}`;
+        if (FED_OUTCOME[template] === "table_open") {
+          expect(tw!.w, "RB5-L10: the arrival waits on the root table, never on the fed knockout").toBe(rig.rootId);
+          expect(await deskLate(rig), "the desk raises the TABLE's late-player row, one").toEqual([
+            { kind: "late_players_waiting", count: 1, stageName: rig.rootName, table: true },
+          ]);
+        } else {
+          expect(tw!.w, "a Swiss root flags no table wait").toBeNull();
+          expect(await deskLate(rig), "the desk raises no late-player row").toEqual([]);
+        }
         expect(await tailRowsOf(rig), "the knockout still stands").toEqual(tailBefore);
         expect(await seatedIn(arrival), "never seated in the knockout").not.toContain(knockoutId);
         checked.add(`${template}|${kind}`);
