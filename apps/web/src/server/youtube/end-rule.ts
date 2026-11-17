@@ -15,6 +15,8 @@ import "server-only";
 //     broadcast open nor moves its end (Review Focus 3).
 //   - not finished → S + 5 min (D4's grace: a quick restart joins the same video).
 //   - finished     → min(S + 5, max(S, F) + 2 min) (D5), F = fixtures.finished_at.
+//   - court (the last session a court one): finished → min(S + 5, max(S, F) + 30 s), S = when its Stop BEGAN (ending_at). A finished
+//     match whose only active sessions are court sessions already `ending` is not held back by them (court-stream device check 2, C1).
 // `finished` is the fixture STATUS being in FINISHED_STATUSES: decided | finalized (owner, D5) plus forfeited | abandoned |
 // cancelled (spec §6.4). Never needs_decision (F8): the V432 trigger stamps finished_at on a held fixture too, but a held
 // result can resume, so the status decides and the stamp only says when.
@@ -45,6 +47,13 @@ export type EndFacts = {
   fixtureStatus: string; finishedAt: Date | null; terminalWithoutEndedAt: boolean;
   /** The session with the latest ended_at on this broadcast was a court session (`court_link_id` set). Absent reads false. */
   lastSessionCourt?: boolean;
+  /** When that last court session's Stop BEGAN (its `ending_at`, else its `ended_at`). The court rule is timed from it (device check 2,
+   *  C1: a composed session completes up to a minute after its Stop). Absent reads `latestEndedAt`. */
+  lastCourtStopAt?: Date | null;
+  /** Every session still active on this broadcast is a COURT session that is already `ending` (its runner shutting down); this is the
+   *  latest of their `ending_at`. null/absent otherwise (none active, or any active one live, starting, a fixture-code one, or with no
+   *  `ending_at`). For a finished match such a session does not hold the end back (C1). */
+  endingCourtAt?: Date | null;
 };
 
 /** The facts break an assumption the rule rests on; the rule refuses rather than answer a time it cannot know. */
@@ -66,18 +75,24 @@ export function broadcastEndDueAt(f: EndFacts, now: Date): Date | null {
   if (f.terminalWithoutEndedAt) {
     throw new EndRuleInvariantError("a terminal session on this broadcast has no ended_at, so its Stop time is unknown");
   }
-  if (f.activeSessionOnBroadcast) return null;
+  // C1: a finished match's court session that is only `ending` (a composed runner still shutting down) does not hold the end back;
+  // YouTube completing while the compositor stops is accepted. Anything else active still does, unfinished matches included.
+  const endingCourt = f.activeSessionOnBroadcast && f.endingCourtAt != null && isFinished(f.fixtureStatus) ? f.endingCourtAt : null;
+  if (f.activeSessionOnBroadcast && endingCourt === null) return null;
   if (f.reservedUntil !== null && f.reservedUntil.getTime() > now.getTime()) return null;
-  if (f.latestEndedAt === null) return null;
+  const court = endingCourt !== null || f.lastSessionCourt === true;
+  // The court rule is timed from when the Stop began; every other rule from the latest ended_at (unchanged).
+  const anchor = endingCourt ?? (court ? (f.lastCourtStopAt ?? f.latestEndedAt) : f.latestEndedAt);
+  if (anchor === null) return null;
 
-  const stop = f.latestEndedAt.getTime();
+  const stop = anchor.getTime();
   const graceEnd = plusMinutes(stop, YOUTUBE_GRACE_MINUTES);
   if (!isFinished(f.fixtureStatus)) return new Date(graceEnd);
   if (f.finishedAt === null) {
     throw new EndRuleInvariantError(`fixture status '${f.fixtureStatus}' is finished but finished_at is null`);
   }
   const settled = Math.max(stop, f.finishedAt.getTime());
-  const resultEnd = f.lastSessionCourt === true
+  const resultEnd = court
     ? settled + YOUTUBE_COURT_FINISHED_END_SECONDS * 1000
     : plusMinutes(settled, YOUTUBE_FINISHED_END_MINUTES);
   return new Date(Math.min(graceEnd, resultEnd));
@@ -86,6 +101,7 @@ export function broadcastEndDueAt(f: EndFacts, now: Date): Date | null {
 interface FactsRow {
   reserved_until: Date | null; fixture_status: string; finished_at: Date | null;
   active: boolean; latest_ended_at: Date | null; terminal_without_ended_at: boolean; last_court: boolean | null;
+  last_court_stop_at: Date | null; ending_court_at: Date | null;
 }
 
 /** The broadcast's end facts in one statement: plain selects, no lock. Sessions are this broadcast's only
@@ -103,7 +119,14 @@ export async function readEndFacts(exec: Tx | typeof sql, broadcastId: string): 
                       and s.ended_at is null) as terminal_without_ended_at,
            (select s.court_link_id is not null from fixture_stream_sessions s
              where s.youtube_broadcast_id = b.id and s.state in ${sql([...TERMINAL_STATES])}
-             order by s.ended_at desc nulls last, s.id limit 1) as last_court
+             order by s.ended_at desc nulls last, s.id limit 1) as last_court,
+           (select coalesce(s.ending_at, s.ended_at) from fixture_stream_sessions s
+             where s.youtube_broadcast_id = b.id and s.state in ${sql([...TERMINAL_STATES])}
+             order by s.ended_at desc nulls last, s.id limit 1) as last_court_stop_at,
+           (select case when bool_and(s.state = 'ending' and s.court_link_id is not null and s.ending_at is not null)
+                        then max(s.ending_at) end
+              from fixture_stream_sessions s
+             where s.youtube_broadcast_id = b.id and s.state in ${sql([...ACTIVE_STATES])}) as ending_court_at
       from youtube_broadcasts b
       join fixtures f on f.id = b.fixture_id
      where b.id = ${broadcastId}`;
@@ -116,5 +139,7 @@ export async function readEndFacts(exec: Tx | typeof sql, broadcastId: string): 
     finishedAt: row.finished_at,
     terminalWithoutEndedAt: row.terminal_without_ended_at,
     lastSessionCourt: row.last_court === true,
+    lastCourtStopAt: row.last_court === true ? row.last_court_stop_at : null,
+    endingCourtAt: row.ending_court_at,
   };
 }

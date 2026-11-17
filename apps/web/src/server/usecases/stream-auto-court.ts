@@ -74,7 +74,7 @@ const setRefusal = (fixtureId: string, refusal: AutoStartRefusal | null) =>
 /** A claimed court start, not yet run: `run` makes it (`startBroadcast`, then the handover's ends), and is called ONCE. */
 export type CourtStartCheck =
   | { claimed: true; fixtureId: string; run: () => Promise<CourtAutoStartResult> }
-  | { claimed: false; result: CourtAutoStartResult; inFlight: boolean };
+  | { claimed: false; result: CourtAutoStartResult; inFlight: boolean; inFlightFixtureId: string | null };
 
 /** Fix round 1 (finding 8): a start claimed this recently, with no refusal stored and no session yet, is taken to be still
  *  running in the background, so the court beat keeps answering `starting` (5 s) until its session row exists. */
@@ -115,7 +115,9 @@ export async function claimCourtAutoStart(
 ): Promise<CourtStartCheck> {
   const { court, pairingId, phoneMode } = a;
   const { link } = court;
-  const not = (result: CourtAutoStartResult, inFlight = false): CourtStartCheck => ({ claimed: false, result, inFlight });
+  // Device check 2 (C2): the match whose start is in flight is named, so the beat's answer can say which match is starting.
+  const not = (result: CourtAutoStartResult, inFlightOf: string | null = null): CourtStartCheck =>
+    ({ claimed: false, result, inFlight: inFlightOf !== null, inFlightFixtureId: inFlightOf });
   if (court.status !== "active" || link.withdrawnAt !== null || !linkOpenAt(link, now)) {
     return not({ fired: false, why: "link_closed" });
   }
@@ -144,9 +146,9 @@ export async function claimCourtAutoStart(
     const inFlight = facts.court_stream && facts.auto_started_at === null && facts.auto_start_blocked_at === null
       && facts.auto_start_refusal === null && !facts.open_session && attempted !== null
       && now.getTime() - attempted < COURT_START_IN_FLIGHT_SECONDS * 1000;
-    return not({ fired: false, why: "not_due" }, inFlight);
+    return not({ fired: false, why: "not_due" }, inFlight ? fixtureId : null);
   }
-  if (!(await claimCourtStart(fixtureId, now, retrySeconds))) return not({ fired: false, why: "claim_lost" }, true);
+  if (!(await claimCourtStart(fixtureId, now, retrySeconds))) return not({ fired: false, why: "claim_lost" }, fixtureId);
   log.info({ orgId: court.orgId, fixtureId, linkId: link.id }, "court auto start: claimed — the start runs after the beat's answer");
   return { claimed: true, fixtureId, run: () => runCourtStart(court, pairingId, fixtureId, deps) };
 }

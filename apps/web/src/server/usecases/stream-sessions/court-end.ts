@@ -1,6 +1,7 @@
 import "server-only";
 // B1 (court-stream device check, owner 2026-11-17: "match decided -> 30 s stops in app -> another 30 s stop in youtube"): after a COURT
-// session ends, its YouTube broadcast is completed near the end rule's due time (S + 30 s for a finished match; see end-rule.ts), not at
+// session ends, its YouTube broadcast is completed near the end rule's due time (30 s after the Stop BEGAN for a finished match, even
+// while a composed session is still `ending`: device check 2, C1; see end-rule.ts), not at
 // the next cron firing. The cron's end step is unchanged and stays the safety net: this deferred run only goes through the same
 // `endDueBroadcasts` (same claim under `for update skip locked`, same due rule), so one that finds the broadcast already completed, or
 // claimed by the cron, does nothing and calls YouTube nothing.
@@ -25,6 +26,13 @@ const COURT_END_STEP_BUDGET_MS = 15_000;
 type Seams = { sleep?: (ms: number) => Promise<void>; wallClock?: () => number };
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Why the tail returned without ending (C1: a miss is visible in the logs). Words only, with ids. */
+type MissReason = "not_court_broadcast" | "not_due" | "still_active" | "due_past_bound";
+function missed(reason: MissReason, sid: string, bid: string | null): false {
+  log.info({ reason, sid, bid }, "court stream: the deferred YouTube end returned without ending; the cron will end it");
+  return false;
+}
+
 /** The broadcast of `sessionId` when it is a court session on one, else null. */
 async function courtBroadcastOf(sessionId: string): Promise<string | null> {
   const [r] = await sql<{ b: string | null }[]>`
@@ -44,14 +52,15 @@ export async function runCourtBroadcastEnd(sessionId: string, deps: SessionDeps,
   const left = () => COURT_END_WAIT_BOUND_MS - (wall() - started);
   try {
     const broadcastId = await courtBroadcastOf(sessionId);
-    if (broadcastId === null) return false;
+    if (broadcastId === null) return missed("not_court_broadcast", sessionId, null);
     for (;;) {
       const facts = await readEndFacts(sql, broadcastId);
       const due = broadcastEndDueAt(facts, deps.now());
       if (due === null) {
-        // Null with a session still active (this one `ending`, or a restart): look again. Null otherwise (no Stop yet, a
-        // reservation): not this tail's; the cron reaches it.
-        if (!facts.activeSessionOnBroadcast || left() <= SETTLE_POLL_MS) return false;
+        // Null with a session still active (a restart, or this one `ending` while the match is unfinished: a finished match's ending
+        // court session no longer holds the end, C1): look again. Null otherwise (no Stop yet, a reservation): not this tail's.
+        if (!facts.activeSessionOnBroadcast) return missed("not_due", sessionId, broadcastId);
+        if (left() <= SETTLE_POLL_MS) return missed("still_active", sessionId, broadcastId);
         await sleep(SETTLE_POLL_MS);
         continue;
       }
@@ -60,7 +69,9 @@ export async function runCourtBroadcastEnd(sessionId: string, deps: SessionDeps,
         // The grace (an unfinished match, 5 min) is the cron's, but a court match stopped just before its result is read again
         // until the bound runs out: a result landing inside it makes the end due 30 s after it.
         const unfinished = !(FINISHED_STATUSES as readonly string[]).includes(facts.fixtureStatus);
-        if (!(facts.lastSessionCourt === true && unfinished) || left() <= RESULT_POLL_MS) return false;
+        if (!(facts.lastSessionCourt === true && unfinished) || left() <= RESULT_POLL_MS) {
+          return missed("due_past_bound", sessionId, broadcastId);
+        }
         await sleep(RESULT_POLL_MS);
         continue;
       }
