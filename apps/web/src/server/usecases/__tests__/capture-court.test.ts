@@ -14,7 +14,9 @@
 //   - O13: a claim from a build older than COURT_MIN_APP_VERSION is 404 not_a_stream_code, with no pairing;
 //   - R4 (controller): a session ended by a handover latches its match while it is still in play;
 //   - web batch A1 (2026-11-17): while the court's link is live (not withdrawn, its day open) the court phone is never told to
-//     beat slower than the near cadence (10 s), idle or with a match far off; a withdrawn link keeps the fixture's rules.
+//     beat slower than the near cadence (10 s), idle or with a match far off; a withdrawn link keeps the fixture's rules;
+//   - web batch A3: a withdrawn court serves its live session's phone, and once that session is no longer streaming (ending or
+//     ended) the phone's next beat is 401 code_ended and its pairing ends; a withdrawn court that never went live is 401 at once.
 //
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam, UTC+1): every clock is the test's, passed in.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -37,7 +39,7 @@ import { postCaptureRecord } from "../capture-record";
 import { captureStageOf } from "../capture-stage";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { endOtherCourtSessions } from "../court-stream-sessions";
-import { resolveAnyStreamCode } from "../stream-codes";
+import { reissueStreamCode, resolveAnyStreamCode } from "../stream-codes";
 import { grantCredits } from "../stream-credits";
 import { startBroadcast, tickSession, type SessionDeps } from "../stream-sessions";
 import { captureRig, override, phoneId } from "./_capture-rig";
@@ -464,6 +466,70 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       await streamed(A, AT_14);
       expect(await common(resolved, clock())).toBe(POLL_NEAR_SECONDS);
       expect(await common({ ...resolved, link: { ...resolved.link, withdrawnAt: clock() } }, clock())).toBe(POLL_FAR_SECONDS);
+    });
+  });
+
+  describe("web batch A3: a withdrawn court releases its phone once the session stops streaming", () => {
+    /** A in play, started by the court phone, live on the tick; then the link withdrawn. */
+    const liveThenWithdrawn = async (phone: string) => {
+      await streamed(A, AT_14);
+      await setStatus(A, "in_play");
+      await claimed(phone);
+      const sid = await operatorStart(phone);
+      now += 3000;
+      await tickSession(sid, deps, "beat");
+      expect((await sessionRow(sid)).state, "premise: A's session went live").toBe("live");
+      await withdrawCourtStream(day.auth, linkId);
+      return sid;
+    };
+
+    it("withdrawn while live: the live session's phone is served; once the match ends and the session auto-stops, 401 code_ended", async () => {
+      const phone = phoneId("a3-live");
+      const sid = await liveThenWithdrawn(phone);
+      expect(await beat(phone, { sid, state: "publishing", mode: "automatic" })).toMatchObject({ state: "live", sid });
+      expect((await describeAs(phone)).state).toBe("live");
+      // The result 1 s after the session (which predates it, A15), and the court's 30 s tail elapsed.
+      await sql`update fixture_stream_sessions set created_at = ${at(0)} where id = ${sid}`;
+      now += 1000;
+      await setStatus(A, "decided");
+      await sql`update fixtures set finished_at = ${clock()} where id = ${A}`;
+      now += 31_000;
+      expect(await beat(phone, { sid, state: "publishing", mode: "automatic" })).toMatchObject({ state: "over", sid, endReason: "auto_stopped" });
+      now += 5000;
+      expect(await refusal(postBeat(qr.code, qr.tok, body(phone, { mode: "automatic" }), deps, clock()))).toBe("401:code_ended");
+      expect((await pairingOf(phone))[0]!.ended_at, "the refused beat ends the pairing").not.toBeNull();
+    });
+
+    it("withdrawn while live, the session lingering in ending (a composed teardown): the phone's next beat is 401 code_ended", async () => {
+      const phone = phoneId("a3-ending");
+      const sid = await liveThenWithdrawn(phone);
+      expect((await beat(phone, { sid, state: "publishing" })).state, "premise: served while live").toBe("live");
+      // The stop decided and the runner still tearing down: `ending` stays open (ACTIVE_STATES) until the runner reports.
+      await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'auto_stopped' where id = ${sid}`;
+      expect(await refusal(postBeat(qr.code, qr.tok, body(phone), deps, clock()))).toBe("401:code_ended");
+      expect(await refusal(getCode(qr.code, qr.tok, { slot: 0, phone }, deps, clock()))).toBe("401:code_ended");
+      expect((await pairingOf(phone))[0]!.ended_at).not.toBeNull();
+    });
+
+    it("withdrawn with nothing ever live: the court phone's next beat is 401 code_ended at once", async () => {
+      const phone = phoneId("a3-never");
+      await claimed(phone);
+      expect((await beat(phone)).state, "premise: served before the withdrawal").toBe("waiting");
+      await withdrawCourtStream(day.auth, linkId);
+      expect(await refusal(postBeat(qr.code, qr.tok, body(phone), deps, clock()))).toBe("401:code_ended");
+      expect((await pairingOf(phone))[0]!.ended_at).not.toBeNull();
+    });
+
+    it("a fixture code's reissued code still serves its ending session's phone (A3 is the court's only)", async () => {
+      const r = await captureRig();
+      const phone = phoneId("a3-fixture");
+      const fbody = (over: Partial<Beat> = {}) => CaptureBeat.parse({ ...body(phone, over), code: r.code, appVersion: "1.0.13-1150" });
+      const sid = await r.start(phone);
+      // Stopping and still open, the code ended after the session began (a reissue): C1b serves its phone, as before A3.
+      await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'stopped', first_ingest_at = now() where id = ${sid}`;
+      await reissueStreamCode(r.auth, r.fixtureId);
+      const a = await postBeat(r.code, r.tok, fbody({ sid }), r.deps, r.now());
+      expect(a).toMatchObject({ state: "over", sid });
     });
   });
 
