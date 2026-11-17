@@ -154,6 +154,7 @@ export type DictionaryKey =
   | "apiKeys.revoked.summary"
   | "apiKeys.scope.manage.label"
   | "apiKeys.scope.manage.line"
+  | "apiKeys.scope.onRequest"
   | "apiKeys.scope.read.label"
   | "apiKeys.scope.read.line"
   | "apiKeys.scope.score.label"

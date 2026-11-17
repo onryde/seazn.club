@@ -3,7 +3,15 @@ import { activeOrg, invalidateOrgEntitlements, loginUi, setBoolEntitlementOverri
 
 // The developer docs are OFF for everyone by default (owner, 2026-11-16) and staff switch them on per organisation with
 // an entitlement override on `developers.docs` (lib/developer-docs.ts). To anyone else the pages are not found.
-const DOCS_PAGES = ["/developers", "/developers/reference", "/developers/guides", "/developers/changelog"];
+// The API map those pages render sits behind the same switch (owner, 2026-11-17), in both its forms.
+const DOCS_PAGES = [
+  "/developers",
+  "/developers/reference",
+  "/developers/guides",
+  "/developers/changelog",
+  "/api/v1/openapi.json",
+  "/api/v1/openapi.json?published=1",
+];
 
 test("developer docs are not found for a signed-out visitor, on every docs page", async ({ browser }) => {
   const ctx = await browser.newContext(); // no auth
@@ -35,6 +43,7 @@ test("an organisation without the switch gets not found; with it, the API refere
 
   // Signed in, a member of an organisation, and still not found: membership alone opens nothing.
   expect((await page.request.get("/developers/reference")).status(), "before the switch").toBe(404);
+  expect((await page.request.get("/api/v1/openapi.json")).status(), "the API map before the switch").toBe(404);
 
   await setBoolEntitlementOverrideSql(org.id, "developers.docs", true);
   await invalidateOrgEntitlements(page.request, org.id);

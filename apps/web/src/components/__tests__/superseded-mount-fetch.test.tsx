@@ -106,6 +106,29 @@ describe("a superseded first read never lands on the panel that replaced it", ()
     expect(island.text()).not.toContain("ZqAlbert");
   });
 
+  // Owner, 2026-11-16/17: read keys are Pro; score and manage are off and switched on per organisation on request
+  // (`api.write`, enforced server-side in usecases/api-keys.ts). The form says so instead of offering a choice the
+  // server will refuse.
+  it("ApiKeysPanel: Score and Manage are greyed out and unselectable without write access, Read never is", () => {
+    vi.stubGlobal("fetch", vi.fn((url: string) => later(url)));
+    const radios = (writeEnabled: boolean | undefined) => {
+      const island = renderIsland(ApiKeysPanel, { orgId: "org-a", competitions: [], writeEnabled });
+      const found = island.tree().filter((el) => propsOf(el).name === "key-scope");
+      return {
+        island,
+        byScope: Object.fromEntries(found.map((el) => [String(propsOf(el).value), propsOf(el).disabled === true])),
+      };
+    };
+    for (const off of [false, undefined]) {
+      const { island, byScope } = radios(off);
+      expect(byScope).toEqual({ read: false, score: true, manage: true });
+      expect(island.tree().filter((el) => propsOf(el)["data-scope-locked"] === true)).toHaveLength(2);
+    }
+    const on = radios(true);
+    expect(on.byScope).toEqual({ read: false, score: false, manage: false });
+    expect(on.island.tree().filter((el) => propsOf(el)["data-scope-locked"] === true)).toHaveLength(0);
+  });
+
   it("ApiKeysPanel: org A's late keys do not replace org B's", async () => {
     vi.stubGlobal(
       "fetch",

@@ -435,6 +435,7 @@ export default async function SettingsPage({
                     orgId={active.id}
                     competitions={pinnableCompetitions}
                     developerDocs={await developerDocsEnabledFor([active.id])}
+                    writeEnabled={await hasFeature(active.id, "api.write")}
                   />
                 ) : (
                   <p className="flex items-center gap-2 text-sm text-slate-500">

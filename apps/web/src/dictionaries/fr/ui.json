@@ -8781,5 +8781,6 @@
   "start.next.pairs.title": "Ajoutez vos paires",
   "start.next.pairs.progress": "{count} paires sur {target}",
   "start.next.action.teams": "Ajouter des équipes",
-  "start.next.action.pairs": "Ajouter des paires"
+  "start.next.action.pairs": "Ajouter des paires",
+  "apiKeys.scope.onRequest": "Sur demande — contactez-nous"
 }

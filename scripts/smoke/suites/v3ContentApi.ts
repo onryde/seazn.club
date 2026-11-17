@@ -83,13 +83,8 @@ export async function v3ContentApiSuite(
   check("v3: /developers is not found signed out", devAnon.status === 404);
   const devAdmin = await html(admin, "/developers");
   check("v3: /developers is not found for an org without the switch", devAdmin.status === 404);
-  const pubSpec = (await (await fetch(BASE + "/api/v1/openapi.json?published=1")).json()) as {
-    paths: Record<string, unknown>;
-  };
-  check(
-    "v3: published spec excludes key management",
-    !Object.keys(pubSpec.paths).some((p) => p.includes("api-keys")),
-  );
+  const pubSpec = await fetch(BASE + "/api/v1/openapi.json?published=1");
+  check("v3: published spec is not found signed out", pubSpec.status === 404);
 
   // Scoped API keys (PROMPT-37): read key reads with rate headers, 403s on
   // writes; pinned key stays inside its competition.
