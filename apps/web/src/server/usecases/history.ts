@@ -30,7 +30,7 @@ import { isKnockoutRefusalCode } from "@/lib/knockout-refusals";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import type { UndoRefusalCode } from "@/lib/undo-refusals";
 import { SWISS_PAIRINGS, type SwissPairingMode } from "@/lib/swiss-pairing";
-import { TABLE_WITHDRAWAL_LINE_ROW, TABLE_WITHDRAWAL_LINE_VOIDED_ROW } from "@/lib/table-withdrawal-note";
+import { PAIR_DISSOLVE_OWED_ROW, TABLE_WITHDRAWAL_LINE_ROW, TABLE_WITHDRAWAL_LINE_VOIDED_ROW } from "@/lib/table-withdrawal-note";
 import { UUID_RE, liveCourt, venueBack, venueOf, venueWith } from "./court-restore-sql";
 import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
 import { byeLineSql } from "@/server/engine-db/system-bye-sql";
@@ -976,7 +976,7 @@ export interface HistoryRow {
 /** Ledger rows that are bookkeeping, never an edit a person made: the withdrawal cascade's per-line write-ahead rows and their
  *  retirements (Task 8b re-review 2). Left out of every history surface (the panel's Recent edits, API v1 history) — the
  *  withdrawal and its Reinstate are each listed once, by their `table_withdrawal` / `table_withdrawal_voided` rows. */
-const INTERNAL_LEDGER_TYPES: readonly string[] = [TABLE_WITHDRAWAL_LINE_ROW, TABLE_WITHDRAWAL_LINE_VOIDED_ROW];
+const INTERNAL_LEDGER_TYPES: readonly string[] = [TABLE_WITHDRAWAL_LINE_ROW, TABLE_WITHDRAWAL_LINE_VOIDED_ROW, PAIR_DISSOLVE_OWED_ROW];
 
 /** GET /divisions/{id}/history — ledger slice, newest first. */
 export async function divisionHistory(

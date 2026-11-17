@@ -40,6 +40,7 @@ import {
   openRegistrationSeatGateFor,
   releaseSoloSignUpPlacement,
   dissolvePairsAfterRelease,
+  retryOwedPairDissolves,
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
   refundEntryUnderLock,
@@ -305,6 +306,9 @@ export async function rejectRegistration(
     };
   });
   await dissolvePairsAfterRelease(auth.orgId, regId, result.pairLosses, "organiser", auth.userId);
+  // I-1 (fix round 2): a rejection POSTed again (already `rejected`: no transition, so nothing above ran) retries a dissolve its
+  // first run left owed.
+  if (result.competitionId === null) await retryOwedPairDissolves(regId, "organiser", auth.userId);
   if (result.mailIds.length > 0) deferred(() => dispatchNow(result.mailIds));
   fireDivisionRevalidate(result.row.division_id, result.competitionId ?? undefined);
   if (result.promoted) {

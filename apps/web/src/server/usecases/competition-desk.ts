@@ -34,7 +34,7 @@ import { bracketAwaitsCompletion } from "@/server/engine-db/stage-finals";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
 import { DEPARTED_STATUSES } from "./entrants";
-import { withdrawalOwedSince } from "./withdrawal";
+import { pairDissolveOwedCandidates, withdrawalOwedSince } from "./withdrawal";
 import { countsAsMatch } from "@/lib/run-sheet-groups";
 import { isCatchUpExtKey } from "@/lib/roundrobin-late-entry";
 import { listDivisions } from "./divisions";
@@ -566,9 +566,18 @@ export async function getCompetitionDesk(
            where trig.at is not null
            order by trig.created_at, trig.id`
       : [];
+    // W5 T10 fix round 2 (I-1): and the pairs a released placed solo left a partner short whose dissolve did not finish - their
+    // trigger is the durable `pair_dissolve_owed` marker (the placement row that linked solo to pair is deleted by the release),
+    // read through the same `withdrawalOwedSince`. A pair both ways (her own withdrawal AND a marker) is one name.
+    const pairCandidates = await pairDissolveOwedCandidates(tx, ids);
     const withdrawalOwed: { division_id: string; name: string }[] = [];
-    for (const c of owedCandidates) {
-      if (await withdrawalOwedSince(tx, c.division_id, c.id, c.at)) withdrawalOwed.push({ division_id: c.division_id, name: c.name });
+    const seenOwed = new Set<string>();
+    for (const c of [...owedCandidates, ...pairCandidates]) {
+      if (seenOwed.has(c.id)) continue;
+      if (await withdrawalOwedSince(tx, c.division_id, c.id, c.at)) {
+        seenOwed.add(c.id);
+        withdrawalOwed.push({ division_id: c.division_id, name: c.name });
+      }
     }
     return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed };
   });

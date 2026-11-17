@@ -95,8 +95,8 @@ export async function releaseSoloSignUpPlacement(
 
   let releasedFrom: string | null = null;
   for (const placement of placements) {
-    const [target] = await tx<{ entrant_id: string | null }[]>`
-      select entrant_id from registrations where id = ${placement.registration_id} for update`;
+    const [target] = await tx<{ entrant_id: string | null; division_id: string }[]>`
+      select entrant_id, division_id from registrations where id = ${placement.registration_id} for update`;
     if (target?.entrant_id && placement.person_id) {
       // W5 T10 fix round 1 (R12; RB5-R2): a placed solo who leaves is a partner LEAVING. On a pair of a started league or group
       // the member row is kept (the pair is the entrant; its record stands) and the pair withdraws instead - reported to the
@@ -113,7 +113,13 @@ export async function releaseSoloSignUpPlacement(
           where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
       } else if (verdict === "dissolve") {
         if (pairLosses === undefined) throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
-        if (!pairLosses.includes(target.entrant_id)) pairLosses.push(target.entrant_id);
+        if (!pairLosses.includes(target.entrant_id)) {
+          pairLosses.push(target.entrant_id);
+          // I-1 (fix round 2): the dissolve runs after the commit and may fail; this row, written with the release, is what the
+          // desk and the retries find the pair by once the placement row below is gone.
+          const { recordPairDissolveOwed } = await import("../withdrawal");
+          await recordPairDissolveOwed(tx, target.division_id, target.entrant_id, registrationId);
+        }
       }
     }
     await tx`delete from registration_players where id = ${placement.id}`;
@@ -164,8 +170,13 @@ async function settleStartedWithdrawal(
 /**
  * W5 T10 fix round 1 (R12; RB5-R2): the pairs of a started league or group that a released solo placement left a partner short
  * (`releaseSoloSignUpPlacement`'s `pairLosses`) withdraw through the same cascade as any other withdrawal, once the releasing
- * transaction has committed. Failure handling is `settleStartedWithdrawal`'s: logged, the pair left in the field, the organiser's
- * Withdraw finishes it. Shared by the withdrawal, a rejection and the expiry sweep.
+ * transaction has committed. Failure handling is `settleStartedWithdrawal`'s: logged, the pair left in the field - and, I-1 (fix round 2),
+ * SHOWN: the release wrote a durable `pair_dissolve_owed` row with it (`recordPairDissolveOwed`), so the desk's "withdrawal did
+ * not finish" item names the pair, the solo's re-POST (`retryOwedWithdrawal`) retries it, and so does the organiser's Withdraw on
+ * the pair (the same lock-guarded cascade). Shared by the withdrawal, a rejection and the expiry sweep.
+ *
+ * The expiry sweep's call of this is wired and UNTESTED: it cannot be reached today (assign refuses an unpaid solo and expiry
+ * takes only `pending` ones, so a placed solo never expires) - m-1, accepted; the release it shares is covered by the other two.
  */
 export async function dissolvePairsAfterRelease(
   orgId: string,
@@ -189,14 +200,32 @@ async function retryOwedWithdrawal(regId: string, divisionId: string, actorId: s
     select r.entrant_id, r.withdrawn_at, e.status as entrant_status
       from registrations r join entrants e on e.id = r.entrant_id
      where r.id = ${regId} and r.status = 'withdrawn'`;
-  if (row === undefined || row.withdrawn_at === null || DEPARTED_STATUSES.has(row.entrant_status)) return;
-  const at = row.withdrawn_at;
-  const entrantId = row.entrant_id;
-  // Started, and still owed (a Reinstate since her withdrawal stands: the organiser's last word).
-  const owed = await sql.begin(async (tx) => (await divisionHasStarted(tx, divisionId)) && (await withdrawalOwedSince(tx, divisionId, entrantId, at)));
-  if (!owed) return;
-  const ctx = await divisionCtx(sql, divisionId);
-  await settleStartedWithdrawal(ctx.org_id, regId, row.entrant_id, by, actorId);
+  if (row !== undefined && row.withdrawn_at !== null && !DEPARTED_STATUSES.has(row.entrant_status)) {
+    const at = row.withdrawn_at;
+    const entrantId = row.entrant_id;
+    // Started, and still owed (a Reinstate since her withdrawal stands: the organiser's last word).
+    const owed = await sql.begin(async (tx) => (await divisionHasStarted(tx, divisionId)) && (await withdrawalOwedSince(tx, divisionId, entrantId, at)));
+    if (owed) {
+      const ctx = await divisionCtx(sql, divisionId);
+      await settleStartedWithdrawal(ctx.org_id, regId, row.entrant_id, by, actorId);
+    }
+  }
+  // Her own entrant's state is no bar to the pairs below (a placed solo has none, or it departed long ago).
+  await retryOwedPairDissolves(regId, by, actorId);
+}
+
+/**
+ * W5 T10 fix round 2 (I-1): the pairs a registration's release left a partner short whose dissolve did not finish (a
+ * `pair_dissolve_owed` marker, the pair still in the field and not reinstated since) run the cascade again. Reached by the solo's
+ * withdrawal POSTed again and by a rejection POSTed again; the organiser's Withdraw on the pair is the third door, the same
+ * lock-guarded cascade. Nothing owed is the no-op it always was.
+ */
+export async function retryOwedPairDissolves(regId: string, by: WithdrawnBy, actorId: string | null): Promise<void> {
+  const { owedPairsOfRegistration } = await import("../withdrawal");
+  for (const pair of await sql.begin((tx) => owedPairsOfRegistration(tx, regId))) {
+    const ctx = await divisionCtx(sql, pair.divisionId);
+    await settleStartedWithdrawal(ctx.org_id, regId, pair.entrantId, by, actorId);
+  }
 }
 
 /** WHO withdrew is an explicit fact, never inferred from `actorId`: an organiser acting through an API key has NO user id (api-v1/auth.ts),

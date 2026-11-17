@@ -60,6 +60,7 @@ import { BOARD_SETTLED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { DEPARTED_STATUSES, getEntrant, listEntrants, writeEntrantPatch } from "./entrants";
 import {
+  PAIR_DISSOLVE_OWED_ROW,
   TABLE_WITHDRAWAL_LINE_ROW,
   TABLE_WITHDRAWAL_LINE_VOIDED_ROW,
   TABLE_WITHDRAWAL_ROW,
@@ -882,6 +883,51 @@ export async function withdrawalOwedSince(tx: Tx, divisionId: string, entrantId:
                     where w.division_id = ${divisionId} and w.type = ${TABLE_WITHDRAWAL_ROW}
                       and w.payload ->> 'entrant_id' = ${entrantId} and v.created_at >= ${at}) as reversed`;
   return row !== undefined && row.status !== null && !DEPARTED_STATUSES.has(row.status) && !row.reversed;
+}
+
+/**
+ * W5 T10 fix round 2 (R12; I-1) - DURABLE marker, not derived: a pair that loses a partner to a released placed solo is owed a
+ * dissolve (`pairLosses`, run after the releasing transaction commits). The release deletes the solo's `registration_players` row
+ * - the only link from her to the pair - so a cascade that then fails would leave nothing to find the pair by; the marker is
+ * written in the SAME transaction as the release, so the two commit or roll back together. Read by `pairDissolveOwedCandidates`
+ * (the desk) and `owedPairsOfRegistration` (the retries), through `withdrawalOwedSince`: owed while the pair is in the field.
+ * Takes the division lock (`appendTableLedgerRow`'s contract).
+ */
+export async function recordPairDissolveOwed(tx: Tx, divisionId: string, entrantId: string, registrationId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+  await appendTableLedgerRow(tx, divisionId, PAIR_DISSOLVE_OWED_ROW, { entrant_id: entrantId, registration_id: registrationId }, null);
+}
+
+/** The pairs with a dissolve owed, latest marker each, for these divisions - candidates only; the desk asks `withdrawalOwedSince`
+ *  of each (a departed pair is done, a Reinstated one is the organiser's last word). Entrants no longer in the field are left out. */
+export async function pairDissolveOwedCandidates(
+  tx: Tx,
+  divisionIds: readonly string[],
+): Promise<{ id: string; division_id: string; name: string; at: Date }[]> {
+  if (divisionIds.length === 0) return [];
+  return tx<{ id: string; division_id: string; name: string; at: Date }[]>`
+    select e.id, e.division_id, e.display_name as name, max(ev.created_at) as at
+      from division_events ev
+      join entrants e on e.id = (ev.payload ->> 'entrant_id')::uuid and e.division_id = ev.division_id
+     where ev.division_id = any(${divisionIds as string[]}) and ev.type = ${PAIR_DISSOLVE_OWED_ROW}
+       and e.status not in ${tx([...DEPARTED_STATUSES])}
+     group by e.id, e.division_id, e.display_name, e.created_at
+     order by e.created_at, e.id`;
+}
+
+/** The pairs a registration's release left a dissolve owed on, and still owed (`withdrawalOwedSince`) - what a re-POST of that
+ *  registration's withdrawal retries. */
+export async function owedPairsOfRegistration(tx: Tx, registrationId: string): Promise<{ entrantId: string; divisionId: string }[]> {
+  const rows = await tx<{ id: string; division_id: string; at: Date }[]>`
+    select (ev.payload ->> 'entrant_id') as id, ev.division_id, max(ev.created_at) as at
+      from division_events ev
+     where ev.type = ${PAIR_DISSOLVE_OWED_ROW} and ev.payload ->> 'registration_id' = ${registrationId}
+     group by ev.payload ->> 'entrant_id', ev.division_id`;
+  const out: { entrantId: string; divisionId: string }[] = [];
+  for (const r of rows) {
+    if (await withdrawalOwedSince(tx, r.division_id, r.id, r.at)) out.push({ entrantId: r.id, divisionId: r.division_id });
+  }
+  return out;
 }
 
 /** The refusal an organiser's (or a scorer's) Undo of a disqualifying forfeit meets while the disqualification stands. */

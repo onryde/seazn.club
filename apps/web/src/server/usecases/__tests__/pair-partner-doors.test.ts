@@ -14,11 +14,12 @@
 // `pending` ones, so it is wired (the collector, the post-commit cascade) and not driven here.
 //
 // Real Postgres required; skipped without DATABASE_URL.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
+import { getCompetitionDesk } from "../competition-desk";
 import { createImport, commitImport } from "../imports";
 import { putRegistrationSettings, confirmRegistration, withdrawRegistrationOrganiser } from "../registrations";
 import { rejectRegistration } from "../registration-approval";
@@ -27,6 +28,24 @@ import { assignSoloSignUp } from "../registration-assign";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
 import { seedFootballCatalog, seedOrg } from "./_seed";
+
+// A cascade failure is simulated as self-withdraw-after-start.test.ts does it: the cascade's first cross-module call
+// (`replaceDepartedQualifier`, called only by the withdrawal cascade, inside its per-entrant lock and before any write) throws once.
+const control = vi.hoisted(() => ({ failNext: false, calls: 0 }));
+vi.mock("../lucky-loser", async (io) => {
+  const real = await io<typeof import("../lucky-loser")>();
+  return {
+    ...real,
+    replaceDepartedQualifier: async (...args: Parameters<typeof real.replaceDepartedQualifier>) => {
+      control.calls++;
+      if (control.failNext) {
+        control.failNext = false;
+        throw new Error("simulated: the cascade's first step failed");
+      }
+      return real.replaceDepartedQualifier(...args);
+    },
+  };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -146,7 +165,7 @@ describe.skipIf(!HAS_DB)("X-RP-2 a placed solo sign-up who leaves a started pair
     const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "Table", config: { legs: 1 }, progression: null });
     await generateStageFixtures(auth, stage!.id);
     if (start) await startDivision(auth, division.id);
-    return { auth, division, divisionId: division.id, team, solo, entrantId };
+    return { auth, division, divisionId: division.id, competitionId: comp.id, team, solo, entrantId };
   }
   const withdrawalRows = (divisionId: string) =>
     sql<{ payload: Record<string, unknown> }[]>`select payload from division_events where division_id = ${divisionId} and type = 'table_withdrawal' order by seq`;
@@ -177,6 +196,63 @@ describe.skipIf(!HAS_DB)("X-RP-2 a placed solo sign-up who leaves a started pair
     await rejectRegistration(r.auth, r.solo.id);
     expect(await statusOf(r.entrantId)).toBe("withdrawn");
     expect(await membersOf(r.entrantId)).toEqual(["Captain One", "Priya Raman"]);
+  }, 300_000);
+
+  /** The desk's "withdrawal did not finish" rows for the rig's division. */
+  const deskOwed = async (r: { auth: Parameters<typeof getCompetitionDesk>[0]; competitionId: string; divisionId: string }) =>
+    ((await getCompetitionDesk(r.auth, r.competitionId)).divisions.get(r.divisionId)?.attention ?? []).filter((a) => a.kind === "withdrawal_owed");
+
+  it("I-1 a pair dissolve that fails after the solo's release is shown on the desk and finished by the solo's re-POST; a dissolve that succeeds shows nothing", async () => {
+    // Positive pair first: the successful dissolve leaves nothing owed (and a marker row was written but is not owed).
+    {
+      const ok = await rig(true);
+      expect(await deskOwed(ok), "the empty case: nobody owed").toEqual([]);
+      await withdrawRegistrationOrganiser(ok.auth, ok.solo.id);
+      expect(await statusOf(ok.entrantId)).toBe("withdrawn");
+      expect(await deskOwed(ok), "a successful dissolve shows nothing").toEqual([]);
+    }
+    const r = await rig(true);
+    control.failNext = true;
+    await withdrawRegistrationOrganiser(r.auth, r.solo.id);
+    expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
+    expect(await statusOf(r.entrantId), "the pair is still in the field, still carrying the departed solo").toBe("confirmed");
+    expect(await deskOwed(r), "the desk names the pair").toEqual([{ kind: "withdrawal_owed", count: 1, names: ["Pair A"] }]);
+    expect(
+      (await sql<{ n: number }[]>`select count(*)::int as n from division_events where division_id = ${r.divisionId} and type = 'pair_dissolve_owed'`)[0]!.n,
+      "one durable marker",
+    ).toBe(1);
+    const calls = control.calls;
+    await withdrawRegistrationOrganiser(r.auth, r.solo.id); // the solo's re-POST
+    expect(control.calls - calls, "the retry ran the cascade once").toBe(1);
+    expect(await statusOf(r.entrantId)).toBe("withdrawn");
+    expect(await membersOf(r.entrantId), "its record stands").toEqual(["Captain One", "Priya Raman"]);
+    expect((await withdrawalRows(r.divisionId)).length, "one ledger row").toBe(1);
+    expect(await deskOwed(r), "finished: the item clears").toEqual([]);
+    await withdrawRegistrationOrganiser(r.auth, r.solo.id);
+    expect(control.calls - calls, "departed: a further re-POST runs no cascade").toBe(1);
+  }, 300_000);
+
+  it("I-1 the organiser's Withdraw on the owed pair finishes it too; so does a rejection POSTed again", async () => {
+    {
+      const r = await rig(true);
+      control.failNext = true;
+      await withdrawRegistrationOrganiser(r.auth, r.solo.id);
+      expect(await deskOwed(r)).toHaveLength(1);
+      await patchEntrant(r.auth, r.entrantId, { status: "withdrawn" });
+      expect(await statusOf(r.entrantId)).toBe("withdrawn");
+      expect(await deskOwed(r), "the organiser's Withdraw clears the item").toEqual([]);
+    }
+    {
+      const r = await rig(true, "paid");
+      await sql`update registration_settings set approval = 'manual' where division_id = ${r.divisionId}`;
+      control.failNext = true;
+      await rejectRegistration(r.auth, r.solo.id);
+      expect(control.failNext, "premise: the cascade ran and failed").toBe(false);
+      expect(await deskOwed(r)).toEqual([{ kind: "withdrawal_owed", count: 1, names: ["Pair A"] }]);
+      await rejectRegistration(r.auth, r.solo.id); // already rejected: the retry
+      expect(await statusOf(r.entrantId)).toBe("withdrawn");
+      expect(await deskOwed(r)).toEqual([]);
+    }
   }, 300_000);
 
   it("a caller that cannot run the cascade (no collector) is refused rather than deleting the partner silently", async () => {

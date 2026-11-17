@@ -23,6 +23,12 @@ export const TABLE_WITHDRAWAL_LINE_ROW = "table_withdrawal_line";
  *  type, so `table_withdrawal_voided` keeps meaning "the footnote's row is voided". */
 export const TABLE_WITHDRAWAL_LINE_VOIDED_ROW = "table_withdrawal_line_voided";
 
+/** W5 T10 fix round 2 (R12; I-1): the durable "owed" marker of a pair a released placed solo left a partner short, written in the
+ *  releasing transaction - `{entrant_id, registration_id}` (the pair, and the solo's registration). The release deletes the
+ *  placement row, so nothing else keeps the link to the pair; the desk's "withdrawal did not finish" item and the retries read this
+ *  row, through `withdrawalOwedSince` (owed while the pair is still in the field and not reinstated since). Not a history step. */
+export const PAIR_DISSOLVE_OWED_ROW = "pair_dissolve_owed";
+
 export type TableWithdrawalPolicy = "expunge" | "walkover";
 
 /** One active `table_withdrawal` row, as written (`seq` is its ledger position). */
