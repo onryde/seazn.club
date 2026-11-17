@@ -87,10 +87,11 @@ describe("seedingSourceReady", () => {
 });
 
 // W4 B6a fix round 1 (review #1): the Confirm warning promises "you can recompute it" only where a confirmed draw CAN be
-// reopened. The server's one gate is scoring.ts: a correction inside a COMPLETED stage of kind "knockout" calls
-// markDependentSeedProposalsStale({ includeConfirmed: true }); a table source's correction does not (usecases/stages/
-// computeSeedProposal refuses a confirmed stage with SEEDING_ALREADY_CONFIRMED for good). Expected values are that gate's
-// verdict per stage kind, typed here - never read back from the predicate.
+// reopened. The server's gate is a correction inside a COMPLETED stage: scoring.ts calls
+// markDependentSeedProposalsStale({ includeConfirmed: true }) for a knockout (W4 T14) and, since W5 T11 (X-CUT-4 <- RB5-K6),
+// for a league or group; every other kind's correction does not (computeSeedProposal refuses a confirmed stage with
+// SEEDING_ALREADY_CONFIRMED for good). Expected values are that gate's verdict per stage kind, typed here - never read back
+// from the predicate.
 describe("confirmedDrawReopens - may the Confirm warning promise a recompute?", () => {
   const stage = (id: string, seq: number, kind: string): SeedingKindStage => ({
     id,
@@ -106,11 +107,11 @@ describe("confirmedDrawReopens - may the Confirm warning promise a recompute?", 
     expect(confirmedDrawReopens([stage("a", 1, "knockout"), TARGET], TARGET, { sources: [] })).toBe(false);
   });
 
-  it("a knockout source reopens a confirmed draw; a table source never does (every table kind the server refuses for good)", () => {
+  it("a knockout, league or group source reopens a confirmed draw; no other kind does (every one the server refuses for good)", () => {
     const cases: [string, boolean][] = [
       ["knockout", true],
-      ["group", false],
-      ["league", false],
+      ["group", true],
+      ["league", true],
       ["swiss", false],
       ["round_robin", false],
       ["double_elim", false],
@@ -128,17 +129,19 @@ describe("confirmedDrawReopens - may the Confirm warning promise a recompute?", 
 
   it("'previous' resolves to the stage just before the target, and that stage's kind decides", () => {
     const ko = stage("ko", 1, "knockout");
-    const grp = stage("grp", 2, "group");
+    const swiss = stage("swiss", 2, "swiss");
     expect(confirmedDrawReopens([ko, TARGET], TARGET, { sources: [{ stage: "previous", take: [] }] })).toBe(true);
-    expect(confirmedDrawReopens([ko, grp, TARGET], TARGET, { sources: [{ stage: "previous", take: [] }] })).toBe(false);
+    expect(confirmedDrawReopens([ko, swiss, TARGET], TARGET, { sources: [{ stage: "previous", take: [] }] })).toBe(false);
   });
 
-  it("EVERY source must be a knockout: one table source among them withholds the promise", () => {
+  it("EVERY source must reopen: one source that does not (a Swiss) among them withholds the promise, whichever side it is on; a league beside a knockout keeps it", () => {
     const ko = stage("ko", 1, "knockout");
-    const grp = stage("grp", 2, "group");
-    expect(confirmedDrawReopens([ko, grp, TARGET], TARGET, { sources: [src("ko"), src("ko")] })).toBe(true);
-    expect(confirmedDrawReopens([ko, grp, TARGET], TARGET, { sources: [src("ko"), src("grp")] })).toBe(false);
-    expect(confirmedDrawReopens([ko, grp, TARGET], TARGET, { sources: [src("grp"), src("ko")] })).toBe(false);
+    const swiss = stage("swiss", 2, "swiss");
+    const league = stage("league", 3, "league");
+    expect(confirmedDrawReopens([ko, swiss, league, TARGET], TARGET, { sources: [src("ko"), src("ko")] })).toBe(true);
+    expect(confirmedDrawReopens([ko, swiss, league, TARGET], TARGET, { sources: [src("ko"), src("league")] })).toBe(true);
+    expect(confirmedDrawReopens([ko, swiss, league, TARGET], TARGET, { sources: [src("ko"), src("swiss")] })).toBe(false);
+    expect(confirmedDrawReopens([ko, swiss, league, TARGET], TARGET, { sources: [src("swiss"), src("ko")] })).toBe(false);
   });
 
   it("a source that resolves to no stage (unknown, later, another division) promises nothing", () => {

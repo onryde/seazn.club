@@ -43,6 +43,7 @@ import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
+import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import { maybeProposePlate } from "./plate-field";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
@@ -1238,13 +1239,26 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // already-COMPLETE source stage. Same best-effort contract as the
     // overrideStandings call site: never blocks a score write that already
     // committed.
-    try {
-      await markDependentSeedProposalsStale(auth, context.stage_id);
-    } catch (err) {
-      log.error(
-        { err, event: "seed_proposals_stale_mark_failed", fixtureId, stageId: context.stage_id },
-        "scoring: the stage's dependent seed proposals were not marked stale (score write unaffected)",
-      );
+    //
+    // W5 T11 (X-CUT-4 <- RB5-K6, FX-G16's table half): inside a COMPLETED league or group the proposals it seeds answer for the
+    // correction too, a confirmed one included: before the destination starts it goes stale and its seats go back (the lines they
+    // empty ride this score's push), after it the bracket stands and the desk warns (`getTableCutDrift`). Best-effort like the
+    // knockout's below: the score already committed.
+    if (TABLE_CUT_DRIFT_KINDS.has(context.kind) && context.stage_status === "complete") {
+      try {
+        advanced.push(...(await markDependentSeedProposalsStale(auth, context.stage_id, { includeConfirmed: true })));
+      } catch (err) {
+        log.error({ err, stageId: context.stage_id }, "scoring: a corrected table's proposals did not update (score write unaffected)");
+      }
+    } else {
+      try {
+        await markDependentSeedProposalsStale(auth, context.stage_id);
+      } catch (err) {
+        log.error(
+          { err, event: "seed_proposals_stale_mark_failed", fixtureId, stageId: context.stage_id },
+          "scoring: the stage's dependent seed proposals were not marked stale (score write unaffected)",
+        );
+      }
     }
   }
   // W4 T14 (FX-G16, FX-G18, X-QM-4, RB4-Q5): the same correction inside a COMPLETED knockout, which stored its ranks once at

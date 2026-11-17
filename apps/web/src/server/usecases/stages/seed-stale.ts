@@ -10,6 +10,9 @@ import { unfillProposalSeats } from "@/server/engine-db/fed-seats";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveProgressionSource, sourcesToTables, standingsHash, poolTableRowsAcrossSources } from "../stage-seeding";
 import { slateStands, type BracketDependent } from "../knockout-cut-drift";
+import { tableSlateStands } from "../table-cut-drift";
+import { stageHasStarted } from "../fixture-started-sql";
+import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import type { Tx } from "./types";
 import { computeSeedProposal, type SeedProposalOut } from "./seed-proposal";
 
@@ -29,9 +32,9 @@ import { computeSeedProposal, type SeedProposalOut } from "./seed-proposal";
  *  onDecided) is permitted too, and must call this the same way.
  *
  *  W4 T14 (FX-G16, X-QM-4, RB4-Q5) `includeConfirmed`: a correction inside a completed KNOCKOUT source, where a confirmed
- *  proposal goes stale too and its seats go back before the destination starts (`correctBracketDependent`). A table source
- *  does not pass it: FX-G16's table half is W5's. Returns the lines of the dependents whose seats went back, for the
- *  caller's publish; [] without the option. */
+ *  proposal goes stale too and its seats go back before the destination starts (`correctBracketDependent`). W5 T11 (X-CUT-4 <-
+ *  RB5-K6): the same for a completed LEAGUE or GROUP source (`correctTableDependent`; the caller passes it when the stage is
+ *  complete). Returns the lines of the dependents whose seats went back, for the caller's publish; [] without the option. */
 export async function markDependentSeedProposalsStale(
   auth: AuthCtx,
   sourceStageId: string,
@@ -39,10 +42,15 @@ export async function markDependentSeedProposalsStale(
 ): Promise<string[]> {
   const unfilled: string[] = [];
   const dependents = await withTenant(auth.orgId, async (tx) => {
-    const [src] = await tx<{ division_id: string }[]>`select division_id from stages where id = ${sourceStageId}`;
+    const [src] = await tx<{ division_id: string; kind: string }[]>`select division_id, kind from stages where id = ${sourceStageId}`;
     if (!src) return [];
     const matches = await setupDependentsOf(tx, sourceStageId, src.division_id);
-    if (opts.includeConfirmed) {
+    if (opts.includeConfirmed && TABLE_CUT_DRIFT_KINDS.has(src.kind)) {
+      // W5 T11: a table source's confirmed proposal is judged first; its drafts then go the way they always went for a table
+      // (every one staled and recomputed), and the recompute below re-proposes the ones just staled.
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + src.division_id}))`;
+      for (const dependent of matches) unfilled.push(...(await correctTableDependent(tx, dependent, sourceStageId)).unfilled);
+    } else if (opts.includeConfirmed) {
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + src.division_id}))`;
       const recompute: string[] = [];
       for (const dependent of matches) {
@@ -66,6 +74,79 @@ export async function markDependentSeedProposalsStale(
     }
   }
   return unfilled;
+}
+
+/**
+ * W5 T11 (X-CUT-4 <- RB5-K6), on one dependent of a completed league or group that a correction (or, with `departing`, a
+ * departure) just moved. Only a CONFIRMED proposal is judged here (a draft is staled and recomputed by the caller as it always
+ * was for a table): does its slate still stand (`tableSlateStands`)? If not, and the destination has not started, the seats go
+ * back (`unfillProposalSeats`, whose own started guard runs under the locks), the row goes stale, and the dependent is returned
+ * for a re-proposal. After the start the bracket stands and the desk warns (`getTableCutDrift`): nothing is written.
+ * `departing` is the entrant the withdrawal cascade is about to settle, asked BEFORE her lines are walked over: a walkover in the
+ * destination is a start, after which the seats could no longer go back.
+ */
+async function correctTableDependent(
+  tx: Tx,
+  dependent: BracketDependent,
+  sourceStageId: string,
+  departing?: string,
+): Promise<{ unfilled: string[]; staled: boolean }> {
+  const [confirmed] = await tx<{ id: string; computed: SeedProposalOut["computed"] }[]>`
+    select id, computed from stage_seed_proposals where stage_id = ${dependent.id} and status = 'confirmed'
+    order by confirmed_at desc nulls last, id limit 1`;
+  const stands = { unfilled: [] as string[], staled: false };
+  if (!confirmed) return stands;
+  if (await tableSlateStands(tx, dependent, confirmed.computed, sourceStageId, departing)) return stands;
+  const unfilled = await unfillProposalSeats(tx, confirmed.id);
+  // The un-fill's own guard (`stageHasStarted`, under the stage and line locks) gives nothing back for a destination that has
+  // started, and then the proposal stays what the seats still are: the bracket stands (RB5-K6) and the desk warns.
+  if (unfilled.length === 0 && (await stageHasStarted(tx, dependent.id))) return stands;
+  await tx`update stage_seed_proposals set status = 'stale' where id = ${confirmed.id}`;
+  return { unfilled, staled: true };
+}
+
+/**
+ * W5 T11 (X-CUT-4 <- RB5-K6): `entrantId` is leaving, and the destination of a completed league or group of her division has not
+ * started: every confirmed proposal that names her goes stale and its seats go back, in this call's own transaction. Run by the
+ * withdrawal cascade BEFORE it settles her lines (a walkover over her seat is a start, after which nothing could go back), so
+ * the status write that follows finds no seat to walk anyone over. Returns the lines that changed (for the caller's publish) and
+ * the dependents to re-propose AFTER her status is written - the re-proposal reads her as departed. A destination that has
+ * started, or a proposal that does not name her, is left as it is.
+ */
+export async function staleConfirmedProposalsOfDeparting(
+  orgId: string,
+  divisionId: string,
+  entrantId: string,
+): Promise<{ unfilled: string[]; recompute: string[] }> {
+  return withTenant(orgId, async (tx) => {
+    const sources = await tx<{ id: string }[]>`
+      select id from stages
+       where division_id = ${divisionId} and status = 'complete' and kind in ${tx([...TABLE_CUT_DRIFT_KINDS])}
+       order by seq`;
+    const out = { unfilled: [] as string[], recompute: [] as string[] };
+    if (sources.length === 0) return out;
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+    for (const source of sources) {
+      for (const dependent of await setupDependentsOf(tx, source.id, divisionId)) {
+        const step = await correctTableDependent(tx, dependent, source.id, entrantId);
+        out.unfilled.push(...step.unfilled);
+        if (step.staled && !out.recompute.includes(dependent.id)) out.recompute.push(dependent.id);
+      }
+    }
+    return out;
+  });
+}
+
+/** Re-propose each of `stageIds` (after a departure staled them): best-effort, like every recompute here - a row that cannot be
+ *  recomputed stays stale, which puts Recompute in front of the organiser. */
+export async function reproposeStaleDependents(auth: AuthCtx, stageIds: readonly string[]): Promise<void> {
+  for (const stageId of stageIds) {
+    try {
+      await computeSeedProposal(auth, stageId);
+    } catch (err) {
+      log.warn({ event: "table_cut_reproposal_failed", stageId, err: String(err) }, "table_cut_reproposal_failed");
+    }
+  }
 }
 
 /** The `timing: "setup"` stages of the division that draw from `sourceStageId`. */

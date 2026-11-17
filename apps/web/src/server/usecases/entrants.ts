@@ -28,11 +28,12 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // One-way edge (stages/ does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
-import { divisionHasStarted, dropEntrantFromRoundRobins, markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { divisionHasStarted, dropEntrantFromRoundRobins, markFieldChangeSeedProposalsStale, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, unseatSwissRoundsSeatingEntrant } from "./stages";
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { log } from "@/server/logger";
+import { afterScheduleWrite } from "./schedule/after-write";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
@@ -1126,7 +1127,7 @@ export async function writeEntrantPatch(
     patch.members && home
       ? await openRosterSeatGate(auth, { divisionId: home.division_id, personIds: patch.members.map((m) => m.person_id) })
       : undefined;
-  const { out, fieldChanged, refresh } = await withTenant(auth.orgId, async (tx) => {
+  const { out, fieldChanged, departed, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
     // it never reaches the `update entrants set ...` below.
@@ -1258,6 +1259,8 @@ export async function writeEntrantPatch(
     return {
       out: { ...(await withMembers(tx, row)), ...(late ? { late_entry: late } : {}) },
       fieldChanged,
+      // W5 T11: this write took her OUT of the field (the other direction of `fieldChanged` is a Reinstate).
+      departed: fieldChanged && DEPARTED_STATUSES.has(row.status),
       refresh: await entrantPublicScope(tx, row),
     };
   }, seatGate?.tenant);
@@ -1280,6 +1283,23 @@ export async function writeEntrantPatch(
       await markFieldChangeSeedProposalsStale(auth.orgId, refresh.divisionId);
     } catch {
       // see above
+    }
+  }
+  // W5 T11 (X-CUT-4 <- RB5-K6, FX-G16's table half): a departure also takes a CONFIRMED proposal of a completed league or group
+  // with her, while its destination has not started: stale, the seats back, a re-proposal that reads her as out. Asked of every
+  // write that took her out of the field - the bare status flip an organiser's PATCH `withdrawn` is (it settles no line, so
+  // nothing has started in the destination) as well as the cascade's own final write (which already asked BEFORE it settled her
+  // lines, where a walkover over her seat would have been a start, and so finds nothing left to do). Own try/catch, same reason as
+  // above: the status write has committed.
+  if (departed) {
+    try {
+      const cut = await staleConfirmedProposalsOfDeparting(auth.orgId, refresh.divisionId, id);
+      if (cut.unfilled.length > 0 && refresh.competitionId !== null) {
+        afterScheduleWrite(refresh.divisionId, refresh.competitionId, "schedule", cut.unfilled);
+      }
+      await reproposeStaleDependents(auth, cut.recompute);
+    } catch (err) {
+      log.warn({ event: "confirmed_cut_not_staled_after_departure", entrantId: id, err: String(err) }, "confirmed_cut_not_staled_after_departure");
     }
   }
   return out;

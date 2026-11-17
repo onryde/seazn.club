@@ -43,6 +43,10 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * as the entrant — 1 of 3 played is under half, so all three of its lines are taken out (main: the members write succeeded and every
  * fixture was left standing).
  *
+ * Task 11 (X-CUT-4 <- RB5-K6): in check 12's division, with the seeding confirmed and the finals not started, the champion leaves: the
+ * confirmed cut goes stale and her seat is given back (the finals read unseated), a fresh proposal offers the next eligible, and
+ * confirming it seats them. (Main: the confirmed seats stood, a departed entrant on a finals line.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -55,7 +59,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // T8b Part 3: 1 (the Disqualify preview's numbers are the ones the cascade then acts on).
   // Task 9: 1 (a qualifier who leaves after the table completes is cut; the 5th place is seated).
   // Task 10: 1 (a started league's pair: a substitute partner is refused by name; dropping a partner withdraws the pair by the 50 percent rule).
-  const EXPECTED_CHECKS = 13;
+  // Task 11: 1 (a confirmed qualifier leaves before the finals start: the proposal goes stale and her seat is given back; the re-proposal seats the next eligible).
+  const EXPECTED_CHECKS = 14;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -520,6 +525,38 @@ export async function w5RoundRobinASuite(): Promise<void> {
         (ok ? "" : ` - div ${dRes.status}, field ${field.length}, stages ${stages.length}, gen ${koGen.status}/${lgGen.status}, start ${started.status}, lines ${table.length}, scored ${scored.join(",")}, done ${JSON.stringify(done ?? null)}, left ${left.status}, proposal ${pRes.status} [${proposed.map((id) => seedOf.get(id)).join(",")}], confirm ${conf.status} ${JSON.stringify(conf.json).slice(0, 200)}, public ${schedRes.status} rows ${pubRows.length} [${seated.split(",").map((id) => seedOf.get(id)).join(",")}], page ${page.status}`),
       ok,
     );
+
+    // Check 14 - Task 11 (X-CUT-4 <- RB5-K6): the SAME division, its seeding confirmed and the finals not started. The champion (1st) now
+    // leaves: her confirmed cut is no longer the cut, so the proposal goes stale and her seat is given back (the public schedule shows
+    // the finals unseated, not seated with a departed entrant); a fresh proposal offers the next eligible and its confirm seats them.
+    // (Own division: both competitions that could take a fifth division are full - `comp` and `pub` hold four each, a fourth competition is 402.)
+    {
+      const first = field[0]?.id;
+      const left1 = await v1(owner, `/api/v1/entrants/${first}/withdraw`, "POST");
+      const seatedNow = async () => {
+        const r = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/divisions/${div?.slug}/schedule`);
+        const sc = v1data<{ fixtures?: PubFx[] } | PubFx[] | undefined>(r);
+        const rows = (Array.isArray(sc) ? sc : (sc?.fixtures ?? [])).filter((f) => f.stage_id === koId);
+        return { status: r.status, ids: rows.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null).sort() };
+      };
+      const gone = await seatedNow();
+      const p2 = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+      const next = v1data<{ id: string; computed: { qualifiers: { entrantId: string }[] } } | undefined>(p2);
+      const nextIds = (next?.computed.qualifiers ?? []).map((q) => q.entrantId);
+      // The table less the champion and the 3rd (already gone): 2nd, 4th, 5th, 6th.
+      const want2 = [field[1]?.id, field[3]?.id, field[4]?.id, field[5]?.id].sort().join(",");
+      const conf2 = await v1(owner, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: next?.id });
+      const back = await seatedNow();
+      const ok2 =
+        left1.status === 200 && gone.status === 200 && gone.ids.length === 0 &&
+        p2.status === 201 && nextIds.length === 4 && [...nextIds].sort().join(",") === want2 && !nextIds.includes(first ?? "") &&
+        conf2.status === 200 && back.status === 200 && back.ids.join(",") === want2;
+      w5Check(
+        "w5a X-CUT-4: the champion leaves after the seeding was confirmed and before the finals start; her seat is given back (the finals unseated), the re-proposal offers the next eligible and confirming it seats them" +
+          (ok2 ? "" : ` - left ${left1.status}, seated after ${gone.status}/${gone.ids.length}, re-proposal ${p2.status} [${nextIds.map((id) => seedOf.get(id)).join(",")}], confirm ${conf2.status} ${JSON.stringify(conf2.json).slice(0, 200)}, seated again ${back.status} [${back.ids.map((id) => seedOf.get(id)).join(",")}]`),
+        ok2,
+      );
+    }
   }
 
   // Check 13 - Task 10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3): a started league of PAIRS. Own competition (three divisions so far: room for one).

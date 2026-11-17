@@ -130,6 +130,8 @@ export {
   markDependentSeedProposalsStale,
   setupDependentsOf,
   markFieldChangeSeedProposalsStale,
+  staleConfirmedProposalsOfDeparting,
+  reproposeStaleDependents,
 } from "./seed-stale";
 export { undecidedBracketFixtures, completeStage, getStandings, overrideStandings } from "./completion";
 export type { CompleteStageResult, StandingsOut } from "./completion";

@@ -148,6 +148,11 @@ describe.runIf(HAS_DB)("M3: a seed_confirmed row written before PR B (no `entran
       expect(Array.isArray(ev!.payload.entrants), "premise: the new confirm records the draw").toBe(true);
       expect(ev!.payload.proposal_id, "premise: and still names its proposal").toBe(f.proposalId);
       const e2 = f.byName.get("E2")!;
+      // W5 T11 (X-CUT-4 <- RB5-K6): a departure BEFORE the destination starts re-proposes the cut instead of walking a seat over,
+      // so the finals start first (a recorded note on R1: `stageHasStarted`) - this cell is about what a departure AFTER the start
+      // leaves, and how that seed ranks from the old-shape event.
+      const first = (await rowsOf(f.stageId)).find((r) => r.status === "scheduled" && r.home_entrant_id !== null && r.away_entrant_id !== null)!;
+      await post(f.auth, first.id, "core.note", { text: "arbiter's report filed" });
       await withdrawEntrantCascade(f.auth, e2);
       expect((await rowsOf(f.stageId)).some((r) => r.home_entrant_id === e2 || r.away_entrant_id === e2), "premise: seed 2's seat is dead, she sits on no line").toBe(false);
       // The OLD shape: the same payload less the field this PR added.

@@ -21,6 +21,7 @@ import { seedNextStage, type SeededStage } from "./carry-over";
 import { generateStageFixturesUnpublished } from "./generate";
 import { computeSeedProposal } from "./seed-proposal";
 import { markDependentSeedProposalsStale } from "./seed-stale";
+import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import { isFirstLossProgression, maybeProposePlate } from "../plate-field";
 import { onlyPoolOf } from "../stage-table-snapshot";
 
@@ -421,10 +422,13 @@ export async function overrideStandings(
   input: { rows: { entrant_id: string; rank: number; reason: string }[] },
 ): Promise<{ overridden: number }> {
   await requireFeature(auth.orgId, "tiebreakers.custom");
+  const seen: { stage?: { division_id: string; competition_id: string; kind: string; status: string } } = {};
   const out = await withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<{ division_id: string; config: Record<string, unknown> }[]>`
-      select division_id, config from stages where id = ${stageId}`;
+    const [stage] = await tx<{ division_id: string; competition_id: string; kind: string; status: string; config: Record<string, unknown> }[]>`
+      select s.division_id, d.competition_id, s.kind, s.status, s.config
+        from stages s join divisions d on d.id = s.division_id where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
+    seen.stage = stage;
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
     const ids = input.rows.map((r) => r.entrant_id);
     const known = await tx<{ id: string }[]>`
@@ -460,6 +464,19 @@ export async function overrideStandings(
   await recomputeStandings(auth.orgId, stageId);
   // D4a (P5): a correction here invalidates any dependent `timing:"setup"`
   // stage's draft proposal — mark it stale and recompute a fresh one.
-  await markDependentSeedProposalsStale(auth, stageId);
+  //
+  // W5 T11 (X-CUT-4 <- RB5-K6): pinning a place inside a COMPLETED league or group moves its cut like a corrected result does, so
+  // a confirmed proposal goes stale too and its seats go back before the destination starts. Best-effort: the pin is written.
+  const complete = seen.stage;
+  if (complete !== undefined && complete.status === "complete" && TABLE_CUT_DRIFT_KINDS.has(complete.kind)) {
+    try {
+      const unfilled = await markDependentSeedProposalsStale(auth, stageId, { includeConfirmed: true });
+      if (unfilled.length > 0) afterScheduleWrite(complete.division_id, complete.competition_id, "schedule", unfilled);
+    } catch (err) {
+      log.error({ err, stageId }, "overrideStandings: a pinned table's proposals did not update (the pin is written)");
+    }
+  } else {
+    await markDependentSeedProposalsStale(auth, stageId);
+  }
   return out;
 }

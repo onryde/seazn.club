@@ -3013,6 +3013,8 @@
   "swiss.cutDrift.warning.other": "Se corrigió un resultado después de que empezara la eliminatoria. El cuadro no cambia. Con la clasificación actual, {in} se clasificarían en lugar de {out}.",
   "knockout.cutDrift.warning.one": "Se corrigió un resultado después de que empezara la siguiente fase. El cuadro no cambia. Con los resultados actuales, {in} pasaría en lugar de {out}.",
   "knockout.cutDrift.warning.other": "Se corrigió un resultado después de que empezara la siguiente fase. El cuadro no cambia. Con los resultados actuales, {in} pasarían en lugar de {out}.",
+  "table.cutDrift.warning.one": "Se corrigió un resultado después de que empezara la siguiente fase. El cuadro no cambia. Con la clasificación actual, {in} pasaría en lugar de {out}.",
+  "table.cutDrift.warning.other": "Se corrigió un resultado después de que empezara la siguiente fase. El cuadro no cambia. Con la clasificación actual, {in} pasarían en lugar de {out}.",
   "stage.more.addLatePlayer": "Añadir jugador tardío",
   "stage.more.addLatePlayer.hint": "Incorpora a alguien que llegó después del sorteo.",
   "stage.more.addRound": "Añadir una ronda",

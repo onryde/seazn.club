@@ -275,6 +275,14 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
     expect(page).not.toMatch(/swissCutDrift=\{\{/);
   });
 
+  it("derives the table drift from getTableCutDrift for every completed league or group and passes it to StagesPanel (W5 T11)", () => {
+    const derivation = page.match(/const tableCutDrift = [\s\S]{0,700}?getTableCutDrift\(auth, s\.id\)/);
+    expect(derivation, "tableCutDrift is no longer derived from getTableCutDrift on this page").not.toBeNull();
+    expect(derivation![0]).toMatch(/TABLE_CUT_DRIFT_KINDS\.has\(s\.kind\) && s\.status === "complete"/);
+    expect(page).toMatch(/tableCutDrift=\{tableCutDrift\}/);
+    expect(page).not.toMatch(/tableCutDrift=\{\{/);
+  });
+
   it("renders the warning from the shared predicate (swissCutDriftOf), not a condition of its own", () => {
     expect(panel).toMatch(/const cutDrift = swissCutDriftOf\(\s*stage,\s*canEdit,\s*swissCutDrift\s*\)/);
     expect(panel).toContain('data-testid="swiss-cut-drift-warning"');
@@ -317,10 +325,12 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
     const driftValue = value("swissCutDrift");
     // W4 T14: the knockout's warning lives in a completed card too, so its stages join the list, by its own helper and map.
     const knockoutValue = value("knockoutCutDrift");
-    if (stages === undefined || canEdit === undefined || driftValue === undefined || knockoutValue === undefined) {
-      problems.push("does not hand stages= / canEdit= / swissCutDrift= / knockoutCutDrift= as plain {values}");
+    // W5 T11: and the league's or group's, by its own helper and map.
+    const tableValue = value("tableCutDrift");
+    if (stages === undefined || canEdit === undefined || driftValue === undefined || knockoutValue === undefined || tableValue === undefined) {
+      problems.push("does not hand stages= / canEdit= / swissCutDrift= / knockoutCutDrift= / tableCutDrift= as plain {values}");
     } else {
-      const expected = `attentionStageIds={[...swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue}), ...knockoutCutDriftStageIds(${stages}, ${canEdit}, ${knockoutValue})]}`;
+      const expected = `attentionStageIds={[...swissCutDriftStageIds(${stages}, ${canEdit}, ${driftValue}), ...knockoutCutDriftStageIds(${stages}, ${canEdit}, ${knockoutValue}), ...tableCutDriftStageIds(${stages}, ${canEdit}, ${tableValue})]}`;
       if (!mount.includes(expected)) problems.push(`attentionStageIds is not ${expected}`);
     }
     return problems;
@@ -340,11 +350,12 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
     }
     expect(page).toMatch(/import \{ swissCutDriftStageIds \} from "@\/lib\/swiss-cut-drift"/);
     expect(page).toMatch(/import \{ knockoutCutDriftStageIds \} from "@\/lib\/knockout-cut-drift"/);
+    expect(page).toMatch(/import \{ TABLE_CUT_DRIFT_KINDS, tableCutDriftStageIds \} from "@\/lib\/table-cut-drift"/);
   });
 
   it("the scan sees what it exists for: the attention list dropped, a literal, a wrong editability, another map, a duplicate (mutants against a clean control)", () => {
-    const list = "[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)]";
-    const clean = `<StagesPanel stages={stages} canEdit={editable} swissCutDrift={swissCutDrift} knockoutCutDrift={knockoutCutDrift} attentionStageIds={${list}} />`;
+    const list = "[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift), ...tableCutDriftStageIds(stages, editable, tableCutDrift)]";
+    const clean = `<StagesPanel stages={stages} canEdit={editable} swissCutDrift={swissCutDrift} knockoutCutDrift={knockoutCutDrift} tableCutDrift={tableCutDrift} attentionStageIds={${list}} />`;
     expect(cutDriftProblems(clean), "control: a clean mount").toEqual([]);
     const killed: Array<[string, string]> = [
       ["attention list dropped", clean.replace(` attentionStageIds={${list}}`, "")],
@@ -356,6 +367,9 @@ describe("the division page feeds the Swiss cut-drift warning to the stages pane
       ["the knockout's stages dropped from the list", clean.replace(", ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)", "")],
       ["the knockout's drift dropped, list kept", clean.replace(" knockoutCutDrift={knockoutCutDrift}", "")],
       ["the knockout's list built from another map", clean.replace("(stages, editable, knockoutCutDrift)", "(stages, editable, {})")],
+      ["the table's stages dropped from the list", clean.replace(", ...tableCutDriftStageIds(stages, editable, tableCutDrift)", "")],
+      ["the table's drift dropped, list kept", clean.replace(" tableCutDrift={tableCutDrift}", "")],
+      ["the table's list built from another map", clean.replace("(stages, editable, tableCutDrift)", "(stages, editable, {})")],
     ];
     let checked = 0;
     for (const [name, mount] of killed) {

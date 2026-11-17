@@ -416,8 +416,10 @@ export async function sourcesToTables(
   target: { id: string; division_id: string; seq: number },
   sources: readonly ProgressionSource[],
   /** Read a knockout's cut as its results make it, with no lucky loser in a departed qualifier's rank: who a CORRECTION moved
-   *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. */
-  opts: { withoutLuckyLoser?: boolean } = {},
+   *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. `withoutDepartureBackfill` is the same read for a league's
+   *  or a group's cut (W5 T11, `getTableCutDrift`): a departed entrant keeps the place her results earned, so the next eligible
+   *  entrant is not read as moved across the line by a withdrawal. */
+  opts: { withoutLuckyLoser?: boolean; withoutDepartureBackfill?: boolean } = {},
 ): Promise<{
   shapes: SourceShape[];
   tables: SourceTables[];
@@ -471,7 +473,9 @@ export async function sourcesToTables(
     const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) && opts.withoutLuckyLoser !== true ? rankCutOf(s.take) : null;
     const pools =
       cut === null
-        ? cutEligiblePools(source.kind, read, departed)
+        ? opts.withoutDepartureBackfill === true
+          ? [...read]
+          : cutEligiblePools(source.kind, read, departed)
         : luckyLoserCut(read, cut, departed, await luckyLoserOrderFor(tx, source.id, target.id, read, cut));
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
     // W2d T12 (spec §5.9, X-TB-7): the source's pinned cross-group order and stored draws — as tablesForCompletedStage.

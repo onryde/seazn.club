@@ -132,6 +132,15 @@ async function seededFinals(sport: string, kind: FinalsKind, opts: { reverse?: b
   return { auth, sport, divisionId: division.id, stageId: finals!.id, seed };
 }
 
+/** W5 T11 (X-CUT-4 <- RB5-K6; owner S5): a departure from the table's confirmed cut BEFORE the destination has started is no
+ *  longer a walkover - the proposal goes stale, the seats go back and the cut is re-proposed without her (table-source-correction
+ *  .test.ts). These cells are about the walkover, which is what a departure after the start leaves (RB4-V3), so they start the
+ *  finals first: a recorded event on one line (`stageHasStarted`: a note is evidence), not a result - the line is still to be
+ *  played, "before R1 is played" in every sense these cells assert. */
+async function startFinals(auth: AuthCtx, lineId: string): Promise<void> {
+  await post(auth, lineId, "core.note", { text: "arbiter's report filed" });
+}
+
 const pair = (r: FixtureRow) => [r.home_entrant_id, r.away_entrant_id].sort();
 const sorted = (...ids: string[]) => [...ids].sort();
 /** RB4-S3: the stage holds no abandoned or voided line, and no abandon or void was ever written on one. */
@@ -196,6 +205,7 @@ describe.skipIf(!HAS_DB)("a withdrawal inside a final-stage stepladder (X-SP-3, 
   it.each(SPORTS)("%s: X-SP-3 seed 2 withdraws BEFORE R1 is played (R2's other seat still empty): the climber walks R2 over on arrival, nothing voided", async (sport) => {
     const f = await seededFinals(sport, "stepladder");
     const { r1, r2, final } = await rungs(f.stageId);
+    await startFinals(f.auth, r1.id);
     const out = await withdrawEntrantCascade(f.auth, f.seed[2]);
     expect(out).toMatchObject({ voided: 0 });
     const held = await fixtureRow(r2.id);
@@ -235,6 +245,7 @@ describe.skipIf(!HAS_DB)("a withdrawal inside a final-stage page playoff (X-SP-5
   it.each(SPORTS)("%s: X-SP-5 a Q1 withdrawal walks Q1 over, then Q2 over to E's winner; the final is Q1's other side v E's winner, nothing voided", async (sport) => {
     const f = await seededFinals(sport, "page_playoff");
     const { q1, e, q2, final } = await pageLines(f.stageId);
+    await startFinals(f.auth, e.id);
     const out = await withdrawEntrantCascade(f.auth, f.seed[1]);
     expect(out).toMatchObject({ policy: "walkover", walkovers: 1, voided: 0 });
     expect(walkedOverTo(await fixtureRow(q1.id)), "Q1 walks over to its other side").toEqual({ status: "forfeited", kind: "award", winner: f.seed[2] });
@@ -296,6 +307,7 @@ describe.skipIf(!HAS_DB)("a withdrawn finalist stage seed is RANKED (X-SP-4 / X-
     const f = await seededFinals(sport, "stepladder", { reverse: true });
     const { r1, r2, final } = await rungs(f.stageId);
     expect(pair(r1), "premise: the draw seeds are the league order, not the registration seeds").toEqual(sorted(f.seed[3], f.seed[4]));
+    await startFinals(f.auth, r1.id);
     await withdrawEntrantCascade(f.auth, f.seed[2]);
     await win(f.auth, sport, r1.id, f.seed[4]); // the lower seed climbs
     await win(f.auth, sport, final.id, f.seed[1]);
@@ -317,6 +329,7 @@ describe.skipIf(!HAS_DB)("a withdrawn finalist stage seed is RANKED (X-SP-4 / X-
     const f = await seededFinals(sport, "page_playoff", { reverse: true });
     const { q1, e, final } = await pageLines(f.stageId);
     expect(pair(q1), "premise: Q1 is the draw's seeds 1 v 2").toEqual(sorted(f.seed[1], f.seed[2]));
+    await startFinals(f.auth, e.id);
     await withdrawEntrantCascade(f.auth, f.seed[1]);
     await win(f.auth, sport, e.id, f.seed[4]);
     await win(f.auth, sport, final.id, f.seed[4]);

@@ -11245,6 +11245,8 @@ export type DictionaryKey =
   | "table.col.ties"
   | "table.col.wins"
   | "table.col.won"
+  | "table.cutDrift.warning.one"
+  | "table.cutDrift.warning.other"
   | "table.disqualified"
   | "table.empty"
   | "table.fewer"

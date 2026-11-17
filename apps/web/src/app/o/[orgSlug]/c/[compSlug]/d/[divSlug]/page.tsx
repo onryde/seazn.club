@@ -33,6 +33,8 @@ import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { listNamedPools } from "@/server/usecases/stage-table-snapshot";
 import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
 import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
+import { getTableCutDrift } from "@/server/usecases/table-cut-drift";
+import { TABLE_CUT_DRIFT_KINDS, tableCutDriftStageIds } from "@/lib/table-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -428,6 +430,19 @@ export default async function DivisionPage({
             stages
               .filter((s) => s.kind === "knockout" && s.status === "complete")
               .map(async (s) => [s.id, await getKnockoutCutDrift(auth, s.id)] as const),
+          )
+        ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
+      : [],
+  );
+  // W5 T11 (X-CUT-4 <- RB5-K6): the same warning on a COMPLETED league or group whose correction moved its cut after the stage it
+  // feeds started. Absent from the map until then, and read on the same tab, for the same reader.
+  const tableCutDrift = Object.fromEntries(
+    tab === "fixtures" && editable
+      ? (
+          await Promise.all(
+            stages
+              .filter((s) => TABLE_CUT_DRIFT_KINDS.has(s.kind) && s.status === "complete")
+              .map(async (s) => [s.id, await getTableCutDrift(auth, s.id)] as const),
           )
         ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
       : [],
@@ -1127,10 +1142,11 @@ export default async function DivisionPage({
               thirdPlaceDropped={thirdPlaceDropped}
               startedKnockoutStageIds={startedKnockoutStageIds}
               knockoutCutDrift={knockoutCutDrift}
+              tableCutDrift={tableCutDrift}
               // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
               // Swiss (W4 T14: or knockout) - so the cards that carry it are listed here and start open. Each list reads the SAME
               // predicate the card draws its notice from, so the two cannot disagree.
-              attentionStageIds={[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)]}
+              attentionStageIds={[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift), ...tableCutDriftStageIds(stages, editable, tableCutDrift)]}
               matchDayHref={matchDayHref}
               rulesStrip={{
                 divisionId: id,

@@ -20,6 +20,7 @@
 // must change with it or the panel's visibility will disagree with the
 // server's real gate.
 import type { ProgressionSource, ProgressionSpec } from "@seazn/engine/competition";
+import { TABLE_CUT_DRIFT_KINDS } from "./table-cut-drift";
 
 export interface SeedingSourceStage {
   id: string;
@@ -60,16 +61,17 @@ export interface SeedingKindStage extends SeedingSourceStage {
   kind: string;
 }
 
-/** The ONE stage kind whose completed-stage correction reopens a CONFIRMED draw: scoring.ts calls
- *  `markDependentSeedProposalsStale(.., { includeConfirmed: true })` for `context.kind === "knockout"` only (W4 T14); a
- *  table source's correction marks drafts stale but never a confirmed one, and `computeSeedProposal` answers a confirmed
- *  stage 409 SEEDING_ALREADY_CONFIRMED for good. */
-const REOPENING_SOURCE_KIND = "knockout";
+/** The stage kinds whose completed-stage correction reopens a CONFIRMED draw: scoring.ts and `overrideStandings` call
+ *  `markDependentSeedProposalsStale(.., { includeConfirmed: true })` for a completed knockout (W4 T14) and, since W5 T11
+ *  (X-CUT-4 <- RB5-K6), for a completed league or group (`TABLE_CUT_DRIFT_KINDS`: the server's own list, so the two cannot
+ *  drift). Every other source's correction marks drafts stale but never a confirmed one, and `computeSeedProposal` answers a
+ *  confirmed stage 409 SEEDING_ALREADY_CONFIRMED for good. */
+const REOPENING_SOURCE_KINDS: ReadonlySet<string> = new Set(["knockout", ...TABLE_CUT_DRIFT_KINDS]);
 
 /**
  * W4 B6a fix round 1 (review #1): whether the Confirm warning may promise "you can recompute it" - true only when the
  * target's progression names at least one source and EVERY source resolves (`resolveSeedingSourceStage`, the same rule as
- * `seedingSourceReady`) to a knockout stage. An empty source list is false: `[].every()` is vacuously true, and the empty
+ * `seedingSourceReady`) to a knockout, league or group stage. An empty source list is false: `[].every()` is vacuously true, and the empty
  * set answers yes to every question (it must not promise a recompute nobody can run).
  */
 export function confirmedDrawReopens(
@@ -78,5 +80,5 @@ export function confirmedDrawReopens(
   progression: Pick<ProgressionSpec, "sources">,
 ): boolean {
   if (progression.sources.length === 0) return false;
-  return progression.sources.every((src) => resolveSeedingSourceStage(stages, target, src.stage)?.kind === REOPENING_SOURCE_KIND);
+  return progression.sources.every((src) => REOPENING_SOURCE_KINDS.has(resolveSeedingSourceStage(stages, target, src.stage)?.kind ?? ""));
 }

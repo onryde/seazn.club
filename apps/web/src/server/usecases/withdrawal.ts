@@ -69,7 +69,7 @@ import {
   type TableWithdrawalPolicy,
 } from "@/lib/table-withdrawal-note";
 import { getDivision } from "./divisions";
-import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, writeDepartedSeat } from "./stages";
+import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
 import { invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
 import { replaceDepartedQualifier } from "./lucky-loser";
@@ -559,6 +559,8 @@ async function runWithdrawEntrantCascade(
     actor?: CascadeActor;
   }[] = [];
   const settledTables: { id: string; kind: string }[] = [];
+  // W5 T11: the destinations whose confirmed proposal this departure staled, to re-propose once she is out of the field.
+  let seedRecompute: string[] = [];
 
   // Before the tournament starts there is nothing to settle: fixtures (if
   // generated) are regenerated from the field anyway — plain status flip.
@@ -574,6 +576,17 @@ async function runWithdrawEntrantCascade(
       out.lucky_loser = { entrant_id: lucky.replacedBy, fixture_id: lucky.fixtureId };
       afterScheduleWrite(division.id, division.competition_id, "schedule", [lucky.fixtureId]);
     }
+    // W5 T11 (X-CUT-4 <- RB5-K6, FX-G16's table half): a qualifier of a COMPLETED league or group whose destination has not started
+    // takes her confirmed proposal with her - it goes stale and its seats go back - BEFORE any line is settled, because the
+    // walkover below over her seat would itself be a start, after which nothing could go back. This is the one place every
+    // door of the cascade passes (the organiser's PATCH and Withdraw, the registrant's own, an in-match disqualification, a pair
+    // that lost a partner, a released solo). It does NOT re-rank the finished table (RB5-L8): the table stays as it finished
+    // (the loop below skips a complete stage) and only the PROPOSAL, the cut into the knockout, answers. After the start
+    // nothing is written: the bracket stands, her seat is RB4-V3's walkover, and the desk's drift names only a moved RESULT.
+    // The re-proposal runs after her status is written (below), which it must read.
+    const cut = await staleConfirmedProposalsOfDeparting(auth.orgId, division.id, entrantId);
+    seedRecompute = cut.recompute;
+    if (cut.unfilled.length > 0) afterScheduleWrite(division.id, division.competition_id, "schedule", cut.unfilled);
     const [stages, fixtures] = await Promise.all([
       listStages(auth, division.id),
       listDivisionFixtures(auth, division.id),
@@ -834,6 +847,7 @@ async function runWithdrawEntrantCascade(
   // The internal writer, never `patchEntrant`: a `disqualified` patch routes to this cascade, so writing through it would
   // route straight back (C6).
   await writeEntrantPatch(auth, entrantId, { status: as });
+  await reproposeStaleDependents(auth, seedRecompute);
   // W5 T8 (ruling 105 / M-10, Review Focus 4): an expunge ends on `core.abandon{expunge: true}`, which decides nothing, so no
   // score write asks whether the stage is now finished; when the leaver's lines were its last open ones it would sit there.
   // Asked once per table stage settled, AFTER the status write: the completion reads the departed status (the cut skips her).

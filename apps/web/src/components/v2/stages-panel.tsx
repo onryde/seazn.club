@@ -126,6 +126,7 @@ import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss
 import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
 import { swissCutDriftOf, swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
 import { knockoutCutDriftOf, knockoutCutDriftText, type KnockoutCutDrift } from "@/lib/knockout-cut-drift";
+import { tableCutDriftOf, tableCutDriftText, type TableCutDrift } from "@/lib/table-cut-drift";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -499,6 +500,9 @@ interface Props {
   /** W4 T14 (RB4-Q5, X-QM-4): who a correction inside a completed knockout moved across its cut, by stage id, once the stage
    *  it feeds has started (`getKnockoutCutDrift`). Absent, or no entry: no notice. */
   knockoutCutDrift?: Readonly<Record<string, KnockoutCutDrift>>;
+  /** W5 T11 (X-CUT-4 <- RB5-K6): the same for a completed league or group, by stage id (`getTableCutDrift`). Absent, or no entry:
+   *  no notice. */
+  tableCutDrift?: Readonly<Record<string, TableCutDrift>>;
   /** Match Day B2 (spec 2026-10-31 §9): Match Day's address, handed down ONLY on a match day to an organiser who can edit (the
    *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
    *  rows then carry "Find a court" (the word follows `sportKey`: pitch, table, board, rink). null/absent ⇒ not a match day: no link. */
@@ -634,7 +638,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1591,6 +1595,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // `attentionStageIds` is built from too, so the card that has the notice is the card that starts open.
         const cutDrift = swissCutDriftOf(stage, canEdit, swissCutDrift);
         const knockoutDrift = knockoutCutDriftOf(stage, canEdit, knockoutCutDrift);
+        const tableDrift = tableCutDriftOf(stage, canEdit, tableCutDrift);
         // W4 T19: this card's waiting players (`listKnockoutWaiting` already leaves out a finished stage and a departed player).
         const waitingHere = knockoutWaiting.filter((w) => w.stageId === stage.id);
         // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
@@ -1906,6 +1911,19 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   >
                     <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
                       {knockoutCutDriftText(knockoutDrift, entrantNames, locale, msgPlural)}
+                    </p>
+                  </div>
+                )}
+                {/* W5 T11 (X-CUT-4 <- RB5-K6): the same notice for a corrected league or group, whose bracket stands once the stage it
+                    feeds has started (before that, the correction re-proposes it). Same treatment, same place, same fold rule. */}
+                {tableDrift && (
+                  <div
+                    role="status"
+                    data-testid="table-cut-drift-warning"
+                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                  >
+                    <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
+                      {tableCutDriftText(tableDrift, entrantNames, locale, msgPlural)}
                     </p>
                   </div>
                 )}
