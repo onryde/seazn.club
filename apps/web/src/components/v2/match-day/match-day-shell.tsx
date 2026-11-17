@@ -24,7 +24,7 @@
 //  - a view-only member (`readOnly`) gets the same page with nothing that writes, and without the Needs-you list;
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { fmtPublicDate } from "@/lib/format";
@@ -151,7 +151,15 @@ export function MatchDayShell({
 
   // One read of the day for the poll, the Refresh button and a court's tail countdown reaching 0 (use-day-refresh.ts).
   const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, setView);
-  const refreshNow = useCallback(() => void refresh(), [refresh]);
+  const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
+  /** A court's tail countdown ended: quiet, and one read per second however many countdowns end on the same tick. */
+  const lastTailRead = useRef(0);
+  const refreshOnTailEnd = useCallback(() => {
+    const at = Date.now();
+    if (at - lastTailRead.current < 1000) return;
+    lastTailRead.current = at;
+    void refresh();
+  }, [refresh]);
 
   const live = isLive(view);
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
@@ -190,7 +198,7 @@ export function MatchDayShell({
   /** A phone shows one court (or match) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now, onTailEnd: refreshNow };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now, onTailEnd: refreshOnTailEnd };
   const words = levelWords(scoreDict);
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
@@ -416,7 +424,7 @@ export function MatchDayShell({
           )}
           <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
             {courts.length > 0 && (
-              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} viewNow={view.now} onTailEnd={refreshNow} />
+              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} viewNow={view.now} onTailEnd={refreshOnTailEnd} />
             )}
             <NoCourtList
               fixtures={noCourt}

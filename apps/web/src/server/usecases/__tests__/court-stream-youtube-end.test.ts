@@ -195,7 +195,7 @@ describe.skipIf(!HAS_DB)("court stream: the YouTube broadcast ends 30 s after a 
     expect(now - stoppedAt).toBe(30 * SEC);
   });
 
-  it("an unfinished match (stopped mid-match, as O17 does): the tail does not wait or complete; the 5-minute grace is the cron's", async () => {
+  it("an unfinished match (stopped mid-match, as O17 does): the tail does not complete; the 5-minute grace is the cron's", async () => {
     sleeps.length = 0;
     const sidA = await autoLive(A, 0);
     tails.queue.length = 0;
@@ -203,7 +203,7 @@ describe.skipIf(!HAS_DB)("court stream: the YouTube broadcast ends 30 s after a 
     expect(tails.queue.length).toBe(1);
     tails.queue.shift();
     expect(await endTail(sidA)).toBe(false);
-    expect(sleeps).toEqual([]);
+    expect(sleeps.reduce((a, b) => a + b, 0), "it re-read the result for the whole 45 s bound and then left it to the cron").toBeLessThanOrEqual(45 * SEC);
     expect(completes()).toBe(0);
     expect(await broadcastState(A)).not.toBe("complete");
     // Four minutes on the cron still leaves it; at five it completes.
@@ -211,6 +211,30 @@ describe.skipIf(!HAS_DB)("court stream: the YouTube broadcast ends 30 s after a 
     expect(await cron(4)).toMatchObject({ ended: 0 });
     expect(await cron(5)).toMatchObject({ ended: 1 });
     expect(completes()).toBe(1);
+  });
+
+  it("a result that lands 10 s after the stop: the tail re-reads it and completes once, 30 s after the result", async () => {
+    sleeps.length = 0;
+    const sidA = await autoLive(A, 0);
+    now = at(1).getTime();
+    tails.queue.length = 0;
+    await stopSession(day.auth, A, sidA, deps);
+    const stoppedAt = now;
+    const resultAt = stoppedAt + 10 * SEC;
+    let landed = false;
+    const slowSleep = async (ms: number) => {
+      sleeps.push(ms);
+      now += ms;
+      if (!landed && now >= resultAt) {
+        landed = true;
+        await setStatus(A, "decided");
+        await sql`update fixtures set finished_at = ${new Date(resultAt)} where id = ${A}`;
+      }
+    };
+    expect(await runCourtBroadcastEnd(sidA, deps, { sleep: slowSleep, wallClock: () => now })).toBe(true);
+    expect(landed).toBe(true);
+    expect(completes()).toBe(1);
+    expect(now, "completed 30 s after the result").toBe(resultAt + 30 * SEC);
   });
 
   it("the cron got there first: the tail finds it complete and calls nothing; and a tail that dies leaves the cron to complete it", async () => {

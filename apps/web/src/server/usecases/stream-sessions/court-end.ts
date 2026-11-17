@@ -8,7 +8,7 @@ import { sql } from "@/lib/db";
 import { deferred } from "@/lib/deferred";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { broadcastEndDueAt, readEndFacts } from "@/server/youtube/end-rule";
+import { FINISHED_STATUSES, broadcastEndDueAt, readEndFacts } from "@/server/youtube/end-rule";
 import { endDueBroadcasts } from "@/server/youtube/end-step";
 import { youtubeOf, type SessionDeps } from "./deps";
 
@@ -17,6 +17,8 @@ import { youtubeOf, type SessionDeps } from "./deps";
 export const COURT_END_WAIT_BOUND_MS = 45_000;
 /** How often a session still ending (a composed one waits on its runner) is looked at again. */
 const SETTLE_POLL_MS = 1_000;
+/** How often a court match that was unfinished at the stop is re-read, in case its result lands inside the bound (fix 3). */
+const RESULT_POLL_MS = 5_000;
 /** The end step's own budget for this one broadcast. */
 const COURT_END_STEP_BUDGET_MS = 15_000;
 
@@ -54,7 +56,14 @@ export async function runCourtBroadcastEnd(sessionId: string, deps: SessionDeps,
         continue;
       }
       const wait = due.getTime() - deps.now().getTime();
-      if (wait > left()) return false;   // the grace (an unfinished match, 5 min) is the cron's
+      if (wait > left()) {
+        // The grace (an unfinished match, 5 min) is the cron's, but a court match stopped just before its result is read again
+        // until the bound runs out: a result landing inside it makes the end due 30 s after it.
+        const unfinished = !(FINISHED_STATUSES as readonly string[]).includes(facts.fixtureStatus);
+        if (!(facts.lastSessionCourt === true && unfinished) || left() <= RESULT_POLL_MS) return false;
+        await sleep(RESULT_POLL_MS);
+        continue;
+      }
       if (wait > 0) await sleep(wait);
       await endDueBroadcasts(youtubeOf(deps), { now: deps.now, budgetMs: COURT_END_STEP_BUDGET_MS, broadcastIds: [broadcastId] });
       return true;
@@ -66,7 +75,11 @@ export async function runCourtBroadcastEnd(sessionId: string, deps: SessionDeps,
   }
 }
 
-/** Queue the end after the response (`deferred`), for a court session that has just been stopped. A session that is not a court
+/** BEST EFFORT, not a guarantee (fix 2): on Fly `after()` work can be lost when the machine suspends or is redeployed mid-wait, and
+ *  then nothing here runs. The stream-tick cron's end step (every minute in production) is the guarantee: it completes the same
+ *  broadcast at the same due time, at most a firing late, and is idempotent with this tail.
+ *
+ *  Queue the end after the response (`deferred`), for a court session that has just been stopped. A session that is not a court
  *  session, or has no YouTube broadcast, does nothing. */
 export function endCourtBroadcastSoon(sessionId: string, deps: SessionDeps): void {
   deferred(() => runCourtBroadcastEnd(sessionId, deps));

@@ -116,6 +116,11 @@ describe("<RefreshLine> — the label ticks each second", () => {
     expect(button().disabled).toBe(true);
     island.rerender({ ...base, onRefresh, lastOkAt: null, failed: true });
     expect(island.text()).toContain("Couldn't refresh");
+    const status = island.tree().filter((e) => propsOf(e).role === "status");
+    expect(status.map((e) => textOf(e))).toEqual(["Couldn't refresh"]);
+    island.rerender({ ...base, onRefresh, lastOkAt: null });
+    expect(island.tree().some((e) => propsOf(e).role === "status"), "the ticking age is never announced").toBe(false);
+    island.rerender({ ...base, onRefresh, lastOkAt: null, failed: true });
     expect(island.text()).not.toContain("Updated");
     island.unmount();
   });
@@ -162,10 +167,31 @@ describe("the shell's one read of the day", () => {
     const island = renderIsland(MatchDayShell, shellProps);
     const onTailEnd = propsOf(island.tree().find((e) => e.type === CourtList)!).onTailEnd as () => void;
     onTailEnd();
+    expect(line(island.tree()).busy, "a countdown's read is quiet: no Refreshing…").toBe(false);
     onTailEnd();
     expect(net.calls).toHaveLength(1);
     net.settle!.ok(view("2026-11-17T10:00:31.000Z"));
     await flush();
+    // Even once the first read has settled, a second countdown ending on the same tick is throttled (one read per second).
+    onTailEnd();
+    expect(net.calls, "same tick, after the first settled").toHaveLength(1);
+    vi.advanceTimersByTime(1000);
+    onTailEnd();
+    expect(net.calls, "a second later it reads again").toHaveLength(2);
+    net.settle!.fail();
+    await flush();
+    expect(line(island.tree()), "a failed quiet read still says so").toMatchObject({ busy: false, failed: true });
+    island.unmount();
+  });
+
+  it("the poll's read is quiet too: no Refreshing…, and a failed one says Couldn't refresh", async () => {
+    const island = renderIsland(MatchDayShell, shellProps);
+    const list = () => propsOf(island.tree().find((e) => e.type === CourtList)!);
+    (list().onTailEnd as () => void)();
+    expect(line(island.tree()).busy).toBe(false);
+    net.settle!.fail();
+    await flush();
+    expect(line(island.tree()).failed).toBe(true);
     island.unmount();
   });
 });

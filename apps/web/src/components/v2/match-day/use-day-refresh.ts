@@ -9,7 +9,8 @@ import { isMatchDayView } from "@/lib/match-day/view";
 import type { MatchDayView } from "@/lib/match-day/types";
 
 export interface DayRefresh {
-  refresh: () => Promise<void>;
+  /** `manual` is the button's own tap: only that shows busy ("Refreshing…"). The poll and a countdown's end read quietly. */
+  refresh: (o?: { manual?: boolean }) => Promise<void>;
   /** A read is in flight. */
   busy: boolean;
   /** The last read failed (cleared by the next success). */
@@ -23,10 +24,10 @@ export function useDayRefresh(competitionId: string, onView: (v: MatchDayView) =
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (o?: { manual?: boolean }) => {
     if (inflight.current) return;
     inflight.current = true;
-    setBusy(true);
+    if (o?.manual === true) setBusy(true);
     try {
       const next = await apiV1<unknown>(`/api/v1/competitions/${competitionId}/match-day`);
       if (!isMatchDayView(next)) throw new Error("not a view");

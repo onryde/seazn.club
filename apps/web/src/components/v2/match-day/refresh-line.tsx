@@ -28,9 +28,14 @@ export function RefreshLine({
   const seconds = secondsSince(lastOkAt ?? mountedAt, nowMs);
   return (
     <p data-testid="md-refresh" className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-slate-600">
-      <span data-testid="md-refresh-age" data-failed={failed ? "true" : undefined} className={`tabular-nums ${failed ? "font-medium text-amber-800" : ""}`}>
-        {failed ? t(dict, "matchDay.refresh.failed") : updatedAgo(dict, seconds)}
-      </span>
+      {/* Only the failure is announced (role=status); the ticking age never is. */}
+      {failed ? (
+        <span data-testid="md-refresh-age" data-failed="true" role="status" className="tabular-nums font-medium text-amber-800">
+          {t(dict, "matchDay.refresh.failed")}
+        </span>
+      ) : (
+        <span data-testid="md-refresh-age" className="tabular-nums">{updatedAgo(dict, seconds)}</span>
+      )}
       <button
         type="button"
         data-testid="md-refresh-button"
