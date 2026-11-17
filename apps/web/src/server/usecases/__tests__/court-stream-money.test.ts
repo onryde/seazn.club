@@ -27,11 +27,14 @@ vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => { tails.queu
 // B1: the YouTube end tail waits up to 45 s for its due time; this file is about the start, the tail and the money, and
 // court-stream-youtube-end.test.ts drives the end tail with its own clock.
 vi.mock("../stream-sessions/court-end", () => ({ endCourtBroadcastSoon: () => undefined }));
+/** `deferred` swallows a tail's error in production; here one fails the test (fix round 1, finding 7). */
 async function runTails(): Promise<void> {
+  const errors: unknown[] = [];
   while (tails.queue.length > 0) {
     const fn = tails.queue.shift()!;
-    try { await fn(); } catch { /* deferred's contract: a tail's error never reaches the caller */ }
+    try { await fn(); } catch (err) { errors.push(err); }
   }
+  if (errors.length > 0) throw new AggregateError(errors, `a deferred tail threw (${errors.length})`);
 }
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";

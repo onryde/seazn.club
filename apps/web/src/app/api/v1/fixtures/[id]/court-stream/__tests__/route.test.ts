@@ -18,6 +18,20 @@ vi.mock("@/lib/auth", async (importOriginal) => {
   };
 });
 
+// Fix round 1 (finding 4): the organiser's Stop fails the next `stopFailures.n` calls (a database blip), then is the real one.
+const stopFailures = vi.hoisted(() => ({ n: 0, calls: 0 }));
+vi.mock("@/server/usecases/stream-sessions/stop", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/stream-sessions/stop")>();
+  return {
+    ...actual,
+    stopSession: ((...a: Parameters<typeof actual.stopSession>) => {
+      stopFailures.calls += 1;
+      if (stopFailures.n > 0) { stopFailures.n -= 1; return Promise.reject(new Error("stop failed (test)")); }
+      return actual.stopSession(...a);
+    }) as typeof actual.stopSession,
+  };
+});
+
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
@@ -64,50 +78,83 @@ async function override(orgId: string, key: string, value: boolean) {
   await invalidateOrgEntitlements(orgId);
 }
 
-describe.skipIf(!HAS_DB)("PUT …/court-stream over HTTP (O17)", () => {
-  it("{on: false} on a match whose court session is open → 200 {on: false}, and the session is stopped as the organiser's Stop", async () => {
-    const ingest = new FakeIngest({ connectAfterMs: 0 });
-    const runner = new FakeRunner();
-    setRelayDriversForTest({ ingest, runner });
-    const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(), appUrl: "http://app.test", youtube: new FakeYouTube() };
-    const day = await seedDay();
-    const fx = day.comp.fixtures[0]!.id;
-    await override(day.orgId, "streaming.relay", true);
-    await override(day.orgId, "streaming.overlay", true);
-    await grantCredits({ orgId: day.orgId, delta: 3, createdBy: await rigUser(), note: "court route", idempotencyKey: randomUUID() });
-    // The link is for REAL today (the switch's guard reads the clock), the match on its court and in play, switched on.
-    const api = await connect({ auth: day.auth, orgId: day.orgId, userId: day.auth.userId! });
-    const shown = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: api.targetId });
-    await place(day, fx, 0, day.courts.c2);
-    await setCourtStream(day.auth, fx, true);
-    await setStatus(fx, "in_play");
-    const phone = `court-route-${randomUUID()}`;
-    const now = new Date();
-    await postBeat(shown.qr!.code, shown.qr!.tok, CaptureBeat.parse({
-      code: shown.qr!.code, slot: 0, phone, claim: "new", device: null, sid: null, at: now.toISOString(), state: "paired", cause: null,
-      notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
-      deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null, appVersion: "1.0.14-1200",
-    }), deps, now);
-    const [pairing] = await sql<{ id: string }[]>`select id from fixture_stream_pairings where phone = ${phone} and ended_at is null`;
-    const { sessionId } = await startBroadcast(
-      { userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId: pairing!.id }, fx,
-      { targetId: api.targetId, startCause: "operator", phone: "present", mode: "passthrough", courtLinkId: shown.id }, deps,
-    );
-    const open = async () => (await sql<{ state: string; end_reason: string | null }[]>`
-      select state, end_reason from fixture_stream_sessions where id = ${sessionId}`)[0]!;
-    expect(["requested", "provisioning", "warming", "live"], "premise: the court session is open").toContain((await open()).state);
-
+/** A court-streamed match in play on Court 2, its court session open (the court phone's start), as the desk sees it. */
+async function courtSessionOpen() {
+  const ingest = new FakeIngest({ connectAfterMs: 0 });
+  ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };   // roomy: each test leaves a session reserving minutes
+  const runner = new FakeRunner();
+  setRelayDriversForTest({ ingest, runner });
+  const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(), appUrl: "http://app.test", youtube: new FakeYouTube() };
+  const day = await seedDay();
+  const fx = day.comp.fixtures[0]!.id;
+  await override(day.orgId, "streaming.relay", true);
+  await override(day.orgId, "streaming.overlay", true);
+  await grantCredits({ orgId: day.orgId, delta: 3, createdBy: await rigUser(), note: "court route", idempotencyKey: randomUUID() });
+  // The link is for REAL today (the switch's guard reads the clock), the match on its court and in play, switched on.
+  const api = await connect({ auth: day.auth, orgId: day.orgId, userId: day.auth.userId! });
+  const shown = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c2, targetId: api.targetId });
+  await place(day, fx, 0, day.courts.c2);
+  await setCourtStream(day.auth, fx, true);
+  await setStatus(fx, "in_play");
+  const phone = `court-route-${randomUUID()}`;
+  const now = new Date();
+  await postBeat(shown.qr!.code, shown.qr!.tok, CaptureBeat.parse({
+    code: shown.qr!.code, slot: 0, phone, claim: "new", device: null, sid: null, at: now.toISOString(), state: "paired", cause: null,
+    notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
+    deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null, appVersion: "1.0.14-1200",
+  }), deps, now);
+  const [pairing] = await sql<{ id: string }[]>`select id from fixture_stream_pairings where phone = ${phone} and ended_at is null`;
+  const { sessionId } = await startBroadcast(
+    { userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId: pairing!.id }, fx,
+    { targetId: api.targetId, startCause: "operator", phone: "present", mode: "passthrough", courtLinkId: shown.id }, deps,
+  );
+  const session = async () => (await sql<{ state: string; end_reason: string | null }[]>`
+    select state, end_reason from fixture_stream_sessions where id = ${sessionId}`)[0]!;
+  expect(["requested", "provisioning", "warming", "live"], "premise: the court session is open").toContain((await session()).state);
+  const switchOn = async () => (await sql<{ on: boolean }[]>`select court_stream as on from fixture_stream_settings where fixture_id = ${fx}`)[0]!.on;
+  const off = async () => {
     authState.userId = day.auth.userId!;
-    const res = await courtStreamRoute(
+    return courtStreamRoute(
       new Request(`https://test.local/api/v1/fixtures/${fx}/court-stream`, {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ on: false }),
       }),
       { params: Promise.resolve({ id: fx }) },
     );
+  };
+  return { session, switchOn, off };
+}
+
+describe.skipIf(!HAS_DB)("PUT …/court-stream over HTTP (O17)", () => {
+  it("{on: false} on a match whose court session is open → 200 {on: false}, and the session is stopped as the organiser's Stop", async () => {
+    stopFailures.n = 0;
+    const c = await courtSessionOpen();
+    const res = await c.off();
     expect(res.status).toBe(200);
     expect(((await res.json()) as { data: unknown }).data).toEqual({ on: false });
-    const after = await open();
+    const after = await c.session();
     expect(["ending", "completed"]).toContain(after.state);
     expect(after.end_reason).toBe("stopped");
+  });
+
+  it("fix round 1: a stop that fails once is tried again — 200, and the session is stopped", async () => {
+    const c = await courtSessionOpen();
+    stopFailures.n = 1;
+    stopFailures.calls = 0;
+    const res = await c.off();
+    expect(res.status).toBe(200);
+    expect(stopFailures.calls, "one failed stop and one retry").toBe(2);
+    expect((await c.session()).end_reason).toBe("stopped");
+  });
+
+  it("fix round 1: a stop that fails twice answers an error (never a quiet 200 with the video on); a second OFF stops it", async () => {
+    const c = await courtSessionOpen();
+    stopFailures.n = 2;
+    const res = await c.off();
+    expect(res.status).toBe(500);
+    expect(await c.switchOn(), "the switch has committed off").toBe(false);
+    expect((await c.session()).end_reason, "the video is still on").toBeNull();
+    stopFailures.n = 0;
+    expect((await c.off()).status).toBe(200);
+    expect((await c.session()).end_reason).toBe("stopped");
   });
 });

@@ -16,6 +16,7 @@ import { resolveVenueTz } from "@/lib/tz";
 import type { CaptureQrV2 } from "@/lib/capture-qr";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
+import { captureError } from "@/lib/sentry";
 import type { MatchDayCourtStream } from "@/lib/match-day/types";
 import { courtMinAppVersion } from "@/server/relay/config";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
@@ -305,7 +306,21 @@ async function stopCourtSessionOf(auth: AuthCtx, fixtureId: string, deps: Sessio
      order by created_at desc, id desc limit 1`;
   if (!open) return;
   if (deps === null) throw new Error("setCourtStream: switching Stream off found a court session to stop, and no session deps were given");
-  await stopSession(auth, fixtureId, open.id, deps);
+  // Fix round 1 (finding 4): the switch has committed, so a stop that fails leaves the video on with the switch off. It is
+  // tried once more (stopSession is idempotent: a stop that half-landed reads `ending` and decides nothing), and a second
+  // failure is reported and rethrown — the organiser sees the error, and a second OFF finds the session and stops it.
+  try {
+    await stopSession(auth, fixtureId, open.id, deps);
+  } catch (first) {
+    log.warn({ orgId: auth.orgId, fixtureId, sid: open.id, err: String(first) }, "court stream: the Stream-off stop failed — trying once more (O17)");
+    try {
+      await stopSession(auth, fixtureId, open.id, deps);
+    } catch (second) {
+      log.error({ orgId: auth.orgId, fixtureId, sid: open.id, err: String(second) }, "court stream: the Stream-off stop failed twice — the switch is off, the video is not stopped (O17)");
+      captureError(second, { orgId: auth.orgId, route: "court_stream.switch_off_stop", extra: { fixtureId, sid: open.id } });
+      throw second;
+    }
+  }
   log.info({ orgId: auth.orgId, fixtureId, sid: open.id }, "court stream: Stream switched off — the match's court session was stopped (O17)");
 }
 

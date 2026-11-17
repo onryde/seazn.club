@@ -41,6 +41,7 @@ import { endOtherCourtSessions } from "./court-stream-sessions";
 import { claimCourtAutoStart } from "./stream-auto-court";
 import { markAutoStartBlocked, startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
+import { COURT_STREAM_OFF } from "./stream-sessions/start";
 
 type CourtView = { facts: CourtMatchFacts[]; focus: CourtFocus };
 export type CourtCommon = CaptureCommon & { court: CaptureCourt; next: CaptureNext | null };
@@ -191,7 +192,8 @@ function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDep
     onStopApplied: (tx: Tx, x: NamedRow) => markAutoStartBlocked(court.orgId, x.fixture_id, now, court.issuedBy, tx),
     autoStart: async (pairingId, phoneMode) => {
       const check = await claimCourtAutoStart({ court, pairingId, phoneMode }, deps, now);
-      if (!check.claimed) return { starting: false };
+      // Fix round 1 (finding 8): a start claimed by an earlier beat and still running answers `starting` too.
+      if (!check.claimed) return { starting: check.inFlight };
       deferred(async () => {
         try {
           await check.run();
@@ -258,6 +260,8 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
       deps,
     ));
   } catch (err) {
+    // O17 fix round 1: the match was switched off while this start was prepared — the court has nothing to start.
+    if (err instanceof HttpError && err.code === COURT_STREAM_OFF) throw new CaptureRefusalError(409, "no_match", "this match's Stream switch was turned off");
     const mapped = phoneStartRefusal(err);
     if (mapped === null) throw err;
     if (mapped instanceof CaptureRefusalError) throw mapped;

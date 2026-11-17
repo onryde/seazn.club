@@ -502,7 +502,8 @@ function fixtureBeatScope(resolved: ResolvedCode, code: string, deps: SessionDep
  *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
  */
 export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
-  const resolved = await resolveAnyStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
+  // The named session (`sid ?? stopped`): a released court code still answers its phone's beat about it (stream-codes.ts).
+  const resolved = await resolveAnyStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now, body.sid ?? body.stopped);
   const code = normaliseCode(rawCode)!;
   if (body.slot !== SLOT) throw new CaptureRefusalError(422, "invalid", `slot ${body.slot} is not served (PR-1 carries slot ${SLOT})`);
   if (body.code !== code) throw new CaptureRefusalError(422, "invalid", "the body names another code than the path");

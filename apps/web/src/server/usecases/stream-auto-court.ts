@@ -24,14 +24,17 @@ import { endOtherCourtSessions } from "./court-stream-sessions";
 import { autoStartRefusalOf } from "./stream-auto";
 import { startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
+import { COURT_STREAM_OFF } from "./stream-sessions/start";
+import { HttpError } from "@/lib/errors";
 
 export type CourtAutoStartResult =
   | { fired: true; sessionId: string; endedSids: string[] }
-  | { fired: false; why: "not_due" | "claim_lost" | "already_running" | "link_closed" }
+  | { fired: false; why: "not_due" | "claim_lost" | "already_running" | "link_closed" | "switched_off" }
   | { fired: false; why: "refused"; refusal: AutoStartRefusal };
 
 type StartFacts = {
   court_stream: boolean; auto_started_at: Date | null; auto_start_blocked_at: Date | null; auto_start_attempted_at: Date | null;
+  auto_start_refusal: string | null;
   fixture_status: string; open_session: boolean; any_ingest: boolean; last_beat_at: Date; answered_poll_seconds: number;
 };
 
@@ -41,6 +44,7 @@ type StartFacts = {
 async function startFactsOf(fixtureId: string, pairingId: string, linkId: string): Promise<StartFacts | null> {
   const [facts] = await sql<StartFacts[]>`
     select coalesce(st.court_stream, false) as court_stream, st.auto_started_at, st.auto_start_blocked_at, st.auto_start_attempted_at,
+           st.auto_start_refusal,
            f.status as fixture_status,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.state in ${sql([...ACTIVE_STATES])}) as open_session,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null) as any_ingest,
@@ -70,7 +74,11 @@ const setRefusal = (fixtureId: string, refusal: AutoStartRefusal | null) =>
 /** A claimed court start, not yet run: `run` makes it (`startBroadcast`, then the handover's ends), and is called ONCE. */
 export type CourtStartCheck =
   | { claimed: true; fixtureId: string; run: () => Promise<CourtAutoStartResult> }
-  | { claimed: false; result: CourtAutoStartResult };
+  | { claimed: false; result: CourtAutoStartResult; inFlight: boolean };
+
+/** Fix round 1 (finding 8): a start claimed this recently, with no refusal stored and no session yet, is taken to be still
+ *  running in the background, so the court beat keeps answering `starting` (5 s) until its session row exists. */
+export const COURT_START_IN_FLIGHT_SECONDS = 15;
 
 /**
  * The court's automatic start, for the current court phone's beat. In order:
@@ -107,7 +115,7 @@ export async function claimCourtAutoStart(
 ): Promise<CourtStartCheck> {
   const { court, pairingId, phoneMode } = a;
   const { link } = court;
-  const not = (result: CourtAutoStartResult): CourtStartCheck => ({ claimed: false, result });
+  const not = (result: CourtAutoStartResult, inFlight = false): CourtStartCheck => ({ claimed: false, result, inFlight });
   if (court.status !== "active" || link.withdrawnAt !== null || !linkOpenAt(link, now)) {
     return not({ fired: false, why: "link_closed" });
   }
@@ -131,16 +139,25 @@ export async function claimCourtAutoStart(
     anySessionHadIngest: facts.any_ingest,
     autoStartAttemptedAt: facts.auto_start_attempted_at,
   }, now, retrySeconds);
-  if (!verdict.due) return not({ fired: false, why: "not_due" });
-  if (!(await claimCourtStart(fixtureId, now, retrySeconds))) return not({ fired: false, why: "claim_lost" });
-  return { claimed: true, fixtureId, run: () => runCourtStart(court, pairingId, fixtureId, deps, now) };
+  if (!verdict.due) {
+    const attempted = facts.auto_start_attempted_at === null ? null : new Date(facts.auto_start_attempted_at).getTime();
+    const inFlight = facts.court_stream && facts.auto_started_at === null && facts.auto_start_blocked_at === null
+      && facts.auto_start_refusal === null && !facts.open_session && attempted !== null
+      && now.getTime() - attempted < COURT_START_IN_FLIGHT_SECONDS * 1000;
+    return not({ fired: false, why: "not_due" }, inFlight);
+  }
+  if (!(await claimCourtStart(fixtureId, now, retrySeconds))) return not({ fired: false, why: "claim_lost" }, true);
+  log.info({ orgId: court.orgId, fixtureId, linkId: link.id }, "court auto start: claimed — the start runs after the beat's answer");
+  return { claimed: true, fixtureId, run: () => runCourtStart(court, pairingId, fixtureId, deps) };
 }
 
 /** Step 5: the claimed start itself, and on success the handover's ends. */
 async function runCourtStart(
-  court: ResolvedCourtCode, pairingId: string, fixtureId: string, deps: SessionDeps, now: Date,
+  court: ResolvedCourtCode, pairingId: string, fixtureId: string, deps: SessionDeps,
 ): Promise<CourtAutoStartResult> {
   const { link } = court;
+  // Fix round 1 (finding 6): the start's own clock, not the beat's — it may run after the beat was answered.
+  const now = deps.now();
   let sessionId: string;
   try {
     ({ sessionId } = await startBroadcast(
@@ -153,6 +170,12 @@ async function runCourtStart(
       deps,
     ));
   } catch (err) {
+    if (err instanceof HttpError && err.code === COURT_STREAM_OFF) {
+      // O17: switched off while this start was being prepared — nothing to report, nothing started.
+      await setRefusal(fixtureId, null);
+      log.info({ orgId: court.orgId, fixtureId, linkId: link.id }, "court auto start: the Stream switch went off while it was prepared — nothing started");
+      return { fired: false, why: "switched_off" };
+    }
     const mapped = autoStartRefusalOf(err);
     if (mapped === null) {
       await setRefusal(fixtureId, null).catch((clearErr) =>
@@ -175,5 +198,6 @@ async function runCourtStart(
     log.error({ err: String(err), sid: sessionId, orgId: court.orgId }, "court auto start: ending the court's other sessions failed — the start stands");
     captureError(err, { orgId: court.orgId, route: "capture.court.auto_end_others", extra: { sid: sessionId } });
   }
+  log.info({ orgId: court.orgId, fixtureId, linkId: link.id, sid: sessionId }, "court auto start: started");
   return { fired: true, sessionId, endedSids };
 }

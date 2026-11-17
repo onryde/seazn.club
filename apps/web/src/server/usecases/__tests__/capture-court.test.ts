@@ -43,7 +43,7 @@ import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-s
 import { endOtherCourtSessions } from "../court-stream-sessions";
 import { reissueStreamCode, resolveAnyStreamCode } from "../stream-codes";
 import { grantCredits } from "../stream-credits";
-import { startBroadcast, tickSession, type SessionDeps } from "../stream-sessions";
+import { startBroadcast, stopSession, tickSession, type SessionDeps } from "../stream-sessions";
 import { captureRig, override, phoneId } from "./_capture-rig";
 import { at, labelOf, place, seedDay, setStatus, type Day } from "./_match-day-seed";
 
@@ -482,6 +482,10 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       await tickSession(sid, deps, "beat");
       expect((await sessionRow(sid)).state, "premise: A's session went live").toBe("live");
       await withdrawCourtStream(day.auth, linkId);
+      // One clock: the withdrawal and the session's creation are database stamps (wall clock), its end the test's clock.
+      // Put both on the test's day, as on a real day where every clock agrees.
+      await sql`update fixture_stream_sessions set created_at = ${at(0)} where id = ${sid}`;
+      await sql`update fixture_stream_codes set ended_at = ${clock()} where id = ${codeId}`;
       return sid;
     };
 
@@ -502,15 +506,50 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       expect((await pairingOf(phone))[0]!.ended_at, "the refused beat ends the pairing").not.toBeNull();
     });
 
-    it("withdrawn while live, the session lingering in ending (a composed teardown): the phone's next beat is 401 code_ended", async () => {
+    it("withdrawn while live, the session lingering in ending (a composed teardown): the beat naming it hears over; the next one is 401 code_ended", async () => {
       const phone = phoneId("a3-ending");
       const sid = await liveThenWithdrawn(phone);
       expect((await beat(phone, { sid, state: "publishing" })).state, "premise: served while live").toBe("live");
       // The stop decided and the runner still tearing down: `ending` stays open (ACTIVE_STATES) until the runner reports.
       await sql`update fixture_stream_sessions set state = 'ending', end_reason = 'auto_stopped' where id = ${sid}`;
+      now += 5000;
+      // Fix round 1 (finding 1): the phone still names its session, so it hears `over` (never a 401 while it publishes).
+      expect(await beat(phone, { sid, state: "publishing" })).toMatchObject({ state: "over", sid, endReason: "auto_stopped" });
+      expect((await pairingOf(phone))[0]!.ended_at, "served: the pairing stands").toBeNull();
+      now += 5000;
       expect(await refusal(postBeat(qr.code, qr.tok, body(phone), deps, clock()))).toBe("401:code_ended");
       expect(await refusal(getCode(qr.code, qr.tok, { slot: 0, phone }, deps, clock()))).toBe("401:code_ended");
       expect((await pairingOf(phone))[0]!.ended_at).not.toBeNull();
+    });
+
+    it("fix round 1: withdrawn while live, the desk's Stop lands between beats: the beat naming the session hears over stopped; the next beat without a sid is 401", async () => {
+      const phone = phoneId("a3-desk-stop");
+      const sid = await liveThenWithdrawn(phone);
+      expect((await beat(phone, { sid, state: "publishing" })).state, "premise: served while live").toBe("live");
+      now += 2000;
+      await stopSession(day.auth, A, sid, deps);
+      expect(["ending", "completed"], "premise: stopped outside a beat").toContain((await sessionRow(sid)).state);
+      now += 5000;
+      expect(await beat(phone, { sid, state: "publishing" })).toMatchObject({ state: "over", sid, endReason: "stopped" });
+      now += 5000;
+      expect(await refusal(postBeat(qr.code, qr.tok, body(phone), deps, clock()))).toBe("401:code_ended");
+      expect((await pairingOf(phone))[0]!.ended_at).not.toBeNull();
+    });
+
+    it("fix round 1: a named session is served only to its own phone, and only when it stopped after the withdrawal", async () => {
+      const phone = phoneId("a3-named");
+      const sid = await liveThenWithdrawn(phone);
+      now += 2000;
+      await stopSession(day.auth, A, sid, deps);
+      now += 5000;
+      // Another phone naming that session: refused (it never held it).
+      const stranger = phoneId("a3-stranger");
+      expect(await refusal(postBeat(qr.code, qr.tok, body(stranger, { sid, state: "publishing" }), deps, clock()))).toBe("401:code_ended");
+      // A session that had already stopped before the withdrawal: its name serves nothing.
+      // (created at T0, stopped at T0+1 s, the code withdrawn at T0+2 s: everything else about the beat as above)
+      await sql`update fixture_stream_sessions set ended_at = ${new Date(at(0).getTime() + 1000)} where id = ${sid}`;
+      await sql`update fixture_stream_codes set ended_at = ${new Date(at(0).getTime() + 2000)} where id = ${codeId}`;
+      expect(await refusal(postBeat(qr.code, qr.tok, body(phone, { sid, state: "publishing" }), deps, clock()))).toBe("401:code_ended");
     });
 
     it("withdrawn with nothing ever live: the court phone's next beat is 401 code_ended at once", async () => {

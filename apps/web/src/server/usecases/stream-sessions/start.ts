@@ -77,6 +77,9 @@ export interface StartActor {
 const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain" } as const satisfies Record<StartActor["source"], EventSource>;
 
 /** The organiser's Go live's phone: its pairing, its standing, and the court link it streams under (null: the fixture's own code). */
+/** O17 fix round 1: a court start whose match was switched off while it was being prepared. */
+export const COURT_STREAM_OFF = "court_stream_off";
+
 type CurrentPhone = { pairingId: string; standing: Exclude<PhoneStanding, "unpaired">; courtLinkId: string | null };
 const standingOf = (p: { last_beat_at: Date; answered_poll_seconds: number }, now: Date): CurrentPhone["standing"] =>
   isPresent(
@@ -395,6 +398,15 @@ export async function startBroadcast(
     // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
     // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
     const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
+    // O17 fix round 1 (finding 3): a court start re-reads the match's Stream switch under its settings-row lock, in the
+    // transaction that inserts the session. `pairingFor` read it before the slow prepare; a switch-off landing in between
+    // (setCourtStream holds the same row lock while it writes) is refused here by name, so no session is ever inserted for a
+    // match the organiser has switched off. A switch-off committing after this lock finds the session and stops it.
+    if (opts.courtLinkId !== undefined) {
+      const [st] = await tx<{ court_stream: boolean }[]>`
+        select court_stream from fixture_stream_settings where fixture_id = ${fixtureId} for update`;
+      if (st?.court_stream !== true) throw new HttpError(409, "This match's Stream switch was turned off", COURT_STREAM_OFF);
+    }
     const headroom = await storageHeadroomMinutes(tx, usage, deps.now(), "admission");   // E1: a negative reading is reported, never enforced on a running stream
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };

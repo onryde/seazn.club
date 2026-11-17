@@ -27,21 +27,24 @@ const tails = vi.hoisted(() => ({ queue: [] as (() => unknown)[] }));
 vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => { tails.queue.push(fn); } }));
 // B1: the YouTube end tail waits up to 45 s for its due time; court-stream-youtube-end.test.ts drives it with its own clock.
 vi.mock("../stream-sessions/court-end", () => ({ endCourtBroadcastSoon: () => undefined }));
-/** Runs every queued tail, and the tails those queue, as `after()` would once the response is sent. Errors are swallowed,
- *  as `deferred` swallows them. */
+/** Runs every queued tail, and the tails those queue, as `after()` would once the response is sent. `deferred` swallows a
+ *  tail's error in production; here one FAILS the test (fix round 1, finding 7): the court's tail catches and reports its
+ *  own errors, so any error reaching this far is a defect, never an expected outcome. */
 async function runTails(): Promise<number> {
   let n = 0;
+  const errors: unknown[] = [];
   while (tails.queue.length > 0) {
     const fn = tails.queue.shift()!;
     n += 1;
-    try { await fn(); } catch { /* deferred's contract: a tail's error never reaches the caller */ }
+    try { await fn(); } catch (err) { errors.push(err); }
   }
+  if (errors.length > 0) throw new AggregateError(errors, `a deferred tail threw (${errors.length})`);
   return n;
 }
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
-import { AUTO_START_RETRY_SECONDS, POLL_STARTING_SECONDS } from "@/server/relay/config";
+import { AUTO_START_RETRY_SECONDS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -236,7 +239,8 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     // A second beat while that start is still running: the claim is held, so nothing more is handed over.
     now += POLL_STARTING_SECONDS * SEC;
     const second = await postBeat(qr.code, qr.tok, body(P), deps, clock());
-    expect(second.state).toBe("waiting");
+    // Fix round 1 (finding 8): the start is still running, so this beat answers `starting` too (5 s), not the paired 10 s.
+    expect(second).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS });
     expect(tails.queue, "the second beat started nothing").toHaveLength(1);
     // The start runs (after the first answer was sent); the phone's next beat finds it armed.
     expect(await runTails()).toBe(1);
@@ -245,6 +249,26 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(await beat(P)).toMatchObject({ state: "go-live", startedBy: "automatic" });
     expect(await sessionsOf(A), "one start in all").toHaveLength(1);
     expect((await settingsOf(A))!.auto_started_at).not.toBeNull();
+  });
+
+  it("fix round 1 (O17 race): the Stream switch turned off while a claimed start is being prepared — no session is inserted, nothing is stored as a refusal", async () => {
+    await streamOn(A);
+    await kickoff(A, 0);
+    // The switch goes off from inside the start's slow middle: the storage read, after `pairingFor`'s switch check and the
+    // YouTube prepare, before the admission transaction.
+    const storage = ingest.storageUsage.bind(ingest);
+    let flipped = 0;
+    ingest.storageUsage = async () => {
+      if (flipped++ === 0) await setCourtStream(day.auth, A, false, clock(), deps);
+      return storage();
+    };
+    const claiming = await postBeat(qr.code, qr.tok, body(P), deps, clock());
+    expect(claiming.state).toBe("waiting");
+    expect(tails.queue, "premise: A's start was claimed").toHaveLength(1);
+    await runTails();
+    expect(flipped, "premise: the switch went off inside the start").toBeGreaterThan(0);
+    expect(await sessionsOf(A), "no session for a switched-off match").toEqual([]);
+    expect((await settingsOf(A))!.auto_start_refusal, "a switch-off is not a refusal").toBeNull();
   });
 
   it("a court start with the match's mode never chosen is COMPOSED: a programme input exists and the add_output effect targets it, not the camera (A2)", async () => {
@@ -517,6 +541,10 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(first).toMatchObject({ auto_start_refusal: "no_destination", auto_started_at: null });
     expect(first.auto_start_attempted_at?.getTime()).toBe(at(0).getTime());
     expect(await sessionsOf(A)).toEqual([]);
+    // Fix round 1 (finding 8): a stored refusal is not a start in flight — the next beat is the plain paired cadence.
+    now += 5 * SEC;
+    expect(await beat(P)).toMatchObject({ state: "waiting", pollSeconds: POLL_NEAR_SECONDS });
+    now -= 5 * SEC;
     // R7: 59 s later the beat makes no second attempt.
     now += (AUTO_START_RETRY_SECONDS - 1) * SEC;
     expect((await beat(P)).state).toBe("waiting");
