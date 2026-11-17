@@ -197,7 +197,11 @@ export async function scoreEvent(
   const isDqForfeit =
     opts.writer === undefined && input.type === "core.forfeit" && (input.payload as { reason?: unknown } | null)?.reason === "disqualified";
   const retryOwedDq = async (answer: ScoreOutcome): Promise<ScoreOutcome> => {
-    if (isDqForfeit) await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by, { retry: true });
+    if (isDqForfeit) {
+      await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by, { retry: true });
+      // B3 fix wave (I-3): and the auto-advance the first attempt held back for the hook (a no-op once complete or not ready).
+      await autoAdvanceFixtureStage(auth, fixtureId);
+    }
     return answer;
   };
   if (cacheKey) {
@@ -383,11 +387,16 @@ export async function scoreEvent(
   // `onDecided` below seats the new winner there) — so they seed the same list,
   // and ride the same DEL and push, even if a hook below throws.
   let advanced: readonly string[] = result.released;
+  let advanceOwed = false;
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
     // W2a (spec §5.4.4): a HELD fixture (needs_decision) seats nobody, so onDecided is not called for it.
     if ((result.outcome !== null && result.status !== "needs_decision") || input.type === "core.void") {
-      const filled = await onDecided(auth, fixtureId);
+      // B3 fix wave (I-3; RB5-W5, ruling 289): a disqualifying forfeit's auto-advance waits for the DQ hook below. Run here, it
+      // completed a league whose last open line this was BEFORE the cascade ranked her last, and the cascade then skipped the
+      // complete stage (C1) - so whether a disqualified player ranked last depended on `auto_progress`.
+      const filled = await onDecided(auth, fixtureId, { autoAdvance: !isDqForfeit });
+      advanceOwed = isDqForfeit;
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       // Best-effort like refreshNews (which swallows its own): the result already stands, so a fold that throws (a dropped
       // connection, a rule set it cannot read) is logged by name and never skips the news draft or the idempotency answer.
@@ -422,6 +431,10 @@ export async function scoreEvent(
   if (isDqForfeit) {
     await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by);
   }
+  // B3 fix wave (I-3): the auto-advance `onDecided` held back for the disqualifying forfeit, now that her withdrawal has been
+  // written (the cascade asks it too for every table it settled; a no-op once complete). Asked whatever the hook did - a bracket
+  // DQ runs no cascade, and a failed one leaves the stage to the organiser like any not-ready stage.
+  if (advanceOwed) await autoAdvanceFixtureStage(auth, fixtureId);
   return out;
 }
 
@@ -1046,7 +1059,7 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 // took away. Under the lock, the void has either committed (and this reads
 // its erased or flipped outcome) or not started (and its un-fill will find
 // the name this writes and take it back).
-export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<string[]> {
+export async function onDecided(auth: AuthCtx, fixtureId: string, opts: { autoAdvance?: boolean } = {}): Promise<string[]> {
   const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
     // Loop R I-2 / R2 N-1: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's
@@ -1286,7 +1299,8 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button. Also after a refold that failed above: the completion never reads the
   // stored table (it ranks the stage from its fixtures and writes the table afresh), so it is that table's repair.
-  if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
+  // B3 fix wave (I-3): not for a disqualifying forfeit - `scoreEvent` asks AFTER its DQ hook (see there).
+  if (opts.autoAdvance !== false && context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
   // Quick match plan 5 (D2, P5, P6): a League + Knockout moves itself on, after a decision and a void alike (a void can take
@@ -1306,6 +1320,13 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   // Only ever reached once the transaction above COMMITTED: a rollback throws
   // out of `withTenant`, so the ids of a fill that was undone never leave.
   return advanced;
+}
+
+/** B3 fix wave (I-3): `maybeAutoAdvance` for the stage of `fixtureId`. */
+async function autoAdvanceFixtureStage(auth: AuthCtx, fixtureId: string): Promise<void> {
+  const [line] = await withTenant(auth.orgId, (tx) => tx<{ stage_id: string; division_id: string }[]>`
+    select stage_id, division_id from fixtures where id = ${fixtureId}`);
+  if (line) await maybeAutoAdvance(auth, line.stage_id, line.division_id);
 }
 
 /** Exported for the withdrawal cascade (W5 T8, ruling 105 / M-10): an expunge ends on `core.abandon{expunge: true}`, which
