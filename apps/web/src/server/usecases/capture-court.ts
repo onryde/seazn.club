@@ -116,7 +116,7 @@ const subjectOf = (focus: CourtFocus): string | null => focus.current?.fixtureId
  */
 export async function courtCommon(
   court: ResolvedCourtCode, code: string, view: CourtView, s: { open: SessionState | null; themeId: string | null },
-  deps: SessionDeps, now: Date,
+  deps: SessionDeps, now: Date, startingFixtureId: string | null = null,
 ): Promise<CourtCommon> {
   const [link] = await sql<{ tz: string; target_label: string }[]>`
     select l.tz, t.label as target_label from court_stream_links l join org_stream_targets t on t.id = l.target_id
@@ -134,7 +134,15 @@ export async function courtCommon(
         pollSeconds: courtCadence(court, now, POLL_FAR_SECONDS), autoAllowed: true, destinationName, overlayUrl: null, scoreUpdates: "polled",
         heartbeatUrl: `${origin}/api/v1/capture/codes/${code}/beats`, startUrl: `${origin}/api/v1/capture/codes/${code}/start`,
       };
-  return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next: await nextOf(court, view) };
+  const next = startingFixtureId !== null ? await startingNextOf(court, startingFixtureId) : await nextOf(court, view);
+  return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next };
+}
+
+/** Device check 2 (C2): while the court's automatic start of a match is in flight (claimed, no session row yet), `next` names that
+ *  match, so the phone reads "Next: <match>" instead of "No streamed match yet" for the seconds the start takes. It has started, so
+ *  no scheduled start is given. */
+async function startingNextOf(court: ResolvedCourtCode, fixtureId: string): Promise<CaptureNext> {
+  return { label: await matchLabelOf(court.orgId, fixtureId), scheduledStart: null };
 }
 
 async function nextOf(court: ResolvedCourtCode, view: CourtView): Promise<CaptureNext | null> {
@@ -181,6 +189,8 @@ export async function getCourtCode(
  *  arriving while the start runs from starting again. A refusal is stored by the start as before; an unmapped error is
  *  reported as the beat reported it. */
 function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDeps, now: Date): BeatScope {
+  // C2: the match this beat found starting (claimed by it, or by an earlier beat and still in flight), for the answer's `next`.
+  let startingFixtureId: string | null = null;
   return {
     orgId: court.orgId, codeId: court.codeId, issuedBy: court.issuedBy,
     openSession: (exec) => courtOpenSession(exec, court.link.id),
@@ -193,7 +203,11 @@ function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDep
     autoStart: async (pairingId, phoneMode) => {
       const check = await claimCourtAutoStart({ court, pairingId, phoneMode }, deps, now);
       // Fix round 1 (finding 8): a start claimed by an earlier beat and still running answers `starting` too.
-      if (!check.claimed) return { starting: check.inFlight };
+      if (!check.claimed) {
+        startingFixtureId = check.inFlightFixtureId;
+        return { starting: check.inFlight };
+      }
+      startingFixtureId = check.fixtureId;
       deferred(async () => {
         try {
           await check.run();
@@ -212,7 +226,9 @@ function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDep
       const view = await courtFocusOf(court.link);
       const subject = subjectOf(view.focus);
       const latest = subject === null ? null : await latestSession(subject);
-      return courtCommon(court, code, view, { open: open?.state ?? null, themeId: latest?.theme_id ?? null }, deps, now);
+      // C2: set only while the start is in flight (claimed, no session row, no refusal, inside the starting window); once its session
+      // exists the claim answers not-in-flight and the usual `next` comes back.
+      return courtCommon(court, code, view, { open: open?.state ?? null, themeId: latest?.theme_id ?? null }, deps, now, startingFixtureId);
     },
   };
 }

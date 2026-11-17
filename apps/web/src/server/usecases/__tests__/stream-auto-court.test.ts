@@ -253,6 +253,40 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect((await settingsOf(A))!.auto_started_at).not.toBeNull();
   });
 
+  it("C2 (device check 2): while the court start of A is in flight the beat's `next` names A (no scheduled start); once its session exists, the usual next (B)", async () => {
+    await streamOn(A);
+    await streamOn(B);
+    await kickoff(A, 0);
+    const nextA = { label: labelOf(day.comp, day.comp.fixtures[0]!), scheduledStart: null };
+    const nextB = { label: labelOf(day.comp, day.comp.fixtures[1]!), scheduledStart: Math.floor(at(30).getTime() / 1000) };
+    // The claiming beat: its start is queued, not run.
+    const first = await postBeat(qr.code, qr.tok, body(P), deps, clock());
+    expect(first).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS, next: nextA });
+    expect(tails.queue).toHaveLength(1);
+    // A second beat inside the in-flight window (claim held, no session yet): still A.
+    now += POLL_STARTING_SECONDS * SEC;
+    const second = await postBeat(qr.code, qr.tok, body(P), deps, clock());
+    expect(second).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS, next: nextA });
+    // The start lands: the session exists, and the next beat is today's answer, naming the next streamed match.
+    expect(await runTails()).toBe(1);
+    now += POLL_STARTING_SECONDS * SEC;
+    const go = await beat(P);
+    expect(go).toMatchObject({ state: "go-live", next: nextB });
+  });
+
+  it("C2: a stored refusal is not a start in flight: the beat's `next` is the usual one, never the refused match", async () => {
+    await streamOn(A);
+    await streamOn(B);
+    await sql`update org_stream_targets set archived_at = now() where id = ${targetId}`;
+    await kickoff(A, 0);
+    await beat(P);   // claims, the start runs and is refused no_destination
+    expect(await settingsOf(A)).toMatchObject({ auto_start_refusal: "no_destination" });
+    now += 5 * SEC;
+    const a = await beat(P);
+    expect(a).toMatchObject({ state: "waiting", pollSeconds: POLL_NEAR_SECONDS });
+    expect(a.next).toEqual({ label: labelOf(day.comp, day.comp.fixtures[1]!), scheduledStart: Math.floor(at(30).getTime() / 1000) });
+  });
+
   it("fix round 1 (O17 race): the Stream switch turned off while a claimed start is being prepared — no session is inserted, nothing is stored as a refusal", async () => {
     await streamOn(A);
     await kickoff(A, 0);
