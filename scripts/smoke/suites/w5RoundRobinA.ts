@@ -62,14 +62,13 @@ export async function w5RoundRobinASuite(): Promise<void> {
 
   /** A generic league of `n` entrants, generated once. */
   async function league(label: string, n: number, compId: string | undefined = comp?.id) {
-    const divId = v1data<{ id: string } | undefined>(
-      await v1(owner, `/api/v1/competitions/${compId}/divisions`, "POST", {
+    const divRes = await v1(owner, `/api/v1/competitions/${compId}/divisions`, "POST", {
         name: label,
         sport_key: "generic",
         variant_key: "score",
         config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
-      }),
-    )?.id;
+      });
+    const divId = v1data<{ id: string } | undefined>(divRes)?.id;
     const addEntrants = async (from: number, to: number) =>
       v1data<{ id: string }[] | undefined>(
         await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
@@ -85,7 +84,9 @@ export async function w5RoundRobinASuite(): Promise<void> {
       (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
     const stage = async () =>
       (v1data<StageOut[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`)) ?? []).find((s) => s.id === stageId);
-    return { divId, entrants, stageId, generate, fixtures, stage, addEntrants };
+    /** The division POST's status and body, for a failure message (an absent division 404s every call after it). */
+    const created = `division ${divRes.status} ${JSON.stringify(divRes.json).slice(0, 200)}`;
+    return { divId, entrants, stageId, generate, fixtures, stage, addEntrants, created };
   }
 
   // Check 1 — 4 -> 6 before Start: Generate adds the missing pairs and nothing twice.
@@ -237,7 +238,11 @@ export async function w5RoundRobinASuite(): Promise<void> {
 
   // Check 7 - X-CU-8 / RB5-L10: a reinstated player with no line waits; one tap writes her catch-up lines; a second tap is refused.
   {
-    const l = await league("Wait", 5);
+    // Its own competition: `comp` already holds four divisions, the plan's per-competition cap (a 5th answers 402).
+    const own = v1data<{ id: string } | undefined>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A wait ${tag}`, visibility: "private" }),
+    );
+    const l = await league("Wait", 5, own?.id);
     const ids = l.entrants.map((e) => e.id);
     const gone = ids[4];
     // Withdrawn before Start (a plain status flip); Generate then redraws the four still in the field.
@@ -264,7 +269,7 @@ export async function w5RoundRobinASuite(): Promise<void> {
       again.status === 409 && again.json.error?.code === "RR_LATE_ENTRY_ALREADY_PLACED";
     w5Check(
       "w5a X-CU-8: a reinstated player with no line waits (nothing placed); one tap writes 4 unscheduled catch-up lines; a second tap is RR_LATE_ENTRY_ALREADY_PLACED" +
-        (ok ? "" : ` - withdraw ${out.status}, generate ${regen.status}, start ${started.status}, drawn ${drawn.length}, ev ${ev.status}, back ${back.status}, answer ${JSON.stringify(answer ?? null)}, before ${placedBefore}, tap ${tap.status}/${tapCase}, mine ${mine.length}, again ${again.status}/${again.json.error?.code}`),
+        (ok ? "" : ` - ${l.created}, withdraw ${out.status}, generate ${regen.status}, start ${started.status}, drawn ${drawn.length}, ev ${ev.status}, back ${back.status}, answer ${JSON.stringify(answer ?? null)}, before ${placedBefore}, tap ${tap.status}/${tapCase}, mine ${mine.length}, again ${again.status}/${again.json.error?.code}`),
       ok,
     );
   }
