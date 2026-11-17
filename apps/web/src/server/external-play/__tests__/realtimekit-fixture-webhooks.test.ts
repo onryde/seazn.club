@@ -9,7 +9,7 @@
 import { createServer, type Server } from "node:http";
 import { verify } from "node:crypto";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   REALTIMEKIT_FIXTURE_ENV,
   httpWebhookDeliver,
@@ -300,6 +300,60 @@ describe("realtimekit fixture webhooks", () => {
       release();
       await fx4.close();
     }
+  });
+
+  it("a delivery that REJECTS after a reset never leaks into the next test's lastWebhookError (batch-1 T1 M2)", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const fx5 = await startRealtimeKitFixtureServer(0, {
+      webhooks: async () => {
+        await gate;
+        throw new Error("receiver down after the reset");
+      },
+    });
+    try {
+      const { participantId } = await mint(fx5);
+      fx5.setLivePublisher(participantId, true);
+      expect(fx5.webhookOutcomes.get(fx5.webhooks[0]!.uuid), "premise: in flight").toBe("pending");
+      const resetting = fx5.reset();
+      release();
+      await resetting;
+      expect(fx5.lastWebhookError(), "the rejection belongs to the reset generation").toBeUndefined();
+      expect(fx5.webhookOutcomes.size).toBe(0);
+      // the pair: a rejection in the CURRENT generation is still recorded
+      const { participantId: again } = await mint(fx5);
+      fx5.setLivePublisher(again, true);
+      await fx5.webhooksSettled();
+      expect((fx5.lastWebhookError() as Error).message).toBe("receiver down after the reset");
+    } finally {
+      release();
+      await fx5.close();
+    }
+  });
+
+  it("joinedAt is strictly increasing: two setLivePublisher calls in ONE millisecond stamp distinct, ordered instants (batch-1 m1)", async () => {
+    const { participantId: a } = await mint();
+    const { participantId: b } = await mint();
+    // Freeze Date only (the HTTP mint above already ran on real time), so both joins read the same millisecond.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(Date.now() + 60_000));
+      const frozen = Date.now();
+      fx.setLivePublisher(a, true);
+      fx.setLivePublisher(b, true);
+      fx.setLivePublisher(a, true); // a reload: a third join, same millisecond
+      expect(Date.now(), "premise: the clock did not move").toBe(frozen);
+      // a clock set BACK (the contract tests stage stays at a past instant) is followed, not held at the last stamp
+      vi.setSystemTime(new Date(frozen - 3_600_000));
+      fx.setLivePublisher(b, true);
+    } finally {
+      vi.useRealTimers();
+    }
+    await fx.webhooksSettled();
+    const joins = got.map(parse).filter((w) => w.event === "meeting.participantJoined").map((w) => Date.parse(w.participant!.joinedAt));
+    expect(joins, "four joins emitted").toHaveLength(4);
+    for (let i = 1; i < 3; i++) expect(joins[i]!, `join ${i} after join ${i - 1}`).toBeGreaterThan(joins[i - 1]!);
+    expect(joins[3], "after the clock was set back an hour").toBe(joins[0]! - 3_600_000);
   });
 
   it("a delivery that rejects is recorded as failed and never escapes: webhooksSettled resolves, no unhandled rejection", async () => {

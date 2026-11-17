@@ -281,6 +281,18 @@ export async function startRealtimeKitFixtureServer(
   let generation = 0;
   const next = (p: string) => `${p}-${(++seq).toString(36).padStart(4, "0")}-${Date.now().toString(36)}`;
   const iso = () => new Date().toISOString();
+  /** A peer's JOIN stamp, STRICTLY increasing while the clock runs forward or stands still (+1 ms on a tie): two joins in one
+   *  millisecond (two players, or a reload, in one synchronous burst) still order, as the presence order (joined_at, received_at,
+   *  seq) assumes the vendor's join stamps do. A clock moved BACKWARDS (a test's `vi.setSystemTime` to an earlier day) is followed,
+   *  not held. Joins only: every other stamp is the plain clock, so a staged stay's length stays exact to the millisecond. */
+  let lastJoinRaw = Number.NEGATIVE_INFINITY;
+  let lastJoin = Number.NEGATIVE_INFINITY;
+  const joinStamp = () => {
+    const now = Date.now();
+    lastJoin = now < lastJoinRaw ? now : Math.max(now, lastJoin + 1);
+    lastJoinRaw = now;
+    return new Date(lastJoin).toISOString();
+  };
 
   const liveSession = (meetingId: string) =>
     [...sessions.values()].find((s) => s.meetingId === meetingId && s.status === "LIVE") ?? null;
@@ -319,8 +331,11 @@ export async function startRealtimeKitFixtureServer(
         if (gen === generation) webhookOutcomes.set(w.uuid, "delivered");
       },
       (err: unknown) => {
-        if (gen === generation) webhookOutcomes.set(w.uuid, "failed");
-        lastError = err;
+        // both inside the guard: a rejection that settles after a reset never leaks into the next test's lastWebhookError()
+        if (gen === generation) {
+          webhookOutcomes.set(w.uuid, "failed");
+          lastError = err;
+        }
       },
     );
     inflight.add(p);
@@ -574,7 +589,7 @@ export async function startRealtimeKitFixtureServer(
           s = { id: next("ses"), meetingId: mt.id, status: "LIVE", startedAt: iso(), endedAt: null };
           sessions.set(s.id, s);
         }
-        const at = iso();
+        const at = joinStamp();
         // MEASURED (T17B): a reload is a new peer under the SAME row of the live session.
         let row = rows.find((r) => r.sessionId === s.id && r.userId === p.id);
         if (!row) {
