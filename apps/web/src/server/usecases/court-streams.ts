@@ -17,10 +17,11 @@ import type { CaptureQrV2 } from "@/lib/capture-qr";
 import { assertUuid, type AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import type { MatchDayCourtStream } from "@/lib/match-day/types";
-import { COURT_AUTO_STOP_AFTER_RESULT_SECONDS, courtMinAppVersion, tunable } from "@/server/relay/config";
+import { courtMinAppVersion } from "@/server/relay/config";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
+import { autoStopDelaySeconds } from "./stream-sessions/auto-stop";
 import { frozenCompetitionIds } from "./entitlement-freeze";
 import { hasValidKek } from "@/server/relay/crypto";
 import { insertCourtStreamCode, openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
@@ -324,7 +325,7 @@ export async function courtStreamsForDay(
            order by s.created_at desc, s.id desc limit 1) s on true
        where l.org_id = ${orgId} and l.court_id in ${sql([...courtIds])} and l.withdrawn_at is null
          and l.opens_at <= ${now} and ${now} < l.expires_at`;
-    const tailSeconds = tunable("COURT_AUTO_STOP_AFTER_RESULT_SECONDS", COURT_AUTO_STOP_AFTER_RESULT_SECONDS);
+    const tailSeconds = autoStopDelaySeconds(true);
     for (const r of linkRows) {
       const tailEnd = courtTailEndsAt({
         openState: r.open_state,

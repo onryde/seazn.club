@@ -1,3 +1,4 @@
+import { autoStopDeadline, autoStopVerdict } from "../auto-stream";
 import { describe, expect, it } from "vitest";
 import {
   courtCodeView,
@@ -253,9 +254,9 @@ describe("courtTailEndsAt (O16: when the court's video stops by itself, while th
     expect(courtTailEndsAt(facts(), T("10:00:45"), DELAY)).toBeNull();
     expect(courtTailEndsAt(facts(), T("10:09:00"), DELAY)).toBeNull();
   });
-  it("is set while ending too, and only while live or ending", () => {
-    expect(courtTailEndsAt(facts({ openState: "ending" }), T("10:00:12"), DELAY)).toEqual(T("10:00:45"));
-    for (const openState of ["requested", "provisioning", "warming", "completed", "failed", null] as const) {
+  it("is set only while the session is live: an ending one is already stopping, so it promises nothing", () => {
+    expect(courtTailEndsAt(facts({ openState: "live" }), T("10:00:12"), DELAY)).toEqual(T("10:00:45"));
+    for (const openState of ["ending", "requested", "provisioning", "warming", "completed", "failed", null] as const) {
       expect(courtTailEndsAt(facts({ openState }), T("10:00:12"), DELAY), String(openState)).toBeNull();
     }
   });
@@ -264,5 +265,21 @@ describe("courtTailEndsAt (O16: when the court's video stops by itself, while th
     expect(courtTailEndsAt(facts({ phoneMode: "operator" }), T("10:00:12"), DELAY)).toBeNull();
     expect(courtTailEndsAt(facts({ phoneMode: null }), T("10:00:12"), DELAY)).toBeNull();
     expect(courtTailEndsAt(facts({ sessionPredatesResult: false }), T("10:00:12"), DELAY)).toBeNull();
+  });
+});
+
+describe("one rule: the desk's tail ends exactly when the tick's delay_elapsed does", () => {
+  const FIN = new Date("2026-11-15T10:00:00Z");
+  const base = { autoStream: true, phoneMode: "automatic" as const, finishedAt: FIN, sessionPredatesResult: true };
+  it("autoStopDeadline is the result plus the delay", () => {
+    expect(autoStopDeadline(FIN, 30)).toEqual(new Date("2026-11-15T10:00:30Z"));
+    expect(autoStopDeadline(FIN, 180)).toEqual(new Date("2026-11-15T10:03:00Z"));
+  });
+  it.each([-1, 0, 1, 29_999, 30_000, 30_001, 180_000])("at result + %i ms the desk has a tail exactly while the tick is not yet due", (ms) => {
+    const now = new Date(FIN.getTime() + ms);
+    const tick = autoStopVerdict(base, now, 30);
+    const desk = courtTailEndsAt({ openState: "live", finishedAt: FIN, sessionPredatesResult: true, phoneMode: "automatic" }, now, 30);
+    expect(desk !== null, `${ms} ms`).toBe(!tick.due);
+    if (desk !== null) expect(desk).toEqual(autoStopDeadline(FIN, 30));
   });
 });

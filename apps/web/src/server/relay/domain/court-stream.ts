@@ -1,6 +1,6 @@
 // Court stream §5.3–§5.5 — which match a court phone's video belongs to. Pure: no I/O, no clock, `now` passed in
 // (domain-purity.test.ts). The use-cases feed it one court's facts at every beat.
-import { autoStopApplies, type PhoneMode } from "./auto-stream";
+import { autoStopApplies, autoStopDeadline, type PhoneMode } from "./auto-stream";
 import { isNotResponding } from "./pairing";
 import type { CodeView } from "./stream-code";
 import type { SessionState } from "./session";
@@ -145,7 +145,7 @@ export function courtPhoneStatus(
  * O16 (owner, 2026-11-16: "streaming will be free in 30s"): when the court's video stops by itself, while it is still to come —
  * the end of the TAIL after its last streamed match's result. The court's open session is the one in `openState` (its newest
  * active one: a handover's newer session belongs to an unfinished match, so it reads null at once). Set only while that session
- * is `live` or `ending`, its match has a result, and the automatic stop WILL fire (`autoStopApplies` on the facts the tick
+ * is `live` (an `ending` one is already stopping: "Video ends in 20 s" would be false), its match has a result, and the automatic stop WILL fire (`autoStopApplies` on the facts the tick
  * judges: a court session's switch is the court's, so `autoStream` is true; a phone in Operator or a broadcast started after the
  * result is never stopped, and promises nothing). Null once `delaySeconds` after the result has passed: the tick ends the
  * session at its next pass and the court reads its normal state. `delaySeconds` is the court tail the use-case passes in
@@ -161,7 +161,7 @@ export function courtTailEndsAt(
   now: Date,
   delaySeconds: number,
 ): Date | null {
-  if (i.openState !== "live" && i.openState !== "ending") return null;
+  if (i.openState !== "live") return null;
   if (i.finishedAt === null) return null;
   const applies = autoStopApplies({
     autoStream: true,
@@ -170,7 +170,7 @@ export function courtTailEndsAt(
     sessionPredatesResult: i.sessionPredatesResult,
   });
   if (!applies) return null;
-  const end = new Date(i.finishedAt.getTime() + delaySeconds * 1000);
+  const end = autoStopDeadline(i.finishedAt, delaySeconds);
   return end.getTime() > now.getTime() ? end : null;
 }
 

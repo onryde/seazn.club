@@ -114,9 +114,11 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
       expect(await tail(new Date(finishedAt!.getTime() + TAIL_MS + 60_000)), "the tick has not run yet; the court reads its normal state").toBeNull();
     });
 
-    it("an ending session is still inside its tail; a warming one, a completed one and one with no result are not", async () => {
-      const ending = await rig({ state: "ending" });
+    it("a live session reads its tail; an ending one (already stopping), a warming one and a completed one do not", async () => {
+      const ending = await rig({ state: "live" });
       expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000))).not.toBeNull();
+      await sql`update fixture_stream_sessions set state = 'ending' where id = ${ending.sid}`;
+      expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000)), "ending: the video is already stopping").toBeNull();
       await sql`update fixture_stream_sessions set state = 'completed' where id = ${ending.sid}`;
       expect(await tail(new Date(ending.finishedAt!.getTime() + 1_000)), "the session ended: the line goes").toBeNull();
       await sql`update fixture_stream_sessions set state = 'warming' where id = ${ending.sid}`;
