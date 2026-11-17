@@ -174,6 +174,20 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(a).not.toHaveProperty("next");
   });
 
+  it("E1: an archived target (a disconnected channel) is no destination — null on the descriptor and the beat; the live target names itself", async () => {
+    await streamed(A, AT_14);
+    const phone = phoneId("e1");
+    await claimed(phone);
+    expect(await describeAs(phone), "premise: live target").toMatchObject({ destinationName: "API rig" });
+    expect(await beat(phone)).toMatchObject({ destinationName: "API rig" });
+    await sql`update org_stream_targets set archived_at = now(), label = 'YouTube channel (disconnected)' where id = ${targetId}`;
+    expect((await describeAs(phone)).destinationName).toBeNull();
+    expect((await beat(phone)).destinationName).toBeNull();
+    // The idle court (no match) says the same.
+    await sql`update fixture_stream_settings set court_stream = false where fixture_id = ${A}`;
+    expect((await describeAs(null)).destinationName).toBeNull();
+  });
+
   it("A switched on, planned 14:00: descriptor label A's, beat next {label: A's, scheduledStart: 14:00 epoch s}", async () => {
     await streamed(A, AT_14);
     const phone = phoneId("next");

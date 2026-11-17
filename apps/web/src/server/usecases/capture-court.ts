@@ -118,12 +118,14 @@ export async function courtCommon(
   court: ResolvedCourtCode, code: string, view: CourtView, s: { open: SessionState | null; themeId: string | null },
   deps: SessionDeps, now: Date, startingFixtureId: string | null = null,
 ): Promise<CourtCommon> {
-  const [link] = await sql<{ tz: string; target_label: string }[]>`
-    select l.tz, t.label as target_label from court_stream_links l join org_stream_targets t on t.id = l.target_id
+  const [link] = await sql<{ tz: string; target_label: string | null }[]>`
+    select l.tz, case when t.archived_at is null then t.label end as target_label from court_stream_links l join org_stream_targets t on t.id = l.target_id
      where l.id = ${court.link.id}`;
   // The code row cascades with its link, so a resolved court code has one.
   if (!link) throw new RangeError(`courtCommon: court link ${court.link.id} is gone`);
-  const destinationName = fitText(link.target_label, DEST_MAX);
+  // E1 (2026-11-17): an archived target (a disconnected channel archives it) is no destination, as the contract says:
+  // `null`, so the phone reads "waiting for a destination" rather than the archived label.
+  const destinationName = link.target_label === null ? null : fitText(link.target_label, DEST_MAX);
   const subject = subjectOf(view.focus);
   const origin = captureOrigin(deps);
   const subjectCommon = subject === null ? null : await captureCommon({ orgId: court.orgId, fixtureId: subject, code }, s, deps, now);
