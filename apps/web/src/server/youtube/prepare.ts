@@ -49,7 +49,6 @@ import { freshLiveRefusal, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
 import { broadcastDescription, broadcastTitle } from "./title";
-import { PUBLICLY_READABLE_VISIBILITIES } from "@/lib/competition-listing";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
 export type Prepared = { broadcastId: string; reused: boolean; keyId: string };
@@ -257,14 +256,17 @@ async function reuseOrClaim(ctx: Ctx): Promise<Prepared | null> {
 
 interface FixtureWords {
   home: string | null; away: string | null; division: string; competition: string; default_locale: string;
-  org_slug: string; comp_slug: string; div_slug: string; visibility: string;
+  org_slug: string; comp_slug: string; div_slug: string; linkable: boolean;
 }
 
-/** The title and description, in the org's default locale (spec §6.5, R4). */
+/** The title and description, in the org's default locale (spec §6.5, R4). `linkable` asks the view the public fixture page reads
+ *  (findPublicDivision -> public_divisions_v: a public or link-only competition and a division not archived), so the live-score
+ *  link is never promised under a rule of its own. */
 async function textsFor(ctx: Ctx): Promise<{ title: string; description: string; locale: Locale }> {
   const [f] = await sql<FixtureWords[]>`
     select he.display_name as home, ae.display_name as away, d.name as division, c.name as competition, o.default_locale,
-           o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug, c.visibility
+           o.slug as org_slug, c.slug as comp_slug, d.slug as div_slug,
+           exists (select 1 from public_divisions_v pd where pd.id = d.id) as linkable
       from fixtures f
       join divisions d on d.id = f.division_id
       join competitions c on c.id = d.competition_id
@@ -282,11 +284,9 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
     }),
     description: broadcastDescription({
       line: msgFor(locale, "streaming.youtube.broadcast.descriptionLine"),
-      // The live-score link only when a stranger can open it: the public fixture page 404s a private competition, and its
-      // readable set is `PUBLICLY_READABLE_VISIBILITIES` (the one the view `public_competitions_v` admits) — not a second rule.
-      matchUrl: (PUBLICLY_READABLE_VISIBILITIES as readonly string[]).includes(f.visibility)
-        ? `${siteOrigin()}${routes.publicFixture(f.org_slug, f.comp_slug, f.div_slug, ctx.fixtureId)}`
-        : null,
+      // The live-score link only when the public fixture page opens: a private competition's and an archived division's
+      // /live/... URL 404s ("This link is no longer valid"), so no line is better than a dead one.
+      matchUrl: f.linkable ? `${siteOrigin()}${routes.publicFixture(f.org_slug, f.comp_slug, f.div_slug, ctx.fixtureId)}` : null,
       poweredBy: msgFor(locale, "streaming.youtube.broadcast.poweredBy"),
       siteUrl: siteOrigin(),
     }),

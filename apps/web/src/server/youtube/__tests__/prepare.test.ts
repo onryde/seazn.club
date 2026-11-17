@@ -307,9 +307,9 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(poweredWitnessed).toBe(3);   // es, fr, nl
   });
 
-  it("A3: a PRIVATE competition's description has no live-score line (its public page 404s); link-only and public keep it; the powered-by paragraph stays on all three", async () => {
-    const w = await world(3);
-    const [priv, unlisted, pub] = w.fixtures as [string, string, string];
+  it("A3: a PRIVATE competition's or an ARCHIVED division's description has no live-score line (the public page 404s); link-only and public keep it; the powered-by paragraph stays on all", async () => {
+    const w = await world(4);
+    const [priv, unlisted, pub, archived] = w.fixtures as [string, string, string, string];
     const origin = siteOrigin();
     const line = en["streaming.youtube.broadcast.descriptionLine"];
     const powered = `${en["streaming.youtube.broadcast.poweredBy"]} · ${origin}`;
@@ -335,6 +335,12 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(dPublic.startsWith(`${line} ${origin}/live/`), "public is linked").toBe(true);
     expect(dPublic).toContain(`/fixtures/${pub}`);
     expect(dPublic.endsWith(`\n\n${powered}`)).toBe(true);
+
+    // A public competition whose division is archived: the page reads public_divisions_v, which drops it, so it 404s too.
+    await sql`update divisions set archived_at = now() where id = (select division_id from fixtures where id = ${archived})`;
+    const dArchived = await describe_(archived, "public");
+    expect(dArchived, "archived division: the powered-by paragraph only").toBe(powered);
+    expect(dArchived).not.toContain(line);
   });
 
   it("S2 (owner 2026-10-29): the Powered-by paragraph is shown for EVERY org — a dashboard.branding org (which removed the public footer's badge) gets it too, before and after a plan change; an unbranded org beside it still gets it (checked === 4)", async () => {
