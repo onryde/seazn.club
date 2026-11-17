@@ -35,6 +35,23 @@ import { cascadeAuthFor, withdrawEntrantCascade } from "../withdrawal";
 import { confirmResolvingTies } from "./_confirm-with-ties";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
+// B3 fix wave (m-2): `failDeparture` makes the withdrawal cascade's own final status write throw once - a cascade cut off AFTER
+// it staled the confirmed proposal and BEFORE its re-proposal. Every other call is the real code (patchEntrant writes in-module).
+const cut = vi.hoisted(() => ({ failDeparture: false }));
+vi.mock("../entrants", async (io) => {
+  const real = await io<typeof import("../entrants")>();
+  return {
+    ...real,
+    writeEntrantPatch: async (...args: Parameters<typeof real.writeEntrantPatch>) => {
+      if (cut.failDeparture && real.DEPARTED_STATUSES.has(args[2].status ?? "")) {
+        cut.failDeparture = false;
+        throw new Error("simulated: the cascade was cut off before its status write");
+      }
+      return real.writeEntrantPatch(...args);
+    },
+  };
+});
+
 vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
   revalidateTag: vi.fn(),
@@ -690,6 +707,50 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
       }
     }, 180_000);
   }
+
+  // B3 fix wave (m-2): a cascade cut off after it staled the confirmed proposal (its seats back) but before its re-proposal left
+  // the destination with NO live proposal, and its retry found nothing confirmed to stale - so nothing ever re-proposed.
+  // differential: today (01888347fa) the newest proposal stays `stale` after the retry. Expected: RB5-K2, E5 takes E3's place.
+  it("X-CUT-4 a cascade cut off after staling the confirmed proposal: its retry re-proposes the draw it staled", async () => {
+    const r = await rig(LEAGUE);
+    cut.failDeparture = true;
+    await expect(withdrawEntrantCascade(r.auth, r.idOf.get(3)!)).rejects.toThrow(/cut off/);
+    expect(cut.failDeparture, "rig: the cut-off was reached").toBe(false);
+    expect(await statusOf(r.confirmedId), "the first run staled it").toBe("stale");
+    expect((await newestSlate(r)).status, "rig: and nothing live is left").toBe("stale");
+    await withdrawEntrantCascade(r.auth, r.idOf.get(3)!); // the retry (the organiser's Withdraw again)
+    expect(await newestSlate(r), "RB5-K2: E5 takes the vacated place").toEqual({ status: "draft", seeds: [1, 2, 4, 5] });
+    await expectDayOne(r);
+    // Sequence: a second departure re-proposes again from the live draft - one draft at a time.
+    await withdrawEntrantCascade(r.auth, r.idOf.get(1)!);
+    expect(await newestSlate(r)).toEqual({ status: "draft", seeds: [2, 4, 5, 6] });
+    const [{ drafts }] = await sql<{ drafts: number }[]>`select count(*)::int as drafts from stage_seed_proposals where stage_id = ${r.koId} and status = 'draft'`;
+    expect(drafts).toBe(1);
+  });
+
+  // B3 fix wave (m-6): a correction is several score writes (each live event taken back, then the new result recorded), and each
+  // one re-proposes; a recompute that reads the SAME cut as the draft it would replace kept the draft as it was only by staling it
+  // and inserting an identical row. differential: today (01888347fa) the dependent holds two identical rows per such recompute.
+  it("X-CUT-4 a correction re-proposes without duplicate rows: no two re-proposals of the destination carry the same slate", async () => {
+    let checked = 0;
+    for (const sport of [GENERIC, BADMINTON]) {
+      const r = await rig(LEAGUE, sport);
+      await correct(r, 1, 2, 2); // E2 beats E1: the cut re-orders, the draw is re-proposed
+      expect(await newestSlate(r)).toEqual({ status: "draft", seeds: [2, 1, 3, 4] });
+      // The re-proposals: every row after the confirmed one the rig made (it went stale; a re-proposal may read its cut again).
+      const rows = await sql<{ status: string; computed: unknown }[]>`
+        select status, computed from stage_seed_proposals where stage_id = ${r.koId} and id <> ${r.confirmedId} order by created_at, id`;
+      // The slate the organiser confirms: who sits where AND the ties to resolve (a mid-correction level pair is a different
+      // slate); the standings hash is not part of it. Both read back from jsonb, so one key order.
+      const cuts = rows.map((p) => {
+        return JSON.stringify({ ...(p.computed as object), standingsHash: undefined });
+      });
+      expect(rows.length, "anti-vacuity: re-proposals were written").toBeGreaterThan(0);
+      expect(new Set(cuts).size, `${sport.key}: ${rows.map((p) => p.status).join(",")}`).toBe(cuts.length);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
 
   it("X-CUT-4 the sweep ran every sport and every door", () => {
     expect(swept, "anti-vacuity: both sports ran the correction").toBe(2);

@@ -22,9 +22,10 @@ import { computeSeedProposal, type SeedProposalOut } from "./seed-proposal";
  *  dependent draft proposals stale and recomputes"). Best-effort throughout:
  *  a dependent whose recompute now trips (e.g. rules unsatisfiable, or
  *  already confirmed) is left as-is rather than blocking the write that
- *  already committed. A TABLE source (W5 T11) takes the same drafts-first path
- *  below the `includeConfirmed` branch: its drafts are staled and recomputed
- *  as always, and with the option its CONFIRMED proposal is judged first.
+ *  already committed. A TABLE source (W5 T11) with the option has its
+ *  CONFIRMED proposal judged first, then every dependent re-proposed; a draft
+ *  naming the same slate is refreshed in place rather than staled for an
+ *  identical row (B3 m-6), and one that cannot be re-proposed is staled.
  *
  *  Exported (P5 review finding): `overrideStandings` is not the only
  *  standings-mutating path a COMPLETE source stage can still take.
@@ -43,15 +44,20 @@ export async function markDependentSeedProposalsStale(
   opts: { includeConfirmed?: boolean } = {},
 ): Promise<string[]> {
   const unfilled: string[] = [];
+  let refreshTable = false;
   const dependents = await withTenant(auth.orgId, async (tx) => {
     const [src] = await tx<{ division_id: string; kind: string }[]>`select division_id, kind from stages where id = ${sourceStageId}`;
     if (!src) return [];
     const matches = await setupDependentsOf(tx, sourceStageId, src.division_id);
     if (opts.includeConfirmed && TABLE_CUT_DRIFT_KINDS.has(src.kind)) {
-      // W5 T11: a table source's confirmed proposal is judged first; its drafts then go the way they always went for a table
-      // (every one staled and recomputed), and the recompute below re-proposes the ones just staled.
+      // W5 T11: a table source's confirmed proposal is judged first; then every dependent is re-proposed (below).
+      // B3 fix wave (m-6): its draft is NOT staled up front - the re-proposal refreshes a draft naming the same slate in place
+      // (`refreshSameSlate`), so each intermediate write of a correction no longer leaves an identical stale row; a re-proposal
+      // that cannot be made stales the draft instead (below), which still puts Recompute in front of the organiser.
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + src.division_id}))`;
       for (const dependent of matches) unfilled.push(...(await correctTableDependent(tx, dependent, sourceStageId)).unfilled);
+      refreshTable = true;
+      return matches.map((m) => m.id);
     } else if (opts.includeConfirmed) {
       await tx`select pg_advisory_xact_lock(hashtext(${"division:" + src.division_id}))`;
       const recompute: string[] = [];
@@ -70,12 +76,18 @@ export async function markDependentSeedProposalsStale(
   });
   for (const dependentStageId of dependents) {
     try {
-      await computeSeedProposal(auth, dependentStageId);
+      await computeSeedProposal(auth, dependentStageId, refreshTable ? { refreshSameSlate: true } : {});
     } catch {
-      // best-effort, see docstring
+      // best-effort, see docstring - and (m-6) a table draft not re-proposed is staled here, as it was up front before.
+      if (refreshTable) await staleDrafts(auth.orgId, dependentStageId).catch(() => undefined);
     }
   }
   return unfilled;
+}
+
+/** The live draft of `stageId` goes stale (no re-proposal could be made for it). */
+async function staleDrafts(orgId: string, stageId: string): Promise<void> {
+  await withTenant(orgId, (tx) => tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`);
 }
 
 /**
@@ -136,10 +148,22 @@ export async function staleConfirmedProposalsOfDeparting(
         const step = await correctTableDependent(tx, dependent, source.id, entrantId);
         out.unfilled.push(...step.unfilled);
         if (step.staled && !out.recompute.includes(dependent.id)) out.recompute.push(dependent.id);
+        // B3 fix wave (m-2): a dependent left STALE with nothing live - no draft, no confirmed - is re-proposed too. A cascade cut
+        // off after it staled the confirmed proposal (its seats back) and before its re-proposal left exactly that, and its retry
+        // finds nothing confirmed to stale: without this the draw stayed unproposed for good. Not once the destination started.
+        else if (!out.recompute.includes(dependent.id) && (await orphanedStale(tx, dependent.id))) out.recompute.push(dependent.id);
       }
     }
     return out;
   });
+}
+
+/** B3 m-2: `stageId` has a stale proposal and no live one (draft or confirmed), and has not started. */
+async function orphanedStale(tx: Tx, stageId: string): Promise<boolean> {
+  const [row] = await tx<{ live: number; stale: number }[]>`
+    select count(*) filter (where status in ('draft', 'confirmed'))::int as live, count(*) filter (where status = 'stale')::int as stale
+      from stage_seed_proposals where stage_id = ${stageId}`;
+  return row !== undefined && row.live === 0 && row.stale > 0 && !(await stageHasStarted(tx, stageId));
 }
 
 /** Re-propose each of `stageIds` (after a departure staled them): best-effort, like every recompute here - a row that cannot be
