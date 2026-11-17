@@ -51,6 +51,7 @@ import { rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import {
   WITHDRAWAL_PENDING_STATUSES,
   WITHDRAWAL_PLAYED_STATUSES,
+  countsAsPlayed,
   tableWithdrawalInputs,
   type WithdrawalFixtureRow,
 } from "@/lib/table-withdrawal";
@@ -368,7 +369,8 @@ async function applyUpdate(
     return;
   }
   // void — pending fixtures abandon directly; resulted ones expunge first. Either way the line's write-ahead row goes first.
-  await expungeLine(auth, owner, fixture, SETTLED.has(fixture.status) && fixture.outcome !== null);
+  // B3 I-5: an abandoned line with a result is played too (`countsAsPlayed`), so its abandon is among the events removed.
+  await expungeLine(auth, owner, fixture, countsAsPlayed(fixture));
   out.voided++;
 }
 

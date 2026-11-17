@@ -14,6 +14,17 @@ import type { TableFixture } from "@seazn/engine/competition";
 
 /** DB statuses whose fixture counts as PLAYED when it carries a result. */
 export const WITHDRAWAL_PLAYED_STATUSES: ReadonlySet<string> = new Set(["decided", "finalized", "forfeited"]);
+/**
+ * B3 fix wave (I-5; RB5-W2, RB5-W4): does this line count as one the entrant PLAYED? A played status with a result - or an
+ * ABANDONED line that still carries one (a cricket no result, a football award-policy abandon): the match gave a result, so it
+ * counts toward the 50 percent and an under-half withdrawal removes it with the rest. A line written since W2b D7 stores such
+ * an abandon as `decided` already; this keeps a row stored in the older shape from being neither played nor pending (never
+ * counted, never expunged, its points kept). An abandon with no result stays neither (X-AB-1). The ONE reading - the cascade,
+ * its preview and the qualification builder all ask it.
+ */
+export function countsAsPlayed(f: { status: string; outcome: unknown }): boolean {
+  return f.outcome !== null && (WITHDRAWAL_PLAYED_STATUSES.has(f.status) || f.status === "abandoned");
+}
 /** DB statuses whose fixture is still to be played. */
 export const WITHDRAWAL_PENDING_STATUSES: ReadonlySet<string> = new Set(["scheduled", "in_play"]);
 
@@ -35,7 +46,7 @@ export function tableWithdrawalInputs(
   const zero = (id: string) => ({ entrantId: id, played: 1, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} });
   return {
     played: mine
-      .filter((f) => WITHDRAWAL_PLAYED_STATUSES.has(f.status) && f.outcome !== null)
+      .filter(countsAsPlayed)
       .map((f) => ({
         id: f.id,
         status: "decided" as const,

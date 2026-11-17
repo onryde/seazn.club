@@ -15,7 +15,7 @@
 // cannot know. The open formats (americano) are not previewed.
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { WITHDRAWAL_PENDING_STATUSES, WITHDRAWAL_PLAYED_STATUSES } from "@/lib/table-withdrawal";
+import { WITHDRAWAL_PENDING_STATUSES, countsAsPlayed } from "@/lib/table-withdrawal";
 import type { WithdrawalPreview, WithdrawalPreviewStage } from "@/lib/withdrawal-consequence";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { getDivision } from "./divisions";
@@ -106,7 +106,7 @@ export async function previewWithdrawal(
       });
     } else if (WITHDRAWAL_WALKOVER_KINDS.has(stage.kind)) {
       const pending = rows.filter((f) => WITHDRAWAL_PENDING_STATUSES.has(f.status));
-      const played = rows.filter((f) => WITHDRAWAL_PLAYED_STATUSES.has(f.status) && f.outcome !== null).length;
+      const played = rows.filter(countsAsPlayed).length;
       out.push({
         stage_id: stage.id,
         stage_kind: stage.kind,

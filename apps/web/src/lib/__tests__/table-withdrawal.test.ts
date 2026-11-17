@@ -8,6 +8,7 @@ import { withdrawTableEntrant } from "@seazn/engine/competition";
 import {
   WITHDRAWAL_PENDING_STATUSES,
   WITHDRAWAL_PLAYED_STATUSES,
+  countsAsPlayed,
   departedRankedLast,
   tableWithdrawalInputs,
   type WithdrawalFixtureRow,
@@ -44,6 +45,19 @@ describe("tableWithdrawalInputs", () => {
       { id: "5", opponent: "F" },
       { id: "6", opponent: "G" },
     ]);
+  });
+  // B3 fix wave (I-5, RB5-W2/W4): an ABANDONED line that still carries an outcome (a cricket no result, a football award-policy
+  // abandon - shaped so before W2b D7 moved such a line to `decided`) is a result she played: counted, and removed under half.
+  // One with no outcome stays neither (X-AB-1: it never reached the table). differential: today the first is neither.
+  it("an abandoned line WITH an outcome is played; one without stays neither (countsAsPlayed is the one reading)", () => {
+    const NR = { kind: "no_result" };
+    const rows = [f("1", "abandoned", "A", "B", NR), f("2", "abandoned", "C", "A", null), f("3", "scheduled", "A", "D")];
+    const { played, pending } = tableWithdrawalInputs("A", rows);
+    expect(played.map((x) => x.id)).toEqual(["1"]);
+    expect(pending.map((x) => x.id)).toEqual(["3"]);
+    expect(rows.map(countsAsPlayed)).toEqual([true, false, false]);
+    // Every played status still needs its result (a decided row with no outcome is not played).
+    expect([f("4", "decided", "A", "E", null), f("5", "finalized", "A", "E", WIN)].map(countsAsPlayed)).toEqual([false, true]);
   });
   it("feeds the engine's mode: under 50% played expunges, half or more awards", () => {
     const stage = { id: "S", kind: "league" as const, entrants: ["A"], cascade: [] };
