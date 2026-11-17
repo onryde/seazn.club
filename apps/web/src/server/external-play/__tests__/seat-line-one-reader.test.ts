@@ -69,11 +69,11 @@ const SITES: readonly Site[] = [
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayArrival", times: 1, consumer: "the check-in is dated at the stay's arrival" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "endStay", times: 2, consumer: "a seat serves the stay; a camera no wait can fix ends it" },
   { file: "server/usecases/external-play/room.ts", owner: "queueDeferred", fn: "settleDeferral", times: 1, consumer: "a mid-claim deferral" },
-  { file: "server/usecases/external-play/sweep.ts", owner: "noShow", fn: "boardPhase", times: 1, bothOnly: false, consumer: "inLine 5: noShow's skip" },
-  { file: "server/usecases/external-play/sweep.ts", owner: "meetingIsDone", fn: "boardPhase", times: 1, bothOnly: false, consumer: "inLine 8: teardown" },
+  { file: "server/usecases/external-play/sweep/no-show.ts", owner: "noShow", fn: "boardPhase", times: 1, bothOnly: false, consumer: "inLine 5: noShow's skip" },
+  { file: "server/usecases/external-play/sweep/teardown.ts", owner: "meetingIsDone", fn: "boardPhase", times: 1, bothOnly: false, consumer: "inLine 8: teardown" },
   // Consumer 6, the create's allowance, asks the SAME phase reader but with `bothOnly`: it rests on both check-ins counting and
   // does not read the line (the deviation recorded in the build report). Four call sites in three declarations of two files.
-  { file: "server/usecases/external-play/sweep.ts", owner: "mintRetry", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance (mint retry)" },
+  { file: "server/usecases/external-play/sweep/mint-retry.ts", owner: "mintRetry", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance (mint retry)" },
   { file: "server/usecases/external-play/create-game.ts", owner: "createGameIfReady", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance" },
   { file: "server/usecases/external-play/create-game.ts", owner: "createAtDequeue", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance (dequeue)" },
 ];
@@ -269,7 +269,7 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
       calls += scan.calls.length;
       bad.push(...callBadness(file, scan));
     }
-    expect(files.length, "files with pinned sites").toBe(4);
+    expect(files.length, "files with pinned sites").toBe(6);
     expect(calls, "calls found in them").toBeGreaterThanOrEqual(SITES.reduce((n, s) => n + s.times, 0));
     expect(bad).toEqual([]);
     // The nine, by name: each is reached through a pinned site or through a fragment use above.

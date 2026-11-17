@@ -1,7 +1,7 @@
 // T15 — the arbiter panel's reading of a flag's evidence note. The notes are
 // written by two producers this file does NOT test: reconcile's out-of-band
 // evidence (usecases/external-play/reconcile.ts) and the sweep's job 5 camera
-// report (usecases/external-play/sweep.ts). The note texts below are copied
+// report (usecases/external-play/sweep/camera-evidence.ts). The note texts below are copied
 // from what those producers' own suites assert (external-play-reconcile.test.ts
 // I5, external-play-sweep.test.ts job 5); the real producer → this parser
 // round trip is asserted inside those two suites.

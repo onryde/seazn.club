@@ -91,11 +91,17 @@ const SITES: readonly { file: string; fn: Consumer; times: number; readers: read
   { file: "server/usecases/me.ts", fn: "windowFor", times: 1, readers: ["qr-checkin"] },
   // The ready row's `expires_at`: the deadline, or the cap when the game was created past the deadline (twice in one expression).
   { file: "server/usecases/external-play/create-game.ts", fn: "windowFor", times: 2, readers: ["expires-at"] },
-  // The one definition; its three consumers below are the sweep's readers (mint-retry now asks `boardPhase`).
-  { file: "server/usecases/external-play/sweep.ts", fn: "windowFor", times: 1, readers: ["sweep-window"] },
+  // The one definition (sweep/pass.ts); its consumers below are the sweep's readers (mint-retry now asks `boardPhase`).
+  { file: "server/usecases/external-play/sweep/pass.ts", fn: "windowFor", times: 1, readers: ["sweep-window"] },
   // The no-show asks the window three times (the cheap precheck on the candidate, the judgement itself, and the re-read of the
   // deadline UNDER the board's check-in-window lock - spec §3.2.2, the race rule); the teardown and the expected end once each.
-  { file: "server/usecases/external-play/sweep.ts", fn: "playableWindow", times: 5, readers: ["no-show", "teardown", "expected-end"] },
+  // The sweep split into a folder: the re-read under the lock is `anchorIfClosedNow`, which lives in pass.ts (the no-show and the
+  // teardown both call it); the precheck and the judgement are no-show.ts's two, the teardown's own is teardown.ts's, and the
+  // expected end is reconcile.ts's. 1 + 2 + 1 + 1 = the five the one file held.
+  { file: "server/usecases/external-play/sweep/pass.ts", fn: "playableWindow", times: 1, readers: ["no-show", "teardown"] },
+  { file: "server/usecases/external-play/sweep/no-show.ts", fn: "playableWindow", times: 2, readers: ["no-show"] },
+  { file: "server/usecases/external-play/sweep/teardown.ts", fn: "playableWindow", times: 1, readers: ["teardown"] },
+  { file: "server/usecases/external-play/sweep/reconcile.ts", fn: "playableWindow", times: 1, readers: ["expected-end"] },
   { file: "server/usecases/external-play/invite.ts", fn: "windowFor", times: 1, readers: ["invite"] },
   { file: "server/usecases/external-play/invite.ts", fn: "roomPhase", times: 1, readers: ["resend"] },
   { file: "server/usecases/external-play/open-round.ts", fn: "roomPhase", times: 1, readers: ["reinvite"] },
@@ -450,9 +456,10 @@ describe("the check-in extension rides on every anchor (spec §3.2.2)", () => {
       if (rank !== extra) mismatched.push(`${rel}: ${rank} rank, ${extra} extension`);
     }
     expect(mismatched).toEqual([]);
-    // round-open.ts (boardOpenFor) 1, open-round.ts 1, open-round-view.ts 1, sweep.ts 4, arbiter.ts 1: a new query that builds a rank
+    // round-open.ts (boardOpenFor) 1, open-round.ts 1, open-round-view.ts 1, sweep/no-show.ts 1, sweep/mint-retry.ts 1,
+    // sweep/teardown.ts 1, sweep/reconcile.ts 1, arbiter.ts 1: a new query that builds a rank
     // owes the extension beside it, and a number here that moved is the author's cue to say which query it was.
-    expect(files, "anti-vacuity: files that build a rank").toBe(5);
+    expect(files, "anti-vacuity: files that build a rank").toBe(8);
     expect(ranks, "anti-vacuity: rank interpolations seen").toBe(8);
   });
 });
