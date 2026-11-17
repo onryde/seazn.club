@@ -234,6 +234,10 @@ export async function v4AiSuite(admin: Session, proOrgId: string, proOrgSlug: st
       const paidOrg = (await signIn(paid, `delivered+smoke-ai-pro-${tag}@resend.dev`)).org_id;
       await setPlan(paidOrg, "pro", paid);
       const { compId, divId, stageId } = await seedPlannableAiDivision(paid, "AI Paid");
+      // Funded up front: this path makes more metered runs than Pro's monthly grant now covers (8 since V526, 25
+      // before), and an `ai.credits` 402 half-way down would surface as an unrelated crash on the next read. Every
+      // credit assertion below reads the wallet either side of its own call, so the starting balance is not asserted.
+      await topUpWallet(paidOrg, 25);
       const firstRefId = v1data<{ id: string }>(
         await v1(paid, "/api/v1/officials", "POST", {
           display_name: `AI Ref ${tag}`,

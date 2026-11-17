@@ -143,7 +143,7 @@ export async function marketingSuite(): Promise<void> {
   check("pricing: no 'Size M' / 'Event Pass M' rung suffix", !phtml.includes("Event Pass M"));
   // W3 fix round 2, item 3: the enterprise-only row routes to Contact-us
   // rather than reading as a flat "no".
-  check("pricing: enterprise-only row carries its routing note", phtml.includes("Enterprise only"));
+  check("pricing: enterprise-only row carries its routing note", phtml.includes("On request"));
   // W3 fix round 2, item 6: the dedicated Platform fee FAQ entry.
   check(
     "pricing: dedicated Platform fee FAQ entry shipped",

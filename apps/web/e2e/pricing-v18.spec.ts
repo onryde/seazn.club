@@ -250,7 +250,7 @@ test.describe("pricing v18 — the box office redesign (R14)", () => {
     const desktopRow = page
       .locator("[data-pricing-matrix] tbody tr")
       .filter({ hasText: "Write API access" });
-    await expect(desktopRow).toContainText("Enterprise only");
+    await expect(desktopRow).toContainText("On request");
 
     await page.setViewportSize({ width: 320, height: 900 });
     await page.reload();
@@ -259,7 +259,7 @@ test.describe("pricing v18 — the box office redesign (R14)", () => {
     );
     const firstDetails = page.locator("[data-pricing-accordion-plan]").first();
     await firstDetails.locator("summary").click();
-    await expect(accordionRow.first()).toContainText("Enterprise only");
+    await expect(accordionRow.first()).toContainText("On request");
   });
 
   // W3 fix round 2, item 6: a dedicated Platform fee FAQ entry, naming live

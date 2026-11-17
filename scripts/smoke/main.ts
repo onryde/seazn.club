@@ -1559,15 +1559,15 @@ async function smokePlanMatrix(): Promise<void> {
     commEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/community: ai.credits.monthly resolves 5 (V393)",
-    commEnt.entitlements["ai.credits.monthly"]?.limit === 5,
+    "matrix/community: ai.credits.monthly resolves 3 (V526 re-cut it from V393's 5)",
+    commEnt.entitlements["ai.credits.monthly"]?.limit === 3,
   );
   // The bootstrap grant (createOrgForUser) synchronously seeds this period's
   // allowance at org creation, so a brand-new Community org's wallet already
   // holds it — no up-to-24h wait on the daily billing-grant cron.
   check(
-    "matrix/community: a freshly-created org's AI credit wallet is bootstrap-granted 5 credits",
-    (await walletBalance(commOrg)) === 5,
+    "matrix/community: a freshly-created org's AI credit wallet is bootstrap-granted 3 credits",
+    (await walletBalance(commOrg)) === 3,
   );
 
   // A scored-through division so a real export renders.
@@ -1643,8 +1643,8 @@ async function smokePlanMatrix(): Promise<void> {
     proEnt.entitlements["scheduling.ai"]?.enabled === true,
   );
   check(
-    "matrix/pro: ai.credits.monthly resolves 25 (V395 re-cut it from V393's 35)",
-    proEnt.entitlements["ai.credits.monthly"]?.limit === 25,
+    "matrix/pro: ai.credits.monthly resolves 8 (V526 re-cut it from V395's 25)",
+    proEnt.entitlements["ai.credits.monthly"]?.limit === 8,
   );
   // V393 DELETED `officials.per_fixture.max` — it resolved to ∞ on every plan
   // and nothing read it. The check is INVERTED rather than dropped, because
