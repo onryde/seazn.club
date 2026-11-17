@@ -175,6 +175,15 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
     expect((await courtOf()).stream_link!.refusal).toBeNull();
   });
 
+  it("M1: a refusal stored against a match the court would no longer start is not shown (latched, or a match that is not the start)", async () => {
+    await link();
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, court_stream, auto_start_refusal, auto_start_attempted_at)
+              values (${f0}, ${day.orgId}, true, 'no_credit', ${at(0)})`;
+    expect((await courtOf()).stream_link!.refusal, "premise: f0 is the start").toBe("no_credit");
+    await sql`update fixture_stream_settings set auto_start_blocked_at = now() where fixture_id = ${f0}`;
+    expect((await courtOf()).stream_link!.refusal).toBeNull();
+  });
+
   it("serves a stored not_entitled as competition_frozen while the competition is frozen, never stored", async () => {
     await link();
     await sql`insert into fixture_stream_settings (fixture_id, org_id, court_stream, auto_start_refusal, auto_start_attempted_at)

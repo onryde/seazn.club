@@ -21,7 +21,7 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
-import { CAPTURE_COURT_NAME_MAX, CaptureScoringLinkOk, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartedBy, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
+import { CAPTURE_COURT_NAME_MAX, CaptureScoringLinkOk, type CaptureAutoRefusal, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartedBy, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { courtMinAppVersion, POLL_FAR_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
@@ -38,13 +38,14 @@ import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLi
 import { captureStageOf } from "./capture-stage";
 import { asFixtureCode, courtFocusOf, linkOpenAt, matchLabelOf, type ResolvedCourtCode } from "./court-stream-codes";
 import { endOtherCourtSessions } from "./court-stream-sessions";
+import { courtRefusalOf } from "./court-streams";
 import { claimCourtAutoStart } from "./stream-auto-court";
 import { markAutoStartBlocked, startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
 import { COURT_STREAM_OFF } from "./stream-sessions/start";
 
 type CourtView = { facts: CourtMatchFacts[]; focus: CourtFocus };
-export type CourtCommon = CaptureCommon & { court: CaptureCourt; next: CaptureNext | null };
+export type CourtCommon = CaptureCommon & { court: CaptureCourt; next: CaptureNext | null; autoRefusal: CaptureAutoRefusal | null };
 
 // ---------------------------------------------------------------------------------------------------------------------
 // O13 — builds without court support never pair to a court
@@ -118,12 +119,14 @@ export async function courtCommon(
   court: ResolvedCourtCode, code: string, view: CourtView, s: { open: SessionState | null; themeId: string | null },
   deps: SessionDeps, now: Date, startingFixtureId: string | null = null,
 ): Promise<CourtCommon> {
-  const [link] = await sql<{ tz: string; target_label: string }[]>`
-    select l.tz, t.label as target_label from court_stream_links l join org_stream_targets t on t.id = l.target_id
+  const [link] = await sql<{ tz: string; target_label: string | null }[]>`
+    select l.tz, case when t.archived_at is null then t.label end as target_label from court_stream_links l join org_stream_targets t on t.id = l.target_id
      where l.id = ${court.link.id}`;
   // The code row cascades with its link, so a resolved court code has one.
   if (!link) throw new RangeError(`courtCommon: court link ${court.link.id} is gone`);
-  const destinationName = fitText(link.target_label, DEST_MAX);
+  // E1 (2026-11-17): an archived target (a disconnected channel archives it) is no destination, as the contract says:
+  // `null`, so the phone reads "waiting for a destination" rather than the archived label.
+  const destinationName = link.target_label === null ? null : fitText(link.target_label, DEST_MAX);
   const subject = subjectOf(view.focus);
   const origin = captureOrigin(deps);
   const subjectCommon = subject === null ? null : await captureCommon({ orgId: court.orgId, fixtureId: subject, code }, s, deps, now);
@@ -137,7 +140,10 @@ export async function courtCommon(
   // D2 (device check 3): a start in flight (C2), or one whose session exists but is not yet handed to the phone, names its match.
   const starting = startingFixtureId ?? startingOfCurrent(view.facts, view.focus, s.open);
   const next = starting !== null ? await startingNextOf(court, starting) : await nextOf(court, view);
-  return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next };
+  // E2: not told while a start is in flight; an open session settles the match, so the stored word is already ignored.
+  const autoRefusal = starting === null
+    ? await courtRefusalOf(court.orgId, court.link.courtId, view.facts.map((f) => f.fixtureId), view.focus.start) : null;
+  return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next, autoRefusal };
 }
 
 /** Device check 2 (C2): while the court's automatic start of a match is in flight (claimed, no session row yet), `next` names that
@@ -175,7 +181,7 @@ export async function getCourtCode(
   const stage = subject === null ? null : await captureStageOf(court.orgId, subject);
   const sessionShape = q.phone !== null && current !== null
     && (current.state === "warming" || current.state === "live" || current.state === "ending");
-  if (!sessionShape) return { state: "waiting", ...waitingFieldsOf(common, stage, common.court) };
+  if (!sessionShape) return { state: "waiting", ...waitingFieldsOf(common, stage, common.court), ...(common.autoRefusal !== null ? { autoRefusal: common.autoRefusal } : {}) };
   return sessionDescriptor(asFixtureCode(court, current.fixture_id), current, q, common, stage, deps, now, common.court);
 }
 

@@ -61,6 +61,11 @@ export type CaptureCourt = z.infer<typeof CaptureCourt>;
 export const CaptureNext = z.strictObject({ label: z.string().min(1).max(200), scheduledStart: EpochS.nullable() });
 export type CaptureNext = z.infer<typeof CaptureNext>;
 
+/** E2 (2026-11-17): why the court's automatic start was refused, the word the Match Day court card shows. */
+export const CAPTURE_AUTO_REFUSALS = ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"] as const;
+export const CaptureAutoRefusal = z.enum(CAPTURE_AUTO_REFUSALS);
+export type CaptureAutoRefusal = z.infer<typeof CaptureAutoRefusal>;
+
 const WaitingFields = {
   code: Code,
   label: z.string().min(1).max(200),
@@ -78,7 +83,11 @@ const WaitingFields = {
   court: CaptureCourt.optional(),
 };
 
-export const CaptureWaiting = z.strictObject({ state: z.literal("waiting"), ...WaitingFields });
+export const CaptureWaiting = z.strictObject({
+  state: z.literal("waiting"), ...WaitingFields,
+  /** E2: court codes only, on the waiting shape only; omitted, never null, when there is no refusal. */
+  autoRefusal: CaptureAutoRefusal.optional(),
+});
 export type CaptureWaiting = z.infer<typeof CaptureWaiting>;
 
 /** W26 (2026-10-05, superseding W15 and W21's RTMPS half): both credentials are on Cloudflare's own host, exactly as
@@ -186,7 +195,11 @@ const AnswerCommon = z.strictObject({
 const AnswerDevice = z.strictObject({ model: z.string().min(1).max(80) });
 
 export const CaptureBeatAnswer = z.discriminatedUnion("state", [
-  AnswerCommon.extend({ state: z.literal("waiting") }),
+  AnswerCommon.extend({
+    state: z.literal("waiting"),
+    /** E2: court codes only, waiting only; omitted, never null, when there is no refusal. */
+    autoRefusal: CaptureAutoRefusal.optional(),
+  }),
   AnswerCommon.extend({ state: z.literal("go-live"), sid: z.uuid(), startedBy: CaptureStartedBy }),
   AnswerCommon.extend({ state: z.literal("live"), sid: z.uuid() }),
   AnswerCommon.extend({ state: z.literal("over"), sid: z.uuid(), endReason: CaptureEndReason }),

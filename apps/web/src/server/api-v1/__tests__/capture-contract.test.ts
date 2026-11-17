@@ -50,8 +50,8 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
-  "capture-descriptor.v1.json": "e740351bbfa1ff836de0e7e53dc8174efb3735bb800af9eaced945598a83ce5d",
-  "capture-beat.v1.json": "be09fa93924109529930d9ea551f16d0dfe79a3359ae8e791d6c19d0992db2bf",
+  "capture-descriptor.v1.json": "909ba262565857566bf49da0c3d547d876e4f5f8bbbc37fe9e921e448032108d",
+  "capture-beat.v1.json": "017ae3e398a07b4c24900ec06d5908acc72c16f0b8f239a9611159a7ac2447d0",
   "capture-start.v1.json": "7fdccba89789c416b007440b32ba5bab5111d53598423eafd89672b156553a2c",
   "capture-scoring-link.v1.json": "4ba43348d7b12fa776b2ff24f4dfd254342d38ddc62207f30156677291fbecae",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
@@ -77,14 +77,15 @@ const REQ: Cell = "required", OPT: Cell = "optional", NO: Cell = "forbidden";
 const COMMON = ["label", "scheduledStart", "autoAllowed", "destinationName", "overlayUrl", "pollSeconds"] as const;
 const COMMON_NULLABLE = new Set<string>(["scheduledStart", "destinationName", "overlayUrl"]);
 // Court stream (spec 2026-11-14 §5.3): `next` is optional on EVERY answer branch, so it is a column of no state.
-const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", ...COMMON] as const;
+// E2 (2026-11-17): `autoRefusal` is optional on the waiting branch only.
+const ANSWER_FIELDS = ["sid", "startedBy", "endReason", "device", "next", "autoRefusal", ...COMMON] as const;
 type AnswerField = (typeof ANSWER_FIELDS)[number];
-const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell): Record<AnswerField, Cell> => ({
-  sid, startedBy, endReason, device, next: OPT, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
+const answerRow = (sid: Cell, startedBy: Cell, endReason: Cell, device: Cell, common: Cell, autoRefusal: Cell = NO): Record<AnswerField, Cell> => ({
+  sid, startedBy, endReason, device, next: OPT, autoRefusal, ...(Object.fromEntries(COMMON.map((f) => [f, common])) as Record<(typeof COMMON)[number], Cell>),
 });
 /** §17.5's table, row for row (absent = forbidden). */
 const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
-  waiting: answerRow(NO, NO, NO, NO, REQ),
+  waiting: answerRow(NO, NO, NO, NO, REQ, OPT),
   "go-live": answerRow(REQ, REQ, NO, NO, REQ),
   live: answerRow(REQ, NO, NO, NO, REQ),
   over: answerRow(REQ, NO, REQ, NO, REQ),
@@ -97,15 +98,16 @@ const ANSWER_MATRIX: Record<string, Record<AnswerField, Cell>> = {
  *  failed." */
 const SESSION_ONLY = ["sid", "preferred", "playbackUrl", "holdWindowSeconds", "maxDurationMinutes", "warmingDeadline", "scoreUpdates"] as const;
 // Court stream (spec 2026-11-14 §6.1): `court` is optional on EVERY descriptor shape, like `stage`.
-const DESCRIPTOR_FIELDS = ["cred", "endReason", "stage", "court", ...SESSION_ONLY] as const;
+// E2: `autoRefusal` is optional on the waiting shape only.
+const DESCRIPTOR_FIELDS = ["cred", "endReason", "stage", "court", "autoRefusal", ...SESSION_ONLY] as const;
 type DescriptorField = (typeof DESCRIPTOR_FIELDS)[number];
 /** W28 (2026-10-06): "Optional field `stage` on EVERY descriptor shape, the waiting one included" — so it is optional
  *  in every row, never a column of its own. */
-const descriptorRow = (cred: Cell, endReason: Cell, session: Cell): Record<DescriptorField, Cell> => ({
-  cred, endReason, stage: OPT, court: OPT, ...(Object.fromEntries(SESSION_ONLY.map((f) => [f, session])) as Record<(typeof SESSION_ONLY)[number], Cell>),
+const descriptorRow = (cred: Cell, endReason: Cell, session: Cell, autoRefusal: Cell = NO): Record<DescriptorField, Cell> => ({
+  cred, endReason, stage: OPT, court: OPT, autoRefusal, ...(Object.fromEntries(SESSION_ONLY.map((f) => [f, session])) as Record<(typeof SESSION_ONLY)[number], Cell>),
 });
 const DESCRIPTOR_MATRIX: Record<string, Record<DescriptorField, Cell>> = {
-  waiting: descriptorRow(NO, NO, NO),
+  waiting: descriptorRow(NO, NO, NO, OPT),
   warming: descriptorRow(OPT, NO, REQ),
   live: descriptorRow(OPT, NO, REQ),
   ending: descriptorRow(OPT, REQ, REQ),
@@ -296,8 +298,8 @@ type Route = [
 ];
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
-  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 55 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 44 },
+  "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 58 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 47 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
@@ -407,7 +409,7 @@ const RECORD_NEAR_MISS: Record<string, "S2" | "S3" | "S4" | "S5"> = {
 /** Every name capture-schemas.ts exports at runtime: the 23 before the record, then the record's own (its seven
  *  twins in RECORD_TWINS, its refusal words, its ref pattern and its two limits). */
 const CAPTURE_SCHEMAS_EXPORTS = [
-  "CAPTURE_CODE_RE", "CAPTURE_COURT_NAME_MAX", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
+  "CAPTURE_AUTO_REFUSALS", "CaptureAutoRefusal", "CAPTURE_CODE_RE", "CAPTURE_COURT_NAME_MAX", "CAPTURE_POOL_RE", "CAPTURE_SCORING_LINK_URL_RE", "CAPTURE_STAGE_LABEL_MAX", "CaptureBeat",
   "CaptureBeatAnswer", "CaptureCause", "CaptureCourt", "CaptureCred", "CaptureDescriptor", "CaptureEndReason", "CaptureNotReady",
   "CapturePhoneState", "CaptureNext", "CaptureRefusal", "CaptureRefusalCode", "CaptureScoringLinkOk", "CaptureSession", "CaptureStage",
   "CaptureStageRole", "CaptureStartBody", "CaptureStartFailed", "CaptureStartOk", "CaptureStartedBy", "CaptureWaiting",
@@ -615,7 +617,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 55 + 44 + 18 + 20 + 63 + 13 + 10 + 17 + 26);
+    expect(total).toBe(12 + 58 + 47 + 18 + 20 + 63 + 13 + 10 + 17 + 26);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -721,25 +723,25 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(all.some((b) => b.claim === "resume"), "a valid resume claim").toBe(true);
   });
 
-  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 11 fields (court stream's `next` included) against the twin AND the file", () => {
+  it("R5/A21 beat answer: each state admits only its own fields — 6 states × 12 fields (court stream's `next` included) against the twin AND the file", () => {
     const states = Object.keys(ANSWER_MATRIX);
     const valid = Object.fromEntries(states.map((s) => [s, fixture("capture-beat.v1", `answer-valid-${s}`)]));
-    const donors = [...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next")];
+    const donors = [...Object.values(valid), fixture("capture-beat.v1", "answer-valid-replaced-device"), fixture("capture-beat.v1", "answer-valid-waiting-next"), fixture("capture-beat.v1", "answer-valid-waiting-autoRefusal")];
     const twinCells = sweepTwin(ANSWER_MATRIX, ANSWER_FIELDS, valid, donors, S.CaptureBeatAnswer);
-    expect(twinCells).toBe(66);
+    expect(twinCells).toBe(72);
     const fileCells = sweepFile(ANSWER_MATRIX, ANSWER_FIELDS, branchesByState(defOf(contract(BEAT), "answer")));
-    expect(fileCells).toBe(66);
+    expect(fileCells).toBe(72);
   });
 
-  it("R5/A21 descriptor: each state admits only its own fields — 6 states × 11 fields (W28's stage and the court stream's court included) against the twin AND the file", () => {
+  it("R5/A21 descriptor: each state admits only its own fields — 6 states × 12 fields (W28's stage and the court stream's court included) against the twin AND the file", () => {
     const states = Object.keys(DESCRIPTOR_MATRIX);
     const valid = Object.fromEntries(states.map((s) => [s, fixture("capture-descriptor.v1", `valid-${s}`)]));
     // W28: the stage donors — the plain valid-<state> fixtures carry no stage (it is optional), these do.
-    const donors = [...Object.values(valid), fixture("capture-descriptor.v1", "valid-waiting-stage"), fixture("capture-descriptor.v1", "valid-live-stage"), fixture("capture-descriptor.v1", "valid-waiting-court")];
+    const donors = [...Object.values(valid), fixture("capture-descriptor.v1", "valid-waiting-stage"), fixture("capture-descriptor.v1", "valid-live-stage"), fixture("capture-descriptor.v1", "valid-waiting-court"), fixture("capture-descriptor.v1", "valid-waiting-autoRefusal")];
     const twinCells = sweepTwin(DESCRIPTOR_MATRIX, DESCRIPTOR_FIELDS, valid, donors, S.CaptureDescriptor);
-    expect(twinCells).toBe(66);
+    expect(twinCells).toBe(72);
     const fileCells = sweepFile(DESCRIPTOR_MATRIX, DESCRIPTOR_FIELDS, branchesByState(rootOf(contract(DESCRIPTOR))));
-    expect(fileCells).toBe(66);
+    expect(fileCells).toBe(72);
   });
 
   it("optional is not nullable: each optional-and-not-`| null` field set to null is refused, and the same fixture without it parses", () => {
@@ -747,11 +749,11 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     // §4 / §6.3.1: `scheduledStart?` on the waiting and session shapes.
     for (const state of Object.keys(DESCRIPTOR_MATRIX)) owed.push(["capture-descriptor.v1", `invalid-null-${state}-scheduledStart`, "scheduledStart", S.CaptureDescriptor]);
     for (const [state, row] of Object.entries(DESCRIPTOR_MATRIX)) {
-      for (const [field, cell] of Object.entries(row)) if (cell === OPT && field !== "court") owed.push(["capture-descriptor.v1", `invalid-null-${state}-${field}`, field, S.CaptureDescriptor]);
+      for (const [field, cell] of Object.entries(row)) if (cell === OPT && field !== "court" && field !== "autoRefusal") owed.push(["capture-descriptor.v1", `invalid-null-${state}-${field}`, field, S.CaptureDescriptor]);
     }
     for (const [state, row] of Object.entries(ANSWER_MATRIX)) {
       for (const [field, cell] of Object.entries(row)) {
-        if (cell === OPT && field !== "next" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
+        if (cell === OPT && field !== "next" && field !== "autoRefusal" && !COMMON_NULLABLE.has(field)) owed.push(["capture-beat.v1", `answer-invalid-null-${state}-${field}`, field, S.CaptureBeatAnswer]);
       }
     }
     let checked = 0;
@@ -1212,6 +1214,28 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(parses(S.CaptureRefusal, { ...fixture(dir, "valid-match_finished"), sid: fixture("capture-start.v1", "valid-already_live").sid }), "match_finished carrying sid").toBe(false);
   });
 
+  it("E2 (2026-11-17): `autoRefusal` is one of six words, optional, never null, on the waiting shape only, in the twin AND the file", () => {
+    const fileAdmits = fileValidator();
+    const D = "capture-descriptor.v1", B = "capture-beat.v1";
+    for (const [dir, file, ptr, twin, valid, plain] of [
+      [D, DESCRIPTOR, "", S.CaptureDescriptor, "valid-waiting-autoRefusal", "valid-waiting"],
+      [B, BEAT, "#/$defs/answer", S.CaptureBeatAnswer, "answer-valid-waiting-autoRefusal", "answer-valid-waiting"],
+    ] as const) {
+      expect(without(fixture(dir, valid), "autoRefusal"), `${dir}: premise — differs from ${plain} in autoRefusal alone`).toEqual(fixture(dir, plain));
+      for (const word of ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"]) {
+        const v = { ...fixture(dir, plain), autoRefusal: word };
+        expect(parses(twin, v), `${dir} ${word}: twin`).toBe(true);
+        expect(fileAdmits(file, ptr, v), `${dir} ${word}: file`).toBe(true);
+      }
+      for (const bad of [null, "nope", "", "no_match"]) {
+        const v = { ...fixture(dir, plain), autoRefusal: bad };
+        expect(parses(twin, v), `${dir} ${String(bad)}: twin`).toBe(false);
+        expect(fileAdmits(file, ptr, v), `${dir} ${String(bad)}: file`).toBe(false);
+      }
+    }
+    expect(CS.CAPTURE_AUTO_REFUSALS).toHaveLength(6);
+  });
+
   it("court stream (spec 2026-11-14 §5.3, §6.1): `court` and `next` are optional, never null, bounded and strict, in the twin AND the file; a fixture code's descriptor and answer parse to themselves", () => {
     const fileAdmits = fileValidator();
     const D = "capture-descriptor.v1", B = "capture-beat.v1";
@@ -1660,7 +1684,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     expect(names.length, "premise: capture-schemas.ts exports").toBeGreaterThan(0);
     // The full list, not a name pattern (review fix 8): a twin named, say, CaptureLogLine trips it too.
     expect([...names].sort()).toEqual([...CAPTURE_SCHEMAS_EXPORTS].sort());
-    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(23 + 3 + 11 + 6 + 1 + 3 + 9);
+    expect(CAPTURE_SCHEMAS_EXPORTS).toHaveLength(25 + 3 + 11 + 6 + 1 + 3 + 9);
     // Every record-named export that is a SHAPE (a zod object or string) is a twin the parity test compares, by
     // identity — an enum is checked by its options instead, a constant by the contract's prose.
     const twins = new Map(RECORD_TWINS.map(([pointer, twin, name]) => [name, { pointer, twin }]));

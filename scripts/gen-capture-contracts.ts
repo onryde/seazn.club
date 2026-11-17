@@ -92,6 +92,9 @@ const NEXT_PROSE: Record<string, string> = {
   "next.label": "The next match as the phone shows it, \"{side A} v {side B}\" or \"Match {n}\", 1 to 200 characters (§5.3).",
   "next.scheduledStart": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
 };
+const AUTO_REFUSAL_PROSE: Record<string, string> = {
+  autoRefusal: "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s) or competition_frozen. Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
+};
 const STAGE_PROSE: Record<string, string> = {
   stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
   "stage.code": "Exactly the scheduler board's chip for this match, 1 to 8 characters: a bracket round's short code (QF, SF, F, 3rd, R16, WB2, LB3, GF, Q1, E, E2, …) or R{round} where the board codes no round (a league, a group, a Swiss round). In the language the label uses (the org's locale, W25): a Spanish org reads CF for a quarter-final.",
@@ -154,6 +157,7 @@ const contracts: Contract[] = [
         endReason: END_REASON,
         ...STAGE_PROSE,
         ...COURT_PROSE,
+        ...AUTO_REFUSAL_PROSE,
       },
     },
     defs: {
@@ -203,6 +207,7 @@ const contracts: Contract[] = [
           startedBy: "go-live only: who asked for the broadcast (§6.3.3, §17.5).",
           endReason: END_REASON,
           ...NEXT_PROSE,
+          ...AUTO_REFUSAL_PROSE,
           device: "replaced and taken only: the current phone's model, for the organiser panel's takeover notice. The phone ignores it, and PR-1 never sends it (G0-e, §7.5, §17.5).",
           ...COMMON_PROSE("fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4)."),
         },

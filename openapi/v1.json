@@ -59871,6 +59871,17 @@
                             "name"
                           ],
                           "additionalProperties": false
+                        },
+                        "autoRefusal": {
+                          "type": "string",
+                          "enum": [
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "destination_in_use",
+                            "unavailable",
+                            "competition_frozen"
+                          ]
                         }
                       },
                       "required": [
@@ -61954,6 +61965,17 @@
                         "state": {
                           "type": "string",
                           "const": "waiting"
+                        },
+                        "autoRefusal": {
+                          "type": "string",
+                          "enum": [
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "destination_in_use",
+                            "unavailable",
+                            "competition_frozen"
+                          ]
                         }
                       },
                       "required": [

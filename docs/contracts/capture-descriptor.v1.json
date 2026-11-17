@@ -150,6 +150,18 @@
             "name"
           ],
           "additionalProperties": false
+        },
+        "autoRefusal": {
+          "description": "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s) or competition_frozen. Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
+          "type": "string",
+          "enum": [
+            "no_destination",
+            "no_credit",
+            "not_entitled",
+            "destination_in_use",
+            "unavailable",
+            "competition_frozen"
+          ]
         }
       },
       "required": [
