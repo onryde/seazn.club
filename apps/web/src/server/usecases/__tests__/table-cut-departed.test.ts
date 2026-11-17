@@ -108,7 +108,10 @@ interface Scene {
 
 const nameFor = (seed: number) => `Ent${String(seed).padStart(2, "0")}`;
 
-async function scene(row: RowSpec, path: Path, departures: Departure[], leaveOpen?: readonly [number, number]): Promise<Scene> {
+/** Which one match of the source to leave unplayed: a pair of seeds, or chosen from the generated fixtures (seed pairs + pool). */
+type LeaveOpen = readonly [number, number] | ((fixtures: { a: number; b: number; pool: string | null }[]) => readonly [number, number]);
+
+async function scene(row: RowSpec, path: Path, departures: Departure[], leaveOpen?: LeaveOpen): Promise<Scene> {
   const { auth } = await seedOrg("pro");
   const suffix = randomUUID().slice(0, 8);
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `Cut ${suffix}`, visibility: "private", branding: {} });
@@ -147,8 +150,12 @@ async function scene(row: RowSpec, path: Path, departures: Departure[], leaveOpe
   const fx = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string; pool_id: string | null }[]>`
     select id, home_entrant_id, away_entrant_id, pool_id from fixtures where stage_id = ${src.id}`;
   expect(fx.length, "the source's fixtures were generated").toBeGreaterThan(0);
+  const openPair =
+    typeof leaveOpen === "function"
+      ? leaveOpen(fx.map((f) => ({ a: seedOf.get(f.home_entrant_id)!, b: seedOf.get(f.away_entrant_id)!, pool: f.pool_id })))
+      : leaveOpen;
   const open = (f: { home_entrant_id: string; away_entrant_id: string }) =>
-    leaveOpen !== undefined && [seedOf.get(f.home_entrant_id)!, seedOf.get(f.away_entrant_id)!].sort().join() === [...leaveOpen].sort().join();
+    openPair !== undefined && [seedOf.get(f.home_entrant_id)!, seedOf.get(f.away_entrant_id)!].sort().join() === [...openPair].sort().join();
   for (const f of fx) {
     if (open(f)) continue;
     const homeWins = seedOf.get(f.home_entrant_id)! < seedOf.get(f.away_entrant_id)!;
@@ -307,6 +314,8 @@ const textOf = (el: ReactElement) => renderToStaticMarkup(el);
 // ---------------------------------------------------------------------------------------------------------------------
 
 const checked = { cut1: new Set<string>(), cut2: new Set<string>(), cut3: new Set<string>(), open: new Set<string>() };
+/** Pools of FOUR (8 entrants over 2 pools, q = 5): a departed pool winner leaves her pool three eligible entrants. */
+const WIDE: RowSpec = { key: "groups_ko", entrants: 8, qualified: 5, poolCount: 2 };
 const DEPART_SEED = 2; // a qualifier on every row (the table's second finisher / a pool winner)
 
 describe.skipIf(!HAS_DB)("X-CUT table-source cut on league/group rows (W5 Task 9)", () => {
@@ -394,6 +403,11 @@ describe.skipIf(!HAS_DB)("X-CUT table-source cut on league/group rows (W5 Task 9
           // The source table: she keeps her row, marked; nobody else is.
           const tableHtml = page.tables.map(textOf).join("");
           expect(tableHtml, "premise: the departed's row is still on the table").toContain(s.nameOf(DEPART_SEED));
+          // The marker the table renders for a departed row (`DEPARTED_STATUS_CHIPS`, one testid per status): exactly one, hers,
+          // and not the other status's.
+          const marks = (id: string) => tableHtml.split(`data-testid="${id}"`).length - 1;
+          expect(marks("standings-withdrawn"), "her row wears the withdrawn marker, once").toBe(1);
+          expect(marks("standings-disqualified"), "and not the disqualified one").toBe(0);
 
           checked.cut3.add(`${row.key}/${path}`);
         });
@@ -442,7 +456,7 @@ describe.skipIf(!HAS_DB)("X-CUT table-source cut on league/group rows (W5 Task 9
 
   // X-CUT-2, the other shape: both pools keep an eligible Nth finisher, so the comparison is a real one over records.
   describe("X-CUT-2 best-Nth recomputed over the eligible thirds (pools of four)", () => {
-    const wide: RowSpec = { key: "groups_ko", entrants: 8, qualified: 5, poolCount: 2 };
+    const wide = WIDE;
     for (const path of PATHS) {
       it(`X-CUT-2 groups_ko ${path}: the pool winner leaves — the best-third seat goes to the better of the two ELIGIBLE thirds`, async () => {
         const s = await scene(wide, path, [{ seed: DEPART_SEED }]);
@@ -512,12 +526,98 @@ describe.skipIf(!HAS_DB)("X-CUT table-source cut on league/group rows (W5 Task 9
     }
   });
 
+  // m-3: TWO departures in one pool — the backfill reaches past both, and the second departed's sunk record cannot take the
+  // best-Nth seat either.
+  describe("X-CUT-1 two departed in one pool (groups_ko, pools of four)", () => {
+    for (const path of PATHS) {
+      it(`X-CUT-1 groups_ko ${path}: the pool's top two both leave — the backfill reaches past both, and neither's record takes the best-Nth seat`, async () => {
+        const s = await scene(WIDE, path, [{ seed: DEPART_SEED }, { seed: 3 }]);
+        const gone = new Set([DEPART_SEED, 3]);
+        const pool = s.poolOf.get(DEPART_SEED)!;
+        const members = (k: string | null) => [...s.poolOf.entries()].filter(([, p]) => p === k).map(([x]) => x).sort((a, b) => a - b);
+        expect(s.poolOf.get(3), "premise: both left from one pool").toBe(pool);
+        expect(members(pool).slice(0, 2), "premise: they were that pool's top two").toEqual([DEPART_SEED, 3]);
+        const { cut, bestNth } = groupCut(s.poolOf, WIDE.qualified, gone);
+        const rivalPool = [...new Set(s.poolOf.values())].find((k) => k !== pool)!;
+        // Premise: the departed second's record (she beat every member below her) beat the rival pool's third — only the sunk
+        // record keeps her from the best-Nth seat.
+        const pts = (k: string | null, x: number) => 3 * members(k).filter((m) => m > x).length;
+        expect(pts(pool, 3), "premise: her record out-scored the rival's third").toBeGreaterThan(pts(rivalPool, members(rivalPool)[2]!));
+        expect(bestNth, "the only eligible third is the rival pool's").toEqual([members(rivalPool)[2]]);
+        expect([...s.qualifiedSeeds].sort((a, b) => a - b), `the ${path} cut named the eligible entrants`).toEqual([...cut].sort((a, b) => a - b));
+        for (const g of gone) expect(s.qualifiedSeeds, `seed ${g} is nowhere in the cut`).not.toContain(g);
+        for (const backfill of members(pool).slice(2)) expect(seatedSeeds(s).has(backfill), `seed ${backfill} is seated past both`).toBe(true);
+        expect(koSeen(s)).toEqual(expectedKo(s.koKind, s.qualifiedSeeds));
+        checked.cut2.add(`groups_ko_two/${path}`);
+      });
+    }
+  });
+
+  // m-2: the status pin on a GROUP table still open. The pool is of four, so with her gone three are still in the field and
+  // the cut (2) is still a contest — a view exists; her row has no status and is no rival for the others'.
+  // The row is groups_ko with a remainder-free cut (q = 4 over 2 pools: top two of each, no best-Nth): `public_stages_v`'s
+  // qualification forecast (V475) is NULL for any source holding a best-Nth take, so at the X-CUT-2 shape (q = 5) a group table
+  // has no qualification view to pin — a finding, not a skip.
+  describe("X-CUT-3 the qualification set on an open group table", () => {
+    it("X-CUT-3 groups_ko: the departed pool winner has no status and is no rival — the race runs over who is still in the field", async () => {
+      const row: RowSpec = { key: "groups_ko", entrants: 8, qualified: 4, poolCount: 2 };
+      const poolMembers = (fx: { a: number; b: number; pool: string | null }[]) => {
+        const pool = fx.find((f) => f.a === DEPART_SEED || f.b === DEPART_SEED)!.pool;
+        return [...new Set(fx.filter((f) => f.pool === pool).flatMap((f) => [f.a, f.b]))].sort((x, y) => x - y);
+      };
+      // Leave the match between the two lowest of HER pool unplayed.
+      const s = await scene(row, "setup", [{ seed: DEPART_SEED }], (fx) => {
+        const m = poolMembers(fx);
+        return [m[m.length - 2]!, m[m.length - 1]!];
+      });
+      const pool = s.poolOf.get(DEPART_SEED)!;
+      const members = [...s.poolOf.entries()].filter(([, p]) => p === pool).map(([x]) => x).sort((a, b) => a - b);
+      expect(members, "premise: her pool is four and she leads it").toHaveLength(4);
+      expect(members[0]).toBe(DEPART_SEED);
+      const below = [members[2]!, members[3]!] as const;
+      const page = await renderPage(s);
+      const idsOf = (seeds: number[]) => seeds.map((x) => s.idOf.get(x)!);
+      const views = page.tables
+        .map((t) => (t.props as { qualification?: { rows: Record<string, { status: string }> } | null }).qualification)
+        .filter((v): v is { rows: Record<string, { status: string }> } => v !== null && v !== undefined);
+      const mine = views.filter((v) => idsOf(members).some((id) => id in v.rows));
+      expect(mine.length, "her open pool table carries a qualification view").toBe(1);
+      const rows = mine[0]!.rows;
+      expect(rows[s.idOf.get(DEPART_SEED)!], "she has no qualification status").toBeUndefined();
+
+      // The engine's own answer over the entrants still in her pool: points the rulebook gives (3 a win, the higher seed always
+      // wins, but the match between the two below is still to play), and the one line each of those two still owes.
+      const perMatch = divisionPointsBounds(builtinModules.find((m) => m.key === "generic"), GENERIC_CONFIG)!;
+      const cut = Math.floor(row.qualified / new Set(s.poolOf.values()).size);
+      const pts = (x: number) => 3 * members.filter((m) => m > x).length - (x === below[0] ? 3 : 0);
+      const field = members.filter((x) => x !== DEPART_SEED);
+      const run = (rowsOf: number[], active: (x: number) => boolean) =>
+        qualificationStatus({
+          rows: rowsOf.map((x) => ({ entrantId: String(x), points: pts(x), active: active(x) })),
+          remaining: new Map(rowsOf.map((x) => [String(x), (below as readonly number[]).includes(x) ? 1 : 0])),
+          perMatch,
+          cut,
+          anyPlayed: true,
+          complete: false,
+        })!;
+      const want = run(field, () => true);
+      for (const x of field) expect(rows[s.idOf.get(x)!]?.status, `seed ${x}`).toBe(want.get(String(x))?.status.kind);
+      // Differential: with her row counted as a rival above the line (the pre-RB4-V6 reading) the backfill answers differently.
+      const old = run(members, (x) => x !== DEPART_SEED);
+      const backfill = members[2]!;
+      expect(old.get(String(backfill))?.status.kind, "premise: counted as a rival she would change the backfill's status").not.toBe(want.get(String(backfill))?.status.kind);
+      checked.open.add("groups_ko");
+    });
+  });
+
   it("anti-vacuity: every row x path cell was checked for X-CUT-1 and X-CUT-3, and groups_ko x path for X-CUT-2", () => {
     const cells = ROWS.flatMap((r) => PATHS.map((p) => `${r.key}/${p}`)).sort();
     expect(cells).toHaveLength(8);
     expect([...checked.cut1].sort()).toEqual(cells);
     expect([...checked.cut3].sort()).toEqual(cells);
-    expect([...checked.cut2].sort()).toEqual(["groups_ko/on_complete", "groups_ko/setup", "groups_ko_wide/on_complete", "groups_ko_wide/setup"]);
-    expect([...checked.open].sort(), "the open-table status pin ran on every league row").toEqual(["group_playoffs", "group_stepladder", "league_ko"]);
+    expect([...checked.cut2].sort()).toEqual([
+      "groups_ko/on_complete", "groups_ko/setup", "groups_ko_two/on_complete", "groups_ko_two/setup", "groups_ko_wide/on_complete", "groups_ko_wide/setup",
+    ]);
+    expect([...checked.open].sort(), "the open-table status pin ran on every league row and on a group table").toEqual(["group_playoffs", "group_stepladder", "groups_ko", "league_ko"]);
   });
 });

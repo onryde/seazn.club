@@ -8,8 +8,11 @@
 //   rows     — every non-retired STAGE_TEMPLATES entry whose `build()` holds a `bestNth` take over the builder's knob sweep
 //              (derived, never typed), plus the gallery `group_group_ko` shape only if its second tier carries one;
 //   pools    — P in {2, 3, 4};
-//   classes  — seed-bearing (tennis), lots-only (football), neither (a stage-pinned metric-only order on generic);
-//   shapes   — all_level, pair_level (and lots_stored on the lots-only class).
+//   classes  — seed-bearing (tennis), lots-only (football), neither (generic under the legacy V475 B1-migrated pin
+//              ["points","diff","for","wins"], source "migrated": the write path refuses a non-Swiss order without `lots`);
+//   shapes   — all_level, pair_level on every class; lots_stored and draw_shrunk (a departure after a stored draw: the members
+//              key shrinks, the old draw no longer matches) on the lots-only class; null_seed (a candidate with no seed: "seed
+//              then id") on the neither class.
 // Each case is built through the REAL setup path: real stages/fixtures, a constructed standings snapshot per pool (the cases
 // need candidates LEVEL on every metric step, which no honest result set produces on three sports), the real
 // computeSeedProposal (sourcesToTables -> loadCrossGroupRules -> resolveProgression -> persistCrossGroupDraws).
@@ -82,21 +85,27 @@ const BESTNTH_ROWS = bestNthRows();
 type ClassName = "seed-bearing" | "lots-only" | "neither";
 const classOf = (order: readonly string[]): ClassName => (order.includes("seed") ? "seed-bearing" : order.includes("lots") ? "lots-only" : "neither");
 
-type Shape = "all_level" | "pair_level" | "lots_stored";
+type Shape = "all_level" | "pair_level" | "lots_stored" | "null_seed" | "draw_shrunk";
+/** A shape that needs at least this many pools to say anything (a draw over one remaining candidate is no draw). */
+const SHAPE_MIN_P: Partial<Record<Shape, number>> = { draw_shrunk: 3 };
 interface ClassSpec {
   name: ClassName;
   sport: string;
-  /** A stage-pinned cross-group order (`stages.config.crossGroupTiebreakers`), for the class no shipped default ends in. */
+  /** A pinned cross-group order (`stages.table_rules_pinned.crossGroup`), for the class no shipped default ends in. */
   pin?: readonly string[];
   shapes: readonly Shape[];
 }
+/** `db/migration/deltas/V475__w2d_table_rules.sql:480`, verbatim. */
+const V475_MIGRATED_CROSS_GROUP = ["points", "diff", "for", "wins"] as const;
 const CLASSES: readonly ClassSpec[] = [
   // tennis ends `..., "seed", "lots"` (tennis.ts:76): seed order, lots never reached.
   { name: "seed-bearing", sport: "tennis", shapes: ["all_level", "pair_level"] },
   // football `..., "for", "lots"`: the stored draw, else a new one — NEVER seed order.
-  { name: "lots-only", sport: "football", shapes: ["all_level", "pair_level", "lots_stored"] },
-  // generic's own default ends in lots; the stage pins a metric-only order, which is how a "neither" cascade is reachable.
-  { name: "neither", sport: "generic", pin: ["points", "diff", "for"], shapes: ["all_level", "pair_level"] },
+  { name: "lots-only", sport: "football", shapes: ["all_level", "pair_level", "lots_stored", "draw_shrunk"] },
+  // generic's own default ends in lots, and the write path REFUSES a non-Swiss order that does not (`validateCascade`, 422
+  // TIEBREAK_KEY_INVALID), so a "neither" cascade is reachable only as a legacy B1-migrated pin: V475 pins every started stage's
+  // crossGroup to this literal with source "migrated".
+  { name: "neither", sport: "generic", pin: V475_MIGRATED_CROSS_GROUP, shapes: ["all_level", "pair_level", "null_seed"] },
 ];
 
 const moduleOf = (sport: string) => builtinModules.find((m) => m.key === sport)!;
@@ -125,7 +134,7 @@ function seedOrderFor(P: number): number[] {
 
 interface CaseResult {
   /** The pools' rank-nth finishers, in pool order. */
-  cands: { id: string; pool: number; seed: number }[];
+  cands: { id: string; pool: number; seed: number | null }[];
   /** The best-Nth seats the real proposal named, in seat order. */
   seats: string[];
   /** The expected seats, derived. */
@@ -202,6 +211,11 @@ async function runCase(c: CaseInput): Promise<CaseResult> {
   // Seeds: the candidates get 1..P in the case's seed order; everyone else follows.
   const seedOrder = (() => {
     const base = seedOrderFor(P);
+    // null_seed: ONLY the highest-id candidate has a seed; every other candidate's seed is null (the engine's "seed then id").
+    if (shape === "null_seed") return [P - 1];
+    // draw_shrunk: seed order == id order, so with two candidates left (P = 3) the one fresh draw that differs from both is
+    // the reverse, and a stale reuse or a fall to seed order each read as the id order.
+    if (shape === "draw_shrunk") return Array.from({ length: P }, (_, i) => i);
     // The lots-only classes with a two-member group (pair_level on P=2, or any all-P draw on P=2) need seed == id order, or a
     // 2-way draw has no answer that differs from both.
     if (cls.name === "lots-only" && (P === 2 || shape === "pair_level")) {
@@ -215,8 +229,15 @@ async function runCase(c: CaseInput): Promise<CaseResult> {
   let next = P + 1;
   for (const p of pools) for (const m of p.members) if (!seedOf.has(m)) seedOf.set(m, next++);
   for (const [id, seed] of seedOf) await sql`update entrants set seed = ${seed} where id = ${id}`;
-  const cands = candIds.map((id, pool) => ({ id, pool, seed: seedOf.get(id)! }));
-  const seedOrderIds = [...cands].sort((a, b) => a.seed - b.seed).map((x) => x.id);
+  const nulled = shape === "null_seed" ? candIds.slice(0, P - 1) : [];
+  for (const id of nulled) {
+    seedOf.delete(id);
+    await sql`update entrants set seed = null where id = ${id}`;
+  }
+  const cands = candIds.map((id, pool) => ({ id, pool, seed: seedOf.get(id) ?? null }));
+  const bySeedThenId = (a: { id: string; seed: number | null }, b: { id: string; seed: number | null }) =>
+    (a.seed ?? Number.POSITIVE_INFINITY) - (b.seed ?? Number.POSITIVE_INFINITY) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const seedOrderIds = [...cands].sort(bySeedThenId).map((x) => x.id);
 
   // Strength of each candidate on the primary metric (higher is better): all level, or the first two level at the TOP with
   // the rest apart below them, in descending order.
@@ -227,14 +248,37 @@ async function runCase(c: CaseInput): Promise<CaseResult> {
   let rngSeed = 7;
   let storedDraw: string[] | null = null;
   const candSet = cands.map((x) => x.id);
+  // draw_shrunk: a draw was stored over ALL candidates, then the last one departs — the tied set's members key shrinks, so the
+  // stored draw (keyed by the full set) no longer matches and a NEW draw over the remaining ones is made.
+  const goneId = shape === "draw_shrunk" ? candSet[P - 1]! : null;
+  const remaining = candSet.filter((id) => id !== goneId);
   if (cls.name === "lots-only") {
-    const group = shape === "pair_level" ? pairIds : candSet;
+    const group = shape === "pair_level" ? pairIds : shape === "draw_shrunk" ? remaining : candSet;
     const sortedGroup = [...group].sort();
     const seedOrderOfGroup = seedOrderIds.filter((id) => group.includes(id));
     if (shape === "lots_stored") {
       storedDraw = permutations(candSet).find((perm) => !sameOrder(perm, seedOrderIds) && !sameOrder(perm, sortedGroup)) ?? null;
       expect(storedDraw, "a stored order that is neither seed order nor id order exists").not.toBeNull();
       rngSeed = pickSeed((s) => !sameOrder(drawOf(s, group), storedDraw!), "a fresh draw that differs from the stored one");
+    } else if (shape === "draw_shrunk") {
+      // The stale draw (stored over everyone), and an rngSeed whose fresh draw over who is left differs from the stale draw
+      // restricted to them, from seed order and from id order — the three things a wrong answer would seat.
+      const wanted = (perm: string[], seed: number) => {
+        const stale = perm.filter((id) => id !== goneId);
+        const fresh = drawOf(seed, group);
+        return !sameOrder(fresh, stale) && !sameOrder(fresh, seedOrderIds.filter((id) => id !== goneId)) && !sameOrder(fresh, sortedGroup);
+      };
+      let found: { perm: string[]; seed: number } | null = null;
+      for (const perm of permutations(candSet)) {
+        const seed = Array.from({ length: 300 }, (_, i) => i + 1).find((x) => wanted(perm, x));
+        if (seed !== undefined) {
+          found = { perm, seed };
+          break;
+        }
+      }
+      expect(found, "a stale draw and an rngSeed exist whose fresh draw differs from the stale one, seed order and id order").not.toBeNull();
+      storedDraw = found!.perm;
+      rngSeed = found!.seed;
     } else {
       rngSeed = pickSeed(
         (s) => !sameOrder(drawOf(s, group), seedOrderOfGroup) && !sameOrder(drawOf(s, group), sortedGroup) && !sameOrder(drawOf(s + 1, group), drawOf(s, group)),
@@ -271,13 +315,15 @@ async function runCase(c: CaseInput): Promise<CaseResult> {
   }
   await sql`update stages set status = 'complete' where id = ${src.id}`;
   await sql`update stages set config = config || ${sql.json({ rngSeed } as never)} where id = ${src.id}`;
-  // The stage's table rules were pinned when its fixtures were generated (V475; "active => pinned"), and a pin is read verbatim,
-  // so a stage-pinned order is written into the pin (the stage's own order, `sources.crossGroup = "stage"`). The write API
-  // would append `lots` to a metric-only order; the pin is the one place a "neither" cascade is stored as given.
+  // The stage's table rules were pinned when its fixtures were generated (V475; "active => pinned"), and a pin is read verbatim
+  // (engine `resolveTableRules`: `if (input.pinned != null) return input.pinned`), so the pinned order is written into the pin
+  // with the legacy source "migrated" — the one place a cross-group order that does not end in `lots` can exist (the write
+  // path refuses it). The source label is never read back, so "migrated" ranks exactly as "stage" would; the cell asserts the
+  // loader hands the engine this very order.
   if (cls.pin) {
     await sql`
       update stages
-         set table_rules_pinned = jsonb_set(jsonb_set(table_rules_pinned, '{crossGroup}', ${sql.json(cls.pin as never)}), '{sources,crossGroup}', '"stage"')
+         set table_rules_pinned = jsonb_set(jsonb_set(table_rules_pinned, '{crossGroup}', ${sql.json([...cls.pin] as never)}), '{sources,crossGroup}', '"migrated"')
        where id = ${src.id}`;
   }
   if (storedDraw !== null) {
@@ -286,14 +332,17 @@ async function runCase(c: CaseInput): Promise<CaseResult> {
       values (${src.id}, null, ${membersKeyOf(candSet)}, ${[...candSet].sort()}::uuid[], ${storedDraw}::uuid[], ${lotSeed(rngSeed, [...candSet].sort())})`;
   }
 
+  if (goneId !== null) await sql`update entrants set status = 'withdrawn' where id = ${goneId}`;
+
   // The expected seats: candidates ranked by strength (higher first); a level group is broken by the class's own rule.
-  const levels = [...new Set(cands.map((x) => strength(x.pool)))].sort((a, b) => b - a);
+  const standing = cands.filter((x) => x.id !== goneId);
+  const levels = [...new Set(standing.map((x) => strength(x.pool)))].sort((a, b) => b - a);
   const expected: string[] = [];
   for (const lv of levels) {
-    const group = cands.filter((x) => strength(x.pool) === lv).map((x) => x.id);
+    const group = standing.filter((x) => strength(x.pool) === lv).map((x) => x.id);
     if (group.length === 1) expected.push(group[0]!);
-    else if (cls.name === "lots-only") expected.push(...(storedDraw !== null ? storedDraw : drawOf(rngSeed, group)));
-    else expected.push(...cands.filter((x) => group.includes(x.id)).sort((a, b) => a.seed - b.seed).map((x) => x.id)); // seed order
+    else if (cls.name === "lots-only") expected.push(...(shape === "lots_stored" ? storedDraw! : drawOf(rngSeed, group)));
+    else expected.push(...standing.filter((x) => group.includes(x.id)).sort(bySeedThenId).map((x) => x.id)); // seed order, then id
   }
 
   const proposal = await computeSeedProposal(auth, ko.id);
@@ -364,7 +413,7 @@ describe("X-PD-8 the row set and the classes are derived, never typed", () => {
     expect(swept).toBeGreaterThan(0);
     expect(byClass.get("seed-bearing"), "tennis is seed-bearing").toContain("tennis");
     expect(byClass.get("lots-only"), "football is lots-only").toContain("football");
-    // Recorded, not assumed: which sports serve which class by default; a class nobody ships (neither) is a stage pin.
+    // Recorded, not assumed: which sports serve which class by default; a class nobody ships (neither) exists only as a legacy V475 migrated pin.
     expect(Object.fromEntries([...byClass].map(([k, v]) => [k, [...v].sort()]))).toEqual({
       "seed-bearing": ["cricket", "icehockey", "tennis"],
       "lots-only": ["badminton", "boardgame", "carrom", "football", "generic", "hockey", "tabletennis", "volleyball"],
@@ -377,7 +426,8 @@ describe.skipIf(!HAS_DB)("X-PD-8 a best-Nth basis tie across pools falls to the 
     for (const P of POOL_COUNTS) {
       for (const cls of CLASSES) {
         for (const shape of cls.shapes) {
-          it(`X-PD-8 ${row} x ${P} pools, ${cls.name} cascade (${cls.sport}${cls.pin ? ", stage-pinned" : ""}), ${shape}`, async () => {
+          if (P < (SHAPE_MIN_P[shape] ?? 0)) continue;
+          it(`X-PD-8 ${row} x ${P} pools, ${cls.name} cascade (${cls.sport}${cls.pin ? ", legacy migrated pin" : ""}), ${shape}`, async () => {
             const r = await runCase({ row, P, cls, shape });
             // The class's own declared cascade is what the app handed the engine.
             expect(r.loadedOrder, "loadCrossGroupRules carries the stage's declared cross-group order").toEqual(r.declaredOrder);
@@ -385,11 +435,15 @@ describe.skipIf(!HAS_DB)("X-PD-8 a best-Nth basis tie across pools falls to the 
             expect(r.seats, `the best-Nth seats are the ${cls.name} cascade's`).toEqual(r.expected);
             expect(r.second, "a second proposal (the store now answering) seats the same entrants in the same order").toEqual(r.expected);
             if (cls.name === "lots-only" && shape !== "lots_stored") {
-              // The draw was stored for reuse: one live row whose order is exactly what was seated (X-TB-7's persist).
-              const live = r.stored.filter((d) => d.members.length === (shape === "pair_level" ? 2 : P));
+              // The draw was stored for reuse: one live row whose order is exactly what was seated (X-TB-7's persist). After a
+              // departure (draw_shrunk) it is the ONLY live row: the old draw, keyed by the bigger set, was superseded.
+              const size = shape === "pair_level" ? 2 : shape === "draw_shrunk" ? P - 1 : P;
+              const live = r.stored.filter((d) => d.members.length === size);
               expect(live, "the new draw was stored").toHaveLength(1);
+              if (shape === "draw_shrunk") expect(r.stored, "the stale draw over the bigger set is no longer live").toHaveLength(1);
               const stored = live[0]!;
-              expect([...stored.members].sort()).toEqual([...(shape === "pair_level" ? r.cands.slice(0, 2).map((x) => x.id) : r.cands.map((x) => x.id))].sort());
+              const want = shape === "pair_level" ? r.cands.slice(0, 2) : shape === "draw_shrunk" ? r.cands.slice(0, P - 1) : r.cands;
+              expect([...stored.members].sort()).toEqual(want.map((x) => x.id).sort());
               expect(stored.drawn_order, "the stored order is the draw the seats followed (the level group sits at the top)").toEqual(r.expectedFull.slice(0, stored.members.length));
             }
             if (cls.name !== "lots-only") expect(r.stored, `${cls.name}: no draw is made or stored`).toEqual([]);
@@ -402,11 +456,13 @@ describe.skipIf(!HAS_DB)("X-PD-8 a best-Nth basis tie across pools falls to the 
   }
 
   it("anti-vacuity: the enumeration ran every cell", () => {
-    const perRow = POOL_COUNTS.length * CLASSES.reduce((n, c) => n + c.shapes.length, 0);
-    expect(perRow, "3 pool counts x (2 + 3 + 2) cells").toBe(3 * (2 + 3 + 2));
+    // Typed per class (3 pool counts; draw_shrunk needs P >= 3, so 2): seed-bearing 2x3, lots-only 3x3 + 2, neither 3x3.
+    const perClass = { "seed-bearing": 6, "lots-only": 11, neither: 9 } as const;
+    const perRow = 6 + 11 + 9;
+    expect(perRow).toBe(26);
     expect(tally.total).toBe(BESTNTH_ROWS.length * perRow);
     for (const c of CLASSES) {
-      expect(tally.byClass.get(c.name), `${c.name} cells ran`).toBe(BESTNTH_ROWS.length * POOL_COUNTS.length * c.shapes.length);
+      expect(tally.byClass.get(c.name), `${c.name} cells ran`).toBe(BESTNTH_ROWS.length * perClass[c.name]);
       expect(tally.byClass.get(c.name)).toBeGreaterThan(0);
     }
   });
