@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({ ends: [] as string[], active: new Map<string, boolean>() }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db", () => {
-  const tag = (strings: unknown, ..._v: unknown[]) => {
+  const tag = (strings: unknown) => {
     const text = Array.isArray(strings) ? strings.join(" ") : "";
     if (text.includes("from fixture_stream_sessions")) {
       return Promise.resolve([...h.active.keys()].map((id) => ({ id, org_id: "o", fixture_id: `f-${id}` })));
