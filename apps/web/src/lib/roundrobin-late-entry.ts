@@ -147,7 +147,14 @@ export function catchUpSet(input: CatchUpInput): CatchUpSet {
   }
 
   const firstRound = (o: Owed): number => earliest.get(o.member) ?? Number.POSITIVE_INFINITY;
-  toAppend.sort((x, y) => x.leg - y.leg || firstRound(x) - firstRound(y) || x.memberIndex - y.memberIndex);
+  // An explicit three-way compare (Task 5 m4): two members with no line are both Infinity, and Infinity - Infinity is NaN — a tie
+  // only because NaN is falsy. Spelt out, the tie falls to the listed order on purpose.
+  const byFirstRound = (x: Owed, y: Owed): number => {
+    const a = firstRound(x);
+    const b = firstRound(y);
+    return a === b ? 0 : a < b ? -1 : 1;
+  };
+  toAppend.sort((x, y) => x.leg - y.leg || byFirstRound(x, y) || x.memberIndex - y.memberIndex);
   toAppend.forEach((o, k) => {
     fixtures.push({ home: o.home, away: o.away, leg: o.leg, placement: { kind: "catch_up_round", roundNo: lastRoundNo + k + 1 } });
   });

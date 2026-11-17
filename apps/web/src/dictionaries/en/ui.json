@@ -2914,7 +2914,7 @@
   "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "A stepladder needs a table to seed from. Add a league or groups first.",
   "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "A page playoff needs a table to seed from. Add a league, groups or a Swiss stage first.",
   "roundrobin.refusal.RR_GENERATE_AFTER_START": "Play has started, so Generate won't change the fixtures. Use Add late player.",
-  "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE": "This stage is complete. Add the player to the next stage, or reopen the stage.",
+  "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE": "This table has finished. Late players can't join it.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOTHING_TO_ADD": "This player already has a fixture against everyone in the pool.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_UNDOABLE": "Adding a late player can't be undone. Withdraw the player instead.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_WAITING": "This player isn't waiting for a place.",

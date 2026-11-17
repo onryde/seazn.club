@@ -57,7 +57,7 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
   },
   RR_LATE_ENTRY_STAGE_COMPLETE: {
     status: 422,
-    en: "This stage is complete. Add the player to the next stage, or reopen the stage.",
+    en: "This table has finished. Late players can't join it.",
     key: "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE",
   },
   RR_LATE_ENTRY_NOTHING_TO_ADD: {

@@ -58,7 +58,7 @@ afterAll(async () => {
 type Kind = (typeof EntrantKind.options)[number];
 
 /** The refusal table's English rows (lib/roundrobin-refusals.ts), typed here as the oracle. */
-const COMPLETE = "This stage is complete. Add the player to the next stage, or reopen the stage.";
+const COMPLETE = "This table has finished. Late players can't join it.";
 const ALREADY_PLACED = "This player already has their fixtures.";
 /** The W4 knockout refusal table's row (lib/knockout-refusals.ts) a tap on a bracket answers: no bracket takes a late entrant (RB5-L2). */
 const BRACKET_NOT_WAITING = "This player isn't waiting to join this bracket.";

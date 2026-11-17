@@ -15,7 +15,7 @@ import { roundRobinRefusal } from "@/server/usecases/roundrobin-refusal";
 // it here in the same commit. The sentence of RR_CUT_EXCEEDS_FIELD is Task 12b's (the plan names only its status).
 const PLAN: Record<string, { status: 409 | 422; en: string }> = {
   RR_GENERATE_AFTER_START: { status: 409, en: "Play has started, so Generate won't change the fixtures. Use Add late player." },
-  RR_LATE_ENTRY_STAGE_COMPLETE: { status: 422, en: "This stage is complete. Add the player to the next stage, or reopen the stage." },
+  RR_LATE_ENTRY_STAGE_COMPLETE: { status: 422, en: "This table has finished. Late players can't join it." },
   RR_LATE_ENTRY_NOTHING_TO_ADD: { status: 422, en: "This player already has a fixture against everyone in the pool." },
   RR_LATE_ENTRY_NOT_UNDOABLE: { status: 409, en: "Adding a late player can't be undone. Withdraw the player instead." },
   RR_LATE_ENTRY_NOT_WAITING: { status: 409, en: "This player isn't waiting for a place." },

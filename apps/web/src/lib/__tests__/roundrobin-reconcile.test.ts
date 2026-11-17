@@ -451,10 +451,13 @@ describe("rrLinesOfRows (the stored side of the planner)", () => {
 describe("isRrExtKey: which stored keys are the table's own lines", () => {
   it("accepts exactly what rrExtKey writes (pooled or not, with or without the leg) and refuses everything else", () => {
     const yes = [rrExtKey("", 3, 2, 1), rrExtKey("pA-", 3, 2, 2), rrExtKey("p12-", 10, 1, 8), rrLegacyExtKey(rrExtKey("", 3, 2, 1)), rrLegacyExtKey(rrExtKey("pB-", 1, 1, 1))];
-    const no = ["adhoc-7", "adhoc-1", "", "rr-r1", "rr-r1-c1-Lx", "xrr-r1-c1-L1", "rr-r1-c1-L1x", "ad-hoc-rr-r1-c1", null];
+    // Task 5 m5: a late entrant's catch-up lines (`rr-cu-` appended, `rr-by-` in a bye slot), typed out — never built by the code
+    // under test — with and without the pool's `p{key}-` prefix. They always carry the leg.
+    yes.push("rr-cu-r6-c1-L1", "pA-rr-cu-r7-c2-L2", "rr-by-r3-c1-L1", "pB-rr-by-r4-c3-L1");
+    const no = ["adhoc-7", "adhoc-1", "", "rr-r1", "rr-r1-c1-Lx", "xrr-r1-c1-L1", "rr-r1-c1-L1x", "ad-hoc-rr-r1-c1", null, "rr-cu-r6-c1", "pA-rr-by-r3-c1", "rr-xx-r3-c1-L1"];
     for (const k of yes) expect(isRrExtKey(k), String(k)).toBe(true);
     for (const k of no) expect(isRrExtKey(k), String(k)).toBe(false);
-    expect(yes.length + no.length, "anti-vacuity").toBe(14);
+    expect(yes.length + no.length, "anti-vacuity").toBe(21);
   });
 });
 

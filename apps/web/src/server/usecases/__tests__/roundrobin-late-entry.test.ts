@@ -47,7 +47,7 @@ afterAll(async () => {
 });
 
 /** The refusal table's English rows (lib/roundrobin-refusals.ts), typed here as the oracle. */
-const COMPLETE = "This stage is complete. Add the player to the next stage, or reopen the stage.";
+const COMPLETE = "This table has finished. Late players can't join it.";
 const NOTHING = "This player already has a fixture against everyone in the pool.";
 const UNKNOWN_POOL = "There's no pool with that name in this stage.";
 const NOT_UNDOABLE = "Adding a late player can't be undone. Withdraw the player instead.";

@@ -96,6 +96,22 @@ describe("catchUpSet — the brief's scenes (RB5-L3, L6; X-CU-4)", () => {
     expect(placed(set.fixtures, "n")).toEqual(["d:catch_up_round:4", "a:catch_up_round:5", "c:catch_up_round:6", "b:catch_up_round:7"]);
   });
 
+  it("Task 5 m4: two members with NO line tie (Infinity vs Infinity) and fall to listed order, after every member who has one", () => {
+    // RB5-L6: earliest line first, ties by listed (seed) order; a member with no line has no earliest round, so it goes last.
+    // c and d played round 1; a and b were both drawn in after it (no line yet) — each listing order must be kept.
+    const lines = [{ home: "c", away: "d", roundNo: 1, leg: 1 }];
+    let checked = 0;
+    for (const [members, want] of [
+      [["a", "b", "c", "d"], ["c:catch_up_round:2", "d:catch_up_round:3", "a:catch_up_round:4", "b:catch_up_round:5"]],
+      [["b", "a", "c", "d"], ["c:catch_up_round:2", "d:catch_up_round:3", "b:catch_up_round:4", "a:catch_up_round:5"]],
+    ] as const) {
+      const set = catchUpSet({ members, newcomer: "n", legs: 1, lines, byes: [], lastRoundNo: 1 });
+      expect(placed(set.fixtures, "n"), members.join(",")).toEqual(want);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(2);
+  });
+
   it("an earlier earliest round goes first: a member who sat out round 1 plays after one who played it", () => {
     // Five-field, rounds 1-5 all started (every bye spent): e sat out round 1 (earliest line round 2); the others played round 1.
     const s = scene(["a", "b", "c", "d", "e"], 1, 5);

@@ -2914,7 +2914,7 @@
   "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "Stepladder-finales hebben een stand nodig om uit te plaatsen. Voeg eerst een competitie of groepen toe.",
   "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "Play-offs (IPL-stijl) hebben een stand nodig om uit te plaatsen. Voeg eerst een competitie, groepen of een Zwitserse fase toe.",
   "roundrobin.refusal.RR_GENERATE_AFTER_START": "Het spel is begonnen, dus Genereren verandert de wedstrijden niet meer. Gebruik Laat nog een speler toevoegen.",
-  "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE": "Deze fase is afgerond. Voeg de speler toe aan de volgende fase, of heropen de fase.",
+  "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE": "Deze stand is afgelopen. Late spelers kunnen er niet meer bij.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOTHING_TO_ADD": "Deze speler heeft al een wedstrijd tegen iedereen in de groep.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_UNDOABLE": "Een laat toegevoegde speler kun je niet ongedaan maken. Laat de speler zich in plaats daarvan terugtrekken.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_WAITING": "Deze speler wacht niet op een plek.",

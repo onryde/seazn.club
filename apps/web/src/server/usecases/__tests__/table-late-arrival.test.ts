@@ -512,6 +512,64 @@ describe.skipIf(!HAS_DB)("W5 T6: automatic arrivals into a running league or gro
   });
 });
 
+describe.skipIf(!HAS_DB)("W5 B2 batch: which byes a placement may take (RB5-L3, L4)", () => {
+  type Bye = { pool: string | null; round_no: number; leg: number; entrant_id: string };
+  const byesOf = async (stageId: string) =>
+    ((await sql<{ b: Bye[] | null }[]>`select config -> 'round_byes' as b from stages where id = ${stageId}`)[0]!.b ?? []);
+  /** A scorer's `core.start` on one line (the K4 predicate's first arm). */
+  async function startLine(r: Rig, fixtureId: string): Promise<void> {
+    const [{ n }] = await sql<{ n: number }[]>`select coalesce(max(seq), 0)::int as n from score_events where fixture_id = ${fixtureId}`;
+    await scoreEvent(r.auth, fixtureId, { expected_seq: n, type: "core.start", payload: {} });
+  }
+
+  it("I1 started rounds are read PER POOL: round 3 started in pool B only leaves pool A's round-3 bye to take, as in a fresh pool", async () => {
+    // RB5-L3: the newcomer's line goes into the pool's own unstarted bye slots. RB5-L4: a bye in a round that has STARTED in that
+    // pool is not consumed. Pool B starting its round 3 says nothing about pool A's round 3.
+    const r = await rig({ n: 10, group: { pools: 2 } });
+    const pools = await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${r.stageId} order by key`;
+    expect(pools.map((p) => p.key), "premise: pools A and B").toEqual(["A", "B"]);
+    const [A, B] = [pools[0]!.id, pools[1]!.id];
+    const rows = await rowsOf(r.stageId);
+    for (const [pool, round] of [[A, 1], [B, 1], [B, 3]] as const) await startLine(r, rows.find((x) => x.pool_id === pool && x.round_no === round)!.id);
+    const byesA = (await byesOf(r.stageId)).filter((b) => b.pool === A);
+    expect(byesA.map((b) => b.round_no), "premise: five in pool A, one bye a round (the generator's own declaration)").toEqual([1, 2, 3, 4, 5]);
+    const { entrantId } = await confirmArrival(r, "Late");
+    await placeWaitingTableEntrant(r.auth, r.stageId, entrantId, "A");
+    const mine = await linesOf(r.stageId, entrantId);
+    // Pool A started round 1 only: rounds 2-5 are its unstarted bye slots, each one taken against its holder.
+    const want = byesA.filter((b) => b.round_no !== 1).map((b) => `${b.round_no}:${b.entrant_id}`);
+    const got = mine.filter((l) => /rr-by-/.test(l.ext_key ?? "")).map((l) => `${l.round_no}:${l.home_entrant_id === entrantId ? l.away_entrant_id : l.home_entrant_id}`);
+    expect(got.sort(), "the round-3 bye is taken, as in a fresh pool").toEqual(want.sort());
+    expect(want.length, "anti-vacuity").toBe(4);
+    expect((await byesOf(r.stageId)).filter((b) => b.pool === A).map((b) => b.round_no), "only round 1's bye stays").toEqual([1]);
+    expect(mine.every((l) => l.pool_id === A), "every line in pool A").toBe(true);
+  });
+
+  it("M1 a waiting player an organiser put into an Add match in round 3 never also takes round 3's bye on the tap", async () => {
+    // A player plays at most once a round: the Add match row (adhoc-N) is a fixed seat, the newcomer's as much as anyone's.
+    // differential: before this fix the tap consumed the round-3 bye and seated the newcomer twice in round 3.
+    const r = await rig({ n: 5 });
+    await startRoundOne(r);
+    const { entrantId } = await confirmArrival(r, "Late");
+    const byes = await byesOf(r.stageId);
+    const holder3 = byes.find((b) => b.round_no === 3)!.entrant_id;
+    const other = r.ids.find((id) => id !== holder3)!;
+    await sql`
+      insert into fixtures (stage_id, division_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, ext_key, status)
+      values (${r.stageId}, ${r.divisionId}, 3, 9, ${entrantId}, ${other}, 'adhoc-1', 'scheduled')`;
+    await placeWaitingTableEntrant(r.auth, r.stageId, entrantId);
+    const mine = await linesOf(r.stageId, entrantId);
+    const perRound = new Map<number, number>();
+    for (const l of mine) perRound.set(l.round_no, (perRound.get(l.round_no) ?? 0) + 1);
+    expect(perRound.get(3), "round 3: the Add match only").toBe(1);
+    expect([...perRound.values()].every((n) => n === 1), "never twice in a round").toBe(true);
+    expect((await byesOf(r.stageId)).some((b) => b.round_no === 3 && b.entrant_id === holder3), "round 3's bye is kept").toBe(true);
+    // The round-3 holder is still owed: an appended catch-up line, after every drawn round.
+    const vsHolder = mine.filter((l) => l.home_entrant_id === holder3 || l.away_entrant_id === holder3);
+    expect(vsHolder.map((l) => /rr-cu-/.test(l.ext_key ?? "")), "owed, appended").toEqual([true]);
+  });
+});
+
 describe.skipIf(!HAS_DB)("W5 T6: every cleanup path of the waiting marker (storage table, G7)", () => {
   it("X-CU-8 Rebuild clears every waiting marker", async () => {
     // Nothing scored (Rebuild refuses a stage with a result): two arrivals wait, Rebuild draws them both in.

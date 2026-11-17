@@ -2914,7 +2914,7 @@
   "knockout.refusal.STEPLADDER_NEEDS_TABLE_SOURCE": "Las finales en escalera necesitan una clasificación de la que sembrar. Añade primero una liga o grupos.",
   "knockout.refusal.PAGE_PLAYOFF_NEEDS_TABLE_SOURCE": "Los playoffs (estilo IPL) necesitan una clasificación de la que sembrar. Añade primero una liga, grupos o una fase de suizo.",
   "roundrobin.refusal.RR_GENERATE_AFTER_START": "El juego ya ha empezado, así que Generar no cambiará los partidos. Usa Añadir jugador tardío.",
-  "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE": "Esta fase está completa. Añade al jugador a la siguiente fase o reabre la fase.",
+  "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE": "Esta tabla ha terminado. Los jugadores tardíos no pueden unirse.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOTHING_TO_ADD": "Este jugador ya tiene un partido contra todos los del grupo.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_UNDOABLE": "Añadir un jugador tardío no se puede deshacer. Retira al jugador en su lugar.",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_WAITING": "Este jugador no está esperando una plaza.",

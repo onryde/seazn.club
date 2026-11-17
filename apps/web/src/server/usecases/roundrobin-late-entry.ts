@@ -163,8 +163,13 @@ export async function readTableLatePlace(tx: Tx, stage: TableEntryStage, entrant
   const fixedSeats = new Set(
     fixed.filter((r) => r.pool_id === poolId || r.pool_id === null).flatMap((r) => [`${r.round_no}|${r.home_entrant_id}`, `${r.round_no}|${r.away_entrant_id}`]),
   );
+  // B2 batch M1: the NEWCOMER's own fixed seats too — a waiting player an organiser put into an Add match plays that round
+  // already, so a bye there would seat them twice. Any pool: an Add match row is the newcomer's whichever pool it names.
+  const newcomerFixedRounds = new Set(
+    fixed.filter((r) => r.home_entrant_id === entrantId || r.away_entrant_id === entrantId).map((r) => r.round_no),
+  );
   const byes: ByeSlot[] = (readRoundByes(stage.config) ?? [])
-    .filter((b) => b.pool === poolId && !fixedSeats.has(`${b.round_no}|${b.entrant_id}`))
+    .filter((b) => b.pool === poolId && !fixedSeats.has(`${b.round_no}|${b.entrant_id}`) && !newcomerFixedRounds.has(b.round_no))
     .map((b) => ({ entrantId: b.entrant_id, roundNo: b.round_no, leg: b.leg, started: started.has(b.round_no) }));
   const lastRoundNo = all.reduce((m, r) => Math.max(m, r.round_no), 0);
   return {
