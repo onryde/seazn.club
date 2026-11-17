@@ -29,13 +29,20 @@ import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts"
  * (main: no answer, seated nowhere, no flag) and nothing is placed. The organiser's tap (`POST /stages/{id}/late-entrants/{id}/place`)
  * writes one unscheduled catch-up line against each of the four, and a second tap is refused 409 RR_LATE_ENTRY_ALREADY_PLACED.
  *
+ * T8 (X-WDT-5, X-WDT-8; ST-G15, RB5-W2/W6/W7): a public league of four, P1's one played match signed off (finalized), then P1
+ * withdraws: 1 of 3 played is under half, so all three of her lines are removed through the expunge abandon, the signed-off one
+ * included (main skipped it: `skipped_finalized: 1`, her win kept on the table). The anonymous hub document carries the footnote
+ * "left after 1 of 3, so their results are removed and their other matches are void." under that table. A Reinstate then puts
+ * her two unplayed lines back to scheduled.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
   // T2: 2 (4 -> 6 reconciles by pair; a 5-team league persists its byes). T3: 1 (Add match lands in the round both sides are free).
   // T5: 2 (a late player's catch-up lines; Undo across the add refused by name). T5b: 1 (her hub row reads Joined round 3).
   // T6: 1 (an automatic arrival waits; one tap places it; a second tap is refused by name).
-  const EXPECTED_CHECKS = 7;
+  // T8: 1 (a leaver's signed-off result is removed, the hub's footnote names the rule; Reinstate restores her unplayed lines).
+  const EXPECTED_CHECKS = 8;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -57,6 +64,7 @@ export async function w5RoundRobinASuite(): Promise<void> {
     away_entrant_id: string | null;
     ext_key?: string | null;
     scheduled_at?: string | null;
+    status?: string;
   };
   type StageOut = { id: string; config: { round_byes?: { round_no: number; leg: number; entrant_id: string }[] } };
 
@@ -204,11 +212,13 @@ export async function w5RoundRobinASuite(): Promise<void> {
     );
   }
 
+  // The public competition checks 6 and 8 read the hub of (one division each; the org's competition cap refuses a fourth).
+  const pub = v1data<{ id: string; slug: string } | undefined>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A hub ${tag}`, visibility: "public" }),
+  );
+
   // Check 6 - X-CU-10 / RB5-L5: the late player's row in the public hub document reads "Joined round 3" while her catch-up lines remain.
   {
-    const pub = v1data<{ id: string; slug: string } | undefined>(
-      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A hub ${tag}`, visibility: "public" }),
-    );
     const l = await league("Hub", 5, pub?.id);
     const lines = await l.fixtures();
     await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
@@ -270,6 +280,50 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-CU-8: a reinstated player with no line waits (nothing placed); one tap writes 4 unscheduled catch-up lines; a second tap is RR_LATE_ENTRY_ALREADY_PLACED" +
         (ok ? "" : ` - ${l.created}, withdraw ${out.status}, generate ${regen.status}, start ${started.status}, drawn ${drawn.length}, ev ${ev.status}, back ${back.status}, answer ${JSON.stringify(answer ?? null)}, before ${placedBefore}, tap ${tap.status}/${tapCase}, mine ${mine.length}, again ${again.status}/${again.json.error?.code}`),
+      ok,
+    );
+  }
+
+  // Check 8 - X-WDT-5 / X-WDT-8 (ST-G15): a leaver's signed-off result is removed through the expunge abandon; the hub footnote; Reinstate.
+  {
+    // Check 6's public competition (the hub is read anonymously; `comp` is at the per-competition division cap). An absent
+    // one 404s this check by name rather than falling through to `league`'s default competition.
+    const l = await league("Expunge", 4, pub?.id ?? "no-public-competition");
+    const [p1, p2] = l.entrants.map((e) => e.id);
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const signed = (await l.fixtures()).find((f) => [f.home_entrant_id, f.away_entrant_id].sort().join("|") === [p1, p2].sort().join("|"));
+    const p1Home = signed?.home_entrant_id === p1;
+    const codes: number[] = [];
+    let seq = 0;
+    for (const [type, payload] of [
+      ["core.start", {}],
+      ["generic.result", p1Home ? { p1Score: 3, p2Score: 0 } : { p1Score: 0, p2Score: 3 }],
+      ["core.finalize", {}],
+    ] as const) {
+      const ev = await v1(owner, `/api/v1/fixtures/${signed?.id}/events`, "POST", { expected_seq: seq, type, payload });
+      codes.push(ev.status);
+      seq = v1data<{ seq: number } | undefined>(ev)?.seq ?? seq;
+    }
+    const out = await v1(owner, `/api/v1/entrants/${p1}/withdraw`, "POST");
+    const report = v1data<{ policy?: string; voided?: number; skipped_cancelled?: number } | undefined>(out);
+    const gone = (await l.fixtures()).find((f) => f.id === signed?.id)?.status;
+    const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+    const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/hub`);
+    type HubTable = { divisionId: string; withdrawalNotes?: { entrantId: string; lead: string; body: string }[] };
+    const table = (v1data<{ tables?: HubTable[] } | undefined>(hubRes)?.tables ?? []).find((t) => t.divisionId === l.divId);
+    const notes = table?.withdrawalNotes ?? [];
+    const back = await v1(owner, `/api/v1/entrants/${p1}`, "PATCH", { status: "registered" });
+    const hers = (await l.fixtures()).filter((f) => f.id !== signed?.id && (f.home_entrant_id === p1 || f.away_entrant_id === p1));
+    const ok =
+      started.status === 200 && signed !== undefined && codes.join(",") === "201,201,201" && out.status === 200 &&
+      report?.policy === "expunge" && report.voided === 3 && report.skipped_cancelled === 0 && gone === "abandoned" &&
+      hubRes.status === 200 && notes.length === 1 && notes[0]?.entrantId === p1 &&
+      notes[0]?.body === "left after 1 of 3, so their results are removed and their other matches are void." &&
+      back.status === 200 && hers.length === 2 && hers.every((f) => f.status === "scheduled");
+    w5Check(
+      "w5a X-WDT-5: a leaver's finalized result is removed (expunge, 3 voided), the hub footnote names the rule; Reinstate puts her 2 unplayed lines back" +
+        (ok ? "" : ` - ${l.created}, start ${started.status}, events ${codes.join(",")}, withdraw ${out.status} ${JSON.stringify(report ?? null)}, signed ${gone}, hub ${hubRes.status} notes ${JSON.stringify(notes)}, back ${back.status}, hers ${hers.map((f) => f.status).join(",")}`),
       ok,
     );
   }

@@ -458,3 +458,57 @@ test.describe("X-CU-8 a paid player waits, then one tap places them", () => {
     expect([again.status, again.error?.code, again.error?.message]).toEqual([409, "RR_LATE_ENTRY_ALREADY_PLACED", "This player already has their fixtures."]);
   });
 });
+
+// W5 app PR A, Task 8 (X-WDT-5, X-WDT-7, X-WDT-8; ST-G15; RB5-W1/W2/W6/W7). A league leaver under half played used to keep her
+// SIGNED-OFF results: the cascade skipped a finalized line (and the ledger's lock refused any write to it). Now every result she
+// played is removed through the expunge abandon, finalized included; she stays listed, chipped and ranked last; the footnote
+// under the table names the rule; and Reinstate reverses the expunge and takes the footnote away. Expected text is the owner's
+// R24 pick 11 A wording, typed here.
+test.describe("X-WDT-5 a leaver's signed-off result is removed", () => {
+  test("1 of 3 played and finalized: the result goes, she ranks last with the footnote; Reinstate restores her lines", async ({ page, request }) => {
+    test.setTimeout(120_000);
+    const { divisionId, stageId, ids } = await seedLeague(request, "Expunge", 4);
+    expect((await generate(request, stageId)).status).toBe(200);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    const [p1, p2] = [ids[0]!, ids[1]!];
+    const lines = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    const signed = lines.find((f) => pairOf(f) === [p1, p2].sort().join("|"))!;
+    const p1Home = signed.home_entrant_id === p1;
+    let seq = 0;
+    for (const [type, payload] of [
+      ["core.start", {}],
+      ["generic.result", p1Home ? { p1Score: 3, p2Score: 0 } : { p1Score: 0, p2Score: 3 }], // P1 wins: the most points
+      ["core.finalize", {}],
+    ] as const) {
+      const ev = await apiJson<{ seq: number }>(request, `/api/v1/fixtures/${signed.id}/events`, "POST", { expected_seq: seq, type, payload });
+      expect(ev.status, `${type}: ${JSON.stringify(ev.error)}`).toBe(201);
+      seq = ev.data!.seq;
+    }
+
+    const out = await apiJson<{ policy: string; voided: number; skipped_cancelled: number }>(request, `/api/v1/entrants/${p1}/withdraw`, "POST");
+    expect(out.status, JSON.stringify(out.error)).toBe(200);
+    expect(out.data, "1 of 3 played: under half, all three removed").toMatchObject({ policy: "expunge", voided: 3, skipped_cancelled: 0 });
+    const after = (await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[];
+    expect(after.find((f) => f.id === signed.id)?.status, "the signed-off result is out").toBe("abandoned");
+
+    const p1Name = `Expunge P1 ${TAG}`;
+    await page.goto(await divisionPath(request, divisionId, "?tab=standings"));
+    await dismissCookieBanner(page);
+    const note = page.getByTestId(`standings-withdrawal-note-${p1}`);
+    await expect(note).toHaveText(`${p1Name} (withdrawn): left after 1 of 3, so their results are removed and their other matches are void.`);
+    const names = page.locator('tbody th[scope="row"]');
+    await expect(names, "she stays listed: four rows").toHaveCount(4);
+    await expect(names.last(), "the leaver, with the most points, ranks last").toContainText(p1Name);
+    await expect(names.last().getByTestId("standings-withdrawn")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+
+    const back = await apiJson(request, `/api/v1/entrants/${p1}`, "PATCH", { status: "registered" });
+    expect(back.status, JSON.stringify(back.error)).toBe(200);
+    const restored = (await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[];
+    const hers = restored.filter((f) => f.home_entrant_id === p1 || f.away_entrant_id === p1);
+    expect(hers.filter((f) => f.id !== signed.id).map((f) => f.status), "her unplayed lines are back").toEqual(["scheduled", "scheduled"]);
+    await page.reload();
+    await expect(page.getByTestId("standings-withdrawal-notes"), "after Reinstate the footnote is gone").toHaveCount(0);
+  });
+});

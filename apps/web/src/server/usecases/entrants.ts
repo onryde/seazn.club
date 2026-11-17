@@ -1019,7 +1019,19 @@ export async function patchEntrant(
       return { ...(await getEntrant(auth, id)), cascade };
     }
   }
-  return writeEntrantPatch(auth, id, patch);
+  // W5 T8 (RB5-W6, X-WDT-8): a Reinstate — a departed entrant patched back into the field — reverses her league or group
+  // withdrawal AFTER the status write commits (her lines still exist, so Task 6's door in `writeEntrantPatch` never makes her
+  // wait). Read before the write: the write is what changes it.
+  const [prior] =
+    patch.status !== undefined && !DEPARTED_STATUSES.has(patch.status)
+      ? await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`)
+      : [];
+  const out = await writeEntrantPatch(auth, id, patch);
+  if (prior !== undefined && DEPARTED_STATUSES.has(prior.status) && !DEPARTED_STATUSES.has(out.status)) {
+    const { reinstateTableEntrant } = await import("./withdrawal");
+    await reinstateTableEntrant(auth, id);
+  }
+  return out;
 }
 
 /** The entrant write itself — every field of a patch, in one transaction, with no routing. `patchEntrant` is the door;

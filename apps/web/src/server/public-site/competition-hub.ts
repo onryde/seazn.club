@@ -92,6 +92,8 @@ import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
 import { loadRrLateJoins, rowFactsFor } from "./table-row-facts";
+import { loadTableWithdrawals } from "./table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { cachedIfFound } from "./cache-found";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
@@ -989,6 +991,8 @@ export async function loadCompetitionHub(
     // catch-up line exists), and every entrant's status so a departed one is never marked.
     const lateJoins = await loadRrLateJoins(d.id, fixtures);
     const rowFactStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+    // W5 T8 (RB5-W7): the departure notes' rows, read only for a division with a league or group stage.
+    const tableWithdrawals = stages.some((s) => s.kind === "league" || s.kind === "group") ? await loadTableWithdrawals(d.id) : [];
     const qualificationFor = divisionQualification({
       module_,
       division: d,
@@ -1033,6 +1037,8 @@ export async function loadCompetitionHub(
             swissFacts: rowFactsFor(stage, fixtures, snap.rows, lateJoins, rowFactStatuses),
             // owner Q2 is the Swiss table: only a Swiss stage's ladders are spelled in the table's points format
             stageKind: stage.kind,
+            // W5 T8 (RB5-W7): this table's departures, in its own row order (a pool names only its pool)
+            withdrawalNotes: withdrawalNotesFor(stage.id, (snap.rows as { entrantId: string }[]).map((r) => r.entrantId), tableWithdrawals, rowFactStatuses, names),
           }),
         );
       }

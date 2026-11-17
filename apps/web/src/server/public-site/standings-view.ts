@@ -50,6 +50,7 @@ import type { SwissRoundState } from "@/lib/swiss-round-state";
 import type { RowMarkerT, TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 import type { SwissRowFacts } from "./swiss-row-facts";
+import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
 
 /** The columns a phone shows without asking: played, won, lost, points.
  *  Everything else — draws, the sport's own metrics, the cascade's derived
@@ -609,6 +610,9 @@ export interface TableViewInput {
   /** The stage's kind (`stages.kind`): "swiss" spells the Swiss ladders in the table's points format (`tableLayoutFor`). Absent
    *  or any other kind: the engine's text. */
   stageKind?: string;
+  /** W5 T8 (RB5-W7): THIS table's departure notes (`withdrawalNotesFor`), resolved here in the org's language like every
+   *  other string the builder emits. Absent or empty: the view carries none. */
+  withdrawalNotes?: readonly WithdrawalNote[];
 }
 
 /**
@@ -701,5 +705,9 @@ export function buildTableView(input: TableViewInput): TableViewT {
     })),
     qualification: qual?.table ?? null,
     swissRound: input.swissRound ?? null,
+    // Only a table someone left carries the key (absent = no note, as a cached document reads it).
+    ...((input.withdrawalNotes ?? []).length > 0
+      ? { withdrawalNotes: input.withdrawalNotes!.map((n) => withdrawalNoteText(n, input.msg)) }
+      : {}),
   };
 }

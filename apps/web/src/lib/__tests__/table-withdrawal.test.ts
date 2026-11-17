@@ -8,6 +8,7 @@ import { withdrawTableEntrant } from "@seazn/engine/competition";
 import {
   WITHDRAWAL_PENDING_STATUSES,
   WITHDRAWAL_PLAYED_STATUSES,
+  departedRankedLast,
   tableWithdrawalInputs,
   type WithdrawalFixtureRow,
 } from "../table-withdrawal";
@@ -52,5 +53,27 @@ describe("tableWithdrawalInputs", () => {
     };
     expect(mode([f("1", "decided", "A", "B", WIN), f("2", "scheduled", "A", "C"), f("3", "scheduled", "D", "A")])).toBe("expunge");
     expect(mode([f("1", "decided", "A", "B", WIN), f("2", "decided", "C", "A", WIN), f("3", "scheduled", "D", "A")])).toBe("award");
+  });
+});
+
+// W5 T8 (RB5-W1, X-WDT-7): a departed entrant stays in the table and ranks last, whatever her points. The order AMONG the
+// competing rows, and among the departed ones, is the engine's (its stored ranks, ties kept); only the split moves.
+describe("departedRankedLast", () => {
+  const r = (entrantId: string, rank: number | undefined) => ({ entrantId, rank });
+  const gone = (...ids: string[]) => (id: string) => ids.includes(id);
+  it("the leaver with the most points goes from first to last; the rest close up", () => {
+    expect(departedRankedLast([r("a", 1), r("b", 2), r("c", 3), r("d", 4)], gone("a"))).toEqual([r("b", 1), r("c", 2), r("d", 3), r("a", 4)]);
+  });
+  it("two leavers keep their own order below the field; a tie among the field stays a tie", () => {
+    expect(departedRankedLast([r("a", 1), r("b", 2), r("c", 2), r("d", 4), r("e", 5)], gone("d", "a"))).toEqual([
+      r("b", 1), r("c", 1), r("e", 3), r("a", 4), r("d", 5),
+    ]);
+  });
+  it("nobody left, an empty table, or an unranked row: the rows as they came", () => {
+    const field = [r("b", 2), r("a", 1)];
+    expect(departedRankedLast(field, gone())).toEqual(field);
+    expect(departedRankedLast([], gone("a"))).toEqual([]);
+    const unranked = [r("a", 1), r("b", undefined)];
+    expect(departedRankedLast(unranked, gone("a"))).toEqual(unranked);
   });
 });

@@ -207,7 +207,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       this.#killSeat(f, home ? 1 : 2, true);
     }
     entrant.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_cancelled: 0, walked_over_held: held };
   }
   /** The table folds each fixture's LIVE ledger (voids resolved), as the product's standings read it. */
   override tableEvents(f: FakeFixture): readonly StreamEvent[] {

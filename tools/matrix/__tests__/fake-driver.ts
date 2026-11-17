@@ -458,8 +458,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
     return this.postStream(id, forfeitPosting(this.#f(id).status, { by, reason }, play), prefix);
   }
   /** withdrawal.ts:130-200 + stage.ts withdrawTableEntrant: played < 50% of
-   *  (played + pending) expunges, otherwise pending games walk over; finalized
-   *  and cancelled are skipped; a TBD opponent is voided, not walked over; an
+   *  (played + pending) expunges, otherwise pending games walk over; a cancelled
+   *  line is skipped (W5 T8: a finalized one is expunged like any result); a TBD opponent is voided, not walked over; an
    *  opponent who already left (X-WD-4, Loop R M-4: no bracket scope) makes the
    *  line a recorded double walkover, unless it holds live play (M-1: left as
    *  it is, and not counted). */
@@ -476,8 +476,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
     let skipped = 0;
     const gone = new Set(this.entrants.filter((e) => e.status === "withdrawn").map((e) => e.id));
     const touched = policy === "expunge" ? [...played, ...pending] : pending;
+    skipped = mine.filter((f) => f.status === "cancelled").length;
     for (const f of touched) {
-      if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const opponent = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
       if (policy === "walkover" && opponent !== null && gone.has(opponent)) {
         if (liveEvents(f.events).length === 0) { await this.doubleWalkoverFixture(f); walkovers++; }
@@ -488,7 +488,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       voided++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped, walked_over_held: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_cancelled: skipped, walked_over_held: 0 };
   }
   /** withdrawal.ts `held` (the plan's N1, `walked_over_held`): a line that used to wait for the organiser's settle —
    *  needs_decision (a held level result), an active abandon, or in play with a decider still owed (the engine's own
@@ -1040,7 +1040,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       walkovers++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_cancelled: 0, walked_over_held: held };
   }
   /** W2b X-WD-2 / X-WD-3 (ruling 90): a page playoff withdrawal walks its pending fixtures over to the opponent, as
    *  knockout does, and never voids one; a seat whose opponent is still TBD is emptied and goes dead — counted a
@@ -1076,7 +1076,7 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
       walkovers++;
     }
     this.entrants.find((e) => e.id === entrantId)!.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, pending), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, pending), walkovers, voided: 0, skipped_cancelled: 0, walked_over_held: held };
   }
   override async postStream(id: string, events: readonly StreamEvent[], prefix = ""): Promise<PostedEvent[]> {
     const f = this.fixtures.find((x) => x.id === id)!;

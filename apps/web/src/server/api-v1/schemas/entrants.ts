@@ -154,7 +154,9 @@ export const WithdrawCascadeReport = z.object({
   policy: z.enum(["none", "walkover", "expunge"]),
   walkovers: z.number().int(),
   voided: z.number().int(),
-  skipped_finalized: z.number().int(),
+  /** W5 T8 (ST-G15): her CANCELLED fixtures, left as they are. Was `skipped_finalized`: a finalized fixture is no longer
+   *  skipped — under the expunge its result is removed like any other (RB5-W2). */
+  skipped_cancelled: z.number().int(),
   walked_over_held: z.number().int(),
   /** Fixtures the cascade wrote nothing to, each still the organiser's to void or settle (an abandoned Swiss board
    *  holds the next round until it is settled, X-AB-5). */

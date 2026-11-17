@@ -126,6 +126,8 @@ import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
 import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
@@ -269,6 +271,8 @@ export default async function DivisionPage({
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
+  // W5 T8 (RB5-W7): the league/group departure notes under each table.
+  const tableWithdrawals = await loadTableWithdrawals(division.id);
   // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
   // delete, so these ids are still in `entrantNames` and in a ladder's
   // persisted order — which is exactly how a <select> came to offer a choice
@@ -1201,6 +1205,7 @@ export default async function DivisionPage({
                         qualification={qualification}
                         rules={stageOrder(stage.id)}
                         swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
+                        withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames)}
                         stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}

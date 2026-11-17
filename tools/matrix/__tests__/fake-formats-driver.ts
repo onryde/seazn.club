@@ -588,6 +588,8 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
         const expunge = (total === 0 ? 0 : played.length / total) < 0.5;
         policy = expunge ? "expunge" : policy === "expunge" ? "expunge" : "walkover";
         for (const f of expunge ? [...played, ...pending] : pending) plan.push({ f, walkover: !expunge, stage });
+        // W5 T8 (withdrawal.ts): a table's cancelled lines are left as they are and counted; a finalized one is expunged.
+        skipped += mine.filter((f) => f.status === "cancelled").length;
       } else if (BRACKET_WALKOVER.has(stage.kind)) {
         // loop F (C-2): a bracket withdrawal also walks a held line over — needs_decision, or an active abandon.
         const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
@@ -601,7 +603,6 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       }
     }
     for (const { f, walkover, stage } of plan) {
-      if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const side: Side = f.home_entrant_id === entrantId ? "home" : "away";
       const opponent = side === "home" ? f.away_entrant_id : f.home_entrant_id;
       if (walkover && BRACKET_WALKOVER.has(stage.kind)) {
@@ -624,7 +625,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       voided++;
     }
     e.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_cancelled: skipped, walked_over_held: held };
   }
 }
 
@@ -857,7 +858,7 @@ export class FakeLadderDriver extends FakeLeagueDriver {
     e.status = "withdrawn";
     this.#withdrawals.push({ entrantId, afterStep: this.#issued.length, rawOrder: [...(this.#raw ?? [])] });
     // Ruling 53: the bracket branch's policy, as the product's text reads it (a ladder takes that branch).
-    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, acts.length), walkovers, voided: 0, skipped_cancelled: 0, walked_over_held: held };
   }
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
@@ -1159,7 +1160,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
     }
     e.status = "withdrawn";
     const policy = voided === 0 ? "none" : this.opts.legacyWithdrawal === true ? "walkover" : "expunge";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers: 0, voided, skipped_finalized: 0, walked_over_held: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers: 0, voided, skipped_cancelled: 0, walked_over_held: 0 };
   }
   /** The table folds over the stage's SIDES (engine-db/competition.ts:360-365). */
   override tableEntrants(): string[] {

@@ -59,3 +59,20 @@ export function tableWithdrawalInputs(
  *  `cutEligiblePools`) and the public table's cut line (server/public-site/qualification-view.ts) — two readings could
  *  draw the line in one place and seat the knockout from another. */
 export const CUT_SKIPS_DEPARTED_KINDS: ReadonlySet<string> = new Set(["swiss", "league", "group"]);
+
+/**
+ * W5 T8 (RB5-W1, X-WDT-7; RB5-W5 for a disqualification): an entrant who leaves a league or group for good STAYS in its table,
+ * marked, and is RANKED LAST — below everyone still competing, whatever her points (a walkover leaver who won her first
+ * matches would otherwise top the table she left). Re-ranks one ranked list: the competing keep their order and their ties
+ * (a rank is 1 + how many competing rows rank strictly above), and the departed follow, in their own order and ties. A list
+ * with an unranked row is returned as it is (nothing to re-rank against), and so is one with nobody departed.
+ */
+export function departedRankedLast<T extends { entrantId: string; rank?: number }>(rows: readonly T[], departed: (id: string) => boolean): T[] {
+  if (rows.some((r) => r.rank === undefined) || !rows.some((r) => departed(r.entrantId))) return [...rows];
+  const reRank = (group: readonly T[], base: number): T[] =>
+    [...group]
+      .sort((a, b) => a.rank! - b.rank!)
+      .map((r) => ({ ...r, rank: base + 1 + group.filter((o) => o.rank! < r.rank!).length }));
+  const competing = rows.filter((r) => !departed(r.entrantId));
+  return [...reRank(competing, 0), ...reRank(rows.filter((r) => departed(r.entrantId)), competing.length)];
+}

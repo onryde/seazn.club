@@ -6,6 +6,17 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-11-17",
+    title: "Breaking: a league or group withdrawal under half played removes signed-off results too",
+    lines: [
+      "POST /entrants/{id}/withdraw (and PATCH /entrants/{id} to disqualified) on an entrant who has played under half of their league or group matches now removes every result they played, finalized ones included, and voids the rest. A finalized match used to be skipped and stay counted.",
+      "The cascade report's skipped_finalized is renamed skipped_cancelled: it counts the entrant's cancelled matches, which are still left as they are.",
+      "PATCH /entrants/{id} back to registered or confirmed (Reinstate) now reverses that league or group withdrawal: matches it voided and walkovers never played return to scheduled. A result the withdrawal removed is not restored; that match is owed again.",
+      "A departed entrant's row in a league or group table now ranks last.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-11-12",
     title: "Breaking: the public registration writes take a bot-check token in the cf-turnstile-response header",
     lines: [

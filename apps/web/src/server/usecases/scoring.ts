@@ -1276,7 +1276,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   return advanced;
 }
 
-async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
+/** Exported for the withdrawal cascade (W5 T8, ruling 105 / M-10): an expunge ends on `core.abandon{expunge: true}`, which
+ *  decides nothing, so no score write runs this check after it; the cascade asks once, after the entrant's status is written. */
+export async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
   // After the score's commit, like the completion below: a read that throws is logged, never the score's failure.
   const ready = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ auto_progress: boolean }[]>`

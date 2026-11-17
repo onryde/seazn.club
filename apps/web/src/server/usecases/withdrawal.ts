@@ -27,7 +27,11 @@ import "server-only";
 // (`writeDepartedSeat`, stages/bracket-seats.ts). Every ledger write names its writer
 // (`withdrawal_cascade`): PF-2 refuses `withdrew` and `expunge` from anyone
 // else. Not one transaction (ruling 101): each write commits on its own.
-// Finalized fixtures are locked (spec 03) and are reported, not touched.
+// W5 T8 (ST-G15, RB5-W2): a FINALIZED fixture under the expunge is removed like any other result — its finalize voided
+// first (the one append a finalized ledger admits, append-event.ts `cascadeReopensFinalize`), then its results, then the
+// expunge abandon, so ruling 105's auto-advance reads it as closed. A `cancelled` fixture is still left as it is, and
+// reported. A league or group settled here leaves one `table_withdrawal` row in the division ledger (the footnote's count,
+// RB5-W7), and Reinstate reverses the cascade's own events there (`reinstateTableEntrant`, RB5-W6).
 import { deciderPending, playRecorded } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import {
@@ -37,7 +41,7 @@ import {
   type FixtureUpdate,
 } from "@seazn/engine/competition";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
-import { withTenant } from "@/lib/db";
+import { withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { resolveModule } from "@/server/engine-db/registry";
 import { rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
@@ -51,14 +55,18 @@ import { log } from "@/server/logger";
 import { BOARD_SETTLED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { DEPARTED_STATUSES, getEntrant, listEntrants, writeEntrantPatch } from "./entrants";
+import { TABLE_WITHDRAWAL_ROW, TABLE_WITHDRAWAL_VOIDED_ROW, activeTableWithdrawals, type TableWithdrawalPolicy } from "@/lib/table-withdrawal-note";
 import { getDivision } from "./divisions";
-import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, writeDepartedSeat } from "./stages";
+import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
-import { invalidatePublicCache, scoreEvent } from "./scoring";
+import { invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
 import { replaceDepartedQualifier } from "./lucky-loser";
 import { afterScheduleWrite } from "./schedule";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
+/** W5 T8: the round-robin tables whose withdrawal is written to the ledger for the footnote (RB5-W7) and reversed by Reinstate
+ *  (RB5-W6). A Swiss withdrawal always walks over (owner ruling 2026-09-24) and its own Reinstate is W3's, so it is not one. */
+const ROUND_ROBIN_KINDS: ReadonlySet<string> = new Set(["league", "group"]);
 /** W2b X-WD-2 (plan premise 19): the kinds a withdrawal walks over. `BRACKET_WALKOVER_KINDS` also gates F14's
  *  departed-qualifier draw at generation, which the spec does not change for page_playoff or ladder — so the
  *  withdrawal path has its own superset instead of widening that one. */
@@ -168,8 +176,9 @@ export interface WithdrawCascadeOut {
   policy: "none" | "walkover" | "expunge";
   walkovers: number;
   voided: number;
-  /** Finalized fixtures are immutable — listed so the organiser knows. */
-  skipped_finalized: number;
+  /** W5 T8 (ST-G15): the CANCELLED fixtures of theirs, left as they are — listed so the organiser knows. A finalized one is
+   *  no longer skipped: under the expunge its result is removed like any other (RB5-W2). */
+  skipped_cancelled: number;
   /** W2b: of `walkovers`, the lines that were HELD (a level result, a tie-break owed, a scorer's abandon) — each was
    *  waiting for the organiser's settle under W2a, and is walked over now (merge notice N1). */
   walked_over_held: number;
@@ -213,13 +222,16 @@ async function voidAndAbandon(auth: AuthCtx, fixtureId: string): Promise<void> {
         !voidedIds.has(e.id),
     )
     .sort((a, b) => b.seq - a.seq);
+  // W5 T8: newest first, so on a finalized ledger the `core.finalize` (always its newest event: a locked ledger takes no other)
+  // is the first void — the cascade's, which is the one append the lock admits (append-event.ts `cascadeReopensFinalize`).
   for (const target of targets) {
     const state = await getFixtureState(auth, fixtureId);
-    await scoreEvent(auth, fixtureId, {
-      expected_seq: state.last_seq,
-      type: "core.void",
-      payload: { event_id: target.id },
-    });
+    await scoreEvent(
+      auth,
+      fixtureId,
+      { expected_seq: state.last_seq, type: "core.void", payload: { event_id: target.id } },
+      CASCADE,
+    );
   }
   await expungeAbandon(auth, fixtureId);
 }
@@ -244,10 +256,10 @@ async function applyUpdate(
   out: WithdrawCascadeOut,
   held: boolean,
 ): Promise<void> {
-  if (fixture.status === "finalized" || fixture.status === "cancelled") {
-    out.skipped_finalized++;
-    return;
-  }
+  // W5 T8 (ST-G15): no status is skipped here any more. A finalized line reaches the void below like any settled result (the
+  // engine hands a played fixture only a "void"); a cancelled one is never planned (neither played nor pending, and a
+  // bracket reads it as "void") and is counted where the lines are read. Either, handed a walkover, meets the ledger's lock
+  // (append-event.ts) and throws — loudly, never a silent skip.
   if (update.status === "walkover" && update.walkoverTo !== undefined && update.walkoverBy) {
     // D-G2 corner 1 (X-AB-4's void-then-forfeit): a forfeit over an active abandon is refused (D4,
     // ABANDONED_SETTLE_OR_VOID), so the abandon is voided first — the score recorded before it stands.
@@ -341,11 +353,16 @@ export async function withdrawEntrantCascade(
     policy: "none",
     walkovers: 0,
     voided: 0,
-    skipped_finalized: 0,
+    skipped_cancelled: 0,
     walked_over_held: 0,
     left_to_organiser: [],
     lucky_loser: null,
   };
+
+  // W5 T8 (RB5-W4, RB5-W7): one row per league or group stage settled, with the count the policy decided on; written after the
+  // settles, so a cascade that fails part-way leaves no footnote claiming a rule it did not finish applying.
+  const ledgerRows: { entrant_id: string; stage_id: string; policy: TableWithdrawalPolicy; played_at_departure: number; scheduled: number }[] = [];
+  const settledTables: { id: string; kind: string }[] = [];
 
   // Before the tournament starts there is nothing to settle: fixtures (if
   // generated) are regenerated from the field anyway — plain status flip.
@@ -405,6 +422,18 @@ export async function withdrawEntrantCascade(
         );
         const mode = result.events[0]?.type === "entrant_withdrawn" ? result.events[0].mode : undefined;
         out.policy = mode === "expunge" ? "expunge" : out.policy === "expunge" ? "expunge" : "walkover";
+        // W5 T8: a cancelled line of theirs is left as it is (neither played nor pending, RB5-W4 does not count it).
+        out.skipped_cancelled += mine.filter((f) => f.status === "cancelled").length;
+        if (ROUND_ROBIN_KINDS.has(stage.kind)) {
+          settledTables.push({ id: stage.id, kind: stage.kind });
+          ledgerRows.push({
+            entrant_id: entrantId,
+            stage_id: stage.id,
+            policy: mode === "expunge" ? "expunge" : "walkover",
+            played_at_departure: played.length,
+            scheduled: played.length + pending.length,
+          });
+        }
         for (const u of result.updates) {
           const f = byId.get(u.fixtureId);
           if (f) plan.push({ update: { ...u, walkoverBy: entrantId }, fixture: f });
@@ -601,10 +630,109 @@ export async function withdrawEntrantCascade(
     } finally {
       await cancelSettledBoardInvites(auth, settled);
     }
+    if (ledgerRows.length > 0) {
+      await withTenant(auth.orgId, async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtext(${"division:" + division.id}))`;
+        for (const row of ledgerRows) await appendTableLedgerRow(tx, division.id, TABLE_WITHDRAWAL_ROW, row, auth.userId);
+      });
+    }
   }
 
   // The internal writer, never `patchEntrant`: a `disqualified` patch routes to this cascade, so writing through it would
   // route straight back (C6).
   await writeEntrantPatch(auth, entrantId, { status: as });
+  // W5 T8 (ruling 105 / M-10, Review Focus 4): an expunge ends on `core.abandon{expunge: true}`, which decides nothing, so no
+  // score write asks whether the stage is now finished; when the leaver's lines were its last open ones it would sit there.
+  // Asked once per table stage settled, AFTER the status write: the completion reads the departed status (the cut skips her).
+  // RB5-W1: and her row now ranks last — the stored table was folded by the settles while she was still in the field.
+  for (const stage of settledTables) {
+    await refoldStageTable(auth.orgId, stage, "skip");
+    await maybeAutoAdvance(auth, stage.id, division.id);
+  }
   return out;
+}
+
+/** A division-ledger row that moves the division's token and never the watermark — not a history step, not an Undo barrier
+ *  (`joint-winners.ts`'s pattern). Under the `division:` lock the caller holds. */
+async function appendTableLedgerRow(
+  tx: Tx,
+  divisionId: string,
+  type: string,
+  payload: Record<string, unknown>,
+  actorId: string | null,
+): Promise<number> {
+  const [{ seq: last }] = await tx<{ seq: number }[]>`select coalesce(max(seq), 0)::int as seq from division_events where division_id = ${divisionId}`;
+  await tx`
+    insert into division_events (division_id, seq, type, payload, actor_id)
+    values (${divisionId}, ${last + 1}, ${type}, ${tx.json(payload as never)}, ${actorId})`;
+  await tx`update divisions set seq = ${last + 1} where id = ${divisionId}`;
+  return last + 1;
+}
+
+/** The cascade's own events on one line, still active, newest first: its expunge abandon and its `withdrew` walkover BY this
+ *  entrant (both cascade-only, append-event.ts PF-2, so nobody else can have written them). */
+function cascadeEventsOf(events: readonly EventOut[], entrantId: string): EventOut[] {
+  const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+  return events
+    .filter((e) => !voided.has(e.id) && e.type !== "core.void")
+    .filter((e) => {
+      const p = (e.payload ?? {}) as { expunge?: unknown; reason?: unknown; by?: unknown };
+      return (e.type === "core.abandon" && p.expunge === true) || (e.type === "core.forfeit" && p.reason === REASON && p.by === entrantId);
+    })
+    .sort((a, b) => b.seq - a.seq);
+}
+
+/**
+ * W5 T8 (RB5-W6, X-WDT-8): Reinstate reverses a league or group withdrawal — the cascade's own events on the entrant's lines
+ * are voided, newest first, so a voided line and a never-played walkover return to scheduled; nothing is reshaped (her lines
+ * still exist, which is also why Task 6's door never makes her wait). Then the `table_withdrawal` row is voided, and the
+ * footnote goes with it. Called by `patchEntrant` after the status write that brought her back.
+ *
+ * What it does NOT bring back: a result the expunge removed. The expunge voided those events, and a void is not voidable
+ * (engine events.ts, PROMPT-02); the line is owed play again, as it stood before its result was recorded.
+ *
+ * Skipped, with the row left as it is: a line whose other side is still departed (the shared line of two withdrawals stays
+ * out until both are back) and a stage already complete (RB5-L8: a finished table takes no one, and its lines are not
+ * reopened). Each void commits on its own, as the cascade's writes do (ruling 101).
+ */
+export async function reinstateTableEntrant(auth: AuthCtx, entrantId: string): Promise<{ voided: number }> {
+  const entrant = await getEntrant(auth, entrantId);
+  if (DEPARTED_STATUSES.has(entrant.status)) {
+    throw new Error(`reinstateTableEntrant: entrant ${entrantId} is still ${entrant.status} — write the Reinstate first`);
+  }
+  const ledger = await withTenant(auth.orgId, (tx) =>
+    tx<{ seq: number; type: string; payload: unknown }[]>`
+      select seq::int as seq, type, payload from division_events
+       where division_id = ${entrant.division_id} and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`,
+  );
+  const records = activeTableWithdrawals(ledger).filter((r) => r.entrant_id === entrantId);
+  if (records.length === 0) return { voided: 0 };
+  const [stages, fixtures, entrants] = await Promise.all([
+    listStages(auth, entrant.division_id),
+    listDivisionFixtures(auth, entrant.division_id),
+    listEntrants(auth, entrant.division_id),
+  ]);
+  const gone = new Set(entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id));
+  let voided = 0;
+  for (const record of records) {
+    const stage = stages.find((s) => s.id === record.stage_id);
+    if (stage === undefined || stage.status === "complete") continue;
+    for (const f of fixtures as unknown as FixtureRowLite[]) {
+      if (f.stage_id !== stage.id || (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId)) continue;
+      const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+      if (other === null || gone.has(other)) continue;
+      for (const e of cascadeEventsOf(await listEvents(auth, f.id, 0), entrantId)) {
+        const state = await getFixtureState(auth, f.id);
+        await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
+        voided++;
+      }
+    }
+    await withTenant(auth.orgId, async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + entrant.division_id}))`;
+      await appendTableLedgerRow(tx, entrant.division_id, TABLE_WITHDRAWAL_VOIDED_ROW, { voids_seq: record.seq }, auth.userId);
+    });
+    // RB5-W1's reverse: back in the field, she ranks by her results again.
+    await refoldStageTable(auth.orgId, stage, "skip");
+  }
+  return { voided };
 }

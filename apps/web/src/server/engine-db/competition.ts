@@ -15,6 +15,7 @@ import { fixtureBoardRef, isLegacyForfeitWin } from "./fed-seats";
 import { completionEngineStatus, hasActiveAbandonSql, rowAwaitsSettle } from "./recorded-abandon";
 import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
+import { departedRankedLast } from "@/lib/table-withdrawal";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   SETTLED_FIXTURE_STATUSES,
@@ -850,6 +851,26 @@ export async function stageTablePoints(
  * refused, never ranked by an order nobody stored.
  */
 async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
+  return withDepartedRankedLast(await rankWithStoredLotsRaw(tx, inputs), inputs);
+}
+
+/**
+ * W5 T8 (RB5-W1, X-WDT-7): a league's or group's departed entrants rank LAST, on every surface — the stored snapshot (every
+ * table page, the hub, the API) and the `stage_completed` places alike, so a walkover leaver who won her first matches
+ * neither tops the table she left nor heads its final order. One place, after the fold ranked and any lots were stored.
+ * A Swiss table is W3's and keeps its own order.
+ */
+function withDepartedRankedLast(done: CompletedTableStage, inputs: StageInputs): CompletedTableStage {
+  if (inputs.kind !== "league" && inputs.kind !== "group") return done;
+  const departed = (id: string) => !inputs.field.has(id);
+  return {
+    ...done,
+    tables: { ...done.tables, pools: done.tables.pools.map((p) => ({ ...p, rows: departedRankedLast(p.rows, departed) })) },
+    events: done.events.map((e) => (e.type === "stage_completed" ? { ...e, finalRanks: departedRankedLast(e.finalRanks, departed) } : e)),
+  };
+}
+
+async function rankWithStoredLotsRaw(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
   const stageId = inputs.stage.id;
   const first = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
   if (first.newLotsDraws.length === 0) return first;

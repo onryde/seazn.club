@@ -12118,7 +12118,7 @@
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
                             },
-                            "skipped_finalized": {
+                            "skipped_cancelled": {
                               "type": "integer",
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
@@ -12170,7 +12170,7 @@
                             "policy",
                             "walkovers",
                             "voided",
-                            "skipped_finalized",
+                            "skipped_cancelled",
                             "walked_over_held",
                             "left_to_organiser",
                             "lucky_loser"
@@ -50915,6 +50915,29 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "withdrawalNotes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrantId": {
+                                      "type": "string"
+                                    },
+                                    "lead": {
+                                      "type": "string"
+                                    },
+                                    "body": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "entrantId",
+                                    "lead",
+                                    "body"
+                                  ],
+                                  "additionalProperties": false
+                                }
                               },
                               "updatedAt": {
                                 "type": "string"

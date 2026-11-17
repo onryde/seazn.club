@@ -35,6 +35,10 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),
 }));
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
+// W5 T8 (RB5-W7): the division ledger's table-withdrawal rows — one per departed seat, plus a row for a seat back in the
+// field (a Reinstate the cascade did not reverse) and one for another stage, both of which the page must NOT print.
+const loadTableWithdrawals = vi.fn();
+vi.mock("@/server/public-site/table-withdrawals", () => ({ loadTableWithdrawals: (...a: unknown[]) => loadTableWithdrawals(...a) }));
 
 import { FIELD_ENTRANT_STATUSES } from "@/lib/entrant-field";
 import { StandingsTable } from "@/components/public-site/standings-table";
@@ -137,8 +141,12 @@ function elements(node: unknown, out: ReactElement[] = []): ReactElement[] {
   return out;
 }
 
+const W = (seq: number, entrant_id: string, stage_id: string, policy: "expunge" | "walkover", played: number) => ({
+  seq, entrant_id, stage_id, policy, played_at_departure: played, scheduled: 3,
+});
 async function renderPage() {
   getPublicDivision.mockResolvedValue(divisionData());
+  loadTableWithdrawals.mockResolvedValue([W(1, "e-dsq", "lg", "walkover", 2), W(2, "e-wit", "lg", "expunge", 1), W(3, "e-reg", "lg", "expunge", 0), W(4, "e-con", "other", "expunge", 1)]);
   const root = await DivisionHomePage({
     params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }),
   });
@@ -207,6 +215,16 @@ describe("public division page — the departed reach the standings marked, and 
     // Her row survives her: the standings still rank all four (F2's ruling —
     // the result is marked, not voided).
     for (const seat of SEATS) expect(standings).toContain(seat.name);
+  });
+
+  it("W5 T8: the footnote under the table names each departure with her own status and rule, in table order, and nobody else", async () => {
+    const { standings } = await renderPage();
+    expect(loadTableWithdrawals).toHaveBeenCalledWith("d1");
+    const notes = [...standings.matchAll(/data-testid="standings-withdrawal-note-([^"]+)"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => [m[1], m[2]!.replace(/<[^>]+>/g, "")]);
+    expect(notes).toEqual([
+      ["e-wit", "Cyd Withdrawn (withdrawn): left after 1 of 3, so their results are removed and their other matches are void."],
+      ["e-dsq", "Dee Disqualified (disqualified): left after 2 of 3, so their results stand and their other match is a walkover."],
+    ]);
   });
 
   it("the Entrants tab lists the field and NEITHER departure", async () => {

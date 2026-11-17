@@ -302,6 +302,10 @@ export const TableView = z.object({
    *  nothing paired yet. Optional because a hub document cached before the field existed (Redis 15s, ISR 30s) reaches
    *  the client without it - absent reads as "no chip", as `TableRow.cellNotes` does. */
   swissRound: SwissRoundView.nullable().optional(),
+  /** W5 T8 (RB5-W7; owner R24 pick 11 A): one resolved line per departed entrant of this table, naming the rule its departure
+   *  applied ("P1 (withdrawn):" + "left after 2 of 5, ..."), in the org's language. Optional for the same cached-document
+   *  reason as `swissRound`: absent reads as "no note". Empty for a table nobody left. */
+  withdrawalNotes: z.array(z.object({ entrantId: z.string(), lead: z.string(), body: z.string() })).optional(),
   updatedAt: z.string(),
   fullHref: z.string(),
 });

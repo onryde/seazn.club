@@ -165,7 +165,7 @@ export interface WithdrawalObs {
   policy: "none" | "walkover" | "expunge";
   walkovers: number;
   voided: number;
-  skippedFinalized: number;
+  skippedCancelled: number;
   /** The withdrawn entrant's fixtures as they stood immediately before the call. */
   before: FixtureSnap[];
   /** americano: the fixtures the withdrawn PLAYER held only through minted pair entrants (a side whose members hold their

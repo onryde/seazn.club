@@ -408,7 +408,7 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     o.withdraw = withdraw;
     // Swiss is a TABLE stage: H has played 1 (the forfeit) and has 0 pending,
     // so the engine picks the ≥50% branch — results stand, nothing to award.
-    expect(withdraw).toMatchObject({ status: "withdrawn", policy: "walkover", walkovers: 0, voided: 0, skipped_finalized: 0 });
+    expect(withdraw).toMatchObject({ status: "withdrawn", policy: "walkover", walkovers: 0, voided: 0, skipped_cancelled: 0 });
 
     const afterWithdraw = await fixturesOf(rig.swissId);
     o.r1AfterWithdraw = record(rig, inRound(afterWithdraw, 1));
@@ -501,7 +501,7 @@ describe.runIf(HAS_DB)("swiss walkover, Saturday — what the product does", () 
     // Unpair ("played results") and Forfeit ("match already over") all
     // refused. A Swiss withdrawal never expunges now: the paired board walks
     // over to A.
-    expect(withdraw).toMatchObject({ status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0 });
+    expect(withdraw).toMatchObject({ status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_cancelled: 0 });
 
     const afterWithdraw = await fixturesOf(rig.swissId);
     const ahAfter = afterWithdraw.find((f) => f.id === ah.id)!;

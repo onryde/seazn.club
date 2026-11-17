@@ -25,6 +25,8 @@ import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/onlin
 import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -121,6 +123,8 @@ export default async function DivisionHomePage({ params }: Props) {
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
+  // W5 T8 (RB5-W7): the league/group departure notes under each table.
+  const tableWithdrawals = await loadTableWithdrawals(division.id);
   // Badge chips (v3/03 §5 + PROMPT-60): the entrant's own badge_url wins,
   // then team → club logo resolved by the view.
   const entrantLogos = Object.fromEntries(
@@ -330,6 +334,7 @@ export default async function DivisionHomePage({ params }: Props) {
                     qualification={qualification}
                     rules={stage.table_rules}
                     swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
+                    withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames)}
                     stageKind={stage.kind}
                     locale={orgLocale}
                     tz={tz}

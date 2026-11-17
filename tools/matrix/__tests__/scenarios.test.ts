@@ -218,7 +218,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
 
   it("resultsAsPosted: only the RECORDED withdrawal's cascade explains a result the harness did not post", () => {
     const withW = (fixtures: ObservedFixture[], policy: "walkover" | "expunge", before: { id: string; status: string }[], entrantId = "b"): ObservedRun =>
-      ({ ...run([], fixtures), withdrawal: { entrantId, afterRound: 1, policy, walkovers: 0, voided: 0, skippedFinalized: 0, before: before.map((b) => ({ ...b, outcome: null })) } });
+      ({ ...run([], fixtures), withdrawal: { entrantId, afterRound: 1, policy, walkovers: 0, voided: 0, skippedCancelled: 0, before: before.map((b) => ({ ...b, outcome: null })) } });
     const wo = fx({ id: "wo", status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "walkover" } });
     expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "scheduled" }]))).toMatchObject({ verdict: "pass", checked: 1 });
     // Its twins fail: the fixture was already decided before the withdrawal, another entrant withdrew, no snapshot, or no withdrawal at all.
@@ -1013,15 +1013,15 @@ describe("pilots on the fake league", () => {
     expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
     expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.voided} voided, observed ${w.voided - 1}`]);
   });
-  it("R4 (m-5): a skipped_finalized count that disagrees with the fixtures the cascade had to leave fails r4-cascade-consistent, naming both", async () => {
+  it("R4 (m-5): a skipped_cancelled count that disagrees with the cancelled fixtures the cascade left fails r4-cascade-consistent, naming both", async () => {
     class MiscountsSkipped extends FakeLeagueDriver {
-      override async withdraw(id: string) { const o = await super.withdraw(id); return { ...o, skipped_finalized: o.skipped_finalized + 1 }; }
+      override async withdraw(id: string) { const o = await super.withdraw(id); return { ...o, skipped_cancelled: o.skipped_cancelled + 1 }; }
     }
     const r = await runOn(new MiscountsSkipped(), "R4");
     const w = r.out.observed.withdrawal!;
     expect(w.policy).toBe("expunge");
     expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
-    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.skippedFinalized} locked fixture(s) skipped, observed ${w.skippedFinalized - 1}`]);
+    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.skippedCancelled} cancelled fixture(s) skipped, observed ${w.skippedCancelled - 1}`]);
   });
   it("R4: a withdrawal the product reports as policy 'none' fails r4-policy-reported", async () => {
     class NoPolicy extends FakeLeagueDriver {
@@ -2569,18 +2569,22 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     ({ id, stageId: "s1", poolId: null, roundNo: 2, home, away, status, outcome, declared: null });
   const ok = (items: { ok: boolean }[]) => items.map((i) => i.ok);
 
-  it("expunge: every touched fixture abandons; finalized and cancelled are left as they were", () => {
+  // W5 T8 (ST-G15, RB5-W2): a finalized result is removed too; only a cancelled line is left as it was.
+  it("expunge: every touched fixture abandons, finalized included; a cancelled one is left as it was", () => {
     const before = [
       { id: "a", status: "decided", outcome: { kind: "win" as const, winner: "w" } },
       { id: "b", status: "scheduled", outcome: null },
       { id: "c", status: "finalized", outcome: { kind: "win" as const, winner: "x" } },
       { id: "d", status: "cancelled", outcome: null },
     ];
-    const good = [after("a", "abandoned", null), after("b", "abandoned", null), after("c", "finalized", { kind: "win", winner: "x" }), after("d", "cancelled", null)];
-    // The last item is the voided count (m-3): two fixtures abandoned by the cascade.
-    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2, "league"))).toEqual([true, true, true, true, true]);
-    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3, "league"))).toEqual([true, true, true, true, false]);
-    const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("c", "abandoned", null), after("d", "abandoned", null)];
+    const good = [after("a", "abandoned", null), after("b", "abandoned", null), after("c", "abandoned", null), after("d", "cancelled", null)];
+    // The last item is the voided count (m-3): three fixtures abandoned by the cascade.
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3, "league"))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2, "league"))).toEqual([true, true, true, true, false]);
+    // The pre-W5 shape — the signed-off result kept — is now the defect ST-G15 names.
+    const kept = [good[0]!, good[1]!, after("c", "finalized", { kind: "win", winner: "x" }), good[3]!];
+    expect(ok(cascadeItems("expunge", "w", before, kept, 0, 2, "league"))).toEqual([true, true, false, true, true]);
+    const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("c", "finalized", { kind: "win", winner: "x" }), after("d", "abandoned", null)];
     expect(ok(cascadeItems("expunge", "w", before, bad, 0, 0, "league"))).toEqual([false, false, false, false, true]);
   });
 
@@ -2633,7 +2637,8 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
   });
 });
 
-describe("skippedItem (m-5) — the locked fixtures withdrawal.ts reports it skipped", () => {
+// W5 T8 (ST-G15): the count is of CANCELLED lines now (`skipped_cancelled`); a finalized one is expunged, never skipped.
+describe("skippedItem (m-5) — the cancelled fixtures withdrawal.ts reports it left", () => {
   const before = [
     { id: "a", status: "finalized", outcome: { kind: "win" as const, winner: "w" } },
     { id: "b", status: "finalized", outcome: { kind: "win" as const, winner: "x" } },
@@ -2641,23 +2646,20 @@ describe("skippedItem (m-5) — the locked fixtures withdrawal.ts reports it ski
     { id: "d", status: "cancelled", outcome: null },
     { id: "e", status: "scheduled", outcome: null },
   ];
-  it("expunge plans the PLAYED fixtures, so the finalized ones with a result are the ones it must skip", () => {
-    expect(skippedItem("expunge", before, 2)).toEqual({ ok: true, note: "reported 2 locked fixture(s) skipped, observed 2" });
-    expect(skippedItem("expunge", before, 0)).toEqual({ ok: false, note: "reported 0 locked fixture(s) skipped, observed 2" });
-    expect(skippedItem("expunge", before, 3).ok).toBe(false);
+  it("a table's expunge counts its cancelled line, and no finalized one (two finalized in the scene: the pre-W5 count was 2)", () => {
+    expect(skippedItem("expunge", before, 1, "league")).toEqual({ ok: true, note: "reported 1 cancelled fixture(s) skipped, observed 1" });
+    expect(skippedItem("expunge", before, 2, "league")).toEqual({ ok: false, note: "reported 2 cancelled fixture(s) skipped, observed 1" });
+    expect(skippedItem("expunge", before, 0, "group").ok).toBe(false);
   });
-  it("a cancelled fixture has no result, so an expunge never planned it — it is not counted as skipped", () => {
-    expect(skippedItem("expunge", [before[3]!], 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
-    expect(skippedItem("expunge", [before[3]!], 1).ok).toBe(false);
+  it("a table's walkover counts it too: the line is left under either policy", () => {
+    expect(skippedItem("walkover", before, 1, "league")).toEqual({ ok: true, note: "reported 1 cancelled fixture(s) skipped, observed 1" });
+    expect(skippedItem("walkover", before, 0, "league").ok).toBe(false);
   });
-  it("a finalized fixture WITHOUT a result was never played (lib/table-withdrawal.ts), so an expunge never planned it either", () => {
-    const noResult = [{ id: "f", status: "finalized", outcome: null }];
-    expect(skippedItem("expunge", noResult, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
-    expect(skippedItem("expunge", noResult, 1).ok).toBe(false);
-  });
-  it("walkover plans pending fixtures only, and a pending fixture is never locked — it skips none", () => {
-    expect(skippedItem("walkover", before, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
-    expect(skippedItem("walkover", before, 2).ok).toBe(false);
+  it("the empty case and the non-table paths count none", () => {
+    expect(skippedItem("expunge", [], 0, "league")).toEqual({ ok: true, note: "reported 0 cancelled fixture(s) skipped, observed 0" });
+    expect(skippedItem("walkover", before, 0, "knockout")).toEqual({ ok: true, note: "reported 0 cancelled fixture(s) skipped, observed 0" });
+    expect(skippedItem("walkover", before, 1, "knockout").ok).toBe(false);
+    expect(skippedItem("none", before, 0, "league").ok).toBe(true);
   });
 });
 
@@ -2878,7 +2880,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     // X-WD-2: a page playoff withdrawal walks the pending fixture over to the opponent, as knockout does.
     expect(fx("pp-q2")).toMatchObject({ home: seed(2), away: seed(3), status: "forfeited", outcome: { kind: "award", winner: seed(2) } });
     const w = r.out.observed.withdrawal!;
-    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 1, voided: 0, skippedFinalized: 0 });
+    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 1, voided: 0, skippedCancelled: 0 });
     expect(r.out.observed.stages[0]!.fixtures.filter((f) => f.status === "abandoned")).toEqual([]);
     // pp-final's away seat is winnerOf("pp-q2") — seed 2, by the walkover — so the final is played.
     expect(fx("pp-final")).toMatchObject({ home: seed(1), away: seed(2), status: "decided" });

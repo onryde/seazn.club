@@ -13,6 +13,8 @@ import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
@@ -89,6 +91,8 @@ export default async function EmbedWidgetPage({ params }: Props) {
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
   // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
+  // W5 T8 (RB5-W7): the league/group departure notes under each table.
+  const tableWithdrawals = await loadTableWithdrawals(division.id);
   // PROMPT-60: the entrant's own badge_url wins over the team logo.
   const entrantLogos = Object.fromEntries(
     entrants.map((e) => [
@@ -247,6 +251,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}
               swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
+              withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames)}
               stageKind={stage.kind}
               locale={orgLocale}
               tz={tz}

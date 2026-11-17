@@ -426,7 +426,7 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const expected = w.before.some((f) => PENDING.has(f.status)) ? "walkover" : "none";
     expect(expected).toBe("none");                                   // D8 decides each challenge before the next is issued
     expect(w.before.length, "seed 3's decided challenge was snapshotted").toBeGreaterThan(0);
-    expect([w.policy, w.walkovers, w.voided, w.skippedFinalized]).toEqual([expected, 0, 0, 0]);
+    expect([w.policy, w.walkovers, w.voided, w.skippedCancelled]).toEqual([expected, 0, 0, 0]);
     expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("pass");
     expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");   // seed 3's decided challenge unchanged
     // T9-R1: I9 judges the active entrants against the raw stored order, the withdrawn entrant set aside.

@@ -38,6 +38,8 @@ import type { QualificationView } from "@/server/public-site/qualification-view"
 import type { QualRowT } from "@/server/public-site/competition-hub-schema";
 import { bracketPlaceLabels, isBracketPlacement } from "@/lib/bracket-places";
 import { SHARED_PLACE_MSG_KEY } from "@/server/public-site/standings-view";
+import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
+import { WithdrawalFootnotes } from "./withdrawal-footnotes";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
@@ -119,6 +121,9 @@ interface Props {
    *  public page and the embed, the viewer's in the console. Absent: en, UTC. */
   locale?: string;
   tz?: string;
+  /** W5 T8 (RB5-W7; owner R24 pick 11 A): THIS table's departure notes (`withdrawalNotesFor`, its stage and its rows), one line
+   *  each under the table naming the rule applied. Absent or empty: nothing renders. */
+  withdrawalNotes?: readonly WithdrawalNote[];
 }
 
 export function StandingsTable({
@@ -136,6 +141,7 @@ export function StandingsTable({
   stageKind,
   locale = "en",
   tz = "UTC",
+  withdrawalNotes,
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
   const layout = tableLayoutFor(rules, stageKind);
@@ -440,13 +446,20 @@ export function StandingsTable({
     </div>
   );
 
-  if (!qualification) return region;
+  // W5 T8: the departure notes sit under the box (and under the legend), outside its sideways scroll, so a long name wraps
+  // to the page's width rather than the table's.
+  const notes = (withdrawalNotes ?? []).map((n) => withdrawalNoteText(n, msg));
+  if (!qualification && notes.length === 0) return region;
   // The legend sits under the box, outside its sideways scroll, so it wraps
   // to the page's width rather than the table's.
   return (
     <div>
       {region}
-      <QualLegend legend={qualification.table.legend} />
+      {/* One slot for both, as the hub's view: a further sibling would renumber every `useId` in the region above. */}
+      <>
+        {qualification ? <QualLegend legend={qualification.table.legend} /> : null}
+        <WithdrawalFootnotes items={notes} />
+      </>
     </div>
   );
 }

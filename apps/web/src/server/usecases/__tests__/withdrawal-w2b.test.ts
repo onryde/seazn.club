@@ -133,7 +133,7 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
       policy: "none",
       walkovers: 0,
       voided: 0,
-      skipped_finalized: 0,
+      skipped_cancelled: 0,
       walked_over_held: 0,
       left_to_organiser: [],
       lucky_loser: null,

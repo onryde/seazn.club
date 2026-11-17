@@ -284,6 +284,28 @@ function assertW2bWriteGuards(
   }
 }
 
+/**
+ * W5 T8 (ST-G15, RB5-W2: "every result they played is removed, finalized ones included"): the ONE append a finalized
+ * ledger admits — the withdrawal cascade's void of its ACTIVE `core.finalize`, the first step of an expunge
+ * (`withdrawal.ts` `voidAndAbandon`). Once it lands the fixture folds back to an unlocked status, and the cascade's further
+ * voids and its expunge abandon go through the ordinary path. Every other writer, every other event, and a void of anything
+ * but that finalize still meet the lock; a `cancelled` fixture never opens. Read under the fixture lock this append holds.
+ */
+async function cascadeReopensFinalize(
+  tx: Tx,
+  fixture: Pick<FixtureRow, "id" | "status">,
+  input: Pick<AppendInput, "type" | "writer" | "voids">,
+): Promise<boolean> {
+  if (fixture.status !== "finalized" || input.writer !== "withdrawal_cascade" || input.type !== "core.void" || input.voids === undefined) {
+    return false;
+  }
+  const [target] = await tx<{ n: number }[]>`
+    select count(*)::int as n from score_events e
+     where e.id = ${input.voids} and e.fixture_id = ${fixture.id} and e.type = 'core.finalize'
+       and not exists (select 1 from score_events v where v.fixture_id = e.fixture_id and v.voids_event_id = e.id)`;
+  return target!.n === 1;
+}
+
 /** Which door the DECIDING append came through (`result_entered.source`, fix
  *  batch 6b): a device link stamps `deviceLinkId` on its appends (scoring.ts,
  *  from the dl_ bearer door); everything else is the organiser side. */
@@ -322,7 +344,7 @@ export async function appendEventInTx(
   // W4 B5a (review I-3, X-CH-4): a final ruled joint holds `decided` + no outcome. Any append (a scorer's tap, a pad Undo, the
   // organiser's settle) would fold and then break V499's shape check with a bare 23514, so the door refuses it by name first.
   if (fixture.joint_declared) throw knockoutRefusal("FINAL_JOINT_WINNERS_DECLARED");
-  if (LOCKED.has(fixture.status)) {
+  if (LOCKED.has(fixture.status) && !(await cascadeReopensFinalize(tx, fixture, input))) {
     throw new EngineError(LOCKED_FIXTURE_REFUSAL_CODE, `fixture ${fixtureId} is ${fixture.status}`, {
       fixtureId,
       status: fixture.status,

@@ -214,7 +214,7 @@ describe("life-bracket-decider-exercised - owed only if a hard-path slot reached
 describe("life-bracket-decider-exercised — a settle the recorded withdrawal struck is explained, not a missing read-back (M-6, R4 on a bracket)", () => {
   const settledFx = (id: string, status: string, method?: string): ObservedFixture =>
     ({ id, stageId: "s1", poolId: null, roundNo: 1, home: "a", away: "b", status, outcome: method === undefined ? null : ({ kind: "win", winner: "a", method } as never), declared: null });
-  const withdrawn = (policy: "walkover" | "expunge", before: { id: string; status: string }[]) => ({ entrantId: "a", afterRound: 1, policy, walkovers: 0, voided: 0, skippedFinalized: 0, before: before.map((b) => ({ ...b, outcome: null })) });
+  const withdrawn = (policy: "walkover" | "expunge", before: { id: string; status: string }[]) => ({ entrantId: "a", afterRound: 1, policy, walkovers: 0, voided: 0, skippedCancelled: 0, before: before.map((b) => ({ ...b, outcome: null })) });
   const runWith = (fixtures: ObservedFixture[], w: ReturnType<typeof withdrawn> | null): ObservedRun => ({
     caseId: "c", facts: [], withdrawal: w, configEdit: null,
     stages: [{ id: "s1", seq: 1, kind: "knockout", config: {}, field: ["a", "b"], fieldSource: "division", fixtures, standings: [], generates: [], pairRounds: [], complete: null }],

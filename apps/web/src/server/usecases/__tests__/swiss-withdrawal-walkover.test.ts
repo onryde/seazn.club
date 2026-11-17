@@ -169,7 +169,7 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
       policy: "walkover",
       walkovers: 1,
       voided: 0,
-      skipped_finalized: 0,
+      skipped_cancelled: 0,
       walked_over_held: 0,
       left_to_organiser: [],
       lucky_loser: null,
@@ -217,7 +217,7 @@ describe.runIf(HAS_DB)("swiss withdrawal — never expunge, walk the paired boar
     const { fixture_id: adHoc } = await seedLegacySwissAdhoc(rig.stageId, S4!, S3!);
 
     const out = await withdrawEntrantCascade(rig.auth, S4!);
-    expect(out).toMatchObject({ policy: "walkover", walkovers: 2, voided: 0, skipped_finalized: 0 });
+    expect(out).toMatchObject({ policy: "walkover", walkovers: 2, voided: 0, skipped_cancelled: 0 });
 
     const after = await fixturesOf(rig.stageId);
     // The earlier walkover S4 WON stands, untouched.

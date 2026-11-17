@@ -53,6 +53,17 @@ name the per-round pairs minted from the individuals, which the cascade never ma
 
 A reinstatement flips the status back and does not restore the voided matches.
 
+## 2026-11-17 — the withdrawal report's `skipped_finalized` is `skipped_cancelled`
+
+`POST /entrants/{id}/withdraw`, and `PATCH /entrants/{id}` to `disqualified` (its `cascade`), report
+`skipped_cancelled` where they reported `skipped_finalized`. A finalized match is no longer skipped: in a
+league or group, an entrant who leaves under half played has every result removed, finalized ones included
+(W5 RB5-W2). The new field counts the entrant's cancelled matches, which are still left as they are. A
+reader of `skipped_finalized` finds the key absent.
+
+A Reinstate (`PATCH /entrants/{id}` back into the field) now reverses a league or group withdrawal: voided
+matches and never-played walkovers return to scheduled. A departed entrant's league or group row ranks last.
+
 ## 2026-11-12 — the public registration writes take a bot-check token
 
 Five public writes are now checked by Cloudflare Turnstile on the hosted service (staging and production):
