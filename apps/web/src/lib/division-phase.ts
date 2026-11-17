@@ -224,6 +224,12 @@ export interface PhaseInput {
    *  its count of waiting entrants still in the field. The caller counts `entrants.knockout_waiting_stage_id` on stages
    *  not complete; empty for every other division. */
   lateWaiting: readonly { stageName: string; count: number; table?: true }[];
+  /** W5 T6 fix round 1 (RB5-L8, L10): players still in the field who hold NO fixture in the division's COMPLETE root league or
+   *  group — an automatic arrival (a paid registration, an import, a Reinstate) after the table finished, which takes no one and
+   *  marks no one. DERIVED on read, never stored: placing them (any fixture of the stage) or their leaving the field clears it.
+   *  One entry per such stage (at most one: the entry stage), its players' names in arrival order. The caller reads it;
+   *  absent reads as none. */
+  lateUnplaced?: readonly { stageName: string; names: readonly string[] }[];
 }
 
 /** WHICH control the seed-proposal panel is showing for a stage that owes
@@ -301,7 +307,10 @@ export type Attention =
   // places each (the bye, a withdrawn slot). Raised per stage, only after Start (the marker is written only then).
   // W5 T6 (X-CU-8): `table: true` when they wait to join a running root league or group (`table_waiting_stage_id`) — the
   // same tap, the copy says "table" instead of "bracket". Absent for a knockout.
-  | { kind: "late_players_waiting"; count: number; stageName: string; table?: true };
+  | { kind: "late_players_waiting"; count: number; stageName: string; table?: true }
+  // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the division's root table FINISHED — in the field, in no fixture
+  // of it. A finished table takes no one, so there is no tap: the row names them for the organiser to place elsewhere or refund.
+  | { kind: "late_unplaced"; count: number; stageName: string; names: readonly string[] };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -335,6 +344,8 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // AMBER: the player is owed a place before round 1 runs out of slots, but every match already drawn can be played —
   // it never blocks the bracket the way the stage-blocking reds do.
   late_players_waiting: "amber",
+  // AMBER, as late_players_waiting: a person is owed a decision, but nothing drawn is blocked by it.
+  late_unplaced: "amber",
   registrations_waiting: "slate",
 };
 
@@ -426,6 +437,8 @@ const KIND_ORDER: Attention["kind"][] = [
   // W4 T11: after the match ambers — it is about people, not a match — and before bans: a late player's bye or slot
   // closes as round 1 is played, so this one runs on the bracket's clock.
   "late_players_waiting",
+  // W5 T6 fix round 1: beside the waiting players — the same people-not-matches row, for a table that has finished.
+  "late_unplaced",
   // Last of the ambers: the three above are about MATCHES (a live one unrecorded, one undated, one without a result);
   // this one is about a person and is reviewed from a different tab.
   "bans_waiting",
@@ -1049,6 +1062,10 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   if (input.divisionStatus !== "setup") {
     for (const w of input.lateWaiting) {
       if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName, ...(w.table ? { table: true as const } : {}) });
+    }
+    // W5 T6 fix round 1: the empty case first — no entry, or an entry naming nobody, raises nothing.
+    for (const u of input.lateUnplaced ?? []) {
+      if (u.names.length > 0) out.push({ kind: "late_unplaced", count: u.names.length, stageName: u.stageName, names: u.names });
     }
   }
   return out.sort(

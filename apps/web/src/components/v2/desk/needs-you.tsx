@@ -214,6 +214,16 @@ export function needsYouItems(
             action: { label: t(dict, a.table ? "roundrobin.lateWaiting.action" : "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
           });
           break;
+        // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the table finished — named, no tap (a finished table takes
+        // no one); "Open entrants" lands where the organiser moves, withdraws or refunds them.
+        case "late_unplaced":
+          items.push({
+            key: needsYouKey(d.id, "late_unplaced"), severity: sev, kind: a.kind,
+            title: plural(dict, "roundrobin.lateUnplaced", a.count, locale),
+            sub: t(dict, "roundrobin.lateUnplaced.sub", { division: d.name, stage: a.stageName, names: a.names.join(", ") }),
+            action: { label: t(dict, "roundrobin.lateUnplaced.action"), href: routes.division(org, comp, d.slug, "entrants") },
+          });
+          break;
         // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own
         // Complete stage — its label is that button's key, so the row and the button it points at cannot drift.
         case "final_decided":

@@ -834,6 +834,20 @@ describe("resolveAttention", () => {
       const ko = resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 1 }] })).find((a) => a.kind === "late_players_waiting");
       expect(ko).toEqual({ kind: "late_players_waiting", count: 1, stageName: "Cup" });
     });
+    it("X-CU-8 late_unplaced (fix round 1): the empty case first, then one row per finished table naming its players; never before Start", () => {
+      expect(resolveAttention(input({})).some((a) => a.kind === "late_unplaced"), "absent").toBe(false);
+      expect(resolveAttention(input({ lateUnplaced: [] })).some((a) => a.kind === "late_unplaced"), "empty").toBe(false);
+      expect(resolveAttention(input({ lateUnplaced: [{ stageName: "Table", names: [] }] })).some((a) => a.kind === "late_unplaced"), "nobody").toBe(false);
+      expect(resolveAttention(input({ lateUnplaced: [{ stageName: "Table", names: ["Lou", "Max"] }] }))).toContainEqual({
+        kind: "late_unplaced",
+        count: 2,
+        stageName: "Table",
+        names: ["Lou", "Max"],
+      });
+      expect(ATTENTION_SEVERITY.late_unplaced).toBe("amber");
+      expect(resolveAttention(input({ divisionStatus: "setup", lateUnplaced: [{ stageName: "Table", names: ["Lou"] }] })).some((a) => a.kind === "late_unplaced")).toBe(false);
+      expect(resolvePhase(input({ lateUnplaced: [{ stageName: "Table", names: ["Lou"] }] })), "orthogonal to phase").toBe(resolvePhase(input({})));
+    });
     it("is AMBER — the player is owed a place, but every match already drawn can be played", () => {
       expect(ATTENTION_SEVERITY.late_players_waiting).toBe("amber");
     });

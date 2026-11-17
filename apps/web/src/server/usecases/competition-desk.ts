@@ -344,7 +344,7 @@ export async function getCompetitionDesk(
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
   const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -516,7 +516,28 @@ export async function getCompetitionDesk(
            group by e.division_id, s.id, s.name, s.seq, s.kind
            order by s.seq`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting };
+    // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the division's root league or group FINISHED. A finished table
+    // takes no one and marks no one (`markTableWaiting`), so this is DERIVED, never stored: the entry stage (lowest seq; a league
+    // or group drawing from the live roster — `isRootTableStage` spelt in SQL, as V526 spells it), complete, and drawn; every
+    // entrant still in the field seated in none of its fixtures. Placing them anywhere in it, or their leaving, clears it.
+    const lateUnplaced = ids.length
+      ? await tx<{ division_id: string; stage_name: string; names: string[] }[]>`
+          select s.division_id, s.name as stage_name,
+                 array_agg(e.display_name order by e.created_at, e.id) as names
+            from stages s
+            join entrants e on e.division_id = s.division_id
+           where s.division_id = any(${ids})
+             and s.kind in ('league', 'group')
+             and s.progression is null
+             and not (s.config ? 'qualified')
+             and s.status = 'complete'
+             and s.seq = (select min(s2.seq) from stages s2 where s2.division_id = s.division_id)
+             and exists (select 1 from fixtures f where f.stage_id = s.id)
+             and e.status not in ${tx([...DEPARTED_STATUSES])}
+             and not exists (select 1 from fixtures f where f.stage_id = s.id and e.id in (f.home_entrant_id, f.away_entrant_id))
+           group by s.division_id, s.id, s.name`
+      : [];
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced };
   });
   const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
@@ -647,6 +668,7 @@ export async function getCompetitionDesk(
       lateWaiting: lateWaiting
         .filter((w) => w.division_id === d.id)
         .map((w) => ({ stageName: w.stage_name, count: w.count, ...(w.is_table ? { table: true as const } : {}) })),
+      lateUnplaced: lateUnplaced.filter((u) => u.division_id === d.id).map((u) => ({ stageName: u.stage_name, names: u.names })),
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");

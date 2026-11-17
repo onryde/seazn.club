@@ -23,8 +23,9 @@
 // sport field reaches.
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import postgres from "postgres";
 import { builtinModules } from "@seazn/engine/sports";
-import { sql, withTenant } from "@/lib/db";
+import { connectionOptions, sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { rankedStageStandings } from "@/server/engine-db/competition";
@@ -39,6 +40,7 @@ import {
   openPromotionSeatGate,
   promoteOldestWaitlisted,
   putRegistrationSettings,
+  withdrawRegistrationPublic,
 } from "../registrations";
 import { placeWaitingLateEntrant, placeWaitingTableEntrant } from "../roundrobin-late-entry";
 import { startDivision } from "../schedule";
@@ -178,12 +180,18 @@ async function deskLate(r: Rig) {
 }
 const WAITING_ROW = (r: Rig, count: number) => [{ kind: "late_players_waiting", count, stageName: r.stageName, table: true }];
 
+/** The desk's "arrived after the table finished" rows (fix round 1, derived on read). */
+async function deskUnplaced(r: Rig) {
+  const desk = await getCompetitionDesk(r.auth, r.competitionId);
+  return (desk.divisions.get(r.divisionId)?.attention ?? []).filter((a) => a.kind === "late_unplaced");
+}
+
 /** A free, offline registration confirmed through `confirmRegistration` → `materialise`. */
-async function confirmArrival(r: Rig, name: string): Promise<{ entrantId: string; status: string }> {
-  const { registration } = await seedRegistration(r.competitionId, r.divisionId, { fee_cents: 0, currency: "eur", payment_method: "offline" }, { displayName: name });
+async function confirmArrival(r: Rig, name: string): Promise<{ entrantId: string; status: string; registrationId: string; token: string }> {
+  const { registration, access_token } = await seedRegistration(r.competitionId, r.divisionId, { fee_cents: 0, currency: "eur", payment_method: "offline" }, { displayName: name });
   const confirmed = await confirmRegistration(r.auth, registration.id);
   expect(confirmed.entrant_id, `rig: ${name}'s confirmation made an entrant`).toBeTruthy();
-  return { entrantId: confirmed.entrant_id!, status: confirmed.status };
+  return { entrantId: confirmed.entrant_id!, status: confirmed.status, registrationId: registration.id, token: access_token };
 }
 
 async function refusal(p: Promise<unknown>): Promise<HttpError> {
@@ -546,6 +554,120 @@ describe.skipIf(!HAS_DB)("W5 T6: every cleanup path of the waiting marker (stora
   });
 });
 
+describe.skipIf(!HAS_DB)("W5 T6 fix round 1: a table that finished flags late arrivals on the desk (RB5-L8, L10)", () => {
+  /** A league of four, started, then marked complete (a finished table: every line stands as drawn). */
+  async function finished(): Promise<Rig> {
+    const r = await rig({ n: 4 });
+    await sql`update stages set status = 'complete' where id = ${r.stageId}`;
+    return r;
+  }
+
+  it("X-CU-8 the empty case first: a finished table with nobody late raises nothing", async () => {
+    const r = await finished();
+    expect(await deskUnplaced(r)).toEqual([]);
+  });
+
+  it("X-CU-8 a confirmation into a COMPLETE league: no marker, and the desk names the player arrived after the table finished", async () => {
+    // differential: today (b5062a338d) the confirmation commits, no marker, and the desk shows nothing — a paid player in no stage.
+    const r = await finished();
+    const { entrantId, registrationId, token } = await confirmArrival(r, "Late Lou");
+    expect(await waitingOn(entrantId), "a finished table takes no one: no marker").toBeNull();
+    expect(await deskLate(r), "no waiting row: there is no tap").toEqual([]);
+    expect(await deskUnplaced(r)).toEqual([{ kind: "late_unplaced", count: 1, stageName: r.stageName, names: ["Late Lou"] }]);
+    // Their leaving clears it (derived): the registrant withdraws their own entry.
+    await withdrawRegistrationPublic(registrationId, token);
+    expect(await deskUnplaced(r), "withdrawn: the count is 0").toEqual([]);
+  });
+
+  it("X-CU-8 positive pair: the same arrival into a RUNNING league waits and is never named as arrived-after-finish", async () => {
+    const r = await rig({ n: 4 });
+    const { entrantId } = await confirmArrival(r, "Late Lou");
+    expect(await waitingOn(entrantId)).toBe(r.stageId);
+    expect(await deskLate(r)).toEqual(WAITING_ROW(r, 1));
+    expect(await deskUnplaced(r)).toEqual([]);
+  });
+
+  it("X-CU-8 the originals of a finished table are never named, and a withdrawn arrival leaves it (cascade)", async () => {
+    const r = await finished();
+    const a = (await confirmArrival(r, "Ann Late")).entrantId;
+    await confirmArrival(r, "Bo Late");
+    expect(await deskUnplaced(r)).toEqual([{ kind: "late_unplaced", count: 2, stageName: r.stageName, names: ["Ann Late", "Bo Late"] }]);
+    await withdrawEntrantCascade(r.auth, a);
+    expect(await deskUnplaced(r)).toEqual([{ kind: "late_unplaced", count: 1, stageName: r.stageName, names: ["Bo Late"] }]);
+  });
+
+  it("X-CU-8 m1: a Reinstate of a player who still holds lines in a COMPLETE league is never answered 'stage complete'", async () => {
+    // differential: today (b5062a338d) the complete check ran before the seat check and answered refused STAGE_COMPLETE.
+    const r = await rig({ n: 4 });
+    await startRoundOne(r);
+    const gone = r.ids[3]!;
+    await withdrawEntrantCascade(r.auth, gone);
+    await sql`update stages set status = 'complete' where id = ${r.stageId}`;
+    const back = await patchEntrant(r.auth, gone, { status: "registered" });
+    expect(back.status).toBe("registered");
+    expect(back.late_entry, "no late-entry answer: they hold their lines").toBeUndefined();
+    expect(await waitingOn(gone)).toBeNull();
+    expect(await deskUnplaced(r), "seated in the table: never named").toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("W5 T6 fix round 1: the marker is cleared on every departure (m2) and the tap locks the entrant row (m4)", () => {
+  it("X-CU-8 m2: a waiting player who withdraws their own registration stops waiting", async () => {
+    // differential: today (b5062a338d) registrations/withdraw.ts writes the status directly and the marker stays set.
+    const r = await rig({ n: 4 });
+    await startRoundOne(r);
+    const { entrantId, registrationId, token } = await confirmArrival(r, "Late");
+    expect(await waitingOn(entrantId), "premise").toBe(r.stageId);
+    await withdrawRegistrationPublic(registrationId, token);
+    const [e] = await sql<{ status: string }[]>`select status from entrants where id = ${entrantId}`;
+    expect(e!.status, "premise: the entrant left").toBe("withdrawn");
+    expect(await waitingOn(entrantId)).toBeNull();
+    expect(await deskLate(r)).toEqual([]);
+  });
+
+  it("X-CU-8 m4: a withdrawal holding the entrant row when the tap arrives is seen by the tap — refused, nothing placed", async () => {
+    // Deterministic: a second connection writes the departure (as `writeEntrantPatch` does) and holds it uncommitted; the tap is
+    // started and observed WAITING on a lock; then the departure commits. With `for update` the tap re-reads the row and refuses;
+    // without it the tap reads the old committed row, writes the catch-up set, and only then waits on its own marker clear.
+    const r = await rig({ n: 4 });
+    await startRoundOne(r);
+    const { entrantId } = await confirmArrival(r, "Late");
+    const url = process.env.DATABASE_URL!;
+    const holder = postgres(url, { max: 1, ssl: connectionOptions(url).ssl, connection: { search_path: connectionOptions(url).schema } });
+    const watcher = postgres(url, { max: 1, ssl: connectionOptions(url).ssl, connection: { search_path: connectionOptions(url).schema } });
+    try {
+      const reserved = await holder.reserve();
+      try {
+        await reserved`begin`;
+        await reserved`update entrants set status = 'withdrawn', table_waiting_stage_id = null where id = ${entrantId}`;
+        const tap = placeWaitingTableEntrant(r.auth, r.stageId, entrantId).then(
+          (v) => ({ ok: true as const, v }),
+          (e: unknown) => ({ ok: false as const, e }),
+        );
+        let waited = false;
+        for (let i = 0; i < 200 && !waited; i++) {
+          const [{ n }] = await watcher<{ n: number }[]>`
+            select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`;
+          waited = n > 0;
+          if (!waited) await new Promise((res) => setTimeout(res, 25));
+        }
+        expect(waited, "premise: the tap is waiting on the held row").toBe(true);
+        await reserved`commit`;
+        const answer = await tap;
+        expect(answer.ok, "the tap is refused").toBe(false);
+        expect(answer.ok ? null : (answer.e as HttpError).code).toBe("RR_LATE_ENTRY_NOT_WAITING");
+      } finally {
+        reserved.release();
+      }
+    } finally {
+      await holder.end();
+      await watcher.end();
+    }
+    expect(await linesOf(r.stageId, entrantId), "nothing placed for a departed player").toEqual([]);
+    expect(await ledger(r.divisionId)).toEqual([]);
+  });
+});
+
 describe.skipIf(!HAS_DB)("W5 T6: an import into a started league (football)", () => {
   // single-sport: football — an import's `entrant.create` makes TEAM entrants only, and chess is individual-only.
   it("X-CU-8 an import into a started league waits with a flag", async () => {
@@ -583,5 +705,36 @@ describe.skipIf(!HAS_DB)("W5 T6: an import into a started league (football)", ()
     expect(await placeWaitingTableEntrant(auth, stage!.id, e!.id)).toMatchObject({ format: "league", case: "rebuild_offered", source: "organiser" });
     expect((await linesOf(stage!.id, e!.id)).length).toBe(4);
     expect(await waitingOn(e!.id)).toBeNull();
+  });
+
+  it("X-CU-8 an import into a COMPLETE league: no marker, and the desk names the team arrived after the table finished", async () => {
+    // differential: today (b5062a338d) the import commits, no marker, and the desk shows nothing.
+    const csv = (rows: string[]) => ({
+      filename: "import.csv",
+      contentType: "text/csv",
+      buffer: Buffer.from(["Club,Team,Player,DOB,Number,Position,Captain,Division", ...rows].join("\r\n"), "utf8"),
+    });
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W5 T6 import done " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const slug = "u12-" + randomUUID().slice(0, 4);
+    const division = await createDivision(auth, comp.id, { name: "U12", slug, sport_key: "football", variant_key: "small-sided", config: {} });
+    const first = await createImport(
+      auth,
+      csv(["A SC,A Team,Ada One,2014-01-01,1,,,", "B SC,B Team,Bo Two,2014-01-02,2,,,", "C SC,C Team,Cy Three,2014-01-03,3,,,"].map((x) => x + slug)),
+    );
+    expect(first.plan.issues, "premise: the roster file plans clean").toEqual([]);
+    await commitImport(auth, first.importId, null);
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "league", name: "Table", config: { legs: 1 }, progression: null });
+    await startDivision(auth, division.id);
+    await sql`update stages set status = 'complete' where id = ${stage!.id}`;
+    const late = await createImport(auth, csv([`E SC,E Team,Ed Five,2014-01-05,5,,,${slug}`]));
+    await commitImport(auth, late.importId, null);
+    const [e] = await sql<{ id: string; w: string | null }[]>`
+      select id, table_waiting_stage_id as w from entrants where division_id = ${division.id} and display_name = 'E Team'`;
+    expect(e, "the import committed").toBeDefined();
+    expect(e!.w, "no marker").toBeNull();
+    const r: Rig = { auth, orgId: auth.orgId, competitionId: comp.id, divisionId: division.id, stageId: stage!.id, stageName: "Table", ids: [] };
+    expect(await deskLate(r)).toEqual([]);
+    expect(await deskUnplaced(r)).toEqual([{ kind: "late_unplaced", count: 1, stageName: "Table", names: ["E Team"] }]);
   });
 });

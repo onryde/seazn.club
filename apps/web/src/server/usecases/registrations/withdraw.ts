@@ -149,7 +149,9 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     // A withdrawn entrant that was already materialised marks withdrawn too —
     // fixtures/standings handle entrant withdrawal by the existing rules.
     if (locked.entrant_id) {
-      await tx`update entrants set status = 'withdrawn' where id = ${locked.entrant_id}`;
+      // W5 T6 review m2: a player waiting for a table place (`table_waiting_stage_id`) stops waiting as they leave — this write
+      // never reaches `writeEntrantPatch`, which clears it on every other departure.
+      await tx`update entrants set status = 'withdrawn', table_waiting_stage_id = null where id = ${locked.entrant_id}`;
     }
     // RS009: if this entry is a solo sign-up placed on someone else's team,
     // withdrawing must take them OFF that roster. Marking their own entrant

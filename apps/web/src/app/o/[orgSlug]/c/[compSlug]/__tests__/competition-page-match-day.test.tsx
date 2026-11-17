@@ -265,6 +265,7 @@ const SAMPLE: { [K in Attention["kind"]]: Extract<Attention, { kind: K }> } = {
   registrations_waiting: { kind: "registrations_waiting", count: 2 },
   bans_waiting: { kind: "bans_waiting", count: 1 },
   late_players_waiting: { kind: "late_players_waiting", count: 1, stageName: "Cup" },
+  late_unplaced: { kind: "late_unplaced", count: 1, stageName: "League", names: ["Lou Late"] },
 };
 
 const SIDES = [

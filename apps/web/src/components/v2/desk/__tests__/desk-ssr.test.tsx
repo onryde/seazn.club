@@ -318,6 +318,22 @@ describe("NeedsYou", () => {
     }
     expect(checked).toBe(5);
   });
+  it("X-CU-8 late_unplaced: one amber row naming the players, opening the Entrants tab, in all four locales", () => {
+    const d = div({ phase: "finished", attention: [{ kind: "late_unplaced", count: 1, stageName: "Table", names: ["Lou Late"] }] });
+    const [item, ...rest] = needsYouItems(en, desk(d, 0), names, "org", "comp", "en");
+    expect(rest, "one row").toEqual([]);
+    expect(item).toMatchObject({ kind: "late_unplaced", severity: "amber", title: "1 player arrived after the table finished, not placed" });
+    expect(item!.sub).toBe("Premier Division · Table: Lou Late. A finished table takes no one.");
+    expect(item!.action).toEqual({ label: "Open entrants", href: "/o/org/c/comp/d/premier-division?tab=entrants" });
+    let checked = 0;
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const [row] = needsYouItems(dict, desk(d, 0), names, "org", "comp", loc);
+      expect(row!.title, loc).toBe(plural(dict, "roundrobin.lateUnplaced", 1, loc));
+      expect(row!.sub, `${loc}: names the player`).toContain("Lou Late");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
   it("loop R M7(e): every Needs-you action is a 44px tap target below lg (768 and 834 are touch widths), compact only at lg", () => {
     // The desktop row (md and up) carried `py-1.5 text-xs` — 28px at 768, a touch width. Each row's two actions (the
     // phone stack and the md row) are read; every item, red and amber.

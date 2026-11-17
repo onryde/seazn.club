@@ -397,10 +397,12 @@ async function markTableWaiting(
   entrantId: string,
 ): Promise<TableAdmission | null> {
   const base = { format: stage.kind === "group" ? ("group" as const) : ("league" as const), entrant_id: entrantId, stage_id: stage.id, source: "automatic" as const };
-  if (stage.status === "complete") return { result: { ...base, case: "refused", reason: "RR_LATE_ENTRY_STAGE_COMPLETE" } };
-  if (!(await tableDrawnAndOffered(tx, divisionId, stages, stage))) return null;
+  // The seat FIRST (Task 6 review m1): a Reinstate whose lines still exist is back in a table it never left, finished or not —
+  // never answered "this stage is complete".
   const [seat] = await tx`select 1 from fixtures where stage_id = ${stage.id} and ${entrantId} in (home_entrant_id, away_entrant_id) limit 1`;
   if (seat !== undefined) return null;
+  if (stage.status === "complete") return { result: { ...base, case: "refused", reason: "RR_LATE_ENTRY_STAGE_COMPLETE" } };
+  if (!(await tableDrawnAndOffered(tx, divisionId, stages, stage))) return null;
   await tx`update entrants set table_waiting_stage_id = ${stage.id} where id = ${entrantId}`;
   return { result: { ...base, case: "waiting" } };
 }
@@ -450,8 +452,12 @@ export async function placeWaitingTableEntrant(auth: AuthCtx, stageId: string, e
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + st.division_id}))`;
     const stages = await divisionStages(tx, st.division_id);
     const stage = stages.find((s) => s.id === stageId && isRootTableStage(s, stages));
+    // `for update` (Task 6 review m4): a departure does not take the division lock (`writeEntrantPatch`, the registration
+    // withdraw), so the entrant ROW is the lock both sides share. A withdrawal committing first is read here as departed; one that
+    // starts after this read waits for the tap to commit.
     const [e] = await tx<{ status: string; waiting: string | null }[]>`
-      select status, table_waiting_stage_id as waiting from entrants where id = ${entrantId} and division_id = ${st.division_id}`;
+      select status, table_waiting_stage_id as waiting from entrants
+       where id = ${entrantId} and division_id = ${st.division_id} for update`;
     const inField = e !== undefined && !DEPARTED_STATUSES.has(e.status);
     if (stage === undefined || !inField || e.waiting !== stageId) {
       const [seat] = inField

@@ -95,6 +95,10 @@ const UNREACHABLE: Record<string, string> = {
   // owe work, and the stage whose final is decided owes none (it has fixtures and no draw); rule 6 falls back to
   // `setting_up` only when nothing has been played.
   "setting_up/final_decided": "a decided final is played, and the stage holding it owes no work",
+  // W5 T6 fix round 1: the row needs a COMPLETE root table — played matches — and is never raised in a `setup` division.
+  // Rule 6's `setting_up` needs nothing played, so a started division reads `setting_up` only by rule 4: an open stage owing
+  // work, whose red row leads.
+  "setting_up/late_unplaced": "a finished table is played, so setting_up means an open stage owing work, whose red row leads",
 };
 
 type Shape = {
@@ -108,6 +112,8 @@ type Shape = {
   bansToReview?: number;
   /** W4 T11: late players waiting to join a started root knockout, per stage. */
   lateWaiting?: PhaseInput["lateWaiting"];
+  /** W5 T6 fix round 1: players who arrived after the root table finished, per stage. */
+  lateUnplaced?: PhaseInput["lateUnplaced"];
   entrants?: number;
 };
 
@@ -324,6 +330,25 @@ const SHAPES: Shape[] = [
     fixtures: [fxt({ id: "a", stageId: "ko" })],
     lateWaiting: [{ stageName: "Cup", count: 1 }],
   },
+  // W5 T6 fix round 1 (X-CU-8): a paid player confirmed after the root league finished — in the field, in none of its fixtures.
+  {
+    why: "finished/late_unplaced — the league played out and completed, a registration confirmed afterwards",
+    stages: [st({ status: "complete" })],
+    fixtures: [fxt({ id: "a" })],
+    lateUnplaced: [{ stageName: "League", names: ["Lou Late"] }],
+  },
+  {
+    why: "scheduled/late_unplaced — the league finished, the knockout after it dated, a late arrival not in the league",
+    stages: [st({ status: "complete" }), st({ id: "ko", name: "Cup", seq: 2 })],
+    fixtures: [fxt({ id: "a" }), fxt({ id: "b", stageId: "ko", status: "scheduled", scheduledAt: FUTURE })],
+    lateUnplaced: [{ stageName: "League", names: ["Lou Late"] }],
+  },
+  {
+    why: "match_day/late_unplaced — the league finished, the knockout being played today, a late arrival not in the league",
+    stages: [st({ status: "complete" }), st({ id: "ko", name: "Cup", seq: 2 })],
+    fixtures: [fxt({ id: "a" }), fxt({ id: "b", stageId: "ko", status: "in_play", hasScorer: true })],
+    lateUnplaced: [{ stageName: "League", names: ["Lou Late"] }],
+  },
   {
     why: "finished/none — a completed season",
     stages: [st({ status: "complete" })],
@@ -342,6 +367,7 @@ function resolve(shape: Shape) {
     awaitingRegistrations: shape.awaitingRegistrations ?? 0,
     bansToReview: shape.bansToReview ?? 0,
     lateWaiting: shape.lateWaiting ?? [],
+    lateUnplaced: shape.lateUnplaced ?? [],
   };
   const phase = resolvePhase(input);
   const attention = resolveAttention(input);
