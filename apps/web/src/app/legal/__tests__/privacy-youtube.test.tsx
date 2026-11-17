@@ -398,9 +398,9 @@ describe("privacy — regression: every section that existed before T19 still re
   ];
   const headingOf = (s: string) => text(s.match(/<h2[^>]*>(.*?)<\/h2>/)?.[1] ?? "").replace(/^\d+\.\s*/, "");
 
-  it("keeps all thirteen headings, in their order, with the YouTube section inserted after the online-chess section", () => {
+  it("keeps all thirteen headings, in their order, with the YouTube section and then the phone app's inserted after the online-chess section", () => {
     const titles = sections.map(headingOf);
-    const want = [...BEFORE.slice(0, 6).map(([t]) => t), "YouTube live streaming (YouTube API Services)", ...BEFORE.slice(6).map(([t]) => t)];
+    const want = [...BEFORE.slice(0, 6).map(([t]) => t), "YouTube live streaming (YouTube API Services)", "The Seazn Club phone app", ...BEFORE.slice(6).map(([t]) => t)];
     expect(titles).toEqual(want);
   });
 
