@@ -63,7 +63,9 @@ let held = "";
 
 const presenceCount = async (meetingId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_presence where meeting_id = ${meetingId}`)[0]!.n;
-const deliveryCount = async () => (await sql<{ n: number }[]>`select count(*)::int as n from realtimekit_webhook_deliveries`)[0]!.n;
+// The rows made under THIS file's uuids, never the table's total: webhook.test.ts (another DB suite) writes deliveries concurrently.
+const deliveryCount = async () =>
+  uuidsMade.length === 0 ? 0 : (await sql<{ n: number }[]>`select count(*)::int as n from realtimekit_webhook_deliveries where rtk_uuid in ${sql(uuidsMade)}`)[0]!.n;
 const deliveryRow = async (uuid: string) =>
   sql<{ event: string }[]>`select event from realtimekit_webhook_deliveries where rtk_uuid = ${uuid}`;
 
@@ -163,10 +165,12 @@ describe.skipIf(!DB)("POST /api/webhooks/realtimekit", () => {
       const bytes = Buffer.from(eventBody({ meetingId: held }));
       const before = await deliveryCount();
       const checked: number[] = [];
+      const [u1, u2] = [randomUUID(), randomUUID()];
+      uuidsMade.push(u1, u2);
       for (const h of [
-        { signature: null, uuid: randomUUID() },
+        { signature: null, uuid: u1 },
         { signature: signBytes(bytes), uuid: null },
-        { signature: "", uuid: randomUUID() },
+        { signature: "", uuid: u2 },
         { signature: null, uuid: null },
       ]) {
         const res = await post({ bytes, ...h });

@@ -57,8 +57,9 @@ const delivery = (rawBody: string, uuid: string = randomUUID()): Delivery => {
 let seeded: { fixtureId: string; orgId: string; personId: string; meetingId: string };
 
 const deliveryCount = async (uuid?: string) => {
+  // No uuid: the rows THIS file's deliveries made (never the table's total: another DB suite, the route's, writes deliveries concurrently).
   const [r] = uuid === undefined
-    ? await sql<{ n: number }[]>`select count(*)::int as n from realtimekit_webhook_deliveries`
+    ? uuidsMade.length === 0 ? [{ n: 0 }] : await sql<{ n: number }[]>`select count(*)::int as n from realtimekit_webhook_deliveries where rtk_uuid in ${sql(uuidsMade)}`
     : await sql<{ n: number }[]>`select count(*)::int as n from realtimekit_webhook_deliveries where rtk_uuid = ${uuid}`;
   return r!.n;
 };
