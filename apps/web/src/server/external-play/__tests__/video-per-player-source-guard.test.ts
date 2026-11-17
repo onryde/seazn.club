@@ -74,6 +74,14 @@ const BOTH_SIDES: readonly BothSides[] = [
     times: 1,
     reason: "the game's end ends BOTH rooms: every unended row of the fixture, each in its own try",
   },
+  {
+    file: "external-play/video/presence.ts",
+    fn: "presenceShadowReport",
+    table: "fixture_video_participants",
+    times: 1,
+    reason:
+      "the shadow report counts every verified PLAYER seat of the fixtures in scope, both sides on purpose; each seat is a row of its own and the statement selects its side",
+  },
 ];
 
 /** The only production files that may name a camera-report column. Paths under `src`. */
