@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harness.ts";
 
 /**
  * Format matrix W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21) — the smoke proof, over real HTTP against a live
@@ -48,7 +48,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // T8b Part 1: 1 (a registrant's own public withdrawal after Start runs the table withdrawal).
   // T8b Part 2: 1 (an in-match disqualification withdraws the entrant from the league).
   // T8b Part 3: 1 (the Disqualify preview's numbers are the ones the cascade then acts on).
-  const EXPECTED_CHECKS = 11;
+  // Task 9: 1 (a qualifier who leaves after the table completes is cut; the 5th place is seated).
+  const EXPECTED_CHECKS = 12;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -444,6 +445,73 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-WDT-10: the Disqualify preview says award at 2 of 4 and names her 2 open lines; the PATCH then walks exactly those over; as=gone is 422" +
         (ok ? "" : ` - ${l.created}, start ${started.status}, hers ${hers.length}, walks ${walks.join(",")}, preview ${pvRes.status} ${JSON.stringify(pv ?? null).slice(0, 300)}, bad ${bad.status}, dq ${dq.status} ${JSON.stringify(report ?? null)}, after ${after.map((f) => f.status).join(",")}`),
+      ok,
+    );
+  }
+
+  // Check 12 - Task 9 (X-CUT-1, X-CUT-3): the league_ko template's own drafts (league, then a top-4 knockout on the setup path)
+  // over 6 entrants, every match won by the better seed so the table reads seed order. After the table completes and BEFORE the
+  // seeding is confirmed, the 3rd-placed qualifier withdraws: the proposal and, once confirmed, the public division's schedule
+  // seat the 5th-placed entrant and never the withdrawn one. Check 6's public competition: `comp` is at its division cap.
+  {
+    const dRes = await v1(owner, `/api/v1/competitions/${pub?.id ?? "no-public-competition"}/divisions`, "POST", {
+      name: "Cut",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const div = v1data<{ id: string; slug: string } | undefined>(dRes);
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${div?.id}/entrants`, "POST",
+        Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `Cut${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const seedOf = new Map(field.map((e, i) => [e.id, i + 1]));
+    const stages = v1data<{ id: string; kind: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", [
+        { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+        { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "setup" } },
+      ]),
+    ) ?? [];
+    const leagueId = stages.find((x) => x.kind === "league")?.id;
+    const koId = stages.find((x) => x.kind === "knockout")?.id;
+    const koGen = await v1(owner, `/api/v1/stages/${koId}/generate`, "POST");
+    const lgGen = await v1(owner, `/api/v1/stages/${leagueId}/generate`, "POST");
+    const started = await v1(owner, `/api/v1/divisions/${div?.id}/start`, "POST");
+    const all = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${div?.id}/fixtures`)) ?? []);
+    const table = all.filter((f) => f.stage_id === leagueId);
+    const scored: number[] = [];
+    for (const f of table) {
+      const homeWins = (seedOf.get(f.home_entrant_id ?? "") ?? 99) < (seedOf.get(f.away_entrant_id ?? "") ?? 99);
+      scored.push((await v1(owner, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: 0, type: "generic.result", payload: homeWins ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 } })).status);
+    }
+    const done = v1data<{ completed?: boolean } | undefined>(await v1(owner, `/api/v1/stages/${leagueId}/complete`, "POST"));
+    const [third, fifth] = [field[2]?.id, field[4]?.id];
+    const left = await v1(owner, `/api/v1/entrants/${third}/withdraw`, "POST");
+    const pRes = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+    const proposal = v1data<{ id: string; computed: { qualifiers: { entrantId: string }[] } } | undefined>(pRes);
+    const proposed = (proposal?.computed.qualifiers ?? []).map((q) => q.entrantId);
+    const want = [field[0]?.id, field[1]?.id, field[3]?.id, fifth].sort().join(",");
+    const conf = await v1(owner, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal?.id });
+    const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+    const schedRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/divisions/${div?.slug}/schedule`);
+    type PubFx = { stage_id: string; home_entrant_id: string | null; away_entrant_id: string | null };
+    const sched = v1data<{ fixtures?: PubFx[] } | PubFx[] | undefined>(schedRes);
+    const pubRows = (Array.isArray(sched) ? sched : (sched?.fixtures ?? [])).filter((f) => f.stage_id === koId);
+    const seated = pubRows.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null).sort().join(",");
+    const page = await html(newSession(), `/live/${orgSlug}/${pub?.slug}/${div?.slug}`);
+    const ok =
+      dRes.status === 201 && field.length === 6 && stages.length === 2 && koGen.status === 200 && lgGen.status === 200 && started.status === 200 &&
+      table.length === 15 && scored.every((c) => c === 201) && done?.completed === true && left.status === 200 &&
+      pRes.status === 201 && proposed.length === 4 && proposed.sort().join(",") === want && !proposed.includes(third ?? "") &&
+      // A draw of four: two semi-finals seated, the final still to be decided.
+      conf.status === 200 && schedRes.status === 200 && pubRows.length === 3 && seated === want &&
+      page.status === 200 && page.body.includes(`Cut5 ${tag}`);
+    w5Check(
+      "w5a X-CUT-1/X-CUT-3: the 3rd-placed qualifier leaves after the table completes; the proposal and the public schedule seat the 5th, never her" +
+        (ok ? "" : ` - div ${dRes.status}, field ${field.length}, stages ${stages.length}, gen ${koGen.status}/${lgGen.status}, start ${started.status}, lines ${table.length}, scored ${scored.join(",")}, done ${JSON.stringify(done ?? null)}, left ${left.status}, proposal ${pRes.status} [${proposed.map((id) => seedOf.get(id)).join(",")}], confirm ${conf.status} ${JSON.stringify(conf.json).slice(0, 200)}, public ${schedRes.status} rows ${pubRows.length} [${seated.split(",").map((id) => seedOf.get(id)).join(",")}], page ${page.status}`),
       ok,
     );
   }
