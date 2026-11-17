@@ -192,7 +192,7 @@ function CourtRow({
             <RowLine dict={dict} court={c} />
           </span>
           {/* O16: the court's video stops by itself in a few seconds, after its last match's result. */}
-          {c.stream_link !== null && c.stream_link.tail_ends_at !== null && (
+          {c.stream_link !== null && c.stream_link.tail_ends_at !== null && viewNow !== undefined && (
             <CourtTailCountdown dict={dict} tailEndsAt={c.stream_link.tail_ends_at} viewNow={viewNow} className="mt-0.5 text-xs font-medium text-slate-700" />
           )}
           {/* The score on its own line (beside the name a real score squeezed the court's own name to "Cour…"), in the row's

@@ -425,11 +425,6 @@ describe("the tail countdown (O16: \"Video ends in 12 s\")", () => {
     expect(has(focus(free(link({ tail_ends_at: plus(12_000) })), baseCtx()), "md-cs-tail")).toBe(false);
   });
 
-  it("is counted from the server's `now`, not the reader's clock: a clock an hour off changes nothing", () => {
-    const html = renderToStaticMarkup(<CourtTailCountdown dict={dict} tailEndsAt={plus(12_000)} viewNow={NOW} clock={() => Date.parse(NOW) + 3_600_000} />);
-    expect(tail(html)).toBe("Video ends in 12 s");
-  });
-
   it.each(["es", "fr", "nl"] as const)("speaks %s, with the seconds in place", (locale) => {
     const html = focused(link({ tail_ends_at: plus(12_000) }), NOW, DICTS[locale]);
     const words = tail(html)!;

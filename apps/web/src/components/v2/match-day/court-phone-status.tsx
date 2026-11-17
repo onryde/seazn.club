@@ -60,7 +60,7 @@ export function CourtPhoneStatus({
         <p className="min-w-0 text-sm font-medium text-slate-900 [overflow-wrap:anywhere]">{link.target_label}</p>
       </div>
       <p className="mt-1 text-xs text-slate-600">{t(dict, "matchDay.courtStream.until", { time: until })}</p>
-      {link.tail_ends_at !== null && (
+      {link.tail_ends_at !== null && viewNow !== undefined && (
         <CourtTailCountdown dict={dict} tailEndsAt={link.tail_ends_at} viewNow={viewNow} className="mt-1 text-sm font-medium text-slate-900" />
       )}
       {link.refusal !== null && (
