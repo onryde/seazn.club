@@ -1473,5 +1473,9 @@
   "pricing.matrix.streaming.credits.monthly.note": "Cada mes con Community y Pro; una sola vez con un Event Pass. Una retransmisión cubre un partido, hasta 3 horas. Se venden más en packs.",
   "pricing.matrix.ai.credits.monthly": "Créditos de IA",
   "pricing.matrix.ai.credits.monthly.note": "Cada mes con Community y Pro; una sola vez con un Event Pass",
-  "pricing.everyPlan": "En todos los planes, incluido el gratuito: Match Day, puntuación remota desde cualquier teléfono y retransmisión en directo desde un teléfono, por partido o por pista."
+  "pricing.everyPlan": "En todos los planes, incluido el gratuito: Match Day, puntuación remota desde cualquier teléfono y retransmisión en directo desde un teléfono, por partido o por pista.",
+  "pricing.streams.perMonth.one": "{count} crédito de retransmisión / mes",
+  "pricing.streams.perMonth.other": "{count} créditos de retransmisión / mes",
+  "pricing.streams.passGrant.one": "+{count} crédito de retransmisión, una sola vez",
+  "pricing.streams.passGrant.other": "+{count} créditos de retransmisión, una sola vez"
 }

@@ -1054,7 +1054,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // same additive disclosure. Net +2 keys.
     // A count, not a floor, so a DELETED pin reds too.
     // 304 -> 300: `pricing.pass.crossover` removed (owner 2026-11-16: the sentence confused more than it told).
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(304);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(320);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1096,7 +1096,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       // `pass\.stub\.caps\w*`, and the fee pill on `card\.feePill` — both added
       // here rather than opening a new rule, since they are the SAME claim
       // class (a live number, words around it that decide what it means).
-      match: /^pricing\.(credits\.\w+|addons\.(credits|seat|org|sizePack)|card\.feePill|pass\.(per|from|stub\.caps\w*)|community\.price)$/,
+      match: /^pricing\.(credits\.\w+|streams\.\w+\.(one|other)|addons\.(credits|seat|org|sizePack)|card\.feePill|pass\.(per|from|stub\.caps\w*)|community\.price)$/,
       pinned: true,
       why: "quotes money or an allowance — the number is interpolated live, so the words around it are the claim",
     },

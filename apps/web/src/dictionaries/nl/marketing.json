@@ -1473,5 +1473,9 @@
   "pricing.matrix.streaming.credits.monthly.note": "Elke maand bij Community en Pro; eenmalig bij een Event Pass. Eén stream dekt één wedstrijd, tot 3 uur. Meer zijn te koop in pakketten.",
   "pricing.matrix.ai.credits.monthly": "AI-credits",
   "pricing.matrix.ai.credits.monthly.note": "Elke maand bij Community en Pro; eenmalig bij een Event Pass",
-  "pricing.everyPlan": "In elk abonnement, ook het gratis: Match Day, scoren op afstand vanaf elke telefoon en livestreaming vanaf een telefoon, per wedstrijd of per baan."
+  "pricing.everyPlan": "In elk abonnement, ook het gratis: Match Day, scoren op afstand vanaf elke telefoon en livestreaming vanaf een telefoon, per wedstrijd of per baan.",
+  "pricing.streams.perMonth.one": "{count} streamingcredit / maand",
+  "pricing.streams.perMonth.other": "{count} streamingcredits / maand",
+  "pricing.streams.passGrant.one": "+{count} streamingcredit, eenmalig",
+  "pricing.streams.passGrant.other": "+{count} streamingcredits, eenmalig"
 }

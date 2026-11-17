@@ -186,6 +186,50 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   // here or exempt with a reason, so this list cannot quietly stop growing.
   {
     file: "marketing",
+    key: "pricing.streams.perMonth.one",
+    why: "the Community and Pro streaming-credit chips (owner 2026-11-16: the cards promote streaming credits, not AI credits). The COUNT is interpolated live from streaming.credits.monthly; the pin guards the CADENCE: a subscription column is granted every month.",
+    text: {
+      en: "{count} streaming credit / month",
+      es: "{count} crédito de retransmisión / mes",
+      fr: "{count} crédit de diffusion / mois",
+      nl: "{count} streamingcredit / maand",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.streams.perMonth.other",
+    why: "the Community and Pro streaming-credit chips (owner 2026-11-16: the cards promote streaming credits, not AI credits). The COUNT is interpolated live from streaming.credits.monthly; the pin guards the CADENCE: a subscription column is granted every month.",
+    text: {
+      en: "{count} streaming credits / month",
+      es: "{count} créditos de retransmisión / mes",
+      fr: "{count} crédits de diffusion / mois",
+      nl: "{count} streamingcredits / maand",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.streams.passGrant.one",
+    why: "the Event Pass streaming-credit chip. A pass's streaming.credits.monthly row is a ONE-OFF amount granted when the pass is bought (usecases/stream-credits.ts: a pass key never grants monthly), so \"one-time\" is the load-bearing word.",
+    text: {
+      en: "+{count} streaming credit, one-time",
+      es: "+{count} crédito de retransmisión, una sola vez",
+      fr: "+{count} crédit de diffusion, une seule fois",
+      nl: "+{count} streamingcredit, eenmalig",
+    },
+  },
+  {
+    file: "marketing",
+    key: "pricing.streams.passGrant.other",
+    why: "the Event Pass streaming-credit chip. A pass's streaming.credits.monthly row is a ONE-OFF amount granted when the pass is bought (usecases/stream-credits.ts: a pass key never grants monthly), so \"one-time\" is the load-bearing word.",
+    text: {
+      en: "+{count} streaming credits, one-time",
+      es: "+{count} créditos de retransmisión, una sola vez",
+      fr: "+{count} crédits de diffusion, une seule fois",
+      nl: "+{count} streamingcredits, eenmalig",
+    },
+  },
+  {
+    file: "marketing",
     key: "pricing.credits.perMonth",
     why: "the Community and Pro credit chips. The COUNT is interpolated live from ai.credits.monthly, so the pin guards the CADENCE around it — \"/ month\" is the claim, and re-wording it to a one-time top-up (or vice versa) makes the chip false while the number stays right. Source of truth: plan_entitlements ai.credits.monthly, rendered by pricing/page.tsx.",
     text: {

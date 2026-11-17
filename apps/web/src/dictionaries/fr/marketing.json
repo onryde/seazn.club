@@ -1473,5 +1473,9 @@
   "pricing.matrix.streaming.credits.monthly.note": "Chaque mois avec Community et Pro ; une seule fois avec un Event Pass. Une diffusion couvre un match, jusqu'à 3 heures. D'autres sont vendues en packs.",
   "pricing.matrix.ai.credits.monthly": "Crédits IA",
   "pricing.matrix.ai.credits.monthly.note": "Chaque mois avec Community et Pro ; une seule fois avec un Event Pass",
-  "pricing.everyPlan": "Dans chaque offre, la gratuite comprise : Match Day, le score à distance depuis n'importe quel téléphone et la diffusion en direct depuis un téléphone, par match ou par terrain."
+  "pricing.everyPlan": "Dans chaque offre, la gratuite comprise : Match Day, le score à distance depuis n'importe quel téléphone et la diffusion en direct depuis un téléphone, par match ou par terrain.",
+  "pricing.streams.perMonth.one": "{count} crédit de diffusion / mois",
+  "pricing.streams.perMonth.other": "{count} crédits de diffusion / mois",
+  "pricing.streams.passGrant.one": "+{count} crédit de diffusion, une seule fois",
+  "pricing.streams.passGrant.other": "+{count} crédits de diffusion, une seule fois"
 }

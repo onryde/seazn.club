@@ -13,7 +13,6 @@
 // this workspace has no jsdom (same pattern as upgrade-page.test.tsx). The
 // dictionary and every pure pricing module are REAL, because the assertions
 // are about the figures and copy a buyer actually reads.
-import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -104,6 +103,11 @@ const LIVE = [
   { plan_key: "pro", feature_key: "competitions.max_active", bool_value: null, int_value: null },
   { plan_key: "pro", feature_key: "divisions.per_competition.max", bool_value: null, int_value: 20 },
   { plan_key: "pro", feature_key: "entrants.per_division.max", bool_value: null, int_value: 256 },
+  // The streaming-credit chips (V526's ladder). The L rung's 5 differs from M's 3 on purpose: the stub must quote M's.
+  { plan_key: "community", feature_key: "streaming.credits.monthly", bool_value: null, int_value: 1 },
+  { plan_key: "event_pass", feature_key: "streaming.credits.monthly", bool_value: null, int_value: 3 },
+  { plan_key: "event_pass_l", feature_key: "streaming.credits.monthly", bool_value: null, int_value: 5 },
+  { plan_key: "pro", feature_key: "streaming.credits.monthly", bool_value: null, int_value: 5 },
 ];
 
 const render = async (rows = LIVE, lang = "en") => {
@@ -157,7 +161,13 @@ describe("/pricing's Event Pass ticket sells only the rung that is on sale", () 
     expect(markup, 'the M slot').toContain('data-pass-stub-slot="m"');
     expect(text).toContain(M_PRICE);
     expect(text).toContain("10 divisions × 128 entrants");
-    expect(text).toContain(`+${PASS_CREDIT_GRANT.event_pass} AI credits`);
+    // The chip names STREAMING credits (owner 2026-11-16), at the pass's own one-off figure from the matrix.
+    expect(text).toContain("+3 streaming credits, one-time");
+    expect(text).not.toMatch(/AI credits, one-time|AI credits \/ month/);
+    // Community's single credit takes the singular, Pro's five the plural, both per month.
+    expect(text).toContain("1 streaming credit / month");
+    expect(text).toContain("5 streaming credits / month");
+    expect(text).not.toContain("+5 streaming credits");
 
     // The negative half, about the CAPS and the PRICE, not just the ladder
     // markup — L's price alone could plausibly appear in unrelated FAQ prose.

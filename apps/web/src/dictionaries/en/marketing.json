@@ -1473,5 +1473,9 @@
   "pricing.matrix.streaming.credits.monthly.note": "Each month on Community and Pro; once with an Event Pass. One stream covers one match for up to 3 hours. More are sold in packs.",
   "pricing.matrix.ai.credits.monthly": "AI credits",
   "pricing.matrix.ai.credits.monthly.note": "Each month on Community and Pro; once with an Event Pass",
-  "pricing.everyPlan": "On every plan, the free one included: Match Day, remote scoring from any phone, and live streaming from a phone, per match or per court."
+  "pricing.everyPlan": "On every plan, the free one included: Match Day, remote scoring from any phone, and live streaming from a phone, per match or per court.",
+  "pricing.streams.perMonth.one": "{count} streaming credit / month",
+  "pricing.streams.perMonth.other": "{count} streaming credits / month",
+  "pricing.streams.passGrant.one": "+{count} streaming credit, one-time",
+  "pricing.streams.passGrant.other": "+{count} streaming credits, one-time"
 }

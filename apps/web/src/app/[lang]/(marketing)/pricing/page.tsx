@@ -19,7 +19,6 @@ import {
   FREE_CARD_BULLETS,
   PASS_CARD_BULLETS,
   PRO_CARD_BULLETS,
-  PASS_CREDIT_GRANT,
   cardBullets,
 } from "@/lib/pricing-cards";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
@@ -38,7 +37,7 @@ import { isPaidPlan, orgPlanKey } from "@/lib/entitlements";
 import { passCtaVariant } from "@/lib/pass-cta";
 import { CurrencySwitcher } from "@/components/currency-switcher";
 import { ProPriceCard } from "@/components/pro-price-card";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { hasLocale } from "@/lib/i18n-constants";
 
 // The switcher cookie re-renders prices per request.
@@ -147,16 +146,19 @@ export default async function PricingPage({
   const matrix: MatrixData = await loadPricingMatrix().catch(() => ({}));
   const sections = buildPricingSections(matrix);
 
-  // v17 AI credit wallet (SPEC-6 A1): each plan's monthly grant is the live
-  // `ai.credits.monthly` value — the same single source the wallet meters
-  // against — so the marketing number cannot drift. The Event Pass adds a
-  // one-time top-up (PASS_CREDIT_GRANT, per rung); it has no monthly matrix row.
-  const creditsMonthly = (plan: string): number | null =>
-    matrix["ai.credits.monthly"]?.[plan]?.int_value ?? null;
-  const communityCredits = creditsMonthly("community");
-  const proCredits = creditsMonthly("pro");
+  // The credit chip on each card names STREAMING credits (owner, 2026-11-16: "remove AI credit and say Streaming");
+  // AI credits are a row of the comparison table below. The count is the live `streaming.credits.monthly` value —
+  // the row the monthly grant itself reads — so the marketing number cannot drift. A subscription column is granted
+  // every month; a pass's row is a ONE-OFF amount granted when the pass is bought. A missing or zero row prints no
+  // chip, never "0".
+  const streamCredits = (plan: string): number | null => {
+    const n = matrix["streaming.credits.monthly"]?.[plan]?.int_value;
+    return n != null && n > 0 ? n : null;
+  };
+  const communityCredits = streamCredits("community");
+  const proCredits = streamCredits("pro");
   const communityCreditsLine =
-    communityCredits != null ? t(d, "pricing.credits.perMonth", { count: communityCredits }) : null;
+    communityCredits != null ? plural(d, "pricing.streams.perMonth", communityCredits, lang) : null;
   // W2 T5 (design R9): the top-up is sized by rung. The chip used to name both
   // rungs' grants because the card sold both; with the L rung off sale
   // (2026-09-05) it names the grant of the rung actually being offered — the
@@ -165,11 +167,10 @@ export default async function PricingPage({
   const offeredRung = lowestPricedRung(
     SELLABLE_PASS_KEYS.map((key) => ({ key, amountMinor: passPrice(currency, key) })),
   );
-  const passCreditsLine = t(d, "pricing.credits.passGrant", {
-    count: PASS_CREDIT_GRANT[offeredRung.key],
-  });
+  const passCredits = streamCredits(offeredRung.key);
+  const passCreditsLine = passCredits != null ? plural(d, "pricing.streams.passGrant", passCredits, lang) : null;
   const proCreditsLine =
-    proCredits != null ? t(d, "pricing.credits.perMonth", { count: proCredits }) : null;
+    proCredits != null ? plural(d, "pricing.streams.perMonth", proCredits, lang) : null;
 
   const passLabel = formatMinor(passPrice(currency, "event_pass"), currency);
 
@@ -377,9 +378,11 @@ export default async function PricingPage({
                             {stubCapsLine}
                           </p>
                         )}
-                        <p className="mt-1 text-[0.78rem] leading-snug text-lime-300">
-                          {passCreditsLine}
-                        </p>
+                        {passCreditsLine && (
+                          <p className="mt-1 text-[0.78rem] leading-snug text-lime-300">
+                            {passCreditsLine}
+                          </p>
+                        )}
                       </div>
 
                     </div>
