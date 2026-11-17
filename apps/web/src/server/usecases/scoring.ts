@@ -403,6 +403,12 @@ export async function scoreEvent(
       });
     }
   }
+  // W5 T8b (X-WDT-10, X-RT-1; ruling 289): an in-match disqualification withdraws the entrant from the stage — after the forfeit
+  // committed and was published, best-effort (`disqualifyFromMatch` never throws). Never for a cascade's own write (`writer`).
+  // A dynamic import: withdrawal.ts imports this module.
+  if (opts.writer === undefined && input.type === "core.forfeit" && (input.payload as { reason?: unknown } | null)?.reason === "disqualified") {
+    await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by);
+  }
   return out;
 }
 

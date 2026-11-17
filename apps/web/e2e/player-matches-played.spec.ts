@@ -89,12 +89,16 @@ async function seedDivision(
   );
   expect(mine.length, `${name}: Pat meets each opponent once`).toBe(6);
 
-  const scenario: string[] = [];
-  for (const [i, f] of mine.entries()) {
+  const scenario: string[] = mine.map((f) => f.id);
+  // W5 T8b (ruling 289, X-WDT-10): a disqualification in a league withdraws Pat from it — scene 4 walks her remaining line
+  // over (5 of 6 played: RB5-W3). Two disqualifications of one player in one league are reachable only through Reinstate
+  // (X-WDT-8 reverses that walkover), so scene 6 runs before scene 4, and she is reinstated between scenes 4 and 5.
+  for (const i of [0, 1, 2, 5, 3, 4]) {
+    const f = mine[i]!;
     const side: Side = f.home_entrant_id === patE ? "home" : "away";
     const opp = side === "home" ? f.away_entrant_id! : f.home_entrant_id!;
-    const seq = { n: 0 };
-    scenario.push(f.id);
+    // The ledger's own tip: the cascade appends to a line this loop has not reached yet.
+    const seq = { n: (await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${f.id}/state`)).data!.last_seq };
     if (i === 0) {
       await post(request, f.id, seq, "core.start", {});
       for (const e of s.win(side)) await post(request, f.id, seq, e.type, e.payload);
@@ -105,6 +109,8 @@ async function seedDivision(
     } else if (i === 3) {
       await post(request, f.id, seq, "core.start", {});
       await post(request, f.id, seq, "core.forfeit", { by: patE, reason: "disqualified" });
+      const back = await apiJson<{ status: string }>(request, `/api/v1/entrants/${patE}`, "PATCH", { status: "registered" });
+      expect([back.status, back.data?.status], `${name}: rig: Pat reinstated after scene 4 — ${JSON.stringify(back.error)}`).toEqual([200, "registered"]);
     } else if (i === 4) {
       await post(request, f.id, seq, "core.start", {});
       const p = s.play(opp);

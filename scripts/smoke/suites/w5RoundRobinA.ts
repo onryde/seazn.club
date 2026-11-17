@@ -46,7 +46,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // T6: 1 (an automatic arrival waits; one tap places it; a second tap is refused by name).
   // T8: 1 (a leaver's signed-off result is removed, the hub's footnote names the rule; Reinstate restores her unplayed lines).
   // T8b Part 1: 1 (a registrant's own public withdrawal after Start runs the table withdrawal).
-  const EXPECTED_CHECKS = 9;
+  // T8b Part 2: 1 (an in-match disqualification withdraws the entrant from the league).
+  const EXPECTED_CHECKS = 10;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -250,12 +251,14 @@ export async function w5RoundRobinASuite(): Promise<void> {
     );
   }
 
+  // Checks 7 and 10 share their own competition: `comp` already holds four divisions, the plan's per-competition cap (a 5th
+  // answers 402).
+  const own = v1data<{ id: string } | undefined>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A wait ${tag}`, visibility: "private" }),
+  );
+
   // Check 7 - X-CU-8 / RB5-L10: a reinstated player with no line waits; one tap writes her catch-up lines; a second tap is refused.
   {
-    // Its own competition: `comp` already holds four divisions, the plan's per-competition cap (a 5th answers 402).
-    const own = v1data<{ id: string } | undefined>(
-      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A wait ${tag}`, visibility: "private" }),
-    );
     const l = await league("Wait", 5, own?.id);
     const ids = l.entrants.map((e) => e.id);
     const gone = ids[4];
@@ -379,6 +382,33 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-WDT-9: a registrant's own public withdrawal after Start takes all 3 lines out at 1 of 3 played, the hub footnote names the rule, a second press settles nothing twice" +
         (ok ? "" : ` - ${l.created}, settings ${settings.status}, register ${sent.status} ${JSON.stringify(submitted?.entries ?? null)}, rae ${raeId}, generate ${regen.status}, start ${started.status}, hers ${hers.length}, walk ${walk.status}, withdraw ${out.status}/${again.status} ${JSON.stringify(out.json).slice(0, 200)}, after ${after.map((f) => f.status).join(",")}, hub ${hubRes.status} notes ${JSON.stringify(notes)}`),
+      ok,
+    );
+  }
+
+  // Check 10 - X-WDT-10 (RB5-W11 as signed by ruling 289): a disqualification recorded IN a match (the organiser's forfeit with
+  // reason disqualified, the console's Forfeit dialog) withdraws the entrant from the league. A league of four: Dee is disqualified
+  // in her first match, so she has played 1 of 3 — under half: all three of her lines are taken out and she reads disqualified.
+  {
+    const l = await league("InMatchDq", 4, own?.id ?? "no-own-competition");
+    const dee = l.entrants[0]?.id;
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const hers = (await l.fixtures()).filter((f) => f.home_entrant_id === dee || f.away_entrant_id === dee);
+    const line = hers[0];
+    const go = await v1(owner, `/api/v1/fixtures/${line?.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    const dq = await v1(owner, `/api/v1/fixtures/${line?.id}/events`, "POST", {
+      expected_seq: v1data<{ seq: number } | undefined>(go)?.seq ?? 1,
+      type: "core.forfeit",
+      payload: { by: dee, reason: "disqualified" },
+    });
+    const after = (await l.fixtures()).filter((f) => f.home_entrant_id === dee || f.away_entrant_id === dee);
+    const status = (v1data<{ id: string; status: string }[] | undefined>(await v1(owner, `/api/v1/divisions/${l.divId}/entrants`)) ?? []).find((e) => e.id === dee)?.status;
+    const ok =
+      started.status === 200 && hers.length === 3 && go.status === 201 && dq.status === 201 &&
+      after.length === 3 && after.every((f) => f.status === "abandoned") && status === "disqualified";
+    w5Check(
+      "w5a X-WDT-10: a disqualification recorded in a match withdraws the entrant from the league — at 1 of 3 played all 3 of her lines are taken out and she reads disqualified" +
+        (ok ? "" : ` - ${l.created}, start ${started.status}, hers ${hers.length}, start ${go.status}, forfeit ${dq.status} ${JSON.stringify(dq.json).slice(0, 200)}, after ${after.map((f) => f.status).join(",")}, status ${status}`),
       ok,
     );
   }

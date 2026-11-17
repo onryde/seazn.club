@@ -86,14 +86,19 @@ async function makeUser(name: string): Promise<string> {
   return id;
 }
 
-/** A fresh fixture of `sport`, both seats filled, its division started. Seeded as a league of seven (21 fixtures) and
- *  handed out one at a time, so the table below does not pay a division per row. */
+/** A fresh fixture of `sport`, both seats filled, its division started. Seeded as a knockout of eight (four first-round
+ *  lines) and handed out one at a time, so the table below does not pay a division per row. W5 T8b (X-WDT-10, owner ruling
+ *  289): it was a league of seven until an ending recorded in a league (a table stage) began to disqualify the entrant from the
+ *  whole stage — the cascade then voids or walks over her other lines, the ending's own line included, which is the table's
+ *  rule (in-match-dq-cascade.test.ts) and not what these tests are about. A knockout line's ending is the bracket's own forfeit
+ *  and nothing more (W4), so each line here stays the one fixture its test drives. */
 const pools = new Map<string, { s: SeededBracket; free: string[] }>();
 async function freshFixture(sport: string, variant: string) {
   const key = `${sport}/${variant}`;
   let pool = pools.get(key);
   if (pool === undefined || pool.free.length === 0) {
-    const s = await seedBracket({ sport, variant, stageKind: "league", entrants: 7 });
+    const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 8 });
+    expect(s.fixtureIds, "rig: four first-round lines").toHaveLength(4);
     pool = { s, free: [...s.fixtureIds] };
     pools.set(key, pool);
   }
@@ -101,6 +106,18 @@ async function freshFixture(sport: string, variant: string) {
   const [f] = await sql<{ home: string; away: string }[]>`
     select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${id}`;
   return { s: pool.s, id, home: f!.home, away: f!.away };
+}
+
+/** A knockout of two: its one line is the final, which feeds no next match, so the scorer's own Undo of a decided ending is
+ *  not refused as a result carried forward (RESULT_CARRIED_FORWARD) — the void sequence below needs that, and a first-round
+ *  line from `freshFixture` carries its winner on. */
+async function finalFixture(sport: string, variant: string) {
+  const s = await seedBracket({ sport, variant, stageKind: "knockout", entrants: 2 });
+  expect(s.fixtureIds, "rig: one line, the final").toHaveLength(1);
+  const id = s.fixtureIds[0]!;
+  const [f] = await sql<{ home: string; away: string }[]>`
+    select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${id}`;
+  return { s, id, home: f!.home, away: f!.away };
 }
 
 type Who = "device_link" | "official" | "organiser";
@@ -366,7 +383,7 @@ describe.runIf(HAS_DB)("X-SE-3 (D13) — a scorer's forfeit through the scoring 
 
   it("X-SE-3 X-SE-1 the sequence through the door: the scorer voids its own ending, the ending is pending again and it may confirm it again; voiding the sanction then leaves the match ended; voiding that ending too lets play resume", async () => {
     // single-sport: the void sequences are core's (Task 1 sweeps them in the engine); this is their route.
-    const { s, id, home, away } = await freshFixture("badminton", "bwf");
+    const { s, id, home, away } = await finalFixture("badminton", "bwf");
     const a = await actorOn(s, id, "device_link");
     await a.send("core.start", {});
     await a.send("badminton.rally", { wonBy: home });

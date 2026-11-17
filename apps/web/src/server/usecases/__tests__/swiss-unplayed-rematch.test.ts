@@ -37,7 +37,7 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { redoDivision, undoDivision } from "../history";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
@@ -504,6 +504,9 @@ for (const sport of SPORTS) {
           await emit(r.auth, b.id, "core.void", { event_id: game.event_id });
           const res = await emit(r.auth, b.id, "core.forfeit", { by: r.idOf(by), reason: "disqualified" });
           expect(res.outcome, "rig: a recorded disqualification").toMatchObject({ kind: "award", reason: "disqualified" });
+          // W5 T8b (ruling 289, X-WDT-10): the disqualification withdrew her from the Swiss. Reinstated (a Swiss arrival), she
+          // is in round 3's field again, so the pairing question this test asks — did the pair meet — is still asked.
+          expect((await patchEntrant(r.auth, r.idOf(by), { status: "registered" })).status, "rig: reinstated").toBe("registered");
         }
 
         const { history } = await pairSpied(r);
@@ -519,6 +522,9 @@ for (const sport of SPORTS) {
           await emit(r.auth, b.id, "badminton.game.summary", { home: 21, away: 19 });
           const res = await emit(r.auth, b.id, "core.forfeit", { by: r.idOf(by), reason: "disqualified" });
           expect(res.outcome, "rig: a recorded disqualification").toMatchObject({ kind: "award", reason: "disqualified" });
+          // W5 T8b (ruling 289, X-WDT-10): the disqualification withdrew her from the Swiss. Reinstated (a Swiss arrival), she
+          // is in round 3's field again, so the pairing question this test asks — did the pair meet — is still asked.
+          expect((await patchEntrant(r.auth, r.idOf(by), { status: "registered" })).status, "rig: reinstated").toBe("registered");
         }
 
         const { history } = await pairSpied(r);

@@ -67,7 +67,8 @@ const divisionStatus = async (divisionId: string) => (await sql<{ status: string
 async function walkoverForHome(t: Rig, id: string): Promise<void> {
   const r = t.rows.find((x) => x.id === id)!;
   await post(t.auth, id, "core.start");
-  await post(t.auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "disqualified" });
+  // W5 T8b (ruling 289): a disqualification in a table stage now withdraws the entrant from it (X-WDT-10); this rig only wants one decided fixture, so a walkover after the Start (ruling 112).
+  await post(t.auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "walkover" });
 }
 /** A scorer's abandon, the shape the console's "Abandon..." writes: started, then abandoned. */
 async function scorerAbandon(t: Rig, id: string): Promise<void> {

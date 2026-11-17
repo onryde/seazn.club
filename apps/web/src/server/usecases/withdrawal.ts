@@ -693,6 +693,45 @@ export async function withdrawEntrantCascade(
   return out;
 }
 
+/**
+ * W5 T8b Part 2 (X-WDT-10 ← RB5-W11, X-RT-1; owner ruling 289, ruling 259): a disqualification recorded DURING a match — a
+ * committed `core.forfeit{by, reason: "disqualified"}`, the pad's sanction ending or the organiser's forfeit — withdraws the
+ * entrant from the stage: the table withdrawal (`withdrawEntrantCascade(…, { as: "disqualified" })`), whose 50 percent rule now
+ * counts the match just ended as played. Only on a table stage (league, group, Swiss); a bracket fixture's disqualification is
+ * the bracket's own forfeit (W4, unchanged). Called by `scoreEvent` AFTER the forfeit committed, for a write no cascade made
+ * (a cascade's own re-record of a disqualifying forfeit, on Reinstate, must not disqualify her again).
+ *
+ * Idempotent: an entrant already departed (withdrawn or disqualified — `patchEntrant`'s C6: a departed entrant is owed no
+ * cascade) is left as she is, so a second disqualifying forfeit never runs a second cascade. It runs under the org's server
+ * authority (`cascadeAuthFor`), keeping the scorer as the user on the events: a device link may write only its own fixture,
+ * and the rule — not the scorer — settles the others.
+ *
+ * Best-effort, like the table stale call after a score: the forfeit stands whatever happens here. A cascade that throws is
+ * logged; she is still in the field (the cascade writes her status last), so the organiser's Disqualify finishes it.
+ */
+export async function disqualifyFromMatch(auth: AuthCtx, fixtureId: string, by: unknown): Promise<WithdrawCascadeOut | null> {
+  if (typeof by !== "string") return null;
+  try {
+    const [line] = await withTenant(auth.orgId, (tx) =>
+      tx<{ kind: string; home: string | null; away: string | null; entrant_status: string | null }[]>`
+        select s.kind, f.home_entrant_id as home, f.away_entrant_id as away,
+               (select e.status from entrants e where e.id = ${by}) as entrant_status
+          from fixtures f join stages s on s.id = f.stage_id
+         where f.id = ${fixtureId}`,
+    );
+    if (line === undefined || !TABLE_KINDS.has(line.kind)) return null;
+    if (by !== line.home && by !== line.away) return null;
+    if (line.entrant_status === null || DEPARTED_STATUSES.has(line.entrant_status)) return null;
+    return await withdrawEntrantCascade(cascadeAuthFor(auth.orgId, auth.userId), by, { as: "disqualified" });
+  } catch (err) {
+    log.error(
+      { err, fixture: fixtureId, entrant: by },
+      "withdrawal: an in-match disqualification stands, but the table withdrawal failed — the organiser's Disqualify finishes it",
+    );
+    return null;
+  }
+}
+
 /** A division-ledger row that moves the division's token and never the watermark — not a history step, not an Undo barrier
  *  (`joint-winners.ts`'s pattern). Under the `division:` lock the caller holds. */
 async function appendTableLedgerRow(

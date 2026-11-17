@@ -112,8 +112,9 @@ const SWEEP: Readonly<Record<string, { prep: (f: { home: string; away: string })
     payload: (f) => ({ winner: f.home, method: "lot" }),
   },
   // `payload` before `prep`: forfeit-vocabulary-scan.test.ts reads a forfeit's reason only when no other quoted event type
-  // sits between it and the literal, so this order lets X-RS-1 check "disqualified" against FORFEIT_REASONS.
-  "core.forfeit": { payload: (f) => ({ by: f.away, reason: "disqualified" }), prep: () => [{ type: "core.start", payload: {} }] },
+  // sits between it and the literal, so this order lets X-RS-1 check "walkover" against FORFEIT_REASONS. W5 T8b (ruling 289): a disqualification in a table stage now withdraws the entrant from it (X-WDT-10); this rig only wants one decided fixture, so a walkover after the Start (ruling 112) —
+  // the void sweep runs on a league.
+  "core.forfeit": { payload: (f) => ({ by: f.away, reason: "walkover" }), prep: () => [{ type: "core.start", payload: {} }] },
   "core.abandon": { prep: () => [{ type: "core.start", payload: {} }], payload: () => ({ reason: "rain" }) },
 };
 
