@@ -50,6 +50,7 @@
     "seed:demo:setup": "node --env-file=apps/web/.env.local --experimental-strip-types scripts/seed-demo.ts --phase=setup",
     "seed:demo": "node --env-file=apps/web/.env.local --experimental-strip-types scripts/seed-demo.ts --phase=seed",
     "seed:showcase": "node --env-file=apps/web/.env.local --experimental-strip-types scripts/seed-showcase.ts",
+    "realtimekit:webhook-register": "node --env-file-if-exists=apps/web/.env.local --experimental-strip-types scripts/realtimekit-webhook-register.ts",
     "reference:boundary": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/reference-boundary.ts",
     "mutate": "node --experimental-strip-types --import ./scripts/lib/crash-exit.ts scripts/mutate.ts",
     "db:apply": "bash scripts/flyway.sh migrate",
