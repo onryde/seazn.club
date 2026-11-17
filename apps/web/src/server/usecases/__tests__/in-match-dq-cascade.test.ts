@@ -40,13 +40,19 @@ vi.stubEnv("DEVICE_LINK_KEK", randomBytes(32).toString("hex"));
 // runs that got past "already departed"). `disqualifyFromMatch` calls the cascade inside its own module, so the cascade's own
 // export cannot be swapped. Re-review (I): a failure AFTER a settle — `failAfter` names a cascade write type; once one such
 // write has gone through, the NEXT cascade write throws. Every other call is the real code.
-const control = vi.hoisted(() => ({ failNext: false, cascades: 0, failAfter: null as string | null, passed: false }));
+// Re-review 2: `failOn` names a cascade write type; the FIRST such write throws (a cut-off between a line's write-ahead row
+// and its first void, when it is "core.void").
+const control = vi.hoisted(() => ({ failNext: false, cascades: 0, failAfter: null as string | null, passed: false, failOn: null as string | null }));
 vi.mock("../scoring", async (io) => {
   const real = await io<typeof import("../scoring")>();
   return {
     ...real,
     scoreEvent: async (...args: Parameters<typeof real.scoreEvent>) => {
       const [, , input, opts] = args;
+      if (opts?.writer === "withdrawal_cascade" && control.failOn !== null && (input as { type: string }).type === control.failOn) {
+        control.failOn = null;
+        throw new Error("simulated: the cascade was cut off before this write");
+      }
       if (opts?.writer === "withdrawal_cascade" && control.failAfter !== null) {
         if (control.passed) {
           control.failAfter = null;
@@ -491,5 +497,181 @@ describe.skipIf(!HAS_DB)("X-WDT-10 review I2: a failed in-match cascade is shown
     expect(control.cascades - cascades, "the Reinstate stands").toBe(0);
     expect(await statusOf(v)).toBe("registered");
     for (const l of rest) expect(await activeWithdrew(l.id, v), "her lines stay open").toBe(0);
+  }, 300_000);
+});
+
+/** One line as a person reads it: its status and result, and its active events in order (type and payload — a re-recorded
+ *  event is a new row, so ids are not compared). */
+async function stateOf(fixtureId: string) {
+  const [f] = await sql<{ status: string; outcome: unknown }[]>`select status, outcome from fixtures where id = ${fixtureId}`;
+  return { status: f!.status, outcome: f!.outcome, events: (await activeEvents(fixtureId)).map((e) => [e.type, e.payload]) };
+}
+async function snapshot(lines: readonly Line[]) {
+  return Object.fromEntries(await Promise.all(lines.map(async (l) => [l.id, await stateOf(l.id)] as const)));
+}
+const lineRows = (divisionId: string) =>
+  sql<{ payload: { entrant_id: string; fixture_id: string; planned_void_ids: string[]; from_seq: number } }[]>`
+    select payload from division_events where division_id = ${divisionId} and type = 'table_withdrawal_line' order by seq`;
+const voidedIds = async (fixtureId: string) =>
+  new Set((await sql<{ v: string }[]>`select voids_event_id as v from score_events where fixture_id = ${fixtureId} and voids_event_id is not null`).map((x) => x.v));
+
+// Task 8b re-review 2 (ruling C): the expunge writes what it will remove (a `table_withdrawal_line` row per line, committed
+// before the line's first void), and a resume and a Reinstate take back ONLY what those rows name. Expected values are the
+// lines as they stood before the withdrawal, read from the stored rows before the cascade first ran.
+describe.skipIf(!HAS_DB)("X-WDT-10 re-review 2: the expunge's write-ahead line rows are the one authority", () => {
+  it("C a cascade cut off after its settles resumes from its line rows; after Reinstate a scorer's Undo on a pending line stays undone — every line as before the withdrawal", async () => {
+    // differential: the walk-back read the scorer's trailing Undo on each pending line as the cascade's own void (a pending
+    // line's expunge is a bare abandon) and recorded the undone rally again.
+    const r = await started(6, BADMINTON);
+    const v = r.ids[0]!;
+    const mine = (await linesOf(r.stageId)).filter((l) => involves(l, v));
+    expect(mine, "rig: five lines each in a league of six").toHaveLength(5);
+    const [dqLine, ...pending] = mine;
+    for (const l of pending) {
+      await post(r.auth, l.id, "core.start", {});
+      const won = await post(r.auth, l.id, "badminton.rally", { wonBy: v });
+      await post(r.auth, l.id, "core.void", { event_id: won.event_id });
+    }
+    await post(r.auth, dqLine!.id, "core.start", {});
+    await post(r.auth, dqLine!.id, `${BADMINTON.key}.sanction`, { by: v, level: BADMINTON.endLevel });
+    control.failNext = true;
+    await post(r.auth, dqLine!.id, "core.forfeit", { by: v, reason: "disqualified" });
+    expect(control.failNext, "premise: the forfeit's cascade ran and failed before any write").toBe(false);
+    const pre = await snapshot(mine);
+    for (const l of pending) expect(pre[l.id]!.events.map((e) => e[0]), "rig: the rally is undone, the Start stands").toEqual(["core.start"]);
+
+    await withdrawEntrantCascade(r.auth, v, { as: "disqualified" });
+    expect(await ledger(r.divisionId), "rig: 1 of 5 played, an expunge").toEqual([["expunge", 1, 5]]);
+    // The crash: everything after the settles is lost — the `table_withdrawal` row and the status write. The line rows were
+    // committed before the settles, so they survive.
+    await sql`delete from division_events where division_id = ${r.divisionId} and type = 'table_withdrawal'`;
+    await sql`update entrants set status = 'registered' where id = ${v}`;
+    expect(await lineRows(r.divisionId), "premise: a line row per line survives the crash").toHaveLength(5);
+
+    await withdrawEntrantCascade(r.auth, v, { as: "disqualified" });
+    expect(await statusOf(v)).toBe("disqualified");
+    expect(await ledger(r.divisionId), "the resume decides as the first run did").toEqual([["expunge", 1, 5]]);
+    let checked = 0;
+    for (const l of mine) {
+      const now = (await linesOf(r.stageId)).find((x) => x.id === l.id)!;
+      expect([now.status, now.outcome, await activeExpunges(l.id)], `line vs ${otherSide(l, v)}: out once`).toEqual(["abandoned", null, 1]);
+      checked++;
+    }
+    await patchEntrant(r.auth, v, { status: "registered" });
+    for (const l of mine) {
+      expect(await stateOf(l.id), `line vs ${otherSide(l, v)}: as before the withdrawal`).toEqual(pre[l.id]);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  }, 300_000);
+
+  it("C an opponent's cut-off expunge on a shared line is theirs: her withdrawal and her Reinstate leave its abandon standing", async () => {
+    // differential: the resume and the Reinstate voided ANY active expunge abandon on her lines, the opponent's included.
+    const r = await started(6, BADMINTON);
+    const o = r.ids[1]!;
+    control.failAfter = "core.abandon";
+    await expect(withdrawEntrantCascade(r.auth, o)).rejects.toThrow(/simulated/);
+    expect(control.failAfter, "premise: the opponent's cascade was cut off after an expunge").toBeNull();
+    expect(await statusOf(o), "premise: the opponent is still in the field").toBe("registered");
+    const cut: Line[] = [];
+    for (const l of (await linesOf(r.stageId)).filter((x) => involves(x, o))) if ((await activeExpunges(l.id)) === 1) cut.push(l);
+    expect(cut, "premise: exactly one of the opponent's lines is out").toHaveLength(1);
+    const shared = cut[0]!;
+    const v = otherSide(shared, o);
+    const abandons = async () => (await activeEvents(shared.id)).filter((e) => e.type === "core.abandon").map((e) => e.id);
+    const theirs = await abandons();
+    expect(theirs, "premise: one abandon, the opponent's").toHaveLength(1);
+
+    await withdrawEntrantCascade(r.auth, v);
+    expect(await statusOf(v)).toBe("withdrawn");
+    expect(await abandons(), "her cascade (and its resume) leaves the opponent's abandon").toEqual(theirs);
+    await patchEntrant(r.auth, v, { status: "registered" });
+    expect(await abandons(), "her Reinstate leaves it too").toEqual(theirs);
+    // The positive pair: the lines that are hers alone are back.
+    let checked = 0;
+    for (const l of (await linesOf(r.stageId)).filter((x) => involves(x, v) && x.id !== shared.id)) {
+      expect([l.status, await activeExpunges(l.id)], `line vs ${otherSide(l, v)}: back`).toEqual(["scheduled", 0]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  }, 300_000);
+
+  it("C a Reinstate retires her line rows: after it, an opponent's cut-off expunge on their shared line is not hers to take back", async () => {
+    // The sequence: her withdrawal and Reinstate (a row on the shared line, taken back), then the opponent's withdrawal cut off
+    // after its settles (its abandon on that line, the opponent still in the field), then her second withdrawal.
+    const r = await started(6, BADMINTON);
+    const [v, o] = [r.ids[0]!, r.ids[1]!];
+    const shared = (await linesOf(r.stageId)).find((l) => involves(l, v) && involves(l, o))!;
+    await withdrawEntrantCascade(r.auth, v);
+    await patchEntrant(r.auth, v, { status: "registered" });
+    expect(await activeExpunges(shared.id), "rig: her first withdrawal is taken back").toBe(0);
+    await withdrawEntrantCascade(r.auth, o);
+    await sql`delete from division_events where division_id = ${r.divisionId} and type = 'table_withdrawal'
+                and payload ->> 'entrant_id' = ${o}`;
+    await sql`update entrants set status = 'registered' where id = ${o}`;
+    const abandons = async () => (await activeEvents(shared.id)).filter((e) => e.type === "core.abandon").map((e) => e.id);
+    const theirs = await abandons();
+    expect(theirs, "premise: the opponent's abandon is on the shared line").toHaveLength(1);
+    await withdrawEntrantCascade(r.auth, v);
+    expect(await statusOf(v)).toBe("withdrawn");
+    expect(await abandons(), "her second withdrawal leaves the opponent's abandon").toEqual(theirs);
+  }, 300_000);
+
+  it("C a cascade cut off between a line's row and its first void: the resume takes back only what was removed, and Reinstate brings every line back exactly once", async () => {
+    control.failNext = true;
+    const { r, v, mine } = await keyedDq(1);
+    expect(control.failNext, "premise: the forfeit's cascade failed before any write").toBe(false);
+    const pre = await snapshot(mine);
+    control.failOn = "core.void";
+    await expect(withdrawEntrantCascade(r.auth, v, { as: "disqualified" })).rejects.toThrow(/simulated/);
+    expect(control.failOn, "premise: the cut-off fired at a void").toBeNull();
+    let untouched = 0;
+    for (const row of await lineRows(r.divisionId)) {
+      const voided = await voidedIds(row.payload.fixture_id);
+      if (row.payload.planned_void_ids.length > 0 && row.payload.planned_void_ids.every((id) => !voided.has(id))) untouched++;
+    }
+    expect(untouched, "premise: a line row whose planned events are all still active").toBe(1);
+
+    await withdrawEntrantCascade(r.auth, v, { as: "disqualified" });
+    expect(await ledger(r.divisionId), "the clean run's row").toEqual([["expunge", 2, 5]]);
+    let checked = 0;
+    for (const l of mine) {
+      const now = (await linesOf(r.stageId)).find((x) => x.id === l.id)!;
+      expect([now.status, now.outcome, await activeExpunges(l.id)], `line vs ${otherSide(l, v)}: out once`).toEqual(["abandoned", null, 1]);
+      checked++;
+    }
+    await patchEntrant(r.auth, v, { status: "registered" });
+    for (const l of mine) {
+      expect(await stateOf(l.id), `line vs ${otherSide(l, v)}: as before, nothing written twice`).toEqual(pre[l.id]);
+      checked++;
+    }
+    expect(checked).toBe(10);
+  }, 300_000);
+
+  it("C a cascade cut off between two voids of one line: the resume puts back exactly the voided half, and decides as the first run did — 1 of 5", async () => {
+    // The only played line is the disqualifying one (its sanction and its forfeit: two removed events), so the cut-off after
+    // the first void leaves it half-removed. differential: re-recording only when every planned event is voided puts back
+    // nothing, the line reads unplayed, and the resume decides 0 of 5.
+    control.failNext = true;
+    const { r, v, mine, dqLine } = await keyedDq(0);
+    expect(control.failNext, "premise: the forfeit's cascade failed before any write").toBe(false);
+    const pre = await snapshot(mine);
+    expect(pre[dqLine.id]!.events.map((e) => e[0]), "rig: the line's result events").toEqual(["core.start", `${BADMINTON.key}.sanction`, "core.forfeit"]);
+    control.failAfter = "core.void";
+    await expect(withdrawEntrantCascade(r.auth, v, { as: "disqualified" })).rejects.toThrow(/simulated/);
+    expect(control.failAfter, "premise: the cut-off fired after one void").toBeNull();
+    const [row] = (await lineRows(r.divisionId)).filter((x) => x.payload.fixture_id === dqLine.id);
+    const voided = await voidedIds(dqLine.id);
+    expect(row!.payload.planned_void_ids.map((id) => voided.has(id)), "premise: half removed — the newest voided, the older still active").toEqual([true, false]);
+
+    await withdrawEntrantCascade(r.auth, v, { as: "disqualified" });
+    expect(await ledger(r.divisionId), "the clean run's row").toEqual([["expunge", 1, 5]]);
+    await patchEntrant(r.auth, v, { status: "registered" });
+    let checked = 0;
+    for (const l of mine) {
+      expect(await stateOf(l.id), `line vs ${otherSide(l, v)}: as before, nothing written twice`).toEqual(pre[l.id]);
+      checked++;
+    }
+    expect(checked).toBe(5);
   }, 300_000);
 });

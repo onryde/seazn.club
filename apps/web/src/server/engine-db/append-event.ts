@@ -287,7 +287,7 @@ function assertW2bWriteGuards(
 /**
  * W5 T8 (ST-G15, RB5-W2: "every result they played is removed, finalized ones included"): the ONE append a finalized
  * ledger admits — the withdrawal cascade's void of its ACTIVE `core.finalize`, the first step of an expunge
- * (`withdrawal.ts` `voidAndAbandon`). Once it lands the fixture folds back to an unlocked status, and the cascade's further
+ * (`withdrawal.ts` `expungeLine`). Once it lands the fixture folds back to an unlocked status, and the cascade's further
  * voids and its expunge abandon go through the ordinary path. Every other writer, every other event, and a void of anything
  * but that finalize still meet the lock; a `cancelled` fixture never opens. Read under the fixture lock this append holds.
  */

@@ -14,6 +14,14 @@ import type { TKey } from "@/lib/i18n-runtime";
 
 export const TABLE_WITHDRAWAL_ROW = "table_withdrawal";
 export const TABLE_WITHDRAWAL_VOIDED_ROW = "table_withdrawal_voided";
+/** Task 8b re-review 2 (ruling C): the cascade's write-ahead row, one per line it is about to expunge, written in its own
+ *  transaction BEFORE the line's first void — `{entrant_id, stage_id, fixture_id, planned_void_ids, from_seq}`. A resume and
+ *  a Reinstate read only these to take an expunge back; a `table_withdrawal_line_voided` row naming its seq retires it. Not a
+ *  history step and not read by the footnote. */
+export const TABLE_WITHDRAWAL_LINE_ROW = "table_withdrawal_line";
+/** Retires a `table_withdrawal_line` row once its line is taken back (`{voids_seq}`), so nothing is reversed twice. Its own
+ *  type, so `table_withdrawal_voided` keeps meaning "the footnote's row is voided". */
+export const TABLE_WITHDRAWAL_LINE_VOIDED_ROW = "table_withdrawal_line_voided";
 
 export type TableWithdrawalPolicy = "expunge" | "walkover";
 

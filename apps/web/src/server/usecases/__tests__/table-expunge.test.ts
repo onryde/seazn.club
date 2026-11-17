@@ -285,7 +285,7 @@ describe.skipIf(!HAS_DB)("X-WDT-5 (RB5-W4, RB5-W7): the ledger row the footnote 
     await withdrawEntrantCascade(r.auth, p1);
     const rows = await withdrawalRows(r.divisionId);
     expect(rows.map((x) => [x.type, x.payload])).toEqual([
-      ["table_withdrawal", { entrant_id: p1, stage_id: r.stageId, policy: "walkover", played_at_departure: 2, scheduled: 3, removed: {} }],
+      ["table_withdrawal", { entrant_id: p1, stage_id: r.stageId, policy: "walkover", played_at_departure: 2, scheduled: 3 }],
     ]);
     const { loadTableWithdrawals } = await import("@/server/public-site/table-withdrawals");
     const { withdrawalNotesFor, withdrawalNoteText } = await import("@/lib/table-withdrawal-note");
@@ -308,7 +308,7 @@ describe.skipIf(!HAS_DB)("X-WDT-5 (RB5-W4, RB5-W7): the ledger row the footnote 
     expect(hers.filter((l) => /(^|-)rr-(cu|by)-/.test(l.ext_key ?? "")).length, "rig: at least one is a catch-up line").toBeGreaterThan(0);
     await withdrawEntrantCascade(r.auth, n);
     const rows = await withdrawalRows(r.divisionId);
-    expect(rows.map((x) => x.payload)).toEqual([{ entrant_id: n, stage_id: r.stageId, policy: "expunge", played_at_departure: 0, scheduled: hers.length, removed: {} }]);
+    expect(rows.map((x) => x.payload)).toEqual([{ entrant_id: n, stage_id: r.stageId, policy: "expunge", played_at_departure: 0, scheduled: hers.length }]);
     for (const l of hers) expect(await hasActiveExpunge(l.id), `catch-up line ${l.ext_key} expunged`).toBe(true);
   }, 120_000);
 });
@@ -461,9 +461,10 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     expect(await lineState(line.id), "exactly as before the withdrawal: the undone game is not brought back").toEqual(pre);
   }, 120_000);
 
-  // m1 (round 1) as re-ruled in round 2: a cascade with no `table_withdrawal` row (from before the row existed) is still
-  // reversed from the score ledger's own cascade events — but with no list of what it removed, nothing is re-recorded:
-  // the removed result's line is owed again (its Start stands), the never-played lines are scheduled again.
+  // m1 (round 1) as re-ruled in rounds 2 and 3: a cascade with no rows (from before the rows existed — neither its
+  // `table_withdrawal` row nor its write-ahead `table_withdrawal_line` rows) is still reversed from the score ledger's own
+  // cascade events — but with no list of what it removed, nothing is re-recorded: the removed result's line is owed again
+  // (its Start stands), the never-played lines are scheduled again.
   it("X-WDT-8 a withdrawal with no ledger row: the lines come back, a removed result is owed again", async () => {
     const r = await started(4);
     const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
@@ -471,7 +472,7 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     await playBadminton(r.auth, signed.id, true);
     const pre = Object.fromEntries(await Promise.all((await linesOf(r.stageId)).filter((l) => involves(l, p1)).map(async (l) => [l.id, await lineState(l.id)] as const)));
     await withdrawEntrantCascade(r.auth, p1);
-    await sql`delete from division_events where division_id = ${r.divisionId} and type = 'table_withdrawal'`;
+    await sql`delete from division_events where division_id = ${r.divisionId} and type in ('table_withdrawal', 'table_withdrawal_line')`;
     expect(await withdrawalRows(r.divisionId), "rig: a legacy withdrawal, no row").toEqual([]);
     await patchEntrant(r.auth, p1, { status: "registered" });
     let checked = 0;
@@ -500,11 +501,14 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     expect(pre.status, "rig: a No result").toBe("abandoned");
     await withdrawEntrantCascade(r.auth, p1);
     expect(await lineState(line.id), "the withdrawal does not remove a No result").toEqual(pre);
-    // Forced: the row lists the No result as removed, and it is voided (as the cascade would have).
+    // Forced: a write-ahead line row lists the No result as removed, and it is voided (as the cascade would have).
     const [nr] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${line.id} and type = 'core.abandon'`;
+    const from = await tip(line.id);
+    await sql`insert into division_events (division_id, seq, type, payload)
+              select ${r.divisionId}, coalesce(max(seq), 0) + 1, 'table_withdrawal_line',
+                     ${sql.json({ entrant_id: p1, stage_id: r.stageId, fixture_id: line.id, planned_void_ids: [nr!.id], from_seq: from } as never)}
+                from division_events where division_id = ${r.divisionId}`;
     await scoreEvent(r.auth, line.id, { expected_seq: await tip(line.id), type: "core.void", payload: { event_id: nr!.id } } as never, { writer: "withdrawal_cascade" });
-    await sql`update division_events set payload = jsonb_set(payload, '{removed}', ${sql.json({ [line.id]: [nr!.id] } as never)})
-               where division_id = ${r.divisionId} and type = 'table_withdrawal'`;
     await patchEntrant(r.auth, p1, { status: "registered" });
     expect(await lineState(line.id), "re-recorded through the No result's own writer: as it was").toEqual(pre);
   }, 120_000);
@@ -653,10 +657,14 @@ describe("Undo and the table-withdrawal rows", () => {
   it("the rows are not history steps and not barriers: Undo steps over them", () => {
     expect(isReversible("table_withdrawal"), "not a step Undo inverts").toBe(false);
     expect(isReversible("table_withdrawal_voided")).toBe(false);
+    expect(isReversible("table_withdrawal_line"), "the write-ahead line row (re-review 2) neither").toBe(false);
+    expect(isReversible("table_withdrawal_line_voided")).toBe(false);
     const ledger = [
       { seq: 1, type: "fixtures_generated", payload: {} },
-      { seq: 2, type: "table_withdrawal", payload: {} },
-      { seq: 3, type: "table_withdrawal_voided", payload: { voids_seq: 2 } },
+      { seq: 2, type: "table_withdrawal_line", payload: {} },
+      { seq: 3, type: "table_withdrawal", payload: {} },
+      { seq: 4, type: "table_withdrawal_line_voided", payload: { voids_seq: 2 } },
+      { seq: 5, type: "table_withdrawal_voided", payload: { voids_seq: 3 } },
     ];
     expect(undoBarrierRefusal(ledger, 0), "an Undo crossing them is not refused").toBeNull();
   });

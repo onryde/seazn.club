@@ -59,7 +59,14 @@ import { log } from "@/server/logger";
 import { BOARD_SETTLED_REASON } from "@/server/email-outbox/cancel";
 import { cancelBoardInvites } from "./external-play/cancel-invites";
 import { DEPARTED_STATUSES, getEntrant, listEntrants, writeEntrantPatch } from "./entrants";
-import { TABLE_WITHDRAWAL_ROW, TABLE_WITHDRAWAL_VOIDED_ROW, activeTableWithdrawals, type TableWithdrawalPolicy } from "@/lib/table-withdrawal-note";
+import {
+  TABLE_WITHDRAWAL_LINE_ROW,
+  TABLE_WITHDRAWAL_LINE_VOIDED_ROW,
+  TABLE_WITHDRAWAL_ROW,
+  TABLE_WITHDRAWAL_VOIDED_ROW,
+  activeTableWithdrawals,
+  type TableWithdrawalPolicy,
+} from "@/lib/table-withdrawal-note";
 import { getDivision } from "./divisions";
 import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
@@ -250,35 +257,66 @@ interface FixtureRowLite {
   third_place?: boolean;
 }
 
-/** Void every effective (not-yet-voided) state-bearing event, newest first,
- *  then abandon — the expunge path for a fixture that already has a result. Returns the ids it voided (W5 T8 fix round 2):
- *  the `table_withdrawal` row records them, and a Reinstate re-records exactly those — the ledger keeps no writer, so a
- *  void the cascade wrote cannot be told from a scorer's Undo once it is written. */
-async function voidAndAbandon(auth: AuthCtx, fixtureId: string): Promise<string[]> {
-  const events = await listEvents(auth, fixtureId, 0);
-  const voidedIds = new Set(
-    events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string),
-  );
-  const targets = events
-    .filter(
-      (e) =>
-        !["core.start", "core.void", "core.note", "core.award"].includes(e.type) &&
-        !voidedIds.has(e.id),
-    )
+/** The line's active result events, newest first — what an expunge removes: every effective (not-yet-voided) state-bearing
+ *  event. Newest first, so on a finalized ledger the `core.finalize` (always its newest event: a locked ledger takes no other)
+ *  is the first void — the cascade's, which is the one append the lock admits (append-event.ts `cascadeReopensFinalize`). */
+function resultEventsOf(events: readonly EventOut[]): EventOut[] {
+  const voidedIds = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+  return events
+    .filter((e) => !["core.start", "core.void", "core.note", "core.award"].includes(e.type) && !voidedIds.has(e.id))
     .sort((a, b) => b.seq - a.seq);
-  // W5 T8: newest first, so on a finalized ledger the `core.finalize` (always its newest event: a locked ledger takes no other)
-  // is the first void — the cascade's, which is the one append the lock admits (append-event.ts `cascadeReopensFinalize`).
-  for (const target of targets) {
-    const state = await getFixtureState(auth, fixtureId);
+}
+
+/** Whose cascade is settling the line, and in which division: the owner a write-ahead row names. */
+interface LineOwner {
+  divisionId: string;
+  entrantId: string;
+}
+
+/**
+ * Task 8b re-review 2 (ruling C): the expunge of ONE line, write-ahead. Before anything on the line is touched, its
+ * `table_withdrawal_line` row is committed in its own transaction: the entrant, the line, the events this expunge is about to
+ * remove (`planned_void_ids` — the line's active result events at this moment, read under the per-entrant cascade lock; none
+ * on a line with no result) and the line's tip (`from_seq`: the expunge abandon it writes is the first after it). Then each
+ * planned event is voided, newest first, then the abandon. A resume and a Reinstate read ONLY these rows to take an expunge
+ * back (`takeBackLines`), so a scorer's own Undo before the withdrawal is never taken for the cascade's.
+ *
+ * Between the row and the voids a scorer can still write (the lock holds cascades, not the pad). An event appended there is
+ * not in the plan and stays as it is: it is not voided, the abandon lands over it (an expunged line reads no result either
+ * way), and nothing re-records it. At a Reinstate it is still there, ahead of the re-recorded events; one that lands between
+ * two of the cascade's voids falls after them, so `rerecordRemoved` reads the line as rescored-since and NAMES it in
+ * `not_restored` rather than merge. A planned event the scorer voids in that window is still in the plan and voided, so a
+ * Reinstate puts it back — the one case the row cannot tell apart (recorded, accepted: the window is one line's writes).
+ */
+async function expungeLine(auth: AuthCtx, owner: LineOwner, fixture: FixtureRowLite, hasResult: boolean): Promise<void> {
+  const events = await listEvents(auth, fixture.id, 0);
+  const planned = hasResult ? resultEventsOf(events) : [];
+  await withTenant(auth.orgId, async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + owner.divisionId}))`;
+    await appendTableLedgerRow(
+      tx,
+      owner.divisionId,
+      TABLE_WITHDRAWAL_LINE_ROW,
+      {
+        entrant_id: owner.entrantId,
+        stage_id: fixture.stage_id,
+        fixture_id: fixture.id,
+        planned_void_ids: planned.map((e) => e.id),
+        from_seq: events.reduce((m, e) => Math.max(m, e.seq), 0),
+      },
+      auth.userId,
+    );
+  });
+  for (const target of planned) {
+    const state = await getFixtureState(auth, fixture.id);
     await scoreEvent(
       auth,
-      fixtureId,
+      fixture.id,
       { expected_seq: state.last_seq, type: "core.void", payload: { event_id: target.id } },
       CASCADE,
     );
   }
-  await expungeAbandon(auth, fixtureId);
-  return targets.map((t) => t.id);
+  await expungeAbandon(auth, fixture.id);
 }
 
 /** D5 / PF-4: an expunge's abandon carries `expunge: true`, so the match leaves the table entirely (`outcomeOf` reads
@@ -300,7 +338,8 @@ async function applyUpdate(
   fixture: FixtureRowLite,
   out: WithdrawCascadeOut,
   held: boolean,
-): Promise<string[]> {
+  owner: LineOwner,
+): Promise<void> {
   // W5 T8 (ST-G15): no status is skipped here any more. A finalized line reaches the void below like any settled result (the
   // engine hands a played fixture only a "void"); a cancelled one is never planned (neither played nor pending, and a
   // bracket reads it as "void") and is counted where the lines are read. Either, handed a walkover, meets the ledger's lock
@@ -324,17 +363,11 @@ async function applyUpdate(
     );
     out.walkovers++;
     if (held) out.walked_over_held++;
-    return [];
+    return;
   }
-  // void — pending fixtures abandon directly; resulted ones expunge first.
-  let removed: string[] = [];
-  if (SETTLED.has(fixture.status) && fixture.outcome !== null) {
-    removed = await voidAndAbandon(auth, fixture.id);
-  } else {
-    await expungeAbandon(auth, fixture.id);
-  }
+  // void — pending fixtures abandon directly; resulted ones expunge first. Either way the line's write-ahead row goes first.
+  await expungeLine(auth, owner, fixture, SETTLED.has(fixture.status) && fixture.outcome !== null);
   out.voided++;
-  return removed;
 }
 
 /** X-CH-3's scope: the deciding final of a KNOCKOUT - `is_final`, never a third-place match - which feeds no next match
@@ -464,43 +497,29 @@ export async function withdrawEntrantCascade(
  * her status unwritten) is RESUMED by the next run — and the next run must decide as the first did. It would not, over the
  * half-settled lines: a line it walked over now reads as PLAYED (4 of 5 instead of 3 of 5 on the ledger row), and a line it
  * expunged reads as neither played nor pending, so an expunge at 2 of 5 resumes as a walkover at 2 of 4. So before deciding,
- * the run takes back its own unfinished work on the open table stages: on every line of hers whose other side is still in the
- * field (a line shared with an entrant who has left is that entrant's), the cascade's own active events (`cascadeEventsOf`:
- * an expunge abandon, her `withdrew` walkover — cascade-only, PF-2) are voided newest first, and what an expunge removed — the
- * unbroken run of voids `voidAndAbandon` wrote just before its abandon — is recorded again (`rerecordRemoved`, Reinstate's
- * own re-record). The line is then as it was before the first run, and the run decides from there.
+ * the run takes back its own unfinished work on the open table stages, on every line of hers whose other side is still in the
+ * field (a line shared with an entrant who has left is that entrant's).
+ *
+ * Re-review 2 (ruling C): what an expunge removed is read from its write-ahead `table_withdrawal_line` rows ONLY
+ * (`takeBackLines`, the same reading a Reinstate makes) — never inferred from the score ledger, where a scorer's trailing
+ * Undo on a pending line looked exactly like the cascade's own voids and came back.
  *
  * Only for an entrant still in the field (the caller has checked): a departed entrant's events are her finished withdrawal.
  */
 async function reversePartialCascade(auth: AuthCtx, entrantId: string, divisionId: string): Promise<void> {
-  const [stages, fixtures, entrants] = await Promise.all([
+  const [stages, fixtures, entrants, ledger] = await Promise.all([
     listStages(auth, divisionId),
     listDivisionFixtures(auth, divisionId),
     listEntrants(auth, divisionId),
+    tableWithdrawalLedger(auth, divisionId),
   ]);
   const open = new Set(stages.filter((st) => TABLE_KINDS.has(st.kind) && st.status !== "complete").map((st) => st.id));
   const gone = new Set(entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id));
+  const lines = (fixtures as unknown as FixtureRowLite[]).filter((f) => open.has(f.stage_id) && sharedWithTheField(f, entrantId, gone));
   const scratch: ReinstateTableOut = { voided: 0, rerecorded: 0, not_restored: [] };
-  for (const f of fixtures as unknown as FixtureRowLite[]) {
-    if (!open.has(f.stage_id) || (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId)) continue;
-    const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
-    if (other === null || gone.has(other)) continue;
-    const events = await listEvents(auth, f.id, 0);
-    const own = cascadeEventsOf(events, entrantId);
-    if (own.length === 0) continue;
-    const bySeq = new Map(events.map((e) => [e.seq, e]));
-    const removed: string[] = [];
-    for (const e of own) {
-      if (e.type !== "core.abandon") continue;
-      for (let seq = e.seq - 1; bySeq.get(seq)?.type === "core.void"; seq--) removed.push(bySeq.get(seq)!.voids_event_id as string);
-    }
-    for (const e of own) {
-      const state = await getFixtureState(auth, f.id);
-      await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
-    }
-    if (removed.length > 0 && !(await rerecordRemoved(auth, f.id, removed, scratch))) {
-      log.warn({ fixture: f.id, entrantId }, "withdrawal: resuming a cut-off cascade, a removed result could not be put back");
-    }
+  await takeBackLines(auth, entrantId, divisionId, lines, ledger, scratch);
+  for (const id of scratch.not_restored) {
+    log.warn({ fixture: id, entrantId }, "withdrawal: resuming a cut-off cascade, a removed result could not be put back");
   }
 }
 
@@ -528,16 +547,14 @@ async function runWithdrawEntrantCascade(
   };
 
   // W5 T8 (RB5-W4, RB5-W7): one row per league or group stage settled, with the count the policy decided on; written after the
-  // settles, so a cascade that fails part-way leaves no footnote claiming a rule it did not finish applying.
-  // Fix round 2: `removed` — per line, the event ids this cascade's expunge voided (`voidAndAbandon`), the exact list a
-  // Reinstate re-records. Filled as the plan runs; a line with nothing removed is not listed.
+  // settles, so a cascade that fails part-way leaves no footnote claiming a rule it did not finish applying. What an expunge
+  // removed is not on this row: each line's write-ahead `table_withdrawal_line` row says it (`expungeLine`, ruling C).
   const ledgerRows: {
     entrant_id: string;
     stage_id: string;
     policy: TableWithdrawalPolicy;
     played_at_departure: number;
     scheduled: number;
-    removed: Record<string, string[]>;
     actor?: CascadeActor;
   }[] = [];
   const settledTables: { id: string; kind: string }[] = [];
@@ -606,7 +623,6 @@ async function runWithdrawEntrantCascade(
             policy: mode,
             played_at_departure: decision.played,
             scheduled: decision.scheduled,
-            removed: {},
             ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
           });
         }
@@ -800,9 +816,7 @@ async function runWithdrawEntrantCascade(
           }
           continue;
         }
-        const removed = await applyUpdate(auth, step.update, step.fixture, out, step.bracket?.held === true);
-        const row = ledgerRows.find((r) => r.stage_id === step.fixture.stage_id);
-        if (row !== undefined && removed.length > 0) row.removed[step.fixture.id] = removed;
+        await applyUpdate(auth, step.update, step.fixture, out, step.bracket?.held === true, { divisionId: division.id, entrantId });
         settled.push(step.update.fixtureId);
       }
     } finally {
@@ -957,30 +971,143 @@ async function appendTableLedgerRow(
   return last + 1;
 }
 
-/** The cascade's own events on one line, still active, newest first: its expunge abandon and its `withdrew` walkover BY this
- *  entrant (both cascade-only, append-event.ts PF-2, so nobody else can have written them). */
-function cascadeEventsOf(events: readonly EventOut[], entrantId: string): EventOut[] {
+/** Her `withdrew` walkovers on one line, still active, newest first (cascade-only, append-event.ts PF-2, so nobody else can
+ *  have written them, and each names her). */
+function walkoversOf(events: readonly EventOut[], entrantId: string): EventOut[] {
   const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
   return events
-    .filter((e) => !voided.has(e.id) && e.type !== "core.void")
+    .filter((e) => !voided.has(e.id) && e.type === "core.forfeit")
     .filter((e) => {
-      const p = (e.payload ?? {}) as { expunge?: unknown; reason?: unknown; by?: unknown };
-      return (e.type === "core.abandon" && p.expunge === true) || (e.type === "core.forfeit" && p.reason === REASON && p.by === entrantId);
+      const p = (e.payload ?? {}) as { reason?: unknown; by?: unknown };
+      return p.reason === REASON && p.by === entrantId;
     })
     .sort((a, b) => b.seq - a.seq);
 }
 
-/** Fix round 2: the event ids a `table_withdrawal` row records as removed, per line — exactly what that cascade's expunge
- *  voided (`voidAndAbandon`). A row from before this field (a legacy withdrawal) records none, and nothing is re-recorded. */
-function removedOfRow(payload: unknown): Map<string, string[]> {
-  const raw = (payload as { removed?: unknown } | null)?.removed;
-  const out = new Map<string, string[]>();
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [fixtureId, ids] of Object.entries(raw as Record<string, unknown>)) {
-    if (Array.isArray(ids) && ids.every((x) => typeof x === "string")) out.set(fixtureId, ids as string[]);
+/** One `table_withdrawal_line` row as `expungeLine` writes it; `retired` once a `table_withdrawal_line_voided` row names its
+ *  seq. */
+interface WithdrawalLineRow {
+  seq: number;
+  entrant_id: string;
+  stage_id: string;
+  fixture_id: string;
+  planned_void_ids: string[];
+  from_seq: number;
+  retired: boolean;
+}
+
+/** Every write-ahead row in the ledger, oldest first. A row this module's writer never produces (a missing field, a list that
+ *  is not ids) is not read: nothing is re-recorded on its word. */
+function withdrawalLineRows(ledger: readonly { seq: number; type: string; payload: unknown }[]): WithdrawalLineRow[] {
+  const retired = new Set<number>();
+  for (const row of ledger) {
+    const of = (row.payload as { voids_seq?: unknown } | null)?.voids_seq;
+    if (row.type === TABLE_WITHDRAWAL_LINE_VOIDED_ROW && typeof of === "number") retired.add(of);
+  }
+  const out: WithdrawalLineRow[] = [];
+  for (const row of [...ledger].sort((a, b) => a.seq - b.seq)) {
+    if (row.type !== TABLE_WITHDRAWAL_LINE_ROW) continue;
+    const p = (row.payload ?? {}) as Record<string, unknown>;
+    if (typeof p.entrant_id !== "string" || typeof p.stage_id !== "string" || typeof p.fixture_id !== "string") continue;
+    if (!Array.isArray(p.planned_void_ids) || !p.planned_void_ids.every((x) => typeof x === "string")) continue;
+    if (typeof p.from_seq !== "number" || !Number.isInteger(p.from_seq) || p.from_seq < 0) continue;
+    out.push({
+      seq: row.seq,
+      entrant_id: p.entrant_id,
+      stage_id: p.stage_id,
+      fixture_id: p.fixture_id,
+      planned_void_ids: p.planned_void_ids as string[],
+      from_seq: p.from_seq,
+      retired: retired.has(row.seq),
+    });
   }
   return out;
 }
+
+/** A line of hers whose other side is still in the field — the only lines a resume or a Reinstate takes back (a line shared
+ *  with an entrant who has left stays out until both are back). */
+function sharedWithTheField(f: FixtureRowLite, entrantId: string, gone: ReadonlySet<string>): boolean {
+  if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) return false;
+  const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
+  return other !== null && !gone.has(other);
+}
+
+/** Did the withdrawal that wrote this line row FINISH and then get Reinstated — a `table_withdrawal` row of the same entrant
+ *  and stage written after it, since voided? That entrant's Reinstate skipped the line (its other side was gone) and left the
+ *  row for whoever comes back second. A cascade still cut off part-way has no such row: its line rows are its own resume's. */
+function finishedAndReinstated(ledger: readonly { seq: number; type: string; payload: unknown }[], line: WithdrawalLineRow): boolean {
+  const voided = new Set<number>();
+  for (const row of ledger) {
+    const of = (row.payload as { voids_seq?: unknown } | null)?.voids_seq;
+    if (row.type === TABLE_WITHDRAWAL_VOIDED_ROW && typeof of === "number") voided.add(of);
+  }
+  return ledger.some((row) => {
+    const p = (row.payload ?? {}) as { entrant_id?: unknown; stage_id?: unknown };
+    return row.type === TABLE_WITHDRAWAL_ROW && row.seq > line.seq && p.entrant_id === line.entrant_id && p.stage_id === line.stage_id && voided.has(row.seq);
+  });
+}
+
+/**
+ * Task 8b re-review 2 (ruling C): take back what withdrawal cascades did to her `lines` (the caller's: hers, on a stage still
+ * open, the other side in the field). The ONE reading both a resume of a cut-off cascade and a Reinstate make:
+ *
+ * 1. Each live `table_withdrawal_line` row on the line that is hers — or the other side's, once that withdrawal finished and
+ *    was Reinstated (`finishedAndReinstated`: the shared line waited for both) — is reversed: the expunge abandon written after
+ *    it (`from_seq`) is voided, and of its `planned_void_ids` exactly those actually voided are recorded again
+ *    (`rerecordRemoved`, its own order, type and payload). An id still active (a cut-off before its void) is not touched. The
+ *    row is then retired (a `table_withdrawal_line_voided` row names its seq), so nothing is reversed twice.
+ * 2. An expunge abandon NO line row precedes (a legacy withdrawal, from before the rows) is voided and nothing re-recorded:
+ *    the line is owed again. One a line row of someone else precedes — an opponent's own cascade, cut off — is theirs and is
+ *    never touched.
+ * 3. Her `withdrew` walkovers (`walkoversOf`) are voided.
+ *
+ * Safe to run again: a void already written is no longer active, and a re-record already written is matched as a prefix of
+ * what was removed. A line whose removed result cannot be put back is NAMED in `out.not_restored` and never blocks the rest.
+ * Returns the stages it changed.
+ */
+async function takeBackLines(
+  auth: AuthCtx,
+  entrantId: string,
+  divisionId: string,
+  lines: readonly FixtureRowLite[],
+  ledger: readonly { seq: number; type: string; payload: unknown }[],
+  out: ReinstateTableOut,
+): Promise<Set<string>> {
+  const rows = withdrawalLineRows(ledger);
+  const changed = new Set<string>();
+  const voidEvent = async (fixtureId: string, eventId: string) => {
+    const state = await getFixtureState(auth, fixtureId);
+    await scoreEvent(auth, fixtureId, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: eventId } }, CASCADE);
+    out.voided++;
+  };
+  for (const f of lines) {
+    const before = out.voided + out.rerecorded;
+    const onLine = rows.filter((r) => r.fixture_id === f.id);
+    for (const row of onLine) {
+      if (row.retired || (row.entrant_id !== entrantId && !finishedAndReinstated(ledger, row))) continue;
+      const events = await listEvents(auth, f.id, 0);
+      const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
+      for (const e of activeAbandons(events).filter((a) => a.seq > row.from_seq && isExpunge(a)).sort((a, b) => b.seq - a.seq)) {
+        await voidEvent(f.id, e.id);
+      }
+      const removed = row.planned_void_ids.filter((id) => voided.has(id));
+      if (removed.length > 0 && !(await rerecordRemoved(auth, f.id, removed, out))) out.not_restored.push(f.id);
+      await withTenant(auth.orgId, async (tx) => {
+        await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+        await appendTableLedgerRow(tx, divisionId, TABLE_WITHDRAWAL_LINE_VOIDED_ROW, { voids_seq: row.seq }, auth.userId);
+      });
+    }
+    const events = await listEvents(auth, f.id, 0);
+    for (const e of activeAbandons(events).filter((a) => isExpunge(a) && !onLine.some((r) => r.from_seq < a.seq))) {
+      await voidEvent(f.id, e.id);
+    }
+    for (const e of walkoversOf(events, entrantId)) await voidEvent(f.id, e.id);
+    if (out.voided + out.rerecorded > before) changed.add(f.stage_id);
+  }
+  return changed;
+}
+
+const isExpunge = (e: EventOut) => (e.payload as { expunge?: unknown } | null)?.expunge === true;
 
 const sameEvent = (a: EventOut, b: EventOut) => a.type === b.type && JSON.stringify(a.payload ?? null) === JSON.stringify(b.payload ?? null);
 
@@ -1002,17 +1129,16 @@ export interface ReinstateTableOut {
 }
 
 /**
- * W5 T8 (RB5-W6, X-WDT-8; fix rounds 1 and 2): Reinstate REVERSES a league or group withdrawal.
+ * W5 T8 (RB5-W6, X-WDT-8; fix rounds 1-3): Reinstate REVERSES a league or group withdrawal.
  *
- * Her lines are found from the SCORE ledger (a legacy withdrawal with no row is reversed too, m1 of round 1): the cascade's
- * own events, still active (`cascadeEventsOf` — cascade-only, PF-2, so self-identifying), are voided newest first, so a
- * never-played line and a never-played walkover return to scheduled. A result the expunge REMOVED is then RE-RECORDED — a
- * void is not voidable, and the engine's way to undo an undo is to record the event again (events.js:354-357): EXACTLY the
- * ids her active `table_withdrawal` row lists for that line (round 2: the ledger keeps no writer, so a scorer's own Undo
- * just before the withdrawal cannot be told from the cascade's voids after the fact — it is the row that knows), in their
- * original order, type and payload. A signed-off line ends on its `core.finalize` again. A row with no list (a legacy
- * withdrawal) re-records nothing: the line is owed again. Last, her rows are voided (the footnote goes) and each stage
- * refolded.
+ * Her lines are taken back by `takeBackLines` — the ONE reading a resume of a cut-off cascade makes too. Re-review 2
+ * (ruling C): what an expunge removed is read only from its write-ahead `table_withdrawal_line` rows, never from a list on
+ * the `table_withdrawal` row (that field is gone: one authority) and never from the score ledger (it keeps no writer, so a
+ * scorer's own Undo just before the withdrawal cannot be told from the cascade's voids after the fact). A removed result is
+ * RE-RECORDED — a void is not voidable, and the engine's way to undo an undo is to record the event again
+ * (events.js:354-357) — in its original order, type and payload; a signed-off line ends on its `core.finalize` again. A line
+ * with no line row (a legacy withdrawal) has its expunge taken back and nothing re-recorded: the line is owed again. Her
+ * walkovers return to scheduled. Last, her `table_withdrawal` rows are voided (the footnote goes) and each stage refolded.
  *
  * Safe to run again (m2): a void already written is no longer active, and a re-record already written is matched as a
  * prefix of what was removed, so a retry after a failure part-way finishes the job and writes nothing twice. A line whose
@@ -1037,25 +1163,11 @@ export async function reinstateTableEntrant(auth: AuthCtx, entrantId: string): P
   const open = new Map(stages.filter((st) => ROUND_ROBIN_KINDS.has(st.kind) && st.status !== "complete").map((st) => [st.id, st]));
   const gone = new Set(entrants.filter((e) => DEPARTED_STATUSES.has(e.status)).map((e) => e.id));
   const rows = activeTableWithdrawals(ledger).filter((r) => r.entrant_id === entrantId && open.has(r.stage_id));
-  const removed = new Map<string, string[]>();
-  for (const r of rows) for (const [fid, ids] of removedOfRow(ledger.find((x) => x.seq === r.seq)?.payload)) removed.set(fid, ids);
   const out: ReinstateTableOut = { voided: 0, rerecorded: 0, not_restored: [] };
+  const lines = (fixtures as unknown as FixtureRowLite[]).filter((f) => open.has(f.stage_id) && sharedWithTheField(f, entrantId, gone));
   const touched = new Map<string, { id: string; kind: string }>();
-  for (const f of fixtures as unknown as FixtureRowLite[]) {
-    const stage = open.get(f.stage_id);
-    if (stage === undefined || (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId)) continue;
-    const other = f.home_entrant_id === entrantId ? f.away_entrant_id : f.home_entrant_id;
-    if (other === null || gone.has(other)) continue;
-    const own = cascadeEventsOf(await listEvents(auth, f.id, 0), entrantId);
-    for (const e of own) {
-      const state = await getFixtureState(auth, f.id);
-      await scoreEvent(auth, f.id, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: e.id } }, CASCADE);
-      out.voided++;
-    }
-    const before = out.rerecorded;
-    const ids = removed.get(f.id) ?? [];
-    if (ids.length > 0 && !(await rerecordRemoved(auth, f.id, ids, out))) out.not_restored.push(f.id);
-    if (own.length > 0 || out.rerecorded > before) touched.set(stage.id, { id: stage.id, kind: stage.kind });
+  for (const id of await takeBackLines(auth, entrantId, entrant.division_id, lines, ledger, out)) {
+    touched.set(id, { id, kind: open.get(id)!.kind });
   }
   // The footnote's rows: voided for every stage she is back in (a finished table's row stands with it, RB5-L8).
   if (rows.length > 0) {
@@ -1104,7 +1216,7 @@ async function tableWithdrawalLedger(auth: AuthCtx, divisionId: string) {
   return withTenant(auth.orgId, (tx) =>
     tx<{ seq: number; type: string; payload: unknown }[]>`
       select seq::int as seq, type, payload from division_events
-       where division_id = ${divisionId} and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`,
+       where division_id = ${divisionId} and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW}, ${TABLE_WITHDRAWAL_LINE_ROW}, ${TABLE_WITHDRAWAL_LINE_VOIDED_ROW})`,
   );
 }
 
