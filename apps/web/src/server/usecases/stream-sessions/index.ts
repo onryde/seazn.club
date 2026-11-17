@@ -64,7 +64,7 @@ export { relayCredits, openStreamStates, holdStatesOf } from "./panel-reads";
 export type { RelayCredits, OpenSessionRow } from "./panel-reads";
 export { lastConnectedSampleAt } from "./phone-lost";
 export type { CameraFacts } from "./phone-lost";
-export { autoStopAppliesTo } from "./auto-stop";
+export { autoStopOf, autoStopDelaySeconds } from "./auto-stop";
 export { tickSession, STREAM_TICK_BUDGET_MS, tickOpenSessions } from "./tick";
 export type { TickObservation, StreamTickResult } from "./tick";
 export { currentSession } from "./current";

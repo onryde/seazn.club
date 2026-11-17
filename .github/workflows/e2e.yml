@@ -1167,6 +1167,9 @@ jobs:
           # between refused attempts (default 60 s). Same rule: honoured only under ENV_NAME ci, told to the
           # Playwright step below, and refused by the spec when unshortened.
           AUTO_STOP_AFTER_RESULT_SECONDS: "10"
+          # Court stream O15 (owner 2026-11-16): a court session's tail is its own tunable (default 30 s);
+          # walkthrough/court-stream.spec.ts demands it and refuses an unshortened one.
+          COURT_AUTO_STOP_AFTER_RESULT_SECONDS: "10"
           AUTO_START_RETRY_SECONDS: "5"
           # Court stream (spec 2026-11-14, capture O13): a court code serves only a capture build at or above this version, in the
           # app's own `appVersion` form; unset, linking a court is refused. match-day.spec.ts and walkthrough/court-stream.spec.ts
@@ -1237,6 +1240,7 @@ jobs:
           PHONE_LOST_LIVE_MINUTES: "1"
           PHONE_SILENT_FLOOR_SECONDS: "5"
           AUTO_STOP_AFTER_RESULT_SECONDS: "10"
+          COURT_AUTO_STOP_AFTER_RESULT_SECONDS: "10"
           AUTO_START_RETRY_SECONDS: "5"
 
       # Distinct from "Connect walkthrough not configured" above: that one

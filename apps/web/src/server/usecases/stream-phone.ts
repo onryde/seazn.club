@@ -25,7 +25,7 @@ import { codeStatus } from "@/server/relay/domain/stream-code";
 import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { fixtureStreamTarget, requireSessionEditor } from "./stream-codes";
 import { frozenCompetitionIds } from "./entitlement-freeze";
-import { autoStopAppliesTo } from "./stream-sessions";
+import { autoStopOf } from "./stream-sessions";
 import { liveCourtLinkFor } from "./court-streams";
 
 /** PR-1 carries one camera: the panel reads slot 0. */
@@ -121,7 +121,7 @@ type SettingsFacts = {
  */
 function autoOf(
   st: SettingsFacts & { status: string },
-  c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null; competitionFrozen: boolean },
+  c: { phoneMode: PhoneMode | null; openSession: boolean; stopApplies: boolean | null; stopAfterSeconds: number | null; competitionFrozen: boolean },
   now: Date,
 ): StreamPhone["auto"] {
   if (st.settings_id === null) return null;
@@ -144,6 +144,7 @@ function autoOf(
     refusal: refusal !== null && verdict.due ? (refusal === "not_entitled" && c.competitionFrozen ? "competition_frozen" : refusal) : null,
     wontStart: autoWontStart(verdict.failed),
     stopApplies: c.stopApplies,
+    stopAfterSeconds: c.stopAfterSeconds,
   };
 }
 
@@ -162,7 +163,8 @@ function autoOf(
  *  - `auto` (PR-2 T6): the fixture's settings row as the panel's switch and strips read it — null with no row. Its `refusal` is
  *    served only while `autoStartVerdict` could still pass (`autoOf`): the stored code can outlive the attempt it belonged to;
  *    `wontStart` (final review I-1) is the latch that verdict's failures name — why a switch left on will not start again;
- *    `stopApplies` (B7 review M-3) is whether §7.3 will ever stop the open session — the tick's own facts and predicate;
+ *    `stopApplies` (B7 review M-3) is whether §7.3 will ever stop the open session — the tick's own facts and predicate — and
+ *    `stopAfterSeconds` the delay after the result that session waits (the tick's own choice: a court session's tail, else the code's);
  *  - `phone.health` (PR-2 T6): domain/phone-health.ts's one derivation over the stored beat — withheld while the phone is silent
  *    (its readings are stale; `not_responding` still names a held one); `phone.notReadyShown` (FP16, owner
  *    ruling R-2): the debounce of the flapping `notReady`, from the pairing's `not_ready_since`, shown only once a BEAT a
@@ -287,11 +289,14 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
   }
 
   // B7 review M-3: will §7.3 ever stop the OPEN session? The tick's own facts and predicate (null with none, or no settings row).
-  const stopApplies = openId === null || fx.settings_id === null ? null : await autoStopAppliesTo(openId);
+  // The delay it will wait is the session's own (a court session's 30 s tail, a per-fixture code's 180 s): the same choice the tick makes.
+  const stop = openId === null || fx.settings_id === null ? null : await autoStopOf(openId);
+  const stopApplies = stop === null ? null : stop.applies;
+  const stopAfterSeconds = stop === null ? null : stop.delaySeconds;
 
   return {
     code, phone, destination, lastTakeover,
-    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, competitionFrozen }, now),
+    auto: autoOf(fx, { phoneMode, openSession: openId !== null, stopApplies, stopAfterSeconds, competitionFrozen }, now),
     legacy, finished: fx.finished_at !== null, session: openId === null ? null : { id: openId },
     court: courtLink ? { name: courtLink.courtName, targetLabel: courtLink.targetLabel } : null,
   };

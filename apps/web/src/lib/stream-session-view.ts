@@ -736,6 +736,16 @@ export function autoStopLine(phone: StreamPhone | null, state: PhoneTabState): b
   return state === "live" && phone?.auto?.stopApplies === true;
 }
 
+/** The delay Live's line names: the OPEN session's own, as the server serves it (`auto.stopAfterSeconds` — the tick's choice, a
+ *  court session's 30 s tail or a per-fixture code's 180 s), in seconds under a minute and in whole minutes (never below 1)
+ *  from there. With none served, the page's per-code minutes (`fallbackMinutes`). */
+export function autoStopWait(phone: StreamPhone | null, fallbackMinutes: number): { unit: "seconds" | "minutes"; count: number } {
+  const seconds = phone?.auto?.stopAfterSeconds ?? null;
+  if (seconds === null) return { unit: "minutes", count: fallbackMinutes };
+  if (seconds < 60) return { unit: "seconds", count: seconds };
+  return { unit: "minutes", count: Math.max(1, Math.round(seconds / 60)) };
+}
+
 /** Owner-approved 2026-10-08: under the switch, while it is ON and the paired phone (the beat's `mode`) is in Operator —
  *  the phone will not start on its own, so the organiser is told where to change it. Hidden with no phone, a phone in
  *  Automatic (or with no mode reported yet), or the switch off. `autoOn` is the switch as the panel shows it. */

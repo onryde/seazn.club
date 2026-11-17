@@ -577,6 +577,8 @@ async function checkOrganiserRead(m: Readonly<Model>, x: Real): Promise<void> {
       refusal: could ? m.refusal : null,
       wontStart,
       stopApplies,
+      // The model's sessions are per-fixture code's: the code's 180 s, whatever the court's tail is (O15); null with none open.
+      stopAfterSeconds: open === null ? null : AUTO_STOP_AFTER_RESULT_SECONDS,
     });
   }
   x.tally.count("organiserReadChecks");

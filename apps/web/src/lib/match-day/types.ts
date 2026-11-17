@@ -118,6 +118,11 @@ export interface MatchDayCourtStream {
   /** The stored refusal of the court's latest refused automatic start (the focus match's `auto_start_refusal`), else null.
    *  `competition_frozen` is served while the competition is frozen, never stored. */
   refusal: "no_destination" | "no_credit" | "not_entitled" | "destination_in_use" | "unavailable" | "competition_frozen" | null;
+  /** O16: ISO instant the court's video stops by itself, while it is still to come: the court's last streamed match has a result
+   *  and its court session is still live or ending inside the tail (`COURT_AUTO_STOP_AFTER_RESULT_SECONDS` after `finished_at`).
+   *  The SERVER decides it (`courtTailEndsAt`); a client only counts down to it. Null outside the tail, with no session, or when the
+   *  automatic stop will not fire; a court with no link has no `stream_link` at all. */
+  tail_ends_at: string | null;
 }
 
 export interface MatchDayCourt {
