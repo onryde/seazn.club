@@ -167,7 +167,12 @@ export async function scoreEvent(
   input: AppendEventRequest,
   /** Server-internal, never a request field (W2b PF-2): the withdrawal cascade names itself here, and only it may
    *  record the cascade-only events (append-event.ts `assertW2bWriteGuards`). */
-  opts: { writer?: CascadeWriter } = {},
+  opts: {
+    writer?: CascadeWriter;
+    /** B3 re-review: false holds this write's auto-advance back - a Reinstate's reverse re-records and voids line by line
+     *  and asks the stage ONCE at the end (`reinstateTableEntrant`), never part-way. */
+    autoAdvance?: boolean;
+  } = {},
 ): Promise<ScoreOutcome> {
   // A FAST PATH, no longer the guarantee (W2, design §6). Until this wave the
   // cache was the ONLY thing standing between a retry and a second write, so a
@@ -395,7 +400,7 @@ export async function scoreEvent(
       // B3 fix wave (I-3; RB5-W5, ruling 289): a disqualifying forfeit's auto-advance waits for the DQ hook below. Run here, it
       // completed a league whose last open line this was BEFORE the cascade ranked her last, and the cascade then skipped the
       // complete stage (C1) - so whether a disqualified player ranked last depended on `auto_progress`.
-      const filled = await onDecided(auth, fixtureId, { autoAdvance: !isDqForfeit });
+      const filled = await onDecided(auth, fixtureId, { autoAdvance: !isDqForfeit && opts.autoAdvance !== false });
       advanceOwed = isDqForfeit;
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       // Best-effort like refreshNews (which swallows its own): the result already stands, so a fold that throws (a dropped
