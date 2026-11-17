@@ -221,7 +221,8 @@ export async function applyPresenceEvent(db: AnySql, ev: RealtimeKitEvent, recei
 type Who = { meetingId: string; participantId: string; customParticipantId: string };
 
 /** The current peer of this participant in this meeting, matched by participant_id OR (participant_id null and custom_participant_id
- *  = `customParticipantId`), in the presence order. A `source='read'` row older than PRESENCE_READ_TRUST_MS at `now` (default: the
+ *  = `customParticipantId`), in the presence order. Open rows only (`left_at is null`, the partial live index's predicate): the
+ *  same answer as reading every row, since currentPeerOf skips a closed one. A `source='read'` row older than PRESENCE_READ_TRUST_MS at `now` (default: the
  *  wall clock) is skipped, so a fallback seat's row is a hint for one claim, never a standing fact (owner ruling R4). `source` and
  *  `receivedAt` are returned so the caller can tell a read hint from a webhook. */
 export async function currentPresence(
@@ -235,6 +236,7 @@ export async function currentPresence(
       from fixture_video_presence
      where meeting_id = ${a.meetingId}
        and (participant_id = ${a.participantId} or (participant_id is null and custom_participant_id = ${a.customParticipantId}))
+       and left_at is null
        and (source = 'webhook' or received_at > ${cutoff})
      order by joined_at, received_at, seq`;
   const cur = currentPeerOf(rows.map((r) => ({ peerId: r.peer_id, joinedAt: r.joined_at, leftAt: r.left_at })));
@@ -287,7 +289,8 @@ export type ShadowReport = {
   /** player participants in scope whose seat verified the camera (`last_publisher_seen_at >= since`) */
   verified: number;
   /** of those, the ones a `source='webhook'` row was OPEN for at the stamp: received_at <= stamp + SHADOW_ARRIVAL_TOLERANCE_MS
-   *  and (left_at is null or left_at > stamp) */
+   *  and (left_at is null or left_at > stamp). A row is the seat's when it names the seat's participant, or names none and carries
+   *  the seat's person id as its custom id in the seat's meeting (the readers' rule). */
   covered: number;
   missing: { fixtureId: string; side: Side; participantId: string; seenAt: Date }[];
   /** presence rows in scope with left_at null at report time. Read at a quiescent point (every meeting in scope ended), any is a
@@ -313,7 +316,10 @@ export async function presenceShadowReport(db: AnySql, scope: ShadowScope): Prom
            exists (
              select 1 from fixture_video_presence w
               where w.fixture_id = p.fixture_id
-                and w.participant_id = p.participant_id
+                -- the readers' match rule (currentPresence): the participant, or a row stored without one (its custom id named
+                -- nobody on file when it arrived) whose custom id is the seat's subject, a player's person id, in the seat's meeting
+                and (w.participant_id = p.participant_id
+                  or (w.participant_id is null and w.side = p.side and w.custom_participant_id = p.person_id::text))
                 and w.source = 'webhook'
                 and w.received_at <= p.last_publisher_seen_at + (${SHADOW_ARRIVAL_TOLERANCE_MS}::int * interval '1 millisecond')
                 and (w.left_at is null or w.left_at > p.last_publisher_seen_at)

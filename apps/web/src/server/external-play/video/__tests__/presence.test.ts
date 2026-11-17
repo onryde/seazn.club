@@ -474,6 +474,40 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
     expect(await sql`select 1 from fixture_video_presence where meeting_id = ${stranger}`).toHaveLength(0);
   });
 
+  it("a repeated meeting.ended with a different endedAt: the session's FIRST recorded end wins, and every row it closes carries that value (both arrival orders)", async () => {
+    // batch-1 T5 M5. Rows a repeat can still reach: a read hint of the session written after the first end (reads take no lock and
+    // stay open), and a null-session peer that joined between the two stamps. Expected, typed from the rule: the recorded end is
+    // the first applied; every closed row's left_at equals it; the null-session peer is closed only if it joined at or before it.
+    const held = { fixtureId: randomUUID(), side: "home" as const };
+    const E1 = at(100 * SEC);
+    const E2 = at(200 * SEC);
+    let closedChecked = 0;
+    for (const [first, second] of [[E1, E2], [E2, E1]] as const) {
+      const M = track(`rep-${randomUUID().slice(0, 8)}`);
+      const [early, hint, between, late] = [peer(), peer(), peer(), peer()];
+      await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: early, custom: "c1", joinedAt: at(10 * SEC) }), at(11 * SEC), held);
+      await applyPresenceEvent(sql, endedEv({ meetingId: M, sessionId: "sess-1", endedAt: first }), at(300 * SEC), held);
+      await recordPresenceFromRead(sql, { meetingId: M, participantId: "prt-hint", customParticipantId: "c2", peerId: hint, sessionId: "sess-1", joinedAt: at(20 * SEC) }, at(301 * SEC));
+      expect((await rowOf(M, hint)).left_at, "premise: a read hint written after the end is open").toBeNull();
+      await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: between, custom: "c3", joinedAt: at(150 * SEC), sessionId: null }), at(302 * SEC), held);
+      await applyPresenceEvent(sql, endedEv({ meetingId: M, sessionId: "sess-1", endedAt: second }), at(303 * SEC), held);
+      await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: late, custom: "c4", joinedAt: at(30 * SEC) }), at(304 * SEC), held);
+
+      const recorded = await sql<{ ended_at: Date }[]>`select ended_at from realtimekit_ended_sessions where meeting_id = ${M}`;
+      expect(recorded, "one end recorded for the session: the first applied").toEqual([{ ended_at: first }]);
+      const rows = await rowsOf(M);
+      expect(rows, "four peers").toHaveLength(4);
+      const closed = rows.filter((r) => r.left_at !== null);
+      for (const r of closed) {
+        expect(r.left_at, `${r.peer_id} carries the recorded end`).toEqual(first);
+        expect(r.left_by).toBe("ended");
+        closedChecked++;
+      }
+      expect(closed.map((r) => r.peer_id).sort(), "the closed peers").toEqual((first === E1 ? [early, hint, late] : [early, hint, between, late]).sort());
+    }
+    expect(closedChecked, "closed rows checked across both orders").toBe(7);
+  });
+
   it("a meeting we hold only through a presence row still takes a meeting.ended (the sweep ended the parked room and deleted its parking row)", async () => {
     const b = await board();
     const orphan = track(`orphan-${randomUUID().slice(0, 8)}`);
@@ -774,6 +808,28 @@ describe.skipIf(!DB)("currentPresence / everJoined / peersOf / recordPresenceFro
     expect((await currentPresence(sql, { ...ids(b), now: at(2 * SEC + 1000 * PRESENCE_READ_TRUST_MS) }))?.peerId).toBe(p);
   });
 
+  it("a read for a meeting held NOWHERE writes the row with no board; a later webhook joined or left fills the board from what the receiver gated on (batch-1 T5 M3)", async () => {
+    const M = track(`unheld-${randomUUID().slice(0, 8)}`);
+    expect(await heldMeeting(sql, M), "premise: no table holds the meeting").toBeNull();
+    const held = { fixtureId: randomUUID(), side: "away" as const };
+    const [viaJoined, viaLeft] = [peer(), peer()];
+    const who = { meetingId: M, participantId: "prt-unheld", customParticipantId: "c-unheld" };
+    await recordPresenceFromRead(sql, { ...who, peerId: viaJoined, sessionId: null, joinedAt: at(SEC) }, at(2 * SEC));
+    await recordPresenceFromRead(sql, { ...who, peerId: viaLeft, sessionId: null, joinedAt: at(SEC) }, at(2 * SEC));
+    let checked = 0;
+    for (const p of [viaJoined, viaLeft]) {
+      expect(await rowOf(M, p), `${p}: the read row has no board`).toMatchObject({ fixture_id: null, side: null, source: "read", participant_id: "prt-unheld" });
+      checked++;
+    }
+    await applyPresenceEvent(sql, joinedEv({ meetingId: M, peerId: viaJoined, custom: "c-unheld", joinedAt: at(SEC) }), at(3 * SEC), held);
+    await applyPresenceEvent(sql, leftEv({ meetingId: M, peerId: viaLeft, custom: "c-unheld", joinedAt: at(SEC), leftAt: at(4 * SEC) }), at(5 * SEC), held);
+    expect(await rowOf(M, viaJoined), "the joined filled the board").toMatchObject({ fixture_id: held.fixtureId, side: "away", source: "webhook", left_at: null });
+    checked++;
+    expect(await rowOf(M, viaLeft), "the left filled the board").toMatchObject({ fixture_id: held.fixtureId, side: "away", source: "webhook", left_by: "left", left_at: at(4 * SEC) });
+    checked++;
+    expect(checked, "rows checked").toBe(4);
+  });
+
   it("recordPresenceFromRead writes source 'read' stamped with the board, and never overwrites an existing row of either source", async () => {
     const b = await board();
     const [fresh, hooked, readFirst] = [peer(), peer(), peer()];
@@ -868,13 +924,13 @@ async function seat(b: Awaited<ReturnType<typeof board>>, seenAt: Date | null, s
 /** A presence row written directly, so the test controls every stamp. */
 async function presenceRow(
   b: Awaited<ReturnType<typeof board>>,
-  o: { participantId: string | null; receivedAt: Date; joinedAt?: Date | null; leftAt?: Date | null; leftBy?: "left" | "ended" | null; source?: "webhook" | "read"; side?: "home" | "away"; peerId?: string },
+  o: { participantId: string | null; receivedAt: Date; joinedAt?: Date | null; leftAt?: Date | null; leftBy?: "left" | "ended" | null; source?: "webhook" | "read"; side?: "home" | "away"; peerId?: string; custom?: string },
 ) {
   const side = o.side ?? "home";
   const meetingId = side === "home" ? b.homeMeeting : b.awayMeeting;
   const peerId = o.peerId ?? peer();
   await sql`insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, left_at, left_by, source, received_at)
-            values (${meetingId}, ${peerId}, ${b.fixtureId}, ${side}, ${o.participantId}, 'c', ${o.joinedAt === undefined ? at(-60 * SEC) : o.joinedAt},
+            values (${meetingId}, ${peerId}, ${b.fixtureId}, ${side}, ${o.participantId}, ${o.custom ?? "c"}, ${o.joinedAt === undefined ? at(-60 * SEC) : o.joinedAt},
                     ${o.leftAt ?? null}, ${o.leftBy ?? (o.leftAt ? "left" : null)}, ${o.source ?? "webhook"}, ${o.receivedAt})`;
   return peerId;
 }
@@ -905,6 +961,28 @@ describe.skipIf(!DB)("presenceShadowReport", () => {
     expect(rep.missing.map((m) => m.participantId).sort()).toEqual([p2, p3, p5].sort());
     expect(rep.missing.every((m) => m.fixtureId === b.fixtureId && m.side === "home" && m.seenAt.getTime() === S.getTime())).toBe(true);
     expect(rep.covered + rep.missing.length, "covered + missing = verified").toBe(rep.verified);
+  });
+
+  it("a seat is covered by a row with NO participant whose custom id is the seat's person, in the seat's own meeting - the readers' rule (batch-1 m2)", async () => {
+    // Expected, typed from currentPresence's rule: participant_id = the seat's, OR (participant_id null AND custom id = the seat's
+    // person id) within the seat's meeting (fixture AND side). Three seats on two boards, one per arm of that rule.
+    const one = await board();
+    const two = await board();
+    const verify = (b: Awaited<ReturnType<typeof board>>, participantId: string) =>
+      sql`update fixture_video_participants set last_publisher_seen_at = ${S} where fixture_id = ${b.fixtureId} and participant_id = ${participantId}`;
+    await verify(one, one.homeParticipant);
+    await verify(one, one.awayParticipant);
+    await verify(two, two.homeParticipant);
+    // one/home: no participant on the row, the home player's person id, the home meeting -> covered
+    await presenceRow(one, { participantId: null, custom: one.home.personId, receivedAt: at(-1 * SEC) });
+    // one/away: the away player's person id, but the row names ANOTHER participant -> the custom arm does not apply -> missing
+    await presenceRow(one, { participantId: "prt-someone-else", custom: one.away.personId, side: "away", receivedAt: at(-1 * SEC) });
+    // two/home: no participant, the home player's person id, but on the AWAY meeting -> another meeting -> missing
+    await presenceRow(two, { participantId: null, custom: two.home.personId, side: "away", receivedAt: at(-1 * SEC) });
+    const rep = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [one.fixtureId, two.fixtureId] });
+    expect(rep.verified, "seats checked").toBe(3);
+    expect(rep.covered).toBe(1);
+    expect(rep.missing.map((m) => m.participantId).sort()).toEqual([one.awayParticipant, two.homeParticipant].sort());
   });
 
   it("a seat whose camera was never verified (no last_publisher_seen_at) is not counted, and an ARBITER is never a verified player", async () => {
