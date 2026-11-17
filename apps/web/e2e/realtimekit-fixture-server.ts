@@ -44,6 +44,7 @@
 // `peer_events[]` with `event_name` PEER_JOINING | PEER_LEAVING, `peer_id`,
 // `created_at`).
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 
 /** 4321 is the Lichess fixture's, 4319 the AI fixture's. CI and ci-local.sh
  *  point REALTIMEKIT_BASE_URL here; e2e-ci-wiring.test.ts imports this. */
@@ -60,6 +61,45 @@ export const REALTIMEKIT_FIXTURE_ENV = {
   REALTIMEKIT_PLAYER_PRESET: "e2e_chess_player",
   REALTIMEKIT_ARBITER_PRESET: "e2e_chess_arbiter",
 } as const;
+
+/** The three vendor events the fixture emits (spec §6.2). */
+export type FixtureWebhookEvent = "meeting.participantJoined" | "meeting.participantLeft" | "meeting.ended";
+export type FixtureWebhook = { uuid: string; event: FixtureWebhookEvent; body: string; signature: string; at: number };
+/** Resolves when the receiver accepted the webhook (2xx); REJECTS when it did not (a final non-2xx, a network error, a thrown
+ *  receiver). The fixture catches every rejection itself (never an unhandled rejection) and records it in `webhookOutcomes`. */
+export type WebhookDeliver = (w: FixtureWebhook) => Promise<void>;
+/** "down" is also what a webhook that has no deliverer configured (`startOpts.webhooks` absent) records: emitted, never delivered. */
+export type WebhookOutcome = "pending" | "delivered" | "failed" | "down";
+
+const WEBHOOK_RETRY_GAP_MS = 200;
+const WEBHOOK_ATTEMPTS = 3;
+
+/** POST `body` to `url` with headers rtk-signature, rtk-uuid, content-type application/json. A 5xx or a network error
+ *  is retried twice more, 200 ms apart; any other non-2xx is not retried (the vendor does not retry those). Rejects with the
+ *  last status (or the network error) when no attempt got a 2xx. */
+export function httpWebhookDeliver(url: string, fetchImpl: typeof fetch = fetch): WebhookDeliver {
+  return async (w) => {
+    let last: unknown = new Error("webhook delivery: no attempt made");
+    for (let attempt = 1; attempt <= WEBHOOK_ATTEMPTS; attempt++) {
+      if (attempt > 1) await new Promise((r) => setTimeout(r, WEBHOOK_RETRY_GAP_MS));
+      let res: Response;
+      try {
+        res = await fetchImpl(url, {
+          method: "POST",
+          headers: { "content-type": "application/json", "rtk-signature": w.signature, "rtk-uuid": w.uuid },
+          body: w.body,
+        });
+      } catch (err) {
+        last = err; // a network error: retried
+        continue;
+      }
+      if (res.ok) return;
+      last = new Error(`webhook delivery rejected: HTTP ${res.status}`);
+      if (res.status < 500) throw last; // the vendor does not retry any other non-2xx
+    }
+    throw last;
+  };
+}
 
 export interface RealtimeKitFixtureCall {
   method: string;
@@ -137,7 +177,22 @@ export interface RealtimeKitFixtureServer {
   liveParticipantIds(): string[];
   sessions(meetingId: string): FixtureSession[];
   meetingStatus(meetingId: string): string | null;
-  reset(): void;
+  /** Every webhook emitted (spec §6.2), delivered or not, in order. */
+  webhooks: FixtureWebhook[];
+  /** uuid → what became of it: "pending" until settled, "down" while `setWebhooksDown` (or with no deliverer). */
+  webhookOutcomes: Map<string, WebhookOutcome>;
+  /** Resolves once every delivery started so far has settled (a failed delivery never rejects it): a test awaits it before
+   *  reading what a delivery wrote. */
+  webhooksSettled(): Promise<void>;
+  /** The most recent delivery rejection, for a failing test's message; undefined when none failed. */
+  lastWebhookError(): unknown;
+  /** SPKI PEM: what GET /.well-known/webhooks.json serves as `{ success: true, data: { publicKey } }`. In-memory, per start. */
+  publicKeyPem: string;
+  /** While down, emitted webhooks are logged and not delivered. */
+  setWebhooksDown(down: boolean): void;
+  /** Clears synchronously (also `webhooks`, `webhookOutcomes` and the down flag), then awaits the in-flight deliveries, so one
+   *  test's deliveries never land in the next's receiver. */
+  reset(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -196,7 +251,10 @@ function send(res: ServerResponse, code: number, obj: unknown): void {
 const ok = (res: ServerResponse, data: unknown, extra: Record<string, unknown> = {}) =>
   send(res, 200, { success: true, data, ...extra });
 
-export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_FIXTURE_PORT): Promise<RealtimeKitFixtureServer> {
+export async function startRealtimeKitFixtureServer(
+  port: number = REALTIMEKIT_FIXTURE_PORT,
+  startOpts: { webhooks?: WebhookDeliver } = {},
+): Promise<RealtimeKitFixtureServer> {
   const env = REALTIMEKIT_FIXTURE_ENV;
   const kitPath = `/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/realtime/kit/${env.REALTIMEKIT_APP_ID}`;
   const calls: RealtimeKitFixtureCall[] = [];
@@ -211,15 +269,68 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
   let peerReportsDown = false;
   let reportsFinal = false;
   let seq = 0;
+  // Webhooks (spec §6.2). The key pair lives in this process's memory only, one per start; nothing here is written anywhere.
+  const { publicKey, privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const webhooks: FixtureWebhook[] = [];
+  const webhookOutcomes = new Map<string, WebhookOutcome>();
+  const inflight = new Set<Promise<void>>();
+  let webhooksDown = false;
+  let lastError: unknown;
+  /** Bumped by reset: a delivery that settles after one never writes into the next test's outcomes. */
+  let generation = 0;
   const next = (p: string) => `${p}-${(++seq).toString(36).padStart(4, "0")}-${Date.now().toString(36)}`;
   const iso = () => new Date().toISOString();
 
   const liveSession = (meetingId: string) =>
     [...sessions.values()].find((s) => s.meetingId === meetingId && s.status === "LIVE") ?? null;
+  /** Build, sign and (fire-and-forget) deliver one webhook. Emission never blocks a route; every delivery promise is kept
+   *  until it settles so `webhooksSettled` can await it, and no rejection escapes. The ONLY callers are the in-process
+   *  presence seam and the routes that END presence: nothing arriving over HTTP creates one. */
+  const emit = (event: FixtureWebhookEvent, s: Session, peer?: { row: Row; peerId: string; joinedAt: string }) => {
+    const meeting = { id: s.meetingId, sessionId: s.id, status: event === "meeting.ended" ? "ENDED" : "LIVE", ...(event === "meeting.ended" ? { endedAt: s.endedAt } : {}) };
+    const participant = peer
+      ? {
+          peerId: peer.peerId,
+          customParticipantId: peer.row.subject,
+          presetName: peer.row.preset,
+          joinedAt: peer.joinedAt,
+          ...(event === "meeting.participantLeft" ? { leftAt: peer.row.leftAt } : {}),
+        }
+      : undefined;
+    const body = JSON.stringify({ event, meeting, ...(participant ? { participant } : {}) });
+    const w: FixtureWebhook = {
+      uuid: randomUUID(),
+      event,
+      body,
+      signature: sign("RSA-SHA256", Buffer.from(body), privateKey).toString("base64"),
+      at: Date.now(),
+    };
+    webhooks.push(w);
+    const deliver = startOpts.webhooks;
+    if (webhooksDown || !deliver) {
+      webhookOutcomes.set(w.uuid, "down");
+      return;
+    }
+    webhookOutcomes.set(w.uuid, "pending");
+    const gen = generation;
+    const p = (async () => deliver(w))().then(
+      () => {
+        if (gen === generation) webhookOutcomes.set(w.uuid, "delivered");
+      },
+      (err: unknown) => {
+        if (gen === generation) webhookOutcomes.set(w.uuid, "failed");
+        lastError = err;
+      },
+    );
+    inflight.add(p);
+    void p.finally(() => inflight.delete(p));
+  };
   const endIfEmpty = (s: Session) => {
     if (rows.some((r) => r.sessionId === s.id && r.leftAt === null)) return;
     s.status = "ENDED";
     s.endedAt = iso();
+    emit("meeting.ended", s);
   };
   const livePeers = (r: Row) =>
     r.peerEvents
@@ -228,7 +339,12 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
   const leave = (r: Row) => {
     if (r.leftAt !== null) return;
     r.leftAt = iso();
-    for (const j of livePeers(r)) r.peerEvents.push({ ...j, event_name: "PEER_LEAVING", created_at: r.leftAt });
+    const s = sessions.get(r.sessionId)!;
+    for (const j of livePeers(r)) {
+      r.peerEvents.push({ ...j, event_name: "PEER_LEAVING", created_at: r.leftAt });
+      // `j.created_at` is the PEER's own PEER_JOINING, never `r.joinedAt` (a reload leaves the row's first join).
+      emit("meeting.participantLeft", s, { row: r, peerId: j.peer_id, joinedAt: j.created_at });
+    }
   };
   const currentPeerOf = (participantId: string): string | null => {
     const mine = rows.filter((r) => r.userId === participantId && r.leftAt === null && sessions.get(r.sessionId)?.status === "LIVE");
@@ -289,6 +405,9 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       const full = url.pathname;
       const inKit = full.startsWith(kitPath + "/") || full === kitPath;
       const path = inKit ? full.slice(kitPath.length) || "/" : full;
+      // The real key document is public and always up: before the outage gate, the Bearer check and the kit-prefix 404, and
+      // not a kit call (never in `calls`).
+      if (method === "GET" && full === "/.well-known/webhooks.json") return send(res, 200, { success: true, data: { publicKey: publicKeyPem } });
       const call: RealtimeKitFixtureCall = { method, path, route: "unhandled", query, body, at: Date.now(), meetingId: meetingOfPath(path) };
       calls.push(call);
       const route = (r: string) => {
@@ -466,6 +585,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
         const peer = next("peer");
         row.peerEvents.push({ event_name: "PEER_JOINING", peer_id: peer, participant_id: row.id, created_at: at });
         peerCameras.set(peer, { rowId: row.id, events: joinEvents(opts.camera ?? "on", at) });
+        emit("meeting.participantJoined", s, { row, peerId: peer, joinedAt: at });
         return;
       }
       const s = liveSession(mt.id);
@@ -523,7 +643,23 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
     meetingStatus(meetingId) {
       return meetings.get(meetingId)?.status ?? null;
     },
+    webhooks,
+    webhookOutcomes,
+    publicKeyPem,
+    webhooksSettled: async () => {
+      await Promise.allSettled([...inflight]);
+    },
+    lastWebhookError: () => lastError,
+    setWebhooksDown(d) {
+      webhooksDown = d;
+    },
     reset() {
+      const settling = [...inflight];
+      generation++;
+      webhooks.length = 0;
+      webhookOutcomes.clear();
+      webhooksDown = false;
+      lastError = undefined;
       calls.length = 0;
       meetings.clear();
       participants.clear();
@@ -534,6 +670,7 @@ export async function startRealtimeKitFixtureServer(port: number = REALTIMEKIT_F
       down = false;
       peerReportsDown = false;
       reportsFinal = false;
+      return Promise.allSettled(settling).then(() => undefined);
     },
     close() {
       return new Promise<void>((resolve) => {
