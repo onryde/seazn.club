@@ -72,7 +72,7 @@ const BRANCHES = CaptureBeatAnswer.options;
 const keysOf = (state: Answer["state"]): string[] => {
   const branch = BRANCHES.find((o) => o.shape.state.value === state);
   if (!branch) throw new Error(`no contract branch for ${state}`);
-  return Object.keys(branch.shape).filter((k) => k !== "device" && k !== "next").sort();
+  return Object.keys(branch.shape).filter((k) => k !== "device" && k !== "next" && k !== "autoRefusal").sort();
 };
 let answersChecked = 0;
 const statesSeen = new Set<string>();
@@ -82,6 +82,7 @@ function checked(a: Answer): Answer {
   expect(Object.keys(a).sort(), a.state).toEqual(keysOf(a.state));
   expect(a).not.toHaveProperty("device");
   expect(a, "a fixture code's answer never carries the court's next").not.toHaveProperty("next");
+  expect(a, "nor the court's autoRefusal (E2)").not.toHaveProperty("autoRefusal");
   for (const v of Object.values(a)) expect(v, "an absent field is omitted, never undefined").not.toBeUndefined();
   answersChecked++;
   statesSeen.add(a.state);

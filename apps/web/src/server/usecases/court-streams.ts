@@ -19,7 +19,7 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import type { MatchDayCourtStream } from "@/lib/match-day/types";
 import { courtMinAppVersion } from "@/server/relay/config";
-import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
+import { AUTO_START_REFUSALS, type AutoServedRefusal } from "@/server/relay/domain/auto-stream";
 import { courtPhoneStatus, courtTailEndsAt } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isTerminal, type SessionState } from "@/server/relay/domain/session";
 import { autoStopDelaySeconds } from "./stream-sessions/auto-stop";
@@ -349,6 +349,48 @@ async function advanceCourtStop(auth: AuthCtx, fixtureId: string, sid: string, d
 type StoredRefusal = (typeof AUTO_START_REFUSALS)[number];
 const isRefusal = (v: string | null): v is StoredRefusal => v !== null && (AUTO_START_REFUSALS as readonly string[]).includes(v);
 
+type RefusalRow = {
+  id: string; court_id: string | null; competition_id: string; auto_start_refusal: string | null;
+  auto_start_attempted_at: Date | null; settled: boolean;
+};
+
+/** The ONE rule for a court's refusal word, shared by the desk (`courtStreamsForDay`) and the court phone
+ *  (`courtRefusalOf`) so they never disagree: per wanted court, the newest stored refusal among its unsettled matches (a success
+ *  or a Go live clears it); `competition_frozen` for a stored `not_entitled` while the competition is frozen. */
+async function servedRefusals(
+  orgId: string, rows: readonly RefusalRow[], wanted: (courtId: string) => boolean,
+): Promise<Map<string, AutoServedRefusal>> {
+  const newest = new Map<string, RefusalRow>();
+  for (const r of rows) {
+    if (r.court_id === null || r.settled || !isRefusal(r.auto_start_refusal) || !wanted(r.court_id)) continue;
+    const held = newest.get(r.court_id);
+    if (!held || (r.auto_start_attempted_at?.getTime() ?? 0) > (held.auto_start_attempted_at?.getTime() ?? 0)) newest.set(r.court_id, r);
+  }
+  const out = new Map<string, AutoServedRefusal>();
+  if (newest.size === 0) return out;
+  // Asked only when it could change the answer, outside any transaction (`frozenCompetitionIds`).
+  const frozen = [...newest.values()].some((r) => r.auto_start_refusal === "not_entitled") ? await frozenCompetitionIds(orgId) : new Set<string>();
+  for (const [courtId, r] of newest) {
+    const refusal = r.auto_start_refusal as StoredRefusal;
+    out.set(courtId, refusal === "not_entitled" && frozen.has(r.competition_id) ? "competition_frozen" : refusal);
+  }
+  return out;
+}
+
+/** E2: the refusal word the court phone is told (and the Match Day card shows) for a court, from the court's own matches; null when none. */
+export async function courtRefusalOf(orgId: string, courtId: string, fixtureIds: readonly string[]): Promise<AutoServedRefusal | null> {
+  if (fixtureIds.length === 0) return null;
+  const rows = await sql<RefusalRow[]>`
+    select f.id, f.court_id, d.competition_id, st.auto_start_refusal, st.auto_start_attempted_at,
+           (f.status not in ('scheduled', 'in_play')
+            or exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.state in ${sql([...ACTIVE_STATES])})) as settled
+      from fixtures f
+      join divisions d on d.id = f.division_id
+      left join fixture_stream_settings st on st.fixture_id = f.id
+     where f.id in ${sql([...fixtureIds])} and d.org_id = ${orgId}`;
+  return (await servedRefusals(orgId, rows, (c) => c === courtId)).get(courtId) ?? null;
+}
+
 /**
  * The desk's read of court streams for Match Day (spec §5.5): per court the live link with its phone's status and the court's
  * latest stored refusal, per match its switch and whether it has its own ACTIVE code. Two statements however many courts and
@@ -421,20 +463,8 @@ export async function courtStreamsForDay(
       join divisions d on d.id = f.division_id
       left join fixture_stream_settings st on st.fixture_id = f.id
      where f.id in ${sql([...fixtureIds])} and d.org_id = ${orgId}`;
-  const newest = new Map<string, (typeof rows)[number]>();
-  for (const r of rows) {
-    switches.set(r.id, { on: r.court_stream === true, ownCode: r.own_code });
-    if (r.court_id === null || r.settled || !isRefusal(r.auto_start_refusal) || !links.has(r.court_id)) continue;
-    const held = newest.get(r.court_id);
-    if (!held || (r.auto_start_attempted_at?.getTime() ?? 0) > (held.auto_start_attempted_at?.getTime() ?? 0)) newest.set(r.court_id, r);
-  }
-  if (newest.size > 0) {
-    // Asked only when it could change the answer, outside any transaction (`frozenCompetitionIds`).
-    const frozen = [...newest.values()].some((r) => r.auto_start_refusal === "not_entitled") ? await frozenCompetitionIds(orgId) : new Set<string>();
-    for (const [courtId, r] of newest) {
-      const refusal = r.auto_start_refusal as StoredRefusal;
-      links.get(courtId)!.refusal = refusal === "not_entitled" && frozen.has(r.competition_id) ? "competition_frozen" : refusal;
-    }
-  }
+  for (const r of rows) switches.set(r.id, { on: r.court_stream === true, ownCode: r.own_code });
+  const served = await servedRefusals(orgId, rows, (courtId) => links.has(courtId));
+  for (const [courtId, refusal] of served) links.get(courtId)!.refusal = refusal;
   return { links, switches };
 }

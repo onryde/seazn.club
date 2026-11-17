@@ -21,7 +21,7 @@
 //     ends its court session at once as the organiser's Stop (end reason stopped), and latches the match.
 //
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam, UTC+1): every clock is the test's, passed in.
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
 import { hashDeviceLinkToken } from "../device-links";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -188,6 +188,37 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect((await describeAs(null)).destinationName).toBeNull();
   });
 
+  it("E2: a stored refusal word is told to the court phone, on the waiting descriptor and beat only; cleared with the refusal; never on a session shape or a fixture code", async () => {
+    await streamed(A, AT_14);
+    const phone = phoneId("e2");
+    await claimed(phone);
+    expect(await describeAs(phone), "premise: none").not.toHaveProperty("autoRefusal");
+    expect(await beat(phone)).not.toHaveProperty("autoRefusal");
+    for (const word of ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable"]) {
+      await sql`update fixture_stream_settings set auto_start_refusal = ${word}, auto_start_attempted_at = ${at(0)} where fixture_id = ${A}`;
+      expect(await describeAs(phone), word).toMatchObject({ state: "waiting", autoRefusal: word });
+      expect(await beat(phone), word).toMatchObject({ state: "waiting", autoRefusal: word });
+    }
+    // competition_frozen is derived from a stored not_entitled, never stored.
+    await sql`update fixture_stream_settings set auto_start_refusal = 'not_entitled' where fixture_id = ${A}`;
+    const spy = vi.spyOn(await import("../entitlement-freeze"), "frozenCompetitionIds").mockResolvedValue(new Set([day.comp.id]));
+    expect(await describeAs(phone)).toMatchObject({ autoRefusal: "competition_frozen" });
+    expect(await beat(phone)).toMatchObject({ autoRefusal: "competition_frozen" });
+    spy.mockRestore();
+    // Cleared when the refusal clears.
+    await sql`update fixture_stream_settings set auto_start_refusal = null where fixture_id = ${A}`;
+    expect(await describeAs(phone)).not.toHaveProperty("autoRefusal");
+    expect(await beat(phone)).not.toHaveProperty("autoRefusal");
+    // A session open: never on the answer (a stale word on a match that now streams is settled).
+    await sql`update fixture_stream_settings set auto_start_refusal = 'unavailable', auto_start_attempted_at = ${at(0)} where fixture_id = ${A}`;
+    await setStatus(A, "in_play");
+    const sid = await operatorStart(phone);
+    now += 3000;
+    await tickSession(sid, deps, "beat");
+    expect(await describeAs(phone)).not.toHaveProperty("autoRefusal");
+    expect(await beat(phone, { sid, state: "publishing" })).not.toHaveProperty("autoRefusal");
+  });
+
   it("A switched on, planned 14:00: descriptor label A's, beat next {label: A's, scheduledStart: 14:00 epoch s}", async () => {
     await streamed(A, AT_14);
     const phone = phoneId("next");
@@ -246,11 +277,16 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
   it("a fixture code's descriptor and beat answer carry no court and no next", async () => {
     const r = await captureRig();
     const phone = phoneId("fixture");
+    // E2: a stored refusal on the fixture itself is never told on a fixture code.
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, auto_start_refusal, auto_start_attempted_at)
+              values (${r.fixtureId}, ${r.auth.orgId}, 'no_credit', now()) on conflict (fixture_id) do update set auto_start_refusal = 'no_credit'`;
     const a = await postBeat(r.code, r.tok, CaptureBeat.parse({ ...body(phone, { claim: "new" }), code: r.code, appVersion: "1.0.13-1150" }), r.deps, r.now());
     expect(a.state).toBe("waiting");
+    expect(a).not.toHaveProperty("autoRefusal");
     expect(a).not.toHaveProperty("next");
     const d = await getCode(r.code, r.tok, { slot: 0, phone }, r.deps, r.now());
     expect(d).not.toHaveProperty("court");
+    expect(d).not.toHaveProperty("autoRefusal");
   });
 
   it("the first beat claims the court code; a second phone's new claim on a silent holder takes over (A9)", async () => {
