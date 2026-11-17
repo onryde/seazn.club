@@ -59,11 +59,17 @@ interface Rig {
   stageId: string;
   kind: Kind;
   sport: string;
+  stageKind: "league" | "group";
   id: Map<string, string>;
   name: Map<string, string>;
 }
 
-async function started(n: number, sport: string, variant: string): Promise<Rig> {
+async function started(
+  n: number,
+  sport: string,
+  variant: string,
+  stage: { kind: "league" | "group"; config: Record<string, unknown> } = { kind: "league", config: { legs: 1 } },
+): Promise<Rig> {
   const kind = (moduleOf(sport).entrantModel?.defaultKind ?? "individual") as Kind;
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W5 T5b " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
@@ -73,21 +79,22 @@ async function started(n: number, sport: string, variant: string): Promise<Rig> 
     d.id,
     Array.from({ length: n }, (_, i) => ({ kind, display_name: `P${i + 1}`, seed: i + 1, members: [] })),
   );
-  const [stage] = await createStages(auth, d.id, { seq: 1, kind: "league", name: "Table", config: { legs: 1 }, progression: null });
+  const [made] = await createStages(auth, d.id, { seq: 1, kind: stage.kind, name: "Table", config: stage.config, progression: null });
   await startDivision(auth, d.id);
   return {
     auth,
     divisionId: d.id,
-    stageId: stage!.id,
+    stageId: made!.id,
     kind,
     sport,
+    stageKind: stage.kind,
     id: new Map(es.map((e) => [e.display_name, e.id])),
     name: new Map(es.map((e) => [e.id, e.display_name])),
   };
 }
 
-async function addLate(rig: Rig, name: string): Promise<string> {
-  const [row] = await createEntrants(rig.auth, rig.divisionId, [{ kind: rig.kind, display_name: name, seed: null, members: [] } as never]);
+async function addLate(rig: Rig, name: string, extra: Record<string, unknown> = {}): Promise<string> {
+  const [row] = await createEntrants(rig.auth, rig.divisionId, [{ kind: rig.kind, display_name: name, seed: null, members: [], ...extra } as never]);
   rig.id.set(name, row!.id);
   rig.name.set(row!.id, name);
   return row!.id;
@@ -133,20 +140,32 @@ async function decide(rig: Rig, fixtureId: string): Promise<void> {
 const catchUpLinesOf = (rows: readonly Line[], entrantId: string): Line[] =>
   rows.filter((r) => /rr-(?:cu|by)-/.test(r.ext_key ?? "") && (r.home_entrant_id === entrantId || r.away_entrant_id === entrantId));
 
-/** The marker words every row of the stage's table reads, by entrant name - through the same chain the public pages call. */
-async function markers(rig: Rig): Promise<Record<string, string[]>> {
+/** The marker words every row of every table of the stage reads, by pool key ("" for a league) and entrant name - through the same
+ *  chain the public pages call. */
+async function tables(rig: Rig): Promise<Record<string, Record<string, string[]>>> {
   const fixtures = await sql<(Line & { stage_id: string; outcome: unknown })[]>`
     select id, stage_id, round_no, ext_key, home_entrant_id, away_entrant_id, status, outcome from fixtures where division_id = ${rig.divisionId}`;
   const joins = await loadRrLateJoins(rig.divisionId, fixtures);
   const entrants = await sql<{ id: string; status: string }[]>`select id, status from entrants where division_id = ${rig.divisionId}`;
   const statuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
-  const snap = await getStandings(rig.auth, rig.stageId);
-  const rows = snap.rows as StandingsRow[];
-  expect(rows.length, "the table has rows to mark").toBeGreaterThan(0);
-  const facts = rowFactsFor({ id: rig.stageId, kind: "league" }, fixtures, rows, joins, statuses);
-  const out: Record<string, string[]> = {};
-  for (const r of rows) out[rig.name.get(r.entrantId)!] = rowMarkers(facts?.[r.entrantId], msg).map((m) => m.text);
+  const pools =
+    rig.stageKind === "group"
+      ? await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${rig.stageId} order by key`
+      : [{ id: undefined, key: "" }];
+  const out: Record<string, Record<string, string[]>> = {};
+  for (const pool of pools) {
+    const rows = (await getStandings(rig.auth, rig.stageId, pool.id)).rows as StandingsRow[];
+    expect(rows.length, `the table ${pool.key || "(league)"} has rows to mark`).toBeGreaterThan(0);
+    const facts = rowFactsFor({ id: rig.stageId, kind: rig.stageKind }, fixtures, rows, joins, statuses);
+    out[pool.key] = {};
+    for (const r of rows) out[pool.key]![rig.name.get(r.entrantId)!] = rowMarkers(facts?.[r.entrantId], msg).map((m) => m.text);
+  }
   return out;
+}
+
+/** A league's one table. */
+async function markers(rig: Rig): Promise<Record<string, string[]>> {
+  return (await tables(rig))[""]!;
 }
 
 const unmarked = (m: Record<string, string[]>) => Object.entries(m).filter(([, v]) => v.length === 0).map(([k]) => k).sort();
@@ -215,11 +234,11 @@ describe.skipIf(!HAS_DB)("W5 T5b: Joined round N on a late entrant's row (X-CU-1
     const fixtures = await sql<(Line & { stage_id: string })[]>`select id, stage_id, round_no, ext_key, home_entrant_id, away_entrant_id, status from fixtures where division_id = ${rig.divisionId}`;
     expect(await loadRrLateJoins(rig.divisionId, fixtures), "the gate: nothing to catch up, nothing read").toEqual([]);
     const forced = await loadRrLateJoins(rig.divisionId, [{ ext_key: "rr-cu-r6-c1-L1" }]);
-    expect(forced).toEqual([{ stageId: rig.stageId, entrantId: late, joinedRound: 3 }]);
+    expect(forced).toEqual([{ stageId: rig.stageId, entrantId: late, joinedRound: 3, fixtureIds: expect.any(Array) }]);
     expect(tableRowFacts(fixtures, forced, { [late]: "registered" }), "the read condition: no undecided catch-up line").toEqual({});
   });
 
-  it("X-CU-10 the marker goes when the entrant withdraws", async () => {
+  it("X-CU-10 a departed entrant is not marked even when a line of hers is still open (the active-entrant check, isolated)", async () => {
     const rig = await started(5, "cricket", "t20");
     await startRounds(rig, [1, 2]);
     const late = await addLate(rig, "Late");
@@ -232,6 +251,76 @@ describe.skipIf(!HAS_DB)("W5 T5b: Joined round N on a late entrant's row (X-CU-1
     const open = catchUpLinesOf(await lines(rig.stageId), late).filter((l) => l.status === "scheduled");
     expect(open.length, "premise: one catch-up line of hers is still undecided").toBeGreaterThan(0);
     expect((await markers(rig)).Late).toEqual([]);
+  });
+
+  it("X-CU-10 the marker goes when the entrant withdraws through the real door (no line forced back by SQL)", async () => {
+    const rig = await started(5, "cricket", "t20");
+    await startRounds(rig, [1, 2]);
+    const late = await addLate(rig, "Late");
+    const before = catchUpLinesOf(await lines(rig.stageId), late).filter((l) => l.status === "scheduled");
+    expect(before.length, "premise: she holds open catch-up lines when she leaves").toBeGreaterThan(0);
+    expect((await markers(rig)).Late, "premise: marked").toEqual(["Joined round 3"]);
+    await withdrawEntrantCascade(rig.auth, late);
+    const [{ status }] = await sql<{ status: string }[]>`select status from entrants where id = ${late}`;
+    expect(status, "premise: withdrawn").toBe("withdrawn");
+    expect((await markers(rig)).Late, "she is out of the field: no marker").toEqual([]);
+    expect(unmarked(await markers(rig)), "nobody else was ever marked (counted: six rows)").toHaveLength(6);
+  });
+
+  it("X-CU-10 two late entrants: each marker follows the entrant's OWN lines, not the lines the other owes her (I1)", async () => {
+    const rig = await started(5, "cricket", "t20");
+    await startRounds(rig, [1, 2]);
+    const a = await addLate(rig, "LateA");
+    const aOwn = catchUpLinesOf(await lines(rig.stageId), a);
+    expect(aOwn, "premise: A owes the five who were there").toHaveLength(5);
+    const b = await addLate(rig, "LateB");
+    const bLines = catchUpLinesOf(await lines(rig.stageId), b);
+    const bVsA = bLines.find((l) => l.home_entrant_id === a || l.away_entrant_id === a);
+    expect(bLines, "premise: B owes the five and A").toHaveLength(6);
+    expect(bVsA, "premise: one of B's lines is against A").toBeDefined();
+    expect(aOwn.some((l) => l.id === bVsA!.id), "premise: that line is B's, not A's").toBe(false);
+    expect(await markers(rig)).toMatchObject({ LateA: ["Joined round 3"], LateB: ["Joined round 3"] });
+    // A's own five are decided; B's line against A (and B's other five) are still open.
+    for (const line of aOwn) await decide(rig, line.id);
+    const left = (await lines(rig.stageId)).find((l) => l.id === bVsA!.id)!;
+    expect(left.status, "premise: B's line against A is still open").toBe("scheduled");
+    const m = await markers(rig);
+    expect(m.LateA, "A is caught up: her marker is gone though B still owes her a match").toEqual([]);
+    expect(m.LateB, "B is not caught up").toEqual(["Joined round 3"]);
+    // B's six decided (the one against A is the sixth): hers goes too.
+    for (const line of bLines.filter((l) => l.id !== bVsA!.id)) await decide(rig, line.id);
+    expect((await markers(rig)).LateB, "five of six decided: still marked").toEqual(["Joined round 3"]);
+    await decide(rig, bVsA!.id);
+    expect(Object.values(await markers(rig)).flat(), "everyone caught up: no marker anywhere").toEqual([]);
+  });
+
+  it("X-CU-10 a two-pool group: a late entrant's marker sits on her row in her pool's table, and only there", async () => {
+    // Seven over two pools snake to A = {P1, P4, P5}, B = {P2, P3, P6, P7} (the late-entry suite's own premise).
+    const rig = await started(7, "cricket", "t20", { kind: "group", config: { legs: 1, pools: { count: 2 } } });
+    await startRounds(rig, [1, 2]);
+    const a = await addLate(rig, "LateA", { late_entry_pool: "A" });
+    const b = await addLate(rig, "LateB", { late_entry_pool: "B" });
+    const rows = await lines(rig.stageId);
+    const ownA = catchUpLinesOf(rows, a);
+    expect(ownA.every((l) => /^pA-rr-(cu|by)-/.test(l.ext_key ?? "")), "premise: pool A's keys carry the pool prefix").toBe(true);
+    expect(catchUpLinesOf(rows, b).every((l) => /^pB-rr-(cu|by)-/.test(l.ext_key ?? "")), "premise: pool B's keys carry the pool prefix").toBe(true);
+    // A pool's table has no rows until something in it is decided (a pool table folds counted results only; a league's rows exist from
+    // the draw), so each late entrant plays her first catch-up line - the rest of hers (two in pool A, three in pool B) are still open, the marker still owed.
+    const ownB = catchUpLinesOf(rows, b);
+    await decide(rig, ownA[0]!.id);
+    await decide(rig, ownB[0]!.id);
+    const t = await tables(rig);
+    expect(Object.keys(t).sort(), "two tables").toEqual(["A", "B"]);
+    expect(t.A!.LateA).toEqual(["Joined round 3"]);
+    expect(t.B!.LateB).toEqual(["Joined round 3"]);
+    expect(Object.keys(t.A!).includes("LateB"), "B's entrant is not on A's table").toBe(false);
+    expect(Object.entries(t.A!).filter(([, v]) => v.length > 0).map(([k]) => k), "only A's late entrant is marked in A").toEqual(["LateA"]);
+    expect(Object.entries(t.B!).filter(([, v]) => v.length > 0).map(([k]) => k), "only B's late entrant is marked in B").toEqual(["LateB"]);
+    // Pool A's late entrant catches up: her marker goes; pool B's stays.
+    for (const line of ownA.slice(1)) await decide(rig, line.id);
+    const after = await tables(rig);
+    expect(after.A!.LateA).toEqual([]);
+    expect(after.B!.LateB).toEqual(["Joined round 3"]);
   });
 
   it("X-CU-10 a second sport: badminton reads the same open and close", async () => {
@@ -247,6 +336,7 @@ describe.skipIf(!HAS_DB)("W5 T5b: Joined round N on a late entrant's row (X-CU-1
 
 describe("X-CU-10 tableRowFacts (pure): the empty case first, then every edge of the read condition", () => {
   const fx = (over: Partial<{ id: string; round_no: number; ext_key: string | null; home: string | null; away: string | null; status: string }> = {}) => ({
+    id: over.id ?? "g",
     stage_id: "s1",
     round_no: over.round_no ?? 6,
     ext_key: over.ext_key === undefined ? "rr-cu-r6-c1-L1" : over.ext_key,
@@ -255,7 +345,7 @@ describe("X-CU-10 tableRowFacts (pure): the empty case first, then every edge of
     outcome: null,
     status: over.status ?? "scheduled",
   });
-  const join = (over: Partial<RrLateJoin> = {}): RrLateJoin => ({ stageId: "s1", entrantId: "late", joinedRound: 3, ...over });
+  const join = (over: Partial<RrLateJoin> = {}): RrLateJoin => ({ stageId: "s1", entrantId: "late", joinedRound: 3, fixtureIds: ["g"], ...over });
   const field = { late: "registered", p1: "registered" };
 
   it("nothing to read marks nobody: no fixtures, no joins, no entrants", () => {
@@ -278,10 +368,18 @@ describe("X-CU-10 tableRowFacts (pure): the empty case first, then every edge of
 
   it("only the entrant's OWN undecided catch-up lines count: an ordinary line, another stage, or another entrant's line does not", () => {
     expect(tableRowFacts([fx({ ext_key: "rr-r6-c1-L1" })], [join()], field), "a generated line is not a catch-up line").toEqual({});
-    expect(tableRowFacts([fx({ home: "p1", away: "p2" })], [join()], field), "not hers").toEqual({});
+    expect(tableRowFacts([fx({ id: "elsewhere", home: "p1", away: "p2" })], [join()], field), "a line her row does not name").toEqual({});
     expect(tableRowFacts([{ ...fx(), stage_id: "s2" }], [join()], field), "another stage's line").toEqual({});
     expect(tableRowFacts([fx()], [join({ stageId: "s2" })], field), "another stage's ledger row").toEqual({});
     expect(Object.keys(tableRowFacts([fx({ ext_key: "p1-rr-by-r3-c2-L1", home: "p1", away: "late" })], [join()], field)), "a bye-slot line in a pool counts").toEqual(["late"]);
+  });
+
+  it("only the lines the ledger row names count: a catch-up line she is on the other side of is another entrant's (I1)", () => {
+    // Late entrant B owes member `late` a catch-up line: `late` is a side of it, but it is B's line, not hers.
+    const theirs = fx({ id: "b-line", home: "b", away: "late" });
+    expect(tableRowFacts([theirs], [join({ fixtureIds: ["her-own"] })], { ...field, b: "registered" }), "not in her ledger row").toEqual({});
+    expect(Object.keys(tableRowFacts([theirs], [join({ fixtureIds: ["b-line"] })], field)), "named by her row, so it is hers").toEqual(["late"]);
+    expect(tableRowFacts([fx()], [join({ fixtureIds: [] })], field), "a row naming no line marks nobody").toEqual({});
   });
 
   it("a departed entrant is never marked, for every departed status (counted)", () => {

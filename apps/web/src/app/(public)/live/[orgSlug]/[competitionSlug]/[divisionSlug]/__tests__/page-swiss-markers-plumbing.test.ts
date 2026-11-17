@@ -156,7 +156,7 @@ describe("public division page - a league's late entrant reads Joined round N wh
   };
 
   it("the late row is marked, the others are not; a withdrawn late entrant is not", async () => {
-    loadRrLateJoins.mockResolvedValue([{ stageId: "sw", entrantId: "c", joinedRound: 3 }]);
+    loadRrLateJoins.mockResolvedValue([{ stageId: "sw", entrantId: "c", joinedRound: 3, fixtureIds: ["g2"] }]);
     const marked = await html("confirmed");
     expect(loadRrLateJoins).toHaveBeenCalledWith("d1", expect.any(Array));
     expect(nameCell(marked, NAMES.c)).toContain("Joined round 3");
