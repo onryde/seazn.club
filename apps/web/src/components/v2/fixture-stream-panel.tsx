@@ -195,6 +195,9 @@ export interface StreamPanelContext {
   /** R2006: config.ts `RELAY_OVERLAY_DELAY_DEFAULT_MS` — the delay a composed session serves when the fixture sets none.
    *  Score timing's "Default {seconds}s" and its reset value; the panel never types the number. */
   overlayDelayDefaultMs: number;
+  /** Court stream device check 3 (D1): config.ts `COURT_PHONE_OVERLAY_DELAY_MS` — the delay a COURT session serves when the
+   *  fixture sets none. Score timing's default while the read model names the match's court. */
+  courtOverlayDelayDefaultMs: number;
   /** I3 (PR #987 review): each listed fixture's sides as the overlay AIRS them — names masked and codes disambiguated by
    *  the overlay page's own loader (server/stream-panel-context.ts `overlayPreviewSides`). The style grid's thumbnails
    *  render these, so a person pair previews the codes it airs. A fixture absent here previews the row's own names. */
@@ -397,6 +400,21 @@ export function FixtureStreamPanel({
       // The Phone tab's editor is Ready's alone (a running session shows its read-only summary there instead).
       note={where === "obs" && nextStreamOnly ? msg("stream.template.nextStream") : null}
     />
+  );
+  // R2006: Ready's score card body, the Phone tab's picker and Score timing, with the default the next session would serve.
+  const scoreEditor = (defaultMs: number) => (
+    <>
+      {picker("phone")}
+      <div className="mt-3 border-t border-purple-100 pt-1">
+        <ScoreTiming
+          idPrefix={`stream-timing-${fixture.id}`}
+          storedMs={prefs.prefs.overlayDelayMs}
+          defaultMs={defaultMs}
+          onSave={(ms) => prefs.save("overlayDelayMs", ms)}
+          saveFailed={prefs.failed === "overlayDelayMs"}
+        />
+      </div>
+    </>
   );
 
   async function copy() {
@@ -607,20 +625,9 @@ export function FixtureStreamPanel({
                 template: style,
                 delayMs: prefs.prefs.overlayDelayMs,
                 sportKey: stream.sportKey,
-                editor: (
-                  <>
-                    {picker("phone")}
-                    <div className="mt-3 border-t border-purple-100 pt-1">
-                      <ScoreTiming
-                        idPrefix={`stream-timing-${fixture.id}`}
-                        storedMs={prefs.prefs.overlayDelayMs}
-                        defaultMs={stream.overlayDelayDefaultMs}
-                        onSave={(ms) => prefs.save("overlayDelayMs", ms)}
-                        saveFailed={prefs.failed === "overlayDelayMs"}
-                      />
-                    </div>
-                  </>
-                ),
+                editor: scoreEditor(stream.overlayDelayDefaultMs),
+                // Court stream device check 3 (D1): a court-streamed match's session is a court session, whose default is its own.
+                courtEditor: scoreEditor(stream.courtOverlayDelayDefaultMs),
                 modeFailed: prefs.failed === "streamMode",
                 onMode: (m) => prefs.save("streamMode", m),
               }}
@@ -675,6 +682,9 @@ export interface PhoneScore {
   delayMs: number | null;
   sportKey: string;
   editor: ReactNode;
+  /** Court stream device check 3 (D1): the same body with Score timing on a COURT session's default (0 s), shown while the
+   *  read model names the match's court. Absent: `editor`. */
+  courtEditor?: ReactNode;
   /** The last Camera only / Add the score back did not save — the stored mode shows again, and a line says so. */
   modeFailed: boolean;
   onMode: (mode: StreamMode) => void;
@@ -2223,7 +2233,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // organiser chose Camera only; nothing where the score cannot stream (the reason sits above Go live instead).
   const scoreBlock = !p.score.available ? null : scoreMode === "composed" ? (
     <div data-testid="stream-score" className="min-w-0 rounded-lg bg-white p-3 ring-1 ring-purple-100">
-      {p.score.editor}
+      {court ? (p.score.courtEditor ?? p.score.editor) : p.score.editor}
     </div>
   ) : (
     <p data-testid="stream-camera-only" className="min-w-0 rounded-lg bg-white px-3 py-2.5 text-sm text-slate-700 ring-1 ring-purple-100">

@@ -369,6 +369,12 @@ describe("R2 relay numbers equal their sources", () => {
     expect(resolveDelayMs(String(config.RELAY_OVERLAY_DELAY_DEFAULT_MS))).toBe(config.RELAY_OVERLAY_DELAY_DEFAULT_MS);
     expect(config.RELAY_OVERLAY_DELAY_DEFAULT_MS, "the differential: not the page's own no-delay default").not.toBe(DEFAULT_DELAY_MS);
   });
+
+  it("D1 (court stream device check 3): a court session's default delay is 0 ms; every other session's is the 3100 ms above", () => {
+    expect(config.COURT_PHONE_OVERLAY_DELAY_MS).toBe(0);
+    expect(config.overlayDelayDefaultMs(true)).toBe(0);
+    expect(config.overlayDelayDefaultMs(false)).toBe(3100);
+  });
 });
 
 // R2003 — the restart and beat constants. The expected values are the RULINGS, cited, never read back off config.ts:

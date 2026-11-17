@@ -44,7 +44,7 @@ async function runTails(): Promise<number> {
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
-import { AUTO_START_RETRY_SECONDS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS } from "@/server/relay/config";
+import { AUTO_START_RETRY_SECONDS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
@@ -386,6 +386,35 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
       if (prev.image === undefined) delete process.env.RELAY_IMAGE; else process.env.RELAY_IMAGE = prev.image;
       if (prev.secret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = prev.secret;
     }
+  });
+
+  describe("D1 (device check 3): a court session's score timing defaults to 0 s; the organiser's own Score timing still wins", () => {
+    const composedCourtStart = async (stored: number | null): Promise<number> => {
+      const prev = { image: process.env.RELAY_IMAGE, secret: process.env.AUTH_SECRET };
+      process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:court-composed-test";
+      process.env.AUTH_SECRET = "stream-auto-court-composed-test-secret";
+      try {
+        await streamOn(A);
+        if (stored !== null) await sql`update fixture_stream_settings set overlay_delay_ms = ${stored} where fixture_id = ${A}`;
+        await kickoff(A, 0);
+        const go = await kick();
+        if (go.state !== "go-live") throw new Error(`premise: A starts, got ${go.state}`);
+        const [s] = await sql<{ mode: string; court_link_id: string | null; overlay_delay_ms: number }[]>`
+          select mode, court_link_id, overlay_delay_ms from fixture_stream_sessions where id = ${go.sid}`;
+        expect(s, "premise: a composed court session").toMatchObject({ mode: "composed", court_link_id: linkId });
+        return s!.overlay_delay_ms;
+      } finally {
+        if (prev.image === undefined) delete process.env.RELAY_IMAGE; else process.env.RELAY_IMAGE = prev.image;
+        if (prev.secret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = prev.secret;
+      }
+    };
+    it("no Score timing set: 0 ms, not the 3.1 s every other session serves", async () => {
+      expect(RELAY_OVERLAY_DELAY_DEFAULT_MS, "premise: the other sessions' default is not 0").not.toBe(0);
+      expect(await composedCourtStart(null)).toBe(0);
+    });
+    it("the organiser's Score timing (2.5 s) wins", async () => {
+      expect(await composedCourtStart(2500)).toBe(2500);
+    });
   });
 
   it("O15 panel line: the organiser read for a court match serves the COURT tail (30 s), never the code's 180 s (a per-fixture code's 180 is stream-phone.test.ts's)", async () => {
