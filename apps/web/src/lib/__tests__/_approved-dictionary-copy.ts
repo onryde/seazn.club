@@ -357,10 +357,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "pricing.card.feePill",
     why: "the platform-fee pill on the Free and Pro cards (R14). The NUMBER is interpolated live from registration.fee_percent (community 5, pro 2 — V398), so the pin guards the two words around it: dropping \"platform\" would read as the REGISTRANT'S fee rather than the org's platform cut, which is the exact distinction pricing.matrix.fees / feeCell already draws in the comparison table.",
     text: {
-      en: "{fee}% platform fee",
-      es: "{fee}% de comisión de plataforma",
-      fr: "{fee} % de frais de plateforme",
-      nl: "{fee}% platformkosten",
+      en: "{fee}% fee on card entry fees",
+      es: "{fee}% de comisión en inscripciones con tarjeta",
+      fr: "{fee} % de frais sur les inscriptions par carte",
+      nl: "{fee}% kosten op inschrijfgeld per kaart",
     },
   },
   // ── THE IN-APP COMPARISON PANEL (fix round 4) ─────────────────────────────

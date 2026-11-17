@@ -118,7 +118,7 @@
   "pricing.table.pro": "Pro",
   "pricing.table.compareLabel": "Compare plans",
   "pricing.pro.cta": "Start 14-day trial →",
-  "pricing.card.feePill": "{fee}% platform fee",
+  "pricing.card.feePill": "{fee}% fee on card entry fees",
   "pricing.credits.perMonth": "{count} AI credits / month",
   "pricing.credits.passGrant": "+{count} AI credits, one-time",
   "pricing.credits.perMonthOperator": "{count} AI credits / month · operator wallet",

@@ -484,7 +484,7 @@ export default async function PricingPage({
                   {feePill("community") && (
                     <p
                       data-community-fee-pill
-                      className="mb-5 inline-flex w-fit items-baseline gap-1 whitespace-nowrap rounded border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-500"
+                      className="mb-5 inline-flex w-fit max-w-full items-baseline gap-1 rounded border border-slate-200 px-2.5 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-500"
                     >
                       {feePill("community")}
                     </p>

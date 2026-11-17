@@ -338,8 +338,8 @@ describe("/pricing's fee pills are derived, never typed", () => {
 
   it("prints Free's and Pro's own rate, and they differ", async () => {
     const { markup } = await render();
-    expect(pillText(markup, "data-community-fee-pill")).toBe("5% platform fee");
-    expect(pillText(markup, "data-pro-fee-pill")).toBe("2% platform fee");
+    expect(pillText(markup, "data-community-fee-pill")).toBe("5% fee on card entry fees");
+    expect(pillText(markup, "data-pro-fee-pill")).toBe("2% fee on card entry fees");
   });
 
   it("suppresses a pill it cannot read rather than printing a hole", async () => {

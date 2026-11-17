@@ -118,7 +118,7 @@
   "pricing.table.pro": "Pro",
   "pricing.table.compareLabel": "Comparar planes",
   "pricing.pro.cta": "Prueba gratuita de 14 días →",
-  "pricing.card.feePill": "{fee}% de comisión de plataforma",
+  "pricing.card.feePill": "{fee}% de comisión en inscripciones con tarjeta",
   "pricing.credits.perMonth": "{count} créditos de IA / mes",
   "pricing.credits.passGrant": "+{count} créditos de IA, una sola vez",
   "pricing.credits.perMonthOperator": "{count} créditos de IA / mes · monedero de operador",

@@ -118,7 +118,7 @@
   "pricing.table.pro": "Pro",
   "pricing.table.compareLabel": "Vergelijk abonnementen",
   "pricing.pro.cta": "Start gratis 14 dagen proefperiode →",
-  "pricing.card.feePill": "{fee}% platformkosten",
+  "pricing.card.feePill": "{fee}% kosten op inschrijfgeld per kaart",
   "pricing.credits.perMonth": "{count} AI-credits / maand",
   "pricing.credits.passGrant": "+{count} AI-credits, eenmalig",
   "pricing.credits.perMonthOperator": "{count} AI-credits / maand · operator-portemonnee",
