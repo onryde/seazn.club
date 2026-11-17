@@ -44,6 +44,7 @@ export function CourtPhoneStatus({
   tz,
   link,
   viewNow,
+  onTailEnd,
 }: {
   dict: Dict;
   locale: Locale;
@@ -51,6 +52,8 @@ export function CourtPhoneStatus({
   link: MatchDayCourtStream;
   /** The view's server `now`, which the tail countdown is anchored to (O16). */
   viewNow?: string;
+  /** The tail countdown reached 0: the desk reads the day again (B2). */
+  onTailEnd?: () => void;
 }) {
   const until = fmtPublicTime(locale, tz, lastWorkingMinute(link.expires_at));
   return (
@@ -61,7 +64,7 @@ export function CourtPhoneStatus({
       </div>
       <p className="mt-1 text-xs text-slate-600">{t(dict, "matchDay.courtStream.until", { time: until })}</p>
       {link.tail_ends_at !== null && viewNow !== undefined && (
-        <CourtTailCountdown dict={dict} tailEndsAt={link.tail_ends_at} viewNow={viewNow} className="mt-1 text-sm font-medium text-slate-900" />
+        <CourtTailCountdown dict={dict} tailEndsAt={link.tail_ends_at} viewNow={viewNow} {...(onTailEnd ? { onEnd: onTailEnd } : {})} className="mt-1 text-sm font-medium text-slate-900" />
       )}
       {link.refusal !== null && (
         <p data-testid="md-cs-refusal" data-refusal={link.refusal} className="mt-2 text-xs font-medium text-amber-900 [overflow-wrap:anywhere]">

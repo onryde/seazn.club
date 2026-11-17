@@ -86,6 +86,8 @@ export interface MatchDayCtx {
   /** The view's server `now` (ISO): what a linked court's tail countdown (O16) is anchored to. Absent where the mount has none: the
    *  court then draws no countdown. */
   viewNow?: string;
+  /** A linked court's tail countdown reached 0 (B2): the desk reads the day again. Absent where the mount does not refresh. */
+  onTailEnd?: () => void;
 }
 
 /** The match's console page: its pad and its per-match stream panel. */
