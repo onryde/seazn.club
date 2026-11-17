@@ -142,6 +142,9 @@ export interface EntryCardProps {
      *  (`GroupEntryView.promotion_skipped_at`), null otherwise. REQUIRED for the reason `waitlist_position` is: an omitted value would
      *  silently say nothing about a skip the registrant was mailed about. */
     promotion_skipped_at: string | null;
+    /** W5 T8b (X-WDT-9, ruling 288): withdrawn after Start, and every match she held is settled (`GroupEntryView.matches_settled`).
+     *  Optional: left out, the card says nothing about her matches — never a claim that they were settled. */
+    matches_settled?: boolean;
     /** RS008: this entry's OWN division's youth/player_name_display policy —
      *  see `rosterPlayerDisplayName` (view-model.ts) for why it travels with
      *  the entry rather than the cart. */
@@ -459,6 +462,13 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
         )}
 
         {moneyNode}
+
+        {/* W5 T8b (X-WDT-9; R24 pick): her own withdrawal after Start went through the event's rules (the table withdrawal). */}
+        {entry.status === "withdrawn" && entry.matches_settled === true && (
+          <p data-testid="reg-status-matches-settled" className="text-sm text-ink">
+            {t(ui, "register.status.entry.matchesSettled")}
+          </p>
+        )}
 
         {/* Polish wave sign-off V6: what came back, on any entry money was sent back for - a rejected or withdrawn entry has no
             money block above, so without this the page never said the fee was returned. */}

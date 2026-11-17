@@ -35,6 +35,9 @@ import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts"
  * "left after 1 of 3, so their results are removed and their other matches are void." under that table. A Reinstate then puts
  * her two unplayed lines back to scheduled.
  *
+ * T8b Part 1 (X-WDT-9; RB5-W10, ruling 288): a registrant's OWN withdrawal from the public status door after Start runs the table
+ * withdrawal — at 1 of 3 played her lines are all taken out and the hub footnote names the rule (main: only her status changed).
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -42,7 +45,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // T5: 2 (a late player's catch-up lines; Undo across the add refused by name). T5b: 1 (her hub row reads Joined round 3).
   // T6: 1 (an automatic arrival waits; one tap places it; a second tap is refused by name).
   // T8: 1 (a leaver's signed-off result is removed, the hub's footnote names the rule; Reinstate restores her unplayed lines).
-  const EXPECTED_CHECKS = 8;
+  // T8b Part 1: 1 (a registrant's own public withdrawal after Start runs the table withdrawal).
+  const EXPECTED_CHECKS = 9;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -324,6 +328,57 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-WDT-5: a leaver's finalized result is removed (expunge, 3 voided), the hub footnote names the rule; Reinstate puts her 2 unplayed lines back" +
         (ok ? "" : ` - ${l.created}, start ${started.status}, events ${codes.join(",")}, withdraw ${out.status} ${JSON.stringify(report ?? null)}, signed ${gone}, hub ${hubRes.status} notes ${JSON.stringify(notes)}, back ${back.status}, hers ${hers.map((f) => f.status).join(",")}`),
+      ok,
+    );
+  }
+
+  // Check 9 - X-WDT-9 (RB5-W10; ruling 111 joins the withdrawal door, ruling 288): a registrant's OWN public withdrawal after Start
+  // goes through the table withdrawal. A league of three plus Rae (registered through the public door before Start), Rae wins
+  // one by walkover, then withdraws from her status page's door: 1 of 3 is under half, so all three of her lines are taken out and
+  // the hub's footnote names the rule; a second press settles nothing twice (still one footnote, still three lines out).
+  {
+    // Check 6's public competition (the register door and the hub are public; the org's competition cap is reached).
+    const l = await league("SelfLeave", 3, pub?.id ?? "no-public-competition");
+    const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === orgId)?.slug ?? "";
+    const settings = await v1(owner, `/api/v1/divisions/${l.divId}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      approval: "auto",
+      form_fields: [],
+    });
+    const rae = `SelfLeave Rae ${tag}`;
+    const sent = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/register`, "POST", {
+      contact: { name: rae, email: `delivered+w5a_self_${tag}@resend.dev` },
+      privacy_consent: true,
+      entries: [{ division_id: l.divId, entrant_kind: "individual", players: [{ full_name: rae }], answers: {} }],
+    });
+    const submitted = v1data<{ access_token?: string; entries?: { registration_id: string; status: string }[] } | undefined>(sent);
+    const regId = submitted?.entries?.[0]?.registration_id;
+    const entrants = v1data<{ id: string; display_name: string }[] | undefined>(await v1(owner, `/api/v1/divisions/${l.divId}/entrants`)) ?? [];
+    const raeId = entrants.find((e) => e.display_name === rae)?.id;
+    const regen = await l.generate();
+    const started = await v1(owner, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const hers = (await l.fixtures()).filter((f) => f.home_entrant_id === raeId || f.away_entrant_id === raeId);
+    const won = hers[0];
+    const opp = won?.home_entrant_id === raeId ? won?.away_entrant_id : won?.home_entrant_id;
+    const walk = await v1(owner, `/api/v1/fixtures/${won?.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: opp, reason: "walkover" } });
+    const out = await v1(newSession(), `/api/v1/public/registrations/${regId}/withdraw`, "POST", { token: submitted?.access_token });
+    const again = await v1(newSession(), `/api/v1/public/registrations/${regId}/withdraw`, "POST", { token: submitted?.access_token });
+    const after = (await l.fixtures()).filter((f) => f.home_entrant_id === raeId || f.away_entrant_id === raeId);
+    const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/hub`);
+    type HubTable = { divisionId: string; withdrawalNotes?: { entrantId: string; body: string }[] };
+    const notes = ((v1data<{ tables?: HubTable[] } | undefined>(hubRes)?.tables ?? []).find((t) => t.divisionId === l.divId)?.withdrawalNotes) ?? [];
+    const ok =
+      settings.status === 200 && sent.status === 201 && submitted?.entries?.[0]?.status === "confirmed" && raeId !== undefined &&
+      regen.status === 200 && started.status === 200 && hers.length === 3 && walk.status === 201 &&
+      out.status === 200 && again.status === 200 && after.length === 3 && after.every((f) => f.status === "abandoned") &&
+      hubRes.status === 200 && notes.length === 1 && notes[0]?.entrantId === raeId &&
+      notes[0]?.body === "left after 1 of 3, so their results are removed and their other matches are void.";
+    w5Check(
+      "w5a X-WDT-9: a registrant's own public withdrawal after Start takes all 3 lines out at 1 of 3 played, the hub footnote names the rule, a second press settles nothing twice" +
+        (ok ? "" : ` - ${l.created}, settings ${settings.status}, register ${sent.status} ${JSON.stringify(submitted?.entries ?? null)}, rae ${raeId}, generate ${regen.status}, start ${started.status}, hers ${hers.length}, walk ${walk.status}, withdraw ${out.status}/${again.status} ${JSON.stringify(out.json).slice(0, 200)}, after ${after.map((f) => f.status).join(",")}, hub ${hubRes.status} notes ${JSON.stringify(notes)}`),
       ok,
     );
   }

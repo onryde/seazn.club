@@ -995,8 +995,9 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
  * `disqualified`, or a withdrawn entrant later disqualified — and takes the plain write (controller ruling C6: the cascade
  * writes through `writeEntrantPatch`, which never routes back). Any other field of the same patch is written BEFORE the
  * cascade (T15 review m4), so a refused field leaves the status, the boards and the ledger untouched. A
- * `status: "withdrawn"` patch stays the bare flip it has always been (ruling 111's self-withdrawal); the
- * Withdraw button is `POST /entrants/{id}/withdraw`.
+ * `status: "withdrawn"` patch stays the bare flip it has always been; the Withdraw button is
+ * `POST /entrants/{id}/withdraw`, and a registrant's own withdrawal after Start runs the same cascade (W5 T8b, ruling 288:
+ * `registrations/withdraw.ts`).
  */
 export async function patchEntrant(
   auth: AuthCtx,

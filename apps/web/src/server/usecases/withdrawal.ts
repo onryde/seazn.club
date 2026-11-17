@@ -343,10 +343,26 @@ async function cancelSettledBoardInvites(auth: AuthCtx, fixtureIds: readonly str
  *  ruling 115 still decides credit) and only the final status differs. `patchEntrant` routes a `status: "disqualified"`
  *  patch of an entrant still in the field here; this function writes its status through `writeEntrantPatch`, which never
  *  routes back (controller ruling C6). Asked for the status the entrant already holds, it refuses 409: nothing is owed. */
+/** W5 T8b (X-WDT-9, ruling 288): who started a withdrawal that no staff user made, written on its `table_withdrawal` rows.
+ *  Server-only, like `writer`: no request field reaches it. */
+export type CascadeActor = { kind: "registrant"; registration_id: string };
+
+/**
+ * W5 T8b (X-WDT-9, X-WDT-10; rulings 288, 289): the authority a server-started cascade runs under — the org's own, with the
+ * organiser's privileges, because the rule (not the person) does the settling: a registrant's own withdrawal (public, token- or
+ * ref-verified, `userId` null — no staff user did it) or a scorer's in-match disqualification (a device link or an official, who
+ * may write only their own fixture; `userId` keeps the scorer on the events, as their own writes carry it). NOT the quick
+ * match's `systemAuth()`: that is the system ORG's actor (`lib/quick-match-auth.ts`), and every read here is tenant-scoped.
+ * Built only by server code after the triggering write committed; never from a request.
+ */
+export function cascadeAuthFor(orgId: string, userId: string | null): AuthCtx {
+  return { orgId, via: "session", userId, role: "owner", keyId: null };
+}
+
 export async function withdrawEntrantCascade(
   auth: AuthCtx,
   entrantId: string,
-  opts: { as?: "withdrawn" | "disqualified" } = {},
+  opts: { as?: "withdrawn" | "disqualified"; actor?: CascadeActor } = {},
 ): Promise<WithdrawCascadeOut> {
   const as = opts.as ?? "withdrawn";
   const entrant = await getEntrant(auth, entrantId);
@@ -377,6 +393,7 @@ export async function withdrawEntrantCascade(
     played_at_departure: number;
     scheduled: number;
     removed: Record<string, string[]>;
+    actor?: CascadeActor;
   }[] = [];
   const settledTables: { id: string; kind: string }[] = [];
 
@@ -453,6 +470,7 @@ export async function withdrawEntrantCascade(
             played_at_departure: played.length,
             scheduled: played.length + pending.length,
             removed: {},
+            ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
           });
         }
         for (const u of result.updates) {
@@ -628,8 +646,8 @@ export async function withdrawEntrantCascade(
           step.update = { fixtureId: u.fixtureId, status: "void" };
         } else if (u.status === "walkover" && gone.has(u.walkoverTo!)) {
           // Loop R M-4 (controller ruling 2026-10-13): signed X-WD-4 (ruling 90) has no bracket scope. In a league, group
-          // or Swiss round the opponent who already left (a bare status write — ruling 111's self-withdrawal, which
-          // cascades nothing) is still seated, and a walkover would hand her the points and the walkover score. Both
+          // or Swiss round the opponent who already left (a bare status write — an organiser's `PATCH {status: "withdrawn"}`,
+          // which cascades nothing; a registrant's own withdrawal after Start cascades since W5 T8b, ruling 288) is still seated, and a walkover would hand her the points and the walkover score. Both
           // sides have withdrawn: a double walkover. Unlike a bracket line (which seats nothing, so it is written as a
           // bye is), a table line is RECORDED — X-DW-4 counts it P+1, L+1 for both, and the table folds only a line with
           // a match state — so it goes through the ordinary write, as the console's double walkover does. M-1's guard

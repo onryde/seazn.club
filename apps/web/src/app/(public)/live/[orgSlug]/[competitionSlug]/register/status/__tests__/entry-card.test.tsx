@@ -580,3 +580,30 @@ describe("EntryCard — an offline fee with no instructions (tidy m3)", () => {
     expect(checked).toBe(16);
   });
 });
+
+// W5 T8b (X-WDT-9; ruling 288, R24 pick): a player who withdrew after Start is told her remaining matches went by the event's
+// rules — only when the view says they are all settled (`GroupEntryView.matches_settled`), and only on a withdrawn entry.
+describe("EntryCard — a withdrawal after Start says the matches are settled (X-WDT-9)", () => {
+  const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as const;
+  const unescape = (s: string) => s.replace(/&#x27;/g, "'").replace(/&amp;/g, "&");
+  const render = (locale: keyof typeof LOCALES, entry: Partial<EntryCardProps["entry"]>) => {
+    const p = baseProps();
+    return unescape(renderToStaticMarkup(<EntryCard {...p} locale={locale} ui={LOCALES[locale] as Dict} entry={{ ...p.entry, ...entry }} />));
+  };
+
+  it("X-WDT-9 the withdrawn card names the rule only once every match is settled, in every locale", () => {
+    let checked = 0;
+    for (const locale of Object.keys(LOCALES) as (keyof typeof LOCALES)[]) {
+      const copy = (LOCALES[locale] as Record<string, string>)["register.status.entry.matchesSettled"];
+      expect(copy, `${locale}: the key exists`).toBeTruthy();
+      const line = `data-testid="reg-status-matches-settled" class="text-sm text-ink">${copy}<`;
+      expect(render(locale, { status: "withdrawn", matches_settled: true }), `${locale} settled`).toContain(line);
+      expect(render(locale, { status: "withdrawn", matches_settled: false }), `${locale} not settled (before Start, or still owed)`).not.toContain(copy);
+      expect(render(locale, { status: "withdrawn" }), `${locale} left out: no claim`).not.toContain(copy);
+      expect(render(locale, { status: "confirmed", matches_settled: true }), `${locale} not withdrawn`).not.toContain(copy);
+      checked += 4;
+    }
+    expect(checked).toBe(16);
+    expect(uiEn["register.status.entry.matchesSettled" as keyof typeof uiEn]).toBe("You've withdrawn. Your remaining matches are settled by the event's rules.");
+  });
+});

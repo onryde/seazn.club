@@ -11,7 +11,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 // The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
 // own hook cannot fire — this is what refreshes a seeding draft that still
 // names the registrant (review finding F3).
-import { markFieldChangeSeedProposalsStale } from "../stages";
+import { divisionHasStarted, markFieldChangeSeedProposalsStale } from "../stages";
 import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx, fallbackOrigin } from "./lookups";
@@ -106,6 +106,39 @@ export async function releaseSoloSignUpPlacement(
   return releasedFrom;
 }
 
+/**
+ * W5 T8b (X-WDT-9; rulings 111, 288): the entrant of a registration withdrawn after Start leaves through the table withdrawal
+ * (`withdrawEntrantCascade`) — the same rule an organiser's Withdraw applies, one door. It runs after the registration has
+ * committed, under the org's own server authority (`cascadeAuthFor`: the registrant has no staff user), and its ledger rows
+ * name the registrant (`actor`).
+ *
+ * A cascade that throws is logged and swallowed. The registration (and its refund, below) stands — telling the registrant it
+ * failed would be false. The entrant is left IN THE FIELD (the cascade writes her status last, so a failure never leaves a
+ * departed entrant over seated lines), which is the recoverable state: the organiser's Withdraw on the Entrants tab runs the
+ * cascade again from the rows as they stand.
+ */
+async function settleStartedWithdrawal(
+  orgId: string,
+  registrationId: string,
+  entrantId: string,
+  by: WithdrawnBy,
+  actorId: string | null,
+): Promise<void> {
+  const { cascadeAuthFor, withdrawEntrantCascade } = await import("../withdrawal");
+  try {
+    // An organiser's own withdrawal of the registration keeps the organiser on the events and the row (`actorId`, as their
+    // Withdraw button does); the registrant's names no staff user.
+    await withdrawEntrantCascade(cascadeAuthFor(orgId, by === "organiser" ? actorId : null), entrantId, {
+      ...(by === "registrant" ? { actor: { kind: "registrant" as const, registration_id: registrationId } } : {}),
+    });
+  } catch (err) {
+    log.error(
+      { err, registrationId, entrantId, orgId },
+      "registration: withdrawn after Start, but the table withdrawal failed — the entrant is still in the field; the organiser's Withdraw finishes it",
+    );
+  }
+}
+
 /** WHO withdrew is an explicit fact, never inferred from `actorId`: an organiser acting through an API key has NO user id (api-v1/auth.ts),
  *  and reading that as "the registrant" sent no mail and labelled the audit row wrongly. `actorId` is only the audit's actor column. */
 export type WithdrawnBy = "organiser" | "registrant";
@@ -146,9 +179,13 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       update registrations
       set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
       where id = ${reg.id}`;
-    // A withdrawn entrant that was already materialised marks withdrawn too —
-    // fixtures/standings handle entrant withdrawal by the existing rules.
-    if (locked.entrant_id) {
+    // W5 T8b (X-WDT-9, ruling 111 joins the withdrawal door, ruling 288): once the division has started, the entrant leaves
+    // through the table withdrawal — the cascade, after this commits (below), which writes her status LAST. Before Start it is
+    // the bare flip it always was (the field regenerates). "Started" is the cascade's own predicate (`divisionHasStarted`, T9's
+    // one reading, C17), read here under the registration's lock: were the two to disagree, a bare flip after Start would leave
+    // her lines seated against a departed entrant.
+    const cascadeOwed = locked.entrant_id !== null && (await divisionHasStarted(tx, reg.division_id));
+    if (locked.entrant_id && !cascadeOwed) {
       // W5 T6 review m2: a player waiting for a table place (`table_waiting_stage_id`) stops waiting as they leave — this write
       // never reaches `writeEntrantPatch`, which clears it on every other departure.
       await tx`update entrants set status = 'withdrawn', table_waiting_stage_id = null where id = ${locked.entrant_id}`;
@@ -182,15 +219,21 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     // Polish wave P2 (W11): the ORGANISER's withdrawal is news to the registrant; their own is not (the status page and the reference page,
     // which refund and receipt on their own). Queued with the fact, so the two commit together.
     const mailIds = by === "organiser" ? await queueRegistrationWithdrawnMails(tx, { reg: locked }) : [];
-    return { locked, promoted, mailIds };
+    return { locked, promoted, mailIds, cascadeOwed };
   })) as unknown as
-    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailIds: string[] }
+    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailIds: string[]; cascadeOwed: boolean }
     | null;
+  // Idempotent: only the call whose transaction moved the row to `withdrawn` (under its `for update`) gets here, so a double
+  // POST or a retry runs no second cascade.
   if (!outcome) return;
   log.info(
     { registrationId: reg.id, orgId: ctx.org_id, by },
     "registration: withdrawn",
   );
+
+  if (outcome.cascadeOwed && outcome.locked.entrant_id) {
+    await settleStartedWithdrawal(ctx.org_id, reg.id, outcome.locked.entrant_id, by, actorId);
+  }
 
   // A registrant who cancels their own entry is a FIELD CHANGE, exactly like
   // an organiser's `PATCH /entrants/{id} {status:"withdrawn"}` — but the

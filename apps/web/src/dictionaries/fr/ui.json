@@ -6830,6 +6830,7 @@
   "register.status.invite.shareTitle": "Rejoindre {entry}",
   "register.status.invite.shareText": "Rejoignez {entry} ({division}) — ouvrez le lien pour confirmer votre place.",
   "register.status.entry.refunded": "Remboursé {amount}",
+  "register.status.entry.matchesSettled": "Vous vous êtes retiré. Vos matchs restants sont réglés selon le règlement de l'événement.",
   "register.status.entry.awaitingTeam": "En attente d'une équipe",
   "register.status.entry.awaitingTeamDeadline": "Si personne ne vous place dans une équipe avant le {date}, vous serez automatiquement remboursé.",
   "register.status.entry.assignedToTeam": "Affecté à {team}",

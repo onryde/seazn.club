@@ -512,3 +512,90 @@ test.describe("X-WDT-5 a leaver's signed-off result is removed", () => {
     await expect(page.getByTestId("standings-withdrawal-notes"), "after Reinstate the footnote is gone").toHaveCount(0);
   });
 });
+
+// W5 app PR A, Task 8b Part 1 (X-WDT-9 ← RB5-W10; ruling 111 joins the withdrawal door, owner ruling 288). A player who
+// withdrew her own entry from the public status page after Start used to leave only her status: her lines stayed seated and
+// scheduled, her results stood whatever she had played. Now her withdrawal goes through the table withdrawal — 1 of 3 played
+// is under half, so her result is removed and her other matches are void (RB5-W2) — the standings footnote says so, and her
+// status page tells her (R24 pick, typed here).
+async function registerPlayer(request: APIRequestContext, competitionId: string, divisionId: string, who: string) {
+  const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    payment_method: "offline",
+    form_fields: [],
+    approval: "auto",
+  });
+  expect(settings.status, JSON.stringify(settings.error)).toBeLessThan(300);
+  const path = await competitionPath(request, competitionId);
+  const [, orgSlug, compSlug] = /^\/o\/([^/]+)\/c\/([^/]+)/.exec(path)!;
+  const sent = await apiJson<{ group_id: string; access_token: string; entries: { registration_id: string; status: string }[] }>(
+    request,
+    `/api/v1/public/orgs/${orgSlug}/competitions/${compSlug}/register`,
+    "POST",
+    {
+      contact: { name: who, email: `delivered+${TAG.toLowerCase().replace(/\W+/g, "-")}-${Math.random().toString(36).slice(2, 8)}@resend.dev` },
+      privacy_consent: true,
+      entries: [{ division_id: divisionId, entrant_kind: "individual", players: [{ full_name: who }], answers: {} }],
+    },
+  );
+  expect(sent.status, JSON.stringify(sent.error)).toBe(201);
+  expect(sent.data!.entries[0]!.status, "premise: confirmed at once").toBe("confirmed");
+  const list = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`);
+  const entrant = list.data!.find((e) => e.display_name === who);
+  expect(entrant, "premise: the confirmation made an entrant").toBeTruthy();
+  return {
+    entrantId: entrant!.id,
+    registrationId: sent.data!.entries[0]!.registration_id,
+    token: sent.data!.access_token,
+    statusPath: `/live/${orgSlug}/${compSlug}/register/status?rid=${sent.data!.group_id}&token=${encodeURIComponent(sent.data!.access_token)}`,
+  };
+}
+
+test.describe("X-WDT-9 a player withdraws after Start and the table follows the rule", () => {
+  test("her own public withdrawal at 1 of 3 played: her result is removed, the footnote names the rule, her status page says so", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const { divisionId, stageId } = await seedLeague(request, "SelfLeave", 3, "public");
+    const div = await apiJson<{ competition_id: string }>(request, `/api/v1/divisions/${divisionId}`);
+    const competitionId = div.data!.competition_id;
+    // Rae registers BEFORE Start, so she is in the field and gets her three lines.
+    const raeName = `SelfLeave Rae Registrant With A Longer Name ${TAG}`;
+    const rae = await registerPlayer(request, competitionId, divisionId, raeName);
+    expect((await generate(request, stageId)).status).toBe(200);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    const hersBefore = ((await stageFixtures(request, divisionId, stageId)) as Pairing[]).filter((f) => f.home_entrant_id === rae.entrantId || f.away_entrant_id === rae.entrantId);
+    expect(hersBefore, "premise: a league of four, three lines each").toHaveLength(3);
+    // She wins one: the opponent did not turn up (an ordinary walkover, a recorded result).
+    const won = hersBefore[0]!;
+    const opp = won.home_entrant_id === rae.entrantId ? won.away_entrant_id! : won.home_entrant_id!;
+    const ev = await apiJson(request, `/api/v1/fixtures/${won.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: opp, reason: "walkover" } });
+    expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+
+    // Her own withdrawal, through the public door her status page calls.
+    const out = await apiJson(request, `/api/v1/public/registrations/${rae.registrationId}/withdraw`, "POST", { token: rae.token });
+    expect(out.status, JSON.stringify(out.error)).toBe(200);
+    const after = (await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[];
+    const hers = after.filter((f) => f.home_entrant_id === rae.entrantId || f.away_entrant_id === rae.entrantId);
+    expect(hers.map((f) => f.status), "1 of 3 is under half: all three are taken out").toEqual(["abandoned", "abandoned", "abandoned"]);
+    // A second press (a double click, a retry) settles nothing twice.
+    const again = await apiJson(request, `/api/v1/public/registrations/${rae.registrationId}/withdraw`, "POST", { token: rae.token });
+    expect(again.status, JSON.stringify(again.error)).toBe(200);
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=standings"));
+    await dismissCookieBanner(page);
+    await expect(page.getByTestId(`standings-withdrawal-note-${rae.entrantId}`)).toHaveText(
+      `${raeName} (withdrawn): left after 1 of 3, so their results are removed and their other matches are void.`,
+    );
+    await expectNoHorizontalScroll(page);
+
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(rae.statusPath);
+      await dismissCookieBanner(page);
+      await expect(page.getByTestId("reg-status-matches-settled"), `@${width}`).toHaveText("You've withdrawn. Your remaining matches are settled by the event's rules.");
+      await expectNoHorizontalScroll(page);
+    }
+  });
+});
