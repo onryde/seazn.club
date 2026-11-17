@@ -2727,6 +2727,21 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
     expect(checked).toBe(rows.length);
   });
 
+  it("O15: Live's line names the OPEN session's own delay — a court session's 30 s as seconds, a per-fixture code's 180 s as minutes, the page's minutes only when none is served", () => {
+    const secondsLine = (n: number) => `Automatic: stops about ${n} ${n === 1 ? "second" : "seconds"} after the result`;
+    const phoneWith = (stopAfterSeconds: number | null | undefined) =>
+      readModel({ auto: auto({ stopApplies: true, stopAfterSeconds }), phone: facts({ mode: "automatic", state: "publishing" }) });
+    const line = (stopAfterSeconds: number | null | undefined) =>
+      textAt(body({ view: LIVE, balance: 1, phone: phoneWith(stopAfterSeconds), autoStopMinutes: 3 }), "stream-auto-live");
+    expect(line(30), "a court session's 30 s tail reads in seconds, not '1 minute'").toBe(secondsLine(30));
+    expect(line(1)).toBe(secondsLine(1));
+    expect(line(180), "a per-fixture code's 180 s is 3 minutes").toBe(liveLine(3));
+    expect(line(90), "whole minutes, rounded").toBe(liveLine(2));
+    expect(line(60)).toBe(liveLine(1));
+    expect(line(null), "none served: the page's minutes (3)").toBe(liveLine(3));
+    expect(line(undefined)).toBe(liveLine(3));
+  });
+
   it("T11: live, the strip is the phone-health line (Option A state 4) — the read model's readings, wired as the builder answers", () => {
     const f = facts({ state: "publishing", elapsedMs: 4_000, beat: { battery: { percent: 78, charging: true, drainPctPerHour: null }, bitrateKbps: 2400, delivery: "ok", thermal: 1, dataUsedMB: 12 } });
     const tree = body({ view: LIVE, balance: 1, phone: readModel({ phone: f }) });

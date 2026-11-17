@@ -10484,6 +10484,8 @@ export type DictionaryKey =
   | "stream.auto.buyCredits"
   | "stream.auto.liveLine.one"
   | "stream.auto.liveLine.other"
+  | "stream.auto.liveLineSeconds.one"
+  | "stream.auto.liveLineSeconds.other"
   | "stream.auto.operatorHint"
   | "stream.auto.refusal.competition_frozen"
   | "stream.auto.refusal.destination_in_use"

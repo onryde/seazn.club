@@ -371,6 +371,11 @@ export const StreamPhone = z
          *  automatic, and the session created before any result (A15). Null with no open session. The panel's live line
          *  "stops about N minutes after the result" is shown only on `true`. */
         stopApplies: z.boolean().nullable(),
+        /** The delay after the result the OPEN session waits before §7.3 stops it, in seconds — the tick's own choice for THIS
+         *  session (`autoStopDelaySeconds`: 30 for a court session's tail, 180 for a per-fixture code's, each tunable under
+         *  local/ci). The live line names it, so it never promises a delay the tick does not use. Null with no open session; the
+         *  server always serves it, so a reader that finds it absent falls back to the page's per-code minutes. */
+        stopAfterSeconds: z.number().int().positive().nullable().optional(),
       })
       .strict()
       .nullable(),

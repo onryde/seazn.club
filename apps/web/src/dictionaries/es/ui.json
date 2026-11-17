@@ -7227,6 +7227,8 @@
   "stream.auto.wontStart.already_streamed": "El inicio automático está desactivado en este partido porque ya hubo una emisión. Pulsa Emitir.",
   "stream.auto.liveLine.one": "Automático: se detiene aproximadamente {count} minuto después del resultado",
   "stream.auto.liveLine.other": "Automático: se detiene unos {count} minutos después del resultado",
+  "stream.auto.liveLineSeconds.one": "Automático: se detiene aproximadamente {count} segundo después del resultado",
+  "stream.auto.liveLineSeconds.other": "Automático: se detiene unos {count} segundos después del resultado",
   "stream.auto.refused": "No se pudo iniciar automáticamente: {reason}",
   "stream.auto.refusal.no_destination": "este partido no tiene ningún destino al que emitir.",
   "stream.auto.refusal.no_credit": "necesitas un crédito para emitir.",

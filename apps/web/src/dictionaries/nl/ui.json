@@ -7227,6 +7227,8 @@
   "stream.auto.wontStart.already_streamed": "Automatisch starten staat uit voor deze wedstrijd, omdat er al een stream is geweest. Gebruik Ga live.",
   "stream.auto.liveLine.one": "Automatisch: stopt ongeveer {count} minuut na de uitslag",
   "stream.auto.liveLine.other": "Automatisch: stopt ongeveer {count} minuten na de uitslag",
+  "stream.auto.liveLineSeconds.one": "Automatisch: stopt ongeveer {count} seconde na de uitslag",
+  "stream.auto.liveLineSeconds.other": "Automatisch: stopt ongeveer {count} seconden na de uitslag",
   "stream.auto.refused": "Automatisch starten lukte niet: {reason}",
   "stream.auto.refusal.no_destination": "deze wedstrijd heeft geen bestemming om naartoe te streamen.",
   "stream.auto.refusal.no_credit": "je hebt een tegoed nodig om live te gaan.",

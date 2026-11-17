@@ -7227,6 +7227,8 @@
   "stream.auto.wontStart.already_streamed": "Le démarrage automatique est désactivé pour ce match, car une diffusion a déjà eu lieu. Appuyez sur Passer en direct.",
   "stream.auto.liveLine.one": "Automatique : s'arrête environ {count} minute après le résultat",
   "stream.auto.liveLine.other": "Automatique : s'arrête environ {count} minutes après le résultat",
+  "stream.auto.liveLineSeconds.one": "Automatique : s'arrête environ {count} seconde après le résultat",
+  "stream.auto.liveLineSeconds.other": "Automatique : s'arrête environ {count} secondes après le résultat",
   "stream.auto.refused": "Impossible de démarrer automatiquement : {reason}",
   "stream.auto.refusal.no_destination": "ce match n'a aucune destination de diffusion.",
   "stream.auto.refusal.no_credit": "il vous faut un crédit pour passer en direct.",

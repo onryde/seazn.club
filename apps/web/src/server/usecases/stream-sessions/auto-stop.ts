@@ -35,20 +35,28 @@ async function autoStopFactsOf(exec: Tx | typeof sql, sessionId: string): Promis
   return f ?? null;
 }
 const phoneModeOf = (mode: string | null): PhoneMode | null => (mode === "automatic" || mode === "operator" ? mode : null);
-/** B7 review M-3: whether §7.3 will ever stop this session (`autoStopApplies`), read from the SAME facts `autoStopDue` judges
- *  (one statement, the pre/post-result comparison in SQL) — the organiser panel's read model serves it, so the panel's
- *  "stops about N minutes after the result" line can never promise a stop the tick will not make. False for a session gone. */
-export async function autoStopAppliesTo(sessionId: string): Promise<boolean> {
-  const f = await autoStopFactsOf(sql, sessionId);
-  return f !== null && autoStopApplies({
-    autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
-  });
-}
-/** The delay after the result, as the tick reads it: a court session's tail (O15) or a per-fixture code's. */
-function autoStopDelaySeconds(isCourt: boolean): number {
+/** The delay after the result, as the tick reads it: a court session's tail (O15) or a per-fixture code's. The ONE choice: the
+ *  tick judges with it and the panel's read model serves the same number (`autoStopOf`), so the line "stops about N after the
+ *  result" can never name a delay the tick does not use. */
+export function autoStopDelaySeconds(isCourt: boolean): number {
   return isCourt
     ? tunable("COURT_AUTO_STOP_AFTER_RESULT_SECONDS", COURT_AUTO_STOP_AFTER_RESULT_SECONDS)
     : tunable("AUTO_STOP_AFTER_RESULT_SECONDS", AUTO_STOP_AFTER_RESULT_SECONDS);
+}
+/** B7 review M-3: whether §7.3 will ever stop this session (`autoStopApplies`), read from the SAME facts `autoStopDue` judges
+ *  (one statement, the pre/post-result comparison in SQL) — the organiser panel's read model serves it, so the panel's
+ *  "stops about N minutes after the result" line can never promise a stop the tick will not make. False for a session gone.
+ *  `delaySeconds` is that session's own delay (`autoStopDelaySeconds`: a court session's 30 s tail, else 180 s), so the line
+ *  names the delay the tick will use for THIS session; null with the session gone. */
+export async function autoStopOf(sessionId: string): Promise<{ applies: boolean; delaySeconds: number | null }> {
+  const f = await autoStopFactsOf(sql, sessionId);
+  if (f === null) return { applies: false, delaySeconds: null };
+  return {
+    applies: autoStopApplies({
+      autoStream: f.auto_stream, phoneMode: phoneModeOf(f.mode), finishedAt: f.finished_at, sessionPredatesResult: f.session_predates_result,
+    }),
+    delaySeconds: autoStopDelaySeconds(f.is_court),
+  };
 }
 function autoStopDue(f: AutoStopFacts, now: Date): boolean {
   return autoStopVerdict({

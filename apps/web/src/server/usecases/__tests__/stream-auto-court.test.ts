@@ -32,6 +32,7 @@ import { resolveAnyStreamCode } from "../stream-codes";
 import { creditBreakdown, grantCredits, revokeCredits } from "../stream-credits";
 import { maybeCourtAutoStart } from "../stream-auto-court";
 import { startBroadcast, type SessionDeps } from "../stream-sessions";
+import { streamPhone } from "../stream-phone";
 import { override, phoneId } from "./_capture-rig";
 import { at, labelOf, place, seedDay, setStatus, type Day } from "./_match-day-seed";
 
@@ -220,6 +221,25 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
       if (prev.image === undefined) delete process.env.RELAY_IMAGE; else process.env.RELAY_IMAGE = prev.image;
       if (prev.secret === undefined) delete process.env.AUTH_SECRET; else process.env.AUTH_SECRET = prev.secret;
     }
+  });
+
+  it("O15 panel line: the organiser read for a court match serves the COURT tail (30 s), never the code's 180 s (a per-fixture code's 180 is stream-phone.test.ts's)", async () => {
+    const sidA = await aLive();
+    const read = () => streamPhone(day.auth, A, { now: clock });
+    const court = (await read()).auto;
+    expect(court, "premise: the court's switch is a settings row, so the read serves an auto block").not.toBeNull();
+    expect(court, "the court session stop applies and waits the court tail, not 180").toMatchObject({ stopApplies: true, stopAfterSeconds: 30 });
+    // The switch is the court's, the session is the court's: the per-fixture 180 s never shows for it, result or none.
+    // `created_at` is the database's wall clock, the result the test's day: the session is put back on the test's day so it
+    // predates the result (A15), as on a real day.
+    await sql`update fixture_stream_sessions set created_at = ${at(0)} where id = ${sidA}`;
+    await decide(A, 10);
+    now = at(10).getTime() + SEC;
+    expect((await read()).auto).toMatchObject({ stopApplies: true, stopAfterSeconds: 30 });
+    // The tick the line promises: 30 s after the result, the same session ends auto_stopped.
+    now = at(10).getTime() + 30 * SEC;
+    await beat(P, { sid: sidA, state: "publishing" });
+    expect(await sessionRow(sidA)).toMatchObject({ end_reason: "auto_stopped" });
   });
 
   it("an unstreamed match in play never starts: no session, no consume row", async () => {
