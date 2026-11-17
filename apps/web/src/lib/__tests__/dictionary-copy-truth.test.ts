@@ -1054,7 +1054,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
     // same additive disclosure. Net +2 keys.
     // A count, not a floor, so a DELETED pin reds too.
     // 304 -> 300: `pricing.pass.crossover` removed (owner 2026-11-16: the sentence confused more than it told).
-    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(320);
+    expect(APPROVED_DICTIONARY_COPY.length * DICTIONARY_LOCALES.length).toBe(324);
     // Every entry must say what it claims and what decides it — a pin with no
     // `why` is a snapshot, and a snapshot teaches the next editor to re-record
     // rather than to re-check.
@@ -1166,6 +1166,12 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       why: "states that the platform fee is ADDITIVE to Stripe's own processing fees, not instead of it — a claim about how the two costs stack, which is exactly the sentence a buyer reading only the row's percentage would miss",
     },
     {
+      // Owner 2026-11-17 ("not in pricing page"): the sponsorship fee, stated where the table ticks sponsor monetization.
+      match: /^pricing\.matrix\.sponsors\.monetize\.note$/,
+      pinned: true,
+      why: "a money claim: the platform keeps a fixed 5% of a sponsorship paid by card whatever the plan, and that rate is not the entry-fee rate. SPONSOR_PLATFORM_FEE_PERCENT is what the checkout charges; sponsor-deal-policy.test.ts reads every locale's note back against it",
+    },
+    {
       // Owner 2026-11-16 ("update the pricing page … matchday, live streaming, court bounded live streaming, remote
       // scoring"): the line above the comparison table naming what no plan withholds.
       match: /^pricing\.everyPlan$/,
@@ -1173,7 +1179,7 @@ describe.skipIf(!HAS_DB)("the four-locale dictionaries say what the resolver enf
       why: "a capability claim about EVERY plan: Match Day, remote scoring and phone streaming (per match or per court) are withheld by none. scoring.device_links, streaming.relay and streaming.overlay are true on every plan row; Match Day has no gate at all",
     },
     {
-      match: /^pricing\.(?!matrix\.(orgs\.max_owned|fees)\.note$)(matrix|table)\./,
+      match: /^pricing\.(?!matrix\.(orgs\.max_owned|fees|sponsors\.monetize)\.note$)(matrix|table)\./,
       pinned: false,
       why: "row labels and column headers of the comparison table. Every VALUE in that table is rendered live from plan_entitlements by lib/pricing-matrix.ts, so the labels name features rather than asserting anything about them. This rule once swallowed pricing.matrix.orgs.max_owned.note, a full sentence quoting a rate, so the exempt side is now scanned by the claim vocabularies too — pricing.matrix.fees.note is excluded the same way and for the same reason. pricing.matrix.enterpriseOnly.note stays IN this bucket: 'Enterprise only — talk to us' routes the reader, it asserts no checkable rate or grant, which is the same shape pricing.enterprise.link already is",
     },

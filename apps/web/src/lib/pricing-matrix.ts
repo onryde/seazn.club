@@ -300,9 +300,13 @@ function buildRow(data: MatrixData, feature: string): PricingRow {
   // reusing the same noteKey mechanism `orgsRow` and `feesRow` already use,
   // never a second rendering path.
   const noteKey =
-    fmt === boolCell && isEnterpriseOnlyFeature(data, feature)
-      ? "pricing.matrix.enterpriseOnly.note"
-      : undefined;
+    feature === "sponsors.monetize"
+      ? // The one money claim this row owes: what a sponsorship paid by card costs (SPONSOR_PLATFORM_FEE_PERCENT, a fixed
+        // rate that is NOT the entry-fee rate in the row above it).
+        "pricing.matrix.sponsors.monetize.note"
+      : fmt === boolCell && isEnterpriseOnlyFeature(data, feature)
+        ? "pricing.matrix.enterpriseOnly.note"
+        : undefined;
   return {
     labelKey: `pricing.matrix.${feature}`,
     ...(noteKey ? { noteKey } : {}),

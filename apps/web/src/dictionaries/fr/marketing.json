@@ -1477,5 +1477,6 @@
   "pricing.streams.perMonth.one": "{count} crédit de diffusion / mois",
   "pricing.streams.perMonth.other": "{count} crédits de diffusion / mois",
   "pricing.streams.passGrant.one": "+{count} crédit de diffusion, une seule fois",
-  "pricing.streams.passGrant.other": "+{count} crédits de diffusion, une seule fois"
+  "pricing.streams.passGrant.other": "+{count} crédits de diffusion, une seule fois",
+  "pricing.matrix.sponsors.monetize.note": "Nous gardons 5 % fixes de chaque parrainage payé par carte. Ce taux ne change pas avec votre formule et est distinct de celui des frais d'inscription."
 }

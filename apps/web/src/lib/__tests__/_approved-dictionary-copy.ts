@@ -600,6 +600,17 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
   },
   {
     file: "marketing",
+    key: "pricing.matrix.sponsors.monetize.note",
+    why: "the sponsorship fee on the Pricing table (owner, 2026-11-17). Source of truth: SPONSOR_PLATFORM_FEE_PERCENT in lib/sponsor-deal-policy.ts, the constant mintDealCheckout charges — fixed whatever the plan (the row's own ticks say which plans can take sponsorships by card), and not registration.fee_percent.",
+    text: {
+      en: "We keep a fixed 5% of each sponsorship paid by card. It does not change with your plan and is separate from the entry-fee rate.",
+      es: "Nos quedamos con un 5% fijo de cada patrocinio pagado con tarjeta. No cambia con tu plan y es independiente de la comisión de inscripción.",
+      fr: "Nous gardons 5 % fixes de chaque parrainage payé par carte. Ce taux ne change pas avec votre formule et est distinct de celui des frais d'inscription.",
+      nl: "Wij houden een vaste 5% van elke sponsoring die met kaart wordt betaald. Dat verandert niet met je abonnement en staat los van het tarief op inschrijfgeld.",
+    },
+  },
+  {
+    file: "marketing",
     key: "pricing.matrix.fees.note",
     why: "that the platform-fee percentage is ADDITIVE — charged on top of Stripe's own processing fees, not instead of them. Source of truth: V398 (the fee ladder became pure platform margin) and the design doc's note that competitors state this explicitly and we did not. Names no specific Stripe rate, which is Stripe's to change.",
     text: {

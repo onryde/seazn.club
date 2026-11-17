@@ -5958,6 +5958,7 @@ export type DictionaryKey =
   | "pricing.matrix.section.scoring"
   | "pricing.matrix.section.streaming"
   | "pricing.matrix.sponsors.monetize"
+  | "pricing.matrix.sponsors.monetize.note"
   | "pricing.matrix.sponsors.tiers"
   | "pricing.matrix.standings.carry_over"
   | "pricing.matrix.standings.custom_points"
