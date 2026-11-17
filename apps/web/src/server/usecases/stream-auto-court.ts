@@ -67,6 +67,11 @@ async function claimCourtStart(fixtureId: string, now: Date, retrySeconds: numbe
 const setRefusal = (fixtureId: string, refusal: AutoStartRefusal | null) =>
   sql`update fixture_stream_settings set auto_start_refusal = ${refusal} where fixture_id = ${fixtureId}`;
 
+/** A claimed court start, not yet run: `run` makes it (`startBroadcast`, then the handover's ends), and is called ONCE. */
+export type CourtStartCheck =
+  | { claimed: true; fixtureId: string; run: () => Promise<CourtAutoStartResult> }
+  | { claimed: false; result: CourtAutoStartResult };
+
 /**
  * The court's automatic start, for the current court phone's beat. In order:
  *  1. the link is open: its code active (not finishing or ended), the link not withdrawn, `now` inside the day (`opens_at <= now`
@@ -80,21 +85,37 @@ const setRefusal = (fixtureId: string, refusal: AutoStartRefusal | null) =>
  *     (`endOtherCourtSessions`). A refusal is stored on the match exactly as `maybeAutoStart` stores it, retried only
  *     after the spacing (R7), and ends NOTHING; `already_running` stores no code and clears the earlier one; an unmapped
  *     error clears it and is rethrown (the beat reports it and answers).
+ * Steps 1–4 are `claimCourtAutoStart` (database reads and one compare-and-set: fast) and step 5 is its `run` (YouTube,
+ * Cloudflare and Fly: slow). The court beat claims on its own critical path and runs the start AFTER answering (web batch
+ * A2, 2026-11-17: a beat that awaited the start timed out on the phone); this function does both, in order, for a caller
+ * that wants the result.
  */
 export async function maybeCourtAutoStart(
   a: { court: ResolvedCourtCode; pairingId: string; phoneMode: PhoneMode },
   deps: SessionDeps, now: Date,
 ): Promise<CourtAutoStartResult> {
+  const check = await claimCourtAutoStart(a, deps, now);
+  return check.claimed ? check.run() : check.result;
+}
+
+/** Steps 1–4 of `maybeCourtAutoStart`: whether this beat starts the court's match, the claim taken when it does. Two beats
+ *  can never both be handed a `run`: the claim is the compare-and-set on `auto_start_attempted_at`, so a second beat inside
+ *  the retry spacing — one arriving while the first's start is still running — loses it. */
+export async function claimCourtAutoStart(
+  a: { court: ResolvedCourtCode; pairingId: string; phoneMode: PhoneMode },
+  deps: SessionDeps, now: Date,
+): Promise<CourtStartCheck> {
   const { court, pairingId, phoneMode } = a;
   const { link } = court;
+  const not = (result: CourtAutoStartResult): CourtStartCheck => ({ claimed: false, result });
   if (court.status !== "active" || link.withdrawnAt !== null || !linkOpenAt(link, now)) {
-    return { fired: false, why: "link_closed" };
+    return not({ fired: false, why: "link_closed" });
   }
   const { focus } = await courtFocusOf(link);
   const fixtureId = focus.start;
-  if (fixtureId === null) return { fired: false, why: "not_due" };
+  if (fixtureId === null) return not({ fired: false, why: "not_due" });
   const facts = await startFactsOf(fixtureId, pairingId, link.id);
-  if (facts === null) return { fired: false, why: "not_due" };
+  if (facts === null) return not({ fired: false, why: "not_due" });
   const retrySeconds = tunable("AUTO_START_RETRY_SECONDS", AUTO_START_RETRY_SECONDS);
   const verdict = autoStartVerdict({
     autoStream: facts.court_stream,
@@ -110,9 +131,16 @@ export async function maybeCourtAutoStart(
     anySessionHadIngest: facts.any_ingest,
     autoStartAttemptedAt: facts.auto_start_attempted_at,
   }, now, retrySeconds);
-  if (!verdict.due) return { fired: false, why: "not_due" };
-  if (!(await claimCourtStart(fixtureId, now, retrySeconds))) return { fired: false, why: "claim_lost" };
+  if (!verdict.due) return not({ fired: false, why: "not_due" });
+  if (!(await claimCourtStart(fixtureId, now, retrySeconds))) return not({ fired: false, why: "claim_lost" });
+  return { claimed: true, fixtureId, run: () => runCourtStart(court, pairingId, fixtureId, deps, now) };
+}
 
+/** Step 5: the claimed start itself, and on success the handover's ends. */
+async function runCourtStart(
+  court: ResolvedCourtCode, pairingId: string, fixtureId: string, deps: SessionDeps, now: Date,
+): Promise<CourtAutoStartResult> {
+  const { link } = court;
   let sessionId: string;
   try {
     ({ sessionId } = await startBroadcast(

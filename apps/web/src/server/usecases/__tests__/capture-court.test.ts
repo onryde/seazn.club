@@ -12,7 +12,9 @@
 //   - the court phone's `stopped: X` ends X operator_stopped AND latches X's match; the pairing stays (§5.4, §6.3);
 //   - the operator's start streams the court's in-play match to the LINK's target, cause operator, court_link_id set;
 //   - O13: a claim from a build older than COURT_MIN_APP_VERSION is 404 not_a_stream_code, with no pairing;
-//   - R4 (controller): a session ended by a handover latches its match while it is still in play.
+//   - R4 (controller): a session ended by a handover latches its match while it is still in play;
+//   - web batch A1 (2026-11-17): while the court's link is live (not withdrawn, its day open) the court phone is never told to
+//     beat slower than the near cadence (10 s), idle or with a match far off; a withdrawn link keeps the fixture's rules.
 //
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam, UTC+1): every clock is the test's, passed in.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -22,13 +24,15 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { CaptureBeat, CaptureBeatAnswer, CaptureDescriptor, CaptureScoringLinkOk } from "@/server/api-v1/capture-schemas";
-import { POLL_FAR_SECONDS } from "@/server/relay/config";
+import { POLL_FAR_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
 import { tokenTag } from "@/server/relay/domain/capture-record";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigApiTarget, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { getCode, postBeat, postScoringLink, postStart } from "../capture-phone";
+import { courtCommon } from "../capture-court";
+import { courtFocusOf } from "../court-stream-codes";
 import { postCaptureRecord } from "../capture-record";
 import { captureStageOf } from "../capture-stage";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
@@ -153,7 +157,7 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     const d = await describeAs(phone);
     expect(d).toMatchObject({
       state: "waiting", label: "Court 2", court: { name: "Court 2" }, autoAllowed: true, destinationName: "API rig",
-      overlayUrl: null, pollSeconds: POLL_FAR_SECONDS, venueTimezone: "Europe/Amsterdam", code: qr.code,
+      overlayUrl: null, pollSeconds: POLL_NEAR_SECONDS, venueTimezone: "Europe/Amsterdam", code: qr.code,
       heartbeatUrl: `http://app.test/api/v1/capture/codes/${qr.code}/beats`, startUrl: `http://app.test/api/v1/capture/codes/${qr.code}/start`,
     });
     expect(d).not.toHaveProperty("stage");
@@ -426,6 +430,41 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     const [row] = await sql<{ fixture_id: string | null; code_id: string; competition_id: string; org_id: string }[]>`
       select fixture_id, code_id, competition_id, org_id from capture_records where ref = ${ok.ref}`;
     expect(row).toEqual({ fixture_id: null, code_id: codeId, competition_id: day.comp.id, org_id: day.orgId });
+  });
+
+  describe("web batch A1: the court's cadence while its link is live", () => {
+    it("an idle linked court answers 10 s, descriptor and beat, and stores 10 s as the answered cadence", async () => {
+      const phone = phoneId("a1-idle");
+      const first = await beat(phone, { claim: "new" });
+      expect(first).toMatchObject({ state: "waiting", pollSeconds: POLL_NEAR_SECONDS });
+      expect((await beat(phone)).pollSeconds).toBe(POLL_NEAR_SECONDS);
+      expect((await describeAs(phone)).pollSeconds).toBe(POLL_NEAR_SECONDS);
+      const [p] = await sql<{ s: number }[]>`select answered_poll_seconds as s from fixture_stream_pairings where code_id = ${codeId} and phone = ${phone}`;
+      expect(p!.s).toBe(POLL_NEAR_SECONDS);
+    });
+
+    it("a streamed match four hours off (a fixture code's 60 s) answers 10 s on the court", async () => {
+      await streamed(A, AT_14);
+      const phone = phoneId("a1-far");
+      await claimed(phone);
+      const a = await beat(phone);
+      expect(a).toMatchObject({ state: "waiting", label: labelOf(day.comp, day.comp.fixtures[0]!), pollSeconds: POLL_NEAR_SECONDS });
+      expect((await describeAs(phone)).pollSeconds).toBe(POLL_NEAR_SECONDS);
+    });
+
+    it("a withdrawn link, or one outside its day, keeps the fixture's cadence (60 s idle, 60 s for a far match)", async () => {
+      const resolved = await resolveAnyStreamCode(qr.code, qr.tok, "get", null, clock());
+      if (resolved.kind !== "court") throw new Error("premise: a court code");
+      const common = async (c: typeof resolved, t: Date) =>
+        (await courtCommon(c, qr.code, await courtFocusOf(c.link), { open: null, themeId: null }, deps, t)).pollSeconds;
+      // Positive control: the same link, live, is capped.
+      expect(await common(resolved, clock())).toBe(POLL_NEAR_SECONDS);
+      expect(await common({ ...resolved, link: { ...resolved.link, withdrawnAt: clock() } }, clock())).toBe(POLL_FAR_SECONDS);
+      expect(await common({ ...resolved, link: { ...resolved.link, opensAt: new Date(now + 1) } }, clock())).toBe(POLL_FAR_SECONDS);
+      await streamed(A, AT_14);
+      expect(await common(resolved, clock())).toBe(POLL_NEAR_SECONDS);
+      expect(await common({ ...resolved, link: { ...resolved.link, withdrawnAt: clock() } }, clock())).toBe(POLL_FAR_SECONDS);
+    });
   });
 
   describe("endOtherCourtSessions (R4: a handover latches the ended match while it is still in play)", () => {
