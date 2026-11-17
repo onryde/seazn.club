@@ -1020,24 +1020,30 @@ export async function patchEntrant(
       return { ...(await getEntrant(auth, id)), cascade };
     }
   }
-  // W5 T8 (RB5-W6, X-WDT-8): a Reinstate — a departed entrant patched back into the field — reverses her league or group
-  // withdrawal AFTER the status write commits (her lines still exist, so Task 6's door in `writeEntrantPatch` never makes her
-  // wait). Read before the write: the write is what changes it.
-  // Fix round 1 (m2): the reverse is many score writes (each its own transaction, as the cascade's are), so it cannot share
-  // the status write's transaction. It is made all-or-retry instead: a reverse that throws puts the status BACK (the PATCH
-  // changed nothing a client can see), and the reverse is idempotent (`reinstateTableEntrant`), so the retry finishes it.
+  // W5 T8 (RB5-W6, X-WDT-8): a Reinstate — a departed entrant back in the field — reverses her league or group withdrawal
+  // AFTER the status write commits (her lines still exist, so Task 6's door in `writeEntrantPatch` never makes her wait).
+  // The reverse is many score writes (each its own transaction, as the cascade's are), so it cannot share the status write's
+  // transaction. It is all-or-retry instead (fix rounds 1 and 2, m2):
+  // - asked of EVERY write that leaves her in the field (`tableReinstateOwed`), never gated on the prior status — a reverse
+  //   cut off after the status write committed (the process died) is finished by the next PATCH;
+  // - a reverse that throws puts a status this PATCH changed BACK (the PATCH changed nothing a client can see), and the
+  //   reverse is idempotent (`reinstateTableEntrant`), so the retry finishes it.
   const [prior] =
     patch.status !== undefined && inTheField({ status: patch.status })
       ? await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`)
       : [];
   const out = await writeEntrantPatch(auth, id, patch);
-  if (prior !== undefined && DEPARTED_STATUSES.has(prior.status) && inTheField(out)) {
-    const { reinstateTableEntrant } = await import("./withdrawal");
-    try {
-      await reinstateTableEntrant(auth, id);
-    } catch (err) {
-      await writeEntrantPatch(auth, id, { status: prior.status as PatchEntrant["status"] });
-      throw err;
+  if (inTheField(out)) {
+    const { reinstateTableEntrant, tableReinstateOwed } = await import("./withdrawal");
+    if (await tableReinstateOwed(auth, id, out.division_id)) {
+      try {
+        await reinstateTableEntrant(auth, id);
+      } catch (err) {
+        if (prior !== undefined && DEPARTED_STATUSES.has(prior.status)) {
+          await writeEntrantPatch(auth, id, { status: prior.status as PatchEntrant["status"] });
+        }
+        throw err;
+      }
     }
   }
   return out;

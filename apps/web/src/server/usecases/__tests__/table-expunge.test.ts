@@ -21,13 +21,13 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { playBadminton, post, tip } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
-import { createEntrants, patchEntrant } from "../entrants";
+import { createEntrants, patchEntrant, writeEntrantPatch } from "../entrants";
 import { getFixtureState } from "../fixtures";
 import { undoBarrierRefusal } from "../history";
 import { startDivision } from "../schedule";
 import { finalizeFixture, scoreEvent } from "../scoring";
 import { addFixture, completeStage, createStages, getStandings, refoldStageTable } from "../stages";
-import { withdrawEntrantCascade } from "../withdrawal";
+import { reinstateTableEntrant, withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -285,7 +285,7 @@ describe.skipIf(!HAS_DB)("X-WDT-5 (RB5-W4, RB5-W7): the ledger row the footnote 
     await withdrawEntrantCascade(r.auth, p1);
     const rows = await withdrawalRows(r.divisionId);
     expect(rows.map((x) => [x.type, x.payload])).toEqual([
-      ["table_withdrawal", { entrant_id: p1, stage_id: r.stageId, policy: "walkover", played_at_departure: 2, scheduled: 3 }],
+      ["table_withdrawal", { entrant_id: p1, stage_id: r.stageId, policy: "walkover", played_at_departure: 2, scheduled: 3, removed: {} }],
     ]);
     const { loadTableWithdrawals } = await import("@/server/public-site/table-withdrawals");
     const { withdrawalNotesFor, withdrawalNoteText } = await import("@/lib/table-withdrawal-note");
@@ -308,7 +308,7 @@ describe.skipIf(!HAS_DB)("X-WDT-5 (RB5-W4, RB5-W7): the ledger row the footnote 
     expect(hers.filter((l) => /(^|-)rr-(cu|by)-/.test(l.ext_key ?? "")).length, "rig: at least one is a catch-up line").toBeGreaterThan(0);
     await withdrawEntrantCascade(r.auth, n);
     const rows = await withdrawalRows(r.divisionId);
-    expect(rows.map((x) => x.payload)).toEqual([{ entrant_id: n, stage_id: r.stageId, policy: "expunge", played_at_departure: 0, scheduled: hers.length }]);
+    expect(rows.map((x) => x.payload)).toEqual([{ entrant_id: n, stage_id: r.stageId, policy: "expunge", played_at_departure: 0, scheduled: hers.length, removed: {} }]);
     for (const l of hers) expect(await hasActiveExpunge(l.id), `catch-up line ${l.ext_key} expunged`).toBe(true);
   }, 120_000);
 });
@@ -443,9 +443,28 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     expect(table, "the table is the one before the withdrawal").toEqual(preTable);
   }, 120_000);
 
-  // m1: a cascade with no `table_withdrawal` row (one from before the row existed) is reversed all the same: the lines are
-  // found from the score ledger's own cascade events.
-  it("X-WDT-8 a withdrawal with no ledger row is reversed from the score ledger", async () => {
+  // Round 2 (C): a scorer's own Undo just before the withdrawal stays undone. The ledger keeps no writer, so a void the
+  // scorer wrote cannot be told from the cascade's once written; the row lists exactly what the cascade removed.
+  // differential: round 1 walked back through every void before the expunge and brought the undone game back.
+  it("X-WDT-8 a scorer's Undo before the withdrawal stays undone after Reinstate", async () => {
+    const r = await started(4);
+    const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
+    const line = await lineBetween(r.stageId, p1, p2);
+    await post(r.auth, line.id, "core.start");
+    const g = await post(r.auth, line.id, "badminton.game.summary", { home: 21, away: 10 });
+    await scoreEvent(r.auth, line.id, { expected_seq: await tip(line.id), type: "core.void", payload: { event_id: g.event_id } } as never);
+    const pre = await lineState(line.id);
+    expect(pre.events.map((e) => e[0]), "rig: the game is undone, the Start stands").toEqual(["core.start"]);
+    await withdrawEntrantCascade(r.auth, p1);
+    expect(await hasActiveExpunge(line.id), "rig: expunged").toBe(true);
+    await patchEntrant(r.auth, p1, { status: "registered" });
+    expect(await lineState(line.id), "exactly as before the withdrawal: the undone game is not brought back").toEqual(pre);
+  }, 120_000);
+
+  // m1 (round 1) as re-ruled in round 2: a cascade with no `table_withdrawal` row (from before the row existed) is still
+  // reversed from the score ledger's own cascade events — but with no list of what it removed, nothing is re-recorded:
+  // the removed result's line is owed again (its Start stands), the never-played lines are scheduled again.
+  it("X-WDT-8 a withdrawal with no ledger row: the lines come back, a removed result is owed again", async () => {
     const r = await started(4);
     const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
     const signed = await lineBetween(r.stageId, p1, p2);
@@ -457,10 +476,54 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     await patchEntrant(r.auth, p1, { status: "registered" });
     let checked = 0;
     for (const id of Object.keys(pre)) {
-      expect(await lineState(id), "back as it was").toEqual(pre[id]);
+      const now = await lineState(id);
+      if (id === signed.id) {
+        expect([now.outcome, now.events], "owed again: no result, its Start stands").toEqual([null, pre[id]!.events.filter((e) => e[0] === "core.start")]);
+        expect(await hasActiveExpunge(id), "the expunge is taken back").toBe(false);
+      } else expect(now, "a never-played line: back as it was").toEqual(pre[id]);
       checked++;
     }
     expect(checked).toBe(3);
+  }, 120_000);
+
+  // Round 2 (m1): the organiser's No result (`core.abandon{noResult}`) is writer-only (rebase ruling D3), so a re-record of
+  // one through the cascade's writer is refused. Found: the cascade never removes one — the line is abandoned, neither
+  // played nor pending, and is left as it is. Should a row ever list one, it goes back through its own writer and never
+  // blocks the Reinstate (the second half forces that case: the row is made to list it).
+  it("X-WDT-8 a No result line: the withdrawal leaves it, and a listed No result is re-recorded through its own writer", async () => {
+    const r = await started(4);
+    const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
+    const line = await lineBetween(r.stageId, p1, p2);
+    await post(r.auth, line.id, "core.start");
+    await scoreEvent(r.auth, line.id, { expected_seq: await tip(line.id), type: "core.abandon", payload: { reason: "No result", noResult: true } } as never, { writer: "organiser_no_result" });
+    const pre = await lineState(line.id);
+    expect(pre.status, "rig: a No result").toBe("abandoned");
+    await withdrawEntrantCascade(r.auth, p1);
+    expect(await lineState(line.id), "the withdrawal does not remove a No result").toEqual(pre);
+    // Forced: the row lists the No result as removed, and it is voided (as the cascade would have).
+    const [nr] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${line.id} and type = 'core.abandon'`;
+    await scoreEvent(r.auth, line.id, { expected_seq: await tip(line.id), type: "core.void", payload: { event_id: nr!.id } } as never, { writer: "withdrawal_cascade" });
+    await sql`update division_events set payload = jsonb_set(payload, '{removed}', ${sql.json({ [line.id]: [nr!.id] } as never)})
+               where division_id = ${r.divisionId} and type = 'table_withdrawal'`;
+    await patchEntrant(r.auth, p1, { status: "registered" });
+    expect(await lineState(line.id), "re-recorded through the No result's own writer: as it was").toEqual(pre);
+  }, 120_000);
+
+  // Round 2 (m3): a line rescored between the withdrawal and the Reinstate is left as the organiser left it, and NAMED.
+  it("X-WDT-8 a line rescored after the withdrawal is left as it is and named in not_restored", async () => {
+    const r = await started(4);
+    const [p1, p2] = [r.id.get("P1")!, r.id.get("P2")!];
+    const signed = await lineBetween(r.stageId, p1, p2);
+    await playBadminton(r.auth, signed.id, true);
+    await withdrawEntrantCascade(r.auth, p1);
+    const [exp] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${signed.id} and type = 'core.abandon'`;
+    await scoreEvent(r.auth, signed.id, { expected_seq: await tip(signed.id), type: "core.void", payload: { event_id: exp!.id } } as never);
+    await post(r.auth, signed.id, "badminton.game.summary", { home: 5, away: 21 });
+    const rescored = await lineState(signed.id);
+    await writeEntrantPatch(r.auth, p1, { status: "registered" });
+    const out = await reinstateTableEntrant(r.auth, p1);
+    expect(out.not_restored, "the rescored line is named").toEqual([signed.id]);
+    expect(await lineState(signed.id), "and left as the organiser left it").toEqual(rescored);
   }, 120_000);
 
   // m3: an Add match line (`adhoc-N`) is one of her ordinary lines (the stated decision): counted, expunged, walked over, and
