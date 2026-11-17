@@ -28,6 +28,7 @@ import { grantCredits } from "../stream-credits";
 import { stopSession, tickSession, type SessionDeps } from "../stream-sessions";
 import { runCourtBroadcastEnd } from "../stream-sessions/court-end";
 import { endDueBroadcasts } from "@/server/youtube/end-step";
+import { readEndFacts } from "@/server/youtube/end-rule";
 import { override, phoneId } from "./_capture-rig";
 import { at, place, seedDay, setStatus, type Day } from "./_match-day-seed";
 
@@ -134,7 +135,7 @@ describe.skipIf(!HAS_DB)("court stream: the YouTube broadcast ends 30 s after a 
     pairing_id: string | null;
   }[]>`select state, end_reason, court_link_id, target_id, start_cause, fixture_id, pairing_id from fixture_stream_sessions where id = ${sid}`)[0]!;
   /** `fixtureId` switched on, kicked off at `minute`, started by the court phone's beat and live on its next one. */
-  const autoLive = async (fixtureId: string, minute: number, named: string | null = null): Promise<string> => {
+  const autoLive = async (fixtureId: string, minute: number, named: string | null = null, composed = false): Promise<string> => {
     await streamOn(fixtureId);
     atMin(minute);
     await kickoff(fixtureId, minute);
@@ -146,7 +147,9 @@ describe.skipIf(!HAS_DB)("court stream: the YouTube broadcast ends 30 s after a 
     if (go.state !== "go-live") throw new Error(`premise: the match starts, got ${go.state}`);
     expect((await sessionRow(go.sid)).fixture_id).toBe(fixtureId);
     now += SEC;
-    expect((await beat(P, { sid: go.sid, state: "publishing" })).state, "premise: it went live").toBe("live");
+    const next = (await beat(P, { sid: go.sid, state: "publishing" })).state;
+    // A composed session goes live once its runner is up (not driven here); it is started, which is all C1 needs.
+    if (!composed) expect(next, "premise: it went live").toBe("live");
     return go.sid;
   };
   /** Runs the queued tails with a sleep that moves the test's clock instead of waiting; answers each tail's sleeps (ms). */
@@ -249,6 +252,68 @@ describe.skipIf(!HAS_DB)("court stream: the YouTube broadcast ends 30 s after a 
     expect(completes()).toBe(1);
     expect(await endTail(sidA), "the late tail, as if it had survived, finds it done").toBe(true);
     expect(completes(), "still one complete call").toBe(1);
+  });
+
+  it("C1 (device check 2): a COMPOSED court session still `ending` at its Stop T, completing at T + 56 s, result at T - 30 s: the end runs at T + 30 s, while the session is still ending", async () => {
+    process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:court-end-test";   // composed: the stop waits on the runner's exit
+    try {
+      sleeps.length = 0;
+      const sidA = await autoLive(A, 0, null, true);
+      // The result at T - 30 s, then the stop at T (the court's 30 s auto-stop delay; here through the Stop path, since the fake runner
+      // is not driven to live and a sweep would fail the session as a start that never came up).
+      await decide(A, 1);
+      now = at(1).getTime() + DELAY_MS;
+      const T = now;
+      const [{ b }] = await sql<{ b: string }[]>`select youtube_broadcast_id as b from fixture_stream_sessions where id = ${sidA}`;
+      expect((await readEndFacts(sql, b)).endingCourtAt, "a court session not yet stopping does not read as ending").toBeNull();
+      tails.queue.length = 0;
+      await stopSession(day.auth, A, sidA, deps);
+      expect((await readEndFacts(sql, b)).endingCourtAt?.getTime(), "the reader names when its stop began").toBe(T);
+      const row = (await sql<{ state: string; mode: string; ending_at: Date | null }[]>`
+        select state, mode, ending_at from fixture_stream_sessions where id = ${sidA}`)[0]!;
+      expect(row, "premise: a composed session whose stop began at T and waits on its runner").toMatchObject({ state: "ending", mode: "composed" });
+      expect(row.ending_at?.getTime()).toBe(T);
+      expect(tails.queue.length, "the Stop queued exactly one tail").toBe(1);
+      tails.queue.shift();
+      // The runner exits at T + 56 s (the device check's 14:09:18 -> 14:10:14), if the tail is still waiting then.
+      let completedEarly = false;
+      const exitingSleep = async (ms: number) => {
+        sleeps.push(ms);
+        now += ms;
+        if (!completedEarly && now >= T + 56 * SEC) {
+          completedEarly = true;
+          await sql`update fixture_stream_sessions set state = 'completed', ended_at = ${new Date(T + 56 * SEC)} where id = ${sidA}`;
+        }
+      };
+      expect(await runCourtBroadcastEnd(sidA, deps, { sleep: exitingSleep, wallClock: () => now })).toBe(true);
+      expect(completes()).toBe(1);
+      expect(await broadcastState(A)).toBe("complete");
+      expect(now - T, "completed 30 s after the stop BEGAN, not after the session completed").toBe(30 * SEC);
+      expect(completedEarly, "the session was still ending when YouTube completed").toBe(false);
+      expect((await sessionRow(sidA)).state).toBe("ending");
+      // The runner exits later; the cron finds nothing left to end.
+      await sql`update fixture_stream_sessions set state = 'completed', ended_at = ${new Date(T + 56 * SEC)} where id = ${sidA}`;
+      expect(await endDueBroadcasts(deps.youtube!, { now: () => new Date(T + 90 * SEC), budgetMs: 15_000, orgIds: [day.orgId] })).toMatchObject({ ended: 0, failed: 0 });
+      expect(completes()).toBe(1);
+    } finally {
+      delete process.env.RELAY_IMAGE;
+    }
+  });
+
+  it("C1: an unfinished match's `ending` composed court session still holds the end (the tail leaves it to the cron)", async () => {
+    process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:court-end-test";
+    try {
+      sleeps.length = 0;
+      const sidA = await autoLive(A, 0, null, true);
+      tails.queue.length = 0;
+      await stopSession(day.auth, A, sidA, deps);
+      expect((await sessionRow(sidA)).state, "premise: composed, still ending").toBe("ending");
+      tails.queue.length = 0;
+      expect(await endTail(sidA)).toBe(false);
+      expect(completes()).toBe(0);
+    } finally {
+      delete process.env.RELAY_IMAGE;
+    }
   });
 
   it("a session that is not a court session, or has no broadcast, does nothing", async () => {

@@ -39,6 +39,10 @@ interface FactsIn {
   S?: Date | null; status?: string; F?: Date | null; active?: boolean; reservedUntil?: Date | null; terminalWithoutEndedAt?: boolean;
   /** B1: the last session on the broadcast was a court session. */
   court?: boolean;
+  /** C1: when the last court session's Stop began. */
+  courtStop?: Date | null;
+  /** C1: every active session is a court session already `ending`, the latest from this instant. */
+  endingCourt?: Date | null;
 }
 const facts = (o: FactsIn): EndFacts => ({
   activeSessionOnBroadcast: o.active ?? false,
@@ -48,6 +52,8 @@ const facts = (o: FactsIn): EndFacts => ({
   finishedAt: o.F ?? null,
   terminalWithoutEndedAt: o.terminalWithoutEndedAt ?? false,
   ...(o.court === undefined ? {} : { lastSessionCourt: o.court }),
+  ...(o.courtStop === undefined ? {} : { lastCourtStopAt: o.courtStop }),
+  ...(o.endingCourt === undefined ? {} : { endingCourtAt: o.endingCourt }),
 });
 /** `now` defaults to a minute after Stop: inside the grace, so a "due" answer is a time in the future of `now`. */
 const due = (o: FactsIn & { now?: Date }) => broadcastEndDueAt(facts(o), o.now ?? m(1));
@@ -241,6 +247,49 @@ describe("broadcastEndDueAt — a court session's finished match (B1, owner 2026
   });
 });
 
+describe("broadcastEndDueAt — a court session still `ending` (C1, device check 2: a composed stop took 56 s to complete)", () => {
+  const s30 = (d: Date) => new Date(d.getTime() + 30_000);
+  const T = m(10);
+  it("finished + only an ending court session: due 30 s after the stop BEGAN, for every finished status", () => {
+    let checked = 0;
+    for (const status of SPEC_FINISHED) {
+      expect(due({ active: true, endingCourt: T, S: null, ...resultAt(status, m(9.5)), now: m(10.1) }), status).toEqual(s30(T));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("finished, result after the stop began: 30 s after the result; never past the grace", () => {
+    expect(due({ active: true, endingCourt: T, ...resultAt("decided", m(10.5)), now: m(10.6) })).toEqual(s30(m(10.5)));
+    expect(due({ active: true, endingCourt: T, ...resultAt("decided", m(14.9)), now: m(14.95) })).toEqual(m(15));
+  });
+  it("an earlier session's Stop on the same broadcast does not anchor it: the ending court session's stop does", () => {
+    expect(due({ active: true, endingCourt: T, S: m(2), court: false, ...resultAt("decided", m(9.5)), now: m(10.1) })).toEqual(s30(T));
+  });
+  it("unfinished (every other status): still held while it is ending", () => {
+    let checked = 0;
+    for (const status of NOT_FINISHED) {
+      expect(due({ active: true, endingCourt: T, ...resultAt(status, m(9)), now: m(10.1) }), status).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("any other active session (live, starting, a fixture code's ending one: endingCourt null) still holds it", () => {
+    expect(due({ active: true, endingCourt: null, court: true, S: m(5), ...resultAt("decided", m(9)) })).toBeNull();
+    expect(due({ active: true, S: m(5), ...resultAt("decided", m(9)) })).toBeNull();
+  });
+  it("an unlapsed reservation still holds it", () => {
+    expect(due({ active: true, endingCourt: T, reservedUntil: m(12), ...resultAt("decided", m(9)), now: m(10.1) })).toBeNull();
+  });
+  it("after it completes (terminal): timed from the stop began (courtStop), not from ended_at", () => {
+    expect(due({ court: true, courtStop: T, S: new Date(T.getTime() + 56_000), ...resultAt("decided", m(9.5)), now: m(11) })).toEqual(s30(T));
+    // A fixture code's session ignores courtStop: Stop (ended_at) + 2 min, unchanged.
+    expect(due({ court: false, courtStop: T, S: new Date(T.getTime() + 56_000), ...resultAt("decided", m(9.5)) })).toEqual(new Date(T.getTime() + 56_000 + 120_000));
+  });
+  it("a finished status with no finished_at is refused while ending too (the invariant)", () => {
+    expect(() => due({ active: true, endingCourt: T, status: "decided", F: null })).toThrow(EndRuleInvariantError);
+  });
+});
+
 describe.skipIf(!HAS_DB)("readEndFacts — the facts, read with plain selects (spec §6.4, P5)", () => {
   it("EMPTY CASE FIRST: a broadcast no session has used reads no active session, no S, no stale terminal → the rule answers null", async () => {
     const w = await world(2);
@@ -249,6 +298,7 @@ describe.skipIf(!HAS_DB)("readEndFacts — the facts, read with plain selects (s
     expect(f).toEqual({
       activeSessionOnBroadcast: false, reservedUntil: null, latestEndedAt: null,
       fixtureStatus: "in_play", finishedAt: null, terminalWithoutEndedAt: false, lastSessionCourt: false,
+      lastCourtStopAt: null, endingCourtAt: null,
     });
     expect(broadcastEndDueAt(f, m(1))).toBeNull();
     // The reservation is the broadcast's own reserved_until, read as written (T10 reserves a broadcast it reuses).
@@ -319,6 +369,19 @@ describe.skipIf(!HAS_DB)("readEndFacts — the facts, read with plain selects (s
       terminal++;
     }
     expect(terminal).toBe(2);
+  });
+
+  it("C1: a fixture code's session `ending` (stop began) never reads as an ending court session; the broadcast stays held", async () => {
+    const w = await world();
+    const fixture = w.fixtures[0]!;
+    const b = await broadcast(w, fixture);
+    const s = await session(w, { fixture, target: w.apiTargetId, broadcast: b, state: "live", endedAt: null });
+    await sql`update fixture_stream_sessions set state = 'ending', ending_at = ${m(0)} where id = ${s}`;
+    await setStatus(fixture, "decided");
+    const f = await readEndFacts(sql, b);
+    expect(f.activeSessionOnBroadcast).toBe(true);
+    expect(f.endingCourtAt).toBeNull();
+    expect(broadcastEndDueAt(f, m(1))).toBeNull();
   });
 
   it("through the real finished_at trigger: result after Stop → result + 2; void → Stop + 5; needs_decision (stamped) → Stop + 5 (F8)", async () => {
