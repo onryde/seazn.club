@@ -170,7 +170,7 @@ async function viaPort<T>(call: () => Promise<T>, row: Reportable): Promise<T> {
 
 /** The broadcast ids the step might act on, oldest first. A non-revoked connection (`reconnect_needed` included: retried with backoff,
  *  never skipped); an open state; not backed off or leased. `orgIds` is test-only. */
-async function candidatesOf(now: Date, orgIds: readonly string[] | undefined): Promise<Candidate[]> {
+async function candidatesOf(now: Date, orgIds: readonly string[] | undefined, broadcastIds?: readonly string[]): Promise<Candidate[]> {
   return sql<Candidate[]>`
     select b.id, b.org_id, b.connection_id
       from youtube_broadcasts b
@@ -179,6 +179,7 @@ async function candidatesOf(now: Date, orgIds: readonly string[] | undefined): P
        and (b.next_attempt_at is null or b.next_attempt_at <= ${now})
        and c.status <> 'revoked'
        ${orgIds ? sql`and b.org_id in ${sql(orgIds)}` : sql``}
+       ${broadcastIds ? sql`and b.id in ${sql(broadcastIds)}` : sql``}
      order by b.created_at, b.id`;
 }
 
@@ -418,24 +419,26 @@ async function failOne(c: Candidate, err: unknown, now: Date): Promise<Tag> {
   return code === "youtube_reconnect_needed" ? "reconnect" : "failed";
 }
 
-/** Run one pass of the end step. `orgIds` (test-only) scopes the selection; an empty list is refused — `org_id in ()` read as "no
+/** Run one pass of the end step. `broadcastIds` narrows it to those broadcasts (a court session's own deferred end, B1; the due rule
+ *  still decides). `orgIds` (test-only) scopes the selection; an empty list is refused — `org_id in ()` read as "no
  *  filter" would end every organisation's broadcasts. `wallClock` scripts the budget's clock. A row or a YouTube call is started only while
  *  `budgetMs` has time left; a row not started, or left between two of its calls, is counted `deferred` (not a failure: the next
  *  firing reaches it - a row left between calls keeps its claim and its two-minute lease, so that is the firing after the lease). */
 export async function endDueBroadcasts(
   port: YouTubePort,
-  o: { now: () => Date; budgetMs: number; wallClock?: () => number; orgIds?: readonly string[]; hooks?: EndStepHooks },
+  o: { now: () => Date; budgetMs: number; wallClock?: () => number; orgIds?: readonly string[]; broadcastIds?: readonly string[]; hooks?: EndStepHooks },
 ): Promise<YoutubeEndResult> {
   const orgIds = o.orgIds === undefined ? undefined : [...o.orgIds];
   if (orgIds !== undefined && orgIds.length === 0) {
     throw new Error("youtube end step: orgIds is empty — omit it to cover every organisation, or name at least one");
   }
+  if (o.broadcastIds !== undefined && o.broadcastIds.length === 0) throw new Error("youtube end step: broadcastIds is empty — omit it, or name at least one");
   const wallClock = o.wallClock ?? Date.now;
   const started = wallClock();
   /** Time left in the slice. The ONE rule for starting a row and for starting each call of one. */
   const room = () => wallClock() - started < o.budgetMs;
   const out: YoutubeEndResult = { ended: 0, neverLive: 0, orphans: 0, failed: 0, deferred: 0 };
-  const candidates = await candidatesOf(o.now(), orgIds);
+  const candidates = await candidatesOf(o.now(), orgIds, o.broadcastIds);
   for (let i = 0; i < candidates.length; i++) {
     if (!room()) {
       out.deferred += candidates.length - i;

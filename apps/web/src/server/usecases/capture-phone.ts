@@ -454,8 +454,13 @@ export type BeatScope = {
   /** Inside the beat's transaction, when this beat's `stopped: X` from the CURRENT phone will end X (a court's latch). A
    *  replaced phone's stale stop (T24a) still ends X but never calls this. */
   onStopApplied?: (tx: Tx, x: NamedRow) => Promise<void>;
-  /** Step 6: the automatic start, for the current phone's beat. A throw is reported and the beat still answered. */
-  autoStart: (pairingId: string, phoneMode: Beat["mode"]) => Promise<void>;
+  /** Step 6: the automatic start, for the current phone's beat. A throw is reported and the beat still answered. A scope that
+   *  hands the start itself to the background (a court's, web batch A2) answers `{ starting: true }` once it has CLAIMED a
+   *  start, so this beat answers `waiting` with `starting` (the 5 s cadence) and the phone's next beat finds the session. */
+  autoStart: (pairingId: string, phoneMode: Beat["mode"]) => Promise<{ starting: boolean } | void>;
+  /** The cadence a pairing this beat inserts starts at (`answered_poll_seconds`, the clock silence is judged on until the
+   *  answer stores its own). A fixture's code starts at the far cadence; a live court link at the near one (web batch A1). */
+  claimPollSeconds?: number;
   /** Step 7's common fields, read from the rows as they now stand, the open session given. */
   answerCommon: (open: OpenRow | null) => Promise<BeatAnswerCommon>;
   /** Court stream §5.4 (plan Task 8): a court's beat that names an ended session of its scope while ANOTHER session of
@@ -497,7 +502,10 @@ function fixtureBeatScope(resolved: ResolvedCode, code: string, deps: SessionDep
  *  7. the answer — `wireBeatAnswer`'s, sent exactly, its pollSeconds stored as the answered cadence.
  */
 export async function postBeat(rawCode: string, tok: string, body: Beat, deps: SessionDeps, now: Date): Promise<BeatAnswer> {
-  const resolved = await resolveAnyStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now);
+  // The session the phone still names as running (`sid`): an ended code still answers its beat about it with `over`
+  // (stream-codes.ts `namesItsEndedSession`). Not `stopped`: a phone reporting its OWN stop already knows the session is
+  // over, and C1/C3 refuse it through an ended code once nothing is open (capture-model.test.ts).
+  const resolved = await resolveAnyStreamCode(rawCode, tok, body.claim === "new" ? "claim" : "beat", body.phone, now, body.sid);
   const code = normaliseCode(rawCode)!;
   if (body.slot !== SLOT) throw new CaptureRefusalError(422, "invalid", `slot ${body.slot} is not served (PR-1 carries slot ${SLOT})`);
   if (body.code !== code) throw new CaptureRefusalError(422, "invalid", "the body names another code than the path");
@@ -552,7 +560,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     const insertMine = async (): Promise<PairingRow> => {
       const [p] = await tx<PairingRow[]>`
         insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, device_model, claimed_at, last_beat_at, answered_poll_seconds)
-        values (${scope.orgId}, ${scope.codeId}, ${SLOT}, ${body.phone}, ${body.claim}, ${body.device?.model ?? null}, ${now}, ${now}, ${POLL_FAR_SECONDS})
+        values (${scope.orgId}, ${scope.codeId}, ${SLOT}, ${body.phone}, ${body.claim}, ${body.device?.model ?? null}, ${now}, ${now}, ${scope.claimPollSeconds ?? POLL_FAR_SECONDS})
         returning id, code_id, phone, last_beat_at, answered_poll_seconds`;
       return p!;
     };
@@ -684,9 +692,10 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
   // 6. PR-2 (§7.2): auto start — the current phone's beat, never the operator's own Stop or a beat that stops a session.
   // After the tick (a session that tick ended is no longer open) and before the answer, so the beat that starts the
   // broadcast is answered `go-live` with `startedBy: "automatic"` (T42). It never fails the beat: reported, answered.
+  let startKicked = false;
   if (decided.mine !== null && body.state !== "ended" && decided.stop === null) {
     try {
-      await scope.autoStart(decided.mine.id, body.mode);
+      startKicked = (await scope.autoStart(decided.mine.id, body.mode))?.starting === true;
     } catch (err) {
       log.error({ err: String(err), orgId: scope.orgId }, "capture beat: auto start failed — the beat is answered");
       captureError(err, { orgId: scope.orgId, route: "capture.beat.auto_start" });
@@ -709,7 +718,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
   const handover = scope.handsOver === true && namedEnded !== null && open !== null && open.id !== namedEnded.sid && slot === "armed"
     ? { sid: open.id, startedBy: open.start_cause }
     : null;
-  const core = beatAnswer({
+  const judged = beatAnswer({
     claim: body.claim === null ? null : decided.claim,
     callerCurrent: decided.callerCurrent,
     namedEnded,
@@ -717,6 +726,9 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     slot,
     open: open === null ? null : { sid: open.id, startedBy: open.start_cause },
   });
+  // Web batch A2: a start this beat claimed and handed to the background has no session yet, so the slot reads `paired`; the
+  // phone is told one is starting (row 5's answer and cadence), exactly as it will be once the session's row exists.
+  const core = startKicked && judged.state === "waiting" ? { state: "waiting" as const, starting: true } : judged;
   const common = await scope.answerCommon(open);
   const answer = wireBeatAnswer(core, common);
   if (decided.mine !== null && answer.pollSeconds !== undefined) {

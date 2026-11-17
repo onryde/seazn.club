@@ -12,6 +12,7 @@ import { markAutoStartBlocked } from "../stream-codes";
 import { lockRow, readRow } from "./session-row";
 import type { SessionDeps } from "./deps";
 import { apply } from "./apply";
+import { endCourtBroadcastSoon } from "./court-end";
 import { latestRow, currentSession } from "./current";
 
 /** A12 / plan R-3 (controller, 2026-10-07): an organiser's Stop of a NON-terminal session turns automatic start off for the
@@ -76,5 +77,7 @@ export async function stopSession(auth: AuthCtx, fixtureId: string, sessionId: s
     await stampOrganiserStop(tx, auth, fixtureId, deps);
     return { type: "stop", reason: "stopped" };
   }, deps, { userId: auth.userId ?? null, source: "client" });   // passthrough: the complete_now effect finishes it; composed: runner session_stop → SIGINT → observed destroyed → completed. The actor lands as an `action` row (ruling 13); stop_requested_at is set by persistFacts.
+  // B1: a court session's YouTube broadcast is completed when due (30 s on for a finished match), not at the next cron firing.
+  endCourtBroadcastSoon(sessionId, deps);
   return (await currentSession(auth, fixtureId, deps))!;
 }

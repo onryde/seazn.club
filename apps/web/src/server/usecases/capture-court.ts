@@ -24,7 +24,8 @@ import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import { CAPTURE_COURT_NAME_MAX, CaptureScoringLinkOk, type CaptureCourt, type CaptureNext, type CaptureStartBody, type CaptureStartedBy, type CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
-import { courtMinAppVersion, POLL_FAR_SECONDS } from "@/server/relay/config";
+import { courtMinAppVersion, POLL_FAR_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
+import { deferred } from "@/lib/deferred";
 import type { CourtFocus, CourtMatchFacts } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isActive, type SessionState } from "@/server/relay/domain/session";
 import {
@@ -37,9 +38,10 @@ import { provideDeviceLinkForPhone, type HolderVerifiedCode, type PhoneScoringLi
 import { captureStageOf } from "./capture-stage";
 import { asFixtureCode, courtFocusOf, linkOpenAt, matchLabelOf, type ResolvedCourtCode } from "./court-stream-codes";
 import { endOtherCourtSessions } from "./court-stream-sessions";
-import { maybeCourtAutoStart } from "./stream-auto-court";
+import { claimCourtAutoStart } from "./stream-auto-court";
 import { markAutoStartBlocked, startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
+import { COURT_STREAM_OFF } from "./stream-sessions/start";
 
 type CourtView = { facts: CourtMatchFacts[]; focus: CourtFocus };
 export type CourtCommon = CaptureCommon & { court: CaptureCourt; next: CaptureNext | null };
@@ -93,13 +95,24 @@ async function sessionById(sid: string): Promise<(LatestSession & { fixture_id: 
   return row ?? null;
 }
 
+/**
+ * Web batch A1 (2026-11-17): while the court's link is live — not withdrawn, and its day open now — the court phone never
+ * beats slower than the near cadence, whatever its match: the court's automatic start is decided on a beat, so a slower beat
+ * is a later start (a 60 s idle cadence made starts take up to two minutes). A withdrawn link, or one outside its day, keeps
+ * the fixture's rules. The 5 s rows (a session requested or provisioning, a start just claimed) stay 5 s.
+ */
+const courtLinkLive = (court: ResolvedCourtCode, now: Date): boolean => court.link.withdrawnAt === null && linkOpenAt(court.link, now);
+const courtCadence = (court: ResolvedCourtCode, now: Date, seconds: number): number =>
+  courtLinkLive(court, now) ? Math.min(seconds, POLL_NEAR_SECONDS) : seconds;
+
 /** The match the court's waiting fields describe: the current session's while one is open, else start ?? next. */
 const subjectOf = (focus: CourtFocus): string | null => focus.current?.fixtureId ?? focus.focusFixtureId;
 
 /**
  * The court's waiting fields (§6.4 on a court code). With a subject match, that match's `captureCommon` with the LINK's
  * destination and `autoAllowed: true`; with none, the idle court: its name as the label, its link's zone, no scheduled
- * start, no overlay, the far cadence. `court` is the court's name; `next` the next streamed match not yet started.
+ * start, no overlay, the far cadence. Either way capped at the near cadence while the link is live (`courtCadence`).
+ * `court` is the court's name; `next` the next streamed match not yet started.
  */
 export async function courtCommon(
   court: ResolvedCourtCode, code: string, view: CourtView, s: { open: SessionState | null; themeId: string | null },
@@ -113,11 +126,12 @@ export async function courtCommon(
   const destinationName = fitText(link.target_label, DEST_MAX);
   const subject = subjectOf(view.focus);
   const origin = captureOrigin(deps);
-  const base: CaptureCommon = subject !== null
-    ? { ...(await captureCommon({ orgId: court.orgId, fixtureId: subject, code }, s, deps, now)), autoAllowed: true, destinationName }
+  const subjectCommon = subject === null ? null : await captureCommon({ orgId: court.orgId, fixtureId: subject, code }, s, deps, now);
+  const base: CaptureCommon = subjectCommon !== null
+    ? { ...subjectCommon, pollSeconds: courtCadence(court, now, subjectCommon.pollSeconds), autoAllowed: true, destinationName }
     : {
         code, label: fitText(court.link.courtName, LABEL_MAX), venueTimezone: link.tz, scheduledStart: null,
-        pollSeconds: POLL_FAR_SECONDS, autoAllowed: true, destinationName, overlayUrl: null, scoreUpdates: "polled",
+        pollSeconds: courtCadence(court, now, POLL_FAR_SECONDS), autoAllowed: true, destinationName, overlayUrl: null, scoreUpdates: "polled",
         heartbeatUrl: `${origin}/api/v1/capture/codes/${code}/beats`, startUrl: `${origin}/api/v1/capture/codes/${code}/start`,
       };
   return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next: await nextOf(court, view) };
@@ -160,7 +174,12 @@ export async function getCourtCode(
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** A court code's beat scope: the link's sessions, the court phone's Stop latch, the court's automatic start and handover
- *  (`maybeCourtAutoStart`, Task 8), and the court's answer fields. */
+ *  (`claimCourtAutoStart`, Task 8), and the court's answer fields.
+ *  Web batch A2 (2026-11-17): the beat CLAIMS the start on its own path and hands the start itself (YouTube, Cloudflare,
+ *  Fly) to `deferred`, answering `waiting` with `starting`; the phone's next beat, 5 s later, finds the session. A beat that
+ *  awaited the start timed out on the phone (8 s) and the start then waited for the next beat. The claim keeps a second beat
+ *  arriving while the start runs from starting again. A refusal is stored by the start as before; an unmapped error is
+ *  reported as the beat reported it. */
 function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDeps, now: Date): BeatScope {
   return {
     orgId: court.orgId, codeId: court.codeId, issuedBy: court.issuedBy,
@@ -172,8 +191,20 @@ function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDep
     // never offers its sid again (the phone refuses it) and the desk restarts it by hand.
     onStopApplied: (tx: Tx, x: NamedRow) => markAutoStartBlocked(court.orgId, x.fixture_id, now, court.issuedBy, tx),
     autoStart: async (pairingId, phoneMode) => {
-      await maybeCourtAutoStart({ court, pairingId, phoneMode }, deps, now);
+      const check = await claimCourtAutoStart({ court, pairingId, phoneMode }, deps, now);
+      // Fix round 1 (finding 8): a start claimed by an earlier beat and still running answers `starting` too.
+      if (!check.claimed) return { starting: check.inFlight };
+      deferred(async () => {
+        try {
+          await check.run();
+        } catch (err) {
+          log.error({ err: String(err), orgId: court.orgId, fixtureId: check.fixtureId }, "capture court beat: the deferred auto start failed");
+          captureError(err, { orgId: court.orgId, route: "capture.beat.auto_start", extra: { fixtureId: check.fixtureId } });
+        }
+      });
+      return { starting: true };
     },
+    claimPollSeconds: courtCadence(court, now, POLL_FAR_SECONDS),
     // §5.4: the beat naming the match the court just moved on from is handed to the new, armed session.
     handsOver: true,
     answerCommon: async (open) => {
@@ -229,6 +260,8 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
       deps,
     ));
   } catch (err) {
+    // O17 fix round 1: the match was switched off while this start was prepared — the court has nothing to start.
+    if (err instanceof HttpError && err.code === COURT_STREAM_OFF) throw new CaptureRefusalError(409, "no_match", "this match's Stream switch was turned off");
     const mapped = phoneStartRefusal(err);
     if (mapped === null) throw err;
     if (mapped instanceof CaptureRefusalError) throw mapped;

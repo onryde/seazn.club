@@ -12,20 +12,47 @@
 //   - the beat naming the ended old sid while the new one is armed hears go-live on the new one (the handover row);
 //   - once per match (A4/A16), retried only on the retry spacing (R7), never with the phone in Operator mode, never past
 //     the link's day or once it is withdrawn;
-//   - money: one credit per streamed match's first video, none for an unstreamed match, none for a refused start.
+//   - money: one credit per streamed match's first video, none for an unstreamed match, none for a refused start;
+//   - web batch A2 (2026-11-17): the beat that claims a start answers at once, `waiting` with the starting cadence (5 s), and
+//     the start itself runs after the answer (`deferred`, Next's `after()`); the phone's NEXT beat finds the session.
+//
+// `@/lib/deferred` is replaced by a queue the `beat` helper drains after each answer, as Next's `after()` runs a tail after
+// the response: so the beat's answer is judged before its start runs, the order production has. (The real `deferred` runs a
+// tail inline under vitest, racing the beat's own answer.)
 //
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam): every clock is the test's, passed in.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const tails = vi.hoisted(() => ({ queue: [] as (() => unknown)[] }));
+vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => { tails.queue.push(fn); } }));
+// B1: the YouTube end tail waits up to 45 s for its due time; court-stream-youtube-end.test.ts drives it with its own clock.
+vi.mock("../stream-sessions/court-end", () => ({ endCourtBroadcastSoon: () => undefined }));
+/** Runs every queued tail, and the tails those queue, as `after()` would once the response is sent. `deferred` swallows a
+ *  tail's error in production; here one FAILS the test (fix round 1, finding 7): the court's tail catches and reports its
+ *  own errors, so any error reaching this far is a defect, never an expected outcome. */
+async function runTails(): Promise<number> {
+  let n = 0;
+  const errors: unknown[] = [];
+  while (tails.queue.length > 0) {
+    const fn = tails.queue.shift()!;
+    n += 1;
+    try { await fn(); } catch (err) { errors.push(err); }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, `a deferred tail threw (${errors.length})`);
+  return n;
+}
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
-import { AUTO_START_RETRY_SECONDS } from "@/server/relay/config";
+import { AUTO_START_RETRY_SECONDS, POLL_NEAR_SECONDS, POLL_STARTING_SECONDS } from "@/server/relay/config";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { connect } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { markReconnectNeeded } from "@/server/youtube/token-store";
+import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import { postBeat } from "../capture-phone";
+import { postCourtStart } from "../capture-court";
 import type { ResolvedCourtCode } from "../court-stream-codes";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { resolveAnyStreamCode } from "../stream-codes";
@@ -80,6 +107,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
   let P: string;
 
   beforeEach(async () => {
+    tails.queue.length = 0;
     day = await seedDay();
     [A, B, C] = day.comp.fixtures.map((f) => f.id) as [string, string, string];
     await override(day.orgId, "streaming.relay", true);
@@ -118,7 +146,16 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
   async function beat(phone: string, over: Partial<Beat> = {}): Promise<Answer> {
     const a = await postBeat(qr.code, qr.tok, body(phone, over), deps, clock());
     expect(CaptureBeatAnswer.parse(a)).toEqual(a);
+    await runTails();
     return a;
+  }
+  /** A2: the beat that claims a start answers at once — `waiting` at the starting cadence while the court is idle, still
+   *  `live` on the old match when it names one — and the phone's next beat, after the start ran, is the one that hears it. */
+  async function kick(over: Partial<Beat> = {}): Promise<Answer> {
+    const first = await beat(P, over);
+    if (over.sid != null) expect(first, "the claiming beat still answers the old match").toMatchObject({ state: "live", sid: over.sid });
+    else expect(first, "the claiming beat answers waiting at the starting cadence").toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS });
+    return beat(P, over);
   }
   /** Kicked off for real: a `core.start` score event at `minute` (the kick-off courtFactsOf reads) and status in_play. */
   const kickoff = async (fixtureId: string, minute: number) => {
@@ -166,7 +203,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
   const aLive = async (): Promise<string> => {
     await streamOn(A);
     await kickoff(A, 0);
-    const go = await beat(P);
+    const go = await kick();
     if (go.state !== "go-live") throw new Error(`premise: A starts, got ${go.state}`);
     now += SEC;
     expect((await beat(P, { sid: go.sid, state: "publishing" })).state, "premise: A went live").toBe("live");
@@ -177,7 +214,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
   it("A switched on kicks off: the next beat answers go-live, startedBy automatic; the session has court_link_id and A's fixture", async () => {
     await streamOn(A);
     await kickoff(A, 0);
-    const ans = await beat(P);
+    const ans = await kick();
     expect(ans).toMatchObject({ state: "go-live", startedBy: "automatic", label: labelOf(day.comp, day.comp.fixtures[0]!) });
     if (ans.state !== "go-live") throw new Error("unreachable");
     expect(await sessionRow(ans.sid)).toMatchObject({ fixture_id: A, court_link_id: linkId, target_id: targetId, start_cause: "automatic" });
@@ -192,6 +229,73 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(await sessionsOf(A)).toHaveLength(1);
   });
 
+  it("A2: the claiming beat answers before the start runs (waiting, 5 s); a second beat while it is in flight starts nothing; the next beat after it hears go-live", async () => {
+    await streamOn(A);
+    await kickoff(A, 0);
+    // The beat's answer, with its start still queued (not drained): no session, no input, the starting cadence.
+    const first = await postBeat(qr.code, qr.tok, body(P), deps, clock());
+    expect(first).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS });
+    expect(tails.queue, "exactly one start handed to the background").toHaveLength(1);
+    expect(await sessionsOf(A), "the answer did not wait on the start").toEqual([]);
+    expect((await settingsOf(A))!.auto_start_attempted_at?.getTime(), "the claim was taken on the beat").toBe(at(0).getTime());
+    // A second beat while that start is still running: the claim is held, so nothing more is handed over.
+    now += POLL_STARTING_SECONDS * SEC;
+    const second = await postBeat(qr.code, qr.tok, body(P), deps, clock());
+    // Fix round 1 (finding 8): the start is still running, so this beat answers `starting` too (5 s), not the paired 10 s.
+    expect(second).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS });
+    expect(tails.queue, "the second beat started nothing").toHaveLength(1);
+    // The start runs (after the first answer was sent); the phone's next beat finds it armed.
+    expect(await runTails()).toBe(1);
+    expect(await sessionsOf(A)).toHaveLength(1);
+    now += POLL_STARTING_SECONDS * SEC;
+    expect(await beat(P)).toMatchObject({ state: "go-live", startedBy: "automatic" });
+    expect(await sessionsOf(A), "one start in all").toHaveLength(1);
+    expect((await settingsOf(A))!.auto_started_at).not.toBeNull();
+  });
+
+  it("fix round 1 (O17 race): the Stream switch turned off while a claimed start is being prepared — no session is inserted, nothing is stored as a refusal", async () => {
+    await streamOn(A);
+    await kickoff(A, 0);
+    // The switch goes off from inside the start's slow middle: the storage read, after `pairingFor`'s switch check and the
+    // YouTube prepare, before the admission transaction.
+    const storage = ingest.storageUsage.bind(ingest);
+    let flipped = 0;
+    ingest.storageUsage = async () => {
+      if (flipped++ === 0) await setCourtStream(day.auth, A, false, clock(), deps);
+      return storage();
+    };
+    const claiming = await postBeat(qr.code, qr.tok, body(P), deps, clock());
+    expect(claiming.state).toBe("waiting");
+    expect(tails.queue, "premise: A's start was claimed").toHaveLength(1);
+    await runTails();
+    expect(flipped, "premise: the switch went off inside the start").toBeGreaterThan(0);
+    expect(await sessionsOf(A), "no session for a switched-off match").toEqual([]);
+    expect((await settingsOf(A))!.auto_start_refusal, "a switch-off is not a refusal").toBeNull();
+    // Fix round 2 (item 2): the broadcast prepared at YouTube for the refused start is abandoned, not left reserved for it.
+    const bcasts = await sql<{ state: string; last_error_code: string | null }[]>`
+      select state, last_error_code from youtube_broadcasts where fixture_id = ${A}`;
+    expect(bcasts.length, "premise: a broadcast was prepared for the start").toBeGreaterThan(0);
+    expect(bcasts, "the prepared broadcast is abandoned (admission refused)").toEqual(bcasts.map(() => ({ state: "failed", last_error_code: "admission_refused" })));
+  });
+
+  it("fix round 2 (item 2): the phone's own court start (postCourtStart) on a match switched off while it was prepared → 409 no_match, no session", async () => {
+    await streamOn(A);
+    await kickoff(A, 0);
+    const court = (await resolveAnyStreamCode(qr.code, qr.tok, "start", P, clock())) as ResolvedCourtCode;
+    expect(court.kind, "premise: a court code").toBe("court");
+    const storage = ingest.storageUsage.bind(ingest);
+    let flipped = 0;
+    ingest.storageUsage = async () => {
+      if (flipped++ === 0) await setCourtStream(day.auth, A, false, clock(), deps);
+      return storage();
+    };
+    const refused = await postCourtStart(court, { phone: P }, deps).then(() => null, (e: unknown) => e);
+    expect(flipped, "premise: the switch went off inside the start").toBeGreaterThan(0);
+    expect(refused).toBeInstanceOf(CaptureRefusalError);
+    expect({ status: (refused as CaptureRefusalError).status, code: (refused as CaptureRefusalError).code }).toEqual({ status: 409, code: "no_match" });
+    expect(await sessionsOf(A), "no session for a switched-off match").toEqual([]);
+  });
+
   it("a court start with the match's mode never chosen is COMPOSED: a programme input exists and the add_output effect targets it, not the camera (A2)", async () => {
     // Every other start here runs `passthrough`, as the helpers that call startBroadcast say; the court's own start asks
     // `startModeFor`, and a fixture whose stream_mode was never stored streams the score whenever the deployment can run it.
@@ -203,7 +307,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
       await streamOn(A);
       await kickoff(A, 0);
       expect((await sql`select 1 from fixture_stream_settings where fixture_id = ${A} and stream_mode is not null`).length, "premise: mode never chosen").toBe(0);
-      const go = await beat(P);
+      const go = await kick();
       if (go.state !== "go-live") throw new Error(`premise: A starts, got ${go.state}`);
       const inputs = await sql<{ role: string; ingest_input_id: string | null }[]>`
         select role, ingest_input_id from fixture_stream_inputs where session_id = ${go.sid} order by role`;
@@ -257,8 +361,8 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     await decide(A, 10);
     atMin(11);
     await kickoff(B, 11);
-    // The beat names A (still publishing it): B opens, A ends, and the answer hands the phone to B.
-    const ans = await beat(P, { sid: sidA, state: "publishing" });
+    // The beat names A (still publishing it): B opens, A ends, and the next beat's answer hands the phone to B.
+    const ans = await kick({ sid: sidA, state: "publishing" });
     expect(ans).toMatchObject({ state: "go-live", startedBy: "automatic", label: labelOf(day.comp, day.comp.fixtures[1]!) });
     if (ans.state !== "go-live") throw new Error("unreachable");
     const sidB = ans.sid;
@@ -283,7 +387,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     await decide(A, 10);
     atMin(11);
     await kickoff(B, 11);
-    const first = await beat(P, { sid: sidA, state: "publishing" });
+    const first = await kick({ sid: sidA, state: "publishing" });
     if (first.state !== "go-live") throw new Error(`premise: the handover fired, got ${first.state}`);
     // A retry of the same beat (the phone did not hear the answer): A is ended, B still armed → go-live B, never over A.
     now += SEC;
@@ -292,7 +396,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(await sessionsOf(B)).toHaveLength(1);
   });
 
-  it("phone offline across the handover: its first beat back naming A gets go-live B (or over A then go-live B); never A", async () => {
+  it("phone offline across the handover: its first beat back naming A starts B; a following beat hears go-live B; never a new A", async () => {
     await streamOn(B);
     const sidA = await aLive();
     // The phone goes silent; the match ends and the next one kicks off while nobody hears it.
@@ -300,14 +404,13 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     await kickoff(B, 11);
     atMin(20);
     expect(await sessionsOf(B), "nothing starts without the phone's beat").toHaveLength(0);
+    // A2: the beat back claims B's start and answers at once. A is still open until B exists (start first, then stop), so
+    // the answer is A's own (`live`), or `over` A when A has ended by itself; the beat after it, B having started, hands over.
     const back = await beat(P, { sid: sidA, state: "publishing" });
-    expect(["go-live", "over"]).toContain(back.state);
-    let goLive = back;
-    if (back.state === "over") {
-      expect(back.sid).toBe(sidA);
-      now += SEC;
-      goLive = await beat(P);
-    }
+    expect(["live", "over"]).toContain(back.state);
+    if (back.state === "live" || back.state === "over") expect(back.sid).toBe(sidA);
+    now += SEC;
+    const goLive = await beat(P, back.state === "over" ? {} : { sid: sidA, state: "publishing" });
     expect(goLive.state).toBe("go-live");
     if (goLive.state !== "go-live") throw new Error("unreachable");
     expect(goLive.sid).not.toBe(sidA);
@@ -334,7 +437,11 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect((await activeOfLink()).sort(), "premise: two court sessions open").toEqual([deskA, autoB].sort());
     atMin(2);
     await kickoff(C, 2);
-    const ans = await beat(P);
+    // A2: the claiming beat answers before C's start runs, so it still names the newest open session, B, armed; the phone's
+    // next beat names B, ended by C's start, and is handed over to C.
+    const claiming = await beat(P);
+    expect(claiming).toMatchObject({ state: "go-live", sid: autoB });
+    const ans = await beat(P, { sid: autoB, state: "publishing" });
     expect(ans).toMatchObject({ state: "go-live", startedBy: "automatic" });
     if (ans.state !== "go-live") throw new Error("unreachable");
     expect((await sessionRow(ans.sid)).fixture_id).toBe(C);
@@ -350,7 +457,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect((await beat(P)).state, "not switched on: nothing starts").toBe("waiting");
     atMin(5);
     await streamOn(A);
-    const go = await beat(P);
+    const go = await kick();
     expect(go).toMatchObject({ state: "go-live", startedBy: "automatic" });
     if (go.state !== "go-live") throw new Error("unreachable");
     now += SEC;
@@ -459,6 +566,10 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(first).toMatchObject({ auto_start_refusal: "no_destination", auto_started_at: null });
     expect(first.auto_start_attempted_at?.getTime()).toBe(at(0).getTime());
     expect(await sessionsOf(A)).toEqual([]);
+    // Fix round 1 (finding 8): a stored refusal is not a start in flight — the next beat is the plain paired cadence.
+    now += 5 * SEC;
+    expect(await beat(P)).toMatchObject({ state: "waiting", pollSeconds: POLL_NEAR_SECONDS });
+    now -= 5 * SEC;
     // R7: 59 s later the beat makes no second attempt.
     now += (AUTO_START_RETRY_SECONDS - 1) * SEC;
     expect((await beat(P)).state).toBe("waiting");
@@ -504,7 +615,7 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(default_locale ?? "en", "premise: the org reads English").toBe("en");
     await streamOn(C);
     await kickoff(C, 0);
-    const ans = await beat(P);
+    const ans = await kick();
     // en/ui.json "breadcrumb.match": "Match {no}"
     expect(ans).toMatchObject({ state: "go-live", startedBy: "automatic", label: `Match ${fixture_no}` });
   });

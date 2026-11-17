@@ -8,6 +8,7 @@ import { log } from "@/server/logger";
 import { type Row, readRow } from "./session-row";
 import type { SessionDeps } from "./deps";
 import { apply } from "./apply";
+import { endCourtBroadcastSoon } from "./court-end";
 
 /** The facts `autoStopDue` (§7.3) judges, in ONE statement (one snapshot). The session's phone is its `pairing_id`, ended or
  *  not: the mode that was set is what the session's phone chose (FP13 — it lags the phone's Settings by at most one poll
@@ -81,6 +82,8 @@ export async function endIfAutoStopDue(row: Row, deps: SessionDeps, cause: "poll
     return decided ? { type: "stop", reason: "auto_stopped" } : null;
   }, deps);
   const after = (await readRow(row.id)) ?? row;
+  // B1: a court session's YouTube broadcast is completed 30 s after a finished match's stop, not at the next cron firing.
+  if (decided) endCourtBroadcastSoon(row.id, deps);
   if (decided && (after.state === "ending" || isTerminal(after.state))) {
     log.info({ sid: row.id, orgId: row.org_id, cause, rule: "auto-stop", state: after.state }, "stream session: ended by the tick");
   }

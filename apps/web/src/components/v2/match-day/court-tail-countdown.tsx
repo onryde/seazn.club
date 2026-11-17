@@ -10,7 +10,7 @@
 // effect happens to run, so a changed `tail_ends_at` under the same `viewNow` never rewinds the count. The first render counts from
 // `viewNow` itself, so the server's markup and the first client render agree (no hydration mismatch) before the one-second tick starts.
 // Seconds are tabular figures, so the line does not twitch as it counts.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { tailSecondsLeft } from "@/lib/match-day/tail-countdown";
@@ -20,6 +20,7 @@ export function CourtTailCountdown({
   tailEndsAt,
   viewNow,
   clock = Date.now,
+  onEnd,
   className = "",
 }: {
   dict: Dict;
@@ -29,6 +30,8 @@ export function CourtTailCountdown({
   viewNow: string;
   /** The page's clock in ms: `Date.now`, or a fixed one in a test. Keep it stable between renders. */
   clock?: () => number;
+  /** Called once when a count that was running reaches 0 (the desk reads the day again, B2), never for a count that was already at 0. */
+  onEnd?: () => void;
   className?: string;
 }) {
   const [anchor, setAnchor] = useState(() => ({ viewNow, at: clock() }));
@@ -41,6 +44,15 @@ export function CourtTailCountdown({
   }
   const seconds = tailSecondsLeft({ tailEndsAt, viewNow: anchor.viewNow, anchoredAtMs: anchor.at, nowMs });
   const done = seconds <= 0;
+  const counting = useRef(false);
+  useEffect(() => {
+    if (!done) {
+      counting.current = true;
+    } else if (counting.current) {
+      counting.current = false;
+      onEnd?.();
+    }
+  }, [done, onEnd]);
   useEffect(() => {
     if (done) return;
     const id = setInterval(() => setNowMs(clock()), 1000);

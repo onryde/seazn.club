@@ -24,10 +24,9 @@
 //  - a view-only member (`readOnly`) gets the same page with nothing that writes, and without the Needs-you list;
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
-import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
-import { apiV1 } from "@/lib/client-v1";
 import { fmtPublicDate } from "@/lib/format";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -43,7 +42,6 @@ import {
   headerCountParts,
   initialVenueSelection,
   isLive,
-  isMatchDayView,
   matchLabel,
   needsYouButtonParts,
   needsYouOrder,
@@ -67,6 +65,8 @@ import { CourtList, NoCourtList } from "./court-list";
 import { levelWords } from "@/lib/score/levels";
 import { VenueFilter } from "./venue-filter";
 import { MatchDayCodeSheet } from "./match-day-code-sheet";
+import { RefreshLine } from "./refresh-line";
+import { useDayRefresh } from "./use-day-refresh";
 
 /** How often the page re-reads the closures against its clock: a break is minutes, so a minute is exact enough (m1). */
 const CLOCK_TICK_MS = 60_000;
@@ -101,6 +101,9 @@ export interface MatchDayShellProps {
   /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
   venueParam?: string | readonly string[] | null;
 }
+
+/** How long after a tail countdown reaches 0 the day is read once more (the server's stop lands after it). */
+const TAIL_RECHECK_MS = 12_000;
 
 export function MatchDayShell({
   competitionId,
@@ -149,14 +152,31 @@ export function MatchDayShell({
   /** The Match Day code sheet (MD-1 Task 2), open over the page. Editors only: a viewer never sees its button. */
   const [codeOpen, setCodeOpen] = useState(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      const next = await apiV1<unknown>(`/api/v1/competitions/${competitionId}/match-day`);
-      if (isMatchDayView(next)) setView(next);
-    } catch {
-      // Keep the last view; the next tick tries again.
-    }
-  }, [competitionId]);
+  // One read of the day for the poll, the Refresh button and a court's tail countdown reaching 0 (use-day-refresh.ts).
+  const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, setView);
+  const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
+  /** A court's tail countdown ended: quiet, and one read per second however many countdowns end on the same tick. */
+  const lastTailRead = useRef(0);
+  const tailTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const refreshOnTailEnd = useCallback(() => {
+    const at = Date.now();
+    if (at - lastTailRead.current < 1000) return;
+    lastTailRead.current = at;
+    void refresh();
+    // The server stops the session a little after the countdown reaches 0, so one more read follows (one per tail end).
+    const id = setTimeout(() => {
+      tailTimers.current.delete(id);
+      void refresh();
+    }, TAIL_RECHECK_MS);
+    tailTimers.current.add(id);
+  }, [refresh]);
+  useEffect(() => {
+    const timers = tailTimers.current;
+    return () => {
+      for (const id of timers) clearTimeout(id);
+      timers.clear();
+    };
+  }, []);
 
   const live = isLive(view);
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
@@ -195,7 +215,7 @@ export function MatchDayShell({
   /** A phone shows one court (or match) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now, onTailEnd: refreshOnTailEnd };
   const words = levelWords(scoreDict);
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
@@ -263,6 +283,7 @@ export function MatchDayShell({
                 {competitionName}
               </Link>
             </p>
+            <RefreshLine dict={dict} lastOkAt={lastOkAt} busy={refreshing} failed={refreshFailed} onRefresh={refreshNow} />
             <DotLine
               testId="md-counts"
               className="mt-0.5 text-sm text-slate-600"
@@ -420,7 +441,7 @@ export function MatchDayShell({
           )}
           <div data-testid="md-list" className={`grid min-w-0 gap-5 md:col-start-1 md:row-start-1${phoneCourt ? " max-md:hidden" : ""}`}>
             {courts.length > 0 && (
-              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} viewNow={view.now} />
+              <CourtList courts={courts} selectedId={focused?.court_id ?? null} dict={dict} words={words} locale={locale} tz={view.tz} onSelect={open} viewNow={view.now} onTailEnd={refreshOnTailEnd} />
             )}
             <NoCourtList
               fixtures={noCourt}

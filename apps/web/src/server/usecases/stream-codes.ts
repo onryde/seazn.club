@@ -18,7 +18,7 @@ import { log } from "@/server/logger";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
 import { composedUnavailable } from "@/server/relay/drivers";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
-import { ACTIVE_STATES } from "@/server/relay/domain/session";
+import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
 import { courtCodeView } from "@/server/relay/domain/court-stream";
 import { type CodeCall, codeServes, codeStatus, type CodeView, normaliseCode, type RecordTail, recordTailAnchor } from "@/server/relay/domain/stream-code";
 import type { CourtLinkRef, ResolvedCourtCode } from "./court-stream-codes";
@@ -231,15 +231,26 @@ type CodeOwner = {
   tailFinishedAt: Date | null;
   /** A fresh fragment each call: the owner's sessions, over `fixture_stream_sessions s`. */
   sessions: () => ReturnType<typeof sql>;
+  /** Web batch A3 (2026-11-17), a court's code only: once its open session is `ending` — the stop decided, the phone told
+   *  `over` — an ENDED code no longer serves that session's phone (C1b), so the phone's next get or beat is `401 code_ended`
+   *  and it forgets the code. Without it, a withdrawn court whose last session lingered in `ending` (a composed session's
+   *  runner teardown) kept answering its phone `waiting`, and the phone never forgot. */
+  releasesOnEnding?: true;
 };
+
+/** Fix round 1 (finding 1): the session a beat names as running (`sid`; CI on #1242: never `stopped`), so a released court session's phone still hears its
+ *  `over` (C1b) before it is refused. Only a uuid is ever read. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * C1 / C1b / C2 / C1(c) for a code whose tok VERIFIED, the same rules for both owners. Answers the status it serves at, or
  * throws `401 code_ended`. C2's expiry is written here (lazily, committed); a refused call from a pairing ends that pairing.
  */
-async function serveCode(row: CodeRow, owner: CodeOwner, call: CodeCall, phone: string | null, now: Date): Promise<"active" | "finishing" | "ended"> {
-  const [open] = await sql<{ created_at: Date; phone: string | null }[]>`
-    select s.created_at, p.phone from fixture_stream_sessions s
+async function serveCode(
+  row: CodeRow, owner: CodeOwner, call: CodeCall, phone: string | null, now: Date, namedSid: string | null = null,
+): Promise<"active" | "finishing" | "ended"> {
+  const [open] = await sql<{ created_at: Date; phone: string | null; state: SessionState }[]>`
+    select s.created_at, p.phone, s.state from fixture_stream_sessions s
       left join fixture_stream_pairings p on p.id = s.pairing_id
      where ${owner.sessions()} and s.state in ${sql([...ACTIVE_STATES])}
      order by s.created_at desc limit 1`;
@@ -252,8 +263,10 @@ async function serveCode(row: CodeRow, owner: CodeOwner, call: CodeCall, phone: 
     endCause = "expired";
     status = "ended";
   }
-  const callerIsOpenSessionPhone = open !== undefined && phone !== null && open.phone === phone;
-  const sessionCreatedBeforeEnd = open !== undefined && endedAt !== null && open.created_at.getTime() < endedAt.getTime();
+  // A3: the court's released session holds nothing for a get or a beat (a record keeps C1(b) and its tail).
+  const held = open !== undefined && !(owner.releasesOnEnding === true && open.state === "ending" && call !== "record") ? open : undefined;
+  const callerIsOpenSessionPhone = held !== undefined && phone !== null && held.phone === phone;
+  const sessionCreatedBeforeEnd = held !== undefined && endedAt !== null && held.created_at.getTime() < endedAt.getTime();
   // Spec 2026-10-12 §4 C1(c): a record call to an ENDED code with no open pre-end session is judged on the 24 h tail,
   // anchored on the later of the code's own end and the end of the owner's last session open when it ended.
   let tail: RecordTail | undefined;
@@ -271,7 +284,8 @@ async function serveCode(row: CodeRow, owner: CodeOwner, call: CodeCall, phone: 
     }
     tail = { now, anchor };
   }
-  const serves = codeServes({ status, callerIsOpenSessionPhone, sessionCreatedBeforeEnd, call, tail });
+  const serves = codeServes({ status, callerIsOpenSessionPhone, sessionCreatedBeforeEnd, call, tail })
+    || (status === "ended" && call === "beat" && endedAt !== null && await namesItsEndedSession(owner, namedSid, phone, endedAt));
   if (!serves) {
     // §5.2: "ENDED(code_ended) is written lazily when a call from the pairing is refused 401" (B6 review M-6). Only a
     // call whose tok VERIFIED speaks for a pairing, and only one C1 refuses: the C1b phone (its open session created
@@ -286,27 +300,51 @@ async function serveCode(row: CodeRow, owner: CodeOwner, call: CodeCall, phone: 
   return status as "active" | "finishing" | "ended";
 }
 
+/**
+ * Fix round 1 (finding 1), for a court's code; fix round 2 (item 3) for a fixture's code too: a BEAT that names a session of the owner which its caller's pairing
+ * held, created before the code ended, and stopping (`ending`) or stopped at or after that end, is served as C1b serves it,
+ * so it hears `over` for that session. The phone then stops naming it, and its next beat (naming nothing it holds) is
+ * `401 code_ended`. Without this, a stop that landed outside a beat (the desk's Stop, the Stream switch off, the tail) answered
+ * the beat that names it with 401: the phone treats a 401 while a session runs as "the code ends after this session" and
+ * keeps publishing, and every later beat is 401 too. A fixture's code meets the same case after a reissue: its session is
+ * stopped outside a beat (the desk's Stop), so no session is open and C1b serves nothing; the beat naming it hears `over`.
+ */
+async function namesItsEndedSession(owner: CodeOwner, namedSid: string | null, phone: string | null, endedAt: Date): Promise<boolean> {
+  if (namedSid === null || phone === null || !UUID_RE.test(namedSid)) return false;
+  const [named] = await sql<{ created_at: Date; state: SessionState; ended_at: Date | null; phone: string | null }[]>`
+    select s.created_at, s.state, s.ended_at, p.phone from fixture_stream_sessions s
+      left join fixture_stream_pairings p on p.id = s.pairing_id
+     where ${owner.sessions()} and s.id = ${namedSid}`;
+  if (!named || named.phone !== phone || named.created_at.getTime() >= endedAt.getTime()) return false;
+  return named.state === "ending" || (named.ended_at !== null && named.ended_at.getTime() >= endedAt.getTime());
+}
+
 /** A fixture's code: its own sessions, the fixture's finish and the grace after it (C2). */
-async function serveFixtureCode(row: FixtureCodeRow, call: CodeCall, phone: string | null, now: Date): Promise<ResolvedCode> {
+async function serveFixtureCode(
+  row: FixtureCodeRow, call: CodeCall, phone: string | null, now: Date, namedSid: string | null = null,
+): Promise<ResolvedCode> {
   const status = await serveCode(row, {
     view: { endedAt: row.ended_at, finishedAt: row.finished_at },
     graceMinutes: graceMinutes(),
     tailFinishedAt: row.finished_at,
     sessions: () => sql`s.fixture_id = ${row.fixture_id}`,
-  }, call, phone, now);
+  }, call, phone, now, namedSid);
   return { kind: "fixture", codeId: row.id, orgId: row.org_id, fixtureId: row.fixture_id, status, issuedBy: row.issued_by };
 }
 
 /** A court's code (court stream §5.4): the link's sessions, whichever match each streamed; the day's end is the finish, with
  *  no grace (`courtCodeView`). A withdrawal is an end like a reissue: C1b serves the open court session's phone a get and a
  *  beat, and the record tail anchors on the withdrawal. */
-async function serveCourtCode(row: CodeRow, link: CourtLinkRef, call: CodeCall, phone: string | null, now: Date): Promise<ResolvedCourtCode> {
+async function serveCourtCode(
+  row: CodeRow, link: CourtLinkRef, call: CodeCall, phone: string | null, now: Date, namedSid: string | null,
+): Promise<ResolvedCourtCode> {
   const status = await serveCode(row, {
     view: courtCodeView({ endedAt: row.ended_at, expiresAt: link.expiresAt }, now),
     graceMinutes: 0,
     tailFinishedAt: link.expiresAt,
     sessions: () => sql`s.court_link_id = ${link.id}`,
-  }, call, phone, now);
+    releasesOnEnding: true,
+  }, call, phone, now, namedSid);
   return { kind: "court", codeId: row.id, orgId: row.org_id, status, issuedBy: row.issued_by, link };
 }
 
@@ -347,7 +385,7 @@ type AnyCodeRow = CodeRow & {
  * `kind: "fixture"`; a court's code answers `kind: "court"` with its link.
  */
 export async function resolveAnyStreamCode(
-  rawCode: string, tok: string, call: CodeCall, phone: string | null, now: Date,
+  rawCode: string, tok: string, call: CodeCall, phone: string | null, now: Date, namedSid: string | null = null,
 ): Promise<ResolvedCode | ResolvedCourtCode> {
   const code = normaliseCode(rawCode);
   if (code === null) throw new CaptureRefusalError(404, "not_a_stream_code", "not a stream code");
@@ -360,7 +398,7 @@ export async function resolveAnyStreamCode(
       left join courts k on k.id = l.court_id
      where c.code = ${code}`;
   if (!tokMatches(row?.tok_hash ?? null, tok) || !row) throw codeEnded();
-  if (row.fixture_id !== null) return serveFixtureCode({ ...row, fixture_id: row.fixture_id }, call, phone, now);
+  if (row.fixture_id !== null) return serveFixtureCode({ ...row, fixture_id: row.fixture_id }, call, phone, now, namedSid);
   // fixture_stream_codes_one_owner (V525): no fixture means a court link, and the link's court is the org's (its FK).
   if (row.court_link_id === null || row.court_id === null || row.court_name === null || row.competition_id === null
       || row.opens_at === null || row.expires_at === null || row.target_id === null) {
@@ -370,7 +408,7 @@ export async function resolveAnyStreamCode(
     id: row.court_link_id, competitionId: row.competition_id, courtId: row.court_id, courtName: row.court_name,
     opensAt: row.opens_at, expiresAt: row.expires_at, targetId: row.target_id, withdrawnAt: row.withdrawn_at,
   };
-  return serveCourtCode(row, link, call, phone, now);
+  return serveCourtCode(row, link, call, phone, now, namedSid);
 }
 
 // One sentence for every refusal of a code (C1): `codeEnded` lives in capture-http.ts, shared with the route's Bearer

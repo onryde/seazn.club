@@ -15,8 +15,27 @@
 //   - money: one consume per streamed match's first video, each on its own session and fixture; none for an unstreamed
 //     match; none for a free restart (W23); none for a refused start; each match its own YouTube broadcast and input.
 //
+// Web batch A2 (2026-11-17): a court beat that claims a start answers at once and the start runs after the answer
+// (`deferred`); here `@/lib/deferred` is a queue the `beat` helper drains after each answer, as Next's `after()` runs a tail
+// once the response is sent, so the phone's NEXT beat is the one that hears the start.
+//
 // The link is for 2026-11-07, the seed's T0 day (Europe/Amsterdam): every clock is the test's, passed in.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const tails = vi.hoisted(() => ({ queue: [] as (() => unknown)[] }));
+vi.mock("@/lib/deferred", () => ({ deferred: (fn: () => unknown) => { tails.queue.push(fn); } }));
+// B1: the YouTube end tail waits up to 45 s for its due time; this file is about the start, the tail and the money, and
+// court-stream-youtube-end.test.ts drives the end tail with its own clock.
+vi.mock("../stream-sessions/court-end", () => ({ endCourtBroadcastSoon: () => undefined }));
+/** `deferred` swallows a tail's error in production; here one fails the test (fix round 1, finding 7). */
+async function runTails(): Promise<void> {
+  const errors: unknown[] = [];
+  while (tails.queue.length > 0) {
+    const fn = tails.queue.shift()!;
+    try { await fn(); } catch (err) { errors.push(err); }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, `a deferred tail threw (${errors.length})`);
+}
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
@@ -77,6 +96,7 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
   let P: string;
 
   beforeEach(async () => {
+    tails.queue.length = 0;
     day = await seedDay();
     [A, B, C] = day.comp.fixtures.map((f) => f.id) as [string, string, string];
     await override(day.orgId, "streaming.relay", true);
@@ -114,6 +134,7 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
   async function beat(phone: string, over: Partial<Beat> = {}): Promise<Answer> {
     const a = await postBeat(qr.code, qr.tok, body(phone, over), deps, clock());
     expect(CaptureBeatAnswer.parse(a)).toEqual(a);
+    await runTails();
     return a;
   }
   /** Kicked off for real: a `core.start` score event at `minute` and status in_play. */
@@ -172,7 +193,11 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     await streamOn(fixtureId);
     atMin(minute);
     await kickoff(fixtureId, minute);
-    const go = await beat(P, named === null ? {} : { sid: named, state: "publishing" });
+    const over = named === null ? {} : { sid: named, state: "publishing" as const };
+    // A2: the claiming beat answers before the start runs (waiting, or the old match's own answer); the next one hears it.
+    const claiming = await beat(P, over);
+    if (claiming.state === "go-live") throw new Error("premise: the claiming beat answers before its start runs");
+    const go = await beat(P, over);
     if (go.state !== "go-live") throw new Error(`premise: the match starts, got ${go.state}`);
     expect((await sessionRow(go.sid)).fixture_id).toBe(fixtureId);
     now += SEC;
