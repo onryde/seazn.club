@@ -48,6 +48,8 @@ import {
 } from "@/lib/swiss-finish-plan";
 import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import { knockoutRefusalText } from "@/lib/knockout-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { undoRefusalText } from "@/lib/undo-refusals";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 
 /** RS007/V380 — the division columns this panel badges above the roster.
@@ -391,6 +393,12 @@ export function EntrantsPanel({
       const knockout = err instanceof ApiV1Error ? knockoutRefusalText(err.code, err.extra, msg) : null;
       if (knockout !== null) {
         setError(knockout);
+        return;
+      }
+      // W5 T10 (R12): a round-robin refusal — a pair's partner changed after play has started (RR_SUBSTITUTE_PARTNER_REFUSED) — said by
+      // its code in the organiser's language, the pointer to Withdraw included, never the server's English.
+      if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
+        setError(undoRefusalText(err.code, err.extra, msg));
         return;
       }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English

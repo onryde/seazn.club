@@ -38,6 +38,11 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * T8b Part 1 (X-WDT-9; RB5-W10, ruling 288): a registrant's OWN withdrawal from the public status door after Start runs the table
  * withdrawal — at 1 of 3 played her lines are all taken out and the hub footnote names the rule (main: only her status changed).
  *
+ * Task 10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3): a league of four PAIRS, started, one match won by the first pair. Swapping one of its
+ * partners for a newcomer is refused 422 RR_SUBSTITUTE_PARTNER_REFUSED and the roster stays; dropping a partner then withdraws the pair
+ * as the entrant — 1 of 3 played is under half, so all three of its lines are taken out (main: the members write succeeded and every
+ * fixture was left standing).
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -49,7 +54,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // T8b Part 2: 1 (an in-match disqualification withdraws the entrant from the league).
   // T8b Part 3: 1 (the Disqualify preview's numbers are the ones the cascade then acts on).
   // Task 9: 1 (a qualifier who leaves after the table completes is cut; the 5th place is seated).
-  const EXPECTED_CHECKS = 12;
+  // Task 10: 1 (a started league's pair: a substitute partner is refused by name; dropping a partner withdraws the pair by the 50 percent rule).
+  const EXPECTED_CHECKS = 13;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -512,6 +518,54 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-CUT-1/X-CUT-3: the 3rd-placed qualifier leaves after the table completes; the proposal and the public schedule seat the 5th, never her" +
         (ok ? "" : ` - div ${dRes.status}, field ${field.length}, stages ${stages.length}, gen ${koGen.status}/${lgGen.status}, start ${started.status}, lines ${table.length}, scored ${scored.join(",")}, done ${JSON.stringify(done ?? null)}, left ${left.status}, proposal ${pRes.status} [${proposed.map((id) => seedOf.get(id)).join(",")}], confirm ${conf.status} ${JSON.stringify(conf.json).slice(0, 200)}, public ${schedRes.status} rows ${pubRows.length} [${seated.split(",").map((id) => seedOf.get(id)).join(",")}], page ${page.status}`),
+      ok,
+    );
+  }
+
+  // Check 13 - Task 10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3): a started league of PAIRS. Own competition (three divisions so far: room for one).
+  {
+    const dRes = await v1(owner, `/api/v1/competitions/${own?.id ?? "no-own-competition"}/divisions`, "POST", {
+      name: "Pairs",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const persons: string[] = [];
+    for (let i = 0; i < 9; i++) {
+      const p = v1data<{ id: string } | undefined>(await v1(owner, "/api/v1/persons", "POST", { full_name: `Pair person ${i + 1} ${tag}` }));
+      persons.push(p?.id ?? "");
+    }
+    const pairs = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        [0, 1, 2, 3].map((i) => ({
+          kind: "pair", display_name: `Pair ${i + 1} ${tag}`, seed: i + 1,
+          members: [{ person_id: persons[2 * i] }, { person_id: persons[2 * i + 1] }],
+        }))),
+    ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "Pairs" }))?.id;
+    await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const first = pairs[0]?.id;
+    const lines = async () =>
+      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const hers = (await lines()).filter((f) => f.home_entrant_id === first || f.away_entrant_id === first);
+    const opp = hers[0]?.home_entrant_id === first ? hers[0]?.away_entrant_id : hers[0]?.home_entrant_id;
+    const walk = await v1(owner, `/api/v1/fixtures/${hers[0]?.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: opp, reason: "walkover" } });
+    const swap = await v1(owner, `/api/v1/entrants/${first}`, "PATCH", { members: [{ person_id: persons[0] }, { person_id: persons[8] }] });
+    const rosterAfterSwap = v1data<{ members?: { person_id: string }[] } | undefined>(await v1(owner, `/api/v1/entrants/${first}`))?.members?.map((m) => m.person_id).sort().join(",");
+    const drop = await v1(owner, `/api/v1/entrants/${first}`, "PATCH", { members: [{ person_id: persons[0] }] });
+    const report = v1data<{ status?: string; cascade?: { policy?: string } } | undefined>(drop);
+    const after = (await lines()).filter((f) => f.home_entrant_id === first || f.away_entrant_id === first);
+    const ok =
+      dRes.status === 201 && pairs.length === 4 && started.status === 200 && hers.length === 3 && walk.status === 201 &&
+      swap.status === 422 && (swap.json as { error?: { code?: string } } | undefined)?.error?.code === "RR_SUBSTITUTE_PARTNER_REFUSED" &&
+      rosterAfterSwap === [persons[0], persons[1]].sort().join(",") &&
+      drop.status === 200 && report?.status === "withdrawn" && report.cascade?.policy === "expunge" &&
+      after.length === 3 && after.every((f) => f.status === "abandoned");
+    w5Check(
+      "w5a X-RP-2/X-RP-3: in a started league a substitute partner is refused by name and changes nothing; dropping a partner withdraws the pair (1 of 3 played: all 3 lines taken out)" +
+        (ok ? "" : ` - div ${dRes.status}, pairs ${pairs.length}, start ${started.status}, hers ${hers.length}, walk ${walk.status}, swap ${swap.status} ${JSON.stringify(swap.json).slice(0, 200)}, roster ${rosterAfterSwap}, drop ${drop.status} ${JSON.stringify(report ?? null).slice(0, 200)}, after ${after.map((f) => f.status).join(",")}`),
       ok,
     );
   }

@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, seedVenueWithCourts, activeOrgIdFromRequest } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
+import { saveRoster, seedPair, seedPlayer, stagePartnerSwap, storedMembers, uiEn } from "./entrant-rename-kit";
 
 // W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21; #837; X-BD-5). A pre-Start Generate on a league used to insert by
 // the engine's POSITIONAL id, so a roster that grew from four to six wrote nine new lines that repeated pairs already drawn and
@@ -655,5 +656,77 @@ test.describe("X-WDT-10 the organiser sees the consequence before disqualifying"
     expect((await sent).status()).toBe(200);
     const after = ((await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[]).filter((f) => f.home_entrant_id === v || f.away_entrant_id === v);
     expect(after.map((f) => f.status), "all five of her lines taken out, as the confirmation said").toEqual(["abandoned", "abandoned", "abandoned", "abandoned", "abandoned"]);
+  });
+});
+
+test.describe("X-RP-2, X-RP-3 a started league's pair cannot change partners; losing one withdraws it", () => {
+  test("the roster editor: a substitute is refused in the console's own words and nothing moves; dropping the partner withdraws the pair and takes its lines out", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Pairs ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+      name: "Doubles",
+      sport_key: "generic",
+      variant_key: "score",
+      config: GENERIC_CONFIG,
+    });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    // The pair under test carries a realistic 43-character name; the three others are plain.
+    const leaverName = "Alexandria Montgomery-Featherstonehaugh III";
+    const keep = await seedPlayer(request, "Keeper");
+    const go = await seedPlayer(request, "Leaver");
+    const newcomer = await seedPlayer(request, "Newcomer");
+    const leaverId = await seedPair(request, divisionId, [keep, go], leaverName);
+    const others: string[] = [];
+    for (let i = 0; i < 3; i++) others.push(await seedPair(request, divisionId, [await seedPlayer(request, `Opp${i}a`), await seedPlayer(request, `Opp${i}b`)]));
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    expect((await generate(request, stageId)).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    const mine = async () => ((await stageFixtures(request, divisionId, stageId)) as (Pairing & { status: string })[]).filter((f) => f.home_entrant_id === leaverId || f.away_entrant_id === leaverId);
+    const lines = await mine();
+    expect(lines, "a league of four: three matches each").toHaveLength(3);
+    const opp = lines[0]!.home_entrant_id === leaverId ? lines[0]!.away_entrant_id! : lines[0]!.home_entrant_id!;
+    const ev = await apiJson(request, `/api/v1/fixtures/${lines[0]!.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: opp, reason: "walkover" } });
+    expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+    const roster = await storedMembers(request, leaverId);
+
+    await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+    await dismissCookieBanner(page);
+    const toggle = page.getByRole("cell", { name: leaverName }).getByRole("button", { name: leaverName, exact: false });
+    await expect(toggle).toBeVisible({ timeout: 20_000 });
+    await toggle.click();
+    // 1. A substitute: refused, in the console's words, and the roster, status and lines stay.
+    await stagePartnerSwap(page, go.name, newcomer.name);
+    const refusedRes = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/entrants/${leaverId}` && res.request().method() === "PATCH", { timeout: 20_000 });
+    await saveRoster(page).click();
+    expect((await refusedRes).status()).toBe(422);
+    const error = page.getByTestId("entrants-error");
+    await expect(error).toHaveText(uiEn["roundrobin.refusal.RR_SUBSTITUTE_PARTNER_REFUSED"]!, { timeout: 20_000 });
+    for (const [w, h] of [[1280, 900], [768, 1024], [320, 640]] as const) {
+      await page.setViewportSize({ width: w, height: h });
+      await expect(error, `@${w}`).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    expect(await storedMembers(request, leaverId), "the roster is as it was").toBe(roster);
+    expect((await apiJson<{ status: string }>(request, `/api/v1/entrants/${leaverId}`)).data!.status).not.toBe("withdrawn");
+    expect((await mine()).map((f) => f.status), "no line moved").not.toContain("abandoned");
+
+    // 2. The partner dropped: the pair withdraws (1 of 3 played is under half: all three lines are taken out).
+    await page.reload();
+    await dismissCookieBanner(page);
+    await toggle.click();
+    const rosterBox = page.getByTestId("entrant-roster");
+    await expect(rosterBox.getByText(go.name, { exact: true })).toBeVisible();
+    await rosterBox.locator("div", { has: page.getByText(go.name, { exact: true }) }).last().getByRole("button", { name: uiEn["entrants.roster.remove"] }).click();
+    const sent = page.waitForResponse((res) => new URL(res.url()).pathname === `/api/v1/entrants/${leaverId}` && res.request().method() === "PATCH", { timeout: 30_000 });
+    await saveRoster(page).click();
+    expect((await sent).status()).toBe(200);
+    await expect.poll(async () => (await apiJson<{ status: string }>(request, `/api/v1/entrants/${leaverId}`)).data!.status, { timeout: 20_000 }).toBe("withdrawn");
+    expect((await mine()).map((f) => f.status), "all three of her lines taken out").toEqual(["abandoned", "abandoned", "abandoned"]);
+    expect(others.length, "anti-vacuity: three opposing pairs").toBe(3);
   });
 });

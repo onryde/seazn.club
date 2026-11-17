@@ -28,7 +28,7 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // One-way edge (stages/ does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
-import { dropEntrantFromRoundRobins, markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { divisionHasStarted, dropEntrantFromRoundRobins, markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
@@ -46,6 +46,8 @@ import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage 
 // A running ladder takes a late player at the bottom of its order (ladder-late-entry.ts, one owner of the rule).
 import { appendToLadderOrder } from "./ladder-late-entry";
 import { admitTableLateEntrant, afterTableLateEntry, hasRootTableStage, type TableAdmission } from "./roundrobin-late-entry";
+import { classifyPairRosterChange } from "@/lib/pair-roster-change";
+import { roundRobinRefusal } from "./roundrobin-refusal";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -986,6 +988,41 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
 }
 
 /**
+ * W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12; rulings 282, 290): what a `members` edit of a PAIR means once its division's root
+ * league or group has started (`hasRootTableStage` + `divisionHasStarted`, the late-entry door's own "running" reading).
+ * - `refuse`: anyone joining (R12a, a substitute partner — a lineup matter, deferred), for a pair that is in the field or would
+ *   be after this patch; and a partner leaving as a departed pair comes back (a Reinstate may not return a pair that is not
+ *   whole). Nothing is written.
+ * - `dissolve`: a partner leaving with nobody joining, for a pair in the field (R12b): the pair withdraws as the entrant.
+ * - `none`: everything else — before Start, a team or an individual, a roster that names the same people, a pair already
+ *   departed that stays so (its record is inert). `patchEntrant` goes on as it always did.
+ * A Reinstate is a `status`-only patch, which never reaches here (no `members`), so the refusal cannot block one.
+ */
+async function pairRosterVerdict(auth: AuthCtx, id: string, patch: PatchEntrant): Promise<PairRosterVerdict> {
+  if (patch.members === undefined) return "none";
+  const next = patch.members.map((m) => m.person_id);
+  return withTenant(auth.orgId, (tx) => pairRosterVerdictTx(tx, id, next, patch.status));
+}
+
+type PairRosterVerdict = "none" | "refuse" | "dissolve";
+
+async function pairRosterVerdictTx(tx: Tx, id: string, next: readonly string[], statusAfter: string | undefined): Promise<PairRosterVerdict> {
+  const [e] = await tx<{ kind: string; status: string; division_id: string }[]>`
+    select kind, status, division_id from entrants where id = ${id}`;
+  if (e === undefined || e.kind !== "pair") return "none";
+  if (!(await hasRootTableStage(tx, e.division_id)) || !(await divisionHasStarted(tx, e.division_id))) return "none";
+  const current = (await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`).map((m) => m.person_id);
+  const change = classifyPairRosterChange(current, next);
+  if (change === "same") return "none";
+  const inField = inTheField(e);
+  const inFieldAfter = inTheField({ status: statusAfter ?? e.status });
+  if (change === "substitutes") return inField || inFieldAfter ? "refuse" : "none";
+  // change === "drops"
+  if (inField) return "dissolve";
+  return inFieldAfter ? "refuse" : "none";
+}
+
+/**
  * `PATCH /entrants/{id}`. W3 T15 (RB3-17, X-SW-23): a disqualification is "withdrawal from that moment" (rulebook §12),
  * so `status: "disqualified"` for an entrant still in the field goes through the withdrawal cascade
  * (`withdrawEntrantCascade(…, { as: "disqualified" })`): their owed boards are settled as a withdrawal settles them, then
@@ -1004,6 +1041,24 @@ export async function patchEntrant(
   id: string,
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut; late_entry?: LateEntryResult }> {
+  // W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12): judged FIRST, before any write and before the disqualification door below —
+  // a roster smuggled in beside `status: "disqualified"` would otherwise be written by that door's own "rest of the patch".
+  const pair = await pairRosterVerdict(auth, id, patch);
+  if (pair === "refuse") throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
+  if (pair === "dissolve") {
+    // The pair IS the entrant: a partner who leaves with nobody joining dissolves it, and it withdraws (or is disqualified, when
+    // that is what the patch said) through the ONE after-Start door, the cascade. The roster itself is not rewritten — the
+    // pair's record stands as it was, and the remaining player enters a new pair with a fresh record (RB5-R2). The rest of the
+    // patch lands first (T15 review m4), so a refused field changes nothing before any fixture surgery.
+    const { withdrawEntrantCascade } = await import("./withdrawal");
+    const rest: PatchEntrant = { ...patch };
+    delete rest.members;
+    delete rest.eligibility_override; // request metadata for the roster this patch no longer writes
+    delete rest.status; // written by the cascade
+    if (Object.keys(rest).length > 0) await writeEntrantPatch(auth, id, rest);
+    const cascade = await withdrawEntrantCascade(auth, id, { as: patch.status === "disqualified" ? "disqualified" : "withdrawn" });
+    return { ...(await getEntrant(auth, id)), cascade };
+  }
   if (patch.status === "disqualified") {
     const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
     if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
@@ -1257,6 +1312,12 @@ export async function syncEntrantRosterFromSquad(
     );
     const eff = await loadEntrantShape(tx, row.division_id);
     assertRosterFits(eff, row.kind, members.length);
+    // W5 T10 (R12): a squad sync rewrites the roster whole, so a started pair's partner cannot change through it either — the
+    // squad that now names someone else, or fewer, is the same edit `patchEntrant` judges. A sync never withdraws a pair on its
+    // own: the organiser withdraws it (the pointer in the refusal), so `dissolve` is a refusal here too.
+    if ((await pairRosterVerdictTx(tx, id, members.map((m) => m.person_id), undefined)) !== "none") {
+      throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
+    }
     await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));
     await tx`delete from entrant_members where entrant_id = ${id}`;
     const warnings = await insertMembers(tx, id, members, {
