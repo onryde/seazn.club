@@ -17,7 +17,7 @@ import { InvalidRunnerTransition, machineNameFor, type RunnerEffect } from "@/se
 import { runnerDeadlineOf } from "@/server/relay/domain/expiry";
 import { createFailureOf, createRefusedBeforeCall, type RunnerSpec } from "@/server/relay/ports";
 import { readFirstInput } from "@/server/relay/secret-columns";
-import { recordEvent } from "@/server/relay/telemetry";
+import { effectLandedSinceEnding, recordEvent } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -204,12 +204,7 @@ export async function finishOwedStop(sessionId: string, deps: SessionDeps): Prom
     return true;
   }
   if (s.runner.state !== "stopping" || !s.runner.machineId) return false;
-  const [landed] = await sql<{ n: number }[]>`
-    select count(*)::int as n from fixture_stream_events
-     where session_id = ${sessionId} and kind = 'effect' and type = 'stop_machine' and result = 'ok'
-       and seq > (select coalesce(max(seq), 0) from fixture_stream_events
-                   where session_id = ${sessionId} and kind = 'transition' and to_state = 'ending')`;
-  if ((landed?.n ?? 0) > 0) return false;
+  if (await effectLandedSinceEnding(sql, sessionId, "stop_machine")) return false;
   await runEffects(s, [{ type: "runner", effect: { type: "stop_machine", signal: RUNNER_STOP_SIGNAL, timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } }], deps);
   return true;
 }

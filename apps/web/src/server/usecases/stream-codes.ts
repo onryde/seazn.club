@@ -238,7 +238,7 @@ type CodeOwner = {
   releasesOnEnding?: true;
 };
 
-/** Fix round 1 (finding 1): the session a beat names (`sid ?? stopped`), so a released court session's phone still hears its
+/** Fix round 1 (finding 1): the session a beat names as running (`sid`; CI on #1242: never `stopped`), so a released court session's phone still hears its
  *  `over` (C1b) before it is refused. Only a uuid is ever read. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

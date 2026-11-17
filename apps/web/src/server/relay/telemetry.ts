@@ -165,6 +165,18 @@ export async function sessionsWhoseCameraWasLive(exec: Exec, sessionIds: readonl
   return new Set(rows.map((r) => r.session_id));
 }
 
+/** Web A fix round 2 (item 1): whether this session's log holds an effect of `type` recorded `ok` AFTER its transition to
+ *  `ending` (the ledger's order, `seq`, never a clock) — the provider call a stop still owes, or not
+ *  (usecases/stream-sessions/apply.ts `finishOwedStop`). A READ, kept beside the writer of the same table (enc-boundary claim 4). */
+export async function effectLandedSinceEnding(exec: Exec, sessionId: string, type: string): Promise<boolean> {
+  const [r] = await exec<{ n: number }[]>`
+    select count(*)::int as n from fixture_stream_events
+     where session_id = ${sessionId} and kind = 'effect' and type = ${type} and result = 'ok'
+       and seq > (select coalesce(max(seq), 0) from fixture_stream_events
+                   where session_id = ${sessionId} and kind = 'transition' and to_state = 'ending')`;
+  return (r?.n ?? 0) > 0;
+}
+
 export interface ProviderCallInput {
   sessionId?: string | null;
   provider: "cloudflare" | "fly" | "stripe";

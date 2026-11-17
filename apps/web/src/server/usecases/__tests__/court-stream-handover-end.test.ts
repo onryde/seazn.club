@@ -12,7 +12,7 @@ vi.mock("@/lib/db", () => {
     }
     return Promise.resolve([{ status: "completed" }]);
   };
-  const sql = Object.assign((s: unknown, ...v: unknown[]) => tag(s, ...v), { begin: async (cb: (tx: typeof tag) => unknown) => cb(tag) });
+  const sql = Object.assign((s: unknown) => tag(s), { begin: async (cb: (tx: typeof tag) => unknown) => cb(tag) });
   return { sql };
 });
 vi.mock("@/server/relay/telemetry", () => ({ recordEvent: async () => undefined }));
