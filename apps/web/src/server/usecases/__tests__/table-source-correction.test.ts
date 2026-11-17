@@ -241,6 +241,13 @@ const newestSlate = async (r: Rig): Promise<{ status: string; seeds: number[] }>
   return { status: p!.status, seeds: [...p!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q) => r.seedOf.get(q.entrantId)!) };
 };
 
+/** The newest proposal's FULL slate as [rank, entrant seed] pairs, rank order: a seat nobody is offered (a departed qualifier's) is
+ *  a rank missing from the list, so a closed-up gap and a dead seat read differently. */
+const newestPairs = async (r: Rig): Promise<{ status: string; pairs: [number, number][] }> => {
+  const p = await getSeedProposal(r.auth, r.koId);
+  return { status: p!.status, pairs: [...p!.computed.qualifiers].sort((a, b) => a.rank - b.rank).map((q): [number, number] => [q.rank, r.seedOf.get(q.entrantId)!]) };
+};
+
 /** The destination's seats, by seed, in line order (null = empty). */
 async function seats(r: Rig): Promise<(number | null)[][]> {
   return (await rowsOf(r.koId)).map((f) => [f.home_entrant_id, f.away_entrant_id].map((id) => (id === null ? null : r.seedOf.get(id)!)));
@@ -597,7 +604,7 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     await expectDayOne(r);
     const now = await newestSlate(r);
     expect(now.status).toBe("draft");
-    expect(now.seeds.slice(0, 3), "re-seeded from the corrected table: E2, E1, E3").toEqual([2, 1, 3]);
+    expect((await newestPairs(r)).pairs, "re-seeded from the corrected table: E2, E1, E3 at seeds 1-3, seed 4 the departed E4's").toEqual([[1, 2], [2, 1], [3, 3]]);
     // The same correction with nobody departed (the plain full cut) stales it too.
     const plain = await rig(FULL);
     await correct(plain, 1, 2, 2);
@@ -633,12 +640,61 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     await patchEntrant(b.auth, b.idOf.get(4)!, { status: "withdrawn" });
     await correct(b, 1, 2, 2);
     expect(await statusOf(b.confirmedId)).toBe("stale");
-    expect((await newestSlate(b)).seeds.slice(0, 3)).toEqual([2, 1, 3]);
+    expect((await newestPairs(b)).pairs, "E2, E1, E3 at seeds 1-3, seed 4 the departed E4's").toEqual([[1, 2], [2, 1], [3, 3]]);
   });
+
+  // Review round 3 (I-A): the same rule inside a MIDDLE seat. A departed qualifier of an exhausted cut keeps the seat her results
+  // EARNED (RB5-K6 + RB4-E7/R6): the proposal offers nobody at it and the confirm walks it over - it is not closed up and her
+  // place never moves to the bottom, which would draw a short cut (a bye on a page playoff, RB4-S2) and shift every seed below her.
+  // Table by hand, the favourite winning every line: E1 9, E2 6, E3 3, E4 0.
+  //   page playoff: E2 leaves, then E4 beats E3 -> E1 9, E2 6 (out), E4 3, E3 0: seeds 1 E1, 2 E2 (dead), 3 E4, 4 E3.
+  //     Q1 = seed 1 v seed 2 is E1's walkover; E = seed 3 v seed 4 is E4 v E3 (RB4-S2).
+  //   stepladder: E3 leaves, then E2 beats E1 -> E2 9, E1 6, E3 3 (out), E4 0: seeds 1 E2, 2 E1, 3 E3 (dead), 4 E4.
+  //     R1 = seed 4 v seed 3 is E4's walkover over the dead seat (RB4-S1).
+  const MIDDLE = [
+    { key: "group_playoffs", leaves: 2, fix: [4, 3, 4], pairs: [[1, 1], [3, 4], [4, 3]], walkover: { winner: 1 } },
+    { key: "group_stepladder", leaves: 3, fix: [1, 2, 2], pairs: [[1, 2], [2, 1], [4, 4]], walkover: { winner: 4 } },
+    // The survivors keep their ORDER (E1, E3, E4) and only the dead seat moves: E3 beats E2 -> E1 9, E3 6, E2 3 (out), E4 0, so E3
+    // and E4 sit one seat higher and lower than before. Seats 1 E1, 2 E3, 3 E2 (dead), 4 E4: Q1 = E1 v E3, E = dead v E4 (E4's walkover).
+    { key: "group_playoffs", leaves: 2, fix: [3, 2, 3], pairs: [[1, 1], [2, 3], [4, 4]], walkover: { winner: 4 } },
+  ] as const;
+  let middleChecked = 0;
+  for (const m of MIDDLE) {
+    it(`X-CUT-4 ${m.key} exhausted (E${m.fix[2]} wins E${m.fix[0]} v E${m.fix[1]}): a departed MIDDLE seat then a correction re-proposes the earned seats, the dead one empty, and the confirm walks it over`, async () => {
+      // The cascade door walks her line over on the spot, which STARTS the finals: a correction after it is the desk's warning, not
+      // a re-proposal (RB5-K6 after the start). The bare PATCH settles nothing, so the correction is still before the start.
+      const started = await rig(finalsRow(m.key, 4));
+      await withdrawEntrantCascade(started.auth, started.idOf.get(m.leaves)!);
+      await correct(started, m.fix[0], m.fix[1], m.fix[2]);
+      expect(await statusOf(started.confirmedId), "after the cascade's walkover the finals have started: the bracket stands").toBe("confirmed");
+      middleChecked++;
+      {
+        const door = "patch";
+        const r = await rig(finalsRow(m.key, 4));
+        expect((await newestPairs(r)).pairs, "premise: the four seats").toEqual([[1, 1], [2, 2], [3, 3], [4, 4]]);
+        await patchEntrant(r.auth, r.idOf.get(m.leaves)!, { status: "withdrawn" });
+        expect(await statusOf(r.confirmedId), `${door}: nobody to take her place, it stands`).toBe("confirmed");
+        await correct(r, m.fix[0], m.fix[1], m.fix[2]);
+        expect(await statusOf(r.confirmedId), `${door}: the correction moved the seeding`).toBe("stale");
+        await expectDayOne(r);
+        const now = await newestPairs(r);
+        expect(now.status).toBe("draft");
+        expect(now.pairs, `${door}: the corrected table's seats, her earned seat offered to nobody`).toEqual(m.pairs);
+        const fresh = await getSeedProposal(r.auth, r.koId);
+        await confirmResolvingTies(r.auth, r.koId, fresh!.id);
+        const win = r.idOf.get(m.walkover.winner)!;
+        const line = (await rowsOf(r.koId)).find((x) => [x.home_entrant_id, x.away_entrant_id].includes(win) && x.round_no === 1);
+        expect(line, `${door}: E${m.walkover.winner} holds a day-one line`).toBeTruthy();
+        expect(line!.outcome, `${door}: the dead seat is a walkover for E${m.walkover.winner}`).toMatchObject({ winner: win });
+        middleChecked++;
+      }
+    }, 180_000);
+  }
 
   it("X-CUT-4 the sweep ran every sport and every door", () => {
     expect(swept, "anti-vacuity: both sports ran the correction").toBe(2);
     expect(doorChecks, "anti-vacuity: every door ran").toBe(doors.length);
     expect(finalsChecked, "anti-vacuity: two finals kinds x (two exhausted doors + one backfill)").toBe(FINALS.length * 3);
+    expect(middleChecked, "anti-vacuity: two finals kinds x two doors").toBe(MIDDLE.length * 2);
   });
 });

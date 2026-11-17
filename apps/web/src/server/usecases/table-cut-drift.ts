@@ -38,6 +38,16 @@ export async function tableCutToday(
   sourceStageId: string,
   opts: { asResultsMake?: boolean; alsoDeparted?: string } = {},
 ): Promise<string[]> {
+  return (await tableSeatsToday(tx, dependent, sourceStageId, opts)).map((q) => q.entrantId);
+}
+
+/** `tableCutToday` with each entrant's SEED: a seat a departed qualifier holds is a seed nobody else takes. */
+async function tableSeatsToday(
+  tx: Tx,
+  dependent: BracketDependent,
+  sourceStageId: string,
+  opts: { asResultsMake?: boolean; alsoDeparted?: string } = {},
+): Promise<{ seed: number; entrantId: string }[]> {
   const asResultsMake = opts.asResultsMake === true;
   const also = new Set(opts.alsoDeparted === undefined ? [] : [opts.alsoDeparted]);
   const { shapes, tables, resolved } = await sourcesToTables(tx, dependent, dependent.progression.sources, {
@@ -51,7 +61,7 @@ export async function tableCutToday(
   return [...today.qualifiers]
     .filter((q) => resolved[q.sourceIndex]?.id === sourceStageId)
     .sort((a, b) => a.seed - b.seed)
-    .map((q) => q.entrantId);
+    .map((q) => ({ seed: q.seed, entrantId: q.entrantId }));
 }
 
 /**
@@ -74,19 +84,23 @@ export async function tableSlateStands(
   if (named.length === 0) return true;
   if (departing !== undefined && !named.includes(departing)) return true;
   try {
-    const today = await tableCutToday(tx, dependent, sourceStageId, { alsoDeparted: departing });
+    const seats = await tableSeatsToday(tx, dependent, sourceStageId, { alsoDeparted: departing });
+    const out = await departedEntrantIds(tx, dependent.division_id);
+    if (departing !== undefined) out.add(departing);
     // EXHAUSTED (RB4-E7, R6 "else walkover"): a DEPARTURE with fewer ELIGIBLE entrants left than the slate has seats - nobody to
-    // take her place (the cut reads a true shortfall into a departed row, so `today` still has the seats; it is the eligible
-    // ones that run out). Re-proposing would offer a short cut (a page playoff with a bye, breaking RB4-S2), so the confirmed
-    // proposal stands and the seat is the cascade's walkover. ONLY for a departure: a correction (or a Reinstate) that re-orders
-    // an exhausted cut changes the seeding, which drives the bracket (RB5-K6), and follows the comparison below.
-    if (departing !== undefined) {
-      const out = await departedEntrantIds(tx, dependent.division_id);
-      out.add(departing);
-      if (today.filter((id) => !out.has(id)).length < named.length) return true;
-    }
-    // Someone is left to backfill: the cut as it reads today (a departing qualifier already out of it) against the slate.
-    return today.length === named.length && today.every((id, i) => id === named[i]);
+    // take her place (a cut that runs out keeps her at her earned seat, so `seats` still names her; it is the eligible ones that
+    // run out). Re-proposing would offer a short cut (a page playoff with a bye, breaking RB4-S2), so the confirmed proposal
+    // stands and the seat is the cascade's walkover. ONLY for a departure: a correction (or a Reinstate) that re-orders an
+    // exhausted cut changes the seeding, which drives the bracket (RB5-K6), and follows the comparison below.
+    if (departing !== undefined && seats.filter((q) => !out.has(q.entrantId)).length < named.length) return true;
+    // Someone is left to backfill, or nobody departed: the cut as it reads today against the slate, seat by seat. A departed
+    // entrant's seat is compared on neither side (RB4-V3: it is a walkover, no correction), so what is checked is who holds each
+    // OTHER seat - a dead seat that stays where it was earned moves nobody, and one a correction shifts moves everybody below it.
+    const todaySeats = seats.filter((q) => !out.has(q.entrantId));
+    const slateSeats = slate.qualifiers
+      .filter((q) => q.source.stageId === sourceStageId && !out.has(q.entrantId))
+      .sort((a, b) => a.rank - b.rank);
+    return todaySeats.length === slateSeats.length && todaySeats.every((q, i) => q.seed === slateSeats[i]!.rank && q.entrantId === slateSeats[i]!.entrantId);
   } catch (err) {
     if (err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE") return true;
     throw err;
