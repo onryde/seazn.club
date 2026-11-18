@@ -13,6 +13,7 @@ import { WEBHOOK_KEY_REFETCH_MIN_MS } from "@/server/external-play/video/webhook
 //  - A 400 logs the event name and the body's top-level KEYS, never a value (a participant's `customParticipantId` is a person
 //    UUID) and never the body or the signature.
 //  - A throw out of the usecase is a storage failure that rolled the transaction back: 500, so the vendor retries the same uuid.
+//  - A 401 or 503 logs ONE warn carrying the receipt's reason (never a header or the body); a 400 logs the shape above.
 
 const KEY_RETRY_AFTER_S = String(Math.ceil(WEBHOOK_KEY_REFETCH_MIN_MS / 1000));
 
@@ -46,9 +47,9 @@ export async function POST(req: Request): Promise<NextResponse> {
       uuid: req.headers.get("rtk-uuid"),
     });
   } catch (err) {
-    // The error's name and code only: a driver error can carry bound parameters.
-    const e = err as { name?: unknown; code?: unknown };
-    log.error({ errName: typeof e?.name === "string" ? e.name : typeof err, code: typeof e?.code === "string" ? e.code : undefined }, "realtimekit-webhook: processing failed");
+    // `{ err }`, the house shape: the logger's serializer (logger.ts dbSafeErr) strips what a driver error echoes back (the failing row,
+    // the bound parameters, the statement) and keeps the name, message, code and stack. Never a hand-picked subset, never the body.
+    log.error({ err }, "realtimekit-webhook: processing failed");
     return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 
@@ -59,8 +60,12 @@ export async function POST(req: Request): Promise<NextResponse> {
       log.warn({ shape: shapeOf(rawBody) }, "realtimekit-webhook: body is not a RealtimeKit event");
       return NextResponse.json({ error: "Unreadable body" }, { status: 400 });
     case 401:
+      // The reason only (no_signature | no_uuid | signature): never a header value, never the body. One line per refusal, so a forged
+      // flood is visible to whoever reads the logs.
+      log.warn({ reason: receipt.reason }, "realtimekit-webhook: delivery refused");
       return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
     case 503:
+      log.warn({ reason: receipt.reason }, "realtimekit-webhook: signing key unavailable, the vendor will retry");
       return NextResponse.json({ error: "Key unavailable" }, { status: 503, headers: { "Retry-After": KEY_RETRY_AFTER_S } });
   }
 }

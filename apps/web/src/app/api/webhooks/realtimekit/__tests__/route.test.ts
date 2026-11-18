@@ -21,6 +21,12 @@ import * as signatureModule from "@/server/external-play/video/webhook-signature
 import { putVideoMeeting, putVideoParticipant, seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 import { POST } from "../route";
 
+/** The repo's real pino `err` serializer (logger.ts is mocked above): what a `{ err }` log field becomes on its way to stdout and Sentry. */
+const realErrSerializer = async () => {
+  const actual = await vi.importActual<typeof import("@/server/logger")>("@/server/logger");
+  return actual.LOGGER_OPTIONS.serializers.err;
+};
+
 const DB = !!process.env.DATABASE_URL;
 const T0 = new Date("2026-11-17T10:00:00.000Z");
 const URL_ = "http://x/api/webhooks/realtimekit";
@@ -179,6 +185,8 @@ describe.skipIf(!DB)("POST /api/webhooks/realtimekit", () => {
         checked.push(res.status);
       }
       expect(checked).toHaveLength(4);
+      // one warn per refusal, carrying the reason and nothing else (the order is the loop's: no signature, no uuid, empty signature, neither)
+      expect(logMock.warn.mock.calls.map((c) => c[0])).toEqual([{ reason: "no_signature" }, { reason: "no_uuid" }, { reason: "no_signature" }, { reason: "no_signature" }]);
       expect(hits).toBe(0);
       expect(await presenceCount(held)).toBe(0);
       expect(await deliveryCount()).toBe(before);
@@ -192,6 +200,10 @@ describe.skipIf(!DB)("POST /api/webhooks/realtimekit", () => {
       const res = await post({ bytes, signature: forged, uuid });
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({ error: "Invalid signature" });
+      expect(logMock.warn.mock.calls.map((c) => c[0])).toEqual([{ reason: "signature" }]);
+      const logged = JSON.stringify(Object.values(logMock).flatMap((m) => m.mock.calls));
+      expect(logged).not.toContain(forged);
+      expect(logged).not.toContain(bytes.toString("utf8"));
       expect(hits).toBe(1);
       expect(await presenceCount(held)).toBe(0);
       expect(await deliveryRow(uuid)).toHaveLength(0);
@@ -227,6 +239,45 @@ describe.skipIf(!DB)("POST /api/webhooks/realtimekit", () => {
     });
   });
 
+  describe("400 shapes", () => {
+    it("the logged shape is capped: 25 long keys log 20 keys of at most 64 chars each, and no value", async () => {
+      const longKey = (i: number) => `${"k".repeat(80)}${i}`;
+      const obj: Record<string, string> = { event: "meeting.participantJoined" }; // a known event missing its participant: signed, parsed, refused
+      for (let i = 0; i < 24; i++) obj[longKey(i)] = "VALUE-MUST-NOT-BE-LOGGED";
+      expect(Object.keys(obj), "premise: 25 keys").toHaveLength(25);
+      const res = await send(delivery(Buffer.from(JSON.stringify(obj))));
+      expect(res.status).toBe(400);
+      const shape = (logMock.warn.mock.calls[0]![0] as { shape: { event: string | null; keys: string[] } }).shape;
+      expect(shape.event).toBe("meeting.participantJoined");
+      expect(shape.keys).toHaveLength(20);
+      expect(shape.keys.every((k) => k.length <= 64), "no key longer than 64").toBe(true);
+      expect(shape.keys.filter((k) => k.length === 64), "the 19 long keys among the 20 kept were cut to exactly 64").toHaveLength(19);
+      expect(JSON.stringify(Object.values(logMock).flatMap((m) => m.mock.calls))).not.toContain("VALUE-MUST-NOT-BE-LOGGED");
+    });
+
+    it("a signed body that is an array, a scalar or null is 400 and logs an empty shape (no event, no keys), not the elements", async () => {
+      let checked = 0;
+      for (const raw of ['["ELEMENT-MARKER", "x"]', "42", "null", '"STRING-MARKER"']) {
+        logMock.warn.mockClear();
+        const res = await send(delivery(Buffer.from(raw)));
+        expect(res.status, raw).toBe(400);
+        expect(logMock.warn.mock.calls.map((c) => c[0]), raw).toEqual([{ shape: { event: null, keys: [] } }]);
+        expect(JSON.stringify(logMock.warn.mock.calls), raw).not.toMatch(/MARKER/);
+        checked += 1;
+      }
+      expect(checked).toBe(4);
+    });
+
+    it("a signed EMPTY body is 400 (nothing parses), logs shape null, and writes no delivery row", async () => {
+      const d = delivery(Buffer.alloc(0));
+      const res = await send(d);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: "Unreadable body" });
+      expect(logMock.warn.mock.calls.map((c) => c[0])).toEqual([{ shape: null }]);
+      expect(await deliveryRow(d.uuid)).toHaveLength(0);
+    });
+  });
+
   describe("200 ignored", () => {
     it("a signed event naming a meeting we do not hold is 200 ignored and NO row of any kind is written", async () => {
       const foreign = `mtg-foreign-${randomUUID().slice(0, 8)}`;
@@ -258,6 +309,7 @@ describe.skipIf(!DB)("POST /api/webhooks/realtimekit", () => {
       expect(res.status).toBe(503);
       expect(res.headers.get("retry-after")).toBe("60");
       expect(await res.json()).toEqual({ error: "Key unavailable" });
+      expect(logMock.warn.mock.calls.filter((c) => (c[0] as { reason?: string }).reason === "key_unavailable"), "one route warn with the receipt's reason").toHaveLength(1);
       expect(hits).toBeGreaterThan(0);
       expect(await presenceCount(held)).toBe(0);
       expect(await deliveryRow(d.uuid)).toHaveLength(0);
@@ -284,19 +336,43 @@ describe.skipIf(!DB)("POST /api/webhooks/realtimekit", () => {
   });
 
   describe("500", () => {
-    it("when the receiver throws, so the vendor retries; the body and error text stay out of the log", async () => {
-      const spy = vi.spyOn(receiverModule, "receiveRealtimeKitWebhook").mockRejectedValueOnce(Object.assign(new Error("boom BODY-MARKER"), { code: "XX000" }));
-      const d = delivery(Buffer.from(eventBody({ meetingId: held })));
+    it("when the receiver throws, so the vendor retries; the error is logged as { err } and, through the logger's own serializer, carries no bound parameter, row or statement", async () => {
+      const driverError = Object.assign(new Error("insert failed"), {
+        code: "XX000",
+        parameters: ["PARAMS-MARKER"],
+        detail: "Failing row contains (DETAIL-MARKER)",
+        query: "insert into t values ($1) QUERY-MARKER",
+      });
+      const spy = vi.spyOn(receiverModule, "receiveRealtimeKitWebhook").mockRejectedValueOnce(driverError);
+      const d = delivery(Buffer.from(eventBody({ meetingId: held, extra: { note: "BODY-MARKER" } })));
       const res = await send(d);
       expect(spy).toHaveBeenCalledTimes(1);
       expect(res.status).toBe(500);
       expect(await res.json()).toEqual({ error: "Processing failed" });
       expect(logMock.error).toHaveBeenCalledTimes(1);
-      expect(logMock.error.mock.calls[0]![0]).toEqual({ errName: "Error", code: "XX000" });
-      expect(JSON.stringify(Object.values(logMock).flatMap((m) => m.mock.calls))).not.toContain("BODY-MARKER");
+      const fields = logMock.error.mock.calls[0]![0] as { err: unknown };
+      expect(Object.keys(fields), "logged as { err } and nothing else (no hand-picked subset)").toEqual(["err"]);
+      expect(fields.err).toBe(driverError);
+      // What reaches stdout: the line's fields through the REAL serializer. The marker-carrying fields must be gone, the diagnosis kept.
+      const printed = (await realErrSerializer())(fields.err) as Record<string, unknown>;
+      const text = JSON.stringify(printed);
+      for (const marker of ["PARAMS-MARKER", "DETAIL-MARKER", "QUERY-MARKER"]) expect(text, marker).not.toContain(marker);
+      expect(printed).toMatchObject({ type: "Error", message: "insert failed", code: "XX000" });
+      // the request body and the signature are never in any log call
+      const everything = JSON.stringify(Object.values(logMock).flatMap((m) => m.mock.calls));
+      expect(everything).not.toContain("BODY-MARKER");
+      expect(everything).not.toContain(d.signature);
       // the throw rolled nothing in: the vendor's retry of the same uuid applies
       expect(await deliveryRow(d.uuid)).toHaveLength(0);
       expect(await (await send(d)).json()).toEqual({ received: true, outcome: "applied" });
+    });
+
+    it("a throw that is not an Error (a string) is still a 500 and one error line", async () => {
+      vi.spyOn(receiverModule, "receiveRealtimeKitWebhook").mockRejectedValueOnce("just a string");
+      const res = await send(delivery(Buffer.from(eventBody({ meetingId: held }))));
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({ error: "Processing failed" });
+      expect(logMock.error).toHaveBeenCalledTimes(1);
     });
   });
 });
