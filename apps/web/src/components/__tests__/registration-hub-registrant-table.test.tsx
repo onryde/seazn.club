@@ -190,6 +190,32 @@ describe("renderRegistrantStatusCell — waitlist position (task 4)", () => {
 // only then; online-seat-gate-waitlist.test.ts pins that against the real walk). Final review m1: the chip is about the SKIP, a moment
 // that has passed - "Skipped on 14 Nov: Lichess wasn't linked" - so it stays true after the player links, which re-runs nothing. The
 // date is written in the org's zone, the hub's own spelling (`fmtDate`, en-GB on every organiser surface).
+// Registration defects fix round 1 I2: the LIST tells a chargeback too, not only the detail panel. Open and lost get a chip (the
+// console's own copy); won gets none (nothing was taken).
+describe("renderRegistrantStatusCell - dispute chips (fix round 1 I2)", () => {
+  const chips = (r: RegistrationListRow) =>
+    walk(renderRegistrantStatusCell(r, dict, ORG_TZ)).filter((e) => "data-registration-hub-registrant-dispute" in propsOf(e));
+
+  it("open: the disputed chip; lost: the dispute-lost chip with its explanation as the title; won and never-disputed: no chip", () => {
+    const open = chips(row({ dispute: "open", disputed_at: new Date("2026-02-01T00:00:00Z") }));
+    const lost = chips(row({ dispute: "lost", disputed_at: new Date("2026-02-01T00:00:00Z") }));
+    expect(open).toHaveLength(1);
+    expect(propsOf(open[0]!)["data-registration-hub-registrant-dispute"]).toBe("open");
+    expect(textOf(open[0]!)).toBe(t(dict, "reg.chip.disputed"));
+    expect(lost).toHaveLength(1);
+    expect(propsOf(lost[0]!)["data-registration-hub-registrant-dispute"]).toBe("lost");
+    expect(textOf(lost[0]!)).toBe(t(dict, "reg.chip.disputeLost"));
+    expect(propsOf(lost[0]!).title).toBe(t(dict, "reg.chip.disputeLostTitle"));
+    expect(chips(row({ dispute: "won" })), "won: nothing was taken, no list chip").toHaveLength(0);
+    expect(chips(row({ dispute: null })), "never disputed").toHaveLength(0);
+  });
+
+  it("the chip sits beside the status pill, which is still there (a disputed entry keeps its status)", () => {
+    const tree = walk(renderRegistrantStatusCell(row({ status: "confirmed", dispute: "open" }), dict, ORG_TZ));
+    expect(tree.some((e) => propsOf(e)["data-registration-hub-registrant-status"] === "confirmed")).toBe(true);
+  });
+});
+
 describe("renderRegistrantStatusCell — skipped by an automatic promotion (walk-fix F16, final review m1)", () => {
   const SKIPPED = new Date("2026-11-14T10:00:00Z");
   const chip = (r: RegistrationListRow, d = dict, tz = ORG_TZ) =>

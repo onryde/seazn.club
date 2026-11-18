@@ -102,7 +102,7 @@ export function renderRegistrantKindCell(
  * waitlist-queue.tsx to avoid re-introducing.
  */
 export function renderRegistrantStatusCell(
-  row: Pick<RegistrationListRow, "status" | "waitlist_position" | "promotion_skipped_at">,
+  row: Pick<RegistrationListRow, "status" | "waitlist_position" | "promotion_skipped_at" | "dispute">,
   dict: Dict,
   /** The org's zone (`RegistrationHubRegistrantTableContext.orgTz`): the skip chip's date is written in it. */
   orgTz: string,
@@ -115,6 +115,26 @@ export function renderRegistrantStatusCell(
       >
         {t(dict, `reg.hub.registrants.status.${row.status}`)}
       </span>
+      {/* A chargeback, told in the LIST as well as the panel (registration defects fix round 1 I2): open (amber, Stripe is still
+          deciding) and lost (rose, the money is gone). Won carries no chip: nothing was taken, and the panel says so. The chips reuse
+          the console's own copy (`reg.chip.disputed`, `reg.chip.disputeLost`); the lost one's sentence rides as a title. */}
+      {row.dispute === "open" && (
+        <span
+          data-registration-hub-registrant-dispute="open"
+          className="inline-flex w-fit items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800"
+        >
+          {t(dict, "reg.chip.disputed")}
+        </span>
+      )}
+      {row.dispute === "lost" && (
+        <span
+          data-registration-hub-registrant-dispute="lost"
+          title={t(dict, "reg.chip.disputeLostTitle")}
+          className="inline-flex w-fit items-center rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-800"
+        >
+          {t(dict, "reg.chip.disputeLost")}
+        </span>
+      )}
       {row.status === "waitlisted" && row.waitlist_position !== null && (
         <span className="text-xs tabular-nums text-slate-500">
           {t(dict, "reg.hub.registrants.table.waitlistPosition", { position: row.waitlist_position })}

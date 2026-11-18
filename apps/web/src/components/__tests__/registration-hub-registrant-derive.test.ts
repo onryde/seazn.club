@@ -156,10 +156,16 @@ describe("deriveRegistrantPaymentState - dispute outcome (registration defects i
   const LOST = { ...PAYMENT_BASE, disputed_at: new Date(), dispute: "lost" as const, refunded_cents: 1500 };
   const WON = { ...PAYMENT_BASE, disputed_at: null, dispute: "won" as const, status: "confirmed" as const, entry_payment_intent_id: "pi_1" };
 
-  it("open, lost and won read as three different states: Disputed, Dispute lost, and the payment it is", () => {
+  it("open, lost and won read as three different states: Disputed, Dispute lost, Paid - dispute won", () => {
     const states = [deriveRegistrantPaymentState(OPEN), deriveRegistrantPaymentState(LOST), deriveRegistrantPaymentState(WON)];
-    expect(states).toEqual(["disputed", "disputeLost", "paid"]);
+    expect(states).toEqual(["disputed", "disputeLost", "disputeWon"]);
     expect(new Set(states).size, "three outcomes, three states").toBe(3);
+  });
+
+  it("a WON dispute whose money was later refunded reads as the refund; a WON one never reads as plain paid", () => {
+    expect(deriveRegistrantPaymentState({ ...WON, refunded_cents: 1500 })).toBe("refunded");
+    expect(deriveRegistrantPaymentState({ ...WON, refunded_cents: 500 })).toBe("partiallyRefunded");
+    expect(deriveRegistrantPaymentState(WON)).not.toBe("paid");
   });
 
   it("a lost dispute beats the refunded state it also implies (refunded_cents is set by the loss)", () => {

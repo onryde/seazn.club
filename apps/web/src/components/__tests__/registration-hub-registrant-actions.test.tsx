@@ -15,7 +15,7 @@
 // ever actually mounted here.
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
@@ -415,9 +415,16 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     expect(island.text()).toContain("Something went wrong");
   });
 
-  it("promote: hides itself once clicked, and a success shows a generic 'promoted' message rather than guessing a specific resulting status", async () => {
+  it("promote: hides itself once the request SUCCEEDS (not while it is in flight), and a success shows a generic 'promoted' message rather than guessing a specific resulting status", async () => {
+    const d = deferred<unknown>();
+    net.next.set("promote", d.promise);
     const island = mount({ status: "waitlisted", approval: "manual" });
-    await (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    const click = (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    // In flight: the button is still there, busy ("Promoting..."), and says nothing is promoted yet.
+    await vi.waitFor(() => expect(textOf(findAction(island, "promote")!)).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoting")));
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    d.resolve({});
+    await click;
     expect(findAction(island, "promote")).toBeUndefined();
     expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
     expect(nav.refresh).toHaveBeenCalledTimes(1);
@@ -429,7 +436,7 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     const island = mount({ status: "waitlisted", approval: "manual" });
 
     const click = (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
-    await vi.waitFor(() => expect(findAction(island, "promote")).toBeUndefined());
+    await vi.waitFor(() => expect(textOf(findAction(island, "promote")!)).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoting")));
 
     d.reject(new ApiV1Error("Division is at capacity", 422, "ERROR"));
     await click;
@@ -469,7 +476,7 @@ describe("RegistrationHubRegistrantActions - promote into a full division", () =
     expect(confirmMock.fn).toHaveBeenCalledTimes(1);
     expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
       title: t(uiEn, "reg.promote.overCapacity.title"),
-      body: t(uiEn, "reg.promote.overCapacity.body"),
+      body: t(uiEn, "reg.promote.overCapacity.body", { taken: 2, capacity: 2 }),
       confirmLabel: t(uiEn, "reg.promote.overCapacity.label"),
     });
     expect(promoteCalls().map((c) => c.json)).toEqual([
@@ -478,6 +485,53 @@ describe("RegistrationHubRegistrantActions - promote into a full division", () =
     ]);
     expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
     expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("the dialog says how full the division is, from the refusal's own numbers (8 of 8, not the 2 of 2 of another test)", async () => {
+    net.next.set("promote", Promise.reject(new ApiV1Error("over capacity", 409, PROMOTE_OVER_CAPACITY_CODE, { capacity: 8, taken: 8 })));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    const body = (confirmMock.fn.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain("8 of 8 places are taken");
+    expect(body).not.toContain("{taken}");
+  });
+
+  it("while the dialog is OPEN nothing has been promoted: the Promote button is still there, not 'Promoting...', and no success is shown (M2)", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    const island = mount({ status: "waitlisted" });
+    const during: { button: boolean; label: string; text: string }[] = [];
+    confirmMock.fn.mockImplementation(async () => {
+      const button = findAction(island, "promote");
+      during.push({
+        button: !!button,
+        label: button ? textOf(button) : "",
+        text: island.text(),
+      });
+      return false;
+    });
+    await clickPromote(island);
+    expect(during, "the dialog opened once").toHaveLength(1);
+    expect(during[0]!.button, "the button is not hidden while the organiser decides").toBe(true);
+    expect(during[0]!.label).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promote"));
+    expect(during[0]!.label).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoting"));
+    expect(during[0]!.text).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+  });
+
+  it("after a confirmed, successful promotion the button is gone (it hid only once the request succeeded)", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(findAction(island, "promote")).toBeFalsy();
+  });
+
+  it("a 409 over-capacity refusal WITHOUT its numbers is not asked about: it is shown as a failure, nothing is promoted", async () => {
+    net.next.set("promote", Promise.reject(new ApiV1Error("no numbers", 409, PROMOTE_OVER_CAPACITY_CODE, {})));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(promoteCalls()).toHaveLength(1);
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(findAction(island, "promote")).toBeTruthy();
   });
 
   it("a NO resends nothing, shows no success, and the Promote button is back", async () => {

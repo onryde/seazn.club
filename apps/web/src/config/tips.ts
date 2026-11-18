@@ -89,7 +89,7 @@ export const TIPS = {
     // msg(`tips.${id}.body`) from the four dictionaries; this is the source of
     // truth the en dictionary mirrors, and lib/__tests__/dictionary-copy-truth
     // asserts the two are identical so a fix here can never be cosmetic.
-    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 5% a free organisation pays.",
+    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee rate instead of the one a free organisation pays; the current rates are on the pricing page.",
     helpSlug: "billing/groups",
   },
   // Held back when the tips landed, because quantity_paid was written by

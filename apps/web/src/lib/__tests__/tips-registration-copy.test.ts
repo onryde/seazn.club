@@ -52,3 +52,22 @@ describe("registration.platform-fee tip", () => {
     expect(checked).toBe(5);
   });
 });
+
+// Fix round 1 M6: the extra-organisation tip typed the entry-fee percentages ("2% on Pro, instead of the 5%") by hand, the same retype-goes-stale
+// defect as the platform-fee tip. It now carries no percentage and sends the reader to the pricing page.
+describe("billing.extra-org tip", () => {
+  it("states no entry-fee percentage (the plan table is the source) and sends the reader to the pricing page, in every locale and in tips.ts", () => {
+    const bodies = [
+      ...LOCALES.map((l) => ({ where: l, body: ui(l)["tips.billing.extra-org.body"]! })),
+      { where: "tips.ts", body: TIPS["billing.extra-org"].body },
+    ];
+    let checked = 0;
+    for (const { where, body } of bodies) {
+      expect(body, `${where}: tip exists`).toBeTruthy();
+      expect(body, `${where}: no hand-typed percentage`).not.toMatch(/\d\s?%/);
+      expect(body.toLowerCase(), `${where}: points to the pricing page`).toMatch(/pricing|tarifs|precios|prijzen/);
+      checked += 1;
+    }
+    expect(checked).toBe(5);
+  });
+});

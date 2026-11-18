@@ -110,6 +110,7 @@ export const CONSENT_STATUS_STYLE: Record<ConsentStatus, string> = {
 export type RegistrantPaymentState =
   | "disputed"
   | "disputeLost"
+  | "disputeWon"
   | "refunded"
   | "partiallyRefunded"
   | "waitlisted"
@@ -123,6 +124,7 @@ export type RegistrantPaymentState =
 export const REGISTRANT_PAYMENT_STATE_KEY: Record<RegistrantPaymentState, DictionaryKey> = {
   disputed: "reg.hub.registrants.detail.paymentState.disputed",
   disputeLost: "reg.chip.disputeLost",
+  disputeWon: "reg.hub.registrants.detail.paymentState.disputeWon",
   refunded: "reg.hub.registrants.detail.paymentState.refunded",
   partiallyRefunded: "reg.hub.registrants.detail.paymentState.partiallyRefunded",
   waitlisted: "reg.hub.registrants.detail.paymentState.waitlisted",
@@ -142,7 +144,7 @@ export const REGISTRANT_PAYMENT_STATE_KEY: Record<RegistrantPaymentState, Dictio
  *
  * Precedence, checked in order: a dispute wins over everything (Stripe has
  * already pulled the money back pending resolution; once LOST it reads "Dispute lost · refunded"); then refunded/partially
- * refunded; then a WAITLISTED entry reads "waitlisted", never "free" (RS005
+ * refunded; then a WON dispute ("Paid · dispute won"); then a WAITLISTED entry reads "waitlisted", never "free" (RS005
  * F2 finding 2, below); then a genuinely zero-fee entry is "free" (never
  * "awaiting payment" — there is nothing to await); then a paid/confirmed
  * status is "paid" or "paidOffline" depending on `payment_intent_id`
@@ -197,6 +199,10 @@ export function deriveRegistrantPaymentState(
   if (row.refunded_cents > 0) {
     return row.refunded_cents >= row.amount_cents ? "refunded" : "partiallyRefunded";
   }
+  // A WON chargeback: nothing was taken and the flag is gone, so the organiser would otherwise read plain "Paid" and not know there was
+  // ever a dispute (registration defects item 4: open, lost and won must be told apart). After the refund arms: money that WAS later
+  // refunded is read as refunded, whatever the bank decided.
+  if (row.dispute === "won") return "disputeWon";
   if (row.status === "waitlisted") return "waitlisted";
   if (row.amount_cents === 0) return "free";
   if (row.status !== "paid" && row.status !== "confirmed") return "awaitingPayment";

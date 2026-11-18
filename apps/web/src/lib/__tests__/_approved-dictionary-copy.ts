@@ -548,10 +548,10 @@ export const APPROVED_DICTIONARY_COPY: ApprovedValue[] = [
     key: "tips.billing.extra-org.body",
     why: "the extra-organisation rate, in the ⓘ tip beside the billing-group controls. 'half your plan's rate' unqualified is false — the seed FLOORS the rider to the charm grid (usd pro monthly 1499 -> 699 = 46.6%), so only 'no more than half' is true in every plan x interval x currency combination. Source of truth: config/stripe-plans.json graduated tiers, via riderClaimShape. The 2%/5% clause is registration.fee_percent in plan_entitlements, re-cut by V398 (community 8 -> 5); pro_plus is gone (V393) and aud is gone (V394), so both are out of the arithmetic above.",
     text: {
-      en: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 5% a free organisation pays.",
-      es: "Cada organización después de la primera cuesta no más de la mitad de la tarifa base. También pasa a la comisión de inscripción de tu plan: 2 % en Pro, en lugar del 5 % que paga una organización gratuita.",
-      fr: "Chaque organisation après la première coûte au plus la moitié du tarif de base. Elle passe aussi à la commission d'inscription de votre formule — 2 % sur Pro, au lieu des 5 % que paie une organisation gratuite.",
-      nl: "Elke organisatie na de eerste kost hoogstens de helft van het basistarief. Ze gaat ook over op het inschrijfgeldpercentage van je abonnement — 2% op Pro, in plaats van de 5% die een gratis organisatie betaalt.",
+      en: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee rate instead of the one a free organisation pays; the current rates are on the pricing page.",
+      es: "Cada organización después de la primera cuesta no más de la mitad de la tarifa base. También pasa a la comisión de inscripción de tu plan, en lugar de la que paga una organización gratuita; las tarifas vigentes están en la página de precios.",
+      fr: "Chaque organisation après la première coûte au plus la moitié du tarif de base. Elle passe aussi à la commission d'inscription de votre formule, au lieu de celle que paie une organisation gratuite ; les tarifs en vigueur figurent sur la page des tarifs.",
+      nl: "Elke organisatie na de eerste kost hoogstens de helft van het basistarief. Ze gaat ook over op het inschrijfgeldpercentage van je abonnement in plaats van dat van een gratis organisatie; de actuele tarieven staan op de prijzenpagina.",
     },
   },
   // ── The remaining three half-rate surfaces (v17 gap wave 7, task 7 round 2) ──

@@ -36,7 +36,8 @@
 // button/confirm copy is translated). Promote's resulting status depends on
 // the division's settings (fee/approval mode) and is NOT safe to guess, so
 // it gets a narrower optimistic treatment: `promotedOptimistically` hides
-// the button the instant it's clicked, without asserting a specific next
+// the button once the promote request has SUCCEEDED (never while a confirm
+// dialog is still open, fix round 1 M2), without asserting a specific next
 // status; `router.refresh()` brings the real one, and the prop-sync
 // render-time adjustment below reconciles `optimisticStatus` (and clears
 // the promote guard) once it lands.
@@ -364,41 +365,43 @@ export function RegistrationHubRegistrantActions({
   }
 
   async function promote() {
-    setBusy("promote");
     setFeedback(null);
-    setPromotedOptimistically(true);
+    // Explicit registration_id override: THIS row promotes, never whichever entry promoteFromWaitlist's default (oldest-waitlisted)
+    // would otherwise pick - the button is "promote this entry", not "promote whoever's next".
+    const send = (confirmOverCapacity: boolean) =>
+      apiV1(`/api/v1/registrations/${registrationId}/promote`, {
+        method: "POST",
+        json: { registration_id: registrationId, ...(confirmOverCapacity ? { confirm_over_capacity: true } : {}) },
+      });
+    // `busy` and the optimistic "promoted" hide are set only around a REQUEST, never across the confirm dialog: while the organiser is
+    // still deciding, nothing has been promoted and the button must not say it is (fix round 1 M2).
+    setBusy("promote");
     try {
-      // Explicit registration_id override: THIS row promotes, never
-      // whichever entry promoteFromWaitlist's default (oldest-waitlisted)
-      // would otherwise pick — the button is "promote this entry", not
-      // "promote whoever's next".
-      const send = (confirmOverCapacity: boolean) =>
-        apiV1(`/api/v1/registrations/${registrationId}/promote`, {
-          method: "POST",
-          json: { registration_id: registrationId, ...(confirmOverCapacity ? { confirm_over_capacity: true } : {}) },
-        });
       try {
         await send(false);
       } catch (err) {
-        // The division is at or over its OWN capacity: the server refuses until the organiser says so. Ask, and resend with the
-        // confirmation. (The PLAN's limit is never asked about - it refuses either way, and is said in `failureText`.)
+        // The division is at or over its OWN capacity: the server refuses until the organiser says so. Ask, saying how full it is (the
+        // numbers the refusal carries), and resend with the confirmation. (The PLAN's limit is never asked about - it refuses either
+        // way, and is said in `failureText`.) A refusal without its numbers is not ours to ask about: it is shown as a failure.
         if (!(err instanceof ApiV1Error && err.code === PROMOTE_OVER_CAPACITY_CODE)) throw err;
+        const { taken, capacity } = err.extra;
+        if (typeof taken !== "number" || typeof capacity !== "number") throw err;
+        setBusy(null);
         const ok = await confirmDialog({
           title: msg("reg.promote.overCapacity.title"),
-          body: msg("reg.promote.overCapacity.body"),
+          body: msg("reg.promote.overCapacity.body", { taken, capacity }),
           confirmLabel: msg("reg.promote.overCapacity.label"),
           tone: "danger",
         });
-        if (!ok) {
-          setPromotedOptimistically(false);
-          return;
-        }
+        if (!ok) return;
+        setBusy("promote");
         await send(true);
       }
+      // Promoted: only now does the button go (until the refresh lands the real status), and the success is said.
+      setPromotedOptimistically(true);
       setFeedback({ tone: "success", text: msg("reg.hub.registrants.detail.actions.promoted") });
       router.refresh();
     } catch (err) {
-      setPromotedOptimistically(false);
       setFeedback({ tone: "error", text: failureText(err) });
     } finally {
       setBusy(null);

@@ -711,8 +711,10 @@ describe("RegistrationHubRegistrantDetail - dispute (registration defects items 
     expect(lost).toContain(t(dict, "reg.chip.disputeLost"));
     expect(lost, "the loss is explained in words, not only in a hover title").toContain(t(dict, "reg.chip.disputeLostTitle"));
     expect(lost).not.toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputed"));
-    expect(won).toContain(t(dict, "reg.hub.registrants.detail.paymentState.paid"));
+    expect(won, "a won dispute is said in words: Paid - dispute won").toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputeWon"));
     expect(won).not.toContain(t(dict, "reg.chip.disputeLost"));
+    expect(won).not.toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputed"));
+    expect(new Set([open, lost, won]).size, "three outcomes, three different panels").toBe(3);
   });
 
   it("offers the evidence pack for an entry that has or had a dispute, as a download of THIS entry's route, and for no other", () => {
