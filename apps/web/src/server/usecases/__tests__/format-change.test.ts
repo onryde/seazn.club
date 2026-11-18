@@ -768,7 +768,7 @@ describe.skipIf(!HAS_DB)("FMT5 — every table that points at a fixture, a stage
     "fixture_officials(fixture_id)->fixtures": { action: "c", handling: "cascade, counted (preview.officials)" },
     "fixture_play_flags(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "entrants(knockout_waiting_stage_id)->stages": { action: "n", handling: "set null: the entrant stays and stops waiting on a knockout that is gone" },
-    // W5 V526 (rulebook RB5-L10): the root table stage a late automatic arrival waits to join.
+    // W5 V529 (rulebook RB5-L10): the root table stage a late automatic arrival waits to join.
     "entrants(table_waiting_stage_id)->stages": { action: "n", handling: "set null: the entrant stays and stops waiting on a table that is gone" },
     "fixture_seat_asks(fixture_id)->fixtures": { action: "c", handling: "cascade" },
     "fixture_seat_line(fixture_id)->fixtures": { action: "c", handling: "cascade" },

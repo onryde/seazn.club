@@ -1,7 +1,7 @@
 // W5 app-A Task 6 (X-CU-8; RB5-L10; Review Focus 1 and 2) — AUTOMATIC arrivals into a running root league or group, driven
 // through every real door on a real database: a free confirmation, a card payment's webhook (and its retry), a waitlist
 // promotion, an import and a Reinstate. None is placed by the app and none is refused (a payment that has moved cannot be
-// un-taken by a 409): the entrant WAITS — `entrants.table_waiting_stage_id` (V526) names the stage and the desk counts it — and
+// un-taken by a 409): the entrant WAITS — `entrants.table_waiting_stage_id` (V529) names the stage and the desk counts it — and
 // the organiser's one tap (`placeWaitingTableEntrant`, the route `POST /stages/{id}/late-entrants/{entrantId}/place`) runs the
 // cases "Add late player" runs (Task 5's admission, never a copy of it).
 //
@@ -9,7 +9,7 @@
 // (registrations/materialise.ts:231-232, imports.ts:734-735, entrants.ts:1093-1094), so an arrival into a started league is
 // seated nowhere and flagged nowhere — the marker stays null and the desk counts nobody.
 //
-// "Seatless" (the parked Task 5 review m2): an arrival waits only when it holds NO fixture of any kind in the stage — V526's own
+// "Seatless" (the parked Task 5 review m2): an arrival waits only when it holds NO fixture of any kind in the stage — V529's own
 // backfill predicate — so a Reinstate whose lines still exist (table lines or an Add match row) never waits.
 //
 // Expected values: the rulebook's cases (RB5-L10: an automatic arrival waits, never placed, never refused; RB5-L3: the tap's
@@ -601,7 +601,7 @@ describe.skipIf(!HAS_DB)("W5 T6: every cleanup path of the waiting marker (stora
   });
 
   it("X-CU-8 deleting the stage nulls the marker", async () => {
-    // Pin: V526's `on delete set null`.
+    // Pin: V529's `on delete set null`.
     const r = await rig({ n: 4 });
     const { entrantId } = await confirmArrival(r, "Late");
     expect(await waitingOn(entrantId), "premise").toBe(r.stageId);

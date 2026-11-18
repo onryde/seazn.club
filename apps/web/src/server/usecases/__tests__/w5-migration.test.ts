@@ -1,4 +1,4 @@
-// W5 app-A Task 5 — V526 (`entrants.table_waiting_stage_id`, plus its LOUD backfill). Read by GLOB, never by number (deltas are
+// W5 app-A Task 5 — V529 (`entrants.table_waiting_stage_id`, plus its LOUD backfill). Read by GLOB, never by number (deltas are
 // renumbered at merge). The schema half is read from the live catalogue; the backfill's own UPDATE runs here inside a rolled-back
 // transaction on a dedicated client — it acts on the whole shared test DB, and a committed run would rewrite sibling suites' rows.
 // Every assertion reads this test's own rows, so a sibling suite's rows cannot answer it.
@@ -61,7 +61,7 @@ async function rolledBack<T>(body: (tx: Tx) => Promise<T>): Promise<T> {
   return value as T;
 }
 
-describe("W5 delta V526: the file", () => {
+describe("W5 delta V529: the file", () => {
   it("exactly one delta carries the name; it is LOUD, quotes the census, and is the column, its index and one UPDATE of entrants", () => {
     expect(files, "one delta named *__w5_table_waiting.sql").toHaveLength(1);
     expect(text, "the header announces the data change").toMatch(/DATA CHANGE \(LOUD\)/);
@@ -73,7 +73,7 @@ describe("W5 delta V526: the file", () => {
   });
 });
 
-describe.skipIf(!HAS_DB)("W5 delta V526: the column", () => {
+describe.skipIf(!HAS_DB)("W5 delta V529: the column", () => {
   it("entrants.table_waiting_stage_id exists, is a nullable uuid, references stages with on delete set null, and is indexed", async () => {
     const [col] = await sql<{ data_type: string; is_nullable: string }[]>`
       select data_type, is_nullable from information_schema.columns
@@ -113,7 +113,7 @@ interface Rig {
 /** A badminton division of four seeded entrants and one stage (`kind`, seq 1 unless `behind` puts a double elimination first). */
 async function rig(kind: "league" | "group", opts: { start: boolean; behind?: boolean }): Promise<Rig> {
   const { auth } = await seedOrg("pro");
-  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W5 V526 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "W5 V529 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
   const d = await createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: "badminton", variant_key: "bwf", config: {} });
   const es = await createEntrants(
     auth,
@@ -140,7 +140,7 @@ async function rawEntrant(divisionId: string, name: string, status = "confirmed"
   return row!.id;
 }
 
-describe.skipIf(!HAS_DB)("W5 delta V526: the LOUD backfill", () => {
+describe.skipIf(!HAS_DB)("W5 delta V529: the LOUD backfill", () => {
   it("flags a seatless entrant of a running root table; leaves the complete, fed, unstarted, seated and departed ones alone", async () => {
     const league = await rig("league", { start: true });
     const group = await rig("group", { start: true });
