@@ -26,6 +26,12 @@
  * The runner and the server share LICHESS_TOKEN_KEK, AUTH_SECRET and
  * CRON_SECRET (the tokens are sealed and the links minted here).
  *
+ * The server also runs the check-in capacity flags (check-in capacity plan 2, Task 10): EXTERNAL_PLAY_PREMINT=1 (the pre-mint job makes a
+ * round's rooms before the organiser opens it; this spec fires the job itself, twice) and EXTERNAL_PLAY_PRESENCE_PROOF=1 (a seat reads ONE
+ * peer report on the presence the join webhooks wrote, so a camera must be on file and 1.5 s old before a claim can seat it: `goLive`).
+ * The pre-minted round's cost is asserted from the video fixture's own call log, a LOCAL pre-check that proves the wiring and the
+ * arithmetic against the fixture and says nothing about the real vendor (that is Task 11's staging run).
+ *
  * Nothing leaves the machine. The real RealtimeKit SDK is handed the video
  * fixture's opaque participant token, which it refuses at `init` before any
  * network call (measured: not one off-machine request), so the player's own
@@ -96,6 +102,7 @@ import { DEADLINE_AFTER_MS, LICHESS_TIMEOUT_MS, WINDOW_OPEN_LEAD_MS } from "../.
 import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES, CHECKIN_EXTEND_STEP_MS } from "../../src/lib/checkin-extend";
 import { CONSENT_KEY, CONSENT_VERSION_KEY, COOKIE_POLICY_VERSION } from "../../src/lib/consent";
 import { routes } from "../../src/lib/routes";
+import { LINE_LOAD } from "../load/line-load";
 
 test.describe.configure({ mode: "parallel" });
 // A synthetic camera, so getUserMedia resolves in a player's page (Task 17).
@@ -266,6 +273,23 @@ const constant = (name: string): number => {
 const LIVE_POLL_MS = constant("LIVE_POLL_MS");
 const IDLE_POLL_MS = constant("IDLE_POLL_MS");
 
+/** A server module's `export const NAME = <number>;`, read the same way (the modules start with `server-only`, which a runner cannot import). */
+const sourceConstant = (relPath: string, name: string): number => {
+  const text = readFileSync(fileURLToPath(new URL(`../../${relPath}`, import.meta.url)), "utf8");
+  const m = new RegExp(`export const ${name} = ([\\d_]+);`).exec(text);
+  if (!m) throw new Error(`${relPath} no longer exports ${name} as a literal`);
+  return Number(m[1]!.replace(/_/g, ""));
+};
+/** preflight.ts: with the one-read proof, a join must be this old before a claim may read its camera (a live report from the browser skips
+ *  the wait, and this spec's pages never send one: their SDK is refused the fixture's token). */
+const FIRST_READ_AFTER_JOIN_MS = sourceConstant("src/server/usecases/external-play/preflight.ts", "FIRST_READ_AFTER_JOIN_MS");
+/** premint.ts: how long one pass runs before it stops STARTING vendor calls (it paces them a second apart). */
+const PREMINT_PASS_BUDGET_MS = sourceConstant("src/server/usecases/external-play/premint.ts", "PREMINT_PASS_BUDGET_MS");
+/** After a camera comes on, how long `goLive` lets the join age: the proof's wait plus a margin for the two clocks and the hop. */
+const JOIN_SETTLE_MS = FIRST_READ_AFTER_JOIN_MS + 250;
+/** One pre-mint pass's own clock: its budget, and a margin for the round trip. */
+const PREMINT_PASS_MS = PREMINT_PASS_BUDGET_MS + 15_000;
+
 // The budget, DERIVED (AGENTS.md failure class 20): every scripted action is a
 // round trip through our server that may wait out one Lichess call, and the
 // OTHER player's page learns of it on its next poll. A flat timeout beside
@@ -273,6 +297,9 @@ const IDLE_POLL_MS = constant("IDLE_POLL_MS");
 const PER_ACTION_MS = LICHESS_TIMEOUT_MS / 2 + LIVE_POLL_MS + 2_000;
 const SEED_MS = 60_000;
 const budget = (actions: number) => Math.max(120_000, SEED_MS + actions * PER_ACTION_MS + 2 * IDLE_POLL_MS);
+/** The same, for a test that brings `lives` cameras on through `goLive`: each waits out its join webhook (the panel's poll budget is the longest
+ *  a delivery is given) and then lets the join age (class 20: a derived cost beside a flat timeout is a latent red). */
+const liveBudget = (lives: number, baseMs: number) => budgetFor(lives, baseMs) + lives * JOIN_SETTLE_MS;
 
 const NOT_POINTED = (what: string) =>
   `the server under test made NO ${what} call to the local fixture server. It is almost certainly still pointed at ` +
@@ -327,6 +354,50 @@ async function sweep(page: Page): Promise<SweepReport> {
   }
   throw new Error("the sweep's lock was held for 10 s: another pass never finished");
 }
+
+type PremintReport = {
+  skipped: number;
+  disabled: number;
+  scanned: number;
+  roomsMade: number;
+  deferred: number;
+  failed: number;
+  windowsOpen: number;
+  failures: unknown[];
+};
+
+/** One pass of the pre-mint cron (`/api/cron/external-play-premint`, check-in capacity plan 2), as the Worker fires it. Like the sweep it
+ *  retries a pass that found another holding the lock (`skipped`: it looked at nothing). The pass paces its vendor calls a second apart, so it
+ *  is given its own clock. It answers `disabled: 1` unless the server runs with EXTERNAL_PLAY_PREMINT=1: an environment fault, named as one. */
+async function premintPass(page: Page): Promise<PremintReport> {
+  for (let i = 0; i < 10; i++) {
+    const res = await page.request.post("/api/cron/external-play-premint", { headers: CRON(), timeout: PREMINT_PASS_MS });
+    expect(res.status(), "CRON_SECRET must be the server's (docs/runbooks/e2e-local.md)").toBe(200);
+    const report = ((await res.json()) as { data: PremintReport }).data;
+    expect(
+      report.disabled,
+      `the pre-mint job is OFF on the server under test: start it with EXTERNAL_PLAY_PREMINT=1 and EXTERNAL_PLAY_PRESENCE_PROOF=1 (docs/runbooks/e2e-local.md). Report ${JSON.stringify(report)}`,
+    ).toBe(0);
+    if (report.skipped === 0) return report;
+    await page.waitForTimeout(1_000);
+  }
+  throw new Error("the pre-mint pass's lock was held for 10 s: another pass never finished");
+}
+
+/** The rooms on file for these boards (one per player and board, D16), in a stable order. */
+async function meetingRowsOf(fixtureIds: string[]): Promise<{ fixture_id: string; side: string; meeting_id: string; ended_at: Date | null }[]> {
+  return withDb(
+    (sql) => sql<{ fixture_id: string; side: string; meeting_id: string; ended_at: Date | null }[]>`
+      select fixture_id, side, meeting_id, ended_at from fixture_video_meetings where fixture_id in ${sql(fixtureIds)} order by fixture_id, side`,
+  );
+}
+
+/** How many of a call list there are per route, as the video fixture templated them (`"POST /meetings/:id/participants"`). */
+const routesOf = (calls: readonly { route: string }[]): Record<string, number> => {
+  const out: Record<string, number> = {};
+  for (const c of calls) out[c.route] = (out[c.route] ?? 0) + 1;
+  return out;
+};
 
 /** The cron fires every five minutes and re-reads a board at most once a
  *  tick, backing off to hourly for a board that tells it nothing
@@ -438,6 +509,67 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     return rec.id;
   };
 
+  /** Round 1's rooms as the pre-mint job left them (set by the round-opening test, before the open), and where the fixture's call log stood at
+   *  the open: every call "since the open" is `video.calls.slice(openMark)`. */
+  let roundOneRooms: { fixture_id: string; side: string; meeting_id: string }[] = [];
+  let openMark = 0;
+  const roomIdsOf = (fixtureId: string): Set<string> => new Set(roundOneRooms.filter((r) => r.fixture_id === fixtureId).map((r) => r.meeting_id));
+  /** The fixture's own record of the calls that name one of these meetings, from `from` on (a call with no meeting is nobody's). */
+  const callsOnMeetings = (ids: ReadonlySet<string>, from: number) => video.calls.slice(from).filter((c) => c.meetingId !== null && ids.has(c.meetingId));
+
+  /** A player's camera comes on at the vendor (`setLivePublisher`, the ONLY way anyone is present there) in a state the SEAT can judge. With the
+   *  one-read proof the seat reads the PEER the presence table names, so the join's webhook must have reached our server (no row, no peer to read:
+   *  the claim answers camera required, and nothing re-asks), and the join must be FIRST_READ_AFTER_JOIN_MS old (younger, and the claim answers
+   *  camera starting; a claim made straight over the API has no screen to re-ask for it). The wait is on the row itself, never a sleep alone. */
+  async function goLive(participantId: string): Promise<void> {
+    const t0 = Date.now();
+    video.setLivePublisher(participantId, true);
+    const peer = video.currentPeer(participantId);
+    if (peer === null) throw new Error(`goLive: the video fixture has no connected peer for ${participantId} right after its join`);
+    const openRows = () =>
+      withDb(async (sql) => {
+        const [r] = await sql<{ n: number }[]>`
+          select count(*)::int as n from fixture_video_presence
+           where participant_id = ${participantId} and peer_id = ${peer} and left_at is null and source = 'webhook'`;
+        return r!.n;
+      });
+    try {
+      await expect.poll(openRows, { timeout: POLL_BUDGET_MS }).toBe(1);
+    } catch (e) {
+      // Bounded: webhooksSettled awaits every in-flight delivery and a hung one would eat the rest of the test's clock, hiding this message.
+      await Promise.race([video.webhooksSettled(), new Promise<void>((r) => setTimeout(r, 5_000))]);
+      const outcomes = [...video.webhookOutcomes.values()].join(",");
+      throw new Error(
+        `no open webhook presence row for peer ${peer} of ${participantId}. The fixture's deliveries: [${outcomes}]; last error: ${String(video.lastWebhookError())}. ` +
+          `If none were delivered the server under test is not reachable at ${test.info().project.use.baseURL}/api/webhooks/realtimekit, or its REALTIMEKIT_BASE_URL is not the fixture's (docs/runbooks/e2e-local.md).\n${(e as Error).message}`,
+        { cause: e },
+      );
+    }
+    // The proof measures a join's age from `least(vendor join stamp, our receipt)`: the stamp is t0, so t0 + the wait is the earliest a claim reads.
+    const left = t0 + JOIN_SETTLE_MS - Date.now();
+    if (left > 0) await new Promise<void>((r) => setTimeout(r, left));
+  }
+
+  /** The camera goes off at the vendor (the peer leaves) in a state the SEAT can judge: with the one-read proof a peer whose leave webhook has
+   *  not landed still reads as present, so the claim would seat. Waits on the leave's own presence row, never a sleep. */
+  async function goDark(participantId: string): Promise<void> {
+    const peer = video.currentPeer(participantId);
+    if (peer === null) throw new Error(`goDark: the video fixture has no connected peer for ${participantId}`);
+    video.setLivePublisher(participantId, false);
+    await expect
+      .poll(
+        () =>
+          withDb(async (sql) => {
+            const [r] = await sql<{ n: number }[]>`
+              select count(*)::int as n from fixture_video_presence
+               where participant_id = ${participantId} and peer_id = ${peer} and left_at is not null and source = 'webhook'`;
+            return r!.n;
+          }),
+        { timeout: POLL_BUDGET_MS, message: `the leave webhook of peer ${peer} (${participantId}) never reached the server's presence table` },
+      )
+      .toBe(1);
+  }
+
   async function claimByLink(page: Page, board: RoundBoard, p: RoundPlayer) {
     const path = await matchRoomPathBySql(board.fixtureId, p.personId);
     const t = new URL(path, "http://x").searchParams.get("t")!;
@@ -535,8 +667,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await ctx.close();
   });
 
-  test("the organiser opens Swiss round 1 from the Arbiter Panel's column: the stamp and the invites, and nothing reaches Lichess or video yet", async ({ page, request }) => {
-    test.setTimeout(budget(2));
+  test("the organiser opens Swiss round 1 from the Arbiter Panel's column: the pre-mint job made its rooms BEFORE the open (once), and the open reaches neither Lichess nor video", async ({ page, request }) => {
+    // Two pre-mint passes, each paced a second a call and given its own clock, on top of the organiser's two scripted actions.
+    test.setTimeout(budget(2) + 2 * (PREMINT_PASS_MS + 10_000));
     round = await seedOnlineRound(request, [`Ada White ${TAG}`, `Bo Black ${TAG}`, `Cy Third ${TAG}`, `Di Fourth ${TAG}`], {
       open: false,
       camera: "required",
@@ -550,10 +683,63 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     }
     expect(await roundOpenedAtSql(round.stageId, 1), "the empty case: nothing opened").toBeNull();
 
+    // ── the pre-mint job (check-in capacity plan 2, Task 10): rooms, and only rooms, before the open ──────────────────────────────
+    // The job is GLOBAL (it takes no org), so every count below is scoped to THESE boards' meetings - D12's unopened board above is a candidate
+    // too, and so is any other spec's unopened camera-on round - while the report's own `roomsMade` is tied to what the log shows was sent.
+    const boardIds = round.boards.map((b) => b.fixtureId);
+    const everyone = round.boards.flatMap((b) => [b.home, b.away]);
+    expect(await meetingRowsOf(boardIds), "the empty case: no room on file before the job has run").toEqual([]);
+
+    const mark1 = video.calls.length;
+    const pass1 = await premintPass(page);
+    const note1 = `pass 1 reported ${JSON.stringify(pass1)}`;
+    expect(pass1.failed, `${note1}: no room failed`).toBe(0);
+    expect(pass1.windowsOpen, `${note1}: no check-in window deferred it (EXTERNAL_PLAY_WINDOW_DEFER=0 on the server)`).toBe(0);
+    const rooms1 = await meetingRowsOf(boardIds);
+    // D16 (§5.6.1): a room PER PLAYER, so two a board. From the rulebook, never from the job's own report.
+    expect(rooms1.length, `${note1}: two rooms for each of the ${boardIds.length} boards are on file`).toBe(2 * boardIds.length);
+    for (const id of boardIds) {
+      expect(rooms1.filter((r) => r.fixture_id === id).map((r) => r.side), `board ${id}: a room for each of its two players`).toEqual(["away", "home"]);
+    }
+    const roomIds = new Set(rooms1.map((r) => r.meeting_id));
+    expect(roomIds.size, `${note1}: four different meetings at the vendor`).toBe(rooms1.length);
+    // The fixture's OWN log of what the pass sent for these boards: one POST /meetings each (2 x boards), and nothing else - the job makes
+    // rooms and only rooms (owner ruling 2026-11-17 (2): no participant, no read, no end).
+    const made1 = callsOnMeetings(roomIds, mark1);
+    expect(made1.filter((c) => c.route === "POST /meetings"), `${note1}: POST /meetings for these boards is 2 x boards`).toHaveLength(2 * boardIds.length);
+    expect(
+      made1.filter((c) => c.route !== "POST /meetings").map((c) => c.route),
+      `${note1}: the job sent nothing for these boards but room creations (a participant before the open would be the claim's add made early)`,
+    ).toEqual([]);
+    expect(new Set(made1.map((c) => c.meetingId)), "the rooms the log shows created are the rooms on file").toEqual(roomIds);
+    for (const p of everyone) expect(video.participantFor(p.personId), `${p.name}: the job minted no participant`).toBeNull();
+    expect(
+      await withDb(async (sql) => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_participants where fixture_id in ${sql(boardIds)}`)[0]!.n),
+      "no participant row on file for these boards",
+    ).toBe(0);
+    // Whatever else the pass made for other boards, it was a room: every call it sent, and exactly as many as it reports.
+    const sent1 = video.calls.slice(mark1);
+    expect(sent1.filter((c) => c.route !== "POST /meetings").map((c) => c.route), `${note1}: nothing but room creations went to the vendor`).toEqual([]);
+    expect(sent1.length, `${note1}: the vendor calls the log holds are the rooms the pass reports making`).toBe(pass1.roomsMade);
+
+    // The second pass finds every room on file and makes no call for them.
+    const mark2 = video.calls.length;
+    const pass2 = await premintPass(page);
+    const note2 = `pass 2 reported ${JSON.stringify(pass2)}`;
+    expect(pass2.failed, `${note2}: no room failed`).toBe(0);
+    expect(pass2.windowsOpen, `${note2}: no check-in window deferred it`).toBe(0);
+    expect(await meetingRowsOf(boardIds), `${note2}: the same rooms are on file - none made, none replaced`).toEqual(rooms1);
+    expect(callsOnMeetings(roomIds, mark2), `${note2}: the second pass made no vendor call for these boards`).toEqual([]);
+    expect(video.calls.slice(mark2).filter((c) => c.route !== "POST /meetings").map((c) => c.route), `${note2}: nothing but room creations`).toEqual([]);
+    // On a database nothing else is waiting on, that is no vendor call at all: what it sent is exactly the rooms it reports (0).
+    expect(video.calls.length - mark2, `${note2}: its vendor calls are the rooms it reports making`).toBe(pass2.roomsMade);
+
+    // ── the open ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(round.arbiterPath);
     const column = page.getByTestId("arbiter-round-column");
     await expect(column, "paired, not opened: the column's before phase").toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+    const beforeOpen = video.calls.length;
     await openFromColumn(page, round, 1);
     await expect(column, "opened: the column moves on to check-in").toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
 
@@ -568,13 +754,14 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       rows++;
     }
     expect(rows).toBe(2);
-    // D12 couples the stamp and the invites — and nothing else. A game is asked
-    // for only when both players are seated; a meeting only when one arrives.
-    const everyone = round.boards.flatMap((b) => [b.home, b.away]);
+    // D12 couples the stamp and the invites - and nothing else. A game is asked for only when both players are seated, and the open itself calls
+    // no vendor: the rooms are the job's, a participant only a player's own claim adds.
     expect(lichessCallsFor(everyone).length, "opening a round makes no Lichess call").toBe(0);
-    let traces = 0;
-    for (const b of round.boards) traces += await videoTracesFor(b);
-    expect(traces, "opening a round makes no video call").toBe(0);
+    expect(callsOnMeetings(roomIds, beforeOpen), "opening a round makes no video call for its boards").toEqual([]);
+    expect(await meetingRowsOf(boardIds), "the open neither retired nor replaced the pre-made rooms").toEqual(rooms1);
+    for (const p of everyone) expect(video.participantFor(p.personId), `${p.name}: the open minted no participant`).toBeNull();
+    roundOneRooms = rooms1;
+    openMark = beforeOpen;
   });
 
   test("final review P10: a grant narrowed AT LICHESS shows the re-link screen as the room loads — asked once per load, never by the polls", async ({ browser }) => {
@@ -621,8 +808,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   let gameA: string;
 
   test("board 1 seats only on the SERVER's word: camera required (2), lost (3), video down (4) — then both in, and the game made at Lichess", async ({ browser }) => {
-    // Ten scripted actions, plus the ONE wait on the join webhook's presence row (a poll of POLL_BUDGET_MS): derived, never a flat bump (class 20).
-    test.setTimeout(budgetFor(1, budget(10)));
+    // Ten scripted actions, plus three cameras brought on through `goLive` (each waits on its join webhook's presence row, then lets the join age): derived, never a flat bump (class 20).
+    test.setTimeout(liveBudget(3, budget(10)));
     boardA = round.boards[0]!;
     // Colours are recorded at creation (T9), so the players are first and
     // second here, White and Black only once the game exists.
@@ -641,52 +828,41 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // The server made the player's OWN meeting (D16, §5.6.1: one per player) and their participant. The claim that MINTS a
     // participant reads nothing - nobody can have joined with a token that did not exist yet (D21-fix-3, §5.6.8) - so the
     // refusal is the server's own word, and the READ is the retry's (asserted below).
-    const asked = video.calls.map((c) => c.route);
-    expect(asked.filter((r) => r === "POST /meetings"), "the first player's claim makes ONE meeting - theirs").toHaveLength(1);
-    expect(asked).toContain("POST /meetings/:id/participants");
+    // The pre-mint job made this player's room before the open (the round-opening test): the claim finds it, so it makes NO room (it used to
+    // make "ONE meeting - theirs") and adds only the player's participant, its token coming with the add.
+    const asked = callsOnMeetings(roomIdsOf(boardA.fixtureId), openMark).map((c) => c.route);
+    expect(asked.filter((r) => r === "POST /meetings"), "the first player's claim makes no room: the pre-mint job made it").toHaveLength(0);
+    expect(asked.filter((r) => r === "POST /meetings/:id/participants"), "the first claim adds the player's participant, and only theirs").toHaveLength(1);
     expect(asked, "a minting claim reads no session").not.toContain("GET /meetings/:id/active-session");
     expect(await checkedInAt(boardA.fixtureId, first.personId), "a refused seat stamps nothing").toBeNull();
     expect(lichessCallsFor([first, second]).length, "one seat asks Lichess for nothing").toBe(0);
 
-    // The meeting now reports them present; Try again re-asks, and seats.
-    video.setLivePublisher(participantOf(first), true);
+    // The meeting now reports them present (their join reached our server as a webhook, and has aged enough to read); Try again re-asks, and seats.
+    await goLive(participantOf(first));
     const beforeRetry = video.calls.length;
     await p1.getByTestId("room-state-retry").click();
     await expect(screen(p1)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await expect(p1.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
     expect(await checkedInAt(boardA.fixtureId, first.personId), "seated on the meeting's word").not.toBeNull();
-    // M6: the seat came from a FRESH presence read, made after the press — not from the refusal's earlier answer.
+    // M6: the seat came from a FRESH read, made after the press — not from the refusal's earlier answer. With the one-read proof that read is ONE
+    // peer-report call on the peer the presence table names, never the three-call session read it replaces.
     const reAsked = video.calls.slice(beforeRetry).map((c) => c.route);
-    expect(reAsked, "Try again re-read the meeting's session").toContain("GET /meetings/:id/active-session");
-    expect(reAsked, "and who is in it").toContain("GET /sessions/:id/participants");
-    // The join reached our server as a SIGNED webhook over HTTP: an open presence row for THIS participant, written by the
+    expect(reAsked, "Try again re-read the camera: the proof's one peer-report call").toContain("GET /sessions/peer-report/:peer");
+    expect(reAsked, "and not the session read the proof replaces").not.toContain("GET /meetings/:id/active-session");
+    expect(reAsked, "nor who is in the session").not.toContain("GET /sessions/:id/participants");
+    // The join reached our server as a SIGNED webhook over HTTP (goLive waited for it): an open presence row for THIS participant, written by the
     // webhook (`source = 'webhook'`: a seat's own read also writes a row, a hint, so a bare count would pass without one).
-    const openWebhookRows = () =>
-      withDb(async (sql) => {
-        const [r] = await sql<{ n: number }[]>`
-          select count(*)::int as n from fixture_video_presence
-           where participant_id = ${participantOf(first)} and left_at is null and source = 'webhook'`;
-        return r!.n;
-      });
-    try {
-      await expect.poll(openWebhookRows, { timeout: POLL_BUDGET_MS }).toBe(1);
-    } catch (e) {
-      // Bounded: webhooksSettled awaits every in-flight delivery and a hung one would eat the rest of the test's clock, hiding this message.
-      await Promise.race([video.webhooksSettled(), new Promise<void>((r) => setTimeout(r, 5_000))]);
-      const outcomes = [...video.webhookOutcomes.values()].join(",");
-      throw new Error(
-        `no open webhook presence row for the first player. The fixture's deliveries: [${outcomes}]; last error: ${String(video.lastWebhookError())}. ` +
-          `If none were delivered the server under test is not reachable at ${test.info().project.use.baseURL}/api/webhooks/realtimekit, or its REALTIMEKIT_BASE_URL is not the fixture's (docs/runbooks/e2e-local.md).\n${(e as Error).message}`,
-        { cause: e },
-      );
-    }
+    const [webhookRows] = await withDb((sql) => sql<{ n: number }[]>`
+      select count(*)::int as n from fixture_video_presence
+       where participant_id = ${participantOf(first)} and left_at is null and source = 'webhook'`);
+    expect(webhookRows!.n, "an open webhook presence row for the first player").toBe(1);
 
     // ── state 3: was live, is not — a reload re-asks ──────────────────────
-    video.setLivePublisher(participantOf(first), false);
+    await goDark(participantOf(first));
     await p1.reload();
     await expect(screen(p1), "a player who HAD passed is told the camera was lost").toHaveAttribute("data-screen", "cameraLost", { timeout: 30_000 });
     await expect(p1.getByTestId("room-state-camera-lost")).toBeVisible();
-    video.setLivePublisher(participantOf(first), true);
+    await goLive(participantOf(first));
     await p1.getByTestId("room-state-retry").click();
     await expect(screen(p1)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
 
@@ -702,7 +878,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     video.setUnavailable(false);
     await p2.getByTestId("room-state-retry").click();
     await expect(screen(p2), "back up: the camera is asked for, not assumed").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
-    video.setLivePublisher(participantOf(second), true);
+    await goLive(participantOf(second));
     await p2.getByTestId("room-state-retry").click();
 
     // ── both seated: OUR server makes the game at Lichess ─────────────────
@@ -725,6 +901,12 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     for (const pg of [white, black]) {
       await expect(screen(pg)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
     }
+    // Through all of it - three states, an outage, a reload - the board made no room of its own since the open: both were the job's. (Its other
+    // counts are not asserted here: the tour re-asks on purpose, and the outage's refused add is a call too. Board 2's seating is the clean census.)
+    expect(
+      callsOnMeetings(roomIdsOf(boardA.fixtureId), openMark).filter((c) => c.route === "POST /meetings"),
+      "board 1 made no room since the open",
+    ).toHaveLength(0);
   });
 
   test("a forged webhook is refused and writes nothing", async ({ request }) => {
@@ -864,7 +1046,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   });
 
   test("a live game nobody is watching is closed by the cron sweep — its own held read is the one Lichess flags it on (D11)", async ({ page }) => {
-    test.setTimeout(budget(8));
+    test.setTimeout(liveBudget(2, budget(8)));
     const boardB = round.boards[1]!;
     // Round 2 cannot pair while a round-1 board is unresolved: the organiser's
     // Generate is refused now (and board 1 is decided), so a pairing that ran
@@ -880,11 +1062,36 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // word (the UI half of this was board 1's), then two plies on the board.
     for (const p of [boardB.home, boardB.away]) {
       expect((await claimByLink(page, boardB, p)).seat).toMatchObject({ seated: false, reason: "camera_required" });
-      video.setLivePublisher(participantOf(p), true);
-      await claimByLink(page, boardB, p);
+      await goLive(participantOf(p));
+      expect((await claimByLink(page, boardB, p)).seat, `${p.name}: a camera on file and aged enough seats on the proof's one read`).toMatchObject({ seated: true });
     }
     await expect.poll(async () => (await bridgeRow(boardB.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
     const gameB = (await bridgeRow(boardB.fixtureId))!.challenge_id!;
+
+    // ── what this pre-minted board cost the vendor since the open, from the fixture's own log (check-in capacity plan 2, Task 10) ──────────
+    // A LOCAL pre-check against the fixture: it proves the wiring and the arithmetic, and says nothing about the real vendor (Task 11's gate).
+    // Taken here, with both seated and the game made, before the sweep below ends a single room. The expected numbers are the declared price
+    // table (LINE_LOAD, pinned to seat-line's own derivation in line-load.test.ts) and a hand count, never read off the code that spends them.
+    const sinceOpen = callsOnMeetings(roomIdsOf(boardB.fixtureId), openMark);
+    const by = routesOf(sinceOpen);
+    const seen = `board 2's ${sinceOpen.length} calls since the open, by route: ${JSON.stringify(by)}`;
+    expect(roomIdsOf(boardB.fixtureId).size, "premise: the job left board 2 a room for each player").toBe(2);
+    // Each stay is priced `room` (the room is waiting, the claim adds the participant); the board's two stays and the opponent's re-verify.
+    const declared = LINE_LOAD.stayPrice.proof.room * 2 + LINE_LOAD.recheckCost.proof;
+    expect(sinceOpen.length, `${seen} - more than the declared bound of ${declared}`).toBeLessThanOrEqual(declared);
+    expect(by["POST /meetings"] ?? 0, `${seen} - a room was made since the open: the pre-mint job should have made both`).toBe(0);
+    expect(by["POST /meetings/:id/participants"] ?? 0, `${seen} - each player's first claim adds their participant, and nothing else does`).toBe(2);
+    for (const route of ["GET /meetings/:id/active-session", "GET /sessions/:id/participants", "GET /sessions"]) {
+      expect(by[route] ?? 0, `${seen} - the one-read proof never takes ${route}`).toBe(0);
+    }
+    // The hand count (7): each player's add (its own token goes to the browser), one peer-report read and the seat's token - 3 a player, 6 -
+    // and the re-verify's read of the opponent's camera, which a pass seen inside SEAT_RECHECK_TRUST_MS stands on at no call (so 6 or 7).
+    const perPlayer = 1 + 1 + 1;
+    expect(by["POST /meetings/:id/participants/:pid/token"] ?? 0, `${seen} - one token a seat`).toBe(2);
+    expect(by["GET /sessions/peer-report/:peer"] ?? 0, `${seen} - one peer-report read a seat, plus the re-verify's unless trusted`).toBeGreaterThanOrEqual(2);
+    expect(by["GET /sessions/peer-report/:peer"] ?? 0, `${seen} - one peer-report read a seat, plus the re-verify's unless trusted`).toBeLessThanOrEqual(3);
+    expect(sinceOpen.length, `${seen} - fewer than the hand count's floor`).toBeGreaterThanOrEqual(2 * perPlayer);
+    expect(sinceOpen.length, `${seen} - more than the hand count's 7`).toBeLessThanOrEqual(2 * perPlayer + 1);
     const B = await colours(boardB);
     expect(await actByLink(page, boardB, B.white, { kind: "move", uci: "d2d4" })).toMatchObject({ ok: true });
     expect(await actByLink(page, boardB, B.black, { kind: "move", uci: "d7d5" })).toMatchObject({ ok: true });
@@ -931,7 +1138,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   });
 
   test("round 2 waits for the organiser: paired on Generate, silent until opened, then opened from the same column and played", async ({ page, browser }) => {
-    test.setTimeout(budget(8));
+    test.setTimeout(liveBudget(2, budget(8)));
     const stamp1 = await roundOpenedAtSql(round.stageId, 1);
     const round2 = () =>
       withDb((sql) => sql<{ id: string; home: string | null; away: string | null }[]>`
@@ -965,6 +1172,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await page.goto(round.arbiterPath);
     const column = page.getByTestId("arbiter-round-column");
     await expect(column, "round 1 played out: the column's playing phase").toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
+    // Round 2 is opened WITHOUT the pre-mint job (nothing fires it for this round): nothing is on file for its boards, so each claim makes its own room.
+    const openMark2 = video.calls.length;
     await openFromColumn(page, round, 2);
     await expect(column.getByTestId("arbiter-checkin-hero").getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible({
       timeout: 30_000,
@@ -983,20 +1192,42 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await passCameraTest(p);
     await p.getByTestId("room-checkin-cta").click();
     await expect(screen(p)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
-    video.setLivePublisher(participantOf(b2.home), true);
+    await goLive(participantOf(b2.home));
     await p.getByTestId("room-state-retry").click();
     await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     expect((await claimByLink(page, b2, b2.away)).seat).toMatchObject({ seated: false, reason: "camera_required" });
-    video.setLivePublisher(participantOf(b2.away), true);
-    await claimByLink(page, b2, b2.away);
+    await goLive(participantOf(b2.away));
+    expect((await claimByLink(page, b2, b2.away)).seat, "a camera on file and aged enough seats on the proof's one read").toMatchObject({ seated: true });
     await expect.poll(async () => (await bridgeRow(b2.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
     const game2 = (await bridgeRow(b2.fixtureId))!.challenge_id!;
     expect(lichess.game(game2)?.status, "round 2's game is live at Lichess").toBe("started");
     await expect(screen(p)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
+
+    // ── what this board cost the vendor since ITS open, with nothing pre-made (check-in capacity plan 2, Task 10, step 3) ─────────────────
+    // Each stay is priced `all` (nothing on file: the claim makes the room and adds the participant), so the bound is the dearer one. A LOCAL
+    // pre-check against the fixture, like board 2 of round 1's census above; the expected numbers are the price table and a hand count.
+    const rooms2 = await meetingRowsOf([b2.fixtureId]);
+    expect(rooms2.map((r) => r.side), "round 2's board has a room for each of its two players, made by their claims").toEqual(["away", "home"]);
+    const sinceOpen2 = callsOnMeetings(new Set(rooms2.map((r) => r.meeting_id)), openMark2);
+    const by2 = routesOf(sinceOpen2);
+    const seen2 = `round 2's board: ${sinceOpen2.length} calls since its open, by route: ${JSON.stringify(by2)}`;
+    const declared2 = LINE_LOAD.stayPrice.proof.all * 2 + LINE_LOAD.recheckCost.proof;
+    expect(sinceOpen2.length, `${seen2} - more than the declared bound of ${declared2}`).toBeLessThanOrEqual(declared2);
+    expect(by2["POST /meetings"] ?? 0, `${seen2} - nothing was pre-made, so each player's claim makes their own room`).toBe(2);
+    expect(by2["POST /meetings/:id/participants"] ?? 0, `${seen2} - and adds their participant`).toBe(2);
+    for (const route of ["GET /meetings/:id/active-session", "GET /sessions/:id/participants", "GET /sessions"]) {
+      expect(by2[route] ?? 0, `${seen2} - the one-read proof never takes ${route}`).toBe(0);
+    }
+    // The hand count is 8 or 9: each player's room and participant (2), one peer-report read and the seat's token (4 a player, 8), plus the
+    // re-verify's read unless it is trusted. Only the floor is pinned here, besides the declared bound above: this board has a browser page open
+    // (the home player's), whose own claims are not part of what the declared price is measured against, so a tighter ceiling would pin the
+    // page's behaviour. Board 2 of round 1 above has no page and carries the hand-count ceiling.
+    const perPlayer2 = 2 + 1 + 1;
+    expect(sinceOpen2.length, `${seen2} - fewer than the hand count's floor of ${2 * perPlayer2}: the census is short a call it must have seen`).toBeGreaterThanOrEqual(2 * perPlayer2);
   });
 
   test("N-2: a re-paired board's newcomer checks in to a FRESH meeting — unpaired, the old room closed by the sweep, re-paired, re-opened", async ({ page, browser, request }) => {
-    test.setTimeout(budget(8));
+    test.setTimeout(liveBudget(1, budget(8)));
     // Its own Swiss round: round 1 above carries games, and Unpair refuses a round with a game on file.
     const r = await seedOnlineRound(request, [`Ed Repair ${TAG}`, `Flo Repair ${TAG}`, `Gus Repair ${TAG}`, `Hal Repair ${TAG}`], {
       camera: "required",
@@ -1113,7 +1344,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(await participantsOf(board1.fixtureId), "only the newcomer — the old player went with the old meeting").toEqual([newcomer.personId]);
 
     // The meeting reports them present; Try again seats them on its word.
-    video.setLivePublisher(part!.id, true);
+    await goLive(part!.id);
     await p.getByTestId("room-state-retry").click();
     await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await expect(p.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
@@ -1122,7 +1353,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   });
 
   test("R2-2: the lobby path — re-paired with NO re-open, the newcomer signs in, takes Your board into the room and checks in to a FRESH meeting; the old room is ended and the player who moved is not in it", async ({ page, browser, request }) => {
-    test.setTimeout(budget(8));
+    test.setTimeout(liveBudget(1, budget(8)));
     // Its own Swiss round, for the same reason as N-2's.
     const r = await seedOnlineRound(request, [`Ida Lobby ${TAG}`, `Jo Lobby ${TAG}`, `Kai Lobby ${TAG}`, `Lu Lobby ${TAG}`], {
       camera: "required",
@@ -1216,7 +1447,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(video.participantFor(mover.personId)?.meetingId, "the mover's only participant is in their own ended room").toBe(moverRoom.meeting_id);
 
     // The meeting reports them present; Try again seats them on its word.
-    video.setLivePublisher(part!.id, true);
+    await goLive(part!.id);
     await p.getByTestId("room-state-retry").click();
     await expect(screen(p)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await expect(p.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
@@ -1224,7 +1455,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await ctx.close();
   });
   test("R3-1: the player who STAYED keeps their room open through the re-pair — when the newcomer's arrival retires their meeting, their page re-claims the seat on its own (no tap, no reload), lands in the NEW meeting, and the game is made under `required`", async ({ page, browser, request }) => {
-    test.setTimeout(budget(10));
+    test.setTimeout(liveBudget(3, budget(10)));
     // Its own Swiss round, for the same reason as N-2's; playable, so the game can really be made at the fixture.
     const names = [`Mo Stay ${TAG}`, `Ned Stay ${TAG}`, `Ola Stay ${TAG}`, `Pia Stay ${TAG}`];
     const r = await seedOnlineRound(request, names, { camera: "required", stage: "swiss", clock: TC, playable: true });
@@ -1257,7 +1488,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await sp.getByTestId("room-checkin-cta").click();
     await expect(screen(sp), "nobody live yet: the seat waits on the camera").toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     const first = video.participantFor(stayer.personId)!;
-    video.setLivePublisher(first.id, true);
+    await goLive(first.id);
     await sp.getByTestId("room-state-retry").click();
     await expect(screen(sp)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     await expect(sp.getByTestId("room-checkin-cta")).toHaveText(uiEn["externalPlay.room.checkin.done"]!);
@@ -1353,8 +1584,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(stayerClaims, "one quiet re-claim, not a loop").toHaveLength(1);
 
     // Each browser joins the meeting with the token it was handed (the fixture is told; it never trusts a page).
-    video.setLivePublisher(second.id, true);
-    video.setLivePublisher(video.participantFor(newcomer.personId)!.id, true);
+    await goLive(second.id);
+    await goLive(video.participantFor(newcomer.personId)!.id);
     await np.getByTestId("room-state-retry").click();
 
     // ── both seated on the meeting's word: the game is made under `required` ──
@@ -1373,7 +1604,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   });
 
   test("I2: the player who stays RELOADS inside the re-pair gap — the re-pair card, never 'not available'; the page re-asks itself, lands in the room once re-paired, and is seated in the NEW meeting with no further action", async ({ page, browser, request }) => {
-    test.setTimeout(budget(10));
+    test.setTimeout(liveBudget(3, budget(10)));
     // Its own Swiss round, as R3-1's: playable, so the game can really be made at the fixture.
     const names = [`Qi Reload ${TAG}`, `Ray Reload ${TAG}`, `Sol Reload ${TAG}`, `Tao Reload ${TAG}`];
     const r = await seedOnlineRound(request, names, { camera: "required", stage: "swiss", clock: TC, playable: true });
@@ -1399,7 +1630,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await sp.getByTestId("room-checkin-cta").click();
     await expect(screen(sp)).toHaveAttribute("data-screen", "cameraRequired", { timeout: 30_000 });
     const first = video.participantFor(stayer.personId)!;
-    video.setLivePublisher(first.id, true);
+    await goLive(first.id);
     await sp.getByTestId("room-state-retry").click();
     await expect(screen(sp)).toHaveAttribute("data-screen", "checkin", { timeout: 20_000 });
     expect(await checkedInAt(board1.fixtureId, stayer.personId), "premise — checked in").not.toBeNull();
@@ -1479,8 +1710,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(both, "two rooms on file now, the stayer's among them").toHaveLength(2);
     expect(both, "the stayer's room is still the one the landing made").toContain(fresh[0]!.meeting_id);
     expect(video.participantFor(newcomer.personId)?.meetingId, "the newcomer is in the OTHER room").toBe(both.find((id) => id !== fresh[0]!.meeting_id));
-    video.setLivePublisher(second.id, true);
-    video.setLivePublisher(video.participantFor(newcomer.personId)!.id, true);
+    await goLive(second.id);
+    await goLive(video.participantFor(newcomer.personId)!.id);
     await np.getByTestId("room-state-retry").click();
     await expectLichessReached(() => lichessCallsFor([stayer, newcomer]).length, board1.fixtureId, 30_000);
     await expect.poll(async () => (await bridgeRow(board1.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
