@@ -333,18 +333,20 @@ export async function scoreEvent(
 
   // R10 M3: everything from here on runs AFTER the event committed, so the
   // invalidation and the pushes sit in `finally`. A post-commit hook that
-  // throws (`onDecided` and `refreshDiscipline` do not swallow their own
-  // failures) used to skip both, and the public pages kept serving the old
+  // throws used to skip both, and the public pages kept serving the old
   // document for a score that already stood: the shape F3 fixed in
-  // event-import.ts. The hook's error still propagates unchanged: `finally`
-  // rethrows it once the awaited invalidation is done, and the invalidation's
-  // own `.catch` means its failure can never replace it.
+  // event-import.ts. The hooks after the advance's fill are best-effort now
+  // (lots-draw fix, 2026-11-18): onDecided's table and bracket hooks, the
+  // discipline refresh below and refreshNews each log a failure by name and
+  // never fail the score. What can still throw is onDecided's fill
+  // transaction itself, which stays loud by ruling; its error propagates
+  // unchanged: `finally` rethrows it once the awaited invalidation is done,
+  // and the invalidation's own `.catch` means its failure can never replace it.
   // R10h: the fixtures this score named a winner (or loser) INTO, from the
   // advance's own write. The `finally` below reads it as it stands when it
-  // runs, so a throw from a LATER hook (discipline, news) still publishes
-  // them. A throw from inside `onDecided` itself, after its fill committed,
-  // does not — that path leaves the next fixture on its own 30s TTL, which is
-  // what every score did before this change.
+  // runs. A throw from inside `onDecided`'s fill does not reach it — that
+  // path leaves the next fixture on its own 30s TTL, which is what every
+  // score did before this change.
   // Player stats (owner ruling 2026-09-16, option B): a result, or an undo that
   // may have changed one, refolds the division's stat snapshot AFTER the
   // response (`player-stats-refresh.ts`, which explains the timing and the
@@ -373,7 +375,17 @@ export async function scoreEvent(
     if ((result.outcome !== null && result.status !== "needs_decision") || input.type === "core.void") {
       const filled = await onDecided(auth, fixtureId);
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
-      await refreshDiscipline(auth, fixtureId);
+      // Best-effort like refreshNews (which swallows its own): the result already stands, so a fold that throws (a dropped
+      // connection, a rule set it cannot read) is logged by name and never skips the news draft or the idempotency answer.
+      // The fold reads the division's whole ledger, so its next run (the division's next result or void) catches it up.
+      try {
+        await refreshDiscipline(auth, fixtureId);
+      } catch (err) {
+        log.error(
+          { err, event: "discipline_refresh_failed", fixtureId },
+          "scoring: the discipline fold did not run after the score (score write unaffected; the next result's fold catches it up)",
+        );
+      }
       await refreshNews(auth, fixtureId);
     }
 

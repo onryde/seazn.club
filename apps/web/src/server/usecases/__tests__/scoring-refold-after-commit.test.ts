@@ -21,11 +21,12 @@ import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
-import { post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { post, tip } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { createStages, generateStageFixtures } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -34,8 +35,50 @@ const inject = vi.hoisted(() => ({
   failStaleMark: 0,
   trapReadyAfterStaleMark: false,
   trapReady: false,
+  failDiscipline: 0,
+  disciplineFolds: 0,
+  drafted: [] as string[],
+  cacheSets: [] as { key: string; value: unknown }[],
   fired: 0,
 }));
+// scoreEvent's own post-commit hooks after onDecided (fix round 3, review m-1): the discipline fold (`detectSuspensions`,
+// which `refreshDiscipline` runs for a division with an enabled rule set), the news draft refreshNews makes for a division
+// with auto_posts on, and the idempotency cache write. Passthrough witnesses; the fold throws once when armed.
+vi.mock("../discipline", async (orig) => {
+  const real = await orig<typeof import("../discipline")>();
+  return {
+    ...real,
+    detectSuspensions: vi.fn(async (...args: Parameters<typeof real.detectSuspensions>) => {
+      if (inject.failDiscipline > 0) {
+        inject.failDiscipline--;
+        inject.fired++;
+        throw new Error("Connection terminated unexpectedly");
+      }
+      inject.disciplineFolds++;
+      return real.detectSuspensions(...args);
+    }),
+  };
+});
+vi.mock("../org-posts", async (orig) => {
+  const real = await orig<typeof import("../org-posts")>();
+  return {
+    ...real,
+    draftPostsForDecidedFixture: vi.fn(async (...args: Parameters<typeof real.draftPostsForDecidedFixture>) => {
+      inject.drafted.push(args[1]);
+      return real.draftPostsForDecidedFixture(...args);
+    }),
+  };
+});
+vi.mock("@/lib/cache", async (orig) => {
+  const real = await orig<typeof import("@/lib/cache")>();
+  return {
+    ...real,
+    cacheSet: async (...args: Parameters<typeof real.cacheSet>) => {
+      inject.cacheSets.push({ key: args[0], value: args[1] });
+      return real.cacheSet(...args);
+    },
+  };
+});
 vi.mock("../stages", async (orig) => {
   const real = await orig<typeof import("../stages")>();
   return {
@@ -101,6 +144,7 @@ afterAll(async () => {
 
 afterEach(() => {
   inject.failNext.clear();
+  inject.failDiscipline = 0;
   inject.failStaleMark = 0;
   inject.trapReadyAfterStaleMark = false;
   inject.trapReady = false;
@@ -276,5 +320,38 @@ describe.skipIf(!HAS_DB)("post-commit hooks that fail after the score committed"
     expect((await win(r.auth, f3)).status).toBe("decided");
     expect(logged(errors, "auto_advance_check_failed"), "no further failure logged").toHaveLength(1);
     expect(await state(r, f3)).toEqual({ fixture: "decided", played: 6, autoAdvanced: 1, koSeated: 2, league: "complete" });
+  }, 120_000);
+
+  it("a failed discipline refresh: answered and logged, the news draft and the idempotency cache still written; the next result folds", async () => {
+    const r = await rig();
+    const [f1, f2] = r.fixtures as [string, string, string];
+    await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
+    // An enabled (empty) rule set, so refreshDiscipline folds whenever it runs (held-behaviours.test.ts's witness).
+    await sql`
+      insert into discipline_rules (org_id, division_id, enabled, rules)
+      values (${r.auth.orgId}, ${r.divisionId}, true, ${sql.json({ accumulation: [], dismissal: [] })})`;
+    const errors = vi.spyOn(log, "error");
+    await post(r.auth, f1, "core.start");
+    const key = randomUUID();
+    const out = await firesOnce(async () => {
+      inject.failDiscipline = 1;
+      return scoreEvent(r.auth, f1, { expected_seq: await tip(f1), type: "generic.result", payload: { p1Score: 1, p2Score: 0 }, idempotency_key: key } as never);
+    });
+    expect(out.status, "scoreEvent answers the committed result").toBe("decided");
+    expect(
+      logged(errors, "discipline_refresh_failed").map((o) => o.fixtureId),
+      "the failure is logged by name, with the fixture",
+    ).toEqual([f1]);
+    expect(inject.drafted.filter((id) => id === f1), "refreshNews still ran for the result").toEqual([f1]);
+    expect(
+      inject.cacheSets.filter((c) => (c.value as { event_id?: string } | null)?.event_id === out.event_id).length,
+      "the idempotency cache still holds the answer",
+    ).toBe(1);
+
+    // the sequence: the next result, nothing armed, folds the discipline and logs nothing more
+    const folds = inject.disciplineFolds;
+    expect((await win(r.auth, f2)).status).toBe("decided");
+    expect(inject.disciplineFolds - folds, "the next result's discipline fold ran").toBe(1);
+    expect(logged(errors, "discipline_refresh_failed"), "no further failure logged").toHaveLength(1);
   }, 120_000);
 });
