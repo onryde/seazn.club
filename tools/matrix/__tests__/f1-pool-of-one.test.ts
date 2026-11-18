@@ -8,7 +8,7 @@ import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { decideState } from "../lib/results.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
-import { cutBeyondFieldExpected, cutItems, poolOfOneExpected } from "../lib/scenarios/f1-odd-field.ts";
+import { cutBeyondFieldExpected, cutItems, poolItems, poolOfOneExpected } from "../lib/scenarios/f1-odd-field.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { invariantsApply, type CaseSpec, type ScenarioContext } from "../lib/scenarios/types.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
@@ -160,5 +160,41 @@ describe("cutItems: a cut refusal the field does not owe is a failed item, never
   it("owed: every item passes on the right numbers; not owed: the first item fails", () => {
     expect(cutItems(refusal, { qualified: 8, max: 7 }).map((i) => i.ok)).toEqual([true, true, true, true]);
     expect(cutItems(refusal, null).map((i) => i.ok)[0], "the gate over-refused a field that supplies the cut").toBe(false);
+  });
+});
+
+// Fix round 1 (Task 25 review): the status is half of what a refusal IS. Both items below were mutation survivors - deleting the status
+// predicate left every test green, because each fixture the suite refused with already carried 422. So each is now refused with the right
+// text and a status or code that is wrong, and the same refusal at 422 beside it, so a pass cannot come from the fixture alone.
+describe("a refusal's status and code are judged as well as its text (the survivors of the cut and pool items)", () => {
+  const cutMessage = "8 can't qualify from this field: it can supply at most 7.";
+  const owedCut = { qualified: 8, max: 7 };
+  const poolExtra = { reason: "group_too_few_entrants", groups: 4, entrants: 7, required: 8, suggested: 3 };
+  const owedPool = { groups: 4, required: 8, suggested: 3 };
+
+  it("cutItems: the cut's text at 409 (or any status but 422) fails the status item, and only it; at 422 every item passes", () => {
+    let checked = 0;
+    for (const status of [409, 400, 500, 200]) {
+      const items = cutItems(new RefusedCall("POST", "/api/v1/divisions/d1/start", status, "RR_CUT_EXCEEDS_FIELD", cutMessage), owedCut);
+      expect(items.map((i) => i.ok), `status ${status}`).toEqual([true, false, true, true]);
+      expect(items[1]!.note).toContain(`Start answered ${status} RR_CUT_EXCEEDS_FIELD, want 422`);
+      checked++;
+    }
+    expect(cutItems(new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD", cutMessage), owedCut).map((i) => i.ok)).toEqual([true, true, true, true]);
+    expect(checked).toBe(4);
+  });
+
+  it("poolItems: the pool refusal's extras at 409, or under a code that is not STAGE_NOT_READY, fail its first item, and only it; at 422 STAGE_NOT_READY every item passes", () => {
+    const refusal = (status: number, code: string) => new RefusedCall("POST", "/api/v1/divisions/d1/start", status, code, "a pool of one", null, poolExtra);
+    const good = poolItems(refusal(422, "STAGE_NOT_READY"), 7, owedPool, null);
+    expect(good.map((i) => i.ok)).toEqual([true, true, true, true, true, true]);
+    let checked = 0;
+    for (const [status, code] of [[409, "STAGE_NOT_READY"], [400, "STAGE_NOT_READY"], [422, "RR_CUT_EXCEEDS_FIELD"], [422, "VALIDATION"], [409, "OTHER"]] as const) {
+      const items = poolItems(refusal(status, code), 7, owedPool, null);
+      expect(items.map((i) => i.ok), `${status} ${code}`).toEqual([false, true, true, true, true, true]);
+      expect(items[0]!.note, `${status} ${code}`).toContain(`Start answered ${status} ${code}, want 422 STAGE_NOT_READY`);
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });

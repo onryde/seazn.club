@@ -142,7 +142,7 @@ export function cutItems(refusal: RefusedCall, owed: ReturnType<typeof cutBeyond
   ];
 }
 
-function poolItems(refusal: RefusedCall | null, field: number, owed: ReturnType<typeof poolOfOneExpected>, cut: ReturnType<typeof cutBeyondFieldExpected>): Item[] {
+export function poolItems(refusal: RefusedCall | null, field: number, owed: ReturnType<typeof poolOfOneExpected>, cut: ReturnType<typeof cutBeyondFieldExpected>): Item[] {
   if (refusal === null) return [{ ok: false, note: `Start accepted ${field} entrants${owed === null ? "" : ` in ${owed.groups} pools (the product drew a pool of one: ST-G5 is back)`}${cut === null ? "" : ` for a cut of ${cut.qualified} the field supplies ${cut.max} of (RB5-E6 is back)`}` }];
   const extra = refusal.extra ?? {};
   if (owed === null) return [{ ok: false, note: `Start answered ${refusal.status} ${refusal.code ?? "none"}, want 422 RR_CUT_EXCEEDS_FIELD (the field owes the cut's refusal alone)` }];

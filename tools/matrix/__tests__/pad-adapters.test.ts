@@ -213,7 +213,7 @@ describe("the pad adapter registry", () => {
       }
     }
     console.info(`pad-adapters: ${checked} registered fallback(s) declare writes and a judge`);
-    expect(checked).toBe(5); // football goal, cricket innings, icehockey and hockey advances, cricket super-over ball (Task 21)
+    expect(checked).toBe(6); // football goal, cricket innings, icehockey and hockey advances, cricket super-over ball (Task 21), tennis Start (toss + core.start)
   });
 
   it("I-1: registration refuses by name a fallback with no judge, or one that declares no row type it writes; its positive pair registers, frozen", () => {
@@ -372,8 +372,10 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
     expect(seen["core.settle"], `${sport}: no settle was generated`).toBeGreaterThan(0);
   });
 
-  it("core.start is the pad's Start match button", () => {
-    expect(a.stepsFor({ type: "core.start", payload: {} }, { cfg: {}, entrants: { home: HOME, away: AWAY } })).toEqual([{ kind: "testid", testid: START_MATCH_TESTID }]);
+  it("core.start is the pad's Start match button (tennis's Start then asks who serves first: its home chip answers)", () => {
+    const start = a.stepsFor({ type: "core.start", payload: {} }, { cfg: {}, entrants: { home: HOME, away: AWAY } });
+    // The toss is a tennis-only question (TN-TS-1); every other sport's Start is the one tap.
+    expect(start).toEqual(sport === "tennis" ? [{ kind: "testid", testid: START_MATCH_TESTID }, { kind: "chip", chipId: "home" }] : [{ kind: "testid", testid: START_MATCH_TESTID }]);
   });
 });
 
@@ -868,7 +870,7 @@ describe("tennis", () => {
         const pad = makeTennisPad();
         for (const e of stream) {
           const steps = pad.stepsFor(e, ctxOf(r));
-          if (e.type !== TENNIS_SUMMARY) { expect(steps).toEqual([{ kind: "testid", testid: START_MATCH_TESTID }]); continue; }
+          if (e.type !== TENNIS_SUMMARY) { expect(steps).toEqual([{ kind: "testid", testid: START_MATCH_TESTID }, { kind: "chip", chipId: "home" }]); continue; }
           const p = e.payload as { home: number; away: number; tb?: { home: number; away: number } };
           expect(steps, `${variant} ${path} ${winner}: ${JSON.stringify(p)}`).toEqual(tennisSteps(p));
           expect(Math.max(p.home, p.away), `${variant} ${path}: games/points within the sheet's bound`).toBeLessThanOrEqual(maxOf(p.tb === undefined ? plainAction : tbAction, "home"));
@@ -924,8 +926,8 @@ describe("tennis", () => {
     expect(cases.filter((c) => !c[5]).length, "both answers are witnessed").toBeGreaterThan(0);
   });
 
-  it("Step 0: the 6-3 row Step 0 saw (no tb key) is equal to the generated summary; no fallback, no tolerated key", () => {
-    expect(tennisPad.fallbacks).toEqual([]);
+  it("Step 0: the 6-3 row Step 0 saw (no tb key) is equal to the generated summary; no summary fallback, no tolerated key", () => {
+    expect(tennisPad.fallbacks.map((f) => f.eventType)).toEqual(["core.start"]); // the Start's toss, never the summary
     const { sums } = summariesOf("tennis", TENNIS_SUMMARY, "home");
     const seen = { id: "r2", seq: 2, type: TENNIS_SUMMARY, payload: { away: 3, home: 6 } };
     expect(compareRow(sums[0]!, seen, tennisPad)).toEqual({ verdict: "equal", note: null });
@@ -943,6 +945,86 @@ describe("tennis", () => {
     expect(TENNIS_SUMMARY).toBe("tennis.set_summary");
     expect(sportModule("tennis")).toBe(tennis);
     expect(Object.keys(tennis.eventSchemas ?? {})).toContain(TENNIS_SUMMARY);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1 (Task 25, I-1): a tennis Start asks "Who serves first?" (TN-TS-1), so core.start is the toss row and the start row.
+
+/** tennis as the product writes it (start-match-control.tsx -> runTossThenStart): the Start tap alone opens the question and
+ *  writes NOTHING; a chip answers it (`pad-dock-chip-<side>`) and writes tennis.toss {serving: that side's entrant}, then
+ *  core.start. A set sheet writes one tennis.set_summary of the numbers typed. `tossRows` lets a test bend what the answer writes. */
+function tennisModel(ctx: TapAdapterContext, tossRows: (serving: string) => RowIn[] = (serving) => [{ type: "tennis.toss", payload: { serving } }, { type: "core.start", payload: {} }]) {
+  return (taps: readonly string[]): RowIn[] => {
+    const chip = taps.length === 2 && taps[0] === START_SEL ? CHIP_ID.exec(taps[1]!) : null;
+    if (chip !== null && (chip[1] === "home" || chip[1] === "away")) return tossRows(ctx.entrants[chip[1]]);
+    if (taps[0] === TILE(TENNIS_SET_SCORE_TILE)) {
+      const numSel = `${selectorForTapStep({ kind: "number", value: 0 })}=`;
+      const nums = taps.filter((t) => t.startsWith(numSel)).map((t) => Number(t.slice(numSel.length)));
+      return [{ type: TENNIS_SUMMARY, payload: nums.length > 2 ? { home: nums[0], away: nums[1], tb: { home: nums[2], away: nums[3] } } : { home: nums[0], away: nums[1] } }];
+    }
+    return [];
+  };
+}
+
+describe("tennis Start: the toss is answered, then core.start (fix round 1, I-1)", () => {
+  it("the real replay of every generated tennis stream, on a pad that writes the toss only for a chip, ends with no finding; the Start is the toss row and the start row", async () => {
+    let streams = 0;
+    for (const winner of ["home", "away"] as const) {
+      const cfg = resolveSportCfg("tennis", offlineBuilderDefault("tennis"));
+      const r = req("tennis", cfg, { kind: "win", winner });
+      const evs = generateStream(r);
+      const { res, ledger } = await replayOnModel(makeTennisPad(), evs, ctxOf(r), tennisModel(ctxOf(r)));
+      expect(res.findings, winner + JSON.stringify(res.findings)).toEqual([]);
+      expect(res.rows[0]!.verdict, winner).toBe("fallback");
+      expect(res.rows[0]!.stored.map((x) => x.type), winner).toEqual(["tennis.toss", "core.start"]);
+      expect((res.rows[0]!.stored[0]!.payload as { serving: string }).serving, "the home chip").toBe(r.home);
+      expect(res.rows.slice(1).every((x) => x.verdict === "equal"), winner).toBe(true);
+      expect(ledger.length, winner).toBe(evs.length + 1); // one extra row: the toss
+      streams++;
+    }
+    expect(streams).toBe(2);
+  });
+
+  it("without the chip the Start tap alone writes no row: the replay stops on a missing row (the toss is not optional)", async () => {
+    const cfg = resolveSportCfg("tennis", offlineBuilderDefault("tennis"));
+    const r = req("tennis", cfg, { kind: "win", winner: "home" });
+    const real = makeTennisPad();
+    const startOnly: MatrixPadAdapter = { ...real, stepsFor: (e, c) => real.stepsFor(e, c).filter((s) => s.kind !== "chip") };
+    const { res } = await replayOnModel(startOnly, generateStream(r), ctxOf(r), tennisModel(ctxOf(r)));
+    expect(res.findings.join("\n")).toMatch(/0 of 2 row\(s\)|row missing/);
+    expect(res.rows[0]!.verdict).toBe("missing");
+  });
+
+  it("the Start's judge accepts the toss-then-start rows and refuses each way they can be wrong, each by name", () => {
+    const cfg = resolveSportCfg("tennis", offlineBuilderDefault("tennis"));
+    const r = req("tennis", cfg, { kind: "win", winner: "home" });
+    const pad = makeTennisPad();
+    pad.stepsFor(START, ctxOf(r)); // records the home entrant the toss must name
+    const judge = pad.fallbacks[0]!.judge!;
+    const row = (seq: number, type: string, payload: unknown): LedgerRow => ({ id: `r${seq}`, seq, type, payload });
+    const toss = (payload: unknown) => row(1, "tennis.toss", payload);
+    const start = row(2, "core.start", {});
+    expect(pad.fallbacks[0]!.rowsFor(START, ctxOf(r))).toBe(2);
+    expect(judge(START, [toss({ serving: r.home }), start])).toEqual({ ok: true, note: null });
+    const bad: Array<[string, readonly LedgerRow[], RegExp]> = [
+      ["the away chip's toss", [toss({ serving: r.away }), start], /pad answers the home chip/],
+      ["a toss naming nobody", [toss({ serving: "" }), start], /pad answers the home chip/],
+      ["a non-string serving", [toss({ serving: 1 }), start], /pad answers the home chip/],
+      ["an extra toss key", [toss({ serving: r.home, extra: 1 }), start], /pad answers the home chip/],
+      ["no serving key", [toss({}), start], /pad answers the home chip/],
+      ["a start before the toss", [row(1, "core.start", {}), row(2, "tennis.toss", { serving: r.home })], /first row is core.start, not tennis.toss/],
+      ["a second row that is not core.start", [toss({ serving: r.home }), row(2, "tennis.set_summary", { home: 6, away: 0 })], /second row is tennis.set_summary, not core.start/],
+      ["a start carrying a payload", [toss({ serving: r.home }), row(2, "core.start", { x: 1 })], /core.start carries .*not an empty payload/],
+      ["one row", [toss({ serving: r.home })], /1 rows, where a tennis Start writes/],
+      ["three rows", [toss({ serving: r.home }), start, row(3, "core.start", {})], /3 rows, where a tennis Start writes/],
+    ];
+    for (const [name, rows, note] of bad) {
+      const j = judge(START, rows);
+      expect(j.ok, name).toBe(false);
+      expect(j.note, name).toMatch(note);
+    }
+    expect(bad.length).toBe(10);
   });
 });
 
@@ -1680,7 +1762,7 @@ describe("cricket", () => {
       const r = req("cricket", cfg, { kind: "win", winner });
       const evs = generateStream(r);
       const { res, ledger } = await replayOnModel(cricketPad, evs, ctxOf(r), cricketModel(ctxOf(r)));
-      expect(res.findings, winner).toEqual([]);
+      expect(res.findings, winner + JSON.stringify(res.findings)).toEqual([]);
       expect(res.rows.map((x) => x.verdict)).toEqual(["equal", "fallback", "fallback"]);
       for (const row of res.rows.slice(1)) {
         expect(row.stored.length).toBe(Math.ceil((row.expected.payload as { legalBalls: number }).legalBalls / bpo));
@@ -2409,7 +2491,7 @@ describe("carrom", () => {
       const r = req("carrom", cfg, { kind: "win", winner });
       const evs = generateStream(r);
       const { res, ledger } = await replayOnModel(carromPad, evs, ctxOf(r), carromModel(ctxOf(r)));
-      expect(res.findings, winner).toEqual([]);
+      expect(res.findings, winner + JSON.stringify(res.findings)).toEqual([]);
       expect(res.rows.every((x) => x.verdict === "equal")).toBe(true);
       boards += res.rows.length - 1;
       expect(matchesRequest(r, foldStream(carrom, cfg, HOME, AWAY, asEvents(ledger)).outcome), winner).toBe("match");
