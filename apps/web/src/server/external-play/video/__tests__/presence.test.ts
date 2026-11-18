@@ -39,7 +39,10 @@ import {
 import { putVideoMeeting, putVideoParticipant, seedOnlineChessFixture } from "../../../usecases/__tests__/_external-play-seed";
 
 const DB = !!process.env.DATABASE_URL;
-const T0 = new Date("2026-11-17T10:00:00.000Z");
+// Derived from the wall clock, never a fixed date: the retention prune (Task 10b) runs on the real clock in every sweep pass and
+// deletes by `received_at`, so a COMMITTED row stamped a fixed 2026-11-17 would be deleted mid-test by another file's pass once it
+// is 30 days old. Whole seconds, so a stamp round-trips through timestamptz unchanged.
+const T0 = new Date(Math.floor(Date.now() / 1000) * 1000);
 const at = (ms: number) => new Date(T0.getTime() + ms);
 const SEC = 1_000;
 
@@ -561,6 +564,12 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
     };
     // canonical order: every joined, then every left, then the end (the order a well-behaved vendor delivers)
     const rank = (key: string) => (key.startsWith("j") ? 0 : key.startsWith("l") ? 1 : 2);
+    type Scenario = { peers: Peer[]; endedOff: number | null; ended2Off: number | null };
+    const exampleOf = (sc: Scenario, order: (base: { key: string; ev: RealtimeKitEvent }[]) => { key: string; ev: RealtimeKitEvent }[], dups: number) => ({
+      sc,
+      seq: order(eventsOf("m-shape", sc.peers, sc.endedOff, sc.ended2Off)),
+      dups,
+    });
 
     let cases = 0;
     let reordered = 0;
@@ -629,7 +638,19 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
           },
         )
         ,
-      { numRuns: 120 },
+      {
+        numRuns: 120,
+        // GUARANTEE the counted cases instead of hoping 120 random scenarios reach them (the "joined after every end" case once
+        // missed: a sessionless peer, no leave, joining past every end, is a small corner of the generator). Examples run first
+        // through the same property body, so the counters below move on them.
+        examples: [
+          // A: two sessionless, never-left peers. peer-0 joins at 140, after both ends (100, 130) -> stays open; peer-1 joins at 70,
+          // before both -> closed by the EARLIER of two distinct ends. Applied in reverse with a repeat.
+          [exampleOf({ peers: [{ sessionless: true, joinedOff: 140, leftOff: null }, { sessionless: true, joinedOff: 70, leftOff: null }], endedOff: 100, ended2Off: 130 }, (b) => [...b].reverse().concat([b[0]!]), 1)],
+          // B: a leave that arrives AFTER its session's end (j0, e, l0), plus a repeated join.
+          [exampleOf({ peers: [{ sessionless: false, joinedOff: 5, leftOff: 30 }], endedOff: 90, ended2Off: null }, (b) => [b[0]!, b[2]!, b[1]!, b[0]!], 1)],
+        ],
+      },
     );
     expect(cases, "cases run").toBeGreaterThanOrEqual(100);
     expect(sessionlessChecked, `null-session peer rows checked: ${sessionlessChecked}`).toBeGreaterThan(0);
@@ -794,8 +815,8 @@ describe.skipIf(!DB)("currentPresence / everJoined / peersOf / recordPresenceFro
     expect(inside).toMatchObject({ peerId: p, source: "read", receivedAt: R, joinedAt: at(90 * SEC) });
     expect(await currentPresence(sql, { ...ids(b), now: at(100 * SEC + PRESENCE_READ_TRUST_MS) }), "at exactly the trust window the hint is spent").toBeNull();
     expect(await currentPresence(sql, { ...ids(b), now: at(100 * SEC + 10 * PRESENCE_READ_TRUST_MS) })).toBeNull();
-    // the default `now` is the wall clock: this row was received in 2026-11, so by then it is long spent
-    expect(R.getTime() + PRESENCE_READ_TRUST_MS, "premise: R + trust is not in the future").toBeLessThan(Date.now() + 10 * 365 * 86_400_000);
+    // T0 is the wall clock at load (a few days at most before this runs), so R is recent and the premise below is real
+    expect(Date.now() - T0.getTime(), "premise: the stamps are anchored on the real clock").toBeLessThan(86_400_000);
 
     // a webhook joined for the SAME peer upgrades the row: current at any later now
     await applyPresenceEvent(sql, joinedEv({ meetingId: b.homeMeeting, peerId: p, custom: b.home.personId, joinedAt: at(90 * SEC) }), at(105 * SEC));
@@ -1130,6 +1151,26 @@ describe.skipIf(!DB)("prunePresence (retention)", () => {
     });
   });
 
+  it("a row EXACTLY at its table's cutoff stays (strictly before is the rule); one millisecond older goes", async () => {
+    await inRolledBackTx(async (tx) => {
+      const dEdge = await delivery(tx, WEEK);
+      const pEdge = await presence(tx, MONTH);
+      const eEdge = await ended(tx, MONTH);
+      const dPast = await delivery(tx, WEEK + 1);
+      const pPast = await presence(tx, MONTH + 1);
+      const ePast = await ended(tx, MONTH + 1);
+
+      const r = await prunePresence(tx, NOW);
+
+      expect(r, "only the three rows a millisecond past their cutoff are deleted").toEqual({ deliveries: 1, presence: 1, endedSessions: 1 });
+      const edge = [await deliveryExists(tx, dEdge), await presenceExists(tx, pEdge), await endedExists(tx, eEdge)];
+      const past = [await deliveryExists(tx, dPast), await presenceExists(tx, pPast), await endedExists(tx, ePast)];
+      expect(edge, "the rows at exactly the cutoff stay").toEqual([true, true, true]);
+      expect(past, "the rows a millisecond older are gone").toEqual([false, false, false]);
+      expect(edge.length + past.length, "anti-vacuity: six rows checked").toBe(6);
+    });
+  });
+
   it("a second call finds nothing to delete (zeros), and the kept rows survive it", async () => {
     await inRolledBackTx(async (tx) => {
       await delivery(tx, WEEK + SEC);
@@ -1173,6 +1214,7 @@ describe.skipIf(!DB)("presence rows are purged with their fixture", () => {
     const neighbour = await board();
     await joined(doomed);
     await joined(neighbour);
+    parkedMade.push(doomed.homeMeeting, doomed.awayMeeting); // the delete parks both rooms (V460); afterAll cleans video_rooms_to_end
     expect([await rowsOfFixture(doomed.fixtureId), await rowsOfFixture(neighbour.fixtureId)], "premise: two rows each").toEqual([2, 2]);
 
     await withTenant(doomed.orgId, async (tx) => {
@@ -1189,13 +1231,13 @@ describe.skipIf(!DB)("presence rows are purged with their fixture", () => {
     await joined(doomed);
     await joined(neighbour);
     expect(await rowsOfFixture(doomed.fixtureId), "premise: two rows").toBe(2);
+    parkedMade.push(doomed.homeMeeting, doomed.awayMeeting); // the cascade parks both rooms (V460)
 
     await deleteCompetition(owner(doomed), doomed.competitionId);
 
     expect(await sql`select 1 from fixtures where id = ${doomed.fixtureId}`, "premise: the fixture went with its competition").toHaveLength(0);
     expect(await rowsOfFixture(doomed.fixtureId), "no presence row of the deleted competition's board is left").toBe(0);
     expect(await rowsOfFixture(neighbour.fixtureId)).toBe(2);
-    parkedMade.push(doomed.homeMeeting, doomed.awayMeeting); // the cascade parked both rooms (V460)
   });
 
   it("a meeting row deleted on its own (a re-pair) is no fixture delete: the presence rows stay", async () => {
@@ -1209,6 +1251,7 @@ describe.skipIf(!DB)("presence rows are purged with their fixture", () => {
   it("a fixture with no presence row deletes without a word (the empty case)", async () => {
     const b = await board();
     expect(await rowsOfFixture(b.fixtureId), "premise: none").toBe(0);
+    parkedMade.push(b.homeMeeting, b.awayMeeting); // the delete parks both rooms (V460)
     await withTenant(b.orgId, async (tx) => {
       await tx`delete from fixtures where id = ${b.fixtureId}`;
     });

@@ -16,7 +16,9 @@ import { forgetWebhookKey } from "../webhook-signature";
 import { receiveRealtimeKitWebhook as receive, type WebhookDeps } from "../webhook";
 
 const DB = !!process.env.DATABASE_URL;
-const T0 = new Date("2026-11-17T10:00:00.000Z");
+// Wall-clock anchored, never a fixed date: the retention prune runs on the real clock in every sweep pass, so a committed row
+// stamped a fixed 2026-11-17 would be deleted mid-test by another file's pass once it is 30 days old.
+const T0 = new Date(Math.floor(Date.now() / 1000) * 1000);
 
 const pair = () => {
   const k = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -293,7 +295,9 @@ describe.skipIf(!DB)("receiveRealtimeKitWebhook", () => {
   it("passes the held board it gated on to apply, and the receipt time as the injected clock", async () => {
     const w = joined();
     const apply = vi.fn<NonNullable<WebhookDeps["apply"]>>((db, ev, at, held) => applyPresenceEvent(db, ev, at, held));
-    const now = new Date("2026-11-17T12:34:56.000Z");
+    // three hours before the real clock: distinguishable from the default clock (so the injection is proven), still far inside the
+    // retention window (a committed row received a fixed date would be pruned by another file's sweep pass once old enough)
+    const now = new Date(Math.floor(Date.now() / 1000) * 1000 - 3 * 3_600_000);
     expect(await receive(w, { publicKey, apply, now })).toEqual({ status: 200, outcome: "applied" });
     expect(apply).toHaveBeenCalledTimes(1);
     const [, ev, at, held] = apply.mock.calls[0]!;
