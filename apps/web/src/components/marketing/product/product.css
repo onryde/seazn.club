@@ -303,3 +303,41 @@
 .mkp-off[data-section=courtstream] .mkp-off-p{grid-template-columns:minmax(0,1fr);max-width:520px}
 /* four choices do not fit one row of a 320 screen in Spanish or French: two by two there */
 @media (max-width:374px){.mkp-track[data-n="4"]{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+
+/* Registration demo (owner 2026-11-18, option A): a player's phone, the entry list, the money. */
+.mkp-regphone{background:var(--mk-cream);color:var(--mk-night);border-radius:20px;padding:14px;display:grid;gap:8px}
+.mkp-regphone strong{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:24px;line-height:1.05}
+.mkp-regsub{font-size:12.5px;color:#5d5873;margin-top:-4px}
+.mkp-regphone dl{display:grid;gap:6px;margin-top:4px}
+.mkp-regphone dt{font-size:11.5px;color:#5d5873}
+.mkp-regphone dd{background:#fff;border:1px solid #e6dff3;border-radius:9px;padding:8px 10px;font-size:14.5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkp-regfee{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;margin-top:4px}
+.mkp-regfee b{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:30px;line-height:1}
+.mkp-regspots{font-size:12.5px;color:#5d5873;min-height:1.4em}
+.mkp-regphone .mkp-key{width:100%;min-height:48px;font-size:15.5px}
+.mkp-regdone{font-size:14px;line-height:1.4;padding:18px 0}
+.mkp-regphone .mkp-dealfoot{margin-top:0}
+.mkp-reglist{background:var(--mk-cream);color:var(--mk-night);border-radius:16px;padding:4px 12px;display:grid}
+.mkp-reglist li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center;padding:9px 0;border-bottom:1px solid #e6dff3}
+.mkp-reglist li:last-child{border-bottom:0}
+.mkp-reglist li[data-new]{background:#efe9ff;margin:0 -12px;padding:9px 12px;border-radius:10px;border-bottom-color:transparent}
+.mkp-regwho{min-width:0;display:grid}
+.mkp-regwho b{font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mkp-regwho em{font-style:normal;font-size:12px;color:#5d5873}
+.mkp-regchip{font-size:11.5px;font-weight:700;border-radius:999px;padding:3px 9px;white-space:nowrap;justify-self:end}
+.mkp-reg-paid{background:#d9f99d;color:#274100}.mkp-reg-held{background:#fef3c6;color:#7a3d00}
+.mkp-reg-waitlisted{background:#e6dff3;color:#3b2a7a}.mkp-reg-refunded{background:#eceaf1;color:#5d5873}
+.mkp-reglist li>button{grid-column:1/-1;justify-self:start;min-height:44px;padding:0;font-size:13px;font-weight:600;color:var(--mk-purple)}
+.mkp-reglist li>span:last-child:empty{display:none}
+.mkp-regmoney{background:var(--mk-night-3, #241659);border-radius:16px;padding:16px;display:grid;gap:4px}
+.mkp-regmoney>b{font-family:var(--mk-font-display, var(--font-geist-sans));font-size:56px;line-height:1;color:var(--mk-lime);font-variant-numeric:tabular-nums}
+.mkp-regmoney>span{font-size:13px;color:#d9d2f3}
+.mkp-regmoney dl{display:grid;gap:2px;margin-top:10px;border-top:1px solid #3a2c7a;padding-top:10px}
+.mkp-regmoney dl div{display:flex;justify-content:space-between;font-size:14px;padding:3px 0}
+.mkp-regmoney dd{font-weight:700;font-variant-numeric:tabular-nums}
+.mkp-regevent{font-size:13.5px;line-height:1.4;color:var(--mk-lime);margin-top:10px;min-height:4.2em}
+@media (min-width:640px){.mkp-reglist li{grid-template-columns:minmax(0,1fr) auto auto}.mkp-reglist li>button{grid-column:auto;justify-self:end;min-width:76px;text-align:right}.mkp-reglist li>span:last-child:empty{display:block;min-width:76px}}
+/* Phone first below 900 (owner 2026-11-18): the list is long, and the control must not sit under it. */
+@media (max-width:899px){.mkp-stage.mkp-reg .mkp-t-pad{order:0}}
+@media (min-width:900px){.mkp-stage.mkp-reg{grid-template-columns:300px minmax(0,1.25fr) minmax(0,1fr)}.mkp-stage.mkp-reg .mkp-t-pad{grid-row:auto}}
+.mkp-off[data-section=entry] .mkp-off-p{grid-template-columns:minmax(0,1fr);max-width:340px;justify-self:center}

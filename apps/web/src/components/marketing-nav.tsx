@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/auth";
 import { NavScrollFlip } from "@/components/marketing/nav-scroll";
 import { MarketingMobileNav } from "@/components/marketing/mobile-nav";
-import { CalendarClock, ClipboardList, Handshake, LayoutGrid, Radio, Smartphone, Trophy, type LucideIcon } from "lucide-react";
+import { CalendarClock, ClipboardList, Handshake, LayoutGrid, Radio, Smartphone, Ticket, Trophy, type LucideIcon } from "lucide-react";
 import { NavMenu } from "@/components/marketing/nav-menu";
 import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import { NAV_GROUPS, TOP_LINKS } from "@/lib/marketing/product-nav";
@@ -10,7 +10,7 @@ import { getDictionary, t } from "@/lib/i18n";
 import { toLocale } from "@/lib/i18n-constants";
 
 /** A menu row's drawing, by the name the link ledger gives it; any other name is a sport key. */
-const MENU_ICONS: Record<string, LucideIcon> = { "layout-grid": LayoutGrid, radio: Radio, smartphone: Smartphone, trophy: Trophy, "calendar-clock": CalendarClock, "clipboard-list": ClipboardList, handshake: Handshake };
+const MENU_ICONS: Record<string, LucideIcon> = { "layout-grid": LayoutGrid, radio: Radio, smartphone: Smartphone, trophy: Trophy, "calendar-clock": CalendarClock, "clipboard-list": ClipboardList, handshake: Handshake, ticket: Ticket };
 const menuIcon = (icon: string) => {
   const Drawn = MENU_ICONS[icon];
   return Drawn ? <Drawn aria-hidden className="h-5 w-5" strokeWidth={1.75} /> : <SportIcon sportKey={icon} className="h-6 w-6" />;

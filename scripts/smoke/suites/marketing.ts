@@ -64,6 +64,13 @@ export async function marketingSuite(): Promise<void> {
   const sportsIndexHtml = await sportsIndex.text();
   check("marketing: /sports 200", sportsIndex.status === 200);
   check("marketing: /sports has a card for each sport page", sportsIndexHtml.split('data-testid="sport-card-').length - 1 === 8 && sportsIndexHtml.includes('href="/sports/ice-hockey"'));
+  const regPage = await fetch(`${BASE}/product/registration`);
+  const regHtml = await regPage.text();
+  check("marketing: /product/registration 200", regPage.status === 200);
+  check("marketing: /product/registration demo opens with places left and both ways to enter", /data-spots-left="[1-9]/.test(regHtml) && regHtml.includes('data-act="card"') && regHtml.includes('data-act="leave"'));
+  // The fees are read from the plan table: at least one row, and no unfilled placeholder.
+  const regTicket = regHtml.slice(regHtml.indexOf('data-section="ticket"'), regHtml.indexOf('data-section="questions"'));
+  check("marketing: /product/registration quotes a fee from the plan table", /\d\s?%/.test(regTicket.replace(/<[^>]+>/g, " ")) && !regTicket.includes("{fee}"));
   const matchDayPage = await fetch(`${BASE}/product/match-day`);
   const matchDayHtml = await matchDayPage.text();
   check("marketing: /product/match-day 200", matchDayPage.status === 200);
