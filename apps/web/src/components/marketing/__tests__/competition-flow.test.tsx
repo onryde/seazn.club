@@ -1,4 +1,4 @@
-// The home page's competition flow (competition-flow.tsx): seven steps in the organiser's order, complete without
+// The home page's competition flow (competition-flow.tsx): eight steps in the organiser's order, complete without
 // script, in every locale. The scroll state's two pure functions are tested here too; the wiring (what a reader sees
 // while scrolling) is e2e's job (marketing-home.spec.ts), since this suite has no DOM.
 import { describe, expect, it } from "vitest";
@@ -17,12 +17,12 @@ const render = (lang: Locale) =>
 const text = (html: string) => html.replace(/<[^>]+>/g, " ");
 
 describe("CompetitionFlow", () => {
-  it("premise: seven steps, and every locale is rendered", () => {
-    expect(FLOW_STEPS).toHaveLength(7);
+  it("premise: eight steps, and every locale is rendered", () => {
+    expect(FLOW_STEPS).toHaveLength(8);
     expect(LOCALES.length).toBe(4);
   });
 
-  it.each(LOCALES.map((l) => [l]))("%s: the seven steps appear once each, in order, with their title, stage and anchor", (lang) => {
+  it.each(LOCALES.map((l) => [l]))("%s: the eight steps appear once each, in order, with their title, stage and anchor", (lang) => {
     const html = render(lang);
     const d = DICTS[lang];
     expect(html).toContain(`id="${FLOW_ID}"`);
@@ -63,14 +63,34 @@ describe("CompetitionFlow", () => {
     }
   });
 
-  it("the streaming price line is shown in the live step, and quotes no figure", () => {
+  // Owner 2026-11-18: "Score it live" was one step holding the pad, the public page AND the stream — so tall that the
+  // progress marker sat on 6 for most of the scroll and looked stuck. Scoring and streaming are a step each.
+  it("scoring and streaming are separate steps, in that order, both on the day", () => {
+    const keys = FLOW_STEPS.map((s) => s.key);
+    expect(keys.indexOf("stream")).toBe(keys.indexOf("live") + 1);
+    expect(FLOW_STEPS.filter((s) => s.key === "live" || s.key === "stream").map((s) => s.stage)).toEqual(["day", "day"]);
     const html = render("en");
-    const live = html.slice(html.indexOf('id="flow-live"'), html.indexOf('id="flow-winner"'));
-    expect(live).toContain('data-testid="flow-stream-offer"');
-    expect(live).toContain(en["home.flow.live.offer"]);
+    const live = html.slice(html.indexOf('id="flow-live"'), html.indexOf('id="flow-stream"'));
+    const stream = html.slice(html.indexOf('id="flow-stream"'), html.indexOf('id="flow-winner"'));
+    // The pad and the public page stay with scoring; the video and its price go with streaming.
+    expect(live).toContain("mkf-pad");
+    expect(live).toContain("mkf-pub");
+    expect(live).not.toContain("mkf-vid");
+    expect(stream).toContain("mkf-vid");
+    expect(stream).not.toContain("mkf-pad");
+  });
+
+  it("the streaming price line is shown in the stream step, and quotes no figure", () => {
+    const html = render("en");
+    const live = html.slice(html.indexOf('id="flow-live"'), html.indexOf('id="flow-stream"'));
+    const stream = html.slice(html.indexOf('id="flow-stream"'), html.indexOf('id="flow-winner"'));
+    expect(stream).toContain('data-testid="flow-stream-offer"');
+    expect(stream).toContain(en["home.flow.stream.offer"]);
+    expect(live).not.toContain('data-testid="flow-stream-offer"');
     for (const l of LOCALES) {
       // Pack prices are not final (lib/stream-credit-packs.ts): the line may say "a coffee", never an amount.
-      expect(DICTS[l]["home.flow.live.offer"], l).not.toMatch(/[$£€₹]|\d/);
+      expect(DICTS[l]["home.flow.stream.offer"], l).toBeTruthy();
+      expect(DICTS[l]["home.flow.stream.offer"], l).not.toMatch(/[$£€₹]|\d/);
     }
   });
 
