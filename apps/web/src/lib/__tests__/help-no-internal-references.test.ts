@@ -9,6 +9,11 @@
 //   (a) a page leaks and is NOT in KNOWN (a new leak), or
 //   (b) a KNOWN page leaks a rule that is not listed, or lists a rule it no
 //       longer trips (a stale excuse that would hide the next regression).
+// What is scanned: title, description and the body as helpPlainText gives it (inline code
+// included, as readers see it), PLUS fenced code blocks on every page outside
+// content/help/api (readers see those too; the API reference is the developer page).
+// NOT yet scanned: image alt text and captions. They are added here when help pages
+// carry pictures (the pictures task), so a leak in a caption cannot ship past this sweep.
 // Anti-vacuity: both sources (Markdown, generated formats) must scan > 0 pages
 // and every LEAK_ALLOW entry must have suppressed at least one real hit.
 import { renderToStaticMarkup } from "react-dom/server";
@@ -65,6 +70,10 @@ const CASES: Record<LeakRule, { hit: string[]; clean: string[] }> = {
       "stored as jsonb",
       "POST to the webhook",
       "A cron job runs nightly.",
+      "Two engines compete.",
+      "Both reducers agree.",
+      "Large payloads are rejected.",
+      "Nightly crons run.",
       "Call the endpoint with your key.",
       "An entitlement unlocks the format.",
       "WEBHOOKS are signed.",
@@ -72,11 +81,28 @@ const CASES: Record<LeakRule, { hit: string[]; clean: string[] }> = {
     clean: [
       "Search for the match in the list.",
       "Entitled to a refund.",
-      "The payloads of a lorry.",
       "Engineer your own bracket.",
     ],
   },
 };
+
+/** The API reference is written for developers: webhook / endpoint are its subject there. */
+const isDeveloperPage = (section: string): boolean => section === "api";
+
+/** Fenced code block bodies (helpPlainText drops them, but readers see them). */
+function fencedCode(markdown: string): string[] {
+  return [...markdown.matchAll(/```[^\n]*\n([\s\S]*?)```/g)].map((m) => m[1]!);
+}
+
+/** The text the sweep scans for one article: what a reader sees, code blocks included outside the API section. */
+function readerText(a: { title: string; description: string; markdown: string; section: string }): string {
+  return [
+    a.title,
+    a.description,
+    helpPlainText(a.markdown),
+    ...(isDeveloperPage(a.section) ? [] : fencedCode(a.markdown)),
+  ].join(" . ");
+}
 
 describe("findLeaks: one positive and one negative per rule", () => {
   for (const rule of LEAK_RULES) {
@@ -117,6 +143,40 @@ describe("findLeaks: one positive and one negative per rule", () => {
     expect(findLeaks(text, { developerPage: true })).toEqual([]);
     // The exemption is only for those two words — engine stays a leak.
     expect(findLeaks("The engine posts a webhook.", { developerPage: true }).map((l) => l.match)).toEqual(["engine"]);
+  });
+
+  it("the API section is the developer page: webhook / endpoint pass there, and only there (real article paths)", () => {
+    const articles = allHelpArticles();
+    const api = articles.get("api/keys");
+    const other = articles.get("billing/plans");
+    expect(api, "premise: api/keys exists").toBeDefined();
+    expect(other, "premise: a non-api article exists").toBeDefined();
+    const text = "Register a webhook and call the endpoint.";
+    const asApi = readerText({ ...api!, markdown: text });
+    const asOther = readerText({ ...other!, markdown: text });
+    expect(findLeaks(asApi, { developerPage: isDeveloperPage(api!.section) })).toEqual([]);
+    expect(findLeaks(asOther, { developerPage: isDeveloperPage(other!.section) }).map((l) => l.match)).toEqual([
+      "webhook",
+      "endpoint",
+    ]);
+  });
+
+  it("fenced code is scanned outside the API section, and still not inside it", () => {
+    const md = "Intro.\n\n```json\n{ \"engine\": 1 }\n```\n";
+    const base = { title: "A title here", description: "A description here", markdown: md };
+    expect(helpPlainText(md), "premise: the plain-text pass drops the block").not.toContain("engine");
+    expect(findLeaks(readerText({ ...base, section: "billing" })).map((l) => l.match)).toEqual(["engine"]);
+    expect(findLeaks(readerText({ ...base, section: "api" }), { developerPage: true }).map((l) => l.match)).toEqual([]);
+    // Inline code is already in the plain text.
+    expect(findLeaks(readerText({ ...base, markdown: "Use `engine` here.", section: "billing" })).map((l) => l.match)).toEqual([
+      "engine",
+    ]);
+  });
+
+  it("'search engines' is ordinary English; a bare 'engines' (or the engine) still leaks", () => {
+    expect(findLeaks("It is findable by search engines.")).toEqual([]);
+    expect(findLeaks("The engines build it.").map((l) => l.match)).toEqual(["engines"]);
+    expect(findLeaks("search engine internals").map((l) => l.match)).toEqual(["engine"]);
   });
 
   it("T20 (the cricket format) is allowed; other task ids are not", () => {
@@ -217,8 +277,7 @@ describe("help copy carries no internal references", () => {
     const articles = allHelpArticles();
     let markdownScanned = 0;
     for (const a of articles.values()) {
-      const text = [a.title, a.description, helpPlainText(a.markdown)].join(" . ");
-      record(a.section, a.slug, text, a.section === "api");
+      record(a.section, a.slug, readerText(a), isDeveloperPage(a.section));
       markdownScanned += 1;
     }
 

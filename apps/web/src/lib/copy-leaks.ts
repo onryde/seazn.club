@@ -59,7 +59,7 @@ const PATTERNS: Record<LeakRule, RegExp> = {
   // V519 — a database migration number.
   "migration-number": /\bV\d{3}\b/g,
   "developer-word":
-    /\b(?:engine|reducer|payload|jsonb|webhooks?|cron|endpoints?|entitlements?)\b/gi,
+    /\b(?:engines?|reducers?|payloads?|jsonb|webhooks?|crons?|endpoints?|entitlements?)\b/gi,
 };
 
 /** developer-word matches that a developer page may use freely. */
@@ -83,6 +83,10 @@ export const LEAK_ALLOW: LeakAllow[] = [
   {
     match: "T20",
     reason: "Twenty20 is the cricket format's real name, not a task id.",
+  },
+  {
+    match: "search engines",
+    reason: "Google and the like: ordinary English for who may index a page, not the scoring engine.",
   },
   ...MATCH_CODES.map((match) => ({ match, reason: MATCH_CODE_REASON })),
 ];
