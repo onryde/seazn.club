@@ -14,7 +14,15 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { sql } from "@/lib/db";
 import { LINE_POLL_MS } from "@/components/public-site/match-room/room-snapshot";
 import { RTK_BUDGET_REFILL_PER_S } from "@/server/external-play/video/budget";
-import { LINE_RELEASE_GRACE_MS, endStay, lineActive, upsertStay, type GateAnswer } from "@/server/external-play/seat-line";
+import {
+  LINE_FALLBACK_READ_CALLS,
+  LINE_RELEASE_GRACE_MS,
+  LINE_RESERVATION_MAX,
+  endStay,
+  lineActive,
+  upsertStay,
+  type GateAnswer,
+} from "@/server/external-play/seat-line";
 import { stayMintOf } from "../external-play/preflight";
 import { configureRealtimeKit } from "./_external-play-rtk-fake";
 import { claimAt, clearBucket, holdReservation, putStay, sceneAt, seedBoard, setBucket, stayRow, stubBucket } from "./_external-play-line";
@@ -249,6 +257,49 @@ describe.skipIf(!DB)("the pool and the estimate follow the stamped prices", () =
     // for every place (3 x 9 + 8 - 4 = 31 -> 15.5 + 3 = 19) both differ.
     expect(Math.ceil((3 * 24 + 21 - 4) / 2 + 3), "premise: the old pricing says 48").toBe(48);
     expect(Math.ceil((3 * 9 + 8 - 4) / 2 + 3), "premise: pricing every place as the cheapest says 19").toBe(19);
+  });
+
+  it("a WAITING stay ahead with a null stamp is promised at the unpriced maximum, column by column: both null 21 + 3, only the recheck null 9 + 3, only the reservation null 21 + 1 - and a fully stamped one 9 + 1 for contrast", async () => {
+    // The estimate's `aheadReserved` coalesces each column on its own (`readStanding`'s ahead sum): a row from before the stamp, or one
+    // with a single column null, must not drop out of the sum (a NULL addend makes the whole row's term NULL, and `sum` skips it).
+    expect([LINE_RESERVATION_MAX, LINE_FALLBACK_READ_CALLS], "premise: the unpriced maximum and the unpriced re-verify the hand count uses").toEqual([21, 3]);
+    expect(RTK_BUDGET_REFILL_PER_S, "premise: the refill the hand count uses").toBe(2);
+    expect(LINE_POLL_MS, "premise: the near cadence the hand count uses").toBe(3_000);
+    // etaS = ceil((promised ahead + own need 8 - pool 4) / 2 + 3 s). The fourth claim is a `room` stay (need 8, flag on), not completing.
+    const CASES = [
+      { label: "both columns null", stamp: [null, null], promised: 24, etaS: 17 }, // (24 + 8 - 4) / 2 + 3 = 17
+      { label: "only recheck_cost null", stamp: [9, null], promised: 12, etaS: 11 }, // (12 + 8 - 4) / 2 + 3 = 11
+      { label: "only reservation null", stamp: [null, 1], promised: 22, etaS: 16 }, // (22 + 8 - 4) / 2 + 3 = 16
+      { label: "fully stamped (contrast)", stamp: [9, 1], promised: 10, etaS: 10 }, // (10 + 8 - 4) / 2 + 3 = 10
+    ] as const;
+    let checked = 0;
+    for (const c of CASES) {
+      const key = scene();
+      await holdReservation(key, sceneAt(0)); // an admitted, unstamped stay reserving 21: the line is active
+      await pin(key, 25); // pool = 25 - 21 = 4: the claim below is held
+      const ahead = await seedBoard();
+      await putStay({
+        fixtureId: ahead.fixtureId,
+        personId: ahead.home.personId,
+        budgetKey: key,
+        firstClaimAt: sceneAt(1_000),
+        gate: "held",
+        queuedAt: sceneAt(1_000),
+        reservation: c.stamp[0],
+        recheckCost: c.stamp[1],
+      });
+      expect(await priceOf(ahead.fixtureId, ahead.home.personId), `${c.label}: premise: the row is stored as seeded`).toEqual([...c.stamp]);
+      const d = await seedBoard();
+      const a = await claimAt(key, d, "home", sceneAt(2_000), { mint: "room", readCalls: 1 });
+      expect(a.kind, `${c.label}: held`).toBe("queued");
+      if (a.kind !== "queued") throw new Error("unreachable");
+      expect(a.line.position, `${c.label}: behind the one`).toBe(2);
+      expect(a.line.etaS, `${c.label}: ${c.promised} promised ahead`).toBe(c.etaS);
+      checked += 1;
+    }
+    expect(checked, "cases checked").toBe(4);
+    // The four estimates are four different numbers: no case is satisfied by another's value.
+    expect(new Set(CASES.map((c) => c.etaS)).size).toBe(4);
   });
 });
 

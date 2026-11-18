@@ -386,9 +386,12 @@ async function readStanding(db: Db, a: GateAsk, now: Date, mine: Stay): Promise<
 }
 
 /** What the board's seat would hold if admitted: the price of the stay this claim is (`mint`, `readCalls`), plus the opponent's
- *  re-verify while it could complete the board. Read off THIS claim's ask; the stamp on the stay is its FIRST claim's, so a stay that
- *  made its own room since (an `all` priced 9 whose later claim sees `none`) can need one token less than it was stamped: the pool
- *  test is at most that one token optimistic, once, and the stamp (what the stay then reserves) is never lowered. */
+ *  re-verify while it could complete the board. Read off THIS claim's ask, i.e. what the claim will actually spend NOW, so it is
+ *  accurate. The stamp on the stay is its FIRST claim's and is never lowered, so where a later claim finds its room already made (an
+ *  `all` stamped 9 whose later claim meets `none`, 8) the stamp is the conservative side: the stay reserves a token more than it
+ *  spends. The cases where the stamp UNDER-prices what a stay will spend are the proof flag flipped OFF mid-stay (reads cost 3, the
+ *  stamp says 1) and a `none` stay re-paired so its next claim must create (it spends `all`); there the bucket, not the stamp, bounds
+ *  the vendor. */
 function reservationIf(mint: StayMint, completing: boolean, readCalls: number): number {
   return lineReservation(mint, readCalls) + (completing ? lineRecheckCost(readCalls) : 0);
 }
