@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import type { Metadata } from "next";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import {
   HELP_SECTIONS, allHelpArticles, helpArticle, helpNav, renderHelpArticleHtml, staticHelpSlugs,
 } from "@/server/help-content";
+import { helpRedirectTarget } from "@/server/help-redirects";
 import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 import { CompetitionProse } from "@/components/public-site/competition-prose";
 
@@ -29,7 +30,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function HelpArticlePage({ params }: Props) {
   const { slug } = await params;
   const article = helpArticle(slug.join("/"));
-  if (!article) notFound();
+  if (!article) {
+    // A page that moved: answer its old address with a permanent redirect (help-redirects.ts).
+    // Served on demand — a source is not in generateStaticParams, and dynamicParams stays on.
+    const moved = helpRedirectTarget(slug.join("/"));
+    if (moved) permanentRedirect(`/help/${moved}`);
+    notFound();
+  }
 
   const html = await renderHelpArticleHtml(article, loadPricingMatrix);
   const sectionLabel =

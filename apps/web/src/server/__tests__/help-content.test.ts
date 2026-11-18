@@ -20,14 +20,19 @@ import {
 import { slugifyHeading } from "@/server/help-heading-ids";
 import { HELP_PICTURE_MAX_BYTES } from "@/server/help-figures";
 import { HELP_ARTICLE_SLUGS, helpUrl } from "@/lib/help";
+import { helpRedirectTarget } from "@/server/help-redirects";
 import { TIPS } from "@/config/tips";
 
 describe("help content ⇄ registry ⇄ tips", () => {
   const onDisk = allHelpArticles();
 
-  it("every registry slug has a Markdown file", () => {
+  // A slug that moved may stay in the registry for as long as it redirects (help-redirects.ts): the link still works.
+  it("every registry slug has a Markdown file, or is a redirect source", () => {
     for (const slug of HELP_ARTICLE_SLUGS) {
-      expect(onDisk.has(slug), `lib/help.ts lists '${slug}' but content/help has no such file`).toBe(true);
+      expect(
+        onDisk.has(slug) || helpRedirectTarget(slug) !== null,
+        `lib/help.ts lists '${slug}' but content/help has no such file and it is not a redirect source`,
+      ).toBe(true);
     }
   });
 
