@@ -89,6 +89,7 @@ import { isPlayableFixtureStatus, seatPlayer } from "../external-play/preflight"
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { openRound } from "../external-play/open-round";
 import { premintExternalPlay } from "../external-play/premint";
+import { endRoomAtResult } from "../external-play/room-end";
 import { act } from "../external-play/play";
 import { FLAG_SETTLE_HOLD_MS, FLAG_UNASKED_HOLD_MS, FLAG_UNSETTLED_HOLD_MS, reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
@@ -6156,6 +6157,38 @@ describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and t
     }
   });
 
+  it("R3 accounting: `deferred` counts the rooms the window HELD BACK (a done board's 2, and the 2 of a board that left the pre-mint set) and not the rooms nothing would end now (a live game's, a board inside its own window) - those stay up uncounted; lifted, exactly the counted four are ended", async () => {
+    const live = await watch(); // a live game with a room: past or not, nothing ends it
+    const early = await openedBoard({ checkedIn: [] }); // a room on a board still inside its own window
+    const earlyRoom = await putVideoMeeting({ fixtureId: early.fixtureId, orgId: early.orgId, side: "home" });
+    const { r, rooms } = await doneRooms(1); // 2 rooms, both done: a cancelled board
+    // A board of a round that was never opened, still playable, whose division has since gone camera-off: it left the pre-mint set (G2).
+    const left = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "optional" });
+    await sql`update divisions set camera_policy = 'off' where id = (select division_id from fixtures where id = ${left.boards[0]!.fixtureId})`;
+    const leftRooms: string[] = [];
+    for (const side of SIDES) leftRooms.push(await putVideoMeeting({ fixtureId: left.boards[0]!.fixtureId, orgId: left.orgId, side }));
+    const orgs = [live.b.orgId, early.orgId, r.orgId, left.orgId];
+    const kept = [live.meetingId, earlyRoom];
+    const held4 = [...rooms, ...leftRooms];
+    expect(await unended([...kept, ...held4]), "premise: six rooms up").toBe(6);
+
+    rtk.calls = []; // the live game's room was made by the seed
+    const held = await sweepOrgs(orgs, { now: new Date(), ...quiet });
+    expect(held.windowsOpen, "premise: the window is open").toBe(1);
+    expect(held.deferred, "the four rooms the window held back; the other two would not have been ended").toBe(4);
+    expect(await unended([...kept, ...held4]), "nothing was ended").toBe(6);
+    expect(callsOn([...kept, ...held4]), "and no request was made on any").toEqual([]);
+
+    vi.stubEnv("EXTERNAL_PLAY_WINDOW_DEFER", "0");
+    try {
+      const open = await sweepOrgs(orgs, { now: new Date(), rtkCallCap: 1000, ...quiet });
+      expect([open.windowsOpen, open.deferred, open.meetingsEnded], "lifted: the counted four are ended, nothing is deferred").toEqual([0, 0, 4]);
+      expect([await unended(kept), await unended(rooms), await rowsOf(leftRooms)], "the live game's and the early board's rooms stay up; the done ones are ended; the left board's rows are deleted").toEqual([2, 0, 0]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("no window: at 45 calls a pass and 2 calls a room, EXACTLY 45 calls are made - 22 rooms ended, the 23rd kicked and still active, the rest deferred; a second pass finishes them", async () => {
     const { r, rooms } = await doneRooms(15); // 30 rooms
     const base = { now: new Date(), ...NO_WINDOW, ...quiet };
@@ -6237,15 +6270,33 @@ describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and t
     expect(all.length, "anti-vacuity: 4 watches").toBe(4);
   });
 
-  it("R5, the order: a pass's revocations are its FIRST vendor calls, before teardown's", async () => {
+  it("R5, the order: a pass's revocations are its FIRST vendor calls - before reconcile's (a finished game ends its board's two rooms inside that job) and before the teardown's", async () => {
     const w = await watch();
     await demote(w);
+    // A board the pass's reconcile finishes: its result is found there and the board's two rooms end at it (the real ender, as
+    // reconcile's own result path calls it), BEFORE the teardown job, so only a revocation that runs first can come first.
+    const g = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
+    await liveGame(g);
+    const gRooms = [await putVideoMeeting({ fixtureId: g.fixtureId, orgId: g.orgId, side: "home" }), await putVideoMeeting({ fixtureId: g.fixtureId, orgId: g.orgId, side: "away" })];
+    const reconcileDep: NonNullable<SweepDeps["reconcile"]> = async (a) => {
+      if (a.fixtureId !== g.fixtureId) return null;
+      await sql`update fixtures set status = 'finalized' where id = ${a.fixtureId}`;
+      await new Promise<void>((resolve) => endRoomAtResult(a.fixtureId, { defer: (task) => void task().then(() => resolve()), endMeeting: (id) => endMeeting(id, RTK) }));
+      return null;
+    };
     const { r, rooms } = await doneRooms(1);
     rtk.calls = [];
-    const out = await sweepOrgs([w.b.orgId, r.orgId], { now: new Date(), ...NO_WINDOW, ...quiet });
-    expect([out.arbitersRemoved, out.meetingsEnded], "premise: a revocation and a teardown").toEqual([1, 2]);
-    const order = rtk.calls.map((c) => (c.path.includes(w.meetingId) ? "revocation" : callsOn(rooms).includes(c) ? "teardown" : "other"));
-    expect(order, "the two revocation calls, then the four teardown calls").toEqual(["revocation", "revocation", "teardown", "teardown", "teardown", "teardown"]);
+    const out = await sweepOrgs([w.b.orgId, g.orgId, r.orgId], { now: new Date(), reconcile: reconcileDep, realtimeKit: RTK, ...NO_WINDOW });
+    expect([out.arbitersRemoved, out.meetingsEnded], "premise: a revocation and a teardown (reconcile's own ends are not counted by the sweep)").toEqual([1, 2]);
+    const kindOf = (c: (typeof rtk.calls)[number]) =>
+      c.path.includes(w.meetingId) ? "revocation" : gRooms.some((id) => c.path.includes(id)) ? "reconcile" : rooms.some((id) => c.path.includes(id)) ? "teardown" : "other";
+    const order = rtk.calls.map(kindOf);
+    expect(order, "the 2 revocation calls, then reconcile's 4 (two rooms), then the teardown's 4").toEqual([
+      ...Array(2).fill("revocation"),
+      ...Array(4).fill("reconcile"),
+      ...Array(4).fill("teardown"),
+    ]);
+    expect(await unended(gRooms), "reconcile's rooms are ended").toBe(0);
   });
 
   it("the capped jobs share ONE cap - teardown, the TTL arm and the parked rooms - and the revocation is not counted in it (cap 6 fits all three; cap 5 refuses the last request)", async () => {

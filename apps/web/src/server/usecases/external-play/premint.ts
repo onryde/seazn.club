@@ -139,6 +139,17 @@ export function premintBoardWhere() {
 }
 
 /**
+ * "A board the pre-mint job no longer wants": the TOTAL negation of `premintBoardWhere`, which the sweep's teardown asks (G2). `is not
+ * true`, not `not`: a NULL rule is "not a candidate" to the candidate query (a NULL `where` drops the row), so it must read LEFT here,
+ * and `not (null)` is NULL - a board that is in neither set, ended by nobody and made by nobody. Today no conjunct of the rule can be
+ * NULL (every column it reads is NOT NULL or coalesced), so this is the guard that keeps the two jobs disjoint AND exhaustive if one ever
+ * is. `rule` is a seam for the test that witnesses exactly that; production passes nothing.
+ */
+export function premintBoardLeftWhere(rule: ReturnType<typeof premintBoardWhere> = premintBoardWhere()) {
+  return sql`(${rule}) is not true`;
+}
+
+/**
  * The candidate (board, side) rows, nearest round first. One statement.
  *
  * A BOARD is wanted when `premintBoardWhere` says so. A SIDE is wanted when no `fixture_video_meetings` row exists for it,

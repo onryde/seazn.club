@@ -17,7 +17,14 @@ import "server-only";
 // the chesslep DB 2026-10-09 — which is why patchDivision asks BEFORE it opens
 // its tenant transaction, the same placement as its `requireFeature` reads.
 import type postgres from "postgres";
-import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, ROUND_WINDOW_TAIL_MS, boardAnchor, type BoardAnchor } from "./window";
+import {
+  CHECKIN_BATCH_GAP_MS,
+  CHECKIN_BATCH_SIZE,
+  ROUND_WINDOW_SCAN_LOOKBACK_MS,
+  ROUND_WINDOW_TAIL_MS,
+  boardAnchor,
+  type BoardAnchor,
+} from "./window";
 
 type AnySql = postgres.TransactionSql | postgres.Sql;
 
@@ -171,10 +178,21 @@ export function roundWindowBoundSql(db: AnySql) {
  *  `orgIds` is a TEST scope (the sweep's own `SweepDeps.orgIds` rule): it limits the question to those orgs' rounds so the shared
  *  test database's other suites cannot flip the answer, and an EMPTY list matches nothing, never "every org". The privileged client:
  *  `stage_round_opens` is sealed. */
-export async function anyCheckinWindowOpen(db: AnySql, now: Date, orgIds?: readonly string[]): Promise<boolean> {
+export async function anyCheckinWindowOpen(
+  db: AnySql,
+  now: Date,
+  orgIds?: readonly string[],
+  lookbackMs: number = ROUND_WINDOW_SCAN_LOOKBACK_MS,
+): Promise<boolean> {
   const scope = orgIds === undefined ? db`` : db`and o.org_id in ${db(orgIds as string[])}`;
+  // The scan is bounded to opens recent enough to be inside a window (`ROUND_WINDOW_SCAN_LOOKBACK_MS`: the tail plus the stagger of the
+  // biggest round it allows for): the table holds every round ever opened, and the bound below counts each row's fixtures. `lookbackMs`
+  // is the test's seam for pinning exactly where that cut falls; production passes none.
+  const since = new Date(now.getTime() - lookbackMs);
   const [row] = await db<{ open: boolean }[]>`
-    select exists (select 1 from stage_round_opens o where ${roundWindowBoundSql(db)} > ${now} ${scope}) as open`;
+    select exists (
+      select 1 from stage_round_opens o where o.opened_at > ${since} and ${roundWindowBoundSql(db)} > ${now} ${scope}
+    ) as open`;
   return row?.open === true;
 }
 

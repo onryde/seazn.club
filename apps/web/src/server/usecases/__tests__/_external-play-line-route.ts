@@ -16,7 +16,7 @@ import { reportOwnCamera } from "../external-play/camera-report";
 import { applyPresenceEvent } from "@/server/external-play/video/presence";
 import { CAMERA_ON_EVENTS, configureRealtimeKit, fakeRealtimeKit } from "./_external-play-rtk-fake";
 import { clearBucket, setBucket, stubBucket } from "./_external-play-line";
-import { seedOnlineChessFixture } from "./_external-play-seed";
+import { NO_WINDOW, seedOnlineChessFixture } from "./_external-play-seed";
 
 export const MIN = 60_000;
 export const SEC = 1_000;
@@ -179,7 +179,10 @@ export async function pollStay(
 }
 
 /** One sweep pass at `now`, scoped to the board's organisation, without the single-flight lock (another file may be sweeping
- *  in parallel), with the room's teardown recorded and no create attempted. */
+ *  in parallel), with the room's teardown recorded and no create attempted. `NO_WINDOW` (check-in capacity plan 2 Task 8, R3): every
+ *  scene here opens its own round, and the REAL window check would defer the teardown for the board's own window - so a case that
+ *  asserts a room is KEPT (the line's consumer 8, the cap's "room is not torn down") would hold for the wrong reason. A case that is
+ *  about the deferral passes its own `windowsOpen` through `over`. */
 export async function sweepBoard(
   b: Board,
   now: Date,
@@ -194,6 +197,7 @@ export async function sweepBoard(
       ended.push(id);
     },
     createGameIfReady: async () => ({ created: false, reason: "not_ready" }),
+    ...NO_WINDOW,
     ...over,
   });
   return { report, ended };

@@ -18,6 +18,8 @@ import {
   CHECKIN_EXTEND_STEP_MS,
   DEADLINE_AFTER_MS,
   LINE_DEADLINE_GRACE_MS,
+  ROUND_WINDOW_SCAN_LOOKBACK_MS,
+  ROUND_WINDOW_SCAN_MAX_BOARDS,
   ROUND_WINDOW_TAIL_MS,
   batchCount,
 } from "../window";
@@ -57,6 +59,20 @@ describe("the bound's constant tail (window.ts)", () => {
     expect(ROUND_WINDOW_TAIL_MS).toBe(TAIL);
     // Anti-vacuity: every term is a real, positive amount, so a zeroed term cannot hide in the sum.
     for (const term of [DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS, CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS]) expect(term).toBeGreaterThan(0);
+  });
+});
+
+describe("the scan's lookback (window.ts)", () => {
+  it("ROUND_WINDOW_SCAN_LOOKBACK_MS is the tail plus the stagger of the biggest round it allows for, and covers every field the product sells (counted)", () => {
+    expect(ROUND_WINDOW_SCAN_LOOKBACK_MS).toBe(TAIL + (batchCount(ROUND_WINDOW_SCAN_MAX_BOARDS) - 1) * CHECKIN_BATCH_GAP_MS);
+    expect(ROUND_WINDOW_SCAN_LOOKBACK_MS, "the stagger term is a real, positive amount").toBeGreaterThan(TAIL);
+    // The Pro tier's entrant limit is 256 (entitlements.ts): a round of that many rows is never past the lookback while it is open.
+    let checked = 0;
+    for (const rows of [1, 10, 256, 1_000]) {
+      expect(ROUND_WINDOW_SCAN_LOOKBACK_MS, `${rows} rows`).toBeGreaterThanOrEqual(TAIL + (batchCount(rows) - 1) * CHECKIN_BATCH_GAP_MS);
+      checked += 1;
+    }
+    expect(checked, "round sizes checked").toBe(4);
   });
 });
 
@@ -119,6 +135,27 @@ describe.skipIf(!DB)("anyCheckinWindowOpen", () => {
       checked += 1;
     }
     expect(checked, "round sizes checked").toBe(6);
+  });
+
+  it("the scan is bounded to opens recent enough to be in a window: the cut is exactly `opened_at > now - lookback`, and the lookback must carry the stagger term (the seam names the lookback)", async () => {
+    // 25 rows staggered: three batches, so the window is open until opened + 2 gaps + the tail - and the round is that much older than a
+    // round that is not staggered when it closes.
+    const opened = new Date("2026-11-18T10:00:00.000Z");
+    const r = await roundOpenedAt(opened, { rows: 25, staggered: true });
+    const lastOpen = new Date(opened.getTime() + (batchCount(25) - 1) * CHECKIN_BATCH_GAP_MS + TAIL - 1);
+    const age = lastOpen.getTime() - opened.getTime();
+    expect(age, "premise: the round is older than the bare tail, and still open").toBe(TAIL + 2 * CHECKIN_BATCH_GAP_MS - 1);
+    const cases: [string, number | undefined, boolean][] = [
+      ["the production lookback", undefined, true],
+      ["a lookback one ms longer than the round's age", age + 1, true],
+      ["a lookback exactly the round's age: the cut is strict", age, false],
+      ["a lookback of the bare tail, which has no stagger term: the open round is missed", TAIL, false],
+      ["a lookback of an hour", 60 * 60_000, true],
+    ];
+    for (const [why, lookback, want] of cases) {
+      expect(await anyCheckinWindowOpen(sql, lastOpen, [r.orgId], lookback), why).toBe(want);
+    }
+    expect(cases.length, "cases checked").toBe(5);
   });
 
   it("an UNSTAGGERED round of 25 rows does not extend (its flag was stored at the open): its bound is the open's own", async () => {

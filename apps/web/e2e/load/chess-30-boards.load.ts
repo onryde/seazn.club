@@ -31,7 +31,12 @@
  * not see it). From apps/web, against a FRESH DB (leftover meetings from an earlier run are swept into this one's
  * numbers) and a PRODUCTION build whose server carries the fixture variables (LICHESS_BASE_URL=http://127.0.0.1:4321,
  * REALTIMEKIT_BASE_URL=http://127.0.0.1:4322, REALTIMEKIT_METER_ANY_BASE=1 for the metered mode, ONLINE_CHESS_ALWAYS=1,
- * CRON_SECRET, AUTH_SECRET, LICHESS_TOKEN_KEK - the same set the walkthrough needs):
+ * CRON_SECRET, AUTH_SECRET, LICHESS_TOKEN_KEK - the same set the walkthrough needs - and EXTERNAL_PLAY_WINDOW_DEFER=0, which the
+ * walkthrough's job sets too: the sweep defers its teardown and camera evidence while ANY round is inside a check-in window
+ * (check-in capacity plan 2 Task 8, ruling R3), and this run's STRICT waits - every meeting ended, every camera evidence settled -
+ * are driven through /api/cron/external-play inside the window of the round it just opened, so a server that leaves the deferral on
+ * would hold them for 30+ minutes. The run FAILS NAMING the variable if a pass reports `windowsOpen: 1`, and its report carries the
+ * count (`sweep.windowsOpenPasses`):
  *
  *   PLAYWRIGHT_BASE=http://localhost:3391 E2E_PROD_TARGET=1 DATABASE_URL=... DATABASE_SSL=disable \
  *   AUTH_SECRET=... CRON_SECRET=... LICHESS_TOKEN_KEK=... \
@@ -585,6 +590,8 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         return { skipped: false };
       }
       sweepPasses.push({ at, ms: Date.now() - at, skipped: data.skipped === true, report: data });
+      // Plan 2 Task 8: a pass that deferred for an open window would hold the strict teardown / evidence waits below for 30+ minutes.
+      if (data.windowsOpen === 1) failures.push("sweep deferred for an open check-in window: start the server with EXTERNAL_PLAY_WINDOW_DEFER=0 (this run's teardown waits cannot be met otherwise)");
       return { skipped: data.skipped === true };
     }
 
@@ -1445,6 +1452,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       sweep: {
         passes: sweepPasses.length,
         skippedByTheLock: sweepPasses.filter((s) => s.skipped).length,
+        windowsOpenPasses: sweepPasses.filter((s) => s.report.windowsOpen === 1).length,
         durationsMs: sweepRuns.map((s) => s.ms),
         callsDuringEachPass: sweepRuns.map((s) => ({
           lichess: lichessCalls.filter((c) => c.at >= s.at && c.at <= s.at + s.ms).length,

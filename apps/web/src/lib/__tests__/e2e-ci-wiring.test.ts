@@ -2032,6 +2032,15 @@ describe("the online-chess fixture servers' wiring", () => {
     const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
     const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
     expect(body, "ci-local.sh's e2e_env").toMatch(/^\s*export EXTERNAL_PLAY_WINDOW_DEFER=0\s*$/m);
+    // The 30-boards load harness drives its STRICT teardown / evidence waits through /api/cron/external-play inside the window of the
+    // round it opened, so ITS server recipe carries the variable too, it fails naming it when a pass reports `windowsOpen: 1`, and its
+    // report records the count. Pinned in the file itself (the harness is never run in CI).
+    const load = readFileSync(join(E2E_DIR, "load/chess-30-boards.load.ts"), "utf8");
+    expect(load, "the load harness's server recipe").toMatch(/and EXTERNAL_PLAY_WINDOW_DEFER=0, which the\n \* walkthrough's job sets too/);
+    expect(load, "the harness fails naming the variable when a pass deferred for a window").toMatch(
+      /data\.windowsOpen === 1\) failures\.push\("[^"]*EXTERNAL_PLAY_WINDOW_DEFER=0/,
+    );
+    expect(load, "the harness's report records the passes that saw an open window").toMatch(/windowsOpenPasses: sweepPasses\.filter\(\(s\) => s\.report\.windowsOpen === 1\)\.length/);
     // The two legs that run no chess walkthrough do not carry it: the deferral stays ON for them, as in production.
     let checked = 0;
     for (const [name, next] of [["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {

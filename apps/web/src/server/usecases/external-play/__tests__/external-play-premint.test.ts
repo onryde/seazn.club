@@ -33,6 +33,8 @@ import {
   PREMINT_FAILURES_BEFORE_BREAK,
   PREMINT_LOCK,
   PREMINT_PASS_BUDGET_MS,
+  premintBoardLeftWhere,
+  premintBoardWhere,
   premintBudget,
   premintCandidates,
   premintExternalPlay,
@@ -254,6 +256,36 @@ describe.skipIf(!DB)("premint candidates (the set)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: five exclusions").toBe(5);
+  });
+
+  it("the NEGATION the sweep's teardown asks is total (G2): over the control and the five exclusions every board is in exactly ONE of the wanted set and the left set; a NULL rule reads LEFT (witness, counted)", async () => {
+    const control = await seedRound(1);
+    const opened = await seedRound(1);
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+      values (${opened.stageId}, ${opened.orgId}, 1, now(), ${opened.ownerUserId}, false)`;
+    const cameraOff = await seedRound(1, { cameraPolicy: undefined });
+    const otb = await seedRound(1, { onlinePlay: "off" });
+    const cancelled = await seedRound(1);
+    await sql`update fixtures set status = 'cancelled' where id = ${cancelled.boards[0]!.fixtureId}`;
+    const withdrawn = await seedRound(1);
+    await sql`update fixtures set status = 'abandoned' where id = ${withdrawn.boards[0]!.fixtureId}`;
+    const seeded = [control, opened, cameraOff, otb, cancelled, withdrawn];
+    const rows = await sql<{ id: string; wanted: boolean | null; left: boolean | null }[]>`
+      select f.id, (${premintBoardWhere()}) as wanted, ${premintBoardLeftWhere()} as "left"
+        from fixtures f
+        join stages s on s.id = f.stage_id
+        join divisions d on d.id = f.division_id
+        join competitions c on c.id = d.competition_id
+       where c.org_id in ${sql(seeded.map((r) => r.orgId))}`;
+    expect(rows.length, "anti-vacuity: one board per seeded round").toBe(seeded.length);
+    expect(rows.filter((r) => r.wanted === true).length, "exactly the control is wanted").toBe(1);
+    expect(rows.filter((r) => r.left === true).length, "and the other five are left").toBe(seeded.length - 1);
+    for (const r of rows) expect((r.wanted === true) !== (r.left === true), `board ${r.id}: in exactly one of the two sets (never both, never neither)`).toBe(true);
+    // The witness: a rule that is NULL for a board. `not (null)` is NULL - in neither set; the total negation says LEFT.
+    const [w] = await sql<{ naive: boolean | null; total: boolean | null }[]>`
+      select not (null::boolean) as naive, ${premintBoardLeftWhere(sql`null::boolean`)} as total`;
+    expect(w, "premise: the naive negation of NULL is NULL; the total one is true").toEqual({ naive: null, total: true });
   });
 
   it("a fixture is playable only while `scheduled` or `in_play` (controller ruling Q2): every FIXTURE_STATUSES value is a candidate iff it is one of those two (counted)", async () => {
@@ -913,7 +945,7 @@ describe.skipIf(!DB)("premint (Task 8)", () => {
     expect(createsFor(ids(r))).toHaveLength(4);
   });
 
-  it("R3, the window closes: an own round opened longer ago than its bound (derived from window.ts) no longer defers - the boundary, one ms each side", async () => {
+  it("R3, the window closes: an own round opened longer ago than its bound (derived from window.ts) no longer defers - one second each side of the bound (the pass reads the real clock, so the exact millisecond is pinned on `anyCheckinWindowOpen` in round-open-any-window.test.ts)", async () => {
     let checked = 0;
     for (const [agoMs, deferred] of [[ROUND_WINDOW_TAIL_MS - 1_000, true], [ROUND_WINDOW_TAIL_MS + 1_000, false]] as const) {
       const r = await seedRound(1);
