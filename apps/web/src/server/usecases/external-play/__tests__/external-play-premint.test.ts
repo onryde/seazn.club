@@ -28,8 +28,10 @@ import { seatPlayer } from "../preflight";
 import {
   PREMINT_CALL_INTERVAL_MS,
   PREMINT_CALLS_PER_PASS,
+  PREMINT_FAILURES_BEFORE_BREAK,
   PREMINT_LOCK,
   PREMINT_PASS_BUDGET_MS,
+  premintBudget,
   premintCandidates,
   premintExternalPlay,
   type PremintCandidate,
@@ -97,13 +99,18 @@ const reseat = async (r: Round) => {
   }
 };
 
-const rowsOf = (orgIds: string[]) => premintCandidates(new Date(), orgIds);
+const rowsOf = (orgIds: string[]) => premintCandidates(orgIds);
 const key = (c: Pick<PremintCandidate, "fixtureId" | "side">) => `${c.fixtureId}/${c.side}`;
 const keysOf = (rows: PremintCandidate[]) => rows.map(key);
 const bothSides = (fixtureIds: string[]) => fixtureIds.flatMap((id) => [`${id}/away`, `${id}/home`]);
 
 const noWait = async () => {};
-const run = (orgIds: string[], over: PremintDeps = {}) => premintExternalPlay({ orgIds, serialise: false, wait: noWait, ...over });
+const run = async (orgIds: string[], over: PremintDeps = {}) => {
+  const report = await premintExternalPlay({ orgIds, serialise: false, wait: noWait, ...over });
+  // Every scanned row ends in exactly one of three places (anti-vacuity for every pass below): made, failed or deferred.
+  expect(report.roomsMade + report.failed + report.deferred, "every scanned row is accounted for exactly once").toBe(report.scanned);
+  return report;
+};
 
 type Room = { fixture_id: string; side: string; meeting_id: string; home: string | null; away: string | null; ended_at: Date | null };
 const roomsOf = (fixtureIds: string[]) =>
@@ -154,7 +161,7 @@ describe.skipIf(!DB)("premint candidates (the set)", () => {
     // The positive pair: the same query sees a real board, and `orgIds: []` still matches nothing (never read as unscoped).
     const r = await seedRound(1);
     await unseat(ids(r));
-    expect(await premintCandidates(new Date(), []), "an empty scope matches nothing").toEqual([]);
+    expect(await premintCandidates([]), "an empty scope matches nothing").toEqual([]);
     expect(keysOf(await rowsOf([r.orgId])).sort(), "positive pair: its own scope finds the board").toEqual(bothSides(ids(r)));
   });
 
@@ -181,21 +188,28 @@ describe.skipIf(!DB)("premint candidates (the set)", () => {
     expect(keysOf(await rowsOf([s.orgId])).sort(), "exactly the paired boards, both sides; no shell").toEqual(bothSides(paired.map((p) => p.id)).sort());
   });
 
-  it("the started arm is the negation of divisionScoringClosed: every division status × (paired, placeholder) is a candidate iff started OR paired (counted)", async () => {
+  it("the started arm is the negation of divisionScoringClosed, and a COMPLETED division is never wanted: every division status × (paired, placeholder) is a candidate iff not completed AND (started OR paired) (counted)", async () => {
     const r = await seedRound(1);
     const f = r.boards[0]!.fixtureId;
     let checked = 0;
+    let wanted = 0;
+    let unwanted = 0;
     for (const status of ["setup", "scheduled", "active", "completed"]) {
       for (const paired of [true, false]) {
         await sql`update divisions set status = ${status} where id = ${r.divisionId}`;
         if (paired) await reseat(r);
         else await unseat([f]);
-        const expected = !divisionScoringClosed(status) || paired;
+        // R3, and the ruling that nothing of a completed division will be opened (m6: its unopened rounds are dead candidates
+        // that would otherwise lead the cap).
+        const expected = status !== "completed" && (!divisionScoringClosed(status) || paired);
         expect(keysOf(await rowsOf([r.orgId])).sort(), `${status}, ${paired ? "paired" : "placeholder"}`).toEqual(expected ? bothSides([f]) : []);
+        if (expected) wanted += 1;
+        else unwanted += 1;
         checked += 1;
       }
     }
     expect(checked, "anti-vacuity: 4 statuses × 2 pairings").toBe(8);
+    expect([wanted, unwanted], "both outcomes occur: setup/paired, scheduled/paired, active × 2 are wanted").toEqual([4, 4]);
   });
 
   it("a side with ANY room on file yields no row, whatever the row: adopted for the current pairing, unadopted on a since-paired board, stamped for an EARLIER pairing, ended (count 4)", async () => {
@@ -547,6 +561,115 @@ describe.skipIf(!DB)("premint pass", () => {
     expect(askedFor.length, "the bucket was asked for every attempt: 3 granted + the 1 refusal that stopped the pass").toBe(4);
   });
 
+  it("the PLATFORM's bucket is spent by the pass itself (no `rtk.budget`): with the base metered N creates drop the bucket by exactly N, an empty bucket defers with 0 creates, and an unmetered base never touches it", async () => {
+    const key = `${fx.url}|${REALTIMEKIT_FIXTURE_ENV.CLOUDFLARE_ACCOUNT_ID}`;
+    // A stamp an hour AHEAD refills nothing (elapsed is floored at zero), so the level reads exactly as the takes leave it.
+    const setBucket = (tokens: number) =>
+      sql`insert into realtimekit_call_budget (key, tokens, refilled_at) values (${key}, ${tokens}, now() + interval '1 hour')
+          on conflict (key) do update set tokens = excluded.tokens, refilled_at = excluded.refilled_at`;
+    const level = async () => Number((await sql<{ tokens: number }[]>`select tokens from realtimekit_call_budget where key = ${key}`)[0]!.tokens);
+    const [a, b, c] = await Promise.all([seedRound(3), seedRound(2), seedRound(1)]);
+    await unseat([...ids(a), ...ids(b), ...ids(c)]);
+    try {
+      // Unmetered (the fixture's base is not Cloudflare's): the same pass leaves the bucket alone. The control that the drops
+      // below come from the metering and from nothing else.
+      await setBucket(100);
+      expect(await run([c.orgId]), "premise: unmetered, the pass makes its 2 rooms").toMatchObject({ roomsMade: 2, failed: 0 });
+      expect(await level(), "unmetered: the bucket is untouched").toBe(100);
+
+      vi.stubEnv("REALTIMEKIT_METER_ANY_BASE", "1");
+      const report = await run([a.orgId]);
+      expect(report, "6 rooms made").toMatchObject({ scanned: 6, roomsMade: 6, deferred: 0, failed: 0 });
+      expect(await level(), "metered: 100 - 6 creates, exactly").toBe(94);
+
+      await setBucket(0);
+      const before = fx.calls.length;
+      const dry = await run([b.orgId]);
+      expect(dry, "an empty bucket: nothing made, all 4 rows deferred, no failure").toMatchObject({ scanned: 4, roomsMade: 0, deferred: 4, failed: 0, failures: [] });
+      expect(fx.calls.length, "a refused request never reached the vendor: 0 creates").toBe(before);
+      expect(await level(), "and it took nothing").toBe(0);
+    } finally {
+      await sql`delete from realtimekit_call_budget where key = ${key}`;
+    }
+  });
+
+  it("the DEFAULT pacing wait is real: with no `wait` dep the second request starts at least PREMINT_CALL_INTERVAL_MS after the first", async () => {
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    const report = await premintExternalPlay({ orgIds: [r.orgId], serialise: false });
+    expect(report).toMatchObject({ scanned: 2, roomsMade: 2, failed: 0 });
+    const posts = creates();
+    expect(posts, "premise: two creates").toHaveLength(2);
+    // The timer may fire a hair early against the fixture's own receipt stamps; the broken default (no wait) is ~10 ms.
+    expect(posts[1]!.at - posts[0]!.at, "the gap between the two requests").toBeGreaterThanOrEqual(PREMINT_CALL_INTERVAL_MS - 50);
+  });
+
+  it("RealtimeKit not configured: ONE failure (code `unconfigured`) and the rest of the pass deferred, never one failure per candidate; configured again, the next pass makes them all", async () => {
+    const r = await seedRound(3);
+    await unseat(ids(r));
+    const order = await rowsOf([r.orgId]);
+    vi.stubEnv("REALTIMEKIT_API_TOKEN", "");
+    const report = await run([r.orgId]);
+    expect(report).toMatchObject({ scanned: 6, roomsMade: 0, deferred: 5, failed: 1 });
+    expect(report.failures, "one entry, for the first row").toEqual([{ fixtureId: order[0]!.fixtureId, side: order[0]!.side, code: "unconfigured" }]);
+    expect(fx.calls, "nothing reached the vendor").toEqual([]);
+    vi.stubEnv("REALTIMEKIT_API_TOKEN", REALTIMEKIT_FIXTURE_ENV.REALTIMEKIT_API_TOKEN);
+    expect(await run([r.orgId]), "positive pair: configured, every row is made").toMatchObject({ scanned: 6, roomsMade: 6, failed: 0 });
+  });
+
+  it("a vendor that fails PREMINT_FAILURES_BEFORE_BREAK rooms in a row is down: the pass stops asking and defers the rest; a success in between resets the streak (counted)", async () => {
+    // The breaker is the brief's "one 503 and the pass goes on" test above, generalised: 3 is the threshold, not 1.
+    expect(PREMINT_FAILURES_BEFORE_BREAK, "the ruling: 3").toBe(3);
+    const r = await seedRound(4);
+    await unseat(ids(r));
+    fx.setUnavailable(true);
+    const down = await run([r.orgId]);
+    expect(down, "3 failures, then the 5 rows left are deferred").toMatchObject({ scanned: 8, roomsMade: 0, failed: 3, deferred: 5 });
+    expect(down.failures.map((f) => f.code), "each a vendor code, never a message").toEqual(["unavailable", "unavailable", "unavailable"]);
+    expect(fx.calls.length, "exactly 3 requests reached the vendor").toBe(3);
+    fx.setUnavailable(false);
+    expect(await run([r.orgId]), "positive pair: the vendor is back and the next pass makes all 8").toMatchObject({ scanned: 8, roomsMade: 8, failed: 0 });
+
+    // Only a VENDOR error counts: a row's own refusal (its fixture vanished since the scan: an HttpError 404, no vendor call) is
+    // neutral, neither a failure of the vendor nor a proof it is back. Vendor, vendor, row-refusal, row-refusal, vendor: the
+    // third VENDOR error is the one that breaks, so 5 failures and the last row deferred.
+    const x = await seedRound(3);
+    await unseat(ids(x));
+    fx.setUnavailable(true);
+    const order = await rowsOf([x.orgId]);
+    expect(order, "premise: 6 rows, the middle fixture on rows 2 and 3").toHaveLength(6);
+    expect(order[2]!.fixtureId, "rows 2 and 3 are one board's two sides").toBe(order[3]!.fixtureId);
+    const gone = order[2]!.fixtureId;
+    const refusing = await run([x.orgId], {
+      // `offered` runs once, before the first row's request, and the scan is already taken: the fixture goes after it.
+      offered: async () => {
+        await sql`delete from fixtures where id = ${gone}`;
+        return true;
+      },
+    });
+    expect(refusing.failures.map((f) => f.code), "V V X X V, then the break").toEqual(["unavailable", "unavailable", "NOT_FOUND", "NOT_FOUND", "unavailable"]);
+    expect(refusing, "the last row is deferred").toMatchObject({ scanned: 6, roomsMade: 0, failed: 5, deferred: 1 });
+    fx.setUnavailable(false);
+
+    // The streak resets on a success: fail, fail, ok, fail, fail, ok is 4 failures and 2 rooms, and nothing is deferred.
+    const s = await seedRound(3);
+    await unseat(ids(s));
+    const pattern = ["F", "F", "O", "F", "F", "O"];
+    let creating = 0;
+    const flaky: typeof fetch = async (input, init) => {
+      if (init?.method === "POST" && String(input).endsWith("/meetings") && pattern[creating++] === "F") {
+        return new Response(JSON.stringify({ success: false, error: { code: 503, message: "vendor down" } }), { status: 503 });
+      }
+      return fetch(input, init);
+    };
+    expect(await run([s.orgId], { rtk: { fetch: flaky } }), "two in a row is below the threshold, twice").toMatchObject({
+      scanned: 6,
+      roomsMade: 2,
+      failed: 4,
+      deferred: 0,
+    });
+  });
+
   it("a club not offered online chess is skipped (deferred), never minted and never a failure; the flag is asked once per club", async () => {
     const [a, b] = await Promise.all([seedRound(1), seedRound(2)]);
     await unseat([...ids(a), ...ids(b)]);
@@ -605,6 +728,29 @@ describe.skipIf(!DB)("premint pass", () => {
     expect(fx.calls, "a skipped pass made no vendor call").toEqual([]);
     const next = await premintExternalPlay({ orgIds: [r.orgId], wait: noWait });
     expect(next, "positive pair: the lock was released with the transaction").toMatchObject({ skipped: 0, roomsMade: 2 });
+  });
+});
+
+// ─── the pass's budget on its own ────────────────────────────────────────────────────────────────────────────────────────
+
+describe("premintBudget", () => {
+  it("the wall-clock refusal is STICKY: once the budget is spent no later request is granted, whatever the clock reads, and none takes a token from the platform's bucket", async () => {
+    let asked = 0;
+    const inner = async () => {
+      asked += 1;
+      return true;
+    };
+    // The clock reads inside the budget (after the wait): in time, past the budget, then BACK to the start (a step backwards).
+    const reads = [0, PREMINT_PASS_BUDGET_MS, 0, 0];
+    let waited = 0;
+    const budget = premintBudget({ cap: 10, inner, clock: () => reads.shift()!, startedAt: 0, wait: async () => void (waited += 1) });
+    expect(await budget("k"), "in time: granted").toBe(true);
+    expect(await budget("k"), "past the budget: refused").toBe(false);
+    expect(await budget("k"), "the clock stepped back: still refused (sticky)").toBe(false);
+    expect(await budget("k"), "and again").toBe(false);
+    expect(asked, "the bucket was asked for the first two only: a sticky refusal wastes no token").toBe(2);
+    expect(waited, "one wait, before the second request: the refused ones made no call").toBe(1);
+    expect(reads.length, "the clock was read twice: a sticky refusal does not even ask it").toBe(2);
   });
 });
 

@@ -23,6 +23,7 @@ import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import {
   RealtimeKitDeferred,
+  RealtimeKitError,
   cappedBudget,
   ensureMeeting,
   platformSpend,
@@ -33,14 +34,21 @@ import { onlinePlayDivisionWhere } from "./guard";
 import { onlineChessOffered } from "./online-chess-flag";
 import { PLAYABLE_STATUSES, codeOf } from "./sweep/pass";
 
-/** The pause between two vendor requests: a pass never bursts. A hundred boards' rooms take about four and a half minutes on
- *  the production trigger. */
+/** The pause between two vendor requests: a pass never bursts. The pause is ADDED to each request's own round trip, so a pass
+ *  starts a request every (interval + round trip) and reaches fewer than PREMINT_CALLS_PER_PASS: with a round trip of 200 ms
+ *  that is 38 in 45 s, and a hundred boards' 200 rooms take five or six one-a-minute passes on the production
+ *  trigger. */
 export const PREMINT_CALL_INTERVAL_MS = 1_000;
 /** The pass stops STARTING a vendor request once this much wall-clock time has gone: the cron Worker abandons a job at 60 s
  *  (apps/cron-worker/src/call.ts JOB_TIMEOUT_MS) and the sweep's own budget (SWEEP_PASS_BUDGET_MS) is the same 45 s. */
 export const PREMINT_PASS_BUDGET_MS = 45_000;
-/** At most one request a second for the budget: 45. */
+/** The CEILING on a pass's vendor requests, not what it reaches: the wait is added to each request's own round trip, so a 45 s
+ *  pass starts a request every (interval + round trip), and fewer than this when the vendor is not instant. It is the bound that
+ *  holds when something else (the clock, the platform's bucket) has not stopped the pass first. */
 export const PREMINT_CALLS_PER_PASS = Math.floor(PREMINT_PASS_BUDGET_MS / PREMINT_CALL_INTERVAL_MS);
+/** A vendor that fails this many rooms IN A ROW is down for the pass: the rest is deferred instead of asked, one warn and one
+ *  failure per row for every candidate of every minute being what a down vendor would otherwise cost. A success resets it. */
+export const PREMINT_FAILURES_BEFORE_BREAK = 3;
 /** The one-pass-at-a-time advisory lock's name (`hashtext`). */
 export const PREMINT_LOCK = "external-play-premint";
 
@@ -71,7 +79,6 @@ export type PremintReport = {
 export type PremintCandidate = { fixtureId: string; orgId: string; side: "home" | "away" };
 
 export type PremintDeps = {
-  now?: Date;
   /** TEST SEAM - scope the pass to these orgs. Production passes none and serves every org; an EMPTY list matches nothing. */
   orgIds?: readonly string[];
   /** The RealtimeKit transport (its `budget` is the platform's bucket the pass's own cap composes with). */
@@ -100,7 +107,7 @@ function emptyReport(over: Partial<Pick<PremintReport, "skipped" | "disabled">> 
  * rule alone - its started-division conjunct would refuse the paired Swiss round-1 board of a division still in setup, which
  * R3 wants), the division has started OR the board is paired (the first arm is the negation of `divisionScoringClosed`,
  * lib/division-phase.ts; the second is there because Swiss shells and round-1 pairings exist before Start, and a placeholder
- * in a division still in setup is never wanted), the camera policy is not `off` (the SQL form of camera-policy.ts
+ * in a division still in setup is never wanted; a COMPLETED division is never wanted either: nothing of it will be opened), the camera policy is not `off` (the SQL form of camera-policy.ts
  * `effectivePolicy`: the nearest set level wins, the competition's is NOT NULL), the fixture is playable, and its round has
  * never been opened. A SIDE is wanted when no `fixture_video_meetings` row exists for it, whatever that row is.
  *
@@ -108,10 +115,8 @@ function emptyReport(over: Partial<Pick<PremintReport, "skipped" | "disabled">> 
  * after every scheduled one, lowest round number first; inside a round the rest is a stable tie-break. The round's key is
  * taken over its BOARDS, before the side filter, so it does not move as the round's own rooms are made - a key taken after
  * the filter would let a round's earliest board leave the set and hand the lead to a round that opens later.
- *
- * `now` is the pass's clock; the set itself does not read it (a round is unopened or it is not).
  */
-export async function premintCandidates(_now: Date, orgIds?: readonly string[]): Promise<PremintCandidate[]> {
+export async function premintCandidates(orgIds?: readonly string[]): Promise<PremintCandidate[]> {
   const scope = orgIds === undefined ? sql`` : sql`and c.org_id in ${sql(orgIds as string[])}`;
   return sql<PremintCandidate[]>`
     with boards as (
@@ -123,6 +128,7 @@ export async function premintCandidates(_now: Date, orgIds?: readonly string[]):
         join competitions c on c.id = d.competition_id
        where ${onlinePlayDivisionWhere()}
          and (d.status not in ('setup', 'scheduled') or (f.home_entrant_id is not null and f.away_entrant_id is not null))
+         and d.status <> 'completed'
          and coalesce(s.camera_policy, d.camera_policy, c.camera_policy) <> 'off'
          and f.status in ${sql(PLAYABLE_STATUSES as string[])}
          and not exists (select 1 from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no)
@@ -155,34 +161,56 @@ export async function premintExternalPlay(deps: PremintDeps = {}): Promise<Premi
   return report ?? emptyReport({ skipped: 1 });
 }
 
+/**
+ * The pass's own budget, in the one place every vendor request passes through (the adapter takes one token per request, so a
+ * sibling room's retirement inside `ensureMeeting` is paced and capped too). In order: the call cap composed over `inner` -
+ * the platform's bucket - which `cappedBudget` never reaches past the cap (and refuses a cap that is not a count); then the
+ * pacing wait before every request after the first; then the wall-clock budget, judged AFTER the wait so no request is STARTED
+ * past it. A refusal is a RealtimeKitDeferred in the adapter: nothing was made, nothing is wrong, the rest of the pass is
+ * deferred. A refused request makes no call, so it does not wait. The wall-clock refusal is STICKY, as the cap's is: once the
+ * budget is spent no later request is granted whatever the clock reads next (a clock that steps back must not reopen it), and
+ * none takes a token from `inner`. Exported for its own tests.
+ */
+export function premintBudget(a: {
+  cap: number;
+  inner: CallBudget | null;
+  wait: (ms: number) => Promise<void>;
+  clock: () => number;
+  startedAt: number;
+}): CallBudget {
+  const capped = cappedBudget(a.cap, a.inner);
+  let granted = 0;
+  let over = false;
+  return async (key) => {
+    if (over) return false;
+    if (!(await capped.budget(key))) return false;
+    if (granted > 0) await a.wait(PREMINT_CALL_INTERVAL_MS);
+    if (a.clock() - a.startedAt >= PREMINT_PASS_BUDGET_MS) {
+      over = true;
+      return false;
+    }
+    granted += 1;
+    return true;
+  };
+}
+
 async function runPass(deps: PremintDeps): Promise<PremintReport> {
   const report = emptyReport();
   if (process.env.EXTERNAL_PLAY_PREMINT !== "1") {
     report.disabled = 1;
     return report;
   }
-  const clock = deps.wallClock ?? Date.now;
-  const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const startedAt = clock();
   const rtk = deps.rtk ?? {};
-
-  // The pass's own budget, in the one place every vendor request passes through. In order: the call cap composed over the
-  // platform's bucket (`rtk.budget`, else the adapter's own default - cappedBudget refuses a cap that is not a count and never
-  // reaches the bucket past it); the pacing wait before every request after the first; and the wall-clock budget, judged AFTER
-  // the wait so no request is STARTED past it. A refusal is a RealtimeKitDeferred in the adapter: nothing was made, nothing
-  // is wrong, the rest of the pass is deferred. The wait is skipped for a refused request (it makes no call).
-  const capped = cappedBudget(deps.callCap ?? PREMINT_CALLS_PER_PASS, rtk.budget ?? platformSpend(rtk));
-  let granted = 0;
-  const budget: CallBudget = async (key) => {
-    if (!(await capped.budget(key))) return false;
-    if (granted > 0) await wait(PREMINT_CALL_INTERVAL_MS);
-    if (clock() - startedAt >= PREMINT_PASS_BUDGET_MS) return false;
-    granted += 1;
-    return true;
-  };
+  const budget = premintBudget({
+    cap: deps.callCap ?? PREMINT_CALLS_PER_PASS,
+    inner: rtk.budget ?? platformSpend(rtk),
+    wait: deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+    clock: deps.wallClock ?? Date.now,
+    startedAt: (deps.wallClock ?? Date.now)(),
+  });
   const vendor: RealtimeKitDeps = { ...rtk, budget };
 
-  const rows = await premintCandidates(deps.now ?? new Date(), deps.orgIds);
+  const rows = await premintCandidates(deps.orgIds);
   report.scanned = rows.length;
   const offered = deps.offered ?? onlineChessOffered;
   const asked = new Map<string, Promise<boolean>>();
@@ -195,6 +223,7 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
     return answer;
   };
 
+  let vendorErrorsInARow = 0;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!;
     if (!(await offeredTo(row.orgId))) {
@@ -204,6 +233,7 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
     try {
       await ensureMeeting(row.fixtureId, row.side, vendor, { unpaired: "allow" });
       report.roomsMade += 1;
+      vendorErrorsInARow = 0;
     } catch (err) {
       // The cap, the pass budget or the platform's bucket refused a request: the budget is the pass's, not the row's, so every
       // later row would be refused the same way. The rest keeps its place and the next pass starts from the top.
@@ -215,13 +245,25 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
         );
         break;
       }
-      report.failures.push({ fixtureId: row.fixtureId, side: row.side, code: codeOf(err) });
+      const code = codeOf(err);
+      report.failures.push({ fixtureId: row.fixtureId, side: row.side, code });
       // The report stays code-only; the server log carries what diagnoses it (the message, never a token: every message the
       // adapter builds is token-free by construction).
       log.warn(
-        { fixtureId: row.fixtureId, side: row.side, code: codeOf(err), message: err instanceof Error ? err.message : String(err) },
+        { fixtureId: row.fixtureId, side: row.side, code, message: err instanceof Error ? err.message : String(err) },
         "external-play premint: a board's room could not be made",
       );
+      // RealtimeKit is not configured here: no row can be made, so the pass reports it ONCE (one failure, which pages) and
+      // defers the rest, instead of one failure and one warn per candidate every minute.
+      const unconfigured = err instanceof RealtimeKitError && err.code === "unconfigured";
+      // A vendor that has failed PREMINT_FAILURES_BEFORE_BREAK rooms in a row is down: stop asking it. Only a vendor error
+      // counts, and only a success resets: a row's own refusal (a fixture that vanished since the scan) says nothing of the
+      // vendor either way.
+      if (err instanceof RealtimeKitError) vendorErrorsInARow += 1;
+      if (unconfigured || vendorErrorsInARow >= PREMINT_FAILURES_BEFORE_BREAK) {
+        report.deferred += rows.length - i - 1;
+        break;
+      }
     }
   }
   report.failed = report.failures.length;
