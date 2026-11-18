@@ -82,7 +82,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 13: 1 (a rank override is checked against its pool's size, refused on a bracket, and a withdrawal takes the leaver's pin away).
   // Task 17: 1 (a second Complete answers already_complete, leaves the draft proposal and the knockout as they were, and mints nothing).
   // Task 12: 1 (the first Generate of 7 entrants in 4 pools is refused STAGE_NOT_READY naming 3, and writes nothing).
-  const EXPECTED_CHECKS = 19;
+  // Task 12b: 1 (a league + knockout whose Top 8 is asked of 6 entrants is refused RR_CUT_EXCEEDS_FIELD naming 6, and writes nothing; Top 6 draws).
+  const EXPECTED_CHECKS = 20;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -852,6 +853,48 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-BD-1: the first Generate of 7 entrants in 4 pools is refused STAGE_NOT_READY naming 3 pools (floor(7/3)=2), and writes nothing" +
         (ok ? "" : ` - div ${dRes.status}, entrants ${made.length}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 260)}, written ${written.length}`),
+      ok,
+    );
+  }
+
+  // Check 17 - Task 12b (X-BD-8, RB5-E6): a Top 8 asked of 6 entrants is refused by name before a placeholder is written; the same division
+  // restructured to a Top 6 draws. The second org again, in check 15's competition: ONE more division there (its fourth, the cap), so both
+  // halves share it.
+  {
+    const second = newSession();
+    await signIn(second, `delivered+w5a2_${tag}@resend.dev`);
+    const dRes = await v1(second, `/api/v1/competitions/${pairsCompId ?? "no-competition"}/divisions`, "POST", {
+      name: "Top eight of six",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const made = v1data<{ id: string }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `Top ${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const structure = async (top: number) =>
+      v1data<{ id: string }[] | undefined>(
+        await v1(second, `/api/v1/divisions/${divId}/stages`, "PUT", [
+          { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+          { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: top }] }], placement: "rank_order", timing: "setup" } },
+        ]),
+      ) ?? [];
+    const overStages = await structure(8);
+    const finals = overStages.find((_, i) => i === 1)?.id;
+    const gen = await v1(second, `/api/v1/stages/${finals}/generate`, "POST");
+    const err = (gen.json as { error?: { code?: string; reason?: string; qualified?: number; max?: number } } | undefined)?.error;
+    const written = (v1data<Fx[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === finals);
+    const fitStages = await structure(6);
+    const fitFinals = fitStages.find((_, i) => i === 1)?.id;
+    const drew = await v1(second, `/api/v1/stages/${fitFinals}/generate`, "POST");
+    const ok =
+      dRes.status === 201 && made.length === 6 && finals !== undefined && gen.status === 422 && err?.code === "RR_CUT_EXCEEDS_FIELD" &&
+      err.qualified === 8 && err.max === 6 && err.reason === "cut_exceeds_field" && written.length === 0 && fitFinals !== undefined && drew.status === 200;
+    w5Check(
+      "w5a X-BD-8: a Top 8 of 6 entrants is refused RR_CUT_EXCEEDS_FIELD naming 6 and writes nothing, and the same division as a Top 6 of 6 draws" +
+        (ok ? "" : ` - div ${dRes.status}, entrants ${made.length}, finals ${finals}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 260)}, written ${written.length}, top-6 generate ${drew.status} ${JSON.stringify(drew.json).slice(0, 160)}`),
       ok,
     );
   }

@@ -11984,6 +11984,8 @@ export type DictionaryKey =
   | "wizard.divisionName"
   | "wizard.divisionNamePlaceholder"
   | "wizard.endDateHint"
+  | "wizard.err.cutBestNth"
+  | "wizard.err.cutExceedsField"
   | "wizard.err.formatBound"
   | "wizard.err.matchLength"
   | "wizard.err.maxAge"

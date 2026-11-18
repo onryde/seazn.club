@@ -11,6 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { afterScheduleWrite, validateSchedule, courtNamesById } from "../schedule";
 import { departedLoseBestNth, descriptorKey, destinationSlotsBySeed, sourcesToTables, persistCrossGroupDraws, standingsHash, poolTableRowsAcrossSources, type SlotDescriptor } from "../stage-seeding";
+import { refuseCutBeyondTables } from "./cut-gate";
 import { STAGE_COLS, type StageRow, type FixtureRow } from "./types";
 import { fireStageRevalidate, refoldStageTable, departedEntrantIds } from "./helpers";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
@@ -143,6 +144,8 @@ export async function computeSeedProposal(
         });
       }
     }
+    // W5 T12b (X-BD-8, RB5-E6): a cut the finished tables cannot supply is refused by name before the engine resolves it.
+    refuseCutBeyondTables(progression.sources, shapes, tables, resolved);
     // A2 (round-4 review) — `stage` here IS the progression's own target
     // (computeSeedProposal proposes seeds INTO it), so `stage.kind` is the
     // real targetKind ruling 13's snake/bracket-target guard needs to fire

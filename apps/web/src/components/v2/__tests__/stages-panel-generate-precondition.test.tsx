@@ -74,6 +74,27 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(checked).toBe(4);
   });
 
+  // W5 T12b (X-BD-8): Generate before Start, or the completion whose seeding tripped, is refused for a cut the field cannot supply: said in
+  // the reader's language with both numbers, amber, and the board refreshes (the completion stood).
+  it("RR_CUT_EXCEEDS_FIELD is said in every locale with its two numbers, never the server's English", () => {
+    const wire = "8 can't qualify from this field: it can supply at most 6.";
+    const err = new ApiV1Error(wire, 422, "RR_CUT_EXCEEDS_FIELD", { qualified: 8, max: 6, reason: "cut_exceeds_field", stageId: "s2" });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      const out = classifyActError(err, say, "en");
+      expect(out.tone, locale).toBe("warning");
+      expect(out.refresh, `${locale}: the board is re-read`).toBe(true);
+      expect(out.text, `${locale}: both numbers`).toMatch(/\b8\b[\s\S]*\b6\b/);
+      expect(out.text, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      if (locale === "en") expect(out.text).toBe(wire);
+      else expect(out.text, `${locale}: not the server's English`).not.toBe(wire);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   // F2a (P7 follow-up): the seeded-path analogue — a `.seeding` group stage
   // whose placed qualifiers can't fill its configured pools
   // (generateSeededStageFixtures) throws the same STAGE_NOT_READY shape with

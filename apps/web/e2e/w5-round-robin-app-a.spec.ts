@@ -1191,3 +1191,68 @@ test.describe("X-BD-1 the builder refuses 7 into 4 and offers 3", () => {
     await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
   });
 });
+
+test.describe("X-BD-8 the builder refuses a cut the field cannot supply and names the largest that works", () => {
+  // differential: the builder judged only the Top N's bounds (2..32), so a Top 8 of a plan of 6 passed Next and the server met it at Complete.
+  // Now Next refuses first with the numbers the server's Start refuses with (RB5-E6): a Top 8 of 6 names 6; two pools of 4 and 3 supply a top 6.
+  test("a Top 8 of a plan of 6 stops Next naming 6; 6 of 6 lets it go on; a best-Nth cut no pool can supply names the pool shape's maximum, at every width", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `X-BD-8 cut ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    await page.goto(await competitionPath(request, comp.data!.id, "/d/new"));
+    await dismissCookieBanner(page);
+    await page.getByTestId("division-builder-name").fill(`Cut gate ${TAG}`);
+    await pickBuilderSport(page, "badminton");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+
+    const plan = page.getByTestId("division-builder-plan-entrants");
+    const qualify = page.locator('input[data-format-bound="qualify"]');
+    const error = page.getByTestId("division-builder-error");
+    const exceeds = (have: number, top: number, max: number) =>
+      uiEn["wizard.err.cutExceedsField"]!.replace("{field}", uiEn["wizard.qualify"]!).replace("{qualified}", String(top)).replace("{entrants}", String(have)).replaceAll("{max}", String(max));
+    const bestNth = (pools: number, top: number, max: number) =>
+      uiEn["wizard.err.cutBestNth"]!.replace("{field}", uiEn["wizard.qualify"]!).replace("{pools}", String(pools)).replace("{qualified}", String(top)).replaceAll("{max}", String(max));
+    const pick = async (template: string) => {
+      const card = page.locator(`label[data-template="${template}"]`);
+      if (!(await card.isVisible())) await showAllFormats(page);
+      await card.click();
+      await expect(card.locator('input[type="radio"]')).toBeChecked();
+    };
+
+    // League + knockout: the empty case first - the opening plan supplies the opening Top N, so nothing is refused.
+    await pick("league_ko");
+    await expect(error).toHaveCount(0);
+    await plan.fill("6");
+    await qualify.fill("8");
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByTestId("division-builder-next").click();
+      await expect(page.getByTestId("division-builder"), `${width}: Next did not move`).toHaveAttribute("data-step", "format");
+      await expect(error, `${width}: the refusal names 6`).toHaveText(exceeds(6, 8, 6));
+      await expect(error).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The number it named works (the pin: a cut equal to the field), and Next moves on.
+    await qualify.fill("6");
+    await expect(error).toHaveCount(0);
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+
+    // Groups + knockout: 7 into two pools (4 and 3) cannot supply a best 4th, so a Top 7 names the shape's maximum, 6.
+    await page.getByTestId("division-builder-step-format").click();
+    await pick("groups_ko");
+    await plan.fill("7");
+    await page.locator('input[data-format-bound="pools"]').fill("2");
+    await qualify.fill("7");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+    await expect(error).toHaveText(bestNth(2, 7, 6));
+    await qualify.fill("6");
+    await expect(error).toHaveCount(0);
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+  });
+});

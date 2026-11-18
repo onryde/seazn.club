@@ -6,6 +6,7 @@
 // Pure: the picker's state lives in the screen (`useFormatKnobs`), the derivations here.
 import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
 import { stageGraphSizeGate, type SizeRefusal } from "@/lib/format-size-gates";
+import { cutIssue, type CutReason } from "@/lib/field-cut-gate";
 import { MIN_POOL_SIZE, poolSizeIssue } from "@/lib/pool-size-gate";
 import {
   applyStandingsCarry,
@@ -101,6 +102,9 @@ export interface FormatBoundIssue {
   min: number;
   max: number;
   poolSize?: { entrants: number; pools: number; size: number; suggested: number | null };
+  /** W5 T12b (X-BD-8): the Top N that fits its bounds but not the field - more than the field holds, or a best-Nth cut no pool can
+   *  supply - with the largest cut the field and pools can. `pools` is the plan's pool count (1 for a format with no pool knob). */
+  cut?: { entrants: number; pools: number; qualified: number; max: number; reason: CutReason };
 }
 
 /** The first VISIBLE number knob outside FORMAT_BOUNDS (pools, rounds, then Top N), with the label the picker shows it
@@ -108,7 +112,11 @@ export interface FormatBoundIssue {
  *
  *  W5 T12 (X-BD-1, PO-1): with `entrants` (the plan's field, or the division's own) a pools knob inside its bounds is also judged
  *  against the field by `poolSizeIssue` - the ONE rule C38's server refusal reads (generate-tx.ts) - so the builder refuses 7 into 4
- *  with the same numbers the server would, and offers the count that works. Without `entrants` (no field to judge) only the bounds apply. */
+ *  with the same numbers the server would, and offers the count that works. Without `entrants` (no field to judge) only the bounds apply.
+ *
+ *  W5 T12b (X-BD-8, RB5-E6): the Top N is judged against the field the same way, by `cutIssue` - the ONE rule the server's Start and
+ *  resolve doors read (lib/field-cut-gate.ts) - so a top 8 of 6, or a best-Nth cut no pool can supply, is refused here with the
+ *  largest cut that works. The pools knob is judged first, and only a pool count that fits the field is a shape to cut from. */
 export function formatBoundIssue(
   template: string,
   knobs: Pick<FormatKnobValues, "qualified" | "swissRounds" | "poolCount">,
@@ -125,15 +133,26 @@ export function formatBoundIssue(
       const issue = poolSizeIssue(entrants, value);
       if (issue !== null) return { field, label, ...FORMAT_BOUNDS[field], poolSize: { entrants, pools: value, size: issue.size, suggested: issue.suggested } };
     }
+    if (field === "qualify" && entrants !== undefined) {
+      const pools = shown.pools ? knobs.poolCount : 1;
+      const issue = cutIssue(entrants, pools, value, template);
+      if (issue !== null) return { field, label, ...FORMAT_BOUNDS[field], cut: { entrants, pools, qualified: issue.qualified, max: issue.max, reason: issue.reason } };
+    }
   }
   return null;
 }
 
 /** The sentence a refused format knob is shown as, in the reader's language: the bounds line, or (a pools knob the field cannot fill)
  *  the pool-size line naming the count that works. A suggestion under the pools bound (one pool is a League, not a pool knob) is no
- *  suggestion, so that line says to add entrants. The builder's Next and the dialog's Save both say it through here. */
+ *  suggestion, so that line says to add entrants. A Top N the field cannot supply (W5 T12b) names the largest cut that works. The
+ *  builder's Next and the dialog's Save both say it through here. */
 export function formatBoundText(issue: FormatBoundIssue, msg: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
   const field = msg(issue.label);
+  const c = issue.cut;
+  if (c !== undefined) {
+    const vars = { field, qualified: c.qualified, entrants: c.entrants, pools: c.pools, max: c.max };
+    return msg(c.reason === "cut_exceeds_field" ? "wizard.err.cutExceedsField" : "wizard.err.cutBestNth", vars);
+  }
   const p = issue.poolSize;
   if (p === undefined) return msg("wizard.err.formatBound", { field, min: issue.min, max: issue.max });
   const vars = { field, entrants: p.entrants, pools: p.pools, required: p.pools * MIN_POOL_SIZE };

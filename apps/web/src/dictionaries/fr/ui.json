@@ -4169,6 +4169,8 @@
   "wizard.err.formatBound": "{field} : choisissez un nombre entier entre {min} et {max}.",
   "wizard.err.poolSize": "{field} : {pools} poules nécessitent au moins {required} participants au total, soit 2 par poule (actuellement {entrants}). Choisissez {suggested} poules ou ajoutez des participants.",
   "wizard.err.poolSizeNone": "{field} : {pools} poules nécessitent au moins {required} participants au total, soit 2 par poule (actuellement {entrants}). Ajoutez des participants.",
+  "wizard.err.cutExceedsField": "{field} : {qualified} ne peuvent pas se qualifier avec {entrants} participants. Choisissez {max} ou moins, ou ajoutez des participants.",
+  "wizard.err.cutBestNth": "{field} : {pools} poules de cette taille peuvent fournir au plus {max} qualifiés, pas {qualified}. Choisissez {max} ou moins, ou ajoutez des participants.",
   "wizard.previewError": "Impossible de créer l'exemple",
   "wizard.tab.format": "Format",
   "wizard.divisionName": "Nom de la division",

@@ -4169,6 +4169,8 @@
   "wizard.err.formatBound": "{field}: choose a whole number from {min} to {max}.",
   "wizard.err.poolSize": "{field}: {pools} pools need at least {required} entrants in total, 2 per pool (have {entrants}). Choose {suggested} pools, or add entrants.",
   "wizard.err.poolSizeNone": "{field}: {pools} pools need at least {required} entrants in total, 2 per pool (have {entrants}). Add entrants.",
+  "wizard.err.cutExceedsField": "{field}: {qualified} can't qualify from {entrants} entrants. Choose {max} or fewer, or add entrants.",
+  "wizard.err.cutBestNth": "{field}: {pools} pools of this size can supply at most {max} qualifiers, not {qualified}. Choose {max} or fewer, or add entrants.",
   "wizard.previewError": "Couldn't build example",
   "wizard.tab.format": "Format",
   "wizard.divisionName": "Division name",

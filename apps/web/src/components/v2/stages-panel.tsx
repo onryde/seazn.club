@@ -2807,6 +2807,11 @@ export function classifyActError(
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
     return { tone: "warning", text: knockoutRefusalText(err.code, err.extra, msg), refresh: false };
   }
+  // W5 T12b (X-BD-8, RB5-E6): a cut the field cannot supply (Generate before Start, or the completion that tried to seed it) says so in
+  // the reader's language, naming the largest cut that works. Amber: the stage stands, the format or the field is what to mend.
+  if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+  }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
   // F3 ultrareview finding 10 — was `err.message` verbatim, i.e. raw English

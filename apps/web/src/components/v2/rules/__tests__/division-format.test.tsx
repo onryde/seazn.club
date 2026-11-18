@@ -535,7 +535,8 @@ describe("Save: the dry run, then the write (FMT5)", () => {
 
   it("a knob outside its bounds is refused before anything is sent; back inside, the save goes", async () => {
     apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
-    const { h } = mountDialog({ stages: stagesOf("league_ko") });
+    // A division as large as the widest Top N, so the field (W5 T12b: a cut the field cannot supply is refused too) is not what refuses the save.
+    const { h } = mountDialog({ stages: stagesOf("league_ko"), entrants: FORMAT_BOUNDS.qualify.max });
     type(h, "qualify", String(FORMAT_BOUNDS.qualify.max + 8));
     click(h, "division-format-save");
     await flush();
@@ -574,6 +575,33 @@ describe("X-BD-1 the dialog judges the division's own field, as the builder judg
     await flush();
     expect(calls(), "the save goes").toHaveLength(2);
     expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+});
+
+describe("X-BD-8 the dialog judges the division's own cut against its own field", () => {
+  // differential: Save accepted a top 8 for a division of 6 (only the 2..32 bounds were read); the server met it at Complete.
+  it("a top 8 of 6 entrants is refused before anything is sent, naming 6; 6 of 6 saves", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("league_ko"), entrants: 6 });
+    type(h, "qualify", "8");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "nothing sent").toHaveLength(0);
+    expect(textOf(byId(h, "division-format-error")!)).toBe(say("wizard.err.cutExceedsField", { field: say("wizard.qualify"), qualified: 8, entrants: 6, pools: 1, max: 6 }));
+    type(h, "qualify", "6");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls()).toHaveLength(2);
+    expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+
+  it("a division with no field yet is not judged against it (the empty case)", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("league_ko"), entrants: 0 });
+    type(h, "qualify", "8");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "the save goes").toHaveLength(2);
   });
 });
 

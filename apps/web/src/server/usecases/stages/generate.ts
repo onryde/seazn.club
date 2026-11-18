@@ -25,6 +25,7 @@ import {
   type GenerateOptions,
   type SealedSetupCounts,
 } from "./types";
+import { refuseCutBeyondField } from "./cut-gate";
 import { fireStageRevalidate, refoldStageTable } from "./helpers";
 import { refuseFormatTooSmall, swissActiveEntrants, swissPairRanksTable } from "./swiss-gen";
 import { rankedStageStandings } from "@/server/engine-db/competition";
@@ -167,7 +168,12 @@ async function generateStageFixturesWrite(
       }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
-      if (progression.timing === "setup") return { seeded: true as const };
+      // W5 T12b (X-BD-8): a `timing: "setup"` stage is drawn off the shape of the cut it takes, so a cut the roster cannot supply is
+      // refused here by name, before a placeholder line is written. Before Start only: after it a withdrawal is the table's to settle.
+      if (progression.timing === "setup") {
+        if (stage.division_status !== "active") await refuseCutBeyondField(tx, stage.division_id);
+        return { seeded: true as const };
+      }
       if (Array.isArray(stage.config.qualified)) return null;
       const [prev] = await tx<{ id: string; status: string }[]>`
         select id, status from stages

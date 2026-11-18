@@ -4116,6 +4116,8 @@
   "wizard.err.formatBound": "{field}: kies een heel getal van {min} tot en met {max}.",
   "wizard.err.poolSize": "{field}: {pools} poules hebben in totaal minstens {required} deelnemers nodig, 2 per poule (nu {entrants}). Kies {suggested} poules of voeg deelnemers toe.",
   "wizard.err.poolSizeNone": "{field}: {pools} poules hebben in totaal minstens {required} deelnemers nodig, 2 per poule (nu {entrants}). Voeg deelnemers toe.",
+  "wizard.err.cutExceedsField": "{field}: {qualified} kunnen zich niet kwalificeren uit {entrants} deelnemers. Kies {max} of minder, of voeg deelnemers toe.",
+  "wizard.err.cutBestNth": "{field}: {pools} poules van deze grootte kunnen hooguit {max} gekwalificeerden leveren, geen {qualified}. Kies {max} of minder, of voeg deelnemers toe.",
   "wizard.previewError": "Kon voorbeeld niet maken",
   "wizard.tab.format": "Formaat",
   "wizard.divisionName": "Divisienaam",

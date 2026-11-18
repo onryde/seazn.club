@@ -8,6 +8,7 @@ import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type 
 import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { engineFixtureStatus as toBracketFixtureStatus } from "@/lib/fixture-engine-status";
+import { refuseCutBeyondTables } from "./cut-gate";
 import { resolveStoredProgression } from "../stored-progression";
 import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/bracket-rounds";
 import { personalPointsLeaderboard } from "../americano";
@@ -344,6 +345,10 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
         sourceTables.push(await tablesForCompletedStage(tx, source, current.division_id));
       }
     }
+    // W5 T12b (X-BD-8, RB5-E6): a cut the finished tables cannot supply is refused by name before the engine resolves it. It is an
+    // HttpError, not the engine's STAGE_NOT_READY that `completeStage` reads as "another source is not ready yet" and swallows, so the
+    // completion that tripped it says why instead of seeding nothing.
+    refuseCutBeyondTables(progression.sources, shapes, sourceTables, resolvedSources);
     // A2 (round-4 review) — `next` here IS the progression's own target
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path

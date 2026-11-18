@@ -4116,6 +4116,8 @@
   "wizard.err.formatBound": "{field}: elige un número entero entre {min} y {max}.",
   "wizard.err.poolSize": "{field}: {pools} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {entrants}). Elige {suggested} grupos o añade participantes.",
   "wizard.err.poolSizeNone": "{field}: {pools} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {entrants}). Añade participantes.",
+  "wizard.err.cutExceedsField": "{field}: no pueden clasificarse {qualified} con {entrants} participantes. Elige {max} o menos, o añade participantes.",
+  "wizard.err.cutBestNth": "{field}: {pools} grupos de este tamaño pueden aportar como máximo {max} clasificados, no {qualified}. Elige {max} o menos, o añade participantes.",
   "wizard.previewError": "No se pudo crear el ejemplo",
   "wizard.tab.format": "Formato",
   "wizard.divisionName": "Nombre de división",
