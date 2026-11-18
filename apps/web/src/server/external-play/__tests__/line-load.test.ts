@@ -54,6 +54,7 @@ import {
   type VendorCall,
   webhookDigest,
   webhookVerdict,
+  parseWebhooksKnob,
   type WebhookDigest,
 } from "../../../../e2e/load/line-load";
 
@@ -520,9 +521,9 @@ describe("webhookDigest + webhookVerdict: the load run's end-of-run presence che
     expect(() => webhookDigest(bad, new Map([["x", "delivered"]]))).toThrow(/participantLeft/);
   });
 
-  const clean = (): { enabled: boolean; digest: WebhookDigest; openRows: number; leftClosed: number; recorded: number } => {
+  const clean = (): { enabled: boolean; digest: WebhookDigest; allEnded: boolean; openRows: number | null; leftClosed: number | null; recorded: number | null; shadowVerified: number | null } => {
     const digest = webhookDigest(hooks.filter((h) => h.uuid !== "u6"), new Map([...outcomes].filter(([k]) => k !== "u6")));
-    return { enabled: true, digest, openRows: 0, leftClosed: digest.leftPeers.length, recorded: digest.deliveredUuids.length };
+    return { enabled: true, digest, allEnded: true, openRows: 0, leftClosed: digest.leftPeers.length, recorded: digest.deliveredUuids.length, shadowVerified: 4 };
   };
 
   it("a clean run passes, and the checks it ran were not vacuous", () => {
@@ -534,7 +535,7 @@ describe("webhookDigest + webhookVerdict: the load run's end-of-run presence che
 
   it("without LOAD_WEBHOOKS nothing is asserted, whatever the counts (the baseline delivers none)", () => {
     const base = webhookDigest(hooks, new Map(hooks.map((h) => [h.uuid, "down"])));
-    expect(webhookVerdict({ enabled: false, digest: base, openRows: 3, leftClosed: 0, recorded: 0 })).toEqual([]);
+    expect(webhookVerdict({ enabled: false, digest: base, allEnded: false, openRows: 3, leftClosed: 0, recorded: 0 })).toEqual([]);
   });
 
   it("delivered 0 (an inert run) fails, with the emitted count named", () => {
@@ -544,7 +545,7 @@ describe("webhookDigest + webhookVerdict: the load run's end-of-run presence che
   });
 
   it("an empty run (nothing emitted, nothing delivered) fails: zero checked is a failure", () => {
-    const v = webhookVerdict({ enabled: true, digest: webhookDigest([], new Map()), openRows: 0, leftClosed: 0, recorded: 0 });
+    const v = webhookVerdict({ enabled: true, digest: webhookDigest([], new Map()), allEnded: true, openRows: 0, leftClosed: 0, recorded: 0 });
     expect(v.length).toBeGreaterThan(0);
     expect(v.some((m) => /delivered 0/.test(m))).toBe(true);
   });
@@ -567,17 +568,53 @@ describe("webhookDigest + webhookVerdict: the load run's end-of-run presence che
     const only = hooks.filter((h) => h.event !== "meeting.participantLeft");
     const d = webhookDigest(only, new Map(only.map((h) => [h.uuid, "delivered"])));
     expect(d.leftPeers).toEqual([]);
-    expect(webhookVerdict({ enabled: true, digest: d, openRows: 0, leftClosed: 0, recorded: d.deliveredUuids.length })).toEqual([expect.stringMatching(/no participantLeft/)]);
+    expect(webhookVerdict({ enabled: true, digest: d, allEnded: true, openRows: 0, leftClosed: 0, recorded: d.deliveredUuids.length })).toEqual([expect.stringMatching(/no participantLeft/)]);
   });
 
   it("a delivered uuid missing from realtimekit_webhook_deliveries fails", () => {
     const c = clean();
-    expect(webhookVerdict({ ...c, recorded: c.recorded - 1 })).toEqual([expect.stringMatching(/5 of 6 delivered/)]);
+    expect(webhookVerdict({ ...c, recorded: c.digest.deliveredUuids.length - 1 })).toEqual([expect.stringMatching(/5 of 6 delivered/)]);
   });
 
   it("a webhook that never settled (neither delivered, failed nor down) fails", () => {
     const d = webhookDigest(hooks.slice(0, 2), new Map([["u1", "delivered"]])); // u2 has no outcome: still pending
-    const v = webhookVerdict({ enabled: true, digest: d, openRows: 0, leftClosed: 0, recorded: d.deliveredUuids.length });
+    const v = webhookVerdict({ enabled: true, digest: d, allEnded: true, openRows: 0, leftClosed: 0, recorded: d.deliveredUuids.length });
     expect(v.some((m) => /never settled/.test(m))).toBe(true);
+  });
+
+  // T10c I1: only meetings that have ended can hold a phantom, and a non-STRICT scenario ends nobody.
+  it("meetings not all ended: open rows are NOT called phantoms; the run says so by name instead (and the check is not skipped when they all ended)", () => {
+    const v = webhookVerdict({ ...clean(), allEnded: false, openRows: 5 });
+    expect(v).toEqual([expect.stringMatching(/meetings not all ended/)]);
+    expect(v.join("\n")).not.toMatch(/phantom peers/);
+    // the sibling direction: ended, same open rows -> phantoms, and no "not all ended"
+    const ended = webhookVerdict({ ...clean(), allEnded: true, openRows: 5 });
+    expect(ended).toEqual([expect.stringMatching(/5 presence row\(s\) still open/)]);
+  });
+
+  it("a table count that was not read (null: the read threw) is never compared, so it cannot read as a mismatch or a pass", () => {
+    expect(webhookVerdict({ ...clean(), openRows: null, leftClosed: null, recorded: null })).toEqual([]);
+    // the delivery-level checks still run with the table unread
+    const d = webhookDigest(hooks, outcomes);
+    expect(webhookVerdict({ ...clean(), digest: d, openRows: null, leftClosed: null, recorded: null })).toEqual([expect.stringMatching(/1 webhook\(s\) failed/)]);
+  });
+
+  it("a shadow report that verified 0 seats fails; null (not read) and a positive count do not", () => {
+    expect(webhookVerdict({ ...clean(), shadowVerified: 0 })).toEqual([expect.stringMatching(/shadow report verified 0 seats/)]);
+    expect(webhookVerdict({ ...clean(), shadowVerified: null })).toEqual([]);
+    expect(webhookVerdict({ ...clean(), shadowVerified: 1 })).toEqual([]);
+  });
+});
+
+describe("parseWebhooksKnob: LOAD_WEBHOOKS accepts only 0, 1 or unset", () => {
+  it("1 is on; 0, unset and empty are off", () => {
+    expect(parseWebhooksKnob("1")).toBe(true);
+    for (const off of ["0", undefined, ""]) expect(parseWebhooksKnob(off), String(off)).toBe(false);
+  });
+
+  it("any other value throws, naming the knob (a typo must not silently run the baseline)", () => {
+    const bad = ["true", "yes", "on", "2", " 1", "01", "TRUE"];
+    for (const v of bad) expect(() => parseWebhooksKnob(v), v).toThrow(/LOAD_WEBHOOKS=/);
+    expect(bad.length, "anti-vacuity: values judged").toBeGreaterThan(0);
   });
 });
