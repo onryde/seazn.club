@@ -254,6 +254,86 @@ describe.skipIf(!DB)("receiveRealtimeKitWebhook", () => {
     expect(await deliveryCount(end.uuid)).toBe(1);
   });
 
+  // I1 (batch-2 review): a deleted fixture's meeting is still HELD through the room its delete parked (V460), so without the receiver's
+  // fixture check the vendor's left / ended for it (the sweep ends the parked room) would re-insert person ids the delete just purged.
+  // A board of its own: these tests delete their fixture.
+  const ownBoard = async () => {
+    const s = await seedOnlineChessFixture({ onlinePlay: "lichess", divisionStarted: false, scheduledAt: new Date(Date.now() + 3_600_000), linked: true });
+    const meetingId = await putVideoMeeting({ fixtureId: s.fixtureId, orgId: s.orgId, side: "home" }, {});
+    await putVideoParticipant({ fixtureId: s.fixtureId, side: "home", personId: s.home.personId });
+    meetingsMade.push(meetingId);
+    return { fixtureId: s.fixtureId, personId: s.home.personId, meetingId };
+  };
+  const fixtureExists = async (id: string) => (await sql`select 1 from fixtures where id = ${id}`).length === 1;
+
+  it("a deleted fixture: its parked meeting's signed left and ended are recorded deliveries that write NO presence and NO ended session (I1)", async () => {
+    const b = await ownBoard();
+    const w = delivery(body({ event: "meeting.participantJoined", meetingId: b.meetingId, peerId: "peer-d", custom: b.personId }));
+    expect(await receive(w, { publicKey })).toEqual({ status: 200, outcome: "applied" });
+    expect(await presenceRows(b.meetingId), "premise: the join wrote a row").toHaveLength(1);
+
+    await sql`delete from fixtures where id = ${b.fixtureId}`;
+    expect(await fixtureExists(b.fixtureId), "premise: the fixture is gone").toBe(false);
+    expect(await presenceRows(b.meetingId), "premise: the delete's trigger purged the row").toHaveLength(0);
+    const [parked] = await sql<{ fixture_id: string }[]>`select fixture_id from video_rooms_to_end where meeting_id = ${b.meetingId}`;
+    expect(parked?.fixture_id, "premise: the delete PARKED the room (V460), so the meeting is still held, naming the deleted fixture").toBe(b.fixtureId);
+
+    const left = delivery(body({ event: "meeting.participantLeft", meetingId: b.meetingId, peerId: "peer-d", custom: b.personId, at: new Date(T0.getTime() + 10_000) }));
+    const end = delivery(body({ event: "meeting.ended", meetingId: b.meetingId, at: new Date(T0.getTime() + 60_000) }));
+    const checked: string[] = [];
+    for (const d of [left, end]) {
+      expect(await receive(d, { publicKey })).toEqual({ status: 200, outcome: "ignored" });
+      expect(await deliveryCount(d.uuid), "the delivery is recorded, so the vendor's retry is a duplicate").toBe(1);
+      expect(await receive(d, { publicKey })).toEqual({ status: 200, outcome: "duplicate" });
+      checked.push(d.uuid);
+    }
+    expect(checked).toHaveLength(2);
+    expect(await presenceRows(b.meetingId), "no person id re-enters the sealed table after its board is gone").toHaveLength(0);
+    expect(await endedRows(b.meetingId)).toHaveLength(0);
+  });
+
+  it("a fixture delete WAITS on a receiver that holds the fixture, then its trigger purges the rows the receiver committed (I1, two connections)", async () => {
+    const b = await ownBoard();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let heldPid!: (pid: number) => void;
+    const pidP = new Promise<number>((r) => (heldPid = r));
+    // the receiver's own transaction, held open AFTER its fixture check (apply runs after it): the real apply, then wait
+    const apply: NonNullable<WebhookDeps["apply"]> = async (tx, ev, now, held) => {
+      const out = await applyPresenceEvent(tx, ev, now, held);
+      const [r] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      heldPid(r!.pid);
+      await gate;
+      return out;
+    };
+    const w = delivery(body({ event: "meeting.participantJoined", meetingId: b.meetingId, peerId: "peer-w", custom: b.personId }));
+    const receipt = receive(w, { publicKey, apply });
+    const pid = await pidP;
+
+    let deleted = false;
+    const del = (async () => {
+      await sql`delete from fixtures where id = ${b.fixtureId}`;
+      deleted = true;
+    })();
+    // the delete, on another connection, is blocked by the receiver's backend
+    let waiting = 0;
+    for (let i = 0; i < 100 && waiting === 0; i++) {
+      const [r] = await sql<{ n: number }[]>`select count(*)::int as n from pg_locks where not granted and ${pid} = any(pg_blocking_pids(pid))`;
+      waiting = r!.n;
+      if (waiting === 0) await new Promise((res) => setTimeout(res, 50));
+    }
+    expect(waiting, "the fixture delete waits on the receiver's key-share lock").toBeGreaterThan(0);
+    expect(deleted).toBe(false);
+
+    release();
+    expect(await receipt).toEqual({ status: 200, outcome: "applied" });
+    await del;
+    expect(deleted).toBe(true);
+    expect(await fixtureExists(b.fixtureId)).toBe(false);
+    expect(await deliveryCount(w.uuid)).toBe(1);
+    expect(await presenceRows(b.meetingId), "the delete ran after the receiver committed, so its trigger saw and purged the row").toHaveLength(0);
+  });
+
   it("meeting.ended for a held meeting with NO sessionId is 200 ignored: the delivery is recorded (a retry is a duplicate), the open row stays open, no ended-session row (m1)", async () => {
     await receive(joined(), { publicKey });
     const raw = JSON.stringify({ event: "meeting.ended", meeting: { id: seeded.meetingId, status: "ENDED", endedAt: new Date(T0.getTime() + 60_000).toISOString() } });

@@ -11,8 +11,13 @@ import "server-only";
 //      must never be answered 4xx merely because we could not look yet; it is retried after the floor and applies then.
 //   3. parse (400 when the body is not a RealtimeKit event). An event we never apply (`other`) is 200 ignored before any statement.
 //   4. ONE transaction: `heldMeeting` (not ours: 200 ignored and NOTHING written, not even the delivery row, so a third party who
-//      holds a valid signature, which every Cloudflare customer's events carry, can never make the public route insert) -> record the
-//      delivery id (`rtk-uuid`; a repeat is 200 duplicate) -> apply the event under the meeting's lock. The delivery insert comes
+//      holds a valid signature, which every Cloudflare customer's events carry, can never make the public route insert) -> KEY SHARE
+//      on the held board's `fixtures` row (gone: the delivery is recorded and nothing else, 200 ignored; there: a fixture delete waits
+//      for this commit, then V527's purge trigger removes what we wrote) -> record the delivery id (`rtk-uuid`; a repeat is 200
+//      duplicate) -> apply the event under the meeting's lock. LOCK ORDER: fixture row -> delivery key -> meeting lock -> presence
+//      rows. A fixture delete locks the fixture row FIRST and touches only that fixture's presence rows (its trigger), never a
+//      delivery row or a meeting lock, so it can wait on a receiver but no receiver of that fixture can hold anything it needs
+//      before then: no cycle. The delivery insert comes
 //      BEFORE the apply so the two writers of one delivery meet on the unique key before either takes the meeting lock (no cycle
 //      between two deliveries of one meeting, which take that lock in turn). A throw anywhere rolls the whole transaction back: no
 //      delivery row survives a failed apply, so the vendor's retry of the same uuid applies (the route answers 500 on a throw).
@@ -55,7 +60,8 @@ const verifies = (raw: string | Uint8Array, signature: string, k: Key) => verify
 
 /** Verify (refetching the key once on failure: 401 only when a key fetched for THIS request still refuses, 503 when none could be
  *  fetched), parse, then in ONE transaction: `heldMeeting` (not ours -> 200 ignored, NOTHING written, not even the delivery row),
- *  record the delivery id, apply the event. A storage failure throws (the route answers 500 so the vendor retries); a duplicate
+ *  key-share the held board's fixture row, record the delivery id, apply the event (a deleted board: 200 ignored, the delivery
+ *  recorded and no presence written). A storage failure throws (the route answers 500 so the vendor retries); a duplicate
  *  `rtk-uuid` is a 200 that applies nothing. An `other` event is 200 ignored and writes nothing. `rawBody` is the body's BYTES as
  *  read (a string is taken as its UTF-8 bytes); the signature is checked over them and the JSON is parsed from them. */
 export async function receiveRealtimeKitWebhook(
@@ -98,10 +104,15 @@ export async function receiveRealtimeKitWebhook(
   const result = await sql.begin(async (tx) => {
     const held = await heldMeeting(tx, ev.meetingId);
     if (held === null) return "foreign" as const;
+    // The board must still exist, and must keep existing until we commit: KEY SHARE on its fixture row (what a foreign key would
+    // take) makes a concurrent fixture delete wait for us, so its purge trigger sees every row we write. A board already deleted (its
+    // meeting still held through the room the delete parked, V460) writes no presence: the delivery is recorded, nothing else.
+    const [board] = await tx`select 1 from fixtures where id = ${held.fixtureId} for key share`;
     const [row] = await tx<{ rtk_uuid: string }[]>`
       insert into realtimekit_webhook_deliveries (rtk_uuid, event) values (${uuid}, ${ev.event})
       on conflict (rtk_uuid) do nothing returning rtk_uuid`;
     if (!row) return "duplicate" as const;
+    if (!board) return "ignored" as const;
     return apply(tx, ev, now, held);
   });
   if (result === "foreign") {

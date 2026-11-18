@@ -370,7 +370,11 @@ export const PRESENCE_RETENTION_MS = 30 * 24 * 60 * 60_000;
  *  A row exactly at its cutoff stays (strictly before). The external-play sweep calls it once a pass (sweep/run.ts).
  *
  *  WHAT THIS IS NOT. It is the age bound only. A row that outlives its FIXTURE is the fixture delete's to remove (V527's trigger on
- *  `fixtures`), so no person UUID outlives a deleted board. A row carries a person's id (a player's `custom_participant_id` is the
+ *  `fixtures`, which deletes the rows COMMITTED when it runs). The webhook writer keeps that complete: it takes KEY SHARE on the held
+ *  board's fixture row before writing (webhook.ts step 4), so a delete either waits for the delivery to commit and then purges its
+ *  rows, or ran first and the delivery (its meeting still held through the room the delete parked) writes none. The READ writer
+ *  (`recordPresenceFromRead`, plan 2's seat) takes no such lock: a read racing its fixture's delete can leave a row this prune
+ *  takes within PRESENCE_RETENTION_MS, so plan 2 owes it the same key share before it ships a caller. A row carries a person's id (a player's `custom_participant_id` is the
  *  person id, an arbiter's the user id and a nonce): when a PERSON or USER is deleted, their rows stay until this prune takes them,
  *  up to PRESENCE_RETENTION_MS (30 days). That is deliberate and not purged by custom id: the ids are pseudonymous (no name, email or
  *  contact detail sits in any of these tables, and the tables are sealed from every tenant role), the window is short, and the fixture
