@@ -254,6 +254,41 @@ describe.skipIf(!DB)("receiveRealtimeKitWebhook", () => {
     expect(await deliveryCount(end.uuid)).toBe(1);
   });
 
+  it("meeting.ended for a held meeting with NO sessionId is 200 ignored: the delivery is recorded (a retry is a duplicate), the open row stays open, no ended-session row (m1)", async () => {
+    await receive(joined(), { publicKey });
+    const raw = JSON.stringify({ event: "meeting.ended", meeting: { id: seeded.meetingId, status: "ENDED", endedAt: new Date(T0.getTime() + 60_000).toISOString() } });
+    const w = delivery(raw);
+    const before = await deliveryCount();
+    expect(await receive(w, { publicKey })).toEqual({ status: 200, outcome: "ignored" });
+    expect(await deliveryCount(w.uuid), "the delivery row is recorded (pinned: the vendor's retry of it is then a duplicate, not a second warn)").toBe(1);
+    expect(await deliveryCount()).toBe(before + 1);
+    expect(await endedRows(seeded.meetingId)).toHaveLength(0);
+    const rows = await presenceRows(seeded.meetingId);
+    expect(rows, "the join's row is untouched").toHaveLength(1);
+    expect(rows[0]).toMatchObject({ left_at: null, left_by: null });
+    expect(await receive(w, { publicKey })).toEqual({ status: 200, outcome: "duplicate" });
+  });
+
+  it("a signed body that starts with a UTF-8 BOM (U+FEFF) still parses and applies: the vendor must not be answered 400 for it (m3)", async () => {
+    const text = body({ event: "meeting.participantJoined", meetingId: seeded.meetingId, custom: seeded.personId });
+    const bytes = new Uint8Array(Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(text, "utf8")]));
+    expect(bytes[0], "premise: the body really starts with a BOM").toBe(0xef);
+    const u = randomUUID();
+    uuidsMade.push(u);
+    expect(await receive({ rawBody: bytes, signature: signed(bytes), uuid: u }, { publicKey })).toEqual({ status: 200, outcome: "applied" });
+    expect(await presenceRows(seeded.meetingId)).toHaveLength(1);
+    expect(await deliveryCount(u)).toBe(1);
+  });
+
+  it("the rtk-uuid is stored trimmed, so a retry with or without the padding is the same delivery (m4)", async () => {
+    const id = randomUUID();
+    uuidsMade.push(id);
+    const w = joined({ uuid: `  ${id} ` });
+    expect(await receive(w, { publicKey })).toEqual({ status: 200, outcome: "applied" });
+    expect(await deliveryCount(id), "stored under the trimmed id").toBe(1);
+    expect(await receive({ ...w, uuid: id }, { publicKey })).toEqual({ status: 200, outcome: "duplicate" });
+  });
+
   it("an unparseable body is 400 and nothing written", async () => {
     const before = await state(seeded.meetingId);
     let checked = 0;

@@ -65,7 +65,7 @@ export async function receiveRealtimeKitWebhook(
   if (a.signature === null || a.signature === "") return { status: 401, reason: "no_signature" };
   if (a.uuid === null || a.uuid.trim() === "") return { status: 401, reason: "no_uuid" };
   const signature = a.signature;
-  const uuid = a.uuid;
+  const uuid = a.uuid.trim(); // stored trimmed: a padded retry of the same delivery must meet its first row
   const getKey = deps.publicKey ?? ((opts) => webhookPublicKey(opts));
 
   const first = await askKey(getKey, false);
@@ -84,7 +84,9 @@ export async function receiveRealtimeKitWebhook(
   let ev: ReturnType<typeof parseRealtimeKitEvent>;
   try {
     const text = typeof a.rawBody === "string" ? a.rawBody : Buffer.from(a.rawBody).toString("utf8");
-    ev = parseRealtimeKitEvent(JSON.parse(text) as unknown);
+    // A leading BOM is not JSON (JSON.parse throws on it) yet is part of the signed bytes: strip it AFTER the signature check, so a vendor
+    // body that carries one is applied, never answered with a 400 the vendor does not retry.
+    ev = parseRealtimeKitEvent(JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text) as unknown);
   } catch {
     ev = null;
   }
