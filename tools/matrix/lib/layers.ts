@@ -354,7 +354,8 @@ export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
       // A row the product refuses (catalogue.ts refusedCell: the standalone stepladder and page playoff, W4 T16) owes no
       // organiser path, so it is not planned 🚫 either.
       // W5 X-BD-3: a row a catalog card reaches on this sport has an organiser path, so it is driven (planL1Grid), never planned
-      // 🚫 here: super-groups reaches group_group_ko on generic, leaving group_only the one row with no control.
+      // 🚫 here: super-groups reaches group_group_ko on generic, and group_only left the API-only rows (W5 T14's picker card), so
+      // since the B4 merge no row is left and the set plans nothing.
       return API_ONLY_ROWS.filter((row) => !isKnobRow(row) && refusedCell(row, sport) === null && templateFor(row, sport) === null).map((row): PlannedLayerCase => ({
         spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
         layer: "L1", width: L1_WIDTH, noPath: apiOnlyNoPath(row, sport), notRun: null, run: null,

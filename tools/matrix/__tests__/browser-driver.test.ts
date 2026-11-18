@@ -29,7 +29,7 @@ import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, isLosersFedOnly, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type DivisionRef, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { builtAsPosted } from "../lib/scenarios/assertions.ts";
 import { Recorder, TEMPLATE_ENDS_ON, playStage, setUpDivision } from "../lib/scenarios/common.ts";
@@ -2026,21 +2026,37 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
   });
 
   it("a division the harness built over http: the places come from the stages it posted, and from the stages it listed", async () => {
-    // An API-only row: its division is the harness's own, over http. Generic's `score` variant is a real one. group_only on generic
-    // has no card (box-league is badminton's); group_group_ko on generic has one now (super-groups), so it is never built over http.
-    // The stages posted are three-stage bodies either way: the places are taken from what is posted, whatever the row.
-    const gk = spec("group_only", "generic", { variant: "score", caseId: "group_only|generic|score|LIFECYCLE" });
-    const posted = new StagedHttp(ORG);
+    // B4 merge: no API-only row is left that the harness builds over http on an engine sport - group_only has the picker's card
+    // (W5 T14) and group_group_ko the super-groups card on every sport (X-BD-3). So the division over http is the case's SECOND
+    // one: the first went through the builder, and the mixed ledger's first-only rule sends every later createDivision over http.
+    // The stages posted are three-stage bodies: the places are taken from what is posted, whatever the row.
+    const gk = spec("league", "generic", { variant: "score", caseId: "league|generic|score|LIFECYCLE" });
+    // Its own id: the fake page's builder division is "d1" too, and the driver must not mistake one for the other.
+    const posted = new (class extends StagedHttp {
+      override createDivision(c: string, i: Parameters<StagedHttp["createDivision"]>[1]): Promise<DivisionRef> {
+        return super.createDivision(c, i).then((d) => ({ ...d, id: "d-http" }));
+      }
+    })(ORG);
     const a = make({ http: posted, spec: gk });
-    const { divId } = await built(a.driver, gk);
+    const first = await built(a.driver, gk);
+    const second = await a.driver.createDivision(first.compId, { name: "Matrix generic 2", slug: "d2", sportKey: "generic", variantKey: "score", config: {} });
+    expect(posted.calls.filter((c) => c === "createDivision"), "the second division went over http").toHaveLength(1);
+    const divId = second.id;
+    expect(divId).not.toBe(first.divId);
     await a.driver.postStages(divId, stagesForRow("group_group_ko"));
     await a.driver.completeStage("h1");
     await a.driver.completeStage("h3");
     expect(places(a.pageArgs)).toEqual([{ stage: "h1", at: { ordinal: 1, last: false } }, { stage: "h3", at: { ordinal: 3, last: true } }]);
     // Stages only LISTED: the fake product holds them, the driver learns them from the read.
-    const listed = new StagedHttp(ORG);
+    // The same second division over http (its own id), so the builder's stages of the first never share its places.
+    const listed = new (class extends StagedHttp {
+      override createDivision(c: string, i: Parameters<StagedHttp["createDivision"]>[1]): Promise<DivisionRef> {
+        return super.createDivision(c, i).then((d) => ({ ...d, id: "d-http" }));
+      }
+    })(ORG);
     const b = make({ http: listed, spec: gk });
-    const made = await built(b.driver, gk);
+    const builder = await built(b.driver, gk);
+    const made = { divId: (await b.driver.createDivision(builder.compId, { name: "Matrix generic 2", slug: "d2", sportKey: "generic", variantKey: "score", config: {} })).id };
     // Listed in REVERSE seq order: a place is by seq, never by the order the stages were learned in.
     listed.stages = stagesForRow("group_group_ko").map((x, i) => ({ id: `l${i + 1}`, seq: x.seq, kind: x.kind, config: {}, status: "pending" })).reverse();
     expect((await b.driver.listStages(made.divId)).map((x) => x.id)).toEqual(["l3", "l2", "l1"]);

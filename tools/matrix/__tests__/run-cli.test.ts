@@ -2084,7 +2084,7 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(fb.log).toEqual([...L2_WIDTHS.flatMap((_w, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
   });
 
-  it("--set api-only-browser --driver browser: one 🚫 per API-only row, in catalogue order, naming W4/W5 (D7 as ruled) — no browser, no org; exit 0; never vacuous, never an error red", async () => {
+  it("--set api-only-browser --driver browser: one 🚫 per API-only row with no organiser control on generic — none is left since W5 T14 + X-BD-3, so the set is refused by name (exit 2, NothingPlanned), nothing written, no browser, no org", async () => {
     const io = capture();
     const WAVE: Readonly<Record<string, string>> = { group_group_ko: "W5" };
     // W4 T16 (ruling 269): the refused standalone rows are in no layer, so the set holds one 🚫 per OFFERED API-only row.
@@ -2095,27 +2095,20 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect([...owed], "the rows still owed a control: the two-tier group format, W5's").toEqual(["group_group_ko"]);
     expect(isKnobRow("knockout_third_place"), "the third-place row is the one that left").toBe(true);
     expect(API_ONLY_ROWS.length - refusedRows.length - owed.length, "API-only rows offered and built by the builder").toBe(1);
-    // W5 X-BD-3: the super-groups card reaches group_group_ko on generic, so only group_only is still 🚫 here (no card builds it on generic).
+    // W5 X-BD-3: the super-groups card reaches group_group_ko on generic. With group_only gone (W5 T14), the B4 merge leaves NO row
+    // without an organiser control on generic: the set plans nothing, and the run refuses it by name (exit 2), never a 0-case run.
     const noControl = owed.filter((r) => templateFor(r, "generic") === null);
-    expect(noControl, "the one row with no organiser control on generic").toEqual(["group_only"]);
+    expect(noControl, "no row is left with no organiser control on generic").toEqual([]);
+    expect(templateFor("group_group_ko", "generic")).toBe("super-groups");
+    expect(WAVE.group_group_ko, "the wave the row would be owed by, were no card to reach it").toBe("W5");
     const dir = dirFor();
     let opened = 0;
     const d = deps({ openBrowserRun: async () => { opened++; return fakeBrowserRun().run; } });
-    expect(await runSlice(d, ["--set", "api-only-browser", "--driver", "browser", "--run-id", "ao", "--report-dir", dir])).toBe(0);
-    const raw = JSON.parse(readFileSync(join(dir, "ao", "results.json"), "utf8")) as RunResults;
-    expect(raw.layer).toBe("L1");
-    expect(raw.cases.map((c) => c.row)).toEqual(noControl);
-    let checked = 0;
-    for (const c of raw.cases) {
-      expect(c).toMatchObject({ state: "no_path", reason: `${WAVE[c.row]}: no organiser control builds ${c.row}`, checks: [], caseId: `${c.row}|generic|score|LIFECYCLE@1280`, width: 1280, layer: "L1", driver: "browser" });
-      checked++;
-    }
-    expect(checked).toBe(noControl.length);
-    expect(checked).toBeGreaterThan(0);
+    expect(await runSlice(d, ["--set", "api-only-browser", "--driver", "browser", "--run-id", "ao", "--report-dir", dir])).toBe(2);
+    expect(io.err()).toMatch(/refused — NothingPlanned: .*api-only-browser.*nothing planned/);
+    expect(existsSync(join(dir, "ao"))).toBe(false);
     expect(opened).toBe(0);
     expect(d.orgs).toEqual([]);
-    expect(io.out()).toMatch(/vacuous: none/);
-    expect(io.out()).toMatch(/error reds: none/);
   });
 
   it("a layered plan whose cases share a result id is refused by name (exit 2) before any case or browser", async () => {
@@ -2152,7 +2145,7 @@ describe("runSlice — results.json names its plan (W1c Task 14 carry 6)", () =>
     ["--layer L1, filtered", ["--driver", "browser", "--layer", "L1", "--only", "swiss|generic"], "--layer L1 --only swiss|generic"],
     ["--layer L2", ["--driver", "browser", "--layer", "L2"], "--layer L2"],
     ["the width sweep", ["--set", WIDTH_SWEEP_SET, "--driver", "browser"], `--set ${WIDTH_SWEEP_SET}`],
-    ["the API-only set", ["--set", API_ONLY_BROWSER_SET, "--driver", "browser"], `--set ${API_ONLY_BROWSER_SET}`],
+    // The API-only set plans nothing since the B4 merge (W5 T14 + X-BD-3), so it writes no results.json: its refusal is pinned in its own test.
     // W1-driving Task 12: the w1-driving set takes filters, so its plan names them;
     // the slice's --only on a catalogue cell outside the slice names that cell.
     ["the w1-driving set, filtered", ["--set", W1_DRIVING_SET, "--only", "league|generic", "--scenario", "M1"], `--set ${W1_DRIVING_SET} --only league|generic --scenario M1`],
@@ -2374,7 +2367,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: the 196 offered cells (220 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 20 with no organiser path (10 API-only, 10 the builder does not offer: C9 review I5's ten) recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 196 offered cells (220 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 10 with no organiser path (no API-only cell since the B4 merge; the 10 the builder does not offer: C9 review I5's ten) recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
@@ -2391,9 +2384,12 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     // builder's Third place control builds it, W4 app PR B T15, less group_group_ko's t20-super8 cell, the one a gallery card reaches; group_only left the API-only
     // rows when the picker gained its Groups only card, W5 T14), plus the cells the builder does not
     // offer (C9 review I5, option 2).
-    // W5 X-BD-3: and the super-groups card reaches group_group_ko on every sport but cricket (t20-super8), so those 10 are driven too.
-    const noPathPlanned = 10 + NO_ORGANISER_PATH_CELLS.length;
+    // W5 X-BD-3: and the super-groups card reaches group_group_ko on every sport but cricket (t20-super8), so those 10 are driven too:
+    // since the B4 merge no API-only cell is left 🚫 in the L1 grid (10 -> 0).
+    const noPathPlanned = 0 + NO_ORGANISER_PATH_CELLS.length;
     expect(planned).toHaveLength(noPathPlanned);
+    expect(planned.filter((c) => (API_ONLY_ROWS as readonly string[]).includes(c.row)), "no API-only cell is 🚫").toEqual([]);
+    expect(NO_ORGANISER_PATH_CELLS.length).toBeGreaterThan(0);
     expect(planned.every((c) => c.state === "no_path" && ((API_ONLY_ROWS as readonly string[]).includes(c.row) || isNoOrganiserPathCell(`${c.row}|${c.sport}`)))).toBe(true);
     expect(planned.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).map((c) => `${c.row}|${c.sport}`)).toEqual([...NO_ORGANISER_PATH_CELLS]);
     // Every other case was handed to a driver: it is not marked planned, and its state is the scenario's.
