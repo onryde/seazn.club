@@ -1482,7 +1482,7 @@
   "pricing.streams.passGrant.other": "+{count} créditos de retransmisión, una sola vez",
   "pricing.matrix.sponsors.monetize.note": "Nos quedamos con un 5% fijo de cada patrocinio pagado con tarjeta. No cambia con tu plan y es independiente de la comisión de inscripción.",
   "product.registration.meta.title": "Inscripciones en línea y cuotas para tus competiciones",
-  "product.registration.meta.description": "Inscripciones en línea para clubes y torneos. Comparte un enlace, los jugadores se inscriben y pagan con tarjeta, y tu lista se llena sola. Lista de espera y reembolsos incluidos.",
+  "product.registration.meta.description": "Inscripciones en línea para clubes y torneos. Comparte un enlace, los jugadores pagan con tarjeta y tu lista se llena sola. Con lista de espera y reembolsos.",
   "product.registration.crumb": "Producto / Inscripciones",
   "product.registration.h1": "Inscritos y pagados, *antes del día.*",
   "product.registration.lede": "Inscripciones en línea para clubes y torneos. Comparte un enlace. Los jugadores se inscriben y pagan con tarjeta, el dinero va a tu club y tu lista se llena sola.",

@@ -32,7 +32,7 @@ describe("product and sport page meta copy", () => {
       expect(new Set(titles.map((k) => d[k])).size, `${lang} titles`).toBe(titles.length);
       expect(new Set(descs.map((k) => d[k])).size, `${lang} descriptions`).toBe(descs.length);
     }
-    // 15 pages, a title and a description each, four locales.
-    expect(checked).toBe(15 * 2 * 4);
+    // 16 pages, a title and a description each, four locales.
+    expect(checked).toBe(16 * 2 * 4);
   });
 });
