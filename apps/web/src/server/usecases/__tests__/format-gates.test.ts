@@ -116,7 +116,7 @@ describe("templateLocksFor: the division builder's per-plan template locks (C9 f
     expect(templateLocksFor({ doubleElim: true, advanced: true })).toEqual({});
   });
 
-  it("a plan with neither (Community) locks the six, each to its own feature", () => {
+  it("an org with neither feature locks the six, each to its own feature (Community has double elimination since V393 - builder-template-locks-live.test.ts reads the real plan rows)", () => {
     expect(templateLocksFor({ doubleElim: false, advanced: false })).toEqual({ ...all(DOUBLE_ELIM_TEMPLATES, "formats.double_elim"), ...all(ADVANCED_TEMPLATES, "formats.advanced") });
   });
 
