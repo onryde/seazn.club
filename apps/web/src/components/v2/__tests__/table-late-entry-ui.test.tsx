@@ -431,3 +431,38 @@ describe("X-CU-7 a catch-up round keeps its number and says Catch-up", () => {
     expect(html.indexOf("Round 1"), "positive pair: round 1 rendered, untagged").toBeLessThan(html.indexOf("Round 2"));
   });
 });
+
+// ─── X-CU-8 (T23 ruling): a waiting player is the strip's, not the Rebuild banner's ─────────────────────────────────────────
+describe("X-CU-8 the roster-drift banner leaves the waiting players to the strip", () => {
+  it("the strip's player is dropped from 'not on a fixture yet'; with nothing left the banner is not drawn", async () => {
+    const { withoutTableWaiting } = await import("@/components/v2/stages-panel");
+    const { rosterDriftShown } = await import("@/lib/roster-drift-eligibility");
+    const wes = { id: "e-wes", display_name: WES.name };
+    const only = withoutTableWaiting({ ghosts: [], unplaced: [wes], vacantLines: 0 }, [WES]);
+    expect(only?.unplaced).toEqual([]);
+    expect(rosterDriftShown(only), "nothing left to say: no banner").toBe(false);
+  });
+
+  it("the positive pairs: a ghost, or an unplaced player who is NOT waiting, still shows", async () => {
+    const { withoutTableWaiting } = await import("@/components/v2/stages-panel");
+    const { rosterDriftShown } = await import("@/lib/roster-drift-eligibility");
+    const wes = { id: "e-wes", display_name: WES.name };
+    const ana = { id: "e-ana", display_name: "Ana" };
+    const ROWS = [
+      { name: "an unplaced player who is not waiting", d: { ghosts: [], unplaced: [wes, ana] }, unplaced: ["e-ana"] },
+      { name: "a ghost beside the waiting player", d: { ghosts: [ana], unplaced: [wes] }, unplaced: [] },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      const out = withoutTableWaiting(r.d, [WES]);
+      expect(out!.unplaced.map((e) => e.id), r.name).toEqual(r.unplaced);
+      expect(rosterDriftShown(out), r.name).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // the empty cases: no drift, and nobody waiting, pass through untouched
+    expect(withoutTableWaiting(undefined, [WES])).toBeUndefined();
+    const d = { ghosts: [], unplaced: [wes] };
+    expect(withoutTableWaiting(d, [])).toBe(d);
+  });
+});

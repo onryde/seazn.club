@@ -1674,7 +1674,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // getStageRosterDrift finds eligible (usecases/stages/roster-drift.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
         // no-op read for the common case.
-        const drift = rosterDrift[stage.id];
+        const drift = withoutTableWaiting(rosterDrift[stage.id], tableWaitingHere);
         // W4 B2 fix round 2 (item 1): an empty first-round place (a deleted entrant) is drift too — `rosterDriftShown` is the
         // one test, read by the banner below and by Update draw's offer.
         const hasDrift = rosterDriftShown(drift);
@@ -2759,6 +2759,21 @@ export interface RebuiltOutcome {
   created?: number;
   /** W5 T23 (Task 18 review): how many manual ranks the Rebuild dropped because their pool's membership changed. Absent at zero. */
   pins_cleared?: number;
+}
+
+/**
+ * W5 T23 (X-CU-8; product-owner ruling, Task 23): a player WAITING to join a started table is not roster drift to fix by Rebuild —
+ * the card's waiting strip names them with the one tap that places them ("Add to the table"), and Rebuild after Start would redraw
+ * a running stage. So the banner's "not on a fixture yet" list leaves out whoever the strip lists; a banner left with nothing to say
+ * is not drawn (`rosterDriftShown`). A ghost, a vacant line, or an unplaced player who is NOT waiting still shows, as before.
+ */
+export function withoutTableWaiting<D extends { unplaced: readonly { id: string }[] }>(
+  drift: D | undefined,
+  waiting: readonly { entrantId: string }[],
+): D | undefined {
+  if (drift === undefined || waiting.length === 0) return drift;
+  const ids = new Set(waiting.map((w) => w.entrantId));
+  return { ...drift, unplaced: drift.unplaced.filter((e) => !ids.has(e.id)) };
 }
 
 /** W5 T23 (B2 batch M4): the Rebuild confirm's count of the fixtures it deletes; nothing for a stage with none (nothing to count). */

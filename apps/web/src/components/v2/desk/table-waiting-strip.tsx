@@ -153,7 +153,7 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
                 </div>
                 <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:shrink-0">
                   {pooled && (
-                    <div className="min-w-0 sm:w-64">
+                    <div className="min-w-0 sm:w-auto sm:max-w-md">
                       <TableLatePoolSelect
                         id={`table-waiting-pool-${w.entrantId}`}
                         testId="table-waiting-pool"
