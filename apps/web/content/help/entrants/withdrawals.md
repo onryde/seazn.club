@@ -14,16 +14,20 @@ On the **Entrants** tab, each active row has **Withdraw** and **Disqualify**. Be
 ## What happens to their fixtures
 
 - **League and group tables.** The app counts how many of their fixtures were already played.
-  - If they played **less than half**, all their results are voided, including the ones already played. The table reads as if they never entered.
+  - If they played **less than half**, all their results are voided, including the ones already played. Their results no longer count for anyone.
   - If they played **half or more**, their played results stand and each fixture still to play is awarded to the opponent as a walkover.
 - **Swiss.** Played results always stand. The board they are already on is awarded to the opponent. The next round is paired without them.
 - **Knockout brackets.** Earlier rounds stand. Their next match is awarded to the opponent, who moves on.
-- **Ladder.** Challenges against them that are still open are awarded to the challengers.
+- **Ladder.** Open challenges that involve them, whether they issued or received them, are awarded to the other player.
 
-Every award is recorded with the reason "withdrew". On the **Standings** tab the entrant stays in the table, marked **Withdrawn**, in the position their results give.
+Every award is recorded with the reason "withdrew". On the **Standings** tab the entrant stays in the table, marked **Withdrawn**. Its row shows the results that still count. When their results were voided, every figure in the row is zero.
 
 > **Example**
-> Five teams play a league, so each team has four fixtures. Harbour Hawks withdraw after playing one of their four. One is less than half, so all four of their fixtures are voided and the table shows four teams. Had they played two, which is exactly half, their two results would stand and the other two fixtures would be awarded to the opponents.
+> Five teams play a league, so each team has four fixtures. Harbour Hawks withdraw after playing one of their four. One is less than half, so all four of their fixtures are voided. The table still lists Harbour Hawks, marked **Withdrawn**, with every figure at zero, and no result against them counts for anyone. Had they played two, which is exactly half, their two results would stand and the other two fixtures would be awarded to the opponents.
+
+## Disqualify
+
+**Disqualify** works like **Withdraw**. It runs the same steps on their fixtures, as listed above, and then marks the entrant **Disqualified** instead of **Withdrawn**. Awards it gives are still recorded with the reason "withdrew". A disqualified row also has **Reinstate**.
 
 ## When a qualifier withdraws
 
@@ -32,7 +36,7 @@ Every award is recorded with the reason "withdrew". On the **Standings** tab the
 
 ## Bring someone back
 
-A withdrawal is not final. Choose **Reinstate** on the withdrawn row and the entrant returns to **Registered**. Walkovers already awarded because of the withdrawal stay as they are.
+A withdrawal is not final. Choose **Reinstate** on the withdrawn row and the entrant returns to **Registered**. Walkovers already awarded because of the withdrawal stay as they are, with one exception. In a knockout, when the entrant's own first-round match was not played and its winner has not started round two, you can choose **Add to bracket** on the waiting entrant. That reverses the walkover and the match is played again.
 
 ## Entry fees
 

@@ -22,6 +22,8 @@ You do not have to create every player first. Through the API, a team can be cre
 - One request can hold up to 500 entrants.
 - One entrant can carry up to 40 roster members.
 
+Your plan's limit on entrants per division still applies to a bulk request: {{plan:entrants.per_division.max:community}} on Community and {{plan:entrants.per_division.max:pro}} on Pro. A request that would go over the limit is refused as a whole, and none of its entrants are created.
+
 New people created this way are never matched against your directory. If a player already exists, send them as an existing person, or you will have two records and need to [merge them](/help/entrants/duplicate-players).
 
 The same request can carry a badge address for each entrant.
