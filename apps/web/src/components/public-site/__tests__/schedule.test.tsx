@@ -385,3 +385,95 @@ describe("public Schedule — a held match reads Ended with its score (W2a fix r
     expect(scoreCells(scheduled)).toBe(0);
   });
 });
+
+// B5 owner fix-now (d), RB5-W2: a withdrawal under half EXPUNGES the leaver's lines (stored `abandoned`, an active
+// `core.abandon{expunge:true}` - `PublicFixture.expunged`). The public Schedule read them as matches still to play: "TBD" in the
+// rail and the summary's 0–0 (or – – –) pill. The organiser's division page presents the same line struck through with its status
+// word on the row and no score; the public row now does the same (no time, the word in the score's place), the word being the public dictionary's own
+// `matchCentre.status.abandoned` (the match centre the row opens says the same) - no new words.
+// differential: today the rail reads the TBD word and the row carries the 0–0 pill.
+describe("public Schedule - an expunged leaver's line reads as removed, not to be played (RB5-W2)", () => {
+  const COPY_X: ScheduleCopy = { ...COPY, abandoned: "(abandoned)" };
+  const render = (rows: Partial<PublicFixture>[], copy: ScheduleCopy = COPY_X) =>
+    renderToStaticMarkup(
+      createElement(Schedule, {
+        fixtures: rows.map((r, i) => F({ id: `f${i}`, seq_in_round: i + 1, home_entrant_id: "e1", away_entrant_id: "e2", scheduled_at: null, ...r })),
+        entrantNames: { e1: "Riverside", e2: "Summit" },
+        divisionPath: "/live/org/comp/div",
+        tz: "UTC",
+        roundLabels: ROUND_LABELS,
+        copy,
+        locale: LOCALE,
+        stageOrder: STAGE_ORDER,
+        stageNames: STAGE_NAMES,
+        slotLabels: {},
+      }),
+    );
+  /** One row's markup: from its link to the next. */
+  const rowOf = (html: string, id: string) => {
+    const href = html.indexOf(`href="/live/org/comp/div/fixtures/${id}"`);
+    expect(href, `premise: row ${id} rendered`).toBeGreaterThanOrEqual(0);
+    const at = html.lastIndexOf("<a ", href);
+    const end = html.indexOf("</a>", at);
+    return html.slice(at, end);
+  };
+  const ZERO = { headline: "0–0", perSide: [{ entrantId: "e1", line: "0" }, { entrantId: "e2", line: "0" }] };
+
+  it("empty case first: a schedule with no expunged line renders exactly as before (the rail TBD, no struck name)", () => {
+    const html = render([{ status: "scheduled", summary: null }]);
+    expect(rowOf(html, "f0")).toContain(">(tbd)<");
+    expect(html).not.toContain("line-through");
+    expect(html).not.toContain("(abandoned)");
+    expect(html).not.toContain('data-expunged="true"');
+  });
+
+  it("an unplayed expunged line: the status word in the score's place, no TBD, both names struck, no 0–0 - beside an untouched scheduled line", () => {
+    const html = render([
+      { status: "abandoned", expunged: true, has_active_abandon: true, summary: ZERO },
+      { status: "scheduled", summary: null },
+    ]);
+    const gone = rowOf(html, "f0");
+    expect(gone, "the status word where the 0–0 was").toContain(">(abandoned)<");
+    expect(gone, "never TBD").not.toContain(">(tbd)<");
+    expect(gone, "no 0–0 pill").not.toContain("0–0");
+    expect((gone.match(/line-through/g) ?? []).length, "both names struck").toBe(2);
+    expect(gone).toContain('data-expunged="true"');
+    const live = rowOf(html, "f1");
+    expect(live).toContain(">(tbd)<");
+    expect(live).not.toContain("line-through");
+    expect(live).not.toContain("data-expunged");
+  });
+
+  it("a PLAYED line whose result the withdrawal removed: no score lines either (its 3–0 no longer counts)", () => {
+    const html = render([
+      { status: "abandoned", expunged: true, has_active_abandon: true, outcome: null,
+        summary: { headline: "3–0", perSide: [{ entrantId: "e1", line: "3" }, { entrantId: "e2", line: "0" }] } },
+    ]);
+    const row = rowOf(html, "f0");
+    expect(row).toContain(">(abandoned)<");
+    expect(row).not.toContain("3–0");
+    expect(row).not.toContain('data-testid="schedule-score"');
+  });
+
+  it("a held abandon that is NOT an expunge (a scorer's abandon awaiting its settle) is not struck: only the withdrawal's removal is", () => {
+    const html = render([{ status: "abandoned", expunged: false, has_active_abandon: true, summary: null }]);
+    expect(html).not.toContain("line-through");
+    expect(html).not.toContain("(abandoned)");
+  });
+
+  it("the word is the public dictionary's own matchCentre.status.abandoned, in all four locales (publicScheduleCopy)", async () => {
+    const { getDictionary } = await import("@/lib/i18n");
+    const { publicScheduleCopy } = await import("@/server/public-site/schedule-copy");
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const file = (await import(`@/dictionaries/${locale}/public.json`)).default as Record<string, string>;
+      const want = file["matchCentre.status.abandoned"]!;
+      expect(want, `${locale}: premise, the word exists`).toBeTruthy();
+      const copy = publicScheduleCopy(await getDictionary(locale, "public"), () => "TBD");
+      expect(copy.abandoned, locale).toBe(want);
+      expect(rowOf(render([{ status: "abandoned", expunged: true, summary: ZERO }], copy), "f0"), locale).toContain(`>${want}<`);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+  });
+});

@@ -134,6 +134,10 @@ export interface ScheduleCopy {
   timesIn: string;
   /** No fixtures at all. */
   empty: string;
+  /** B5 (RB5-W2): the status word of a match a withdrawal REMOVED (`PublicFixture.expunged`), in the score's place - the public
+   *  dictionary's `matchCentre.status.abandoned`, the match centre's own word. Optional: a caller that hands none shows no word,
+   *  but the row is still struck and shows no time and no score. */
+  abandoned?: string;
   /** W4 B5b (pick 3A): a deciding final ruled joint winners reads this in the result's place - the public dictionary's
    *  `title.joint`, the page banner's own words. Optional: a caller that hands none shows no label, exactly as before. */
   jointWinners?: string;
@@ -316,7 +320,11 @@ function ScorebugRow({
   // W4 B5b (pick 3A): a final the organiser ruled JOINT WINNERS has no winner and no score to show - an abandoned game's
   // stray side lines beside "Joint winners" would read as its result - so the row says that instead, and weights both names.
   const jointFinal = finalTitleTag(f) === "joint";
-  const lines = (decided || live) && !doubleWalkover && !jointFinal ? sideLines(f) : null;
+  // B5 (RB5-W2): a withdrawal under half EXPUNGED this match - it is no longer to be played and any result it had no longer
+  // counts. The organiser's division page strikes its names and says its status where the time was, with no score; this row
+  // does the same, never "TBD" over a 0–0 as if it were still to come.
+  const expunged = f.expunged === true;
+  const lines = (decided || live) && !doubleWalkover && !jointFinal && !expunged ? sideLines(f) : null;
   // V4 (T17 fix round 4, as V1): an online board with no scheduled time whose round is open shows when it opened —
   // the fixture page's "Round opened HH:MM" clock — where the rail said "TBD". A real time, a live or a decided row
   // keeps its own.
@@ -343,7 +351,9 @@ function ScorebugRow({
   const awayName = sideName(f.away_entrant_id, "away");
 
   const nameCls = (id: string | null) =>
-    (winner && id === winner) || (jointFinal && id !== null)
+    expunged
+      ? "truncate text-[15px] font-medium leading-6 text-ink-muted line-through"
+      : (winner && id === winner) || (jointFinal && id !== null)
       ? "truncate text-[15px] font-semibold leading-6 text-ink"
       : winner
         ? "truncate text-[15px] font-medium leading-6 text-ink-muted"
@@ -363,6 +373,7 @@ function ScorebugRow({
   return (
     <Link
       href={href}
+      data-expunged={expunged ? "true" : undefined}
       className={`relative grid ${tagTrack ? "grid-cols-[3.5rem_minmax(0,1fr)_auto_auto]" : "grid-cols-[3.5rem_minmax(0,1fr)_auto]"} items-center gap-x-3 px-3.5 py-2.5 transition hover:bg-accent-soft/60`}
     >
       {live ? <span aria-hidden className="absolute inset-y-0 left-0 w-0.5 bg-emerald-400" /> : null}
@@ -384,7 +395,7 @@ function ScorebugRow({
           </span>
         ) : (
           <span className="w-full break-words font-display text-sm font-semibold text-ink">
-            {decided ? copy.ended : f.scheduled_at ? timeOf(f.scheduled_at, tz) : opened !== null ? timeOf(opened, tz) : copy.tbd}
+            {expunged ? null : decided ? copy.ended : f.scheduled_at ? timeOf(f.scheduled_at, tz) : opened !== null ? timeOf(opened, tz) : copy.tbd}
           </span>
         )}
         {/* A court name is free text, so this line DOES truncate — but at the
@@ -410,6 +421,13 @@ function ScorebugRow({
         <span data-testid="schedule-joint-winners" className="row-span-2 flex max-w-28 items-center gap-1 self-center text-right text-xs font-semibold leading-tight text-amber-700">
           <span aria-hidden className="shrink-0">🏆</span>
           <span className="min-w-0 text-balance">{copy.jointWinners}</span>
+        </span>
+      ) : expunged ? (
+        // B5 (RB5-W2): no score and no pill - its 0–0 (or a removed result) would read as a match still on. The status word
+        // takes the score's place (the division page's sub-line), not the rail: the rail is a 56px track and es "Abandonado"
+        // does not fit it (schedule-rail-fits.test.ts), and a match that will not be played has no time to show there.
+        <span data-testid="schedule-expunged" className="row-span-2 self-center text-right text-[11px] font-medium text-ink-muted">
+          {copy.abandoned ?? ""}
         </span>
       ) : chip !== null ? (
         // No score lines beside the tag (a double walkover, or a line too long for the column): the tag alone, with a

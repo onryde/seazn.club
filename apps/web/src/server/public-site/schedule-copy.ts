@@ -29,6 +29,8 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     // W2a: the SAME words the match centre's status line uses for a held fixture (Task 7), so the bracket card and the
     // page it opens cannot describe one match two ways.
     held: t(dict, "matchCentre.status.needs_decision"),
+    // B5 (RB5-W2): a match a withdrawal removed - the match centre's own word for it, so the row and the page it opens agree.
+    abandoned: t(dict, "matchCentre.status.abandoned"),
     tbd: ui("schedule.tbd"),
     filterLabel: t(dict, "division.filter.showFor"),
     viewLabel: t(dict, "division.view.label"),

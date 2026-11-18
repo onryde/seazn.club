@@ -464,3 +464,42 @@ test("T14b pool winners: both named on the division page and the hub, no champio
   const axe = await new AxeBuilder({ page }).include('[data-testid^="mh-table-pool-winners-"]').analyze();
   expect(axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical"), "axe: the strip").toEqual([]);
 });
+
+// B5 owner fix-now (d), RB5-W2: at every width project, a leaver's EXPUNGED lines on the public Schedule read as removed - no "TBD",
+// no 0–0, both names struck (the organiser's division page's presentation), the dictionary's "Abandoned" in the score's place - while
+// the other lines are untouched. The leaver carries a realistic 43-character name: a struck name still truncates inside its min-w-0
+// cell, the row never pushes the page sideways (a clipped box is a defect, `overflowingIn` tells it from a rail), and axe finds
+// nothing serious on the schedule. Not serial: it reads nothing another test writes.
+test("RB5-W2 an expunged leaver's lines read as removed on the public schedule, no horizontal scroll with a long name", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/expunged-leaver-kit");
+  const { dictString } = await import("../spectator-w2-kit");
+  const { uiEn } = await import("../entrant-rename-kit");
+  const k = await kit.seedExpungedLeaver(request, `RB5-W2 ${width}`);
+  await page.goto(`/live/${k.orgSlug}/${k.compSlug}/${k.divSlug}`, { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const row = (id: string) => page.locator(`a.grid[href$="/fixtures/${id}"]`);
+  let checked = 0;
+  for (const id of k.removed) {
+    await expect(row(id)).toHaveAttribute("data-expunged", "true");
+    await expect(row(id).getByTestId("schedule-expunged")).toHaveText(dictString("en", "matchCentre.status.abandoned"));
+    await expect(row(id)).not.toContainText(uiEn["schedule.tbd"]!);
+    await expect(row(id).getByTestId("schedule-score")).toHaveCount(0);
+    const struck = await row(id).locator("span").evaluateAll((els) => els.filter((e) => getComputedStyle(e).textDecorationLine.includes("line-through")).length);
+    expect(struck, `${width}: both names struck`).toBe(2);
+    const box = await row(id).boundingBox();
+    expect(box, "the row has a box").toBeTruthy();
+    expect(box!.x + box!.width, `the row ends inside the viewport at ${width}px`).toBeLessThanOrEqual(width + 0.5);
+    checked += 1;
+  }
+  expect(checked, "anti-vacuity: her three lines").toBe(3);
+  for (const id of [k.played, ...k.open]) await expect(row(id)).not.toHaveAttribute("data-expunged", "true");
+  await expectNoHorizontalScroll(page);
+  const { clipped } = await overflowingIn(page, `a.grid[href$="/fixtures/${k.removed[0]}"]`, "span", "the expunged row was not in the DOM");
+  expect(clipped, `the expunged row clips content at ${width}px`).toEqual([]);
+  const axe = await new AxeBuilder({ page }).include(`a.grid[href$="/fixtures/${k.removed[0]}"]`).analyze();
+  expect(axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical"), "axe: the expunged row").toEqual([]);
+});

@@ -5,6 +5,7 @@ import { waitForHydration } from "./directory-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dictString } from "./spectator-w2-kit";
 import { LONG_NAME_SUFFIX, seedFinishedGroupsOnly } from "./support/pool-winners-kit";
+import { seedExpungedLeaver } from "./support/expunged-leaver-kit";
 import { saveRoster, seedPair, seedPlayer, stagePartnerSwap, storedMembers, uiEn } from "./entrant-rename-kit";
 
 // W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21; #837; X-BD-5). A pre-Start Generate on a league used to insert by
@@ -1592,6 +1593,63 @@ test.describe("n1 the open-stages warning says completed, but", () => {
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });
       await expect(notice).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+  });
+});
+
+// B5 owner fix-now (d), RB5-W2: a leaver under half played has her lines EXPUNGED. The public Schedule showed each as a match still to
+// come - "TBD" in the rail over a 0–0 (– – –) pill. The organiser's division page shows the same line struck through with its status
+// word and no score; the public row now does the same (no time, names struck, the public dictionary's "Abandoned" where the score
+// was). Read on the organiser's page too, so the two presentations are pinned side by side. Words: the en dictionaries, never typed.
+test.describe("RB5-W2 the public schedule shows a leaver's removed lines as removed", () => {
+  test("her three expunged lines are struck, say Abandoned, show no TBD and no score; the other lines are untouched; the division page strikes the same three; no page scroll at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const k = await seedExpungedLeaver(request, "Removed lines");
+    const word = dictString("en", "matchCentre.status.abandoned");
+    const tbd = uiEn["schedule.tbd"]!;
+    const row = (id: string) => page.locator(`a.grid[href$="/fixtures/${id}"]`);
+    const struck = (id: string, n: number) =>
+      expect
+        .poll(async () => row(id).locator("span").evaluateAll((els) => els.filter((e) => getComputedStyle(e).textDecorationLine.includes("line-through")).length))
+        .toBe(n);
+
+    // the source presentation: the organiser's fixtures tab strikes her three lines and says "abandoned"
+    await page.goto(await divisionPath(request, k.divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    await showAllFixtures(page);
+    // a round whose lines are all done folds shut - open every one, so all three of her lines are on the sheet
+    const shut = page.locator('[data-testid="run-sheet-round-toggle"][aria-expanded="false"]');
+    while ((await shut.count()) > 0) await shut.first().click();
+    for (const no of k.removedNos) {
+      const deskRow = page.locator(`li[data-fixture-no="${no}"]`);
+      await expect(deskRow, "premise: the division page lists her line").toHaveCount(1);
+      await expect(deskRow, "the division page says its status").toContainText(uiEn["schedule.fstatus.abandoned"]!);
+      await expect(deskRow.locator("a.line-through"), "and strikes its names").toHaveCount(1);
+    }
+
+    await page.goto(`/live/${k.orgSlug}/${k.compSlug}/${k.divSlug}`);
+    await dismissCookieBanner(page);
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      let checked = 0;
+      for (const id of k.removed) {
+        await expect(row(id), `${w}: an expunged row is marked`).toHaveAttribute("data-expunged", "true");
+        await expect(row(id).getByTestId("schedule-expunged"), `${w}: the status word in the score's place`).toHaveText(word);
+        await expect(row(id), `${w}: never TBD`).not.toContainText(tbd);
+        await expect(row(id).getByTestId("schedule-score"), `${w}: no score`).toHaveCount(0);
+        await expect(row(id), `${w}: no 0–0`).not.toContainText("0–0");
+        await struck(id, 2);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: her three lines").toBe(3);
+      // the positive pair: the other played line keeps its score, the two still to be played keep TBD, none is struck
+      await expect(row(k.played).getByTestId("schedule-score")).toHaveCount(2);
+      for (const id of [k.played, ...k.open]) {
+        await expect(row(id)).not.toHaveAttribute("data-expunged", "true");
+        await struck(id, 0);
+      }
+      for (const id of k.open) await expect(row(id)).toContainText(tbd);
       await expectNoHorizontalScroll(page);
     }
   });
