@@ -255,9 +255,14 @@ $$;
 -- Plain CREATE INDEX, not CONCURRENTLY: Flyway holds its own transaction open
 -- (V413's header, measured). The SHARE lock queues webhook INSERTs for the
 -- build — one heap pass — and Stripe's delivery waits rather than fails.
+-- `replay_attempts < 4` too: a row the sweep parks (4th failed replay) keeps
+-- processed_at null forever, so without it every parked row would sit at the
+-- index's oldest end and every tick would read past all of them (stg: all 690
+-- unprocessed rows are parked). The sweep states `replay_attempts < 4`
+-- literally, so the implication still holds.
 create index if not exists billing_events_unprocessed_idx
   on billing_events (received_at)
-  where processed_at is null;
+  where processed_at is null and replay_attempts < 4;
 
 -- ── Realtime Authorization policies: evaluate realtime.topic() once ─────────
 --

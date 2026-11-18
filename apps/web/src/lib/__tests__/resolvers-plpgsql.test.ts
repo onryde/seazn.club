@@ -45,9 +45,9 @@ const V403 = deltaBySuffix("realtime_fixture_broadcast_policy");
 const V452 = deltaBySuffix("online_chess_realtime_policy");
 
 const HEADERS = {
-  ohf3: /create or replace function org_has_feature\(\s*p_org_id uuid,\s*p_feature_key text,\s*p_competition_id uuid\s*\)/,
-  ohf2: /create or replace function org_has_feature\(\s*p_org_id uuid,\s*p_feature_key text\s*\)/,
-  sqm: /create or replace function stage_qualification_meta\(\s*p_stage_id uuid\s*\)/,
+  ohf3: /create (?:or replace )?function (?:\$\{flyway:defaultSchema\}\.)?org_has_feature\(\s*p_org_id uuid,\s*p_feature_key text,\s*p_competition_id uuid\s*\)/i,
+  ohf2: /create (?:or replace )?function (?:\$\{flyway:defaultSchema\}\.)?org_has_feature\(\s*p_org_id uuid,\s*p_feature_key text\s*\)/i,
+  sqm: /create (?:or replace )?function (?:\$\{flyway:defaultSchema\}\.)?stage_qualification_meta\(\s*p_stage_id uuid\s*\)/i,
 } as const;
 
 /** The dollar-quoted body after `header` in `text` — the text Postgres stores as prosrc. */
@@ -209,7 +209,7 @@ describe.skipIf(!HAS_DB)("billing_events_unprocessed_idx (real Postgres)", () =>
       select indexdef from pg_indexes
        where schemaname = ${SCHEMA} and tablename = 'billing_events' and indexname = 'billing_events_unprocessed_idx'`;
     expect(idx.map((r) => r.indexdef)).toEqual([
-      `CREATE INDEX billing_events_unprocessed_idx ON ${SCHEMA}.billing_events USING btree (received_at) WHERE (processed_at IS NULL)`,
+      `CREATE INDEX billing_events_unprocessed_idx ON ${SCHEMA}.billing_events USING btree (received_at) WHERE ((processed_at IS NULL) AND (replay_attempts < 4))`,
     ]);
 
     // The REAL query, out of sweepStuckEvents — so a predicate edit there that stops matching the index reds here.
