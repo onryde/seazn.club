@@ -23,7 +23,7 @@ When a confirmed entry is withdrawn, the first entry on the waiting list is prom
 
 - A free division that **Auto-confirms**: the entry is confirmed at once.
 - A division with an entry fee that **Auto-confirms**: the entry becomes **Pending** until the fee is paid. On a card division the player gets 48 hours to pay. See [how card entry fees flow](/help/registration/card-payments). On a pay-the-organiser division it stays pending until you mark it paid.
-- A division with **Manual approval**: the entry stays pending until you approve it. On the player's registration page a free entry reads "Not confirmed yet: waiting for the organiser to approve this entry." An entry with a fee reads "Not confirmed yet: waiting for payment and for the organiser to approve this entry."
+- A division with **Manual approval**: the entry stays pending until you approve it, and, when it has an entry fee, until the fee is paid as well. On the player's registration page a free entry reads "Not confirmed yet: waiting for the organiser to approve this entry." An entry with a fee reads "Not confirmed yet: waiting for payment and for the organiser to approve this entry."
 
 You can also promote someone yourself. Open **Registration**, choose **Registrants**, and set **Status** to **Waitlisted**. Each entry shows its place in line (#1, #2 and so on). Go by that number. The list is ordered by when entries were submitted and opens on **Newest first**, so #2 sits above #1. Choose **Oldest first** to turn it round. An entry that lost a promoted place goes to the back of the queue whatever its submission time. Open a row and choose **Promote from waitlist**.
 
