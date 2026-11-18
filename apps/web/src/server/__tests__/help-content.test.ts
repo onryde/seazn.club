@@ -127,6 +127,17 @@ describe("heading ids", () => {
     expect(slugifyHeading("")).toBe("section");
   });
 
+  it("slugifyHeading, called directly: an apostrophe (straight or curly) keeps a contraction one word", () => {
+    const cases: [string, string][] = [
+      ["Don't", "dont"],
+      ["Don\u2019t", "dont"],
+      ["\u2018Quoted\u2019 words", "quoted-words"],
+      ["It's the organiser's call", "its-the-organisers-call"],
+    ];
+    for (const [heading, id] of cases) expect(slugifyHeading(heading), heading).toBe(id);
+    expect(cases.length, "anti-vacuity").toBe(4);
+  });
+
   it("repeated headings in one article get distinct, stable ids; a new article starts again", async () => {
     const md = "## Details\n\na\n\n## Details\n\nb\n\n### Details\n\nc\n\n## Details 2\n";
     const first = ids(await renderHelpMarkdown(md));
@@ -218,7 +229,7 @@ describe("pictures", () => {
     expect(html).toContain("<figcaption>Second</figcaption>");
   });
 
-  it("a picture inside a callout-free blockquote still becomes a figure", async () => {
+  it("a picture inside a plain quote becomes a figure, and the quote stays a blockquote", async () => {
     const html = await render(`> ![Quoted](${SRC} "In a quote")\n`);
     expect(html).toContain("<blockquote>");
     expect(html).toContain("<figure>");
@@ -334,6 +345,9 @@ describe("pictures", () => {
       expect(HELP_SCHEMA.tagNames).not.toContain("figure");
       expect(HELP_SCHEMA.tagNames).not.toContain("figcaption");
       expect(HELP_SCHEMA.tagNames).not.toContain("aside");
+      // the callout's element (help-callouts.ts) is ours too, never an author's
+      expect(HELP_SCHEMA.tagNames).not.toContain("div");
+      expect(HELP_SCHEMA.attributes?.["*"] ?? [], "no author-facing role on any element").not.toContain("role");
     });
   });
 });
@@ -367,33 +381,34 @@ describe("helpHeadings", () => {
 });
 
 // Callouts: a blockquote whose FIRST LINE is exactly **Note**, **Warning** or **Example** becomes
-// <aside class="help-callout" data-kind="...">; every other blockquote stays a blockquote.
+// <div role="note" class="help-callout" data-kind="...">; every other blockquote stays a blockquote.
 describe("callouts", () => {
   const KINDS: [label: string, kind: string][] = [["Note", "note"], ["Warning", "warning"], ["Example", "example"]];
 
-  it("each kind renders its aside, data-kind and a visible label", async () => {
+  it("each kind renders a note (div role=note, not an aside landmark), data-kind and a visible label", async () => {
     for (const [label, kind] of KINDS) {
       const html = await renderHelpMarkdown(`> **${label}**\n> Check the draw before you publish.\n`);
-      expect(html, label).toContain(`<aside class="help-callout" data-kind="${kind}">`);
+      expect(html, label).toContain(`<div role="note" class="help-callout" data-kind="${kind}">`);
       expect(html, `${label}: the label is visible text`).toContain(`<strong>${label}</strong>`);
       expect(html, `${label}: the body is inside`).toContain("Check the draw before you publish.");
       expect(html, `${label}: no longer a blockquote`).not.toContain("<blockquote");
-      expect(html.match(/<aside\b/g)?.length).toBe(1);
-      expect(html.match(/<\/aside>/g)?.length).toBe(1);
+      expect(html.match(/<div role="note"/g)?.length).toBe(1);
+      expect(html.match(/<\/div>/g)?.length).toBe(1);
+      expect(html, `${label}: never a complementary landmark`).not.toContain("<aside");
     }
     expect(KINDS.length, "anti-vacuity").toBe(3);
   });
 
   it("the label alone on the first line, with the body in following paragraphs, lists and headings", async () => {
     const html = await renderHelpMarkdown("> **Warning**\n>\n> First paragraph.\n>\n> - one\n> - two\n>\n> ## Inside heading\n");
-    expect(html).toContain('<aside class="help-callout" data-kind="warning">');
+    expect(html).toContain('<div role="note" class="help-callout" data-kind="warning">');
     expect(html).toContain("<li>one</li>");
     expect(html, "a heading in a callout still gets its id").toContain('<h2 id="inside-heading">');
   });
 
   it("a callout with only its label (the empty body) is still a callout", async () => {
     const html = await renderHelpMarkdown("> **Note**\n");
-    expect(html).toContain('<aside class="help-callout" data-kind="note">');
+    expect(html).toContain('<div role="note" class="help-callout" data-kind="note">');
     expect(html).toContain("<strong>Note</strong>");
   });
 
@@ -407,18 +422,35 @@ describe("callouts", () => {
       "> *Note*\n> emphasis, not strong.\n",
       "> Text first, then **Note**\n",
       "> A plain quotation.\n",
+      // near-misses around a hard line break: text, or a colon, before the break is not the label alone
+      "> **Note** text  \n> body after a hard break.\n",
+      "> **Note**:  \n> colon before a hard break.\n",
+      "> Text first **Note**\\\n> backslash break after text.\n",
+      // a trailing backslash with nothing after it is a literal backslash, not a break
+      "> **Note**\\\n",
     ];
     for (const md of stays) {
       const html = await renderHelpMarkdown(md);
       expect(html, md).toContain("<blockquote>");
-      expect(html, md).not.toMatch(/<aside|help-callout|data-kind/);
+      expect(html, md).not.toMatch(/<aside|role="note"|help-callout|data-kind/);
     }
     expect(stays.length, "anti-vacuity").toBeGreaterThan(5);
   });
 
+  it("a hard line break after the label (two trailing spaces, or a backslash) ends the label line too", async () => {
+    const breaks = ["> **Note**  \n> Two trailing spaces.\n", "> **Warning**\\\n> A backslash.\n"];
+    for (const md of breaks) {
+      const html = await renderHelpMarkdown(md);
+      expect(html, `premise: the Markdown makes a hard break: ${md}`).toContain("<br>");
+      expect(html, md).toMatch(/<div role="note" class="help-callout" data-kind="(note|warning)">/);
+      expect(html, md).not.toContain("<blockquote");
+    }
+    expect(breaks.length, "anti-vacuity").toBe(2);
+  });
+
   it("a second callout, of another kind, and a plain quote between them, are each handled on their own", async () => {
     const html = await renderHelpMarkdown("> **Note**\n> One.\n\nBetween.\n\n> Plain.\n\n> **Example**\n> Two.\n");
-    expect(html.match(/<aside\b/g)?.length).toBe(2);
+    expect(html.match(/<div role="note"/g)?.length).toBe(2);
     expect(html).toContain('data-kind="note"');
     expect(html).toContain('data-kind="example"');
     expect(html.match(/<blockquote>/g)?.length).toBe(1);
@@ -434,15 +466,15 @@ describe("callouts", () => {
   });
 
   it("the author cannot write one: raw HTML is dropped and the sanitiser strips class and data-kind from any element", async () => {
-    const html = await renderHelpMarkdown('<aside class="help-callout" data-kind="warning">x</aside>\n\n<p class="help-callout" data-kind="note">y</p>\n\ntext\n');
-    expect(html).not.toMatch(/<aside|help-callout|data-kind/);
+    const html = await renderHelpMarkdown('<div role="note" class="help-callout" data-kind="warning">x</div>\n\n<p role="note" class="help-callout" data-kind="note">y</p>\n\ntext\n');
+    expect(html).not.toMatch(/<aside|role="note"|help-callout|data-kind/);
 
     const tree: Root = {
       type: "root",
-      children: ["blockquote", "p", "aside", "h2"].map((tagName) => ({
+      children: ["blockquote", "p", "aside", "div", "h2"].map((tagName) => ({
         type: "element" as const,
         tagName,
-        properties: { className: ["help-callout"], dataKind: "warning" },
+        properties: { role: "note", className: ["help-callout"], dataKind: "warning" },
         children: [{ type: "text" as const, value: "x" }],
       })),
     };
@@ -452,6 +484,7 @@ describe("callouts", () => {
     for (const el of els) {
       expect(el.properties, el.tagName).not.toHaveProperty("className");
       expect(el.properties, el.tagName).not.toHaveProperty("dataKind");
+      expect(el.properties, el.tagName).not.toHaveProperty("role");
     }
   });
 });

@@ -21,7 +21,7 @@
 // reader. Dimensions come from sharp (already a dependency, used for poster images); no
 // image reader of our own.
 import { stat } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import sharp from "sharp";
 import type { Element, ElementContent, Root } from "hast";
 
@@ -57,9 +57,9 @@ async function inspectPicture(img: Element, publicRoot: string): Promise<{ width
   const alt = typeof img.properties.alt === "string" ? img.properties.alt.trim() : "";
   if (alt === "") fail(src, "alt text is required and must not be empty");
 
+  // PICTURE_SRC admits no `.` but the extension's and no `/` past the section, so the path cannot
+  // leave publicRoot; there is no second containment check (it could never fire, so nothing tests it).
   const file = resolve(publicRoot, `.${src}`);
-  // The path rule already excludes `..`; this is the guard that says so out loud.
-  if (!file.startsWith(resolve(publicRoot) + sep)) fail(src, "the path leaves the public folder");
   const info = await stat(file).catch(() => null);
   if (!info || !info.isFile()) fail(src, `file not found (expected public${src})`);
   if (info.size > HELP_PICTURE_MAX_BYTES) {

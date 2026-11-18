@@ -12,10 +12,11 @@
 //    (anything else never matches a request, so the redirect would silently do nothing).
 //
 // SERVED ON DEMAND, not prebuilt. A redirect source is deliberately NOT in generateStaticParams: the route does not
-// set `dynamicParams = false`, so a slug that was not prerendered is rendered at its first request, and the redirect is
-// issued then and cached with the route's ISR (`revalidate`). The page redirects before any streaming starts (the help
-// layout has no loading boundary), so the response is a real 308, not a meta-refresh. Prerendering the sources would add
-// nothing the first request does not, and would mean a second list to keep in step with this one.
+// set `dynamicParams = false`, so a slug that was not prerendered is rendered on demand when it is requested, and the
+// page calls `permanentRedirect` then. The docs promise a 308 for that call; they say nothing about the redirect being
+// cached, so nothing here relies on it being cached. The page redirects before any streaming starts (the help layout has
+// no loading boundary), so the response is a real 308, not a meta-refresh. Prerendering the sources would add nothing
+// the on-demand render does not, and would mean a second list to keep in step with this one.
 // (Next docs: app/api-reference/functions/permanentRedirect and .../generate-static-params, "dynamicParams".)
 // The test help-redirect-page.test.ts pins the choice.
 

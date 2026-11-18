@@ -79,7 +79,7 @@ function buildPipeline(publicRoot: string) {
     // heading text. See help-heading-ids.ts. The figure step is after it for the same reason:
     // an author's image arrives with src/alt/title only, and the figure, its dimensions and
     // its lazy loading are ours. See help-figures.ts. Callouts likewise (help-callouts.ts): the
-    // sanitiser allows no aside, class or data attribute, so only a labelled blockquote makes one.
+    // sanitiser allows no div, role, class or data attribute, so only a labelled blockquote makes one.
     .use(rehypeHelpFigures, { publicRoot })
     .use(rehypeHelpCallouts)
     .use(rehypeHelpHeadingIds)
