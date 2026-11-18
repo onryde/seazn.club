@@ -2826,12 +2826,13 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     }
   });
 
-  // CLAIM: "Extra seats have no control in Settings yet" / "Size packs have no
-  // control in Settings yet either." True today and the single most rot-prone
+  // CLAIM: "There is no screen for buying a size pack" (was "Size packs have no
+  // control in Settings yet either"; reworded when the page was proven against
+  // the product, Task 8). True today and the single most rot-prone
   // sentence on the page: the day somebody builds either control, the article
   // starts telling customers to email support for a button that is on screen.
   // Nothing about the copy can detect that, so this watches the CODE.
-  it("says 'no control in Settings yet' only while that is still true", () => {
+  it("says there is no screen for buying a size pack only while that is still true", () => {
     // The purchase entry points. A control means a component or page reaching
     // for one of these — the API routes and the usecases themselves are not
     // evidence of a UI, which is exactly the distinction the sentence makes.
@@ -2848,7 +2849,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
         .map(([file]) => file);
       expect(
         callers,
-        `${addOn} now has a caller in the UI. For size packs, content/help/billing/add-ons.md still says there is no control in Settings and that sentence has to go; for extra seats, entitlements v18 R13 hid the add-on from the article altogether, so a purchase control appearing means the hide has been undone and the copy has to come back`,
+        `${addOn} now has a caller in the UI. For size packs, content/help/billing/add-ons.md still says there is no screen for buying a size pack and that sentence has to go; for extra seats, entitlements v18 R13 hid the add-on from the article altogether, so a purchase control appearing means the hide has been undone and the copy has to come back`,
       ).toEqual([]);
     }
     // KNOWN-POSITIVE on the same read: the routes DO exist, so the walk is
@@ -2862,7 +2863,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // ONE, not two: R13 removed the extra-seat section, so only the size pack
     // still makes this claim. A count rather than a floor, so re-adding the
     // hidden add-on's copy reds here and gets read.
-    expect(addOns.match(/no control in Settings yet/g) ?? []).toHaveLength(1);
+    expect(addOns.match(/no screen for buying a size pack/g) ?? []).toHaveLength(1);
   });
 
   // CLAIM: the rider matches the half rate monthly but NOT annually — "about a

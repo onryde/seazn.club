@@ -249,7 +249,6 @@ const FORMATS_PAGES = "formats-pages";
 type Known = Record<string, Record<string, LeakRule[]>>;
 /** section -> page -> the rules that page is excused for. Sections delete their own entries. */
 const KNOWN: Known = {
-  divisions: { "divisions/groups-to-knockout": ["developer-word"] },
   "getting-started": { "getting-started/generate-fixtures": ["developer-word"] },
   scheduling: {
     "scheduling/ai-officials": ["developer-word"],
@@ -259,17 +258,6 @@ const KNOWN: Known = {
     "scoring/batch-import": ["developer-word"],
     "scoring/knockout-deciders": ["developer-word"],
   },
-  // Generated pages: the gallery overview and one page per family. Every one
-  // says "the engine" (page copy and the live-example caption).
-  [FORMATS_PAGES]: Object.fromEntries(
-    [
-      "formats",
-      ...[
-        "league", "groups-knockout", "knockout", "double_elim", "swiss", "stepladder",
-        "page_playoff", "swiss_playoff", "swiss_knockout", "americano", "ladder",
-      ].map((f) => `formats/${f}`),
-    ].map((page) => [page, ["developer-word"] as LeakRule[]]),
-  ),
 };
 
 /** Strip tags from rendered markup; decode the few entities React emits. */

@@ -444,7 +444,7 @@ export const APPROVED_ADD_ONS_INVENTORY: string[] = [
   "628281436c3b5d97",
   "57ab4cb8d1c7ae64",
   "dd3682cfbbbd86eb",
-  "904600a779329e0b",
+  "8e0b8f41b080c93d",
   "81ba6ce07303ccdc",
   "2884caabfd4cb14f",
   "bbaba7db595534ff",
