@@ -19,6 +19,7 @@ import {
   swissLatecomerLines,
   type LateEntryNoticeLine,
 } from "@/lib/swiss-late-entry-notice";
+import { TABLE_LATE_ENTRY_MESSAGE_KEYS, TABLE_LATE_ENTRY_PLURAL_KEYS } from "@/lib/roundrobin-late-entry-notice";
 import type { LateEntryResult, SwissLateEntryResult } from "@/server/api-v1/schemas";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
@@ -373,9 +374,13 @@ describe("swiss late-entry copy in all four locales", () => {
     }
     // 7 Swiss + 9 knockout (W4 T19: tookBye, tookWithdrawnSlot, backInPlace, rebuildOffered, playedOn, luckyLoser, the no-slot refusal;
     // final review m1: unfreezeFirst; T26c I2: unscheduledFrozen) plain keys, 3 Swiss + 1 knockout plural bases × 2 forms, × 4 locales.
-    // W5 T23: + 9 league / group plain keys and 3 plural bases (`lib/roundrobin-late-entry-notice.ts`; fix round 1 I1 moved
-    // `roundrobin.lateEntry.rebuildOffered` to the waiting strip, which says it beside its Rebuild button).
-    expect(checked).toBe((7 + 9 + 9 + (3 + 1 + 3) * 2) * 4);
+    // W5 T23: + the league / group keys, counted from their OWN declaration (`lib/roundrobin-late-entry-notice.ts`'s
+    // TABLE_LATE_ENTRY_MESSAGE_KEYS / TABLE_LATE_ENTRY_PLURAL_KEYS, whose locale coverage that module's test pins). A hand copy of
+    // that module's count here went stale when B5 G1 added `rebuiltMany` and the `pinsCleared` base (168 checked vs 156 typed).
+    // The Swiss and knockout shares stay typed: this module owns them. Dropping either table spread still reds this count.
+    expect(TABLE_LATE_ENTRY_MESSAGE_KEYS.length).toBeGreaterThan(0);
+    expect(TABLE_LATE_ENTRY_PLURAL_KEYS.length).toBeGreaterThan(0);
+    expect(checked).toBe((7 + 9 + TABLE_LATE_ENTRY_MESSAGE_KEYS.length + (3 + 1 + TABLE_LATE_ENTRY_PLURAL_KEYS.length) * 2) * 4);
   });
 });
 
