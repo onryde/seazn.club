@@ -570,6 +570,10 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
         ["--since-hours", "abc"],
         ["--fixture", "not-a-uuid"],
         ["--nonsense"],
+        // m7: the gate reads a NAMED round; an unscoped --strict would gate on every fixture in the window (another round, a test)
+        ["--strict"],
+        ["--strict", "--since", "2026-11-17T08:30:00Z"],
+        ["--since-hours", "6", "--strict"],
       ];
       let seen = 0;
       for (const argv of cases) {
@@ -580,6 +584,20 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
         seen++;
       }
       expect(seen).toBe(cases.length);
+      expect(seen).toBe(13);
+    });
+
+    it("m7: --strict without a --fixture names the reason (exit 2); the same run with one --fixture is accepted", async () => {
+      const l = lines();
+      const boom = new Proxy(sql, { get: () => { throw new Error("a usage error must not touch the database"); }, apply: () => { throw new Error("a usage error must not touch the database"); } }) as typeof sql;
+      expect(await run(["--strict", "--since", "2026-11-17T08:30:00Z"], { sql: boom, out: l.say })).toBe(2);
+      expect(l.out.join("\n")).toMatch(/--strict needs at least one --fixture/);
+      const ok = lines();
+      // a fixture with no seats: strict and empty, so exit 1 (verified 0), not the usage 2
+      expect(await run(["--strict", "--since", "2026-11-17T08:30:00Z", "--fixture", crypto.randomUUID()], { sql, out: ok.say })).toBe(1);
+      // and an unscoped run WITHOUT --strict is still allowed (the operator's investigation)
+      const plain = lines();
+      expect(await run(["--since", iso(new Date(Date.now() - 1_000))], { sql, out: plain.say })).toBe(0);
     });
 
     it("a zoneless --since is refused with a message naming the zone, and is never read as local time (the same wall time with Z is accepted)", async () => {

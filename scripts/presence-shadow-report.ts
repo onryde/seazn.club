@@ -22,7 +22,7 @@
 // until every counted row is explained and recorded (plan 1 Task 12 step 5), which is a separate decision from this script's exit code.
 // `endedWhileNewest` alone does not set the flag; its note points at the same step, whose gate bullet counts every closedByEnded row.
 //
-// --strict exits 1 when `verified === 0` (an empty run is a failure, never a pass), or `missing` or `open` is non-empty. It is meant for a
+// --strict needs at least one --fixture (exit 2 without: the gate reads a named round, never every fixture in the window), and exits 1 when `verified === 0` (an empty run is a failure, never a pass), or `missing` or `open` is non-empty. It is meant for a
 // QUIESCENT scope (every meeting in it ended); run mid-round, `open` lists the live peers and the operator reads it rather than gating on it.
 // Exit codes: 0 done (or strict and clean), 1 strict and not clean, 2 usage or configuration.
 //
@@ -169,6 +169,8 @@ function parseArgs(argv: readonly string[]): Parsed {
       return { error: `Unknown argument ${a}.` };
     }
   }
+  // The gate reads a NAMED round: an unscoped --strict would pass or fail on every fixture in the window (another round, a test's).
+  if (strict && fixtureIds.length === 0) return { error: "--strict needs at least one --fixture <uuid> (the gate reads a named round)." };
   return { since, hours, fixtureIds, strict };
 }
 

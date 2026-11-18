@@ -223,15 +223,20 @@ describe.skipIf(!DB)("receiveRealtimeKitWebhook", () => {
     const w = joined({ meetingId: foreign });
     const before = await deliveryCount();
     const info = vi.spyOn(log, "info");
+    const debug = vi.spyOn(log, "debug");
     expect(await receive(w, { publicKey })).toEqual({ status: 200, outcome: "ignored" });
     expect(await deliveryCount(w.uuid)).toBe(0);
     expect(await deliveryCount()).toBe(before);
     expect(await presenceRows(foreign)).toHaveLength(0);
     expect(await endedRows(foreign)).toHaveLength(0);
-    // the log line names the meeting id and nothing else
-    const line = info.mock.calls.find((c) => String(c[1]).includes("realtimekit-webhook: foreign meeting"));
+    // the log line names the meeting id and nothing else, at DEBUG (m5): every Cloudflare customer's events verify against the same
+    // key, so a shared app's foreign deliveries are routine traffic, not news
+    const isForeign = (c: unknown[]) => String(c[1]).includes("realtimekit-webhook: foreign meeting");
+    const line = debug.mock.calls.find(isForeign);
     expect(line?.[0]).toEqual({ meetingId: foreign });
+    expect(info.mock.calls.filter(isForeign), "not at info").toHaveLength(0);
     info.mockRestore();
+    debug.mockRestore();
     // a foreign ENDED too (an ended-session row is a write)
     const ended = delivery(body({ event: "meeting.ended", meetingId: foreign }));
     expect(await receive(ended, { publicKey })).toEqual({ status: 200, outcome: "ignored" });

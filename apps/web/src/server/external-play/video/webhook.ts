@@ -116,7 +116,8 @@ export async function receiveRealtimeKitWebhook(
     return apply(tx, ev, now, held);
   });
   if (result === "foreign") {
-    log.info({ meetingId: ev.meetingId }, "realtimekit-webhook: foreign meeting");
+    // debug, not info: every Cloudflare customer's events verify against one key, so a shared app's other deliveries are routine
+    log.debug({ meetingId: ev.meetingId }, "realtimekit-webhook: foreign meeting");
     return { status: 200, outcome: "ignored" };
   }
   return { status: 200, outcome: result };
