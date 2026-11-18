@@ -46,6 +46,8 @@ const PRODUCT_KEYS: readonly { file: string; key: string; en: string }[] = [
   { file: "public", key: "info.onlinePlay.named", en: NOTE_NAMED },
   { file: "ui", key: "register.online.lichess", en: NOTE },
   { file: "ui", key: "externalPlay.watch.details.online", en: DETAILS_ONLINE },
+  { file: "ui", key: "divset.onlinePlay.summaryOn", en: DETAILS_ONLINE },
+  { file: "ui", key: "divBuilder.review.lichess", en: DETAILS_ONLINE + ", {control}" },
 ];
 
 describe("online chess copy: the five product sentences", () => {
@@ -61,11 +63,12 @@ describe("online chess copy: the five product sentences", () => {
         expect(v, `${loc} ${p.key}: names Seazn`).toContain("Seazn");
         expect(v, `${loc} ${p.key}: names Lichess`).toContain("Lichess");
         if (loc !== "en") expect(v, `${loc} ${p.key}: translated`).not.toBe(p.en);
+        if (p.en.includes("{control}")) expect(v.split("{control}").length - 1, `${loc} ${p.key}: {control} slot`).toBe(1);
         expect(v.split("{division}").length - 1, `${loc} ${p.key}: {division} slot`).toBe(p.en.split("{division}").length - 1);
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: 4 locales x 5 sentences").toBe(LOCALES.length * PRODUCT_KEYS.length);
+    expect(checked, "anti-vacuity: 4 locales x 7 sentences").toBe(LOCALES.length * PRODUCT_KEYS.length);
   });
 });
 
