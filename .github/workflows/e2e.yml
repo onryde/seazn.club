@@ -823,6 +823,13 @@ jobs:
       # wait on OTHER specs' open windows, so the e2e server switches the deferral off: exactly "0". The deferral itself is proven by
       # the DB tests of Task 8 and by the staging gate. Pinned by e2e-ci-wiring.test.ts.
       EXTERNAL_PLAY_WINDOW_DEFER: "0"
+      # Check-in capacity plan 2 Task 10: the chess walkthrough prices a pre-minted round from the video fixture's own call log, so this
+      # server runs the pre-mint job (its work is off unless the flag is exactly "1": a pass answers `disabled: 1` otherwise) and the
+      # one-read proof (the seat reads one peer report, not the three-call session read; off unless exactly "1"). Both are read from the
+      # environment at call time. Only this job: the two legs that run no walkthrough leave them OFF, as production does before the
+      # rollout. Pinned by e2e-ci-wiring.test.ts, with the runbook recipe and ci-local.sh's e2e_env.
+      EXTERNAL_PLAY_PREMINT: "1"
+      EXTERNAL_PLAY_PRESENCE_PROOF: "1"
 
     steps:
       - uses: actions/checkout@v5
