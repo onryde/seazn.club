@@ -161,8 +161,8 @@ export interface PadClockSpec {
   readonly seed?: number;
   /**
    * PROPERTY 7 — this clock is the match's, not this pad's: it follows the
-   * ledger's newest `*.clock` event (`reconcileClock`). Absent for every skin
-   * whose clock is pad-local, which is every skin but football.
+   * ledger's newest `*.clock` event (`reconcileClock`). Absent for a skin
+   * whose clock is pad-local. Football, hockey and ice hockey — every skin that declares a clock today — share theirs.
    */
   readonly shared?: true;
   /**

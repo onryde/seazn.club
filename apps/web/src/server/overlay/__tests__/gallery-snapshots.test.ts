@@ -111,6 +111,37 @@ describe("gallerySnapshots — every sport, every kind, each showing the state i
   });
 });
 
+describe("gallerySnapshots — a sport with a clock shows one on its live sample (owner 2026-11-18)", () => {
+  // The on-air clock is anchored on the sport's own clock event and on nothing else (`project.ts` `clockOf`), so a
+  // sample stream without one drew hockey and ice hockey with no clock at all on the staff gallery.
+  const NOW = Date.parse("2026-11-18T12:00:00.000Z");
+  const snaps = gallerySnapshots(NOW);
+  const clockSports = OVERLAY_SPORT_KEYS.filter(
+    (key) => (resolveLatestModule(key).eventSchemas as Record<string, unknown> | undefined)?.[`${key}.clock`] !== undefined,
+  );
+  it("the engine declares at least one clock sport, and every one of them is checked", () => {
+    expect(clockSports.length).toBeGreaterThan(0);
+  });
+  it.each([...clockSports])("%s: the live sample carries a clock in the phase it is in, held", (sportKey) => {
+    const clock = snaps[sportKey]!.live.clock;
+    expect(clock, `${sportKey} live sample has no clock`).toBeDefined();
+    expect(clock!.running, "held, so every frame of the gallery reads the same").toBe(false);
+    expect(clock!.anchorAtWallMs).toBe(NOW);
+    expect(Number.isFinite(clock!.anchorSeconds) && clock!.anchorSeconds >= 0).toBe(true);
+  });
+  it("a sport without a clock event still shows none, and neither does a finished or unstarted sample", () => {
+    let checked = 0;
+    for (const sportKey of OVERLAY_SPORT_KEYS) {
+      if (!clockSports.includes(sportKey)) {
+        expect(snaps[sportKey]!.live.clock, sportKey).toBeUndefined();
+        checked++;
+      }
+      expect(snaps[sportKey]!.warming.clock, `${sportKey} warming`).toBeUndefined();
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
 describe("galleryResultVariants — every status whose Result card is not 'decided by play' (review m11)", () => {
   // The expected status set comes from the status UNION and the card layer's own authority, never from the producer:
   // a fixture in that status, with no verdict, shows the ended card.

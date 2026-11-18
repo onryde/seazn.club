@@ -263,6 +263,23 @@ function refuseUnless(cond: boolean, what: string): void {
 const livePrefix = (sample: Sample) => sample.played.slice(0, -1).map(({ type, payload }) => ({ type, payload }));
 const fullPlay = (sample: Sample) => sample.played.map(({ type, payload }) => ({ type, payload }));
 
+/**
+ * The live prefix with the sport's own clock event at its end, for a sport that declares one (owner 2026-11-18). The
+ * on-air clock is anchored on that event and nothing else (`project.ts` `clockOf`), and the generated walk never yields
+ * one, so without it football, hockey and ice hockey were drawn with no clock. HELD (`running: false`), at the fold's
+ * own last stamp in the phase the sample stands in (0 with none), so every frame of the gallery reads the same. A sport
+ * with no clock event, and a sample standing in a phase with no stamp to name, are returned as they came.
+ */
+function withHeldClock(sample: Sample, events: { type: string; payload: unknown }[]): { type: string; payload: unknown }[] {
+  const clockType = `${sample.sportKey}.clock`;
+  if ((sample.module.eventSchemas as Record<string, unknown> | undefined)?.[clockType] === undefined) return events;
+  if (events.length === 0) return events;
+  const state = project(sample, stamp(events, 0)).folded?.state as { phase?: unknown; asOf?: { period?: unknown; elapsed?: unknown } } | undefined;
+  if (typeof state?.phase !== "string") return events;
+  const elapsed = state.asOf?.period === state.phase && typeof state.asOf.elapsed === "number" ? state.asOf.elapsed : 0;
+  return [...events, { type: clockType, payload: { at: { period: state.phase, elapsed }, running: false } }];
+}
+
 export type GallerySnapshots = Record<string, Record<GallerySnapshotKind, OverlayLiveData>>;
 
 /** Every overlay sport × warming / live / ended. `now` anchors the event times (the live clock reads them). */
@@ -271,7 +288,7 @@ export function gallerySnapshots(now: number = Date.now()): GallerySnapshots {
   for (const sportKey of OVERLAY_SPORT_KEYS) {
     const sample = sampleFor(sportKey);
     const warming = project(sample, []);
-    const live = project(sample, stamp(livePrefix(sample), now));
+    const live = project(sample, stamp(withHeldClock(sample, livePrefix(sample)), now));
     const ended = project(sample, stamp(fullPlay(sample), now));
     // Guards, not comments: each kind is the state it names, by the write path's own rule.
     refuseUnless(live.derivedStatus === "in_play", `${sportKey} live prefix folds to ${live.derivedStatus}`);

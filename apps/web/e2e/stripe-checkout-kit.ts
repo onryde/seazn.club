@@ -129,6 +129,9 @@ export async function submitHostedCheckout(page: Page, timeoutMs = 30_000): Prom
  *    read as one of its lines).
  * Polled until one shows; a page with none says so by name.
  */
+/** The symbol of the currency every session this kit reads is created in (GBP — the picker option read above is `currency-gbp`). */
+const SESSION_CURRENCY_SYMBOL = "£";
+
 export async function hostedCheckoutTotalText(page: Page, timeoutMs = 60_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -140,10 +143,16 @@ export async function hostedCheckoutTotalText(page: Page, timeoutMs = 60_000): P
       if (await gbp.isVisible().catch(() => false)) return (await gbp.textContent()) ?? "";
     }
     const lines = page.getByTestId("line-item-total-amount").filter({ visible: true });
-    if ((await lines.count().catch(() => 0)) === 1) return (await lines.first().textContent()) ?? "";
+    if ((await lines.count().catch(() => 0)) === 1) {
+      // Only in the session's own currency. With Adaptive Pricing the line item paints in the runner's local currency
+      // ("$20.52" for a £15.00 session) BEFORE the currency picker's iframe attaches, so a dollar line item is that
+      // race, not the total (main e2e, 2026-11-18: `Expected: 1500 / Received: 2052`). Keep polling for the picker.
+      const text = (await lines.first().textContent().catch(() => null)) ?? "";
+      if (text.includes(SESSION_CURRENCY_SYMBOL)) return text;
+    }
     await page.waitForTimeout(250);
   }
-  throw new Error(`Stripe hosted checkout: no total (summary, GBP currency option or single line item) within ${timeoutMs}ms at ${page.url()}`);
+  throw new Error(`Stripe hosted checkout: no total (summary, GBP currency option or single GBP line item) within ${timeoutMs}ms at ${page.url()}`);
 }
 
 async function fillLegacy(page: Page, cardholder: string): Promise<void> {

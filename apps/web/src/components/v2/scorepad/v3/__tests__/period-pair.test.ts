@@ -19,7 +19,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolvePositions, type AnySportModule, type PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
-import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
+import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf, latestClockAnchor, reconcileClock } from "../clock";
 import { dockFor, softCommitPlan, stampFor } from "../pad-host";
 import { answerStep, backStep, currentStep, initialSheetState, resolveInitial } from "../guided-sheet";
 import type { GuidedSheetState } from "../guided-sheet";
@@ -190,6 +190,34 @@ describe("R6 headline: both skins declare clock(), which is what makes PadClockB
         }
       });
 
+      // Owner, 2026-11-18. The clock is the MATCH's (property 7), as football's is: the stream overlay already reads
+      // the ledger's newest clock event, so a pad that held its own would show Paused after a reload while the
+      // picture on air kept running.
+      it("a pad mounted mid-period FOLLOWS the ledger's running clock event — a reload does not read Paused", () => {
+        const state = livePhaseState(sport, cfg);
+        const spec = sport.factory(T).clock!(viewFor(sport, cfg, state))!;
+        expect(spec.shared, "the period pair's clock is shared").toBe(true);
+        const startedAt = Date.parse("2026-11-18T10:00:00.000Z");
+        const ledger = [
+          { id: "c1", seq: 2, type: `${sport.key}.clock`, payload: { at: { period: spec.period, elapsed: 30 }, running: true }, recordedAt: new Date(startedAt).toISOString() },
+        ];
+        const anchor = latestClockAnchor(ledger, `${sport.key}.clock`, new Set());
+        const mounted = reconcileClock(null, spec, anchor, 0)!;
+        expect(mounted.runningSince, "running, from the anchor's own moment").toBe(startedAt);
+        expect(elapsedOf(mounted, startedAt + 45_000)).toBe(75);
+        // The pair: the newest event a Pause — the reloaded pad holds it.
+        const paused = latestClockAnchor(
+          [...ledger, { id: "c2", seq: 3, type: `${sport.key}.clock`, payload: { at: { period: spec.period, elapsed: 50 }, running: false }, recordedAt: new Date(startedAt + 20_000).toISOString() }],
+          `${sport.key}.clock`,
+          new Set(),
+        );
+        const held = reconcileClock(null, spec, paused, 0)!;
+        expect(held.runningSince).toBeNull();
+        expect(elapsedOf(held, startedAt + 600_000)).toBe(50);
+        // …and with no clock event at all, the pad seats as before: paused, at the fold's seed.
+        expect(reconcileClock(null, spec, null, 0)!.runningSince).toBeNull();
+      });
+
       it("seeds from the fold's own last stamp, and IGNORES one left over from a phase the match has left", () => {
         const stamped = livePhaseState(sport, cfg, [
           [`${sport.key}.goal`, { by: "H", at: { period: firstPlayPhase(sport, cfg), elapsed: 421 } }],
@@ -197,6 +225,7 @@ describe("R6 headline: both skins declare clock(), which is what makes PadClockB
         expect(buildClock(viewFor(sport, cfg, stamped))).toEqual({
           period: firstPlayPhase(sport, cfg),
           seed: 421,
+          shared: true,
         });
 
         const next = nextAdvanceOf(sport.module, stamped);
@@ -208,7 +237,7 @@ describe("R6 headline: both skins declare clock(), which is what makes PadClockB
           ]);
           // `state.asOf` still names the PREVIOUS period here; seeding from it
           // would start the new period 421 seconds in.
-          expect(buildClock(viewFor(sport, cfg, afterWhistle))).toEqual({ period: next });
+          expect(buildClock(viewFor(sport, cfg, afterWhistle))).toEqual({ period: next, shared: true });
         }
       });
 
@@ -226,7 +255,7 @@ describe("R6 headline: both skins declare clock(), which is what makes PadClockB
         const folded = foldPeriod(sport.module, cfg, [["core.start"], [goal.type, stamped]]);
         expect(folded.asOf).toEqual({ period: state.phase, elapsed: 761 });
         // …and the pad then reads its own stamp back as the next seed.
-        expect(buildClock(viewFor(sport, cfg, folded))).toEqual({ period: state.phase, seed: 761 });
+        expect(buildClock(viewFor(sport, cfg, folded))).toEqual({ period: state.phase, seed: 761, shared: true });
       });
 
       it("A PAUSED clock still stamps — in a stop-clock sport the whistle time IS the game time", () => {

@@ -111,12 +111,12 @@ describe("the football skin shows match time; hockey is unchanged", () => {
     expect(buildFootballClock(viewOf(cfg, state))!.display!(30)).toBe("10:30");
   });
 
-  it("hockey's buildClock spec has neither shared nor display", () => {
+  it("hockey's buildClock spec is shared, and has no match-time display", () => {
     const cfg = periodCfg(hockey);
     const state = foldPeriod(hockey, cfg, [["core.start"]]);
     const spec = buildClock(viewOf(cfg, state))!;
     expect(spec).not.toBeNull();
-    expect(spec).not.toHaveProperty("shared");
+    expect(spec.shared).toBe(true);
     expect(spec).not.toHaveProperty("display");
   });
 
