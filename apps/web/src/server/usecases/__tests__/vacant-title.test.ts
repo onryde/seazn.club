@@ -112,7 +112,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
     const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
     expect(data, "the public division reads").not.toBeNull();
-    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings)).toMatchObject({ kind: "vacant" });
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools)).toMatchObject({ kind: "vacant" });
   });
 
   it("X-CH-3 a disqualification counts as out", async () => {
@@ -445,7 +445,7 @@ describe.skipIf(!HAS_DB)("W4 T16 fix 1: two sequential Withdraws of both finalis
         join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id where d.id = ${s.divisionId}`;
     await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
     const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
-    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings), "the public title agrees").toMatchObject({ kind: "champion" });
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools), "the public title agrees").toMatchObject({ kind: "champion" });
     checked++;
   });
 

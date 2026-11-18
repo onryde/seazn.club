@@ -130,10 +130,10 @@ describe.skipIf(!HAS_DB)("C16 the division title through the real read", () => {
     expect(detail.stages.length).toBe(2);
 
     expect(decisiveStageOf(detail.stages)!.id).toBe(main);
-    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings)).toEqual({ kind: "champion", champion: mainWinner });
+    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings, detail.pools)).toEqual({ kind: "champion", champion: mainWinner });
     // The differential, on the same rows: without the graph (the old rule) the Plate is crowned.
     const flat = detail.stages.map((s) => ({ id: s.id, seq: s.seq, kind: s.kind, status: s.status }));
-    expect(divisionTitle(flat, detail.fixtures, detail.standings)).toEqual({ kind: "champion", champion: plateWinner });
+    expect(divisionTitle(flat, detail.fixtures, detail.standings, detail.pools)).toEqual({ kind: "champion", champion: plateWinner });
   });
 
   it("the positive pair: a plain knockout is its own title, and league → knockout titles the knockout", async () => {
@@ -145,7 +145,7 @@ describe.skipIf(!HAS_DB)("C16 the division title through the real read", () => {
       await decideFinal(last, winner, r.entrantIds[5]!, r.stageIds[0]);
       const detail = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
       expect(decisiveStageOf(detail.stages)!.id, key).toBe(last);
-      expect(divisionTitle(detail.stages, detail.fixtures, detail.standings), key).toEqual({ kind: "champion", champion: winner });
+      expect(divisionTitle(detail.stages, detail.fixtures, detail.standings, detail.pools), key).toEqual({ kind: "champion", champion: winner });
       if (key === "league_ko") {
         expect(detail.stages[1]!.feeds_from, "the knockout is fed from the league's winners' side").toEqual([
           { stageId: r.stageIds[0]!, side: "winners", top: true },
@@ -179,10 +179,10 @@ describe.skipIf(!HAS_DB)("C16 the division title through the real read", () => {
     expect(byId.get(cup)!.feeds_from).toEqual([{ stageId: league, side: "winners", top: true }]);
     expect(byId.get(bowl)!.feeds_from).toEqual([{ stageId: league, side: "winners" }]);
     expect(decisiveStageOf(detail.stages)!.id).toBe(cup);
-    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings)).toEqual({ kind: "champion", champion: cupWinner });
+    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings, detail.pools)).toEqual({ kind: "champion", champion: cupWinner });
     // The differential: with the graph's rank-1 hint removed, the highest seq (the Bowl) is crowned.
     const flat = detail.stages.map((s) => ({ ...s, feeds_from: s.feeds_from?.map((f) => ({ stageId: f.stageId, side: f.side })) }));
-    expect(divisionTitle(flat, detail.fixtures, detail.standings)).toEqual({ kind: "champion", champion: bowlWinner });
+    expect(divisionTitle(flat, detail.fixtures, detail.standings, detail.pools)).toEqual({ kind: "champion", champion: bowlWinner });
   });
 
   it("a stored double-walkover final reaches the hub as a VACANT title with the fixture, and the document parses", async () => {
@@ -197,6 +197,6 @@ describe.skipIf(!HAS_DB)("C16 the division title through the real read", () => {
     expect(doc.knockouts[0]!.championFixtureId).toBe(final!.id);
     // A vacant title flags nobody on the page's rule either.
     const detail = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
-    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings)).toEqual({ kind: "vacant" });
+    expect(divisionTitle(detail.stages, detail.fixtures, detail.standings, detail.pools)).toEqual({ kind: "vacant" });
   });
 });

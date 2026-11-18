@@ -130,8 +130,8 @@ import { CompetitionHubDoc } from "../competition-hub-schema";
 import { divisionTitle } from "../champion";
 
 /** The single champion's entrant id of `divisionTitle` — null for no title, a joint title or a vacant one. */
-const championIdOf = (...a: Parameters<typeof divisionTitle>): string | null => {
-  const t = divisionTitle(...a);
+const championIdOf = (stages: Parameters<typeof divisionTitle>[0], fixtures: Parameters<typeof divisionTitle>[1], standings: Parameters<typeof divisionTitle>[2], pools: Parameters<typeof divisionTitle>[3] = null): string | null => {
+  const t = divisionTitle(stages, fixtures, standings, pools);
   return t?.kind === "champion" ? t.champion : null;
 };
 

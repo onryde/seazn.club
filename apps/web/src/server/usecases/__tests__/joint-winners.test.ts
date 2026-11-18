@@ -247,7 +247,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12: declare joint winners (X-CH-4, X-CH-6)", (
     await undoJointWinners(r.auth, r.final.id);
     const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
     expect(data, "the public division reads").not.toBeNull();
-    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings)).toBeNull();
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools)).toBeNull();
     const hub = await loadCompetitionHub(slugs!.org, slugs!.comp, new Date(), { uncached: true });
     expect(hub, "the hub reads").not.toBeNull();
     expect(CompetitionHubDoc.safeParse(hub).success).toBe(true);
@@ -337,7 +337,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12: declare joint winners (X-CH-4, X-CH-6)", (
     await sql`update competitions set visibility = 'public' where id = ${r.competitionId}`;
     expect(await ranks(r.auth, r.stageId)).toEqual([1, 1, 3, 3]);
     const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
-    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings)).toMatchObject({ kind: "joint" });
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools)).toMatchObject({ kind: "joint" });
     const hub = await loadCompetitionHub(slugs!.org, slugs!.comp, new Date(), { uncached: true });
     expect(CompetitionHubDoc.safeParse(hub).success).toBe(true);
   });
@@ -425,7 +425,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the divisi
     expect(data).not.toBeNull();
     const pf = data!.fixtures.find((f) => f.id === final.id)!;
     expect(typeof pf.joint_winners_at, "an ISO string crosses the wire, never a Date").toBe("string");
-    const title = divisionTitle(data!.stages, data!.fixtures, data!.standings);
+    const title = divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools);
     expect(title).toMatchObject({ kind: "joint" });
     expect(title && title.kind === "joint" ? [...title.winners].sort() : []).toEqual([a, b].sort());
 
@@ -460,7 +460,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T12 C31: a ruled joint final reaches the divisi
     await undoJointWinners(r.auth, final.id);
     await playWinner(r.auth, pick.sport, final, a);
     const after = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
-    expect(divisionTitle(after!.stages, after!.fixtures, after!.standings)).toMatchObject({ kind: "champion", champion: a });
+    expect(divisionTitle(after!.stages, after!.fixtures, after!.standings, after!.pools)).toMatchObject({ kind: "champion", champion: a });
     await expect(declareJointWinners(r.auth, final.id), "a final with a winner named").rejects.toMatchObject({ code: "JOINT_WINNERS_FINAL_DECIDED" });
   }, 300_000);
 });

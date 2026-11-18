@@ -45,8 +45,8 @@ const bracketChampion = (fixtures: readonly ChampionFixture[]) => {
   const t = bracketTitleOf(fixtures);
   return t?.kind === "champion" ? { fixtureId: t.fixtureId, winner: t.champion } : null;
 };
-const divisionChampion = (...a: Parameters<typeof divisionTitle>) => {
-  const t = divisionTitle(...a);
+const divisionChampion = (stages: Parameters<typeof divisionTitle>[0], fixtures: Parameters<typeof divisionTitle>[1], standings: Parameters<typeof divisionTitle>[2], pools: Parameters<typeof divisionTitle>[3] = null) => {
+  const t = divisionTitle(stages, fixtures, standings, pools);
   return t?.kind === "champion" ? t.champion : null;
 };
 
@@ -252,7 +252,7 @@ describe("divisionChampion", () => {
         snapshot({ stage_id: "s1", pool_id: `p${i + 1}`, rows: [{ entrantId: `top-${i + 1}`, rank: 1 }, { entrantId: `second-${i + 1}`, rank: 2 }] }),
       );
       expect(divisionChampion(stages, [], standings), `${pools} pools`).toBeNull();
-      expect(divisionTitle(stages, [], standings), `${pools} pools`).toBeNull();
+      expect(divisionTitle(stages, [], standings, null), `${pools} pools`).toBeNull();
       checked++;
     }
     expect(checked).toBe(3);
@@ -524,21 +524,21 @@ describe("divisionTitle — the title through the division rule", () => {
   const koStage = (over: Partial<ChampionStage> = {}) => stage({ id: "ko", seq: 1, kind: "knockout", status: "complete", ...over });
 
   it("EMPTY: no stages → null", () => {
-    expect(divisionTitle([], [], [])).toBeNull();
+    expect(divisionTitle([], [], [], null)).toBeNull();
   });
 
   it("a bracket division answers joint and vacant, not null", () => {
     // differential: today null
     const joint = fixture({ stage_id: "ko", round_no: 2, is_final: true, home_entrant_id: "a", away_entrant_id: "b", outcome: null, joint_winners_at: "2026-11-10T10:00:00Z" });
-    expect(divisionTitle([koStage()], [joint], [])).toEqual({ kind: "joint", winners: ["a", "b"] });
+    expect(divisionTitle([koStage()], [joint], [], null)).toEqual({ kind: "joint", winners: ["a", "b"] });
     const vacant = fixture({ stage_id: "ko", round_no: 2, is_final: true, status: "forfeited", outcome: { kind: "double_walkover" } });
-    expect(divisionTitle([koStage()], [vacant], [])).toEqual({ kind: "vacant" });
+    expect(divisionTitle([koStage()], [vacant], [], null)).toEqual({ kind: "vacant" });
   });
 
   it("a TABLE stage answers champion only (never joint or vacant), the pair of the bracket cases above", () => {
     const stages = [stage({ id: "s1", seq: 1, status: "complete" })];
     const standings = [snapshot({ stage_id: "s1", rows: [{ entrantId: "a", rank: 1 }, { entrantId: "b", rank: 1 }] })];
-    expect(divisionTitle(stages, [], standings)).toEqual({ kind: "champion", champion: "a" });
+    expect(divisionTitle(stages, [], standings, null)).toEqual({ kind: "champion", champion: "a" });
   });
 });
 
@@ -551,13 +551,13 @@ describe("C16 — the decisive stage comes from the progression graph, not from 
   it("a Knockout + Plate division crowns the main-draw winner, never the plate's", () => {
     // differential: seq made it "plate-winner"
     const fixtures = [fx("main", "main-winner"), fx("plate", "plate-winner")];
-    expect(divisionTitle([mainDraw, plate], fixtures, [])).toEqual({ kind: "champion", champion: "main-winner" });
+    expect(divisionTitle([mainDraw, plate], fixtures, [], null)).toEqual({ kind: "champion", champion: "main-winner" });
     expect(decisiveStageOf([plate, mainDraw])?.id, "in either input order").toBe("main");
   });
 
   it("the Plate's own result never titles the division even when the main draw is still undecided", () => {
     const fixtures = [fx("plate", "plate-winner")];
-    expect(divisionTitle([mainDraw, plate], fixtures, [])).toBeNull();
+    expect(divisionTitle([mainDraw, plate], fixtures, [], null)).toBeNull();
   });
 
   it("positive pair: a plain knockout is its own decisive stage; group → knockout titles the knockout", () => {
@@ -565,7 +565,7 @@ describe("C16 — the decisive stage comes from the progression graph, not from 
     const group = stage({ id: "g", seq: 1, kind: "group", status: "complete" });
     const ko = stage({ id: "ko", seq: 2, kind: "knockout", feeds_from: [{ stageId: "g", side: "winners" }] });
     expect(decisiveStageOf([group, ko])?.id).toBe("ko");
-    expect(divisionTitle([group, ko], [fx("ko", "kw")], [])).toEqual({ kind: "champion", champion: "kw" });
+    expect(divisionTitle([group, ko], [fx("ko", "kw")], [], null)).toEqual({ kind: "champion", champion: "kw" });
   });
 
   it("a group feeding a knockout WITH a plate: the knockout titles it (feeder excluded, consolation excluded)", () => {
@@ -702,29 +702,49 @@ describe("poolWinnersOf — each pool's winner of a finished Groups only divisio
   it("two CONFIGURED pools but one table written: no champion and no winners list (a partial set is never final)", () => {
     const oneTable = tablesOf(1);
     // differential: today (no pool list) the lone snapshot's leader is crowned
-    expect(divisionTitle([groupStage()], [], oneTable)).toEqual({ kind: "champion", champion: "top-1" });
+    expect(divisionTitle([groupStage()], [], oneTable, null)).toEqual({ kind: "champion", champion: "top-1" });
     expect(divisionTitle([groupStage()], [], oneTable, poolsOf(2))).toBeNull();
     expect(poolWinnersOf([groupStage()], [], oneTable, poolsOf(2))).toBeNull();
     // and the second pool's table present but the FIRST missing is equally partial
     expect(poolWinnersOf([groupStage()], [], tablesOf(2).slice(1), poolsOf(2))).toBeNull();
   });
 
-  it("a pool whose rank 1 is not one entrant has no winner (flagged null, never guessed); the others keep theirs", () => {
-    const cases: [string, (i: number) => Partial<ChampionStandings>][] = [
-      ["two rows share rank 1", (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1 }, { entrantId: "y", rank: 1 }] } : {})],
-      ["tieUnbroken on the leader", (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1, tieUnbroken: true }, { entrantId: "y", rank: 2, tieUnbroken: true }] } : {})],
-      ["a table with no counted fixture (level)", (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1, level: true }, { entrantId: "y", rank: 1, level: true }] } : {})],
-      ["no row ranked 1", (i) => (i === 2 ? { rows: [{ entrantId: "x" }, { entrantId: "y" }] } : {})],
-    ];
-    for (const [name, over] of cases) {
-      const w = poolWinnersOf([groupStage()], [], tablesOf(3, over), poolsOf(3))!;
-      expect(w.map((x) => x.entrantId), name).toEqual(["top-1", null, "top-3"]);
+  // The rule is the CHAMPION's: the row ranked 1. The engine ranks every row (rank = index + 1) and ends a tie it cannot split
+  // by stored lots or by the seed fallback, leaving a SOLE rank 1 with `tieUnbroken` on every tied row - those shapes are real.
+  it("a tie ended by LOTS or by the SEED fallback (sole rank 1, tieUnbroken, tieBreak key) names that row, exactly as the champion rule does", () => {
+    let checked = 0;
+    for (const key of ["lots", "seed"]) {
+      const rows = [
+        { entrantId: "drawn", rank: 1, tieUnbroken: true, tieBreak: { key } },
+        { entrantId: "other", rank: 2, tieUnbroken: true, tieBreak: { key } },
+        { entrantId: "third", rank: 3 },
+      ];
+      const tied = tablesOf(3, (i) => (i === 2 ? { rows } : {}));
+      const w = poolWinnersOf([groupStage()], [], tied, poolsOf(3))!;
+      expect(w.map((x) => x.entrantId), key).toEqual(["top-1", "drawn", "top-3"]);
+      // expected from the champion's rule, never from poolWinnersOf: the same snapshot as a one-pool division's table
+      const asOnePool = [snapshot({ stage_id: "g", pool_id: "p2", rows })];
+      expect(divisionChampion([groupStage()], [], asOnePool, [poolsOf(2)[1]!]), `${key}: the champion of that table`).toBe(w[1]!.entrantId);
+      checked++;
     }
-    // a tie the cascade SETTLED (lots: one rank 1, a stored tieBreak) names its winner - RB5-U4's mirror
-    const settled = poolWinnersOf([groupStage()], [], tablesOf(2, (i) => (i === 1 ? { rows: [{ entrantId: "drawn", rank: 1 }, { entrantId: "other", rank: 2 }] } : {})), poolsOf(2))!;
-    expect(settled.map((x) => x.entrantId)).toEqual(["drawn", "top-2"]);
-    // every pool undecided: nothing to name at all
-    expect(poolWinnersOf([groupStage()], [], tablesOf(2, () => ({ rows: [{ entrantId: "x", rank: 1 }, { entrantId: "y", rank: 1 }] })), poolsOf(2))).toBeNull();
+    expect(checked).toBe(2);
+  });
+
+  it("a sole rank 1 flagged level is still its pool's winner (the champion rule reads no `level`); two rank-1 rows name the first, as a champion does", () => {
+    const level = tablesOf(2, (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1, level: true }, { entrantId: "y", rank: 2, level: true }] } : {}));
+    expect(poolWinnersOf([groupStage()], [], level, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["top-1", "x"]);
+    expect(divisionChampion([groupStage()], [], [level[1]!], [poolsOf(2)[1]!])).toBe("x"); // same rule, one table
+    const shared = tablesOf(2, (i) => (i === 1 ? { rows: [{ entrantId: "a", rank: 1 }, { entrantId: "b", rank: 1 }] } : {}));
+    expect(poolWinnersOf([groupStage()], [], shared, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["a", "top-2"]);
+    expect(divisionChampion([groupStage()], [], [shared[0]!], [poolsOf(2)[0]!])).toBe("a");
+  });
+
+  it("only a table with NO rank 1 row has no winner (flagged null); the others keep theirs, and with none at all nothing is named", () => {
+    const empty = poolWinnersOf([groupStage()], [], tablesOf(3, (i) => (i === 2 ? { rows: [] } : {})), poolsOf(3))!;
+    expect(empty.map((x) => x.entrantId)).toEqual(["top-1", null, "top-3"]);
+    const unranked = poolWinnersOf([groupStage()], [], tablesOf(2, (i) => (i === 2 ? { rows: [{ entrantId: "x" }, { entrantId: "y" }] } : {})), poolsOf(2))!;
+    expect(unranked.map((x) => x.entrantId)).toEqual(["top-1", null]);
+    expect(poolWinnersOf([groupStage()], [], tablesOf(2, () => ({ rows: [] })), poolsOf(2))).toBeNull();
   });
 
   it("an overall table, a bracket decisive stage, no stages and no pool list all answer null", () => {

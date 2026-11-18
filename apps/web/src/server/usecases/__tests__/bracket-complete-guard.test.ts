@@ -355,7 +355,7 @@ async function championOf(divisionId: string): Promise<string | null> {
       from fixtures f join stages s on s.id = f.stage_id where s.division_id = ${divisionId}`;
   const standings = await sql<ChampionStandings[]>`
     select ss.stage_id, ss.pool_id, ss.rows from standings_snapshots ss join stages s on s.id = ss.stage_id where s.division_id = ${divisionId}`;
-  const t = divisionTitle(stages, fixtures, standings);
+  const t = divisionTitle(stages, fixtures, standings, null);
   return t?.kind === "champion" ? t.champion : null;
 }
 

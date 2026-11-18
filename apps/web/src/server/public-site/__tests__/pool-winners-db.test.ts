@@ -20,7 +20,7 @@ import { CreateStage } from "@/server/api-v1/schemas";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
-import { createEntrants } from "@/server/usecases/entrants";
+import { createEntrants, patchEntrant } from "@/server/usecases/entrants";
 import { startDivision } from "@/server/usecases/schedule";
 import { createStages } from "@/server/usecases/stages";
 import { getFixtureState } from "@/server/usecases/fixtures";
@@ -80,14 +80,16 @@ async function rig(sport: "badminton" | "football", poolCount: number, perPool: 
 }
 
 /** Walk every fixture over to the better seed - through the real scoring path, so the standings fold writes the snapshots. */
-async function playAll(r: Rig, only?: (poolId: string) => boolean): Promise<number> {
+async function playAll(r: Rig, only?: (poolId: string) => boolean, pick?: (f: { pool_id: string; home_entrant_id: string; away_entrant_id: string }, seedOf: Map<string, number>) => string | undefined): Promise<number> {
   const seeds = new Map((await sql<{ id: string; seed: number }[]>`select id, seed from entrants where division_id = ${r.divisionId}`).map((e) => [e.id, e.seed]));
   const rows = await sql<{ id: string; pool_id: string; home_entrant_id: string; away_entrant_id: string }[]>`
     select id, pool_id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${r.stageId} order by fixture_no`;
   let played = 0;
   for (const f of rows) {
     if (only && !only(f.pool_id)) continue;
-    const loser = seeds.get(f.home_entrant_id)! < seeds.get(f.away_entrant_id)! ? f.away_entrant_id : f.home_entrant_id;
+    // `pick` names the WINNER of a line (a cycle); by default the better seed wins
+    const winner = pick?.(f, seeds) ?? (seeds.get(f.home_entrant_id)! < seeds.get(f.away_entrant_id)! ? f.home_entrant_id : f.away_entrant_id);
+    const loser = winner === f.home_entrant_id ? f.away_entrant_id : f.home_entrant_id;
     const { last_seq } = await getFixtureState(r.auth, f.id);
     await scoreEvent(r.auth, f.id, { expected_seq: last_seq, type: "core.start", payload: {} });
     const { last_seq: s2 } = await getFixtureState(r.auth, f.id);
@@ -165,4 +167,61 @@ describe.skipIf(!HAS_DB)("W5 T14b pool winners through the real read", () => {
     expect(poolWinnersOf(detail.stages, detail.fixtures, detail.standings, detail.pools)).toBeNull();
     expect((await loadCompetitionHub(r.orgSlug, r.compSlug))!.poolWinners).toBeUndefined();
   }, 120_000);
+
+  // The rule is the CHAMPION's (the row ranked 1), so its expected value is taken from `divisionTitle` over that one pool's table as
+  // a stage of its own - never from `poolWinnersOf`.
+  const championOfPool = (detail: Awaited<ReturnType<typeof getPublicDivision>> & object, poolId: string) => {
+    const pool = detail.pools.find((p) => p.id === poolId)!;
+    const snap = detail.standings.filter((x) => x.pool_id === poolId);
+    const t = divisionTitle(detail.stages, detail.fixtures, snap, [pool]);
+    return t?.kind === "champion" ? t.champion : null;
+  };
+
+  it("a REAL tie produced by the engine (a 3-team cycle in one group): the table's sole rank 1 is that group's winner, as the champion rule names it", async () => {
+    let checked = 0;
+    for (const sport of ["badminton", "football"] as const) {
+      const r = await rig(sport, 2, 3);
+      const pools = await sql<{ id: string }[]>`select id from pools where stage_id = ${r.stageId} order by key`;
+      const cyclePool = pools[0]!.id;
+      const members = (
+        await sql<{ id: string; seed: number }[]>`
+          select distinct e.id, e.seed from fixtures f join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
+          where f.stage_id = ${r.stageId} and f.pool_id = ${cyclePool} order by e.seed`
+      ).map((m) => m.id);
+      expect(members.length, `${sport}: three in the cycle group`).toBe(3);
+      const [m1, m2, m3] = members as [string, string, string];
+      // m1 beats m2, m2 beats m3, m3 beats m1: level on points, on the mini-table and on every walkover score
+      const beats = new Map<string, string>([[[m1, m2].sort().join("|"), m1], [[m2, m3].sort().join("|"), m2], [[m1, m3].sort().join("|"), m3]]);
+      await playAll(r, undefined, (f) => (f.pool_id === cyclePool ? beats.get([f.home_entrant_id, f.away_entrant_id].sort().join("|")) : undefined));
+      const detail = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
+      const snap = detail.standings.find((x) => x.pool_id === cyclePool)!;
+      const rankOnes = snap.rows.filter((x) => x.rank === 1);
+      // premise (the engine's real shape): ONE rank 1, and the tie it ended is flagged unbroken - the shape a hand-built "two rank 1s" never was
+      expect(rankOnes.length, `${sport}: a sole rank 1`).toBe(1);
+      expect((rankOnes[0] as { tieUnbroken?: boolean }).tieUnbroken, `${sport}: ended by lots or seed, flagged unbroken`).toBe(true);
+      const w = poolWinnersOf(detail.stages, detail.fixtures, detail.standings, detail.pools)!;
+      const entry = w.find((x) => x.poolId === cyclePool)!;
+      expect(entry.entrantId, `${sport}: the tied group still names a winner`).not.toBeNull();
+      expect(entry.entrantId, `${sport}: the champion rule on that table`).toBe(championOfPool(detail, cyclePool));
+      expect(members, `${sport}: a member of the group`).toContain(entry.entrantId);
+      // and the other group is untouched: its lowest seed
+      const other = w.find((x) => x.poolId !== cyclePool)!;
+      expect(other.entrantId).toBe(championOfPool(detail, other.poolId));
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, 180_000);
+
+  it("same as the champion: a winner who has since DEPARTED is still named (the champion rule reads no status)", async () => {
+    const r = await rig("badminton", 2, 3);
+    await playAll(r);
+    const before = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
+    const first = poolWinnersOf(before.stages, before.fixtures, before.standings, before.pools)![0]!;
+    await patchEntrant(r.auth, first.entrantId!, { status: "withdrawn" });
+    const after = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
+    expect(after.entrants.find((e) => e.id === first.entrantId)!.status, "premise: she has departed").not.toBe("registered");
+    const entry = poolWinnersOf(after.stages, after.fixtures, after.standings, after.pools)!.find((x) => x.poolId === first.poolId)!;
+    expect(entry.entrantId, "a pool winner is named whoever the champion rule names for that table").toBe(championOfPool(after, first.poolId));
+    expect(entry.entrantId, "and it is still the departed winner").toBe(first.entrantId);
+  }, 180_000);
 });

@@ -186,9 +186,9 @@ export function bracketTitleOf(fixtures: readonly ChampionFixture[]): BracketTit
 export interface ChampionStandings {
   stage_id: string;
   pool_id: string | null;
-  /** `level` (no counted fixture: nobody leads) and `tieUnbroken` (equal on every cascade criterion) are the engine's
-   *  own flags on a snapshot row; optional because a hand-built row, and a snapshot read before them, carries neither. */
-  rows: readonly { entrantId: string; rank?: number; level?: boolean; tieUnbroken?: boolean }[];
+  /** The engine's own flags on a row (`tieUnbroken`, `level`, `tieBreak`) ride along on a real snapshot. NOTHING here reads them,
+   *  on purpose: who wins a table is the row ranked 1 (`rankOneOf`), for the champion and for a pool winner alike. */
+  rows: readonly { entrantId: string; rank?: number; level?: boolean; tieUnbroken?: boolean; tieBreak?: { key: string } }[];
 }
 
 /** A pool of a stage, as `public_pools_v` lists it: the pools a stage was CONFIGURED with (a pool row is written at
@@ -317,7 +317,7 @@ export function divisionTitle(
   stages: readonly ChampionStage[],
   fixtures: readonly ChampionFixture[],
   standings: readonly ChampionStandings[],
-  pools?: readonly ChampionPool[],
+  pools: readonly ChampionPool[] | null,
 ): DivisionTitle | null {
   const decisive = decisiveStageOf(stages);
   if (!decisive) return null;
@@ -344,12 +344,22 @@ export function divisionTitle(
   // division, W5 T14) has no single rank 1: each pool's leader has the same claim, so nobody is crowned and the pool
   // tables are the result (`poolWinnersOf` names each pool's). Counted from the pool list when the caller has it, never
   // from the snapshots that exist: a second pool whose table is not written yet is still a second pool (W5 T14b).
+  // `pools` is REQUIRED (a missing list would fail open, crowning a lone snapshot of a stage that has more pools): a caller with
+  // no pool rows to hand in (a bracket-only reader) says so with an explicit `null`, and the snapshots are then all there is to count.
   const configured = pools?.filter((p) => p.stage_id === decisive.id).length ?? 0;
-  const lone = configured > 0 ? configured === 1 : true; // no pool list handed in: the snapshots are all there is to count
+  const lone = configured > 0 ? configured === 1 : true;
   const snap = mine.find((s) => !s.pool_id) ?? (lone && mine.length === 1 ? mine[0] : undefined);
   if (!snap) return null;
-  const top = snap.rows.find((r) => r.rank === 1);
+  const top = rankOneOf(snap.rows);
   return top ? { kind: "champion", champion: top.entrantId } : null;
+}
+
+/** THE rule for who a table's winner is, shared by the champion and every pool winner: the row the standings fold ranked 1.
+ *  The engine ranks every row (`rank = index + 1`), so a tie its cascade could not split on the criteria (`tieUnbroken`) is ended
+ *  by stored lots or by the seed fallback and still has ONE rank 1; the champion has always been that row, flags and `level` and
+ *  `tieBreak` notwithstanding, and so is a pool's winner. Only a table with no rank 1 row at all has no winner. */
+function rankOneOf<R extends { entrantId: string; rank?: number }>(rows: readonly R[]): R | undefined {
+  return rows.find((r) => r.rank === 1);
 }
 
 /** The decisive TABLE stage's snapshots once the stage is DONE (flagged complete, or every fixture decided), else null.
@@ -377,7 +387,7 @@ export interface PoolWinner {
 }
 
 /**
- * W5 T14b (owner 2026-11-18): each pool's winner of a FINISHED Groups only division — a lone table stage of two or more
+ * W5 T14b (owner 2026-11-18): each pool's winner of a FINISHED Groups only division - a lone table stage of two or more
  * pools with no overall table, which `divisionTitle` deliberately crowns nobody for. Pools in display order
  * (`comparePools`), one entry per CONFIGURED pool.
  *
@@ -385,11 +395,13 @@ export interface PoolWinner {
  * champion's, `tableStageRead`), the stage has an overall table or fewer than two pools (a champion's case), a configured
  * pool has no snapshot yet (a partial winners set is never published as final), or no pool has a winner at all.
  *
- * A pool WITHOUT a single winner carries `entrantId: null` rather than vanishing, so a reader never mistakes "Pool A: X"
- * for the whole result. That is a pool whose rank 1 is not one entrant: a table with no counted fixture (`level`, nobody
- * leads), two rows sharing rank 1, or rows equal on every cascade criterion (`tieUnbroken`). The rulebook has no pool-winner
- * clause; RB5-U4 reads the pool's own cascade, "stored lots included", and this is its top-end mirror: a tie the cascade
- * settled (lots, seed — a stored rank 1) names its winner, a tie it could not is no winner. Never guessed.
+ * WHO WINS A POOL is exactly who wins a league or a one-pool Groups only division (`rankOneOf`): the row ranked 1. A tie the
+ * cascade could not split is ended by the engine itself - a stored lots draw (RB5-G9's `lots` step, `tieBreak.key` "lots") or the
+ * seed fallback ("seed") - which leaves a SOLE rank 1 carrying `tieUnbroken` on every tied row; that row is the winner, as it is the
+ * champion of a league (the owner's rulings 183 / RB5-U4: the pool's own cascade, stored lots included). So this never second-guesses
+ * the flags: one rule for the champion and for each pool's winner. A pool whose table has no rank 1 row at all (empty rows) is the
+ * only one listed with `entrantId: null` (the UI says "No single winner"), so a reader never mistakes "Group A: X" for the whole
+ * result. A winner who has since departed is named all the same, as a champion is.
  */
 export function poolWinnersOf(
   stages: readonly ChampionStage[],
@@ -412,9 +424,8 @@ export function poolWinnersOf(
   for (const pool of configured) {
     const snap = mine.find((s) => s.pool_id === pool.id);
     if (!snap) return null; // a configured pool whose table is not written: the set is partial, so it is not final
-    const first = snap.rows.filter((r) => r.rank === 1);
-    const sole = first.length === 1 && first[0]!.level !== true && first[0]!.tieUnbroken !== true ? first[0]! : null;
-    winners.push({ poolId: pool.id, key: pool.key, entrantId: sole ? sole.entrantId : null });
+    const top = rankOneOf(snap.rows);
+    winners.push({ poolId: pool.id, key: pool.key, entrantId: top ? top.entrantId : null });
   }
   return winners.some((w) => w.entrantId !== null) ? winners : null;
 }
