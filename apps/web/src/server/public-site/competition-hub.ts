@@ -98,7 +98,8 @@ import { cachedIfFound } from "./cache-found";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
-import { BRACKET_KINDS, BRACKET_SETTLED, bracketTitleOf, divisionTitle, titleEntrantIds, type BracketTitleRead } from "./champion";
+import { BRACKET_KINDS, BRACKET_SETTLED, bracketTitleOf, divisionTitle, poolWinnersOf, titleEntrantIds, type BracketTitleRead } from "./champion";
+import { poolWinnerLines } from "./pool-winners";
 import { describeFormat } from "./describe-format";
 import { stageFormatLines } from "./stage-format-lines";
 import type {
@@ -111,6 +112,7 @@ import type {
   KnockoutViewT,
   LeaderBoardT,
   TableViewT,
+  HubPoolWinnersT,
   TeamCardT,
   DivisionTitleWireT,
 } from "./competition-hub-schema";
@@ -799,6 +801,7 @@ export async function loadCompetitionHub(
   const matches: HubMatchT[] = [];
   const tables: TableViewT[] = [];
   const knockouts: KnockoutViewT[] = [];
+  const poolWinners: HubPoolWinnersT[] = [];
   const teams: TeamCardT[] = [];
   const hubDivisions: HubDivisionT[] = [];
   const venues = new Set<string>();
@@ -970,7 +973,18 @@ export async function loadCompetitionHub(
     }
 
     // W4: a joint title flags BOTH finalists' rows; a vacant one flags nobody (`titleEntrantIds`).
-    const championIds = titleEntrantIds(divisionTitle(stages, fixtures, standings));
+    const championIds = titleEntrantIds(divisionTitle(stages, fixtures, standings, pools));
+    // W5 T14b (owner 2026-11-18): a finished multi-pool Groups only division names each pool's winner instead (the champion above is
+    // null for it): the Table tab prints one strip per division, as it does for a champion.
+    const poolWinnerRead = poolWinnersOf(stages, fixtures, standings, pools);
+    if (poolWinnerRead) {
+      const lines = poolWinnerLines(poolWinnerRead, dict, (id) => names[id] ?? "—");
+      poolWinners.push({
+        divisionId: d.id,
+        divisionSlug: d.slug,
+        pools: lines.map((l, i) => ({ poolId: l.poolId, label: l.label, entrantId: poolWinnerRead[i]!.entrantId, name: l.name })),
+      });
+    }
     // A pool is named from its KEY in the org's locale, never by its stored
     // English name (`lib/pool-label.ts`).
     const poolKey = poolNaming(pools);
@@ -1135,6 +1149,7 @@ export async function loadCompetitionHub(
     matches: sorted,
     tables,
     knockouts,
+    ...(poolWinners.length > 0 ? { poolWinners } : {}),
     leaders,
     teams,
     info: {

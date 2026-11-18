@@ -72,6 +72,10 @@ import { detectTemplate } from "../../../apps/web/src/lib/format-templates.ts";
  * reads back as a plain `league` with `config.legs` 3 - the product's own `detectTemplate` over the stage read back from the API
  * names no template of its own for three legs. (Main: it read back as the retired template.)
  *
+ * Task 14b (owner 2026-11-18): a Groups only division of two pools played to the end reads, through the PUBLIC hub document, with one pool
+ * winner per pool - the lowest seed of each pool, every match being a walkover for the better seed - and no row flagged champion. (Main:
+ * the document had no such field, and the first pool's leader was crowned the division's champion.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -93,7 +97,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 12b: 1 (a league + knockout whose Top 8 is asked of 6 entrants is refused RR_CUT_EXCEEDS_FIELD naming 6, and writes nothing; Top 6 draws).
   // Task 14: 1 (the Groups only card's one-stage list: three pools of eleven, 15 lines, no second stage).
   // Task 16: 1 (a legs-3 league over the API draws 18 lines and reads back as a league with its 3 legs).
-  const EXPECTED_CHECKS = 22;
+  // Task 14b: 1 (a finished two-pool Groups only division's public hub document names each pool's winner and crowns no one).
+  const EXPECTED_CHECKS = 23;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -979,6 +984,66 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-RR-6: a league created with legs 3 draws three legs (18 lines) and reads back as a league with its 3 legs, never a template of its own" +
         (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, stage ${posted.status}, generate ${gen.status}, lines ${lines.length}, back ${JSON.stringify(back)?.slice(0, 200)}`),
+      ok,
+    );
+  }
+
+  // Check 20 - Task 14b (owner 2026-11-18): a two-pool Groups only division, played to the end, publishes each pool's winner in the hub
+  // document and crowns no one. Six entrants in two pools of three (3 lines a pool); every line is a walkover for the better seed, so
+  // a pool's winner is its lowest seed - derived here from the lines' own pool_id, not from the product's table. A public competition
+  // in an org of its own (the second holds two competitions already, the plan's cap). B4 merge: `w5a6_`, since the super-groups check
+  // signs in `w5a3_` - each check keeps an org of its own.
+  {
+    const second = newSession();
+    const whoSecond = await signIn(second, `delivered+w5a6_${tag}@resend.dev`);
+    const cRes = await v1(second, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A pool winners ${tag}`, visibility: "public" });
+    const pubComp = v1data<{ id: string; slug: string } | undefined>(cRes);
+    const dRes = await v1(second, `/api/v1/competitions/${pubComp?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Pool winners",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const made = v1data<{ id: string }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `Pw ${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const seedOf = new Map(made.map((e, i) => [e.id, i + 1]));
+    const posted = v1data<{ id: string }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/stages`, "PUT", [
+        { seq: 1, kind: "group", name: "Group stage", config: { legs: 1, pools: { count: 2 } }, progression: null },
+      ]),
+    ) ?? [];
+    const stageId = posted[0]?.id;
+    const gen = await v1(second, `/api/v1/stages/${stageId}/generate`, "POST");
+    const started = await v1(second, `/api/v1/divisions/${divId}/start`, "POST");
+    const lines = (v1data<(Fx & { pool_id?: string | null })[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const walks: number[] = [];
+    for (const f of lines) {
+      const loser = seedOf.get(f.home_entrant_id!)! < seedOf.get(f.away_entrant_id!)! ? f.away_entrant_id : f.home_entrant_id;
+      walks.push((await v1(second, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: loser, reason: "walkover" } })).status);
+    }
+    // each pool's lowest seed, from the lines' own pool ids
+    const best = new Map<string, number>();
+    for (const f of lines) for (const id of [f.home_entrant_id!, f.away_entrant_id!]) best.set(f.pool_id ?? "", Math.min(best.get(f.pool_id ?? "") ?? Infinity, seedOf.get(id)!));
+    const wantSeeds = [...best.values()].sort((a, b) => a - b);
+    const orgs = (await call(second, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === whoSecond.org_id)?.slug ?? "";
+    const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pubComp?.slug}/hub`);
+    type PwHub = { poolWinners?: { divisionId: string; pools: { label: string; entrantId: string | null; name: string | null }[] }[]; tables?: { divisionId: string; rows: { champion: boolean }[] }[] };
+    const hub = v1data<PwHub | undefined>(hubRes);
+    const mine = (hub?.poolWinners ?? []).filter((w) => w.divisionId === divId);
+    const gotSeeds = (mine[0]?.pools ?? []).map((p) => (p.entrantId === null ? -1 : (seedOf.get(p.entrantId) ?? -2))).sort((a, b) => a - b);
+    const rows = (hub?.tables ?? []).filter((t) => t.divisionId === divId).flatMap((t) => t.rows);
+    const ok =
+      cRes.status === 201 && dRes.status === 201 && made.length === 6 && posted.length === 1 && gen.status === 200 && started.status === 200 &&
+      lines.length === 6 && walks.length === 6 && walks.every((w) => w === 201) && best.size === 2 && hubRes.status === 200 &&
+      mine.length === 1 && mine[0]!.pools.length === 2 && JSON.stringify(gotSeeds) === JSON.stringify(wantSeeds) &&
+      mine[0]!.pools.every((p) => p.name !== null && p.name.length > 0) && rows.length === 6 && rows.every((r) => r.champion === false);
+    w5Check(
+      "w5a T14b: a finished two-pool Groups only division publishes each pool's winner in the hub document and flags no row champion" +
+        (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, generate ${gen.status}, start ${started.status}, lines ${lines.length}, walks ${walks.join(",")}, hub ${hubRes.status}, winners ${JSON.stringify(mine).slice(0, 300)}, want seeds ${wantSeeds.join(",")}, rows ${rows.length}`),
       ok,
     );
   }

@@ -2,6 +2,8 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats, activeOrgIdFromRequest } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
+import { dictString } from "./spectator-w2-kit";
+import { LONG_NAME_SUFFIX, seedFinishedGroupsOnly } from "./support/pool-winners-kit";
 import { saveRoster, seedPair, seedPlayer, stagePartnerSwap, storedMembers, uiEn } from "./entrant-rename-kit";
 
 // W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21; #837; X-BD-5). A pre-Start Generate on a league used to insert by
@@ -1327,5 +1329,54 @@ test.describe("X-BD-2 the builder makes a groups-only division", () => {
     expect(stages.data![0]!.config.pools?.count, "the Pools box's number").toBe(3);
     expect(stages.data![0]!.config.legs, "once").toBe(1);
     expect(stages.data![0]!.progression, "nothing progresses out of it").toBeNull();
+  });
+});
+
+test.describe("T14b a finished multi-pool Groups only division names each pool's winner (owner 2026-11-18)", () => {
+  // differential: today (f305ccc939) the division page and the hub name NOBODY for a finished two-pool Groups only division - the pool tables
+  // are the whole result - and before it named the first pool's leader "Champion". The owner's ruling: each pool's winner, no champion.
+  test("a finished 2-pool division shows both winners on the division page and the hub's Table tab, and no Champion", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const k = await seedFinishedGroupsOnly(request, { label: "T14b 2 pools", pools: 2, perPool: 3, longNames: true });
+    expect(k.winners.length, "one winner per pool").toBe(2);
+
+    await page.goto(`/live/${k.orgSlug}/${k.compSlug}/${k.divSlug}`);
+    const banner = page.getByTestId("division-pool-winners");
+    await expect(banner).toBeVisible();
+    await expect(page.getByTestId("division-pool-winner")).toHaveCount(2);
+    for (const w of k.winners) await expect(banner, w.name).toContainText(w.name);
+    await expect(banner).toContainText(dictString("en", "title.poolWinners"));
+    await expect(page.getByTestId("division-title-champion"), "no single champion").toHaveCount(0);
+    await expect(page.getByTestId("division-title-joint")).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    // the hub's Table tab: one strip for the division, the same two names
+    await page.goto(`/live/${k.orgSlug}/${k.compSlug}?tab=table`);
+    const strip = page.locator('[data-testid^="mh-table-pool-winners-"]');
+    await expect(strip).toHaveCount(1);
+    await expect(strip.getByTestId("mh-table-pool-winner")).toHaveCount(2);
+    for (const w of k.winners) await expect(strip, w.name).toContainText(w.name);
+    await expect(page.locator('[data-testid^="mh-table-champion-"]')).toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+
+    // the API document carries them too, and no row of any table is flagged champion
+    const hub = await apiJson<{ poolWinners?: { divisionId: string; pools: { entrantId: string | null }[] }[]; tables: { rows: { champion: boolean }[] }[] }>(request, `/api/v1/public/orgs/${k.orgSlug}/competitions/${k.compSlug}/hub`);
+    expect(hub.status).toBe(200);
+    expect(hub.data!.poolWinners?.find((w) => w.divisionId === k.divisionId)?.pools.map((p) => p.entrantId).sort()).toEqual(k.winners.map((w) => w.entrantId).sort());
+    expect(hub.data!.tables.flatMap((t) => t.rows).some((r) => r.champion)).toBe(false);
+    expect(LONG_NAME_SUFFIX.length, "premise: a long name was in play").toBeGreaterThan(40);
+  });
+
+  test("with one line still to play nothing is named; a one-pool division crowns its winner as champion", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const open = await seedFinishedGroupsOnly(request, { label: "T14b open", pools: 2, perPool: 3, decide: false });
+    await page.goto(`/live/${open.orgSlug}/${open.compSlug}/${open.divSlug}`);
+    await expect(page.getByTestId("division-pool-winners")).toHaveCount(0);
+    await expect(page.getByTestId("division-title-champion")).toHaveCount(0);
+
+    const one = await seedFinishedGroupsOnly(request, { label: "T14b one pool", pools: 1, perPool: 4 });
+    await page.goto(`/live/${one.orgSlug}/${one.compSlug}/${one.divSlug}`);
+    await expect(page.getByTestId("division-title-champion")).toContainText(one.winners[0]!.name);
+    await expect(page.getByTestId("division-pool-winners")).toHaveCount(0);
   });
 });

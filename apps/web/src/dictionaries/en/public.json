@@ -539,6 +539,8 @@
   "matchesHub.timesIn": "times in {tz}",
   "matchesHub.card.label": "{home} v {away}",
   "table.champion": "Champion",
+  "title.poolWinners": "Group winners",
+  "title.poolWinnerNone": "No single winner",
   "title.joint": "Joint winners",
   "title.jointNames": "{a} and {b}",
   "title.vacant": "Title vacant",

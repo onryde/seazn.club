@@ -482,6 +482,16 @@ export const HubInfo = z.object({
  * comment. The trade was made deliberately: enforcing the tab invariant is
  * worth more than schema-surgery ergonomics.
  */
+/** W5 T14b (owner 2026-11-18): the pool winners of ONE finished multi-pool Groups only division, pools in display order. `label` is
+ *  the pool's name in the org's locale (`poolLabel`); `name` is the winner's (already masked), null for a pool with no single winner
+ *  (a tie its cascade could not settle). Only a division that has them is listed, and the one champion stays null for it. */
+export const HubPoolWinners = z.object({
+  divisionId: z.string(),
+  divisionSlug: z.string(),
+  pools: z.array(z.object({ poolId: z.string(), label: z.string(), entrantId: z.string().nullable(), name: z.string().nullable() })).min(2),
+});
+export type HubPoolWinnersT = z.infer<typeof HubPoolWinners>;
+
 export const CompetitionHubDoc = z.object({
   competitionId: z.string(),
   orgSlug: z.string(),
@@ -499,6 +509,10 @@ export const CompetitionHubDoc = z.object({
   tables: z.array(TableView),
   /** One per bracket stage with fixtures, division order then stage `seq`. */
   knockouts: z.array(KnockoutView),
+  /** W5 T14b: each finished multi-pool Groups only division's pool winners, in division order. OPTIONAL, for the reason
+   *  `HubDivision.description` is: the hub API answers from an edge cache, so a new bundle can read a document built before the
+   *  field existed; absent reads as "no pool winners". */
+  poolWinners: z.array(HubPoolWinners).optional(),
   leaders: z.array(LeaderBoard),
   teams: z.array(TeamCard),
   info: HubInfo,

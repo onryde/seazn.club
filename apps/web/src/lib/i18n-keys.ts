@@ -11636,6 +11636,8 @@ export type DictionaryKey =
   | "tips.slideshow.url.title"
   | "title.joint"
   | "title.jointNames"
+  | "title.poolWinnerNone"
+  | "title.poolWinners"
   | "title.vacant"
   | "title.vacantReason"
   | "titleSponsor.group"

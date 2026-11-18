@@ -539,6 +539,8 @@
   "matchesHub.timesIn": "horarios en {tz}",
   "matchesHub.card.label": "{home} vs {away}",
   "table.champion": "Campeón",
+  "title.poolWinners": "Ganadores de grupo",
+  "title.poolWinnerNone": "Sin ganador único",
   "title.joint": "Campeones compartidos",
   "title.jointNames": "{a} y {b}",
   "title.vacant": "Título vacante",

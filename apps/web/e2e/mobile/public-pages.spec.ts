@@ -422,3 +422,45 @@ test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no h
   await expectNoHorizontalScroll(page);
   console.log(`[t17-otw ${width}px] division headers ${headers.join(" ")}; Ash ${ashCells.join(" ")}; scrollable ${scrollable.length}`);
 });
+
+// W5 T14b (owner 2026-11-18): a finished multi-pool Groups only division names each pool's winner where a champion banner would sit. At every
+// width project: both winners are on the division page and the hub's Table tab, no "Champion"; the page does not scroll sideways with two
+// 55-character names in play (they WRAP inside a min-w-0 chain - a clipped box is a defect, `overflowingIn` tells it from a rail); axe finds
+// nothing serious. Not serial: it reads nothing another test writes.
+test("T14b pool winners: both named on the division page and the hub, no champion, no horizontal scroll with long names", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/pool-winners-kit");
+  const k = await kit.seedFinishedGroupsOnly(request, { label: `T14b ${width}`, pools: 2, perPool: 3, longNames: true });
+  expect(k.winners.length).toBe(2);
+
+  await page.goto(`/live/${k.orgSlug}/${k.compSlug}/${k.divSlug}`, { waitUntil: "load" });
+  const banner = page.getByTestId("division-pool-winners");
+  await expect(banner).toBeVisible();
+  await expect(page.getByTestId("division-pool-winner")).toHaveCount(2);
+  for (const w of k.winners) await expect(banner, w.name).toContainText(w.name);
+  await expect(page.getByTestId("division-title-champion")).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  const { clipped } = await overflowingIn(page, '[data-testid="division-pool-winners"]', "div,span,li,ul,p", "the pool winners banner was not in the DOM");
+  expect(clipped, `the pool winners banner clips content at ${width}px`).toEqual([]);
+  // the long name is on screen in full (wrapped), never cut: its own box is inside the viewport
+  const longest = page.getByTestId("division-pool-winner").filter({ hasText: kit.LONG_NAME_SUFFIX }).first();
+  await expect(longest).toBeVisible();
+  const box = await longest.boundingBox();
+  expect(box, "the long winner has a box").toBeTruthy();
+  expect(box!.x + box!.width, `the long winner ends inside the viewport at ${width}px`).toBeLessThanOrEqual(width + 0.5);
+
+  await page.goto(`/live/${k.orgSlug}/${k.compSlug}?tab=table`, { waitUntil: "load" });
+  const strip = page.locator('[data-testid^="mh-table-pool-winners-"]');
+  await expect(strip).toBeVisible();
+  await expect(strip.getByTestId("mh-table-pool-winner")).toHaveCount(2);
+  for (const w of k.winners) await expect(strip, w.name).toContainText(w.name);
+  await expect(page.locator('[data-testid^="mh-table-champion-"]')).toHaveCount(0);
+  await expectNoHorizontalScroll(page);
+  const hubOverflow = await overflowingIn(page, '[data-testid^="mh-table-pool-winners-"]', "div,span,li,ul,p", "the hub strip was not in the DOM");
+  expect(hubOverflow.clipped, `the hub's pool winners strip clips content at ${width}px`).toEqual([]);
+  const axe = await new AxeBuilder({ page }).include('[data-testid^="mh-table-pool-winners-"]').analyze();
+  expect(axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical"), "axe: the strip").toEqual([]);
+});
