@@ -51,6 +51,25 @@ export async function readPoolTables<Rows = unknown>(
     });
 }
 
+/**
+ * W5 app PR A, Task 21 fix round 1 (X-SF-2): the table a FIXTURE sits in - its own pool's when it has a pool (`fixtures.pool_id`), else
+ * the stage's single table. A pooled fixture's movement ("moves up to 1st", the recap's climber) is measured against ITS pool's table and
+ * previous table only: rank 2 in pool B is not rank 2 in pool A. A fixture with no pool (a league, a Swiss stage), or whose pool has no
+ * stored table yet, falls back to `readSingleTableSnapshot` (which answers undefined for a several-pool stage).
+ */
+export async function readFixtureTable<Rows = unknown>(
+  tx: Tx,
+  stageId: string,
+  poolId: string | null | undefined,
+): Promise<{ rows: Rows; previous_rows: Rows | null } | undefined> {
+  if (poolId) {
+    const [snap] = await tx<{ rows: Rows; previous_rows: Rows | null }[]>`
+      select rows, previous_rows from standings_snapshots where stage_id = ${stageId} and pool_id = ${poolId}`;
+    if (snap) return snap;
+  }
+  return readSingleTableSnapshot<Rows>(tx, stageId);
+}
+
 /** The pool a stage's single table sits under: the stage's only pool, or null when it has none or several (the no-pool table). */
 export async function onlyPoolOf(tx: Tx, stageId: string): Promise<string | null> {
   const pools = await tx<{ id: string }[]>`select id from pools where stage_id = ${stageId} limit 2`;

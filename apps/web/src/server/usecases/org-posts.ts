@@ -37,7 +37,7 @@ import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { playerStatsWithoutWaiting } from "./player-stats";
-import { readPoolTables, readSingleTableSnapshot } from "./stage-table-snapshot";
+import { readFixtureTable, readPoolTables, readSingleTableSnapshot } from "./stage-table-snapshot";
 import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import {
@@ -417,6 +417,9 @@ export interface FixtureCtx {
   division_id: string;
   competition_id: string;
   stage_id: string;
+  /** W5 T21 fix 1: the fixture's own pool (`fixtures.pool_id`), so its movement reads its own pool's table. Optional: a hand-built ctx
+   *  without it reads the stage's single table, as before. */
+  pool_id?: string | null;
   stage_kind: string;
   round_no: number | null;
   status: string;
@@ -467,7 +470,7 @@ export async function draftPostsForDecidedFixture(
   // with a blank venue line regardless of what venue it was actually played
   // at (draftResult below renders `venue` verbatim into the post body).
   const [fx] = await tx<(FixtureCtx & CreditedCtx)[]>`
-    select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id,
+    select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id, f.pool_id,
            st.kind as stage_kind, f.round_no, f.status, f.outcome,
            ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
            f.home_entrant_id, f.away_entrant_id,
@@ -1056,7 +1059,7 @@ export async function assembleRecapEnrichment(
     // reaching the second query below is a genuine SQL-level risk the
     // savepoint now covers too.
     await tx.savepoint(async (sp) => {
-      const snap = await readSingleTableSnapshot<RankedEntrantRow[]>(sp, fx.stage_id);
+      const snap = await readFixtureTable<RankedEntrantRow[]>(sp, fx.stage_id, fx.pool_id);
       if (snap) {
         const climber = biggestClimber(snap.rows, snap.previous_rows);
         if (climber) {
@@ -1102,7 +1105,7 @@ async function winnerMovement(
       if (!outcome || (outcome.kind !== "win" && outcome.kind !== "award") || !outcome.winner) {
         return null;
       }
-      const rows = await topStandings(sp, fx.stage_id, Number.MAX_SAFE_INTEGER);
+      const rows = await topStandings(sp, fx.stage_id, Number.MAX_SAFE_INTEGER, fx.pool_id);
       const [row] = await sp<{ display_name: string }[]>`
         select display_name from entrants where id = ${outcome.winner}`;
       const idx = rows.findIndex((r) => r.entrantId === outcome.winner);
@@ -1132,17 +1135,24 @@ async function pointsUnitOf(tx: Tx, stageId: string) {
  *  resolved, ranked by the engine's `rank` (falls back to array order). A LEVEL
  *  table (started, nothing counted — X-TB-6) has no top: its order is the seed
  *  list, so it is no table at all here (anti-goal 3: nobody reads as first). */
-async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP): Promise<StandingRow[]> {
-  const snap = await readSingleTableSnapshot<StoredRow[]>(tx, stageId);
+async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP, poolId: string | null = null): Promise<StandingRow[]> {
+  const snap = await readFixtureTable<StoredRow[]>(tx, stageId, poolId);
   return topOfTable(tx, stageId, snap?.rows, top);
 }
 
 type StoredRow = { entrantId: string; played: number; points: number; rank?: number; level?: boolean };
 
 /** The top `top` rows of one stored table, ranked and named, as `topStandings` returns them. Shared by the single table and every pool's. */
-async function topOfTable(tx: Tx, stageId: string, table: StoredRow[] | undefined, top: number): Promise<StandingRow[]> {
+async function topOfTable(
+  tx: Tx,
+  stageId: string,
+  table: StoredRow[] | undefined,
+  top: number,
+  /** The stage's points unit when the caller already read it (one fact for every pool of a stage). */
+  knownUnit?: Awaited<ReturnType<typeof pointsUnitOf>>,
+): Promise<StandingRow[]> {
   if (!table || table.length === 0 || isLevelTable(table)) return [];
-  const unit = await pointsUnitOf(tx, stageId);
+  const unit = knownUnit ?? (await pointsUnitOf(tx, stageId));
   const sorted = [...table].sort(
     (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
   );
@@ -1172,9 +1182,10 @@ async function topPoolStandings(tx: Tx, stageId: string, locale: Locale): Promis
   const tables = await readPoolTables<StoredRow[]>(tx, stageId);
   if (tables.length === 0) return [];
   const dict = await getDictionary(locale, "public");
+  const unit = await pointsUnitOf(tx, stageId);
   const out: { label: string; rows: StandingRow[] }[] = [];
   for (const t of tables) {
-    const rows = await topOfTable(tx, stageId, t.rows, RECAP_STANDINGS_TOP);
+    const rows = await topOfTable(tx, stageId, t.rows, RECAP_STANDINGS_TOP, unit);
     if (rows.length > 0) out.push({ label: poolLabel(dict, t.key), rows });
   }
   return out;
@@ -1352,10 +1363,12 @@ export async function assembleDigestStandings(
           ? pooled.map((t) => ({ snap: t, key: t.key }))
           : single ? [{ snap: single }] : [];
         const dict = pooled.length > 0 ? await getDictionary(locale, "public") : null;
+        // the stage's points unit is one fact for every pool of it
+        if (tables.length === 0) return;
+        const unit = await pointsUnitOf(sp, stage.stage_id);
         for (const { snap, key } of tables) {
           // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
           if (snap.rows.length === 0 || isLevelTable(snap.rows)) continue;
-          const unit = await pointsUnitOf(sp, stage.stage_id);
           const sorted = [...snap.rows].sort(
             (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
           );
