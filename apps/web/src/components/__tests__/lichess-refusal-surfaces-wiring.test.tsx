@@ -62,6 +62,7 @@ const PROPS: ActionProps = {
   lastRemindedAt: null,
   remindersInWindow: 0,
   approvedAt: null,
+  paymentLostToDispute: false,
 };
 const mount = (o: Partial<ActionProps> = {}) => renderIsland(RegistrationHubRegistrantActions, { ...PROPS, ...o });
 const action = (island: ReturnType<typeof mount>, name: string) =>

@@ -842,6 +842,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       lastRemindedAt: null,
       remindersInWindow: 0,
       approvedAt: null,
+      paymentLostToDispute: false,
     });
     // The existing render-time prop-sync already reconciles to it —
     // withdraw (legal on "confirmed") reappears.
