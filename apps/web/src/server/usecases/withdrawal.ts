@@ -73,7 +73,7 @@ import {
 import { getDivision } from "./divisions";
 import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
-import { advanceAfterSettle, invalidatePublicCache, scoreEvent } from "./scoring";
+import { advanceAfterSettle, invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
 import { replaceDepartedQualifier } from "./lucky-loser";
 import { afterScheduleWrite } from "./schedule";
 
