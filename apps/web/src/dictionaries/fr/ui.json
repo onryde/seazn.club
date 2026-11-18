@@ -3690,7 +3690,7 @@
   "archived.restoreFailed": "Échec de la restauration",
   "archived.purgeFailed": "Échec de la purge",
   "archived.heading": "Divisions archivées",
-  "archived.desc": "Masquées de votre console et du site public ; elles ne comptent pas dans votre forfait. La restauration ramène tout exactement comme c'était.",
+  "archived.desc": "Masquées de votre console et du site public. Une division sans résultat enregistré libère sa place ; une division avec des résultats continue de compter dans votre limite. La restauration ramène tout exactement comme c'était.",
   "archived.archivedAt": "archivé le {date}",
   "archived.restore": "Restaurer",
   "archived.purge": "Purger…",

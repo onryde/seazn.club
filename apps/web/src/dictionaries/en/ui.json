@@ -3690,7 +3690,7 @@
   "archived.restoreFailed": "Restore failed",
   "archived.purgeFailed": "Purge failed",
   "archived.heading": "Archived divisions",
-  "archived.desc": "Hidden from your console and the public site; they don't count against your plan. Restore brings everything back exactly as it was.",
+  "archived.desc": "Hidden from your console and the public site. A division with no recorded results frees its division slot; one with results keeps counting toward your limit. Restore brings everything back exactly as it was.",
   "archived.archivedAt": "archived {date}",
   "archived.restore": "Restore",
   "archived.purge": "Purge…",

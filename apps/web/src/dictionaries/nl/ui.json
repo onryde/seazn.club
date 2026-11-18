@@ -3637,7 +3637,7 @@
   "archived.restoreFailed": "Herstellen mislukt",
   "archived.purgeFailed": "Opschonen mislukt",
   "archived.heading": "Gearchiveerde divisies",
-  "archived.desc": "Verborgen voor je console en de openbare site; ze tellen niet mee voor je abonnement. Herstellen brengt alles precies terug zoals het was.",
+  "archived.desc": "Verborgen voor je console en de openbare site. Een divisie zonder geregistreerde resultaten geeft haar plek vrij; een divisie met resultaten blijft meetellen voor je limiet. Herstellen brengt alles precies terug zoals het was.",
   "archived.archivedAt": "gearchiveerd {date}",
   "archived.restore": "Herstellen",
   "archived.purge": "Verwijderen…",

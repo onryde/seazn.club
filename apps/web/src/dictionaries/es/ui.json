@@ -3637,7 +3637,7 @@
   "archived.restoreFailed": "Error al restaurar",
   "archived.purgeFailed": "Error al purgar",
   "archived.heading": "Divisiones archivadas",
-  "archived.desc": "Ocultos de tu consola y del sitio público; no cuentan para tu plan. Restaurar devuelve todo exactamente como estaba.",
+  "archived.desc": "Ocultas de tu consola y del sitio público. Una división sin resultados registrados libera su plaza; una con resultados sigue contando para tu límite. Restaurar devuelve todo exactamente como estaba.",
   "archived.archivedAt": "archivado {date}",
   "archived.restore": "Restaurar",
   "archived.purge": "Purgar…",
