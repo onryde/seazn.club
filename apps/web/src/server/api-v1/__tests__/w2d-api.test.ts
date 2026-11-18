@@ -811,6 +811,8 @@ describe("W2d T13 the documented standings row and the retired code", () => {
       entrantId: "e1", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: { won_ot: 1 },
       tieBreak: { key: "fewest_played", with: ["e2"], note: "h2h_incomplete", drawnAt: "2026-10-27T10:00:00.000000+00:00" },
       level: true,
+      // W5 T22: the row's own three fields (name, status, pool) are declared, so a fixture row carries them
+      name: "Ann", status: "active", pool: null,
     };
     expect(S.StandingsRow.parse(row)).toEqual(row);
     expect(S.StandingsRow.parse({ ...row, tieBreak: { key: "lots", with: [], note: "h2h_two_not_applicable" } }).tieBreak?.note).toBe("h2h_two_not_applicable");
@@ -938,7 +940,7 @@ describe("D11b serialiseLevelRanks (W2e Task 27)", () => {
   });
 
   it("D11b the documented row takes rank null, a number or none, and nothing else, in the schema and in both generated JSONs", () => {
-    const row = { entrantId: "a", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, level: true };
+    const row = { entrantId: "a", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, level: true, name: "Ann", status: "active", pool: null };
     expect(S.StandingsRow.safeParse({ ...row, rank: null }).success, "null").toBe(true);
     expect(S.StandingsRow.safeParse({ ...row, rank: 3 }).success, "a place").toBe(true);
     expect(S.StandingsRow.safeParse(row).success, "none").toBe(true);

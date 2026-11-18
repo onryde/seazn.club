@@ -86,6 +86,11 @@ import { detectTemplate } from "../../../apps/web/src/lib/format-templates.ts";
  * round recap the last result drafts has one headed standings block per pool, A then B. (Main: a pooled stage's table was read as
  * `pool_id is null`, found nothing and the digest and the recap carried no standings at all.)
  *
+ * Task 22 (X-SF-6 <- RB5-T13; ST-G23, ST-G28): in Task 20's public league the PUBLIC standings payload (read anonymously) names every row, says
+ * who left (`status`), and a started level table serves `rank: null` with `pool: null`; in Task 21's two-pool group the private standings
+ * WITHOUT pool_id return both pools' rows, each tagged with its pool key, and `GET /stages/{id}/pools` lists A and B with the ids the
+ * fixtures carry. (Main: the pool-less call answered `rows: []`, there was no pools route, and a departed entrant's row was an unnamed id.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -110,7 +115,9 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 14b: 1 (a finished two-pool Groups only division's public hub document names each pool's winner and crowns no one).
   // Task 20: 1 (the public hub's table marks a withdrawn and a disqualified row, and Reinstate takes the first away).
   // Task 21: 1 (a pooled stage's weekly digest and round recap list every pool, in pool order, each with its own players).
-  const EXPECTED_CHECKS = 25;
+  // Task 22: 2 (the public standings payload names every row and its status - a level table's null rank included; a pooled stage's
+  //   private standings without pool_id return every pool and /pools lists A and B).
+  const EXPECTED_CHECKS = 27;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -1111,6 +1118,24 @@ export async function w5RoundRobinASuite(): Promise<void> {
         (ok ? "" : ` - div ${dRes.status}, start ${started.status}, calm ${JSON.stringify(calm)}, withdraw ${out.status} ${JSON.stringify(afterW.by)}, dq ${dq.status} ${JSON.stringify(afterDq.by)}, back ${back.status} ${JSON.stringify(afterBack.by)}`),
       ok,
     );
+
+    // Task 22 (X-SF-6, ST-G23): the public standings payload names every row and says who left; a level table's rank is null.
+    {
+      const pub = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${c3?.slug}/divisions/${v1data<{ slug: string } | undefined>(dRes)?.slug ?? "no-division"}/standings`);
+      type PubRow = { entrantId: string; name?: string | null; status?: string; pool?: string | null; rank?: number | null };
+      const rows = (v1data<{ standings?: { rows: PubRow[] }[] } | undefined>(pub)?.standings ?? []).flatMap((t) => t.rows);
+      const by = Object.fromEntries(rows.map((r) => [r.entrantId, r]));
+      const named = es.every((e, i) => by[e.id]?.name === `Chip${i + 1} ${tag}`);
+      const ok22 =
+        pub.status === 200 && rows.length === 4 && named &&
+        by[p1!]?.status === "active" && by[p2!]?.status === "disqualified" && by[p3!]?.status === "active" && by[p4!]?.status === "active" &&
+        rows.every((r) => r.pool === null && r.rank === null);
+      w5Check(
+        "w5a X-SF-6: the public standings payload names every row, marks the disqualified one, and serves a level table's rank as null with no pool" +
+          (ok22 ? "" : ` - http ${pub.status}, rows ${JSON.stringify(rows).slice(0, 400)}`),
+        ok22,
+      );
+    }
   }
 
   // Task 21 (X-SF-2, ST-G6): the weekly digest and the round recap list every pool of a pooled stage, in pool order.
@@ -1168,6 +1193,27 @@ export async function w5RoundRobinASuite(): Promise<void> {
         (ok ? "" : ` - div ${dRes.status}, toggle ${toggle.status}, entrants ${es.length}, start ${started.status}, lines ${lines.length}, pools ${poolIds.length}, digest ${digest.status} A@${a} B@${b} ${JSON.stringify(body).slice(0, 300)}, recap heads ${JSON.stringify(heads)}`),
       ok,
     );
+
+    // Task 22 (X-SF-6, ST-G28): the private standings WITHOUT pool_id return every pool; /pools lists A and B.
+    {
+      const all = await v1(fourth, `/api/v1/stages/${stageId}/standings`);
+      type Row22 = { entrantId: string; name?: string | null; status?: string; pool?: string | null };
+      const rows = v1data<{ pool_id: string | null; rows: Row22[] } | undefined>(all)?.rows ?? [];
+      const pools = await v1(fourth, `/api/v1/stages/${stageId}/pools`);
+      const listed = v1data<{ pools?: { id: string; key: string; name: string }[] } | undefined>(pools)?.pools ?? [];
+      const byPool = (key: string) => rows.filter((r) => r.pool === key).map((r) => r.entrantId).sort();
+      const seated = (poolId: string) => [...new Set(lines.filter((f) => f.pool_id === poolId).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => !!x))].sort();
+      const ok19 =
+        all.status === 200 && rows.length === 4 && pools.status === 200 &&
+        listed.map((p) => p.key).join(",") === "A,B" && listed.every((p) => poolIds.includes(p.id)) &&
+        listed.every((p) => JSON.stringify(byPool(p.key)) === JSON.stringify(seated(p.id))) &&
+        rows.every((r) => typeof r.name === "string" && r.status === "active");
+      w5Check(
+        "w5a X-SF-6: the private standings without pool_id return both pools' rows tagged A and B, and /pools lists A and B with the fixtures' pool ids" +
+          (ok19 ? "" : ` - standings ${all.status} ${JSON.stringify(rows).slice(0, 300)}, pools ${pools.status} ${JSON.stringify(listed)}`),
+        ok19,
+      );
+    }
   }
 
   check(`w5a: the W5 round-robin app-A suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);

@@ -17,6 +17,7 @@ import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../lib/knockout-re
 // Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS } from "../../../lib/format-bounds.ts";
+import { DEPARTED_STATUS_KEYS } from "../../../lib/departed-status-keys.ts";
 // W2c Task 13b finish-up (R-13b-1) — the deciders a stage config refuses at its top level, the engine's own set (shared
 // with the create door). RELATIVE with `.ts`; the module's only imports are the bare engine packages, which load under
 // strip-types as the engine imports above do.
@@ -638,10 +639,23 @@ export const StandingsRow = z.object({
     .object({ key: TieBreakKeyS, with: z.array(z.string()), note: TieBreakNoteS.optional(), drawnAt: z.string().optional() })
     .optional(),
   level: z.boolean().optional(),
+  /** W5 T22 (ST-G28): the entrant's name, so a row stands on its own — the public entrants list drops a withdrawn or disqualified
+   *  entrant, which left its row an unresolvable id. On the public door it is the division's masked name (youth / consent), never a
+   *  raw column. Null only for a row whose entrant is no longer in the division (a delete racing the read). */
+  name: z.string().nullable().meta({ examples: ["Riverside"] }),
+  /** W5 T22: `active`, or how the entrant left (`withdrawn`, `disqualified` — the one departed vocabulary,
+   *  `lib/departed-status-keys.ts`). A departed entrant's row stays while the table counts her results. */
+  status: z.enum(["active", ...DEPARTED_STATUS_KEYS]),
+  /** W5 T22 (ST-G28): the key (`A`, `B`, …) of the pool this row's `rank` is within — what `GET /stages/{id}/pools` lists as `key`.
+   *  Null on a table that names no pool: a league, a Swiss stage, a knockout, and a group of ONE pool (it reads as a league). */
+  pool: z.string().nullable().meta({ examples: ["A"] }),
 });
 
 /** GET /stages/{id}/standings — one pool's (or the stage's) table as last folded. `computed_through_seq` is the stored
- *  snapshot's bigint watermark, served as the DB prints it (a decimal string), and 0 for a table folded on the read. */
+ *  snapshot's bigint watermark, served as the DB prints it (a decimal string), and 0 for a table folded on the read.
+ *  W5 T22 (ST-G28): asked for no `pool_id`, a stage with SEVERAL pools answers EVERY pool — `pool_id` null, `rows` the pools' rows in
+ *  pool order, each row's `pool` the key it is ranked within; its watermark is the oldest of the pools' (the point every pool is
+ *  folded through) and `updated_at` the newest. */
 export const StandingsSnapshot = z.object({
   stage_id: Uuid,
   pool_id: Uuid.nullable(),
@@ -649,6 +663,12 @@ export const StandingsSnapshot = z.object({
   computed_through_seq: z.union([z.string().regex(/^\d+$/).meta({ examples: ["42"] }), z.literal(0)]),
   updated_at: z.string().nullable(),
 });
+
+/** GET /stages/{id}/pools — the pools of a stage with SEVERAL pools, in the product's pool order (the key). `id` is what
+ *  `GET /stages/{id}/standings?pool_id=` takes; `key` is what a standings row's `pool` carries. A stage whose table names no pool
+ *  (a league, a knockout, a group of one pool) lists none. */
+export const StagePool = z.object({ id: Uuid, key: z.string(), name: z.string() });
+export const StagePools = z.object({ stage_id: Uuid, pools: z.array(StagePool) });
 
 /** GET /public/…/divisions/{divisionSlug}/standings — every published table of the division. */
 export const PublicDivisionStandings = z.object({

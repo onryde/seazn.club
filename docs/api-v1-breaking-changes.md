@@ -53,6 +53,20 @@ name the per-round pairs minted from the individuals, which the cascade never ma
 
 A reinstatement flips the status back and does not restore the voided matches.
 
+## 2026-11-18 — `GET /stages/{id}/standings` without `pool_id` on a pooled stage answers every pool
+
+On a stage with SEVERAL pools, `GET /api/v1/stages/{id}/standings` with no `pool_id` used to answer `rows: []`
+(there was no single table to default to). It now answers every pool: `pool_id` is `null`, `rows` holds the pools'
+rows in pool order, and each row's `rank` is its place WITHIN its own pool, so a place repeats across pools. Read a
+row's pool from its new `pool` field (the pool's `key`, `A`, `B`, ...); `GET /api/v1/stages/{id}/pools` lists the
+pools with the ids `?pool_id=` takes. A league, a Swiss stage, a knockout and a group of one pool are unchanged (one
+table, `pool: null`). A consumer that read the empty answer as "no table yet" now receives rows to group by `pool`.
+
+Every standings row, on both standings routes, also carries `name`, `status` (`active`, `withdrawn` or
+`disqualified`) and `pool`. These are additive; they are listed here because they close the gap the entrants list
+left: a withdrawn or disqualified entrant's row is named on the row itself, though `GET .../entrants` does not list
+her. The pinning test is `apps/web/src/server/usecases/__tests__/standings-api-shape.test.ts`.
+
 ## 2026-11-17 — the withdrawal report's `skipped_finalized` is `skipped_cancelled`
 
 `POST /entrants/{id}/withdraw`, and `PATCH /entrants/{id}` to `disqualified` (its `cascade`), report
