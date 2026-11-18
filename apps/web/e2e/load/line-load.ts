@@ -430,3 +430,98 @@ export function gateLevels(lines: readonly string[]): { decisions: number; min: 
   }
   return { decisions, min };
 }
+
+// ──────────────────────────────────────────────────────────────────────────────────────────── presence webhooks (LOAD_WEBHOOKS)
+
+/** What the fixture recorded of the webhooks it emitted, reduced to what the end-of-run presence checks need. `webhooks` is the fixture's own
+ *  `video.webhooks` and `outcomes` its `video.webhookOutcomes` (read after `webhooksSettled()`); the shape is structural so this file need not
+ *  import the fixture. `pending` is what is left once delivered, failed and down are taken out: a webhook with no recorded outcome, or one
+ *  still "pending", is never counted delivered. `leftPeers` are the DISTINCT (meeting, peer) pairs of the participantLeft webhooks that were
+ *  DELIVERED (a failed leave owes no closed row); `meetingIds` every meeting a webhook named, delivered or not (the scope of the table reads). */
+export type WebhookDigest = {
+  emitted: number;
+  delivered: number;
+  failed: number;
+  down: number;
+  deliveredUuids: string[];
+  leftPeers: { meetingId: string; peerId: string }[];
+  meetingIds: string[];
+};
+
+export function webhookDigest(
+  webhooks: readonly { uuid: string; event: string; body: string }[],
+  outcomes: ReadonlyMap<string, string>,
+): WebhookDigest {
+  const deliveredUuids: string[] = [];
+  const leftPeers = new Map<string, { meetingId: string; peerId: string }>();
+  const meetingIds = new Set<string>();
+  let failed = 0;
+  let down = 0;
+  for (const w of webhooks) {
+    const parsed = JSON.parse(w.body) as { meeting?: { id?: unknown }; participant?: { peerId?: unknown } };
+    const meetingId = parsed.meeting?.id;
+    if (typeof meetingId === "string") meetingIds.add(meetingId);
+    const outcome = outcomes.get(w.uuid);
+    if (outcome === "failed") failed += 1;
+    else if (outcome === "down") down += 1;
+    if (outcome !== "delivered") continue;
+    deliveredUuids.push(w.uuid);
+    if (w.event !== "meeting.participantLeft") continue;
+    const peerId = parsed.participant?.peerId;
+    if (typeof meetingId !== "string" || typeof peerId !== "string") {
+      throw new Error(`webhookDigest: a delivered participantLeft (${w.uuid}) names no meeting or no peer`);
+    }
+    leftPeers.set(`${meetingId}|${peerId}`, { meetingId, peerId });
+  }
+  return {
+    emitted: webhooks.length,
+    delivered: deliveredUuids.length,
+    failed,
+    down,
+    deliveredUuids,
+    leftPeers: [...leftPeers.values()],
+    meetingIds: [...meetingIds],
+  };
+}
+
+/** The LOAD_WEBHOOKS knob: "1" on, "0" or unset (or empty, like every other knob here) off. Anything else ("true", "yes", "on") THROWS: a typo that
+ *  silently ran the baseline would report a green run that measured no presence at all. */
+export function parseWebhooksKnob(raw: string | undefined): boolean {
+  if (raw === undefined || raw === "" || raw === "0") return false;
+  if (raw === "1") return true;
+  throw new Error(`LOAD_WEBHOOKS=${raw} is not "0" or "1"`);
+}
+
+/** The end-of-run verdict of a `LOAD_WEBHOOKS=1` run, as failure messages (empty = green); without the knob nothing is asserted (the baseline
+ *  delivers none). `allEnded`: every meeting of the run has ended - only then is an open presence row a phantom, so `openRows` (rows still open
+ *  for the run's fixtures) is judged only when it is true; a run that did not end them (a non-STRICT scenario) says so by name instead of
+ *  reporting phantoms. `leftClosed`: how many of `digest.leftPeers` have their row closed with left_by='left'; `recorded`: how many of
+ *  `digest.deliveredUuids` are in realtimekit_webhook_deliveries; each of the three table counts is null when its read failed (the caller has
+ *  recorded that failure by name, and a count that was never read is never compared). `shadowVerified`: the shadow report's verified seats
+ *  (null = not read); zero means the coverage check looked at nothing. A check that looked at nothing (no delivery, no delivered leave) is a
+ *  failure, never a pass. */
+export function webhookVerdict(c: {
+  enabled: boolean;
+  digest: WebhookDigest;
+  allEnded: boolean;
+  openRows: number | null;
+  leftClosed: number | null;
+  recorded: number | null;
+  shadowVerified?: number | null;
+}): string[] {
+  if (!c.enabled) return [];
+  const d = c.digest;
+  const out: string[] = [];
+  if (d.delivered === 0) out.push(`LOAD_WEBHOOKS=1 delivered 0 of ${d.emitted} emitted webhooks: an inert run (the fixture's deliverer never reached the server)`);
+  if (d.failed > 0) out.push(`${d.failed} webhook(s) failed delivery`);
+  if (d.down > 0) out.push(`${d.down} webhook(s) were recorded down (emitted, never delivered)`);
+  const pending = d.emitted - d.delivered - d.failed - d.down;
+  if (pending !== 0) out.push(`${pending} webhook(s) never settled (neither delivered, failed nor down)`);
+  if (!c.allEnded) out.push("meetings not all ended: the open-presence-row check was skipped (an open row is a phantom only once its meeting has ended)");
+  else if (c.openRows !== null && c.openRows > 0) out.push(`${c.openRows} presence row(s) still open after every meeting ended (phantom peers)`);
+  if (d.leftPeers.length === 0) out.push("no participantLeft was delivered: the left_by check looked at nothing");
+  else if (c.leftClosed !== null && c.leftClosed !== d.leftPeers.length) out.push(`${c.leftClosed} of ${d.leftPeers.length} delivered participantLeft webhooks have their row closed with left_by='left'`);
+  if (c.recorded !== null && c.recorded !== d.deliveredUuids.length) out.push(`${c.recorded} of ${d.deliveredUuids.length} delivered webhooks are in realtimekit_webhook_deliveries`);
+  if (c.shadowVerified === 0) out.push("the shadow report verified 0 seats: its coverage check looked at nothing");
+  return out;
+}

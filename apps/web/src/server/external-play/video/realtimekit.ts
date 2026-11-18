@@ -101,11 +101,12 @@ function requireConfig(): Config {
   return cfg;
 }
 
-const CF_BASE = "https://api.cloudflare.com/client/v4";
+export const CF_BASE = "https://api.cloudflare.com/client/v4";
 
-/** The vendor base a request goes to: the caller's, else the environment's, else Cloudflare's own (no trailing slash). */
-function baseUrlOf(deps: RealtimeKitDeps): string {
-  return (deps.baseUrl ?? process.env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
+/** The vendor base a request goes to: the caller's, else the environment's, else Cloudflare's own (no trailing slash). A BLANK
+ *  `REALTIMEKIT_BASE_URL=` line (the empty string) is unset, never a relative base: `||`, not `??`. */
+export function baseUrlOf(deps: RealtimeKitDeps): string {
+  return (deps.baseUrl ?? (process.env.REALTIMEKIT_BASE_URL || CF_BASE)).replace(/\/$/, "");
 }
 
 /** The bucket this process's requests spend from (budget.ts): the vendor host and the account, which is what `cfEnvelope`

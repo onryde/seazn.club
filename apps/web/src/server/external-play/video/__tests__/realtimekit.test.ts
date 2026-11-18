@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "@/server/usecases/__tests__/_external-play-seed";
 import {
+  CF_BASE,
   RealtimeKitDeferred,
   RealtimeKitError,
   addParticipant,
+  baseUrlOf,
   currentBudgetKey,
   endMeeting,
   ensureMeeting,
@@ -2318,5 +2320,24 @@ describe("the call budget (D21): every vendor request spends a token first, and 
         }
       });
     });
+  });
+});
+
+// m1 (batch-2 review): a blank `REALTIMEKIT_BASE_URL=` line in an env file is the empty string. With `??` it was taken as the base,
+// so every vendor call (the webhook key fetch included) went to a relative URL and every delivery answered 503. Blank is unset.
+describe("baseUrlOf", () => {
+  it("a BLANK REALTIMEKIT_BASE_URL is unset (Cloudflare's base); unset is Cloudflare's; a set one wins, its trailing slash dropped; the caller's wins over all", () => {
+    const cases: Array<[string | undefined, { baseUrl?: string }, string]> = [
+      ["", {}, "https://api.cloudflare.com/client/v4"],
+      [undefined, {}, "https://api.cloudflare.com/client/v4"],
+      ["http://127.0.0.1:9/client/v4/", {}, "http://127.0.0.1:9/client/v4"],
+      ["", { baseUrl: "http://127.0.0.1:8/x" }, "http://127.0.0.1:8/x"],
+    ];
+    for (const [env, deps, want] of cases) {
+      vi.stubEnv("REALTIMEKIT_BASE_URL", env);
+      expect(baseUrlOf(deps), JSON.stringify([env, deps])).toBe(want);
+    }
+    expect(cases).toHaveLength(4);
+    expect(CF_BASE, "the expected base is Cloudflare's API v4 root").toBe("https://api.cloudflare.com/client/v4");
   });
 });

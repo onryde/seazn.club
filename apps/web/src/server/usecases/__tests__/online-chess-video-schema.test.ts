@@ -366,6 +366,127 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     });
   });
 
+  // V527 (check-in capacity design 2026-11-05 §6.2): webhook presence. Every write is rolled back. No foreign keys, on
+  // purpose: a webhook can name a meeting whose row a re-pair has deleted, and its row must still be kept.
+  describe("V527: fixture_video_presence, realtimekit_webhook_deliveries, realtimekit_ended_sessions", () => {
+    /** A meeting id no table holds: the no-foreign-key claim is exercised by every insert below. */
+    const orphanMeeting = () => `gone-${randomUUID().slice(0, 8)}`;
+    /** One presence row; `extra` overrides or adds columns. */
+    const presence = (extra: Record<string, string | null> = {}, meeting = orphanMeeting(), peer = "peer-1") => (tx: typeof sql) => {
+      const row: Record<string, string | null> = { meeting_id: meeting, peer_id: peer, custom_participant_id: "cp-1", source: "webhook", ...extra };
+      const cols = Object.keys(row);
+      return tx.unsafe(
+        `insert into fixture_video_presence (${cols.join(", ")}) values (${cols.map((_, i) => `$${i + 1}`).join(", ")})`,
+        cols.map((c) => row[c]!),
+      );
+    };
+
+    it("the positive pair: a presence row for a meeting nothing holds, with every nullable column null, is accepted; so are a delivery and a session end", async () => {
+      expect(await rolledBack(presence({ fixture_id: null, side: null, left_by: null })), "presence").toEqual({ accepted: true });
+      expect(await rolledBack((tx) => tx`insert into realtimekit_webhook_deliveries (rtk_uuid, event) values (${randomUUID()}, 'meeting.participantJoined')`), "delivery")
+        .toEqual({ accepted: true });
+      expect(await rolledBack((tx) => tx`insert into realtimekit_ended_sessions (meeting_id, session_id, ended_at) values (${orphanMeeting()}, 'sess-1', now())`), "session end")
+        .toEqual({ accepted: true });
+    });
+
+    it("side, left_by and source are closed sets: each listed value is accepted and an unlisted one refused (counted)", async () => {
+      // The sets, typed from the design (§6.2) and the plan's brief, never read from the catalogue.
+      const SETS = { side: ["home", "away"], left_by: ["left", "ended"], source: ["webhook", "read"] } as const;
+      // a left_by needs its left_at (the pair check below), so each left_by case carries one: the set check alone decides it
+      const withPair = (col: string, v: string) => (col === "left_by" ? { left_by: v, left_at: "2026-11-17T10:00:00.000Z" } : { [col]: v });
+      let checked = 0;
+      for (const [col, values] of Object.entries(SETS)) {
+        for (const v of values) {
+          expect(await rolledBack(presence(withPair(col, v))), `${col} = ${v}`).toEqual({ accepted: true });
+          checked += 1;
+        }
+        expect(await rolledBack(presence(withPair(col, "other"))), `${col} = other`).toMatchObject({ accepted: false, code: CHECK_VIOLATION, constraint: `fixture_video_presence_${col}_check` });
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: cases checked").toBe(9);
+    });
+
+    it("left_at and left_by are set TOGETHER: a stamp without its cause and a cause without its stamp are each refused, by name (batch-1 T2)", async () => {
+      // Every writer in presence.ts sets both or neither; this pins the table refusing a half-closed row. Positive pair: both
+      // null (open) and both set (closed) are accepted.
+      const AT = "2026-11-17T10:00:00.000Z";
+      const cases: [string, Record<string, string | null>, boolean][] = [
+        ["open: both null", { left_at: null, left_by: null }, true],
+        ["closed: both set", { left_at: AT, left_by: "left" }, true],
+        ["a stamp without its cause", { left_at: AT, left_by: null }, false],
+        ["a cause without its stamp", { left_at: null, left_by: "ended" }, false],
+      ];
+      let checked = 0;
+      for (const [why, cols, ok] of cases) {
+        const got = await rolledBack(presence(cols));
+        if (ok) expect(got, why).toEqual({ accepted: true });
+        else expect(got, why).toMatchObject({ accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_presence_left_pair_check" });
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: cases checked").toBe(4);
+    });
+
+    it("one presence row per (meeting, peer), one delivery per rtk-uuid, one end per (meeting, session); a second peer in the meeting is accepted", async () => {
+      const m = orphanMeeting();
+      expect(await rolledBack(async (tx) => { await presence({}, m, "p1")(tx); await presence({}, m, "p1")(tx); }), "same peer twice")
+        .toMatchObject({ accepted: false, code: "23505" });
+      expect(await rolledBack(async (tx) => { await presence({}, m, "p1")(tx); await presence({}, m, "p2")(tx); }), "the pair: a second peer")
+        .toEqual({ accepted: true });
+      const id = randomUUID();
+      expect(await rolledBack(async (tx) => {
+        await tx`insert into realtimekit_webhook_deliveries (rtk_uuid, event) values (${id}, 'meeting.participantJoined')`;
+        await tx`insert into realtimekit_webhook_deliveries (rtk_uuid, event) values (${id}, 'meeting.participantJoined')`;
+      }), "a redelivery").toMatchObject({ accepted: false, code: "23505" });
+      expect(await rolledBack(async (tx) => {
+        await tx`insert into realtimekit_ended_sessions (meeting_id, session_id, ended_at) values (${m}, 's1', now())`;
+        await tx`insert into realtimekit_ended_sessions (meeting_id, session_id, ended_at) values (${m}, 's1', now())`;
+      }), "a session ended twice").toMatchObject({ accepted: false, code: "23505" });
+    });
+
+    it("seq breaks a tie in (joined_at, received_at): three joins in one millisecond and one transaction still order by insert", async () => {
+      const m = orphanMeeting();
+      const at = "2026-11-17T10:00:00.000Z";
+      let got: { peer: string; seq: string; same: boolean }[] = [];
+      expect(await rolledBack(async (tx) => {
+        for (const peer of ["first", "second", "third"]) await presence({ joined_at: at }, m, peer)(tx);
+        got = await tx<{ peer: string; seq: string; same: boolean }[]>`
+          select peer_id as peer, seq::text as seq,
+                 (received_at = min(received_at) over () and joined_at = min(joined_at) over ()) as same
+            from fixture_video_presence where meeting_id = ${m} order by joined_at, received_at, seq`;
+      })).toEqual({ accepted: true });
+      expect(got.length, "rows read").toBe(3);
+      expect(got.every((r) => r.same), "premise: joined_at and received_at tie on all three").toBe(true);
+      expect(got.map((r) => r.peer), "the order is the insert order").toEqual(["first", "second", "third"]);
+      expect(new Set(got.map((r) => r.seq)).size, "seq is distinct").toBe(3);
+    });
+
+    it("the indexes are the ones the readers, the ended sweep and retention use, on the right columns, the open-row ones partial", async () => {
+      const idx = await sql<{ table: string; name: string; def: string }[]>`
+        select tablename as table, indexname as name, indexdef as def from pg_indexes
+         where schemaname = current_schema()
+           and tablename in ('fixture_video_presence', 'realtimekit_webhook_deliveries', 'realtimekit_ended_sessions')
+           and indexname not like '%_pkey'
+         order by indexname`;
+      // Typed from the brief's DDL (plan 1, Task 2), never read from the catalogue.
+      const EXPECTED: Record<string, { cols: string; partial: boolean }> = {
+        fixture_video_presence_custom_idx: { cols: "(meeting_id, custom_participant_id)", partial: false },
+        fixture_video_presence_fixture_idx: { cols: "(fixture_id, side)", partial: false },
+        fixture_video_presence_live_idx: { cols: "(meeting_id, participant_id)", partial: true },
+        fixture_video_presence_received_idx: { cols: "(received_at)", partial: false },
+        fixture_video_presence_session_idx: { cols: "(meeting_id, session_id)", partial: true },
+        realtimekit_ended_sessions_received_idx: { cols: "(received_at)", partial: false },
+        realtimekit_webhook_deliveries_received_idx: { cols: "(received_at)", partial: false },
+      };
+      expect(idx.map((i) => i.name), "indexes checked").toEqual(Object.keys(EXPECTED).sort());
+      for (const i of idx) {
+        const want = EXPECTED[i.name]!;
+        expect(i.def, i.name).toContain(want.cols);
+        if (want.partial) expect(i.def, i.name).toMatch(/WHERE \(?left_at IS NULL\)?$/);
+        else expect(i.def, i.name).not.toContain("WHERE");
+      }
+    });
+  });
+
   // V465 (spec 2026-10-09 §3.2.2): the arbiter's check-in extension. Every write is rolled back.
   describe("V465: the check-in extension - fixture_external_play.checkin_extra_ms / checkin_extensions, and the checkin_extend audit kind", () => {
     const COHERENCE = "fixture_external_play_checkin_extend_check";
@@ -876,12 +997,14 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
   // scripts/rls-exempt.ts. That name is a claim that no app_user connection can reach the table. These cases make the
   // claim the DATABASE's: a sealed table has no policy AND no grant, so an app_user query on it is refused (42501),
   // never silently empty.
-  describe("sealed tables (V451, V454, V457, V458, V460, V461): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
+  describe("sealed tables (V451, V454, V457, V458, V460, V461, V527): forced RLS, no policy, no app_user privilege; the org_id ones exempt by name", () => {
     /** Typed from the migrations' own words (V451: "Sealed like V410's tables … no app_user policy"; stage_round_opens
-     *  and V454's guard faults enable + force with no policy), never read from the catalogue. */
+     *  and V454's guard faults enable + force with no policy; V527's three presence tables, sealed like V460's
+     *  video_rooms_to_end, carry no org_id), never read from the catalogue. */
     const SEALED = [
       "fixture_play_flags", "fixture_seat_asks", "fixture_seat_line", "fixture_video_guard_faults", "fixture_video_meetings",
-      "fixture_video_participants", "online_chess_audit", "realtimekit_call_budget", "stage_round_opens", "video_rooms_to_end",
+      "fixture_video_participants", "fixture_video_presence", "online_chess_audit", "realtimekit_call_budget",
+      "realtimekit_ended_sessions", "realtimekit_webhook_deliveries", "stage_round_opens", "video_rooms_to_end",
     ];
     /** The five with an org_id column: the ones the RLS guard selects (CI red, 2026-10-13). fixture_seat_line has none, like
      *  fixture_seat_asks: it is keyed by a fixture and a person the room has already proved. */

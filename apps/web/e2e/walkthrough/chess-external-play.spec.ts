@@ -41,6 +41,7 @@
  */
 import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { Chess } from "chess.js";
+import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
@@ -86,6 +87,7 @@ import {
 } from "../arbiter-column-kit";
 import { LICHESS_FIXTURE_PORT, startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
 import {
+  httpWebhookDeliver,
   REALTIMEKIT_FIXTURE_PORT,
   startRealtimeKitFixtureServer,
   type RealtimeKitFixtureServer,
@@ -350,7 +352,11 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
 
   test.beforeAll(async () => {
     lichess = await startLichessFixtureServer();
-    video = await startRealtimeKitFixtureServer();
+    // Presence webhooks travel over REAL HTTP to the server under test (check-in capacity plan 1, Task 10): the fixture signs
+    // each one with its in-memory key and the receiver verifies it against the key the fixture serves.
+    video = await startRealtimeKitFixtureServer(REALTIMEKIT_FIXTURE_PORT, {
+      webhooks: httpWebhookDeliver(`${test.info().project.use.baseURL!}/api/webhooks/realtimekit`),
+    });
   });
   test.afterAll(async () => {
     for (const c of contexts) await c.close().catch(() => undefined);
@@ -615,7 +621,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   let gameA: string;
 
   test("board 1 seats only on the SERVER's word: camera required (2), lost (3), video down (4) — then both in, and the game made at Lichess", async ({ browser }) => {
-    test.setTimeout(budget(10));
+    // Ten scripted actions, plus the ONE wait on the join webhook's presence row (a poll of POLL_BUDGET_MS): derived, never a flat bump (class 20).
+    test.setTimeout(budgetFor(1, budget(10)));
     boardA = round.boards[0]!;
     // Colours are recorded at creation (T9), so the players are first and
     // second here, White and Black only once the game exists.
@@ -652,6 +659,27 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const reAsked = video.calls.slice(beforeRetry).map((c) => c.route);
     expect(reAsked, "Try again re-read the meeting's session").toContain("GET /meetings/:id/active-session");
     expect(reAsked, "and who is in it").toContain("GET /sessions/:id/participants");
+    // The join reached our server as a SIGNED webhook over HTTP: an open presence row for THIS participant, written by the
+    // webhook (`source = 'webhook'`: a seat's own read also writes a row, a hint, so a bare count would pass without one).
+    const openWebhookRows = () =>
+      withDb(async (sql) => {
+        const [r] = await sql<{ n: number }[]>`
+          select count(*)::int as n from fixture_video_presence
+           where participant_id = ${participantOf(first)} and left_at is null and source = 'webhook'`;
+        return r!.n;
+      });
+    try {
+      await expect.poll(openWebhookRows, { timeout: POLL_BUDGET_MS }).toBe(1);
+    } catch (e) {
+      // Bounded: webhooksSettled awaits every in-flight delivery and a hung one would eat the rest of the test's clock, hiding this message.
+      await Promise.race([video.webhooksSettled(), new Promise<void>((r) => setTimeout(r, 5_000))]);
+      const outcomes = [...video.webhookOutcomes.values()].join(",");
+      throw new Error(
+        `no open webhook presence row for the first player. The fixture's deliveries: [${outcomes}]; last error: ${String(video.lastWebhookError())}. ` +
+          `If none were delivered the server under test is not reachable at ${test.info().project.use.baseURL}/api/webhooks/realtimekit, or its REALTIMEKIT_BASE_URL is not the fixture's (docs/runbooks/e2e-local.md).\n${(e as Error).message}`,
+        { cause: e },
+      );
+    }
 
     // ── state 3: was live, is not — a reload re-asks ──────────────────────
     video.setLivePublisher(participantOf(first), false);
@@ -697,6 +725,41 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     for (const pg of [white, black]) {
       await expect(screen(pg)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
     }
+  });
+
+  test("a forged webhook is refused and writes nothing", async ({ request }) => {
+    test.setTimeout(budget(2));
+    // Our OWN key pair, never the fixture's: the signature is well-formed and verifies against nothing the server trusts.
+    const foreign = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // boardA is the serial group's shared state, set by the first test: running this one alone (--grep, a retry) must say so, not throw on `.home`.
+    expect(boardA, "board 1 comes from the first test of this serial group; this test cannot run on its own").toBeDefined();
+    const first = boardA.home;
+    const [held] = await withDb(
+      (sql) => sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${boardA.fixtureId} and side = 'home'`,
+    );
+    expect(held, "board 1's home player has a held meeting (the previous test seated them)").toBeDefined();
+    const uuid = randomUUID();
+    const body = JSON.stringify({
+      event: "meeting.participantJoined",
+      meeting: { id: held!.meeting_id, sessionId: `forged-${uuid}`, status: "LIVE" },
+      participant: { peerId: `forged-peer-${uuid}`, customParticipantId: first.personId, joinedAt: new Date().toISOString() },
+    });
+    const signature = sign("RSA-SHA256", Buffer.from(body), foreign.privateKey).toString("base64");
+    const res = await request.post("/api/webhooks/realtimekit", {
+      headers: { "content-type": "application/json", "rtk-signature": signature, "rtk-uuid": uuid },
+      data: body,
+    });
+    // Verification FAILED: the key fetched afresh from the fixture's origin (one forced refetch, a fixture base has no floor)
+    // is not the foreign key either. Not 400 (the body is fine), not 503 (a key WAS fetched for this request), not 200.
+    expect(res.status(), "a signature that verifies against no trusted key is refused").toBe(401);
+    // No fixture delivery still in flight, then THIS uuid's rows only (a global count could be moved by a fixture delivery).
+    await video.webhooksSettled();
+    const written = await withDb(async (sql) => {
+      const [d] = await sql<{ n: number }[]>`select count(*)::int as n from realtimekit_webhook_deliveries where rtk_uuid = ${uuid}`;
+      const [p] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_presence where peer_id = ${`forged-peer-${uuid}`}`;
+      return { deliveries: d!.n, presence: p!.n };
+    });
+    expect(written, "a refused delivery writes no delivery row and no presence row").toEqual({ deliveries: 0, presence: 0 });
   });
 
   test("six moves tapped on OUR board reach Lichess exactly as played, both boards agree, and the camera-off banner (9) stays up", async () => {

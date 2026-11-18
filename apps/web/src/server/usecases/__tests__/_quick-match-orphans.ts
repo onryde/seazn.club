@@ -14,6 +14,7 @@
 //
 // The system org is shared by every case, run and parallel file (A16): everything here keys on the one match's own ids, never on a
 // count of the org's rows.
+import { randomUUID } from "node:crypto";
 import { expect } from "vitest";
 import { sql } from "@/lib/db";
 
@@ -70,6 +71,8 @@ const KEYLESS: readonly { table: string; column: string; kinds: readonly IdKind[
   { table: "capture_records", column: "competition_id", kinds: ["competition"] },
   { table: "pass_mint_refusals", column: "competition_id", kinds: ["competition"] },
   { table: "video_rooms_to_end", column: "fixture_id", kinds: ["fixture"] },
+  // V527: a presence row carries a person's UUID and no foreign key; a trigger on `fixtures` purges it with its board.
+  { table: "fixture_video_presence", column: "fixture_id", kinds: ["fixture"] },
   { table: "org_addons", column: "target_competition_id", kinds: ["competition"] },
   { table: "ai_parse_previews", column: "division_ids", kinds: ["division"] },
   { table: "stream_provider_calls", column: "subject_id", kinds: ["competition", "fixture"] },
@@ -253,4 +256,22 @@ export async function expectAllPresent(probes: readonly OrphanProbe[], label: st
     if (n !== p.before) changed.push(`${p.table}.${p.column} = ${p.id}: ${p.before} before, ${n} now`);
   }
   expect(changed, `every row of the surviving match is still there (${label})`).toEqual([]);
+}
+
+/**
+ * Writes one webhook presence row (V527) for every fixture of the match, so the keyless probe on `fixture_video_presence.fixture_id`
+ * has something to find: the quick-match boards are not chess and hold no RealtimeKit meeting, so nothing else puts a presence row
+ * there. A row carries a person's UUID with no foreign key, so only V527's trigger on `fixtures` removes it. Returns how many rows
+ * it wrote; zero is a failure (the match must have a fixture).
+ */
+export async function seedPresenceForMatch(qm: QuickMatchIds): Promise<number> {
+  const fixtures = await sql<{ id: string }[]>`
+    select f.id from fixtures f join divisions d on d.id = f.division_id where d.competition_id = ${qm.competitionId}`;
+  expect(fixtures.length, "anti-vacuity: the match has a fixture to hang a presence row on").toBeGreaterThan(0);
+  for (const f of fixtures) {
+    await sql`
+      insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, custom_participant_id, source, joined_at)
+      values (${`orphan-check-${f.id}`}, 'peer', ${f.id}, 'home', ${randomUUID()}, 'webhook', now())`;
+  }
+  return fixtures.length;
 }
