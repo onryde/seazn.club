@@ -11,8 +11,6 @@ Open a division for registration and players can enter it themselves. You get a 
 
 Open your competition and choose **Registration**. The **Settings** tab lists every division with a status: **Open now**, **Scheduled** or **Closed**.
 
-![A division row on the Registration page](/help/registration/reg-link.webp "A division row on the Settings tab: its status, entrant type, approval and how many have registered")
-
 A division that is open or scheduled shows its sign-up link under the row, with three buttons:
 
 - **Copy** copies the link.
@@ -25,9 +23,11 @@ A competition set to **Private** has no sign-up link, and its register page does
 
 Choose **Open settings** on a division. The settings come in five sections. Press **Save changes** when you finish.
 
+![Part of a division's settings: Who approves entries, Allow solo sign-ups, Place-by date and the start of Open & close](/help/registration/division-settings.webp "A division's settings: Who approves entries?, Allow solo sign-ups, Place-by date and the start of Open & close")
+
 - **Eligibility**: **Category** (Open, Men's, Women's or Mixed), **Minimum age**, **Maximum age**, **Cutoff month** and **Cutoff day**, and a **Note for entrants** that appears on the sign-up form. The cutoff is the date a player's age is counted on; with none set it is 1 January. **Who approves entries?** is **Auto-confirms** or **Manual approval**.
 - **Open & close**: tick **Open for public registration**, choose the **Entrant type** (Individual, Team or Pair), and set **Opens** and **Closes** times if you want a window.
-- **Capacity**: the most entries the division takes. Leave it blank and only your plan's limit applies: {{plan:entrants.per_division.max:community}} entries on Community, {{plan:entrants.per_division.max:event_pass}} on an Event Pass, {{plan:entrants.per_division.max:pro}} on Pro, and no limit on Enterprise. When the division is full, new entries join the [waitlist](/help/registration/waitlist). The division row shows how many places are taken, for example "2 of 4 registered". The sign-up page shows players a count of places only when you set a capacity, or when three or fewer places are left.
+- **Capacity**: the most entries the division takes. Leave it blank and only your plan's limit applies. That limit is {{plan:entrants.per_division.max:community}} entries on Community, {{plan:entrants.per_division.max:event_pass}} on an Event Pass, {{plan:entrants.per_division.max:pro}} on Pro, and none on Enterprise, plus any [size pack](/help/billing/add-ons#size-packs-one-competition-bought-once) bought for the competition. When the division is full, new entries join the [waitlist](/help/registration/waitlist). The division row shows how many places are taken, for example "2 of 4 registered". The sign-up page shows players a count of places only when you set a capacity, or when three or fewer places are left.
 - **Money**: the **Entry fee** and how it is collected. See below.
 - **Sign-up form**: **+ Add question** adds your own questions, such as shirt size or dietary needs. A question can be text, a choice from a list or a tick box, and you can make it required. Players answer on the **Details** step.
 

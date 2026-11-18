@@ -13,7 +13,7 @@ You can add every team or entry you are signing up for in one go. That can be yo
 
 On **Entries**, each division is a card with its fee. Press **Add an entry** or, on a team division, **Add a team**. **Add another** on the cart starts a second entry in the same division, and **Remove** takes an entry out before you submit.
 
-![The Entries step with a team and a waiting-list entry in the cart](/help/registration/entries-cart.webp "The Entries step: each division is a card, and your cart is on the right")
+![The cart on the Entries step with a team entry and a waiting-list entry](/help/registration/entries-cart.webp "Your cart: a team entry, a waiting-list entry that is not charged, and the subtotal")
 
 A division that is full offers **Join waiting list**. Nothing is charged for a waiting-list entry until you are offered a place. See [the waitlist](/help/registration/waitlist). A team division may also offer **Sign up solo**. You enter without a team, and the organiser places you on one.
 

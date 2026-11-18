@@ -44,7 +44,7 @@ Taking card payments needs no upgrade. Every plan can do it, Community included.
 | Pro | {{plan:registration.fee_percent:pro}}% |
 | Enterprise | {{plan:registration.fee_percent:enterprise}}% |
 
-The **Connect** page says payouts land in your bank on Stripe's schedule, minus Stripe's processing fee and the platform fee for your plan. Stripe sets its own fee.
+The **Connect** page says payouts land in your bank on Stripe's schedule, minus Stripe's processing fee and the platform fee for your plan.
 
 The rate for a competition is the better of what your plan and an [Event Pass](/help/billing/event-pass) give it. It is fixed when the competition takes its first paid entry, and later entries pay that same rate even if your plan changes.
 
