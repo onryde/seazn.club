@@ -31,7 +31,7 @@ import {
 import { seatPlayer, type SeatResult } from "../external-play/preflight";
 import { CAMERA_EVIDENCE_AFTER_MS, sweepExternalPlay } from "../external-play/sweep";
 import { endMeeting } from "@/server/external-play/video/realtimekit";
-import { seedOnlineChessFixture } from "./_external-play-seed";
+import { NO_WINDOW, seedOnlineChessFixture } from "./_external-play-seed";
 
 const DB = !!process.env.DATABASE_URL;
 
@@ -153,6 +153,7 @@ describe.skipIf(!DB)("one board's whole life costs what the table says, for the 
       values (${s.fixtureId}, ${s.orgId}, now(), 'finished', ${`budget-${s.fixtureId.slice(0, 8)}`}, 'home', ${startedAt}, now())`;
 
     const sweepDeps = {
+      ...NO_WINDOW, // the board's round was opened by this test: the window deferral (R3) is not what this budget table measures
       orgIds: [s.orgId],
       serialise: false as const, // other files' passes hold the advisory lock; this pass is scoped to this board's org
       endMeeting: (id: string) => endMeeting(id),

@@ -114,6 +114,8 @@ import { openRound, roundOpenedAt } from "../open-round";
 import { bridgeTakesInvites } from "../invite";
 import { organiserOverrideVideo, seatPlayer, type PreflightDeps } from "../preflight";
 import { sweepExternalPlay } from "../sweep";
+import { premintExternalPlay } from "../premint";
+import { endRoomAtResult } from "../room-end";
 import { RealtimeKitDeferred, addParticipant, endMeeting, ensureMeeting, peerReportCamera, refreshParticipantToken } from "@/server/external-play/video/realtimekit";
 import { log } from "@/server/logger";
 import { createGameIfReady } from "../create-game";
@@ -139,6 +141,7 @@ import { ensureBridgeRow, loadOnlinePlayFixture } from "../guard";
 import { readRoom } from "../room";
 import { mintMatchRoomToken } from "../../match-room-token";
 import {
+  NO_WINDOW,
   seedOnlineChessRound,
   seedOnlineChessRoundWithRankedBoard,
   seedOnlineSwiss,
@@ -1583,7 +1586,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       peerReportCamera,
       refreshParticipantToken: (a) => refreshParticipantToken(a, { fetch }),
     };
-    return { http, video, end: (meetingId: string) => endMeeting(meetingId, { fetch }) };
+    return { http, video, deps: { fetch }, end: (meetingId: string) => endMeeting(meetingId, { fetch }) };
   }
 
   /** D21-fix-3 (F1): under a REQUIRED camera a player's FIRST claim makes the participant and reads nothing (it cannot have
@@ -1655,7 +1658,9 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
           later = new Date(t0.getTime() + DEADLINE_AFTER_MS + 2 * MIN);
           // `serialise: false`: an org-scoped pass that must not take the one-pass lock — another file's pass holding
           // it (external-play-sweep.test.ts, in a parallel run) would skip this one, and this one would skip theirs.
-          const report = await sweepExternalPlay({ now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false });
+          // `NO_WINDOW` (check-in capacity plan 2 Task 8, R3): this test opened its own round a moment ago, so the REAL window check
+          // would defer the deadline teardown it is proving; what is under test here is the re-pair, not the deferral.
+          const report = await sweepExternalPlay({ now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false, ...NO_WINDOW });
           expect(report.meetingsEnded, `${label}: premise — the sweep ended each of the unpaired board's two meetings`).toBe(2);
           expect((await meetingsOf(fixtureId)).map((m) => m.ended_at === null), `${label}: premise — both ended`).toEqual([false, false]);
         }
@@ -1690,6 +1695,85 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       }
     }
     expect(checked, "2 policies × 2 states of the old meeting").toBe(4);
+  });
+
+  it("pre-mint -> result -> undo -> FIRST open -> claim (batch-3 review I1): the first open deletes the ENDED rows of its boards, so the board can check in; an unended pre-minted room is kept and used - counted", async () => {
+    vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, rounds: 1, pairing: "fold", cameraPolicy: "optional" }); // round 1 paired, never opened (one round: no later round's shells to pre-mint)
+    const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+    const [decided, intact] = await swissRound1(s.stageId);
+    expect(decided && intact, "premise: two boards").toBeTruthy();
+    // The REAL pre-mint job makes both boards' rooms (2 each), stamped with their pairing.
+    const made = await premintExternalPlay({
+      orgIds: [s.orgId], serialise: false, wait: async () => {}, rtk: rtk.deps, offered: async () => true, windowsOpen: async () => false,
+    });
+    expect(made.roomsMade, "premise: 4 rooms made").toBe(4);
+    const roomsBefore = await meetingsOf(intact!.fixtureId);
+    expect(roomsBefore, "premise: the intact board's two rooms").toHaveLength(2);
+    // A result is entered on the first board and its rooms end at it (the real ender; the sweep's teardown does the same later) ...
+    await sql`update fixtures set status = 'finalized' where id = ${decided!.fixtureId}`;
+    await new Promise<void>((resolve) => endRoomAtResult(decided!.fixtureId, { defer: (task) => void task().then(() => resolve()), endMeeting: rtk.end }));
+    const ended = await meetingsOf(decided!.fixtureId);
+    expect(ended.map((m) => m.ended_at !== null), "premise: both of its rooms ended at the result").toEqual([true, true]);
+    // ... and is undone: the board is playable again, and an ended row is on file.
+    await sql`update fixtures set status = 'scheduled' where id = ${decided!.fixtureId}`;
+
+    const t0 = new Date();
+    const mark = rtk.http.length;
+    expect(await open(s, 1, t0), "the FIRST open").toMatchObject({ opened: true });
+    expect(await meetingsOf(decided!.fixtureId), "the ended rows went with the first open").toEqual([]);
+    expect((await meetingsOf(intact!.fixtureId)).map((m) => [m.meeting_id, m.ended_at]), "the unended pre-minted rooms are untouched, ended by nobody").toEqual(
+      roomsBefore.map((m) => [m.meeting_id, null]),
+    );
+    expect(rtk.http.slice(mark).filter((c) => c.startsWith("PATCH") || c.includes("kick-all")), "the first open ended no room").toEqual([]);
+
+    // The claims: the decided board makes its room afresh (no VIDEO_MEETING_ENDED); the intact board uses the pre-minted one.
+    const seatAt = new Date(t0.getTime() + MIN);
+    const creates = () => rtk.http.filter((c) => c === "POST /meetings").length;
+    const createdBefore = creates();
+    const a = await seatThrough({ fixtureId: decided!.fixtureId, personId: personOf.get(decided!.home)! }, { now: seatAt, video: rtk.video });
+    expect(a, "the undone board seats").toMatchObject({ seated: true, participant: { participantId: expect.any(String) } });
+    expect(creates() - createdBefore, "its room was made at the claim").toBe(1);
+    const b = await seatThrough({ fixtureId: intact!.fixtureId, personId: personOf.get(intact!.home)! }, { now: seatAt, video: rtk.video });
+    expect(b, "the intact board seats").toMatchObject({ seated: true });
+    expect(creates() - createdBefore, "the pre-minted room was used: no further create").toBe(1);
+  });
+
+  it("the FIRST open's empty case and its neighbours: a round with no room on file ends and deletes nothing (no vendor call); an ENDED row on one board goes while the next board's unended room - current pairing, and unadopted - stays, ended by nobody (counted)", async () => {
+    const rtk = fakeRtk();
+    const ended: string[] = [];
+    const end = async (id: string) => void ended.push(id);
+    // Empty: nothing was ever made for this round.
+    const empty = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    expect(await openRound({ stageId: empty.stageId, roundNo: 1, actorUserId: empty.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true });
+    let checked = 0;
+    for (const b of empty.boards) {
+      expect(await meetingsOf(b.fixtureId), "nothing on file").toEqual([]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both boards of the empty round").toBe(2);
+
+    // Mixed: board A holds an ENDED row (a decided board whose decision was undone), board B holds unended rooms.
+    const mixed = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+    const [a, b] = mixed.boards as [(typeof mixed.boards)[0], (typeof mixed.boards)[0]];
+    const tag = randomUUID().slice(0, 8);
+    const [endedOnA, currentOnB, unadoptedOnB] = [`ended-a-${tag}`, `current-b-${tag}`, `unadopted-b-${tag}`];
+    await insertRoomStamped(a.fixtureId, endedOnA, "home", { home: a.home.entrantId, away: a.away.entrantId }, new Date());
+    await insertRoomStamped(b.fixtureId, currentOnB, "home", { home: b.home.entrantId, away: b.away.entrantId });
+    await insertRoomStamped(b.fixtureId, unadoptedOnB, "away", null);
+    expect(await openRound({ stageId: mixed.stageId, roundNo: 1, actorUserId: mixed.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true });
+    expect(await meetingsOf(a.fixtureId), "the ended row went with the first open").toEqual([]);
+    expect((await meetingsOf(b.fixtureId)).map((m) => [m.meeting_id, m.ended_at]), "the unended rooms stay (by side: away, home)").toEqual([
+      [unadoptedOnB, null],
+      [currentOnB, null],
+    ]);
+    expect((await stampsOf(b.fixtureId)).map((r) => [r.side, r.home === null]), "and are not marked for retirement: the unadopted one is still unadopted").toEqual([
+      ["away", true],
+      ["home", false],
+    ]);
+    expect(ended, "the first open ended no room").toEqual([]);
+    expect(rtk.http, "no vendor call").toEqual([]);
   });
 
   it("m3: the re-open is the R3-1 trigger's second producer — a player who STAYED on a re-paired board reads no participant on file once the re-open retires the old pairing's meeting (so their open room re-claims, ownMeetingRetired), and that re-claim seats them in the NEW meeting under a new id; counted", async () => {

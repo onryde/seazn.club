@@ -13,6 +13,12 @@ import "server-only";
 //                             → a camera_lost flag (controller ruling C1);
 //   6. the arbiter removal    an organiser's watch of a board (T15) ends when
 //                             their role does, or after a TTL (fix round 1, I2).
+//                             Check-in capacity R5 splits it: the safeguarding
+//                             arms (the account is gone, the role is gone, the
+//                             user now plays on the board) are `arbiter_revocation`,
+//                             the FIRST job of the pass, uncapped and never
+//                             deferred; the TTL and ended-room arms stay
+//                             `arbiter_revoke`, under the pass's call cap.
 // The T-10 notice is NOT here: under D12 the organiser's open-round action
 // sends the invites and stamps the window (T19).
 //
@@ -37,7 +43,16 @@ import { type ReconcileOutcome } from "../reconcile";
 import { checkIns } from "../room";
 
 /** Every job a pass runs — the vocabulary of `failures[].job` (final re-review N-1: the suite sweeps it). */
-export const SWEEP_JOBS = ["close_unplayable", "no_show", "mint_retry", "teardown", "reconcile", "camera_evidence", "arbiter_revoke"] as const;
+export const SWEEP_JOBS = [
+  "arbiter_revocation",
+  "close_unplayable",
+  "no_show",
+  "mint_retry",
+  "teardown",
+  "reconcile",
+  "camera_evidence",
+  "arbiter_revoke",
+] as const;
 export type SweepJob = (typeof SWEEP_JOBS)[number];
 
 /** Final review I-1: written out LITERALLY. The cron Worker reads `data.failed` and `data.skipped` as its failure
@@ -71,9 +86,14 @@ export type SweepReport = {
    *  from more than one place at the same time in the match (T17B fix 2,
    *  D9) — evidence, never a block. */
   deviceFlags: number;
-  /** Arbiter watches ended this pass (job 6): removed at RealtimeKit and
+  /** Arbiter watches ended this pass (jobs `arbiter_revocation` and 6): removed at RealtimeKit and
    *  stamped, or stamped for a room already torn down. */
   arbitersRemoved: number;
+  /** 1: a check-in window was open when the pass asked (check-in capacity R3: any round of the scope opened up to
+   *  ROUND_WINDOW_TAIL_MS ago), so teardown deferred its rooms that are not stale-paired and the camera evidence was deferred
+   *  whole - counted in `deferred`, never a failure. 0: none open, or the deferral is switched off (EXTERNAL_PLAY_WINDOW_DEFER=0).
+   *  Informational: the cron Worker reads `failed` and `skipped` only. Declared a number, as they are. */
+  windowsOpen: number;
   /** Candidates examined across every job — a pass that looked at nothing
    *  says so (anti-vacuity), rather than reporting four zeros. */
   scanned: number;
@@ -122,6 +142,14 @@ export type SweepDeps = {
   /** TEST SEAM — Task 10b's retention prune (`prunePresence`, on the pass's clock). A test passes one that throws to prove a failing
    *  prune is logged, never fails the pass, and cannot starve the parked-rooms job after it, or one that records its call order. */
   prunePresence?: (now: Date) => Promise<{ deliveries: number; presence: number; endedSessions: number }>;
+  /** TEST SEAM - is a check-in window open (R3)? Asked ONCE per pass, after job 0 to job 2's work and before the teardown. Default:
+   *  `windowDeferralOn() && anyCheckinWindowOpen(sql, pass.now, deps.orgIds)` - the REAL scoped check, so a test that opens its own
+   *  round sees it. A case that is not about the deferral passes `async () => false`. Production passes none. */
+  windowsOpen?: () => Promise<boolean>;
+  /** TEST SEAM - the pass's vendor-call cap for the jobs it applies to (teardown, camera evidence, `arbiter_revoke`, the parked
+   *  rooms). Default SWEEP_RTK_CALLS_PER_PASS; a non-negative integer (`cappedBudget` refuses anything else by name). The
+   *  revocation job is never under it. Production passes none. */
+  rtkCallCap?: number;
 };
 
 /** Final review I-1: the pass stops STARTING network work (NETWORK_JOBS) once this much wall-clock time has gone. The
@@ -134,6 +162,14 @@ export type SweepDeps = {
  *  D11 widens it: a board whose side to move is at zero is read again on a stream HELD ~9 s (reconcile
  *  FLAG_SETTLE_HOLD_MS, bounded at LICHESS_TIMEOUT_MS + the hold). D20 bounds that: see the two constants below. */
 export const SWEEP_PASS_BUDGET_MS = 45_000;
+
+/** Check-in capacity plan 2 Task 8 (finding 15): the RealtimeKit requests one pass makes for the jobs the cap applies to - teardown,
+ *  the camera evidence, the TTL and ended-room arms of the arbiter removal, and the parked rooms (a stale-paired retire is the
+ *  teardown's). One request a second for the budget the cron Worker leaves the pass: the same arithmetic as the pre-mint job's
+ *  PREMINT_CALLS_PER_PASS, a CEILING that holds when nothing else stopped the pass. NOT counted: the revocation job (never capped,
+ *  R5), and the reconcile and mint-retry jobs, which create or finish a GAME and build their own adapters (a game held back by the
+ *  sweep's own cap is a player waiting). The platform's bucket meters every request regardless of this ceiling. */
+export const SWEEP_RTK_CALLS_PER_PASS = Math.floor(SWEEP_PASS_BUDGET_MS / 1000);
 
 /** D20 (review I1; spec docs/superpowers/specs/2026-10-15-chess-per-board-timers-design.md §6.1 (b)): the settling
  *  reads (reconcile's D11 held read, FLAG_SETTLE_HOLD_MS each) one pass makes. About five of them spent the whole pass
@@ -157,7 +193,14 @@ export const SWEEP_RECONCILE_BUDGET_MS = 20_000;
 /** I-1: the jobs that call Lichess or RealtimeKit, so the pass budget applies to them. Job 0 (close) and job 1 (the
  *  deadline no-show) touch only our own database, and the no-show is time-critical: a slow Lichess must never push a
  *  forfeit past its tick. */
-const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>(["reconcile", "mint_retry", "teardown", "camera_evidence", "arbiter_revoke"]);
+const NETWORK_JOBS: ReadonlySet<SweepJob> = new Set<SweepJob>([
+  "arbiter_revocation",
+  "reconcile",
+  "mint_retry",
+  "teardown",
+  "camera_evidence",
+  "arbiter_revoke",
+]);
 
 /** The window a board is playable in, anchored on the BOARD's batch of the round being opened (D12; spec §3.2.1). Every
  *  merged reader - T9's create, T8's seat and room, T19's invite and openRound - judges it as `roomPhase(now, anchor)`,
@@ -208,6 +251,9 @@ export type Pass = {
   spent: boolean;
   /** D20: the settling reads this pass has made (SWEEP_SETTLING_READS_PER_PASS). */
   settlingReads: number;
+  /** R3: a check-in window was open when the pass asked (read ONCE, before the teardown). The teardown defers a room that is not
+   *  stale-paired while it is true, and the camera evidence is deferred whole. */
+  windowsOpen: boolean;
   /** D16 review G1: the boards whose stale meetings this pass has already tried to retire. The retire takes EVERY stale row of
    *  a board, so the board's second candidate must not ask the vendor again, in the same pass, for a room it just failed to end. */
   retired: Set<string>;

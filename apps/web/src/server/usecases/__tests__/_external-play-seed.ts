@@ -542,6 +542,13 @@ export async function seedOnlineSwiss(opts: {
 // the sweep, the room or the arbiter then read. A meeting is (fixture, side); a participant lives on one.
 // ---------------------------------------------------------------------------
 
+/** Check-in capacity plan 2 Task 8 (owner ruling R3): while ANY board of the scoped orgs is inside a check-in window (a round opened
+ *  up to ROUND_WINDOW_TAIL_MS ago) the sweep defers its housekeeping - the teardown of rooms that are not stale-paired, and the camera
+ *  evidence - and the pre-mint job makes nothing. The bound is conservative, so a case that opens its OWN round and then sweeps inside
+ *  it meets the deferral. A case that is not about the deferral spreads this into the pass's deps and keeps every assertion; a case
+ *  that IS about it passes no `windowsOpen` and lets the REAL scoped check read the round it opened. Fits SweepDeps and PremintDeps. */
+export const NO_WINDOW = { windowsOpen: async (): Promise<boolean> => false };
+
 export type VideoSide = "home" | "away";
 
 /** A meeting row for one side of the board, made for the board's CURRENT pairing (the R2-2 stamp). Returns its vendor id. */

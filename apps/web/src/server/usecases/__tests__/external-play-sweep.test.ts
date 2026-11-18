@@ -46,7 +46,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
-import { RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
+import { RETIRED_PAIR, RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
@@ -57,6 +57,7 @@ import {
   DEADLINE_AFTER_MS,
   LINE_DEADLINE_GRACE_MS,
   MINT_CLAIM_STALE_MS,
+  ROUND_WINDOW_TAIL_MS,
   boardCap,
   roomPhase,
   windowFor,
@@ -87,6 +88,7 @@ import { createGameIfReady } from "../external-play/create-game";
 import { isPlayableFixtureStatus, seatPlayer } from "../external-play/preflight";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import { openRound } from "../external-play/open-round";
+import { premintExternalPlay } from "../external-play/premint";
 import { act } from "../external-play/play";
 import { FLAG_SETTLE_HOLD_MS, FLAG_UNASKED_HOLD_MS, FLAG_UNSETTLED_HOLD_MS, reconcile } from "../external-play/reconcile";
 import { ensureBridgeRow, loadOnlinePlayFixture } from "../external-play/guard";
@@ -101,6 +103,7 @@ import {
   SWEEP_NO_TRUTH_HOLD_AFTER,
   SWEEP_PASS_BUDGET_MS,
   SWEEP_RECONCILE_BUDGET_MS,
+  SWEEP_RTK_CALLS_PER_PASS,
   SWEEP_SETTLING_READS_PER_PASS,
   STRANDED_CREATE_AFTER_MS,
   NO_SHOW_REFUSALS_BEFORE_HOLD,
@@ -112,9 +115,11 @@ import {
   type SweepReport,
 } from "../external-play/sweep";
 import {
+  NO_WINDOW,
   seedOnlineChessFixture,
   seedOnlineChessRound,
   seedPlayer,
+  putVideoMeeting,
   putVideoParticipant,
   type SeedOnlineChessFixtureResult,
   type SeedOnlineChessRoundResult,
@@ -578,6 +583,7 @@ async function sweep(b: Board | readonly Board[], deps: SweepDeps): Promise<Swee
   const boards = Array.isArray(b) ? (b as readonly Board[]) : [b as Board];
   return checkedPass({ ...deps, orgIds: boards.map((x) => x.orgId) });
 }
+
 
 const forfeitsAttempted = (fixtureId: string) =>
   scoring.calls.filter((c) => c.fixtureId === fixtureId && c.input.type === "core.forfeit");
@@ -1312,13 +1318,13 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
     // The reviewer's probe P3: T9 itself cannot recover it past the cap (spec §5.7.8: both came, so until the cap it can).
     expect(await createGameIfReady(b.fixtureId, { now: b.at(CAP_MIN + 1), publish: async () => {} }), "premise: T9 refuses past the cap")
       .toEqual({ created: false, reason: "not_ready" });
-    const r = await sweep(b, { now: b.at(CAP_MIN + 5), endMeeting: (id) => endMeeting(id, RTK) });
+    const r = await sweep(b, { ...NO_WINDOW, now: b.at(CAP_MIN + 5), endMeeting: (id) => endMeeting(id, RTK) });
     expect(r.failures).toEqual([]);
     expect([r.heldForOrganiser, r.meetingsEnded, r.noShows]).toEqual([1, 1, 0]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
     expect(forfeitsAttempted(b.fixtureId)).toEqual([]);
     expect(await roomEnded(b.fixtureId)).toBe(true);
-    const again = await sweep(b, { now: b.at(45), endMeeting: (id) => endMeeting(id, RTK) });
+    const again = await sweep(b, { ...NO_WINDOW, now: b.at(45), endMeeting: (id) => endMeeting(id, RTK) });
     expect([again.heldForOrganiser, again.meetingsEnded, again.noShows, again.failures]).toEqual([0, 0, 0, []]);
   });
 
@@ -1351,14 +1357,14 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
     const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
     // Stands for T9's claim (taken before its marker), live at the deadline.
     await sql`update fixture_external_play set mint_claimed_at = ${new Date(deadline.getTime() - 1_000)} where fixture_id = ${b.fixtureId}`;
-    const at = await sweep(b, { now: deadline, endMeeting: (id) => endMeeting(id, RTK) });
+    const at = await sweep(b, { ...NO_WINDOW, now: deadline, endMeeting: (id) => endMeeting(id, RTK) });
     expect([at.heldForOrganiser, at.meetingsEnded, at.noShows], "in flight: nobody rules").toEqual([0, 0, 0]);
     expect(await roomEnded(b.fixtureId)).toBe(false);
     // The claim goes stale with nothing sent: both came, no game - the create is owed to the cap, so nobody rules before it (§5.7.8)...
-    const owed = await sweep(b, { now: new Date(deadline.getTime() + MINT_CLAIM_STALE_MS), endMeeting: (id) => endMeeting(id, RTK), createGameIfReady: async () => ({ created: false, reason: "not_ready" }) });
+    const owed = await sweep(b, { ...NO_WINDOW, now: new Date(deadline.getTime() + MINT_CLAIM_STALE_MS), endMeeting: (id) => endMeeting(id, RTK), createGameIfReady: async () => ({ created: false, reason: "not_ready" }) });
     expect([owed.heldForOrganiser, owed.meetingsEnded], "a stale claim, before the cap: still owed").toEqual([0, 0]);
     // ...and AT the cap: not_started (C2).
-    const stale = await sweep(b, { now: boardCap(boardAnchor(b.opened, 0, false)), endMeeting: (id) => endMeeting(id, RTK) });
+    const stale = await sweep(b, { ...NO_WINDOW, now: boardCap(boardAnchor(b.opened, 0, false)), endMeeting: (id) => endMeeting(id, RTK) });
     expect([stale.heldForOrganiser, stale.meetingsEnded]).toEqual([1, 1]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "not_started" });
   });
@@ -1370,15 +1376,15 @@ describe.runIf(HAS_DB)("I3 + M1 — a create that is, or may be, on file", () =>
     // Stands for T9 mid-call: its marker and its renewed claim, a second before the deadline.
     const sent = new Date(deadline.getTime() - 1_000);
     await sql`update fixture_external_play set create_sent_at = ${sent}, mint_claimed_at = ${sent} where fixture_id = ${b.fixtureId}`;
-    const live = await sweep(b, { now: new Date(deadline.getTime() + 10_000), endMeeting: (id) => endMeeting(id, RTK) });
+    const live = await sweep(b, { ...NO_WINDOW, now: new Date(deadline.getTime() + 10_000), endMeeting: (id) => endMeeting(id, RTK) });
     expect([live.heldForOrganiser, live.meetingsEnded, live.noShows]).toEqual([0, 0, 0]);
     // T9's own staleness: a claim is stale once OLDER than MINT_CLAIM_STALE_MS.
-    const edge = await sweep(b, { now: new Date(sent.getTime() + MINT_CLAIM_STALE_MS), endMeeting: (id) => endMeeting(id, RTK) });
+    const edge = await sweep(b, { ...NO_WINDOW, now: new Date(sent.getTime() + MINT_CLAIM_STALE_MS), endMeeting: (id) => endMeeting(id, RTK) });
     expect([edge.heldForOrganiser, edge.meetingsEnded], "exactly the stale age: still live").toEqual([0, 0]);
     // Stale, but both came and the cap is ahead: T9 can still recover the sent create, so it is not held yet (spec §5.7.8).
-    const owed = await sweep(b, { now: new Date(sent.getTime() + MINT_CLAIM_STALE_MS + 1), endMeeting: (id) => endMeeting(id, RTK), createGameIfReady: async () => ({ created: false, reason: "not_ready" }) });
+    const owed = await sweep(b, { ...NO_WINDOW, now: new Date(sent.getTime() + MINT_CLAIM_STALE_MS + 1), endMeeting: (id) => endMeeting(id, RTK), createGameIfReady: async () => ({ created: false, reason: "not_ready" }) });
     expect([owed.heldForOrganiser, owed.meetingsEnded, owed.noShows], "stale, before the cap: owed").toEqual([0, 0, 0]);
-    const stale = await sweep(b, { now: boardCap(boardAnchor(b.opened, 0, false)), endMeeting: (id) => endMeeting(id, RTK) });
+    const stale = await sweep(b, { ...NO_WINDOW, now: boardCap(boardAnchor(b.opened, 0, false)), endMeeting: (id) => endMeeting(id, RTK) });
     expect([stale.heldForOrganiser, stale.meetingsEnded, stale.noShows]).toEqual([1, 1, 0]);
     expect(await bridgeOf(b.fixtureId)).toEqual({ status: "needs_organiser", needs_reason: "create_outcome_unknown" });
   });
@@ -1982,9 +1988,9 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
     await meetingFor(b);
     const { ended, end } = recordingEnd();
     const { deadline } = playableWindow(boardAnchor(b.opened, 0, false));
-    await sweep(b, { now: new Date(deadline.getTime() - 1), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: new Date(deadline.getTime() - 1), endMeeting: end });
     expect(ended, "one millisecond before the deadline").toEqual([]);
-    await sweep(b, { now: deadline, endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: deadline, endMeeting: end });
     expect(ended.length, "at the deadline exactly the room has closed").toBe(1);
   });
 
@@ -2026,7 +2032,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
     const [r] = await sql<{ status: string }[]>`select status from fixture_external_play where fixture_id = ${b.fixtureId}`;
     expect(r!.status, "premise: T11 finished the game").toBe("finished");
     const { ended, end } = recordingEnd();
-    await sweep(b, { now: b.at(11), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: b.at(11), endMeeting: end });
     expect(ended).toEqual([m]);
   });
 
@@ -2046,7 +2052,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
       .toMatchObject({ result: { wrote: "none" }, finished: true });
     expect((await fixtureRow(b.fixtureId)).status, "premise: the fixture plays on").toBe("in_play");
     const { ended, end } = recordingEnd();
-    await sweep(b, { now: b.at(11), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: b.at(11), endMeeting: end });
     expect(ended).toEqual([m]);
   });
 
@@ -2055,7 +2061,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
     const m = await meetingFor(b);
     await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
     const { ended, end } = recordingEnd();
-    await sweep(b, { now: b.at(5), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: b.at(5), endMeeting: end });
     expect(ended).toEqual([m]);
   });
 
@@ -2069,7 +2075,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
     expect(away, "premise: a room each, not one shared room").not.toBe(home);
     await withdrawEntrantCascade(await mintOrgOwnerAuth(b.orgId), b.away.entrantId);
     const { ended, end } = recordingEnd();
-    const report = await sweep(b, { now: b.at(5), endMeeting: end });
+    const report = await sweep(b, { ...NO_WINDOW, now: b.at(5), endMeeting: end });
     expect([...ended].sort(), "both rooms, once each").toEqual([home, away].sort());
     expect(report.meetingsEnded).toBe(2);
     for (const m of [home, away]) {
@@ -2079,7 +2085,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
     const rows = await sql<{ side: string; ended_at: Date | null }[]>`
       select side, ended_at from fixture_video_meetings where fixture_id = ${b.fixtureId} order by side`;
     expect(rows.map((r) => [r.side, r.ended_at !== null]), "both rows stamped").toEqual([["away", true], ["home", true]]);
-    const again = await sweep(b, { now: b.at(6), endMeeting: end });
+    const again = await sweep(b, { ...NO_WINDOW, now: b.at(6), endMeeting: end });
     expect([again.meetingsEnded, ended.length], "idempotent: nothing is ended twice").toEqual([0, 2]);
   });
 
@@ -2203,7 +2209,7 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
       await reconcile(b.fixtureId, "game_end", { now: b.at(10) });
       await repairHome(b);
       const { ended, end } = recordingEnd();
-      const report = await sweep(b, { now: b.at(11), endMeeting: end });
+      const report = await sweep(b, { ...NO_WINDOW, now: b.at(11), endMeeting: end });
       expect([ended, report.meetingsEnded], "the finished game's room is ended once").toEqual([[m], 1]);
       expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at !== null]), "stamped, kept").toEqual([[m, true]]);
     });
@@ -2385,13 +2391,13 @@ describe.runIf(HAS_DB)("job 4 — reconcile the boards nobody is watching", () =
       ended.push(m);
       await endMeeting(m, RTK);
     };
-    const first = await sweep(b, { now: b.at(10), endMeeting: end });
+    const first = await sweep(b, { ...NO_WINDOW, now: b.at(10), endMeeting: end });
     expect(first.reconciled).toBe(1);
     expect((await bridge(b)).status).toBe("finished");
     expect(first.meetingsEnded, "job 3 runs after job 4").toBe(1);
     expect(ended).toEqual([meetingId]);
     const reads = readsOf(gameId);
-    const later = await sweep(b, { now: b.at(40), endMeeting: end });
+    const later = await sweep(b, { ...NO_WINDOW, now: b.at(40), endMeeting: end });
     expect(later.reconciled).toBe(0);
     expect(readsOf(gameId)).toBe(reads);
   });
@@ -2719,7 +2725,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
       skipped: 1, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
-      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, deviceFlags: 0, arbitersRemoved: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
+      cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, deviceFlags: 0, arbitersRemoved: 0, windowsOpen: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
     });
     release();
     const done = await first;
@@ -3001,7 +3007,7 @@ describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I
       // A settling read costs its hold on the pass's clock (~9 s); a first-line read, nothing.
       const sim = simClock();
       lichess.charge = (holdMs) => sim.advance(holdMs);
-      const r = await sweep([...(flagged?.boards ?? []), ...later.boards], { now: later.at, wallClock: sim.wallClock, ...later.deps });
+      const r = await sweep([...(flagged?.boards ?? []), ...later.boards], { now: later.at, wallClock: sim.wallClock, ...NO_WINDOW, ...later.deps });
       lichess.charge = null;
       const settled = Math.min(n, CAP);
       expect(later.ended, `N=${n}: the idle room came down`).toEqual([later.meetingId]);
@@ -3183,6 +3189,7 @@ describe.runIf(HAS_DB)("D20 — flag-due boards cannot starve the pass (review I
         sim.advance(C);
         return null;
       },
+      ...NO_WINDOW,
       ...later.deps,
     });
     expect([reads.length, r.reconciled, r.deferred], "reconcile stopped at its slice").toEqual([inSlice, inSlice, n - inSlice]);
@@ -3897,7 +3904,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       await settleByHand();
     }
     // On the real clock, so the room this pass ends is not yet 2 minutes old.
-    const torn = await sweep(b, { now: new Date(), endMeeting: (id) => endMeeting(id, RTK) });
+    const torn = await sweep(b, { now: new Date(), endMeeting: (id) => endMeeting(id, RTK), ...NO_WINDOW });
     expect(torn.meetingsEnded, `premise: ${ending} — the sweep tore BOTH players' rooms down`).toBe(ROOMS);
     const rooms = await sql<{ side: Side; meeting_id: string }[]>`
       select side, meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId} order by side`;
@@ -4008,7 +4015,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
   const rtkReads = () => rtk.calls.filter((c) => c.method === "GET" && c.path.startsWith("/sessions"));
   /** `ms` after the room ended — the sweep's clock. */
   const after = (m: Match, ms: number) => new Date(m.endedCeil + ms);
-  const pass = (m: Match, now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK });
+  const pass = (m: Match, now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK, ...NO_WINDOW });
 
   it("the rulebook's timing: at least 2 minutes after the room ends; a day to give up", () => {
     expect(CAMERA_EVIDENCE_AFTER_MS, "spec §5.2: at least 2 minutes").toBe(2 * 60_000);
@@ -4713,7 +4720,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       const holderPid = await held;
       const now = after(m, CAMERA_EVIDENCE_AFTER_MS);
       // The pass lock (M8) off, so the settle's own claim is proven alone.
-      const overlapping = () => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK, serialise: false });
+      const overlapping = () => sweep(m.b, { ...NO_WINDOW, now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK, serialise: false });
       const a = overlapping();
       const b = overlapping();
       // Both settles parked: the first behind the holder, the second behind
@@ -5225,7 +5232,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     await sql`update fixture_video_meetings set ended_at = null where fixture_id = ${m.b.fixtureId} and side = 'away'`;
     // The teardown job would end the due away room in this very pass (and rightly); a stand-in leaves it live to prove the
     // evidence job on its own.
-    const r = await sweep(m.b, { now: after(m, CAMERA_EVIDENCE_AFTER_MS), endMeeting: async () => {}, realtimeKit: RTK });
+    const r = await sweep(m.b, { ...NO_WINDOW, now: after(m, CAMERA_EVIDENCE_AFTER_MS), endMeeting: async () => {}, realtimeKit: RTK });
     expect([r.cameraSettled, r.failures.filter((f) => f.job === "camera_evidence")], "home's room settled, nothing failed").toEqual([1, []]);
     const rows = await sql<{ side: string; ended_at: Date | null; camera_evidence_at: Date | null }[]>`
       select side, ended_at, camera_evidence_at from fixture_video_meetings where fixture_id = ${m.b.fixtureId} order by side`;
@@ -5246,6 +5253,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
         orgIds: [m.b.orgId],
         endMeeting: (id) => endMeeting(id, RTK),
         realtimeKit: RTK,
+        ...NO_WINDOW,
         parkedRooms: async () => {
           throw broken;
         },
@@ -5285,7 +5293,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const m = await playedMatch();
     bothOnThroughout(m);
     const spent = { ...RTK, budget: async () => false };
-    const deferredPass = (now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: spent });
+    const deferredPass = (now: Date) => sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: spent, ...NO_WINDOW });
     const first = await deferredPass(after(m, CAMERA_EVIDENCE_AFTER_MS));
     // The budget is the account's: the first refused read ends the job and the rest are counted deferred (D21-fix) - both rooms.
     expect([first.failures, first.failed, first.deferred, first.cameraSettled]).toEqual([[], 0, ROOMS, 0]);
@@ -5321,6 +5329,86 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     rtk.calls = [];
     await pass(m, after(m, CAMERA_EVIDENCE_GIVE_UP_MS + SWEEP_CADENCE_MS));
     expect(rtkReads(), "settled: never read again").toEqual([]);
+  });
+
+  // Check-in capacity plan 2 Task 8 (owner rulings R3 and R6).
+  it("T8 R3: while a check-in window is open the WHOLE job is deferred - no request at the vendor, nothing settled, both rooms counted deferred; when it closes the same rooms are read and settled", async () => {
+    const m = await playedMatch(); // opened 19 minutes ago: inside the round's window, whose bound is ROUND_WINDOW_TAIL_MS
+    bothOnThroughout(m);
+    const now = after(m, CAMERA_EVIDENCE_AFTER_MS);
+    expect(now.getTime() - m.b.opened.getTime(), "premise: inside the bound").toBeLessThan(ROUND_WINDOW_TAIL_MS);
+    rtk.calls = [];
+    // No `windowsOpen` seam: the REAL scoped check reads the board's own open round.
+    const held = await sweep(m.b, { now, endMeeting: (id) => endMeeting(id, RTK), realtimeKit: RTK });
+    expect(held.windowsOpen, "the pass found the window").toBe(1);
+    expect(rtkReads(), "no request was made").toEqual([]);
+    expect([held.cameraSettled, held.deferred, held.failures]).toEqual([0, ROOMS, []]);
+    expect(await settledSides(m.b.fixtureId)).toEqual(NONE_SETTLED);
+    const open = await pass(m, now);
+    expect(open.windowsOpen).toBe(0);
+    expect([open.cameraSettled, open.deferred]).toEqual([ROOMS, 0]);
+    expect(rtkReads().length, "the reads were made once the window was not open").toBeGreaterThan(0);
+  });
+
+  it("T8: the job runs under the pass's capped budget - a cap of 0 refuses its first read, which is a deferral (counted, never a failure) - and the same pass with a cap that fits settles it", async () => {
+    const m = await playedMatch();
+    bothOnThroughout(m);
+    rtk.calls = [];
+    const none = await sweep(m.b, { now: after(m, CAMERA_EVIDENCE_AFTER_MS), realtimeKit: RTK, rtkCallCap: 0, ...NO_WINDOW });
+    expect([none.cameraSettled, none.deferred, none.failures], "refused: the whole job deferred").toEqual([0, ROOMS, []]);
+    expect(rtkReads(), "the refused request made no call").toEqual([]);
+    const fits = await sweep(m.b, { now: after(m, CAMERA_EVIDENCE_AFTER_MS), realtimeKit: RTK, rtkCallCap: SWEEP_RTK_CALLS_PER_PASS, ...NO_WINDOW });
+    expect([fits.cameraSettled, fits.deferred]).toEqual([ROOMS, 0]);
+  });
+
+  it("T8: the camera evidence shares the pass's ONE cap with the teardown before it - a cap that fits the evidence alone settles it, the same cap less the teardown's two calls does not (deferred, not failed)", async () => {
+    // N: what one fresh match's evidence costs the vendor, measured on its own pass (no other job has a vendor call to make).
+    const alone = await playedMatch();
+    bothOnThroughout(alone);
+    rtk.calls = [];
+    expect((await sweep(alone.b, { now: after(alone, CAMERA_EVIDENCE_AFTER_MS), realtimeKit: RTK, ...NO_WINDOW })).cameraSettled, "premise: the evidence settled").toBe(ROOMS);
+    const N = rtk.calls.length;
+    expect(N, "premise: the evidence costs calls").toBeGreaterThanOrEqual(ROOMS);
+
+    const TEARDOWN = 2; // a done room: kick-all, then the deactivate
+    const shared = async (cap: number) => {
+      const m = await playedMatch();
+      bothOnThroughout(m);
+      // A done room on another board (cancelled fixture) of another club: the teardown job spends its calls first.
+      const extra = await openedBoard({ checkedIn: [] });
+      await sql`update fixtures set status = 'cancelled' where id = ${extra.fixtureId}`;
+      const room = await putVideoMeeting({ fixtureId: extra.fixtureId, orgId: extra.orgId, side: "home" });
+      rtk.calls = [];
+      // No `endMeeting` dep: the pass's default end, which draws on the capped budget.
+      const r = await sweep([m.b, extra], { now: after(m, CAMERA_EVIDENCE_AFTER_MS), realtimeKit: RTK, rtkCallCap: cap, ...NO_WINDOW });
+      const ended = (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where meeting_id = ${room} and ended_at is not null`)[0]!.n;
+      return { r, ended };
+    };
+    const fits = await shared(TEARDOWN + N);
+    expect([fits.ended, fits.r.cameraSettled, fits.r.deferred, fits.r.failures], "cap = teardown + evidence: both done").toEqual([1, ROOMS, 0, []]);
+    const short = await shared(TEARDOWN + N - 1);
+    expect(short.ended, "the teardown ran first and was served").toBe(1);
+    expect(short.r.cameraSettled, "the evidence ran out of the SAME cap before it was done").toBeLessThan(ROOMS);
+    expect(short.r.deferred, "the rest is counted deferred").toBeGreaterThan(0);
+    expect(short.r.failures, "never a failure").toEqual([]);
+  });
+
+  it("T8 R6: the peers are still listed at the vendor - one GET /sessions/:id/participants per participant per session, as before - even when presence rows exist for every participant", async () => {
+    const m = await playedMatch();
+    const x = bothOnThroughout(m);
+    for (const side of ["home", "away"] as const) {
+      await sql`
+        insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, session_id, joined_at, source)
+        values (${m.meetings[side]}, ${`presence-peer-${side}`}, ${m.b.fixtureId}, ${side}, ${m.part[side]}, ${m.b[side].personId}, ${x[side].id}, now(), 'webhook')`;
+    }
+    rtk.calls = [];
+    const r = await pass(m, after(m, CAMERA_EVIDENCE_AFTER_MS));
+    expect([r.cameraSettled, r.failures]).toEqual([ROOMS, []]);
+    const listed = rtk.calls.filter((c) => c.method === "GET" && /^\/sessions\/[^/]+\/participants$/.test(c.path));
+    // One session per room (D16), one player participant per room: 2 rooms x 1 session x 1 participant.
+    expect(listed.map((c) => c.path).sort(), "the participants of each room's session, read at the vendor").toEqual(
+      ["home", "away"].map((side) => `/sessions/${x[side as Side].id}/participants`).sort(),
+    );
   });
 });
 
@@ -5383,12 +5471,12 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     await sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
     const pass = new Date(w.createdAt + 60_000);
     const spent = { ...RTK, budget: async () => false };
-    const r = await sweep(w.b, { now: pass, reconcile: async () => null, realtimeKit: spent });
+    const r = await sweep(w.b, { ...NO_WINDOW, now: pass, reconcile: async () => null, realtimeKit: spent });
     expect([r.failures, r.failed, r.arbitersRemoved]).toEqual([[], 0, 0]);
     expect(r.deferred).toBe(1);
     expect(removals(), "no request was made").toEqual([]);
     expect(await removedAt(w.participantId), "not stamped removed").toBeNull();
-    const next = await sweep(w.b, { now: new Date(pass.getTime() + 5 * 60_000), ...quiet });
+    const next = await sweep(w.b, { now: new Date(pass.getTime() + 5 * 60_000), ...NO_WINDOW, ...quiet });
     expect([next.arbitersRemoved, next.deferred, next.failures]).toEqual([1, 0, []]);
     expect(removals()).toHaveLength(2);
   });
@@ -5463,11 +5551,23 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     rtk.removeFails = 1;
     const failed = await sweep(w.b, { now: new Date(w.createdAt + 60_000), ...quiet });
     expect(failed.arbitersRemoved).toBe(0);
-    expect(failed.failures).toEqual([{ job: "arbiter_revoke", fixtureId: w.b.fixtureId, code: "unavailable" }]);
+    // T8 (owner ruling R5): the role, account and seat arms are the FIRST job's - `arbiter_revocation` - so the failure is named for it.
+    expect(failed.failures).toEqual([{ job: "arbiter_revocation", fixtureId: w.b.fixtureId, code: "unavailable" }]);
     expect(await removedAt(w.participantId)).toBeNull();
     const retried = await sweep(w.b, { now: new Date(w.createdAt + 6 * 60_000), ...quiet });
     expect([retried.arbitersRemoved, retried.failures]).toEqual([1, []]);
     expect(await removedAt(w.participantId)).not.toBeNull();
+  });
+
+  it("T8: the TTL arm's vendor failure is `arbiter_revoke`'s (the capped job that is left), reported by code, the watch stays OPEN, and the next pass removes it", async () => {
+    const w = await watched();
+    rtk.removeFails = 1;
+    const failed = await sweep(w.b, { now: new Date(w.createdAt + ARBITER_PARTICIPANT_TTL_MS), ...quiet });
+    expect(failed.arbitersRemoved).toBe(0);
+    expect(failed.failures).toEqual([{ job: "arbiter_revoke", fixtureId: w.b.fixtureId, code: "unavailable" }]);
+    expect(await removedAt(w.participantId)).toBeNull();
+    const retried = await sweep(w.b, { now: new Date(w.createdAt + ARBITER_PARTICIPANT_TTL_MS + 60_000), ...quiet });
+    expect([retried.arbitersRemoved, retried.failures]).toEqual([1, []]);
   });
 
   it("a watch whose room already ended (no stamp on file) is stamped with no vendor call — INACTIVE keeps every token out", async () => {
@@ -5479,25 +5579,38 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     expect(await removedAt(w.participantId)).not.toBeNull();
   });
 
-  it("SEQUENCE: a teardown in the same pass ends the watch with the room — the job then has nothing to remove", async () => {
-    // No game on file: past the deadline the room comes down (job 3) before job 6 runs.
-    const b = await openedBoard({ checkedIn: ["home"], cameraPolicy: "optional" });
-    const [u] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, email_verified, locale)
-      values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
-    await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
-    await ensureMeeting(b.fixtureId, "home", RTK); // the player's room, which the first arrival opened (an arbiter never makes one)
-    const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, "home", { video: VIDEO });
-    await sql`update org_members set role = 'viewer' where org_id = ${b.orgId} and user_id = ${u!.id}`;
+  it("SEQUENCE: a teardown in the same pass ends the watch with the room - a TTL-expired watch has nothing left to remove after it; a role-removed one was REVOKED first (R5), the accepted price: one removal on a room the teardown ends next", async () => {
+    // No game on file: past the deadline the room comes down (job 3). Two boards, one watch each, both still admins but for the one demoted.
+    const pair: { b: Board; participantId: string; meetingId: string }[] = [];
+    for (const demoted of [false, true]) {
+      const b = await openedBoard({ checkedIn: ["home"], cameraPolicy: "optional" });
+      const [u] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified, locale)
+        values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
+      const { meetingId } = await ensureMeeting(b.fixtureId, "home", RTK); // the player's room, which the first arrival opened (an arbiter never makes one)
+      const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, "home", { video: VIDEO });
+      if (demoted) await sql`update org_members set role = 'viewer' where org_id = ${b.orgId} and user_id = ${u!.id}`;
+      pair.push({ b, participantId: out.participantId, meetingId });
+    }
+    const [kept, revoked] = pair as [(typeof pair)[number], (typeof pair)[number]];
+    // The kept watch is a TTL one: old enough to be ended on its own, so the ORDER is what spares the vendor call.
+    await sql`update fixture_video_participants set created_at = now() - (${ARBITER_PARTICIPANT_TTL_MS + 60_000}::float8 * interval '1 millisecond')
+               where participant_id = ${kept.participantId}`;
     rtk.calls = [];
-    const r = await sweep(b, { now: b.at(45), endMeeting: (m) => endMeeting(m, RTK), ...quiet });
-    expect(r.meetingsEnded, "premise: the room came down in this pass").toBe(1);
-    expect([r.arbitersRemoved, removals()]).toEqual([0, []]);
-    const [row] = await sql<{ removed_at: Date | null; ended_at: Date | null }[]>`
-      select vp.removed_at, m.ended_at from fixture_video_participants vp
-        join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
-       where vp.participant_id = ${out.participantId}`;
-    expect(row!.removed_at?.getTime(), "the watch ended with the room").toBe(row!.ended_at?.getTime());
+    const r = await sweep([kept.b, revoked.b], { now: kept.b.at(45), endMeeting: (m) => endMeeting(m, RTK), ...NO_WINDOW, ...quiet });
+    expect(r.meetingsEnded, "premise: both rooms came down in this pass").toBe(2);
+    expect(removals().filter((c) => c.path.includes(kept.meetingId)), "the teardown ended the TTL watch's room first: nothing to remove").toEqual([]);
+    expect(removals().filter((c) => c.path.includes(revoked.meetingId)).map((c) => c.method), "the demoted watch was revoked FIRST (kick, DELETE)").toEqual(["POST", "DELETE"]);
+    expect(r.arbitersRemoved, "only the revocation counts: the TTL watch ended with its room").toBe(1);
+    for (const w of [kept, revoked]) {
+      const [row] = await sql<{ removed_at: Date | null; ended_at: Date | null }[]>`
+        select vp.removed_at, m.ended_at from fixture_video_participants vp
+          join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
+         where vp.participant_id = ${w.participantId}`;
+      expect(row!.removed_at, "every watch is stamped").not.toBeNull();
+      expect(row!.ended_at, "and its room ended").not.toBeNull();
+    }
   });
 });
 
@@ -5924,6 +6037,290 @@ describe.runIf(HAS_DB)("Task 10b - the pass prunes the webhook deliveries and pr
   });
 });
 
+// ---------------------------------------------------------------------------
+// Check-in capacity plan 2 Task 8 (owner rulings R3 and R5; spec §6.7): the open-window deferral, the shared per-pass call cap and the
+// arbiter revocation that runs first. Single-sport reason: online play exists only for `boardgame` (guard.ts), so there is no sport
+// axis to sweep. Every count below is per-uuid (this file's orgs are its own), and every sweep is scoped to them (`orgIds`).
+// ---------------------------------------------------------------------------
+describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and the arbiter revocation (R3, R5)", () => {
+  const SIDES = ["home", "away"] as const;
+  const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit"> = { reconcile: async () => null, realtimeKit: RTK };
+  const sweepOrgs = (orgIds: readonly string[], deps: SweepDeps) => checkedPass({ ...deps, orgIds });
+  const VIDEO: ArbiterVideo = {
+    addParticipant: (a) => addParticipant(a, RTK),
+    removeParticipant: (a) => removeParticipant(a, RTK),
+  };
+
+  /** A round's open stamp, written directly (the product stamps exactly these columns): `openedAt`, unstaggered. */
+  const stampOpen = (r: { stageId: string; orgId: string; roundNo: number; ownerUserId: string }, openedAt: Date) =>
+    sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+        values (${r.stageId}, ${r.orgId}, ${r.roundNo}, ${openedAt}, ${r.ownerUserId}, false)`;
+
+  /** `boards` paired boards of a round opened long before any window, every fixture CANCELLED, with both players' rooms on file: 2 x
+   *  boards rooms, each DONE for job 3 ("no longer playable"), none stale-paired, none a game's, none on a board the pre-mint
+   *  job could still want (the round is opened). */
+  async function doneRooms(boards: number) {
+    const r = await seedOnlineChessRound({ fixtures: boards, cameraPolicy: "optional" });
+    await sql`update fixtures set status = 'cancelled' where id in ${sql(r.boards.map((x) => x.fixtureId))}`;
+    await stampOpen(r, new Date(Date.now() - 2 * ROUND_WINDOW_TAIL_MS));
+    const rooms: string[] = [];
+    for (const f of r.boards) for (const side of SIDES) rooms.push(await putVideoMeeting({ fixtureId: f.fixtureId, orgId: r.orgId, side }));
+    return { r, rooms };
+  }
+  /** Calls the fake vendor took on any of these meetings. */
+  const callsOn = (meetingIds: readonly string[]) => rtk.calls.filter((c) => meetingIds.some((id) => c.path.includes(`/meetings/${id}`)));
+  const unended = async (meetingIds: readonly string[]) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where meeting_id in ${sql(meetingIds as string[])} and ended_at is null`)[0]!.n;
+  const rowsOf = async (meetingIds: readonly string[]) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where meeting_id in ${sql(meetingIds as string[])}`)[0]!.n;
+  const parkedOf = async (meetingIds: readonly string[]) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from video_rooms_to_end where meeting_id in ${sql(meetingIds as string[])}`)[0]!.n;
+
+  /** A live game (so its room stays up) watched by a second admin of the club through the REAL join (job 6's `watched`). */
+  async function watch(): Promise<{ b: Board; userId: string; participantId: string; meetingId: string }> {
+    const b = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
+    await liveGame(b);
+    await ensureMeeting(b.fixtureId, "home", RTK);
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
+    const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, "home", { video: VIDEO });
+    const [row] = await sql<{ meeting_id: string }[]>`
+      select m.meeting_id from fixture_video_participants vp
+        join fixture_video_meetings m on m.fixture_id = vp.fixture_id and m.side = vp.side
+       where vp.participant_id = ${out.participantId}`;
+    return { b, userId: u!.id, participantId: out.participantId, meetingId: row!.meeting_id };
+  }
+  const removedAt = async (participantId: string) =>
+    (await sql<{ removed_at: Date | null }[]>`select removed_at from fixture_video_participants where participant_id = ${participantId}`)[0]!.removed_at;
+  const kicks = () => rtk.calls.filter((c) => c.path.endsWith("/active-session/kick"));
+  const deletes = () => rtk.calls.filter((c) => c.method === "DELETE");
+  const demote = (w: { b: Board; userId: string }) =>
+    sql`update org_members set role = 'viewer' where org_id = ${w.b.orgId} and user_id = ${w.userId}`;
+
+  it("the cap's own constant is the pass budget in whole seconds (45): one request a second for the budget the cron Worker leaves", () => {
+    expect(SWEEP_RTK_CALLS_PER_PASS).toBe(Math.floor(SWEEP_PASS_BUDGET_MS / 1000));
+    expect(SWEEP_RTK_CALLS_PER_PASS).toBeGreaterThan(0);
+  });
+
+  it("the empty case first: an org that opened no round has no window - the pass reports windowsOpen 0 and defers nothing; the positive pair is the next test", async () => {
+    const quietOrg = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "optional" });
+    const r = await sweepOrgs([quietOrg.orgId], { now: new Date(), ...quiet });
+    expect([r.windowsOpen, r.deferred, r.failures]).toEqual([0, 0, []]);
+  });
+
+  it("a window open (the REAL scoped check: an own round opened a minute ago): 50 done rooms are deferred, the stale-paired rooms and the parked room are still ended; EXTERNAL_PLAY_WINDOW_DEFER=0 lifts it", async () => {
+    const win = await openedBoard({ checkedIn: [] }); // the window
+    const { r, rooms } = await doneRooms(25);
+    expect(rooms, "premise: 50 rooms").toHaveLength(50);
+    // Two stale-paired rooms (an earlier pairing's: RETIRED_PAIR is the open's own mark) on a board that has a pairing now.
+    const stale = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "optional" });
+    const staleRooms: string[] = [];
+    for (const side of SIDES) {
+      const id = `mtg-stale-${side}-${randomUUID().slice(0, 8)}`;
+      await sql`insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+                values (${stale.boards[0]!.fixtureId}, ${side}, ${stale.orgId}, ${id}, ${RETIRED_PAIR}, ${RETIRED_PAIR})`;
+      staleRooms.push(id);
+    }
+    // One parked room: a room whose row went with its fixture (V460's trigger parks it).
+    const gone = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "optional" });
+    const parkedRoom = await putVideoMeeting({ fixtureId: gone.boards[0]!.fixtureId, orgId: gone.orgId, side: "home" });
+    await sql`delete from fixture_video_meetings where meeting_id = ${parkedRoom}`;
+    expect(await parkedOf([parkedRoom]), "premise: the room is parked").toBe(1);
+    const orgs = [win.orgId, r.orgId, stale.orgId, gone.orgId];
+
+    const held = await sweepOrgs(orgs, { now: new Date(), ...quiet });
+    expect(held.windowsOpen, "the pass found the window").toBe(1);
+    expect(await unended(rooms), "none of the 50 done rooms was ended").toBe(50);
+    expect(callsOn(rooms), "no vendor call on any of them").toEqual([]);
+    expect(held.deferred, "every one of them is counted deferred").toBe(50);
+    expect(await rowsOf(staleRooms), "the stale-paired rooms were retired (ended, then their rows deleted)").toBe(0);
+    expect(callsOn(staleRooms).map((c) => c.method + " " + c.path.replace(/\/meetings\/[^/]+/, "")).sort(), "kick-all and the deactivate, per room").toEqual(
+      ["PATCH ", "PATCH ", "POST /active-session/kick-all", "POST /active-session/kick-all"].sort(),
+    );
+    expect(await parkedOf([parkedRoom]), "the parked room was ended and its parking cleared").toBe(0);
+    expect(held.meetingsEnded, "2 stale-paired + 1 parked").toBe(3);
+
+    // The same state, the deferral switched off: the 50 are ended (the cap lifted so only the deferral is under test).
+    vi.stubEnv("EXTERNAL_PLAY_WINDOW_DEFER", "0");
+    try {
+      rtk.calls = [];
+      const open = await sweepOrgs(orgs, { now: new Date(), rtkCallCap: 1000, ...quiet });
+      expect(open.windowsOpen, "not asked").toBe(0);
+      expect(open.meetingsEnded).toBe(50);
+      expect(await unended(rooms)).toBe(0);
+      expect(callsOn(rooms), "kick-all and the deactivate, per room").toHaveLength(100);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("no window: at 45 calls a pass and 2 calls a room, EXACTLY 45 calls are made - 22 rooms ended, the 23rd kicked and still active, the rest deferred; a second pass finishes them", async () => {
+    const { r, rooms } = await doneRooms(15); // 30 rooms
+    const base = { now: new Date(), ...NO_WINDOW, ...quiet };
+    const p1 = await sweepOrgs([r.orgId], base);
+    expect(callsOn(rooms), "45 calls and not one more").toHaveLength(SWEEP_RTK_CALLS_PER_PASS);
+    expect(p1.meetingsEnded).toBe(22);
+    expect(await unended(rooms), "22 rows stamped ended").toBe(30 - 22);
+    const kicked = rtk.calls.filter((c) => c.path.endsWith("/active-session/kick-all")).map((c) => c.path.split("/")[2]!);
+    const patched = rtk.calls.filter((c) => c.method === "PATCH").map((c) => c.path.split("/")[2]!);
+    expect([kicked.length, patched.length], "23 kicked, 22 deactivated").toEqual([23, 22]);
+    const half = kicked.filter((id) => !patched.includes(id));
+    expect(half, "exactly one room was kicked and never deactivated").toHaveLength(1);
+    expect(await unended(half), "its row is unstamped: the vendor room is still active").toBe(1);
+    expect(p1.deferred, "the rest, the half-done room included").toBe(30 - 22);
+    expect(p1.failures, "a refused request is a deferral, never a failure").toEqual([]);
+    // SEQUENCE: the next pass takes up where this one stopped.
+    rtk.calls = [];
+    const p2 = await sweepOrgs([r.orgId], base);
+    expect([p2.meetingsEnded, p2.deferred, await unended(rooms)], "the other 8").toEqual([30 - 22, 0, 0]);
+    expect(callsOn(half).map((c) => c.method), "the half-done room is asked again from the top").toEqual(["POST", "PATCH"]);
+    // And a third pass has nothing to do (the empty case after the work).
+    rtk.calls = [];
+    const p3 = await sweepOrgs([r.orgId], base);
+    expect([p3.meetingsEnded, p3.deferred, callsOn(rooms)]).toEqual([0, 0, []]);
+  });
+
+  it("finding 16, a board with no pairing yet: its UNADOPTED room is left before the board's deadline and ended after it (2 calls, counted, never retired: its row stays)", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    await sql`update fixtures set home_entrant_id = null, away_entrant_id = null where id = ${b.fixtureId}`;
+    const room = await putVideoMeeting({ fixtureId: b.fixtureId, orgId: b.orgId, side: "home" });
+    const [stamp] = await sql<{ h: string | null; a: string | null }[]>`
+      select home_entrant_id as h, away_entrant_id as a from fixture_video_meetings where meeting_id = ${room}`;
+    expect([stamp!.h, stamp!.a], "premise: an unadopted room, both stamps null").toEqual([null, null]);
+    const before = await sweep(b, { now: b.at(DL_MIN - 1), ...NO_WINDOW, ...quiet });
+    expect([before.meetingsEnded, await unended([room]), callsOn([room])], "before the deadline: left alone").toEqual([0, 1, []]);
+    rtk.calls = [];
+    const after = await sweep(b, { now: b.at(DL_MIN + 1), ...NO_WINDOW, ...quiet });
+    expect(after.meetingsEnded, "past it, nobody playing: ended").toBe(1);
+    expect(callsOn([room]).map((c) => c.method), "2 calls").toEqual(["POST", "PATCH"]);
+    expect(await rowsOf([room]), "ended, NOT retired: the row stays, stamped").toBe(1);
+    expect(await unended([room])).toBe(0);
+  });
+
+  it("an UNADOPTED room on a PAIRED board past its deadline with no game is ended by the done path, never counted as retired", async () => {
+    const b = await openedBoard({ checkedIn: [] });
+    const room = `mtg-unadopted-${randomUUID().slice(0, 8)}`;
+    await sql`insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+              values (${b.fixtureId}, 'home', ${b.orgId}, ${room}, null, null)`;
+    const r = await sweep(b, { now: b.at(DL_MIN + 1), ...NO_WINDOW, ...quiet });
+    expect(r.meetingsEnded, "ended in this pass").toBe(1);
+    expect(callsOn([room]).map((c) => c.method), "kick-all and the deactivate: the done path's 2 calls").toEqual(["POST", "PATCH"]);
+    expect([await rowsOf([room]), await unended([room])], "the row stays, stamped ended").toEqual([1, 0]);
+  });
+
+  it("R5: with a window open AND rtkCallCap 0, the role-removed, the account-deleted and the now-seated arbiter are each removed at the vendor; a TTL-expired watch is NOT (it is capped)", async () => {
+    const roleGone = await watch();
+    const accountGone = await watch();
+    const nowPlays = await watch();
+    const ttl = await watch();
+    await demote(roleGone);
+    await sql`delete from users where id = ${accountGone.userId}`;
+    const [p] = await sql<{ id: string }[]>`insert into persons (org_id, full_name, user_id) values (${nowPlays.b.orgId}, 'Late sub', ${nowPlays.userId}) returning id`;
+    await stampFixtureCheckIn(p!.id, nowPlays.b.fixtureId, nowPlays.b.orgId);
+    await sql`update fixture_video_participants set created_at = now() - (${ARBITER_PARTICIPANT_TTL_MS + 60_000}::float8 * interval '1 millisecond')
+               where participant_id = ${ttl.participantId}`;
+    rtk.calls = [];
+    const all = [roleGone, accountGone, nowPlays, ttl];
+    const r = await sweepOrgs(all.map((w) => w.b.orgId), { now: new Date(), rtkCallCap: 0, ...quiet });
+    expect(r.windowsOpen, "premise: the window IS open (every board's round opened a minute ago)").toBe(1);
+    expect(r.arbitersRemoved, "3 revocations").toBe(3);
+    expect(deletes().map((c) => c.path).sort(), "DELETE participant, 3").toEqual(
+      [roleGone, accountGone, nowPlays].map((w) => `/meetings/${w.meetingId}/participants/${w.participantId}`).sort(),
+    );
+    expect(kicks(), "and their kicks").toHaveLength(3);
+    for (const w of [roleGone, accountGone, nowPlays]) expect(await removedAt(w.participantId), "stamped removed").not.toBeNull();
+    expect(callsOn([ttl.meetingId]), "the TTL arm is capped: no call").toEqual([]);
+    expect(await removedAt(ttl.participantId), "and not stamped").toBeNull();
+    expect(r.failures, "a refused request is a deferral").toEqual([]);
+    expect(all.length, "anti-vacuity: 4 watches").toBe(4);
+  });
+
+  it("R5, the order: a pass's revocations are its FIRST vendor calls, before teardown's", async () => {
+    const w = await watch();
+    await demote(w);
+    const { r, rooms } = await doneRooms(1);
+    rtk.calls = [];
+    const out = await sweepOrgs([w.b.orgId, r.orgId], { now: new Date(), ...NO_WINDOW, ...quiet });
+    expect([out.arbitersRemoved, out.meetingsEnded], "premise: a revocation and a teardown").toEqual([1, 2]);
+    const order = rtk.calls.map((c) => (c.path.includes(w.meetingId) ? "revocation" : callsOn(rooms).includes(c) ? "teardown" : "other"));
+    expect(order, "the two revocation calls, then the four teardown calls").toEqual(["revocation", "revocation", "teardown", "teardown", "teardown", "teardown"]);
+  });
+
+  it("the capped jobs share ONE cap - teardown, the TTL arm and the parked rooms - and the revocation is not counted in it (cap 6 fits all three; cap 5 refuses the last request)", async () => {
+    const run = async (cap: number) => {
+      const { r, rooms } = await doneRooms(1);
+      const room = rooms[0]!; // one done room: 2 calls (the other side's room is deferred or ended below by the same cap)
+      await sql`delete from fixture_video_meetings where meeting_id = ${rooms[1]!}`; // the board's other room: no candidate (its parking is its own)
+      await sql`delete from video_rooms_to_end where meeting_id = ${rooms[1]!}`;
+      const ttl = await watch();
+      await sql`update fixture_video_participants set created_at = now() - (${ARBITER_PARTICIPANT_TTL_MS + 60_000}::float8 * interval '1 millisecond')
+                 where participant_id = ${ttl.participantId}`;
+      const revoked = await watch();
+      await demote(revoked);
+      const gone = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "optional" });
+      const parked = await putVideoMeeting({ fixtureId: gone.boards[0]!.fixtureId, orgId: gone.orgId, side: "home" });
+      await sql`delete from fixture_video_meetings where meeting_id = ${parked}`;
+      rtk.calls = [];
+      const report = await sweepOrgs([r.orgId, ttl.b.orgId, revoked.b.orgId, gone.orgId], { now: new Date(), rtkCallCap: cap, ...NO_WINDOW, ...quiet });
+      return { report, room, ttl, revoked, parked };
+    };
+    const full = await run(6);
+    expect(full.report.arbitersRemoved, "the revocation (2 more calls, outside the cap) and the TTL watch").toBe(2);
+    expect([await unended([full.room]), await parkedOf([full.parked])], "the teardown's room and the parked room, all done within 6").toEqual([0, 0]);
+    expect(full.report.deferred).toBe(0);
+    const short = await run(5);
+    expect(short.report.arbitersRemoved, "the revocation went through; the cap spent 4 on the room and the TTL watch").toBe(2);
+    expect(await unended([short.room]), "the teardown ran first").toBe(0);
+    expect(await parkedOf([short.parked]), "the parked room is the last request and the cap refused it: kicked, not deactivated").toBe(1);
+    expect(short.report.deferred, "counted deferred, not failed").toBe(1);
+    expect(short.report.failures).toEqual([]);
+  });
+
+  it("no make-and-unmake loop: over 3 passes of BOTH jobs a pre-minted room of an unopened board is made once and never ended; a board that LEAVES the candidate set has its rooms ended and DELETED; back in it, fresh rooms are made", async () => {
+    vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
+    try {
+      const s = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "optional" });
+      const [a, c] = s.boards.map((x) => x.fixtureId) as [string, string];
+      const bothJobs = async () => {
+        const made = await premintExternalPlay({
+          orgIds: [s.orgId], serialise: false, wait: async () => {}, rtk: RTK, offered: async () => true, windowsOpen: async () => false,
+        });
+        const swept = await sweepOrgs([s.orgId], { now: new Date(), ...NO_WINDOW, ...quiet });
+        return { made, swept };
+      };
+      const creates = () => rtk.calls.filter((x) => x.method === "POST" && x.path === "/meetings").length;
+      const ends = () => rtk.calls.filter((x) => x.method === "PATCH" || x.path.endsWith("/kick-all")).length;
+      const roomsOn = async (fixtureId: string) =>
+        (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where fixture_id = ${fixtureId}`)[0]!.n;
+      let passes = 0;
+      for (let i = 0; i < 3; i++) {
+        const { made, swept } = await bothJobs();
+        passes += 1;
+        expect([made.roomsMade, swept.meetingsEnded], `pass ${i + 1}`).toEqual([i === 0 ? 4 : 0, 0]);
+      }
+      expect([creates(), ends(), await roomsOn(a), await roomsOn(c)], "4 rooms made once; not one end").toEqual([4, 0, 2, 2]);
+      // The board leaves the set (cancelled): its rooms are ended AND their rows deleted; the other board's stay.
+      await sql`update fixtures set status = 'cancelled' where id = ${a}`;
+      const gone = await bothJobs();
+      passes += 1;
+      expect([gone.made.roomsMade, gone.swept.meetingsEnded, ends(), await roomsOn(a), await roomsOn(c)]).toEqual([0, 2, 4, 0, 2]);
+      const again = await bothJobs();
+      passes += 1;
+      expect([again.made.roomsMade, again.swept.meetingsEnded, creates(), ends()], "nothing more, either way").toEqual([0, 0, 4, 4]);
+      // The decision is undone: the board is a candidate again and gets FRESH rooms (an ended row left behind would refuse every claim).
+      await sql`update fixtures set status = 'scheduled' where id = ${a}`;
+      const back = await bothJobs();
+      passes += 1;
+      expect([back.made.roomsMade, back.swept.meetingsEnded, creates(), await roomsOn(a)]).toEqual([2, 0, 6, 2]);
+      expect(passes, "anti-vacuity: both jobs ran 6 times").toBe(6);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
 describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every failure kind", () => {
   it("every pass in this file held failed = failures.length, and those passes reported every job's failure and the give-up", () => {
     const kinds: readonly string[] = [...SWEEP_JOBS, GIVE_UP];
@@ -5931,7 +6328,7 @@ describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every 
     const missing = kinds.filter((k) => !failureKindsSeen.has(k));
     expect(missing, `kinds seen: ${JSON.stringify(Object.fromEntries(failureKindsSeen))}`).toEqual([]);
     expect([...failureKindsSeen.keys()].filter((k) => !kinds.includes(k)), "no kind outside the vocabulary").toEqual([]);
-    expect(kinds.length, "7 jobs and the give-up").toBe(8);
+    expect(kinds.length, "8 jobs and the give-up").toBe(9);
   });
 });
 
@@ -6045,11 +6442,11 @@ describe.runIf(HAS_DB)("the sweep in timed batches - each board's window is its 
       ended.push(m);
       await endMeeting(m, RTK);
     };
-    await sweep(b, { now: afterBatch0(b), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: afterBatch0(b), endMeeting: end });
     expect(ended, "past the ROUND's deadline, inside the board's: somebody may still come").toEqual([]);
-    await sweep(b, { now: new Date(deadlineOf(b, 2).getTime() - 1), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: new Date(deadlineOf(b, 2).getTime() - 1), endMeeting: end });
     expect(ended, "1 ms before the board's deadline").toEqual([]);
-    await sweep(b, { now: deadlineOf(b, 2), endMeeting: end });
+    await sweep(b, { ...NO_WINDOW, now: deadlineOf(b, 2), endMeeting: end });
     expect(ended, "at the board's deadline").toEqual([meetingId]);
   });
 

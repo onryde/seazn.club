@@ -18,11 +18,20 @@ import { orgScope, type Pass } from "./pass";
 //   - its user now PLAYS on the board (C1's predicate: a sub seated after the
 //     watch began never keeps watching their opponent);
 //   - it is ARBITER_PARTICIPANT_TTL_MS old: a panel left open runs longer
-//     than any game on the ship-1 clocks, and re-opening mints a fresh one.
+//     than any game on the ship-1 clocks, and re-opening mints a fresh one;
+//   - its room has ended.
 // A watch whose room has ended needs no vendor call (the teardown kicked
 // everyone and INACTIVE keeps every token out): it is stamped. Otherwise it
 // is kicked and deleted at RealtimeKit (removeParticipant), THEN stamped; a
 // vendor failure leaves it open, reported, for the next pass.
+//
+// Check-in capacity plan 2 Task 8 (owner ruling R5) splits the job in two, because the first three arms are SAFEGUARDING and the
+// last two are housekeeping, and a pass that is capping or deferring its housekeeping must not hold a safeguard back:
+//   - `arbiter_revocation` runs FIRST in the pass: the account-gone, role-gone and now-plays arms. Its calls are not under the
+//     pass's call cap and an open check-in window never defers it. They still go through the platform bucket (`cfEnvelope` spends
+//     it on every request: the vendor's own rate limit, not the pass's policy), so a refusal there is a deferral retried next pass.
+//     Running first costs one `removeParticipant` on a room the teardown ends later in the same pass: the accepted price.
+//   - `arbiter_revoke` keeps its name for the rest - the TTL and the ended-room arms - under the pass's cap, not deferred by a window.
 
 /** How long one arbiter participant may live (I2). Three hours: longer than
  *  any ship-1 game's clock, short enough that a forgotten panel stops. */
@@ -54,19 +63,50 @@ export async function arbiterCandidates(pass: Pass): Promise<ArbiterCandidate[]>
      order by vp.created_at, vp.id`;
 }
 
-async function arbiterMustGo(pass: Pass, c: ArbiterCandidate): Promise<boolean> {
-  if (c.meetingEndedAt !== null) return true;
+/** The safeguarding arms (R5): the account is gone, the user is no longer an owner or admin of the club, or the user now plays on
+ *  the board. Cheap ones first; the seat read is the only one that asks the database. */
+async function revocationDue(c: ArbiterCandidate): Promise<boolean> {
   if (c.userId === null || !c.organiser) return true;
-  if (pass.now.getTime() - c.createdAt.getTime() >= ARBITER_PARTICIPANT_TTL_MS) return true;
   return isSeatedOn(c.userId, c.fixtureId);
 }
 
-export async function arbiterRevoke(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDeps): Promise<void> {
-  if (!(await arbiterMustGo(pass, c))) return;
+/** The first job's candidates: the watches a safeguarding arm selects. A watch whose seat read FAILS is kept in the list, so the
+ *  act asks again and reports the failure under this job, row by row, as `each` does for every other (a throw here would fail the
+ *  whole pass). */
+export async function arbiterRevocationCandidates(pass: Pass): Promise<ArbiterCandidate[]> {
+  const due: ArbiterCandidate[] = [];
+  for (const c of await arbiterCandidates(pass)) {
+    try {
+      if (await revocationDue(c)) due.push(c);
+    } catch {
+      due.push(c);
+    }
+  }
+  return due;
+}
+
+/** Take the watch off: kicked and deleted at the vendor unless its room already ended, then stamped. A vendor failure leaves it open. */
+async function removeWatch(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDeps): Promise<void> {
   if (c.meetingEndedAt === null) {
     await removeParticipant({ meetingId: c.meetingId, participantId: c.participantId }, rtk);
   }
   const stamped = await sql`
     update fixture_video_participants set removed_at = ${pass.now} where id = ${c.id} and removed_at is null`;
   pass.report.arbitersRemoved += stamped.count;
+}
+
+/** `arbiter_revocation`, the first job of the pass. `rtk` is the caller's own transport, NOT the pass's capped one. */
+export async function arbiterRevocation(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDeps): Promise<void> {
+  if (!(await revocationDue(c))) return;
+  await removeWatch(pass, c, rtk);
+}
+
+/** `arbiter_revoke`, what is left of job 6: a watch whose room ended, or that is ARBITER_PARTICIPANT_TTL_MS old. `rtk` carries the
+ *  pass's capped budget. The safeguarding arms are the first job's: a role-removed watch the first job could not remove (the
+ *  platform bucket refused it) is still on file here, and is NOT removed by this job - it waits for the next pass's first job. */
+export async function arbiterRevoke(pass: Pass, c: ArbiterCandidate, rtk: RealtimeKitDeps): Promise<void> {
+  const ended = c.meetingEndedAt !== null;
+  const expired = pass.now.getTime() - c.createdAt.getTime() >= ARBITER_PARTICIPANT_TTL_MS;
+  if (!ended && !expired) return;
+  await removeWatch(pass, c, rtk);
 }

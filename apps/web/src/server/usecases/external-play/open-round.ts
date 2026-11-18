@@ -131,6 +131,11 @@ type Tx = postgres.TransactionSql | postgres.Sql;
  *  spares nothing there.
  *
  *  `mode` is who is asking, and only the re-open spares by pairing (check-in capacity, spec §11):
+ *  - `"first"` (the round's FIRST open; plan 2 Task 8, batch-3 review I1): marks nothing and retires nothing - an unended room of a
+ *    board that has never been opened is the pre-mint job's, current or unadopted, and a stale-paired one is the claim's to retire -
+ *    but DELETES the ENDED rows, as a re-open does, through the same delete below. With the pre-mint job a room can be ended before
+ *    the first open (the sweep's teardown of a decided board, `endRoomAtResult` at a result) and the decision then undone; an ended
+ *    row left on file refuses every claim VIDEO_MEETING_ENDED, and nothing would ever clear it, so the board could never check in.
  *  - `"reopen"` (the organiser's re-open, a fresh window for a round nobody was invited into): an UNENDED room that is
  *    unadopted (both stamps null: the pre-mint job's room for a board with no pairing yet) or stamped for the fixture's
  *    CURRENT pairing is kept, unmarked - it is a room this window needs, made before anyone checked in, and retiring it would
@@ -148,7 +153,7 @@ async function retireBoardsMeetings(
   tx: Tx,
   fixtureIds: readonly string[],
   now: Date,
-  mode: "reopen" | "rearm",
+  mode: "first" | "reopen" | "rearm",
 ): Promise<string[]> {
   if (fixtureIds.length === 0) return [];
   const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
@@ -157,12 +162,15 @@ async function retireBoardsMeetings(
       ? tx`and not (m.home_entrant_id is null
              or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))`
       : tx``;
-  const marked = await tx<{ fixture_id: string; ended_at: Date | null }[]>`
-    update fixture_video_meetings m
-       set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
-      from fixtures f
-     where f.id = m.fixture_id and m.fixture_id in ${tx(fixtureIds as string[])} ${spare} ${keepCurrent}
-    returning m.fixture_id, m.ended_at`;
+  const marked =
+    mode === "first"
+      ? []
+      : await tx<{ fixture_id: string; ended_at: Date | null }[]>`
+          update fixture_video_meetings m
+             set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
+            from fixtures f
+           where f.id = m.fixture_id and m.fixture_id in ${tx(fixtureIds as string[])} ${spare} ${keepCurrent}
+          returning m.fixture_id, m.ended_at`;
   await tx`
     delete from fixture_video_meetings m
      where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is not null ${spare}`;
@@ -442,6 +450,7 @@ export async function openRound(
         returning id, opened_at as "roundOpenedAt", opened_by as "openedBy", staggered`;
       open = row!;
       kind = "opened";
+      await retireBoardsMeetings(tx, ids, now, "first");
     } else if (pending.length === 0) {
       return { kind: "nothing", skipped: [] };
     } else if (!anyInvited || !otherBoundStillPlayable) {
