@@ -117,7 +117,9 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 21: 1 (a pooled stage's weekly digest and round recap list every pool, in pool order, each with its own players).
   // Task 22: 2 (the public standings payload names every row and its status - a level table's null rank included; a pooled stage's
   //   private standings without pool_id return every pool and /pools lists A and B).
-  const EXPECTED_CHECKS = 27;
+  // Task 23: 1 (the desk's waiting strip: an automatic arrival after Start is listed on the table card by name, the strip's tap
+  //   places them against all four, and the strip is gone from the page).
+  const EXPECTED_CHECKS = 28;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -1214,6 +1216,58 @@ export async function w5RoundRobinASuite(): Promise<void> {
         ok19,
       );
     }
+  }
+
+  // Check 28 - Task 23 (X-CU-8; Task 6 ruling I2): the desk's "Waiting to join the table" strip, end to end over HTTP. A started
+  // league of four in the public competition; a free auto-approved registration arrives after Start and WAITS (no line). The
+  // organiser's division page (fixtures tab, the prod server's real render) lists her in the strip by name with its one tap; the
+  // tap's route places her against each of the four; the page then draws no strip.
+  {
+    // A NINTH org: the earlier orgs' competitions are at their caps, and the register door needs a public competition.
+    const ninth = newSession();
+    const who9 = await signIn(ninth, `delivered+w5a9_${tag}@resend.dev`);
+    const c9 = v1data<{ id: string; slug: string } | undefined>(
+      await v1(ninth, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A desk ${tag}`, visibility: "public" }),
+    );
+    const l = await league("TableDesk", 4, c9?.id ?? "no-competition", ninth);
+    const orgs = (await call(ninth, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs.find((o) => o.id === who9.org_id)?.slug ?? "";
+    const divSlug = v1data<{ slug: string } | undefined>(await v1(ninth, `/api/v1/divisions/${l.divId}`))?.slug ?? "no-division";
+    const started = await v1(ninth, `/api/v1/divisions/${l.divId}/start`, "POST");
+    const settings = await v1(ninth, `/api/v1/divisions/${l.divId}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      approval: "auto",
+      form_fields: [],
+    });
+    const zed = `TableDesk Zed ${tag}`;
+    const sent = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${c9?.slug}/register`, "POST", {
+      contact: { name: zed, email: `delivered+w5a_tdesk_${tag}@resend.dev` },
+      privacy_consent: true,
+      entries: [{ division_id: l.divId, entrant_kind: "individual", players: [{ full_name: zed }], answers: {} }],
+    });
+    const entrants = v1data<{ id: string; display_name: string }[] | undefined>(await v1(ninth, `/api/v1/divisions/${l.divId}/entrants`)) ?? [];
+    const zedId = entrants.find((e) => e.display_name === zed)?.id;
+    const path = `/o/${orgSlug}/c/${c9?.slug}/d/${divSlug}?tab=fixtures`;
+    const before = await html(ninth, path);
+    const strip = /data-testid="table-waiting"[^>]*>/.test(before.body);
+    const named = before.body.includes(zed) && before.body.includes('data-testid="table-waiting-place"') && before.body.includes(`data-entrant-id="${zedId}"`);
+    const waitedBare = (await l.fixtures()).every((f) => f.home_entrant_id !== zedId && f.away_entrant_id !== zedId);
+    const tap = await v1(ninth, `/api/v1/stages/${l.stageId}/late-entrants/${zedId}/place`, "POST");
+    const mine = (await l.fixtures()).filter((f) => f.home_entrant_id === zedId || f.away_entrant_id === zedId);
+    const opps = mine.map((f) => (f.home_entrant_id === zedId ? f.away_entrant_id : f.home_entrant_id)).sort();
+    const after = await html(ninth, path);
+    const ok =
+      started.status === 200 && settings.status === 200 && sent.status === 201 && zedId !== undefined && waitedBare &&
+      before.status === 200 && strip && named && tap.status === 200 &&
+      JSON.stringify(opps) === JSON.stringify(l.entrants.map((e) => e.id).sort()) &&
+      after.status === 200 && !after.body.includes('data-testid="table-waiting"') && after.body.includes('data-testid="stage-rail-trigger"');
+    w5Check(
+      "w5a X-CU-8 desk: an arrival after Start waits on the table card's strip by name; its tap places her against all four; the strip goes" +
+        (ok ? "" : ` - ${l.created}, start ${started.status}, settings ${settings.status}, register ${sent.status}, zed ${zedId}, bare ${waitedBare}, page ${before.status} strip ${strip} named ${named}, tap ${tap.status} ${JSON.stringify(tap.json).slice(0, 200)}, opps ${opps.length}, after ${after.status}`),
+      ok,
+    );
   }
 
   check(`w5a: the W5 round-robin app-A suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);

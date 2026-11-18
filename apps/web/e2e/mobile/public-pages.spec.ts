@@ -503,3 +503,35 @@ test("RB5-W2 an expunged leaver's lines read as removed on the public schedule, 
   const axe = await new AxeBuilder({ page }).include(`a.grid[href$="/fixtures/${k.removed[0]}"]`).analyze();
   expect(axe.violations.filter((v) => v.impact === "serious" || v.impact === "critical"), "axe: the expunged row").toEqual([]);
 });
+
+// W5 app-A Task 23 (RB5-W2; B5 merge finding): the hub's Matches card of an expunged line, at every width project — the public
+// schedule's presentation (above), never "Ended": both names struck, no score, "Abandoned" in the status slot. The 43-character
+// leaver's name still truncates inside its card and the page never scrolls sideways. Not serial: it reads nothing another test writes.
+test("RB5-W2 an expunged leaver's hub Matches cards read Abandoned, struck, no horizontal scroll with a long name", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/expunged-leaver-kit");
+  const { dictString } = await import("../spectator-w2-kit");
+  const k = await kit.seedExpungedLeaver(request, `RB5-W2 hub ${width}`);
+  await page.goto(`/live/${k.orgSlug}/${k.compSlug}?tab=matches`, { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await page.getByRole("button", { name: /^Completed/ }).click();
+  const card = (id: string) => page.getByTestId(`mh-match-${id}`).first();
+  let checked = 0;
+  for (const id of k.removed) {
+    await expect(card(id)).toHaveAttribute("data-expunged", "true", { timeout: 20_000 });
+    await expect(card(id).getByTestId("mh-match-expunged")).toHaveText(dictString("en", "matchCentre.status.abandoned"));
+    await expect(card(id)).not.toContainText(dictString("en", "matchesHub.ended"));
+    const struck = await card(id).locator("span[title]").evaluateAll((els) => els.filter((e) => getComputedStyle(e).textDecorationLine.includes("line-through")).length);
+    expect(struck, `${width}: both names struck`).toBe(2);
+    const box = await card(id).boundingBox();
+    expect(box, "the card has a box").toBeTruthy();
+    expect(box!.x + box!.width, `the card ends inside the viewport at ${width}px`).toBeLessThanOrEqual(width + 0.5);
+    checked += 1;
+  }
+  expect(checked, "anti-vacuity: her three lines").toBe(3);
+  await expect(card(k.played)).not.toHaveAttribute("data-expunged", "true");
+  await expectNoHorizontalScroll(page);
+});

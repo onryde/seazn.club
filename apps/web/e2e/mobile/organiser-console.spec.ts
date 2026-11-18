@@ -1396,3 +1396,52 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
 
   await expectNoHorizontalScroll(page);
 });
+
+// W5 app-A Task 23 (X-CU-8, X-CU-11; R24 picks 1A, 3A): at every width project, the table card's "Waiting to join the table" strip
+// and the Entrants tab's Group field. A group of two pools, started; a late arrival with a realistic long name waits. The strip names
+// them, its Group field and its "Add to the table" tap are on screen at the tap floor, and the page never scrolls sideways; the tap
+// places them and the panel says so. Then the add form's Group field, same bar. One DOM: the same controls at every width, stacked
+// below `sm`. Not serial: it reads nothing another test writes.
+test("X-CU-8 / X-CU-11 the waiting strip and the Group field fit every width; the tap places the player", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/table-late-entry-kit");
+  const t = await kit.seedStartedTable(request, { label: `Strip ${width}`, n: 8, pools: 2 });
+  const who = `Riverside Rovers Community Football Club ${TAG}`;
+  const lateId = await kit.registerLateArrival(request, t, who);
+
+  await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("table-waiting");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await expect(strip.getByTestId("table-waiting-row")).toContainText(who);
+  const controls = [strip.getByTestId("table-waiting-pool"), strip.getByTestId("table-waiting-place")];
+  let checked = 0;
+  for (const c of controls) {
+    await expect(c).toBeVisible();
+    const box = await c.boundingBox();
+    expect(box, "the control has a box").toBeTruthy();
+    expect(box!.height, `${width}: at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(box!.x + box!.width, `${width}: inside the viewport`).toBeLessThanOrEqual(width + 0.5);
+    checked++;
+  }
+  expect(checked).toBe(2);
+  await expectNoHorizontalScroll(page);
+
+  await strip.getByTestId("table-waiting-place").click();
+  await expect(page.getByTestId("schedule-notice")).toContainText(`${who} joined Group`, { timeout: 20_000 });
+  await expect(page.getByTestId("table-waiting")).toHaveCount(0, { timeout: 20_000 });
+  const placed = await apiJson<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null; stage_id: string }[]>(request, `/api/v1/divisions/${t.divisionId}/fixtures`);
+  expect((placed.data ?? []).filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId).length, "placed: four catch-up lines").toBe(4);
+  await expectNoHorizontalScroll(page);
+
+  await page.goto(await divisionPath(request, t.divisionId, "?tab=entrants"), { waitUntil: "load" });
+  const pool = page.locator("#add-entrant").getByTestId("entrants-late-pool");
+  await expect(pool).toBeVisible({ timeout: 20_000 });
+  const box = await pool.boundingBox();
+  expect(box!.height, `${width}: the Group field at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  expect(box!.x + box!.width, `${width}: the Group field inside the viewport`).toBeLessThanOrEqual(width + 0.5);
+  await expectNoHorizontalScroll(page);
+});

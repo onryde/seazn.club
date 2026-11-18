@@ -6,6 +6,7 @@ import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-k
 import { dictString } from "./spectator-w2-kit";
 import { LONG_NAME_SUFFIX, seedFinishedGroupsOnly } from "./support/pool-winners-kit";
 import { seedExpungedLeaver } from "./support/expunged-leaver-kit";
+import { registerLateArrival, seedStartedTable, tableLines } from "./support/table-late-entry-kit";
 import { saveRoster, seedPair, seedPlayer, stagePartnerSwap, storedMembers, uiEn } from "./entrant-rename-kit";
 
 // W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21; #837; X-BD-5). A pre-Start Generate on a league used to insert by
@@ -440,8 +441,11 @@ test.describe("X-CU-8 a paid player waits, then one tap places them", () => {
     expect(waiting.some((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId), "the app placed nobody").toBe(false);
     expect(waiting).toHaveLength(6);
 
-    await page.goto(await competitionPath(request, competitionId));
+    // A line is in play, so the competition page hands its Needs-you list to Match Day (T23: this read the competition page and
+    // was red - the list moved while the test sat on it).
+    await page.goto(`${await competitionPath(request, competitionId)}/match-day`);
     await dismissCookieBanner(page);
+    await page.getByTestId("md-needs-you-toggle").click();
     const flag = page.locator('[data-attention="late_players_waiting"]').first();
     await expect(flag, "the desk flags the waiting player").toContainText("1 late player waiting — add to the table", { timeout: 20_000 });
     await expect(flag).not.toContainText("bracket");
@@ -458,7 +462,9 @@ test.describe("X-CU-8 a paid player waits, then one tap places them", () => {
     expect((tap.data!.fixtures ?? []).map((f) => f.fixture_id).sort()).toEqual(mine.map((f) => f.id).sort());
 
     await page.reload();
-    await expect(page.locator('[data-attention="late_players_waiting"]'), "the desk row goes").toHaveCount(0, { timeout: 20_000 });
+    await page.getByTestId("md-needs-you-toggle").click();
+    await expect(page.locator("[data-attention]").first(), "positive pair: Match Day lists its rows").toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-attention="late_players_waiting"]'), "the desk row goes").toHaveCount(0);
     const again = await apiJson(request, `/api/v1/stages/${stageId}/late-entrants/${lateId}/place`, "POST");
     expect([again.status, again.error?.code, again.error?.message]).toEqual([409, "RR_LATE_ENTRY_ALREADY_PLACED", "This player already has their fixtures."]);
   });
@@ -1650,6 +1656,166 @@ test.describe("RB5-W2 the public schedule shows a leaver's removed lines as remo
         await struck(id, 0);
       }
       for (const id of k.open) await expect(row(id)).toContainText(tbd);
+      await expectNoHorizontalScroll(page);
+    }
+  });
+});
+
+// W5 app-A Task 23 (X-CU-7, X-CU-11; R24 picks 1A, 2A, 7A): the desk half of "Add late player" into a running GROUP. The rail's More
+// offers "Add late player" (never "Add to bracket"); the Entrants tab's add form says what an add does now and offers the Group field,
+// opening at the smallest pool; the organiser picks Group B. The notice says the group and the catch-up rounds; the board's round bars
+// for the appended rounds say "Catch-up" and keep their numbers. Two pools of four: an even pool has no bye, so every catch-up match
+// is an APPENDED round (rounds 4-7). Expected words: the approved English (R24 page, T23 rulings), typed here.
+test.describe("X-CU-7 / X-CU-11 a late player joins a running group from the desk", () => {
+  test("X-CU-7 the desk adds a late player to Pool B and shows the catch-up rounds", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const t = await seedStartedTable(request, { label: "Groups late", n: 8, pools: 2 });
+    const before = await tableLines(request, t.divisionId, t.stageId);
+    expect(before, "premise: two pools of four, six lines each").toHaveLength(12);
+
+    await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const more = page.getByTestId("stage-more");
+    await expect(more, "a started group offers More").toBeVisible({ timeout: 20_000 });
+    await more.click();
+    const item = page.getByTestId("stage-add-late-player");
+    await expect(item).toContainText("Add late player");
+    await expect(item).not.toContainText("Add to bracket");
+    await item.click();
+    await expect(page).toHaveURL(/[?&]tab=entrants/, { timeout: 20_000 });
+
+    const form = page.locator("#add-entrant");
+    await expect(form.getByTestId("entrants-table-late-note")).toHaveText(
+      "This group stage has started. An entrant you add here joins a group and plays catch-up matches.",
+    );
+    const pool = form.getByTestId("entrants-late-pool");
+    await expect(pool, "the Group field opens at a smallest pool (two of four: the snake's pick)").toHaveValue(/^[AB]$/);
+    await expect(pool.locator("option")).toHaveText([/^Group A · 4 entrants · 4 matches to play/, /^Group B · 4 entrants · 4 matches to play/]);
+    await pool.selectOption("B");
+    const name = `Late Westgate Wanderers Badminton Club ${TAG}`;
+    await form.getByLabel("Name", { exact: true }).fill(name);
+    const answered = page.waitForResponse((r) => r.url().endsWith(`/api/v1/divisions/${t.divisionId}/entrants`) && r.request().method() === "POST");
+    await form.getByRole("button", { name: "Add entrant" }).click();
+    const res = await answered;
+    expect(res.status()).toBe(201);
+    expect(JSON.parse(res.request().postData() ?? "{}").late_entry_pool, "the pick rides the one add").toBe("B");
+
+    const lines = page.getByTestId("entrants-late-entry-line");
+    await expect(lines.nth(0)).toHaveText(`${name} joined Group B.`, { timeout: 20_000 });
+    await expect(lines.nth(1)).toHaveText(`${name} has 4 catch-up matches, in rounds 4, 5, 6, and 7.`);
+    await expect(lines.nth(2)).toHaveText("4 new matches have no time or court yet. Give each one a time and court.");
+
+    // The stored lines: four, all in pool B, each an appended catch-up round (ext key rr-cu-).
+    const after = await tableLines(request, t.divisionId, t.stageId);
+    const late = (await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${t.divisionId}/entrants`)).data!.find((e) => e.display_name === name)!;
+    const mine = after.filter((f) => f.home_entrant_id === late.id || f.away_entrant_id === late.id).sort((a, b) => a.round_no - b.round_no);
+    expect(mine.map((f) => f.round_no)).toEqual([4, 5, 6, 7]);
+    expect(new Set(mine.map((f) => f.pool_id)).size, "one pool").toBe(1);
+
+    // The board: rounds 4-7 tagged "Catch-up", rounds 1-3 not; the round numbers stay.
+    await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      let checked = 0;
+      for (const r of [1, 2, 3, 4, 5, 6, 7]) {
+        const bar = page.locator(`[data-run-sheet-round="${r}"]`).first();
+        await expect(bar, `${w}: round ${r} has a bar`).toBeVisible();
+        await expect(bar.locator("[data-run-sheet-round-catch-up]"), `${w}: round ${r}`).toHaveCount(r >= 4 ? 1 : 0);
+        if (r >= 4) await expect(bar.locator("[data-run-sheet-round-catch-up]")).toHaveText("· Catch-up");
+        checked++;
+      }
+      expect(checked).toBe(7);
+      await expectNoHorizontalScroll(page);
+    }
+  });
+});
+
+// W5 app-A Task 23 (X-CU-8; Task 6 ruling I2; R24 pick 3A): the waiting flag's tap. An automatic arrival after Start waits; the
+// competition page's Needs-you row says so and its "Open fixtures" lands ON the table card's "Waiting to join the table" strip
+// (`#table-waiting`); one "Add to the table" places them, the panel says what it did, and the strip and the row go.
+test.describe("X-CU-8 the waiting strip on the table card", () => {
+  test("X-CU-8 the waiting flag's tap places the player", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const t = await seedStartedTable(request, { label: "Strip", n: 4 });
+    const who = `Strip Riverside Rovers Community Club ${TAG}`;
+    const lateId = await registerLateArrival(request, t, who);
+
+    // A line is in play, so the competition page hands its Needs-you list to Match Day (one line, "N things need you").
+    await page.goto(await competitionPath(request, t.competitionId));
+    await dismissCookieBanner(page);
+    await page.getByTestId("desk-needs-you-in-match-day").click();
+    await page.getByTestId("md-needs-you-toggle").click();
+    const flag = page.locator('[data-attention="late_players_waiting"]').first();
+    await expect(flag).toContainText("1 late player waiting — add to the table", { timeout: 20_000 });
+    await flag.getByRole("link", { name: "Open fixtures" }).click();
+    await expect(page).toHaveURL(/[?&]tab=fixtures#table-waiting$/, { timeout: 20_000 });
+
+    const strip = page.getByTestId("table-waiting");
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    await expect(strip).toContainText("Waiting to join the table");
+    const row = strip.getByTestId("table-waiting-row");
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText(who);
+    await expect(strip.getByTestId("table-waiting-pool"), "a league has no Group field").toHaveCount(0);
+    await expect(page.getByTestId("roster-drift-banner"), "the waiting player is the strip's to place, never Rebuild's").toHaveCount(0);
+    await expect(strip).toBeInViewport();
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(row.getByTestId("table-waiting-place")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    const tapped = page.waitForResponse((r) => r.url().includes(`/late-entrants/${lateId}/place`) && r.request().method() === "POST");
+    await row.getByTestId("table-waiting-place").click();
+    expect((await tapped).status()).toBe(200);
+    await expect(page.getByTestId("schedule-notice")).toContainText(`${who} has 4 catch-up matches`, { timeout: 20_000 });
+    await expect(page.getByTestId("schedule-warning")).toContainText("Their opponents are not notified.");
+    await expect(page.getByTestId("table-waiting"), "placed: the strip goes").toHaveCount(0, { timeout: 20_000 });
+
+    const mine = (await tableLines(request, t.divisionId, t.stageId)).filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId);
+    expect(mine.map((f) => (f.home_entrant_id === lateId ? f.away_entrant_id : f.home_entrant_id)).sort(), "one line against each of the four").toEqual([...t.ids].sort());
+    await page.goto(`${await competitionPath(request, t.competitionId)}/match-day`);
+    await page.getByTestId("md-needs-you-toggle").click();
+    await expect(page.locator("[data-attention]").first(), "positive pair: Match Day lists its rows").toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-attention="late_players_waiting"]'), "the desk row goes").toHaveCount(0);
+  });
+});
+
+// W5 app-A Task 23 (RB5-W2; B5 merge finding): the hub's Matches card of a leaver's expunged line. It read "Ended" (her played line)
+// or a time; it now reads as the public schedule above does: both names struck, no score, "Abandoned" in the status slot. Her one
+// played line included - a removed result no longer counts. Words: the en public dictionary, never typed.
+test.describe("RB5-W2 the hub Matches card shows a leaver's removed lines as removed", () => {
+  test("her three cards say Abandoned, strike both names and show no score; the other cards are untouched; no page scroll at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const k = await seedExpungedLeaver(request, "Hub removed");
+    const word = dictString("en", "matchCentre.status.abandoned");
+    const ended = dictString("en", "matchesHub.ended");
+    await page.goto(`/live/${k.orgSlug}/${k.compSlug}?tab=matches`);
+    await dismissCookieBanner(page);
+    // her lines are over (abandoned): they sit under Completed, beside the one other played line
+    await page.getByRole("button", { name: /^Completed/ }).click();
+    const card = (id: string) => page.getByTestId(`mh-match-${id}`).first();
+    const struckNames = (id: string) =>
+      card(id).locator("span[title]").evaluateAll((els) => els.filter((e) => getComputedStyle(e).textDecorationLine.includes("line-through")).length);
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      let checked = 0;
+      for (const id of k.removed) {
+        await expect(card(id), `${w}: her card is on the hub`).toBeVisible({ timeout: 20_000 });
+        await expect(card(id)).toHaveAttribute("data-expunged", "true");
+        await expect(card(id).getByTestId("mh-match-expunged")).toHaveText(word);
+        await expect(card(id), `${w}: never Ended`).not.toContainText(ended);
+        await expect(card(id).getByTestId("mh-match-result")).toHaveCount(0);
+        await expect.poll(() => struckNames(id), `${w}: both names struck`).toBe(2);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: her three lines").toBe(3);
+      // the positive pair: the other played line still ended, with its result; nobody else struck
+      await expect(card(k.played)).not.toHaveAttribute("data-expunged", "true");
+      await expect(card(k.played).getByTestId("mh-match-result")).toHaveCount(1);
+      await expect.poll(() => struckNames(k.played)).toBe(0);
       await expectNoHorizontalScroll(page);
     }
   });
