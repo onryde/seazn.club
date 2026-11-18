@@ -502,7 +502,7 @@ export class BrowserDriver implements OrganiserDriver {
   /** The builder's answer, until the harness's one postStages for that division consumes it. */
   #built: { divisionId: string; stages: StageOut[]; door: DoorDivision } | null = null;
   #uiPathJudged = false;
-  /** Stages completed, or whose complete ended unknown: never completed again (design §6.4). */
+  /** Stages completed, or whose complete ended unknown: their finalRanks and title are kept for a repeat's answer (X-BD-4). */
   readonly #completed = new Set<string>();
   /** stage id → the finalRanks its completion answered (null: none). */
   readonly #finalRanks = new Map<string, readonly string[] | null>();
@@ -1177,7 +1177,7 @@ export class BrowserDriver implements OrganiserDriver {
       out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId, position ?? undefined, this.#railHooks(where))));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
-      // other ending may follow a committed completion, so it is never repeated
+      // other ending may follow a committed completion, so it is recorded as one
       // — and STAGE_COMPLETED_SEEDING_FAILED says it DID commit (W1-driving T6, FP-3).
       if (!(e instanceof RefusedCall && e.status < 500 && e.code !== SEEDING_FAILED_AFTER_COMMIT)) this.#completed.add(stageId);
       throw e;

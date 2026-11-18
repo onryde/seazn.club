@@ -20,6 +20,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, type CompleteStageResult } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -95,6 +96,69 @@ const ledger = async (divisionId: string) => ({
 });
 
 describe.skipIf(!HAS_DB)("X-BD-4: a second Complete is a no-op that says so", () => {
+  it("R10h: a repeat Complete whose next stage still owes its draw (a second source waiting) falls through to the old shape, not already_complete", async () => {
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "CT " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    const entrants = await createEntrants(
+      auth,
+      division.id,
+      Array.from({ length: 4 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })),
+    );
+    const seedOf = new Map(entrants.map((e) => [e.id, e.seed ?? 99]));
+    const [a, b] = await createStages(auth, division.id, [
+      { seq: 1, kind: "league", name: "A", config: {} },
+      { seq: 2, kind: "league", name: "B", config: {} },
+    ]);
+    const [final] = await createStages(auth, division.id, {
+      seq: 3,
+      kind: "knockout",
+      name: "Final",
+      config: {},
+      progression: {
+        sources: [
+          { stage: { stageId: a!.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+          { stage: { stageId: b!.id }, take: [{ kind: "rankRange", from: 1, to: 1 }] },
+        ],
+        placement: "rank_order",
+        timing: "on_complete",
+      },
+    });
+    const fa = (await generateStageFixtures(auth, a!.id)).fixtures;
+    const fb = (await generateStageFixtures(auth, b!.id)).fixtures;
+    await startDivision(auth, division.id);
+    // A: the lower seed wins everything (E1 is rank 1). B: the HIGHER seed does (E4), so the two sources qualify different entrants.
+    // Only B (seq 2, the stage seq-adjacent to Final) triggers Final's draw, so B is the stage that is Completed twice.
+    for (const f of fb) await decide(auth, f.id, (seedOf.get(f.home_entrant_id!) ?? 99) > (seedOf.get(f.away_entrant_id!) ?? 99));
+    const finalLines = async () => (await koSeats(final!.id)).length;
+
+    const first = await completeStage(auth, b!.id);
+    expect(first.completed, "rig: B completes while A is still undecided").toBe(true);
+    expect(await finalLines(), "rig: Final owes its draw (A is undecided), so a repeat Complete is NOT a no-op").toBe(0);
+
+    // The shape R10h keeps: a retry, not a no-op. `completed: true`, no `already_complete`, no seed_proposal key.
+    const repeat = await completeStage(auth, b!.id);
+    expect(repeat).toEqual({ completed: true, events: [] });
+    expect(repeat.already_complete).toBeUndefined();
+    expect(await finalLines(), "A still waits: the retry draws nothing yet").toBe(0);
+
+    // The retry that works: A is decided and completed (its next stage, B, has no progression, so it draws nothing), and the
+    // SAME repeat of B now draws the Final - the retry R10h exists for.
+    for (const f of fa) await decide(auth, f.id, (seedOf.get(f.home_entrant_id!) ?? 99) < (seedOf.get(f.away_entrant_id!) ?? 99));
+    await completeStage(auth, a!.id);
+    expect(await finalLines(), "rig: completing A drew nothing (not seq-adjacent to Final)").toBe(0);
+    const retried = await completeStage(auth, b!.id);
+    expect(retried.already_complete, "the retry that drew is not a no-op").toBeUndefined();
+    expect(retried.completed).toBe(true);
+    expect(await finalLines(), "the repeat Complete drew the Final").toBeGreaterThan(0);
+
+    // And once drawn, the same call owes nothing: the no-op, leaving every row as it is.
+    const settled = { seats: await koSeats(final!.id), ledger: await ledger(division.id) };
+    expect(await completeStage(auth, b!.id)).toMatchObject({ completed: false, already_complete: true, events: [] });
+    expect(await koSeats(final!.id)).toEqual(settled.seats);
+    expect(await ledger(division.id)).toEqual(settled.ledger);
+  }, 120_000);
+
   describe.each(SOURCES)("$label", (source) => {
     it("a DRAFT proposal: the second Complete answers already_complete with that draft, and rewrites nothing", async () => {
       const r = await rig(source);
@@ -161,6 +225,32 @@ describe.skipIf(!HAS_DB)("X-BD-4: a second Complete is a no-op that says so", ()
       expect(second).toEqual({ completed: false, already_complete: true, events: [], seed_proposal: null });
       expect(await proposalRows(r.koId), "still exactly one row, still stale").toEqual(before.proposals);
       expect(await koSeats(r.koId)).toEqual(before.seats);
+    }, 120_000);
+
+    it("after a qualifier WITHDRAWS through the product (the B3 cascade re-proposes): the second Complete leaves whatever the cascade wrote exactly alone", async () => {
+      const r = await rig(source);
+      const first = await completeStage(r.auth, r.srcId);
+      const [draft] = await proposalRows(r.koId);
+      const qualifier = (draft!.computed as { qualifiers: { entrantId: string }[] }).qualifiers[0]!.entrantId;
+      const atFirst = await proposalRows(r.koId);
+      await withdrawEntrantCascade(r.auth, qualifier);
+      const settled = { proposals: await proposalRows(r.koId), seats: await koSeats(r.koId), ledger: await ledger(r.divisionId) };
+      // The premise, anti-vacuity: the cascade DID act on the proposal (a fresh draft, or the old one staled), so there is a state to disturb.
+      expect(settled.proposals, "rig: the withdrawal moved the proposal rows").not.toEqual(atFirst);
+      expect(first.seed_proposal?.status).toBe("draft");
+
+      const second = await completeStage(r.auth, r.srcId);
+      // The expected answer is read off the rows the cascade left: the latest row's id when it is a draft, else null.
+      const latest = settled.proposals.at(-1)!;
+      expect(second).toEqual({
+        completed: false,
+        already_complete: true,
+        events: [],
+        seed_proposal: latest.status === "draft" ? { id: latest.id, status: "draft" } : null,
+      });
+      expect(await proposalRows(r.koId), "every proposal row, `computed` included, as the cascade left it").toEqual(settled.proposals);
+      expect(await koSeats(r.koId)).toEqual(settled.seats);
+      expect(await ledger(r.divisionId)).toEqual(settled.ledger);
     }, 120_000);
 
     it("a stage that is NOT finished still answers a plain completed:false (no already_complete): the field names a repeat only", async () => {

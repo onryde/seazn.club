@@ -1,6 +1,5 @@
 // The organiser, over the real v1 API (design §6.1). Every write that can race
-// a server-side cascade reads its sequence first; /complete is never repeated
-// once it has completed (design §6.4).
+// a server-side cascade reads its sequence first.
 //
 // W5 T17 (X-BD-4, CS-1): /complete MAY now be repeated. It used to be avoided: on an
 // already-complete stage the product answered `{completed:true, events:[]}` and re-ran
@@ -383,17 +382,15 @@ export class HttpDriver implements OrganiserDriver {
     // product's SWISS_OVER, and its own guard is not what this wave moved).
     if (first !== undefined && what !== "/complete") {
       // Names the call that completed the stage or ended unknown (a Finish is not a /complete), and the one now refused.
-      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it (design §6.4)`);
+      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it`);
     }
-    // Parked Task 6 (a): completeStage COMMITS the completion and then runs
-    // progressCompletedStage (usecases/stages/completion.ts), which can throw —
-    // so a 5xx, or a request that never answered, may follow a committed
-    // completion. Its outcome is unknown, and a repeat would re-run the
-    // progression; it is recorded like a completion. A 4xx (a named
-    // refusal) committed nothing and stays retryable — except W1-driving T6's
-    // FP-3: 409 STAGE_COMPLETED_SEEDING_FAILED is the product saying the
-    // completion DID commit and only the next stage's seed proposal failed
-    // (:4239-4252), so it is recorded like a completion too.
+    // completeStage COMMITS the completion and then runs progressCompletedStage
+    // (usecases/stages/completion.ts), which can throw - so a 5xx, or a request that never
+    // answered, may follow a committed completion. Its outcome is unknown, so it is recorded like
+    // a completion: a Finish is not sent after it (a /complete still is, X-BD-4). A 4xx (a named
+    // refusal) committed nothing and stays retryable - except 409 STAGE_COMPLETED_SEEDING_FAILED,
+    // the product saying the completion DID commit and only the next stage's seed proposal failed,
+    // so it is recorded like a completion too.
     let r: RawResult;
     try {
       r = await this.#send(path, "POST", {});

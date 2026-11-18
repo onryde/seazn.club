@@ -538,6 +538,19 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
       expect(failed(misused.checks)).toEqual(["life-complete-twice-noop"]);
       expect(noop(misused).evidence[0]).toMatch(/^stage 1: the repeat \/complete was DriverMisuse: /);
     });
+    it("a 5xx-shaped first progression (the completion committed, the next stage's draft was never minted) is a MISSING draft, never a clean no-op", async () => {
+      // failSeedingOnComplete: the fake's first /complete on stage 1 throws 409 STAGE_COMPLETED_SEEDING_FAILED after committing, so no
+      // draft exists. The repeat then answers `already_complete` with `seed_proposal: null` - which, before the scenario read the
+      // successor, passed as a clean no-op.
+      const r = await runOn(new FakeMultiStageDriver({ failSeedingOnComplete: 1 }), "LIFECYCLE", { row: "league_ko" });
+      expect(noop(r), "rig: the repeat of stage 1 was judged").toMatchObject({ verdict: "fail", checked: 1 });
+      expect(noop(r).evidence[0]).toContain("NO DRAFT after the first completion");
+      expect(noop(r).evidence[0]).toContain("first answered 409 STAGE_COMPLETED_SEEDING_FAILED");
+    });
+    it("...and the same repeat after a first call that DID mint a draft (the harness has since confirmed it) stays a clean no-op", async () => {
+      const r = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko" });
+      expect(noop(r)).toMatchObject({ verdict: "pass", checked: 2 });
+    });
     it("a run whose stage never completed abstains with its reason (nothing to complete twice), and is not a pass", async () => {
       class NeverCompletes extends FakeLeagueDriver {
         override completeStage(): Promise<CompleteOut> { return Promise.resolve({ completed: false, events: [] }); }

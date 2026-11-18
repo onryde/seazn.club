@@ -232,7 +232,10 @@ async function progressCompletedStage(
   const plateNext = nextProgression?.timing === "setup" && isFirstLossProgression(nextProgression);
   if (plateNext) {
     // The completion above has ALREADY committed: a failure of the plate's trigger is said aloud, never reported as a failed
-    // completion (the sibling branch's F3 finding-4 rule). The plate is proposed again by the next result or withdrawal.
+    // completion (the sibling branch's F3 finding-4 rule). It is proposed again by the next decided result in the source or a
+    // withdrawal (both call the trigger), or by the organiser's Recompute: POST /stages/{id}/seed-proposal on the plate reaches
+    // `computeSeedProposal`, which draws a firstLosses plate's lines at its field's size (seed-proposal.ts, `firstLossPlate`).
+    // (Whether the desk offers that button on a plate with no proposal is not read here: the route is.)
     try {
       await maybeProposePlate(auth, stageId);
     } catch (err) {

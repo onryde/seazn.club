@@ -1387,7 +1387,10 @@ export async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionI
   if (!ready) return;
   const { completeStage } = await import("./stages");
   try {
-    await completeStage(auth, stageId, { publish: false });
+    const done = await completeStage(auth, stageId, { publish: false });
+    // W5 T17 (X-BD-4): a stage that completed between the `ready` read above and this call answers `already_complete` - the call
+    // did nothing, so the ledger is not told it advanced the stage.
+    if (done.already_complete === true) return;
     await withTenant(auth.orgId, async (tx) => {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events
