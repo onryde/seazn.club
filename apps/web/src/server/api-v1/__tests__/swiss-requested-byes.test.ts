@@ -340,8 +340,10 @@ function requestByeNames(doc: Doc): { operations: number; withRequestSurface: nu
 /** The only /bye/i request property names the API may carry (spec §12 RB3-7(c); the brief):
  *  `byes` — the knockout draw's seeded byes (entrant ids placed on a bracket, not a request for a bye);
  *  `requestedByes` — W3 T18's own refusal slot (controller ruling C8): allowed ONLY as the never-schema `{"not":{}}`,
- *  i.e. a key that accepts no value at all, which `StageConfig` / `PatchSwissStage` emit so the spec documents it. */
-const ALLOWED = new Set(["byes", "requestedByes"]);
+ *  i.e. a key that accepts no value at all, which `StageConfig` / `PatchSwissStage` emit so the spec documents it;
+ *  `round_byes` — W5 T2 (FX-G21): who the round-robin DRAW sat out in each round, written by the server at every generate and
+ *  round-tripped by a stage replace. A record of the engine's schedule, not a player asking for a bye (B4 fix wave m1). */
+const ALLOWED = new Set(["byes", "requestedByes", "round_byes"]);
 const NEVER = JSON.stringify({ not: {} });
 
 function offenders(matches: Match[]): Match[] {
@@ -368,6 +370,9 @@ describe("X-SW-18 the deferral: no API operation declares a per-entrant bye requ
     // stage doors (single + list arm, POST + PUT) and the refusal slot on both create doors and the PATCH.
     const found = (name: string) => sweep.matches.filter((m) => m.name === name).map((m) => m.op);
     expect(found("byes").sort(), "byes (the knockout draw's seeded byes)").toEqual(
+      ["POST /api/v1/divisions/{id}/stages", "POST /api/v1/divisions/{id}/stages", "PUT /api/v1/divisions/{id}/stages", "PUT /api/v1/divisions/{id}/stages"].sort(),
+    );
+    expect(found("round_byes").sort(), "round_byes (the round-robin draw's own record) on the two stage doors").toEqual(
       ["POST /api/v1/divisions/{id}/stages", "POST /api/v1/divisions/{id}/stages", "PUT /api/v1/divisions/{id}/stages", "PUT /api/v1/divisions/{id}/stages"].sort(),
     );
     expect(found("requestedByes").sort(), "requestedByes (T18's refusal slot) on create, replace and PATCH").toEqual(

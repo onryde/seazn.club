@@ -71,7 +71,10 @@ import {
   type TableWithdrawalPolicy,
 } from "@/lib/table-withdrawal-note";
 import { getDivision } from "./divisions";
-import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, writeDepartedSeat } from "./stages";
+import { divisionHasStarted, listStages, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, writeDepartedSeat } from "./stages";
+// B4 fix wave (I1): read at module load (`WITHDRAWAL_WALKOVER_KINDS` below), so it comes from its leaf module, not the barrel - a test
+// that mocks `@/server/usecases/stages` (the desk page suites) then still loads this file.
+import { BRACKET_WALKOVER_KINDS } from "./stages/generators";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
 import { advanceAfterSettle, invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
 import { replaceDepartedQualifier } from "./lucky-loser";

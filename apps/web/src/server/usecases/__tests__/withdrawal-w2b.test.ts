@@ -211,13 +211,14 @@ describe.skipIf(!HAS_DB)("W2b withdrawal cascade, per fixture state (spec §5.4)
     expect([after.status, after.outcome]).toEqual(["forfeited", withdrewAward(challenger!, holder!)]);
     expect(await activeTypes(challenge), "a forfeit, never an abandon").toEqual(["core.forfeit"]);
     // Jul3/08 §6: the challenger taking the game takes the position — a walkover win included — so the ladder
-    // completes with no hold and no settle, the departed holder one place down. Twice: completion is idempotent.
-    for (const call of ["first", "second"]) {
-      const done = await completeStage(s.auth, s.stageId);
-      const ev = done.events.find((e) => e.type === "stage_completed");
-      if (call === "first") expect(ev?.type === "stage_completed" ? ev.finalRanks : null, call).toEqual([challenger, holder, l3, l4]);
-      expect(done.completed, call).toBe(true);
-    }
+    // completes with no hold and no settle, the departed holder one place down. Twice: completion is idempotent - since W5 T17 the
+    // repeat is a no-op that says so (`already_complete`, nothing completed again; B4 fix wave: this suite was red on it).
+    const first = await completeStage(s.auth, s.stageId);
+    const ev = first.events.find((e) => e.type === "stage_completed");
+    expect(ev?.type === "stage_completed" ? ev.finalRanks : null, "first").toEqual([challenger, holder, l3, l4]);
+    expect(first.completed, "first").toBe(true);
+    const second = await completeStage(s.auth, s.stageId);
+    expect({ completed: second.completed, already_complete: second.already_complete }, "second").toEqual({ completed: false, already_complete: true });
   });
 
   it("R53 (owner ruling 53): a ladder entrant whose challenge is DECIDED withdraws with nothing pending — policy none, nothing walked over or voided; the decided challenge stands", async () => {
