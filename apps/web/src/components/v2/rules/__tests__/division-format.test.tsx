@@ -9,8 +9,7 @@
 //
 // Expected copy comes from the en dictionary (filled by hand here, never through the component's own formatter), expected
 // counts from the preview the test hands the dialog, and expected stages from the templates' own builder.
-// Ported here from Settings › Format (removed by FMT5): a stored triple round robin is kept on a save, never clamped
-// (triple-rr-retired.test.tsx); a stored Swiss opens at its rounds and an unpicked one at the field's recommendation
+// Ported here from Settings › Format (removed by FMT5): a stored three-leg league is kept on a save, never clamped; a stored Swiss opens at its rounds and an unpicked one at the field's recommendation
 // (division-settings-derived-rounds.test.tsx). The bounds sweep and the stored-legs case moved with the rest of the
 // bounds, into lib/__tests__/format-bounds.test.ts.
 import { renderToStaticMarkup } from "react-dom/server";
@@ -606,11 +605,15 @@ describe("X-BD-8 the dialog judges the division's own cut against its own field"
 });
 
 describe("a stored format is kept as it is, never clamped (ported from Settings › Format)", () => {
-  it("a stored triple round robin opens picked (it is in the offer only for this division) and a save keeps its 3 legs", async () => {
+  it("a stored three-leg league opens picked as League with its 3 legs shown (a league has no template of its own for its legs) and a save keeps them", async () => {
     apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
-    const stored: DivisionFormatStage[] = [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }];
-    const { h } = mountDialog({ stages: stored, offer: templatesForSport(SPORT, KINDS, "triple_rr").map((t) => t.key) });
-    expect(pickedTemplate(h as never)).toBe("triple_rr");
+    // differential: today detectTemplate answered a retired template key for legs >= 3
+    const stored: DivisionFormatStage[] = [{ kind: "league", name: "League", config: { legs: 3 }, progression: null }];
+    const { h } = mountDialog({ stages: stored, offer: templatesForSport(SPORT, KINDS, "league").map((t) => t.key) });
+    expect(pickedTemplate(h as never)).toBe("league");
+    const legs = h.tree().find((e) => e.type === LegsChoice);
+    expect(legs, "the legs control is drawn").toBeTruthy();
+    expect((propsOf(legs!) as { value: number }).value, "its stored count is the one shown").toBe(3);
     click(h, "division-format-save");
     await flush();
     expect(calls()[1]!.json!.map((s) => [s.kind, (s.config as { legs?: number }).legs])).toEqual([["league", 3]]);

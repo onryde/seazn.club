@@ -19,7 +19,7 @@ import { z } from "zod";
 import { describe, expect, it } from "vitest";
 import { SPORT_RULES, configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { effectiveEntrantModel, stageKeysFor } from "@seazn/engine/sport";
-import { REFUSED_CELL_REASON, ROW_KEYS, RetiredRowUnrouted, STANDALONE_REFUSED_REASON, SPORT_KEYS, TEMPLATE_ROW_KEYS, noOrganiserPathCell, refusedCell, retiredRowRoute, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { REFUSED_CELL_REASON, ROW_KEYS, STANDALONE_REFUSED_REASON, SPORT_KEYS, TEMPLATE_ROW_KEYS, noOrganiserPathCell, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import { STAGE_TEMPLATES, templatesForSport } from "../../../apps/web/src/lib/format-templates.ts";
 import {
   ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, P6_SPORTS, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
@@ -32,7 +32,7 @@ import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.
 import { generateStream } from "../lib/streams/index.ts";
 import { ALL_OUTCOMES, GeneratorUnsupported, START, type StreamEvent } from "../lib/streams/types.ts";
 import { buildSportVariants, offlineBuilderDefault, type SportVariants } from "../lib/variants.ts";
-import { CHESS_REFUSED_CELLS, NO_ORGANISER_PATH_CELLS, PAIR_NO_PATH_CELLS, REFUSED_CELLS, REFUSED_REASON, RETIRED_ROWS, STANDALONE_REASON, STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell, isRefusedCell, noPathWaveOf, offeredCells, offeredRows, refusedReasonOf } from "./refused-cells.ts";
+import { CHESS_REFUSED_CELLS, NO_ORGANISER_PATH_CELLS, PAIR_NO_PATH_CELLS, REFUSED_CELLS, REFUSED_REASON, STANDALONE_REASON, STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell, isRefusedCell, offeredCells, offeredRows, refusedReasonOf } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const variants = SPORT_KEYS.map((s) => buildSportVariants(s));
@@ -457,11 +457,11 @@ describe("applicability — the L3 plan", () => {
     expect(seen.size).toBe(ROW_KEYS.length * SPORT_KEYS.length * L3_IDS.length);
     expect([...seen.values()].every((n) => n === 1)).toBe(true);
   });
-  it("LIFECYCLE runs in every one of the 231 cells the product offers (207: chess americano/mexicano and the 22 standalone stepladder/page playoff cells refused); every drop has a non-empty reason", () => {
+  it("LIFECYCLE runs in every one of the 220 cells the product offers (196: chess americano/mexicano and the 22 standalone stepladder/page playoff cells refused); every drop has a non-empty reason", () => {
     expect(base.cases.filter((c) => c.scenario === LIFECYCLE_ID).map((c) => c.cell)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
-    expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(231);
+    expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(220);
     expect(REFUSED_CELLS.length).toBe(24);
-    expect(ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length).toBe(207);
+    expect(ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length).toBe(196);
     expect(base.drops.length).toBeGreaterThan(0);
     expect(base.drops.every((d) => d.reason.length > 0)).toBe(true);
   });
@@ -619,7 +619,7 @@ describe("applicability — the cells the product refuses (chess is individual-o
         expect(why, cell).toBe(CHESS_REFUSED_CELLS.includes(cell) ? REFUSED_CELL_REASON : STANDALONE_REFUSED_REASON);
       }
     }
-    expect(judged).toBe(231);
+    expect(judged).toBe(220);
     expect(refused.sort()).toEqual([...REFUSED_CELLS].sort());
     expect(refused.length).toBe(CHESS_REFUSED_CELLS.length + STANDALONE_REFUSED_CELLS.length);
     expect(REFUSED_REASON.test(REFUSED_CELL_REASON)).toBe(true);
@@ -628,55 +628,35 @@ describe("applicability — the cells the product refuses (chess is individual-o
     expect(STANDALONE_REASON.test(REFUSED_CELL_REASON)).toBe(false);
     expect(REFUSED_REASON.test(STANDALONE_REFUSED_REASON)).toBe(false);
   });
-  // The Triple round robin is offered to NO sport (owner ruling 2026-11-01, Match Day D1 legs Option A), but it is not
-  // refused: the API still takes legs up to 8 and divisions stored as one still play it. So its cells are no-organiser-path
-  // cells on every sport (🚫 in the browser layers, routed to the round-robin wave; CI run 42356855670's 14 harness errors
-  // were the builder's picker with no such radio), and the parity below is "the builder offers exactly the cells the matrix
-  // neither refuses nor plans with no organiser path". RETIRED_ROWS is the ruling's literal; the product's own `retired`
-  // marks must equal it. Match Day C9 review I5, option 2: the builder offers the pair formats to no sport whose ENGINE
-  // entrant model holds no individuals (round 3's rule), and the product does not refuse them there, so those cells are
-  // the matrix's no-organiser-path cells too, not refused ones.
+  // Match Day C9 review I5, option 2: the builder offers the pair formats to no sport whose ENGINE entrant model holds no
+  // individuals (round 3's rule), and the product does not refuse them there, so those cells are the matrix's
+  // no-organiser-path cells, not refused ones. The parity below is "the builder offers exactly the cells the matrix neither
+  // refuses nor plans with no organiser path". (The three-leg template's row, once a no-organiser-path row on every
+  // sport, left with it, W5 T16 / ruling 287.)
   /** What the division builder's page hands the offer: the engine's own declaration, read here from the engine. */
   const engineKinds = (sport: string): readonly string[] => effectiveEntrantModel(builtinModules.find((m) => m.key === sport)!.entrantModel ?? null, null).kinds;
-  it("on every template row the builder does not offer (format-templates templatesForSport) exactly the cells the matrix refuses or plans with no organiser path, every sport — a retired template is a no-organiser-path row", () => {
-    expect(STAGE_TEMPLATES.filter((t) => t.retired).map((t) => t.key)).toEqual(RETIRED_ROWS);
+  it("on every template row the builder does not offer (format-templates templatesForSport) exactly the cells the matrix refuses or plans with no organiser path, every sport", () => {
     let judged = 0;
     let refused = 0;
     let noPath = 0;
-    let retired = 0;
     for (const row of TEMPLATE_ROW_KEYS) for (const s of SPORT_KEYS) {
       const cell = `${row}|${s}`;
       const offered = templatesForSport(s, engineKinds(s)).some((t) => t.key === row);
-      const isRetired = RETIRED_ROWS.includes(row);
-      expect(offered && isRetired, `${cell}: a retired template is offered`).toBe(false);
       expect(refusedCell(row, s) !== null, cell).toBe(isRefusedCell(cell));
       expect(noOrganiserPathCell(row, s) !== null, cell).toBe(isNoOrganiserPathCell(cell));
       expect(offered, cell).toBe(!isRefusedCell(cell) && !isNoOrganiserPathCell(cell));
       judged++;
-      if (isRetired) {
-        expect(noOrganiserPathCell(row, s)?.wave, `${cell}: a retired row's route`).toBe(noPathWaveOf(cell));
-        retired++;
-      } else if (isRefusedCell(cell)) refused++;
+      if (isRefusedCell(cell)) refused++;
       else if (isNoOrganiserPathCell(cell)) noPath++;
     }
     expect(judged).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length);
     expect(refused).toBe(CHESS_REFUSED_CELLS.length); // the template rows carry only the chess refusals; the standalone rows are API-only
     expect(noPath).toBe(PAIR_NO_PATH_CELLS.length);
-    expect(retired).toBe(RETIRED_ROWS.length * SPORT_KEYS.length);
-    expect(retired + noPath).toBe(NO_ORGANISER_PATH_CELLS.length);
+    expect(noPath).toBe(NO_ORGANISER_PATH_CELLS.length);
   });
-  it("a retired template the matrix routes nowhere is refused by name, never planned 🚫 with no wave; a template that is not retired has no retired route", () => {
-    expect(() => retiredRowRoute("league", [{ key: "league", retired: true }])).toThrow(RetiredRowUnrouted);
-    expect(() => retiredRowRoute("league", [{ key: "league", retired: true }])).toThrow(/'league' is retired[\s\S]*names no wave/);
-    // The positive pairs: the product's own list routes its one retired row, and every other template row answers null.
-    expect(retiredRowRoute("triple_rr")?.wave).toBe(noPathWaveOf("triple_rr|generic"));
-    let checked = 0;
-    for (const row of TEMPLATE_ROW_KEYS) {
-      if (RETIRED_ROWS.includes(row)) continue;
-      expect(retiredRowRoute(row), row).toBeNull();
-      checked++;
-    }
-    expect(checked).toBe(TEMPLATE_ROW_KEYS.length - RETIRED_ROWS.length);
+  it("the template rows are exactly the product's STAGE_TEMPLATES keys, in its order (a deleted template leaves no row behind)", () => {
+    expect([...TEMPLATE_ROW_KEYS].sort()).toEqual(STAGE_TEMPLATES.map((t) => t.key).sort());
+    expect(TEMPLATE_ROW_KEYS.length).toBeGreaterThan(0);
   });
   it("a no-organiser-path cell keeps its HTTP (L3) plan: it is offered and the stage create takes it, so it plans cases and drops none for a refusal", () => {
     let checked = 0;
@@ -685,8 +665,8 @@ describe("applicability — the cells the product refuses (chess is individual-o
       expect(base.drops.filter((d) => d.cell === cell && REFUSED_REASON.test(d.reason)), cell).toEqual([]);
       checked++;
     }
-    // The ten pair-format cells (C9 review I5) and the retired Triple round robin on every sport.
-    expect(checked).toBe(10 + SPORT_KEYS.length);
+    // The ten pair-format cells (C9 review I5).
+    expect(checked).toBe(10);
   });
   it("a refused cell plans no L3 case and drops EVERY L3 id with the refusal as the reason, kind inapplicable, even LIFECYCLE", () => {
     expect(base.cases.filter((c) => isRefusedCell(c.cell))).toEqual([]);

@@ -173,6 +173,11 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     expected: 16 + wideFields(WIDE_FROM.qualifying_main!).length,
     why: "X-QM-2 (RB4-Q2): a cut of 1-5 or 1-6 from a knockout ends inside a finishing band, and so does 1-3 unless the source plays a third-place match. Day one 16 (n=4 at q=3; n=9, 17 and 33 at q=3 and, with and without third place, q=5 and 6) and seeded one per wide field (q=3 without third place, 19 fields)",
   },
+  {
+    re: /^groups_ko n=\d+ q=\d+ pools=\d+ third=(true|false): generate knockout refused \(\d+ can't qualify from this field: it can supply at most \d+\.\)$/,
+    expected: 2,
+    why: "RB5-E6 (the cut gate, W5 T12): a cut the field cannot supply is refused at the knockout's Generate - the sweep's one such field is n=17 with 3 pools, which supplies 15 of the 16 asked, with and without third place",
+  },
 ];
 
 /** Every problem with a list of refusals: a rule that covered the wrong number of cases, and a refusal no rule has read. Empty = clean. */
@@ -188,8 +193,8 @@ function auditRefusals(refused: readonly string[]): { problems: string[] } {
 
 const KNOBS = (q: number, over: Partial<TemplateKnobs> = {}): TemplateKnobs => ({ qualified: q, swissRounds: 3, poolCount: 2, legs: 1, ...over });
 
-/** The bracket-type templates, FROM the catalogue: every non-retired template with a stage whose kind is a bracket kind. */
-const BRACKET_TEMPLATES = STAGE_TEMPLATES.filter((t) => !t.retired && t.build(KNOBS(4)).some((s) => BRACKET_STAGE_KINDS.has(s.kind)));
+/** The bracket-type templates, FROM the catalogue: every template with a stage whose kind is a bracket kind. */
+const BRACKET_TEMPLATES = STAGE_TEMPLATES.filter((t) => t.build(KNOBS(4)).some((s) => BRACKET_STAGE_KINDS.has(s.kind)));
 /** Whether a knob changes what a template builds (so a knob is only varied where it exists - the declaration, not a list of keys). */
 const reads = (t: (typeof STAGE_TEMPLATES)[number], a: TemplateKnobs, b: TemplateKnobs): boolean => JSON.stringify(t.build(a)) !== JSON.stringify(t.build(b));
 const usesQualified = (t: (typeof STAGE_TEMPLATES)[number]) => reads(t, KNOBS(3), KNOBS(5));
@@ -441,6 +446,7 @@ describe("the sweep's refusal audit (no database)", () => {
   const SMALL_PLATE = (third: boolean) => `ko_plate n=2 q=2 pools=2 third=${third}: generate knockout refused (Knockout + Plate needs at least 4 entrants.)`;
   const CUT = (n: number, q: number, third: boolean, pools = " pools=2") => `qualifying_main n=${n} q=${q}${pools} third=${third}: createStages refused (From a knockout, qualify a whole round: 1, 2, 4, 8 …)`;
   const THIRDS = [false, true];
+  const GKO_CUT = (third: boolean) => `groups_ko n=17 q=16 pools=3 third=${third}: generate knockout refused (16 can't qualify from this field: it can supply at most 15.)`;
   // A cut of 1-3 is no whole band unless the source plays a third-place match (then it is), so q=3 refuses without one only.
   const CUTS = [
     CUT(4, 3, false),
@@ -454,13 +460,14 @@ describe("the sweep's refusal audit (no database)", () => {
     SW("swiss_knockout", 2, false),
     SW("swiss_knockout", 2, true),
     ...THIRDS.map(SMALL_PLATE),
+    ...THIRDS.map(GKO_CUT),
     ...CUTS,
   ];
 
-  it("accepts exactly what the sweep meets today (72 refusals: 31 + 2 + 2 + 2 + 35; the Plate refuses none, T8-b)", () => {
+  it("accepts exactly what the sweep meets today (74 refusals: 31 + 2 + 2 + 2 + 2 + 35; the Plate refuses none, T8-b)", () => {
     // 35 cuts: 16 day one + 19 seeded.
     expect(CUTS.length).toBe(35);
-    expect(today().length).toBe(72);
+    expect(today().length).toBe(74);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 
@@ -476,6 +483,8 @@ describe("the sweep's refusal audit (no database)", () => {
       ["the page playoff refusal at a field the bound allows", [...today(), PAGE().replace("n=2", "n=4")]],
       ["the page playoff refusal on a template that ends in no page playoff", [...today().filter((r) => r !== PAGE()), PAGE("swiss_knockout")]],
       ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_knockout", 2, false)), SW("swiss_other", 2, false)]],
+      ["one cut-gate refusal no longer refused (third place off)", today().filter((r) => r !== GKO_CUT(false))],
+      ["a cut-gate refusal on a template the rule does not name", [...today(), GKO_CUT(true).replace("groups_ko", "league_ko")]],
       ["a refusal text nobody has read", [...today(), "ko_plate n=8 q=4 third=false: seeding knockout from knockout refused (something new)"]],
       ["a Plate refusal of the old kind comes back (T8-b: the Plate refuses nothing)", [...today(), "ko_plate n=5 q=4 third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position 2 (found 1))"]],
       ["the plate refused at a field the bound allows", [...today(), SMALL_PLATE(false).replace("n=2", "n=4")]],

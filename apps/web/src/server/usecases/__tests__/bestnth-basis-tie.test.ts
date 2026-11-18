@@ -5,7 +5,7 @@
 // gives seed then id. No engine change; inside the cross-pool draw ruling 281's stored seed decides (PR B's X-PD-3).
 //
 // A CONSTRUCTED enumeration (the plan's G1: the "21 harness cases" premise is withdrawn):
-//   rows     — every non-retired STAGE_TEMPLATES entry whose `build()` holds a `bestNth` take over the builder's knob sweep
+//   rows     — every STAGE_TEMPLATES entry whose `build()` holds a `bestNth` take over the builder's knob sweep
 //              (derived, never typed), plus the gallery `group_group_ko` shape only if its second tier carries one;
 //   pools    — P in {2, 3, 4};
 //   classes  — seed-bearing (tennis), lots-only (football), neither (generic under the legacy V475 B1-migrated pin
@@ -53,10 +53,10 @@ const POOL_COUNTS = [2, 3, 4] as const;
 const hasBestNth = (drafts: readonly StageDraft[]) =>
   drafts.some((d) => d.progression?.sources.some((s) => s.take.some((t) => t.kind === "bestNth")));
 
-/** Every non-retired template that carries a `bestNth` take anywhere in the builder's knob sweep (pools 2..4 x every qualified
+/** Every template that carries a `bestNth` take anywhere in the builder's knob sweep (pools 2..4 x every qualified
  *  count with a remainder, `qualified mod pools != 0`, the remainder `format-templates.ts` pushes as a bestNth take). */
 function bestNthRows(): string[] {
-  return STAGE_TEMPLATES.filter((t) => t.retired !== true)
+  return STAGE_TEMPLATES
     .filter((t) =>
       POOL_COUNTS.some((poolCount) =>
         Array.from({ length: 3 * poolCount }, (_, i) => i + 2)

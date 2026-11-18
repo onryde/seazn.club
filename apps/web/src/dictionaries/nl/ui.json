@@ -2477,8 +2477,6 @@
   "format.template.knockout.help": "Schema met enkele eliminatie.",
   "format.template.double_elim.label": "Dubbele eliminatie",
   "format.template.double_elim.help": "Verliezersbracket + grote finale.",
-  "format.template.triple_rr.label": "Driedubbele competitie",
-  "format.template.triple_rr.help": "Iedereen speelt drie keer tegen iedereen.",
   "format.template.americano.label": "Americano",
   "format.template.americano.help": "Individuen wisselen elke ronde van partner; persoonlijke punten.",
   "format.template.mexicano.label": "Mexicano",

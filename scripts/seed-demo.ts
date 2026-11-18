@@ -444,6 +444,8 @@ interface DivPlan {
   n: number;
   template: keyof typeof TEMPLATES;
   q?: number;
+  /** The league's leg count when it is not the template's own (a league with legs 3: the stage's `config.legs`). */
+  legs?: number;
   ratio: number;
   config?: Record<string, unknown>;
 }
@@ -681,18 +683,19 @@ const PLAN_PRO: { name: string; divisions: DivPlan[] }[] = [
       },
     ],
   },
-  // Jul3/08 new formats (triple RR here; americano + ladder seeded separately
-  // by seedAdvancedFormats since they need linked persons / on-demand fixtures).
+  // Jul3/08 formats: a three-leg league here (a league with legs 3: there is no template of its own, ruling 287);
+  // americano + ladder seeded separately by seedAdvancedFormats since they need linked persons / on-demand fixtures.
   {
     name: "Padel & Ladder Club",
     divisions: [
       {
-        name: "Triple Round Robin",
+        name: "Three-leg League",
         sport: "generic",
         variant: "score",
         kind: "individual",
         n: 4,
-        template: "triple_rr",
+        template: "league",
+        legs: 3,
         ratio: 1,
         config: GENERIC_CFG,
       },
@@ -843,6 +846,7 @@ async function main() {
       await call(`/api/v1/divisions/${div.id}/entrants`, "POST", entrantsFor(d.kind, d.n));
       const specs = TEMPLATES[d.template](d.q ?? 4).map((s, i) => ({
         ...s,
+        ...(d.legs !== undefined && s.kind === "league" ? { config: { ...s.config, legs: d.legs } } : {}),
         seq: i + 1,
       }));
       const created = await call(`/api/v1/divisions/${div.id}/stages`, "POST", specs);

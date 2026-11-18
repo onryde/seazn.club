@@ -108,13 +108,13 @@ const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
  *  pin below rather than slip past the matrix. */
 const ENTRY_TEMPLATES = STAGE_TEMPLATES.filter((t) => {
   const first = t.build(KNOBS)[0];
-  return !t.retired && first?.kind === "knockout" && first.progression === null;
+  return first?.kind === "knockout" && first.progression === null;
 }).map((t) => t.key);
 
 /** Every template that carries a knockout AFTER its first stage: the knockout is fed, so it is no entry stage (RB4-L2). */
 const FED_TEMPLATES = STAGE_TEMPLATES.filter((t) => {
   const stages = t.build(KNOBS);
-  return !t.retired && stages[0]?.kind !== "knockout" && stages.slice(1).some((s) => s.kind === "knockout");
+  return stages[0]?.kind !== "knockout" && stages.slice(1).some((s) => s.kind === "knockout");
 }).map((t) => t.key);
 
 /** A PLAYED win for `winner` after `core.start`, through the scorer's own events — each sport's own vocabulary. The set of

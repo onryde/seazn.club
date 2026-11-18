@@ -117,7 +117,7 @@ describe("pickProbeVariant — the selection rule, empty case first", () => {
     ["an empty override", { overrides: {} }],
     ["a recorded unscorable reason", { scorable: "win-home: EngineError: nope" }],
     ["an API-only row", { row: "group_only" }],
-    ["a template row outside the slice", { row: "triple_rr" }],
+    ["a template row outside the slice", { row: "league_ko" }],
   ])("a case with %s alone does not qualify", (_what, over) => {
     expect(() => pickProbeVariant("generic", [{ ...base, ...over }])).toThrow(NoProbeVariant);
   });

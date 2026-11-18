@@ -514,8 +514,8 @@ describe("the pair-wise cover", () => {
     expect(judged).toBe(SPORT_KEYS.length);
     expect(witnesses).toBeGreaterThan(0);
   });
-  it("covers every row: each sport has a case on each of the 21 rows but a chess americano/mexicano one; the standalone stepladder / page playoff rows keep their variant levels (held, option A)", () => {
-    expect(ROW_KEYS.length).toBe(21);
+  it("covers every row: each sport has a case on each of the 20 rows but a chess americano/mexicano one; the standalone stepladder / page playoff rows keep their variant levels (held, option A)", () => {
+    expect(ROW_KEYS.length).toBe(20);
     let chessCells = 0;
     let heldCases = 0;
     for (const v of ALL) {

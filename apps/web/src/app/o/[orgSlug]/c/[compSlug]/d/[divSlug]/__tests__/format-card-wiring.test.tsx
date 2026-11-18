@@ -367,12 +367,12 @@ describe("a stored format stays in the offer, so the division still shows what i
       })),
     );
 
-  it("triple round robin (retired 2026-11-01): absent for an empty division, present for one stored as it", async () => {
+  it("a stored three-leg league lists League once, and nothing else is added for its legs", async () => {
     const empty = await withEngineModel("badminton", () => formatProp());
-    expect(empty!.offer).not.toContain("triple_rr");
-    stagesSpies.listStages.mockResolvedValue([{ id: "s0", seq: 1, name: "Triple RR", kind: "league", config: { legs: 3 }, progression: null }]);
+    stagesSpies.listStages.mockResolvedValue([{ id: "s0", seq: 1, name: "League", kind: "league", config: { legs: 3 }, progression: null }]);
     const stored = await withEngineModel("badminton", () => formatProp());
-    expect(stored!.offer.filter((k) => k === "triple_rr"), "listed once").toEqual(["triple_rr"]);
+    expect(stored!.offer.filter((k) => k === "league"), "listed once").toEqual(["league"]);
+    expect(stored!.offer, "the same offer as an empty division: no template of its own for three legs").toEqual(empty!.offer);
   });
 
   it("chess stored as americano before the individual-only ruling keeps americano; mexicano stays absent", async () => {

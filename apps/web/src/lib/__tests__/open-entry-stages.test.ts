@@ -345,8 +345,7 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
 
   it("every template answers the lock its rulebook row names", () => {
     // Open after Start: the root knockouts (X-LE-1), the root Swiss templates (W3, X-SW-12), the open formats (Jul3/08).
-    // W5 (X-CU-9): and the six whose entry stage is a root league or group (RB5-L1, L2), `triple_rr` (retired, stored
-    // as a league) among them.
+    // W5 (X-CU-9): and the six whose entry stage is a root league or group (RB5-L1, L2).
     const OPEN = new Set([
       ...ROOT_KNOCKOUT_TEMPLATES,
       "swiss",
@@ -361,7 +360,6 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
       "group_only",
       "group_stepladder",
       "group_playoffs",
-      "triple_rr",
     ]);
     let checked = 0;
     for (const t of STAGE_TEMPLATES) {
@@ -448,7 +446,6 @@ describe("W5 T4: a root league or group keeps the entrant list open after Start"
 
   it("X-CU-9 the templates whose entry stage is a table are exactly the six the rulebook names", () => {
     const opening = STAGE_TEMPLATES.filter((t) => {
-      if (t.retired) return false;
       const [first] = buildTemplateStages(t.key, KNOBS);
       return (first?.kind === "league" || first?.kind === "group") && first.progression === null;
     }).map((t) => t.key);

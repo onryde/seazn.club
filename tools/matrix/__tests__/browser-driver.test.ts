@@ -521,24 +521,21 @@ describe("BrowserDriver — creation, from the product's answers (ruling B)", ()
     expect(c.evidence).toEqual(["stage[1].config.rngSeed: built 8, harness 7"]);
   });
 
-  // The brief's example (bodies say legs 3, the builder posts 1) is a false
-  // premise: the bodies ARE the builder's code (catalogue.ts builderStages →
-  // buildTemplateStages), which overwrites every league stage's legs with the
-  // legs knob (format-templates.ts buildTemplateStages), so both sides say
-  // the same thing and this check cannot see triple_rr's hypothesis (W5 owns
-  // it). The shape is kept: the builder posting a legs the bodies do not say.
+  // The bodies ARE the builder's code (catalogue.ts builderStages → buildTemplateStages), which overwrites every league
+  // stage's legs with the legs knob, so both sides normally say the same thing. The shape tested: the builder posting a
+  // legs the bodies do not say.
   it("builder output that differs from the bodies in one config value fails naming the path, and postStages answers what the organiser really got", async () => {
-    const bodies = stagesForRow("triple_rr");
+    const bodies = stagesForRow("league");
     const harnessLegs = bodies[0]!.config.legs as number;
     const builtLegs = harnessLegs + 2;
     const { driver, http } = league({
-      spec: spec("triple_rr"),
+      spec: spec("league"),
       pages: { createDivisionUi: async (_c, _s, compId, i) => ({
         division: { id: "d1", competition_id: compId, name: i.name, slug: PRODUCT_DIV_SLUG, sport_key: i.sportKey, variant_key: i.variantKey, config: {}, status: "draft" },
-        stages: builtFrom("triple_rr").map((s) => ({ ...s, config: { ...s.config, legs: builtLegs } })),
+        stages: builtFrom("league").map((s) => ({ ...s, config: { ...s.config, legs: builtLegs } })),
       }) },
     });
-    const { divId } = await built(driver, spec("triple_rr"));
+    const { divId } = await built(driver, spec("league"));
     const out = await driver.postStages(divId, bodies);
     expect(out[0]!.config.legs).toBe(builtLegs);
     expect(http.calls).not.toContain("postStages");

@@ -24,8 +24,7 @@ const en = enUi as Record<string, string>;
 const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: "blitz", name: "Blitz", system: true }], entrants: engineEntrantChoice("boardgame") };
 const BADMINTON: SportOption = { key: "badminton", name: "Badminton", variants: [{ key: "bwf", name: "BWF", system: true }], entrants: engineEntrantChoice("badminton") };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
-// Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
-const OFFERED = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
+const OFFERED = STAGE_TEMPLATES;
 
 function picker(first: SportOption): string {
   const html = renderToStaticMarkup(
@@ -56,7 +55,7 @@ describe("the division builder offers chess no americano or mexicano (follow-up 
       expect(grid, t.key).toContain(label(t.key));
       shown++;
     }
-    expect(shown).toBeGreaterThanOrEqual(13); // 16 templates, less Triple RR (retired) and the two refused
+    expect(shown).toBeGreaterThanOrEqual(13); // every template, less the two refused
   });
 
   it("the positive pair: badminton still renders every card, americano and mexicano among them", () => {

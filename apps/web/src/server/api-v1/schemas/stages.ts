@@ -244,9 +244,9 @@ export const StageConfig = z
     ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
     // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8 on the server, the generator's own clamp (usecases/stages/,
-    // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01): the builder offers 1-2 only (LegsChoice), and
-    // Triple round robin is retired from the list, but a stored division with 3 or more legs keeps playing it, so the door
-    // must not refuse the value it already holds.
+    // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01) and RB5-G1: the builder offers 1-2 only
+    // (LegsChoice). The three-leg format itself is gone (ruling 287: a league with legs 3 has no template of its own and
+    // reads back as a league), but the legs VALUE is not: the door must not refuse a count a stored division already holds.
     legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
     pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with

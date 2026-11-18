@@ -67,9 +67,6 @@ export interface TemplateKnobs {
 
 export const STAGE_TEMPLATES: {
   key: string;
-  /** Kept for what already reads it (a division stored with it, the seeds, the format matrix), but offered to no sport:
-   *  templatesForSport leaves it out unless it is the structure a division already plays. */
-  retired?: true;
   build: (knobs: TemplateKnobs) => StageDraft[];
 }[] = [
   {
@@ -261,16 +258,6 @@ export const STAGE_TEMPLATES: {
     ],
   },
   {
-    // Retired from the offer (owner ruling 2026-11-01, Match Day D1 legs Option A): the builder and Settings offer legs 1
-    // or 2 only, and through the builder this template never built its three legs anyway (buildTemplateStages stamps
-    // the legs knob on every league stage). The server still takes legs up to 8 (Jul3/08, usecases/stages/), and a
-    // division stored as one still shows it in Settings (detectTemplate, templatesForSport `current`). Kept rather than
-    // deleted: the seeds, the format matrix catalogue and stored divisions read it.
-    key: "triple_rr",
-    retired: true,
-    build: () => [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }],
-  },
-  {
     key: "americano",
     build: () => [
       { kind: "americano", name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 7 }, progression: null },
@@ -323,8 +310,7 @@ export const STAGE_TEMPLATES: {
 const KIND_PROBE_KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
 
 /** The templates the division builder and the Settings format select OFFER for a sport, in STAGE_TEMPLATES order: a
- *  `retired` template is left out for every sport (Triple round robin, owner ruling 2026-11-01), and so is a template
- *  any of whose stages is a kind the sport refuses - by KEY (chess is individual-only, owner ruling 2026-10-26,
+ *  template any of whose stages is a kind the sport refuses - by KEY (chess is individual-only, owner ruling 2026-10-26,
  *  follow-up to #1027: americano and mexicano mint pair entrants, so chess is offered neither) or by its ENGINE entrant
  *  model (Match Day C9 fix round 1, review I5; round 3: a pair-minting stage needs individual players,
  *  PAIR_MINTING_NEEDS_KINDS, so `entrantKinds` lacking them - the team sports, volleyball, a Pairs or Teams division -
@@ -333,7 +319,7 @@ const KIND_PROBE_KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 5, poolCoun
  *  no caller can forget it. The refusal is read off each template's OWN stage graph, never a list of keys, so a later
  *  template carrying such a stage is left out too. `current` (Settings: the structure the division already plays) is
  *  kept either way, so a division stored before a ruling still shows what it is. Re-applying a kind refused by KEY is
- *  refused by the server (assertStageKindsAllowed); a retired template re-applies as it is stored. */
+ *  refused by the server (assertStageKindsAllowed). */
 export function templatesForSport(
   sportKey: string | null | undefined,
   entrantKinds: readonly string[],
@@ -342,8 +328,7 @@ export function templatesForSport(
   return STAGE_TEMPLATES.filter(
     (t) =>
       t.key === current ||
-      (!t.retired &&
-        !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind) || entrantKindsRefuseStageKind(entrantKinds, s.kind))),
+      !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind) || entrantKindsRefuseStageKind(entrantKinds, s.kind)),
   );
 }
 
@@ -408,10 +393,9 @@ export function detectTemplate(
   }[],
 ): string | null {
   const kinds = stages.map((s) => s.kind).join("+");
-  if (kinds === "league") {
-    const legs = (stages[0]?.config as { legs?: number } | undefined)?.legs ?? 1;
-    return legs >= 3 ? "triple_rr" : "league";
-  }
+  // Any leg count (the stage schema takes 1-8, RB5-G1) is a league: there is no template of its own for three legs
+  // (owner ruling 287). The count is the stage's own knob and reads back from `config.legs`.
+  if (kinds === "league") return "league";
   if (kinds === "league+knockout") return "league_ko";
   if (kinds === "group+knockout") return "groups_ko";
   // A lone group stage is group_only - unless it carries a progression: it has nothing to progress from, so that is a custom graph

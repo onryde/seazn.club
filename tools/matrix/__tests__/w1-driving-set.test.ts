@@ -97,13 +97,13 @@ describe("planW1Driving — the whole set", () => {
     // playoff cells, ruling 269). The 11 F1 page_playoff_only odd-field drops of Task 2 are among them now, not a group of their own.
     expect(drops).toBe(REFUSED_CELLS.length * W1_DRIVING_SCENARIOS.length);
     expect(REFUSED_CELLS.length).toBe(24);
-    // 25 committed cricket `test` cases; 2 sit on a refused row and are held, never planned (option A).
-    expect(cricketTests().length).toBe(25);
-    expect(testCases).toBe(23);
+    // 24 committed cricket `test` cases (25 before W5 T16 deleted the three-leg row's one); 2 sit on a refused row and are held, never planned (option A).
+    expect(cricketTests().length).toBe(24);
+    expect(testCases).toBe(22);
     expect(plan.length).toBe(expected + testCases);
-    // 231×4 − 24×4 (the refused cells) + 23 (the cricket `test` cases of an offered row) — the typed pin must equal the derivation.
-    expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(231);
-    expect(plan.length).toBe(851);
+    // 220×4 − 24×4 (the refused cells) + 22 (the cricket `test` cases of an offered row) — the typed pin must equal the derivation.
+    expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(220);
+    expect(plan.length).toBe(806);
     expect(plan.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(new Set(plan.map((c) => c.caseId)).size).toBe(plan.length);
   });
@@ -137,9 +137,9 @@ describe("planW1Driving — the whole set", () => {
       expect(c, vc.id).toEqual({ caseId: `${vc.row}|cricket|test|LIFECYCLE|${vc.id}`, row: vc.row, sport: "cricket", variant: "test", scenario: "LIFECYCLE", canary: false, overrides: vc.overrides });
       checked++;
     }
-    expect(checked).toBe(23);
+    expect(checked).toBe(22);
     // The 2 held ones are planned nowhere.
-    expect(cricketTests().filter((vc) => byId.has(`${vc.row}|cricket|test|LIFECYCLE|${vc.id}`)).length).toBe(23);
+    expect(cricketTests().filter((vc) => byId.has(`${vc.row}|cricket|test|LIFECYCLE|${vc.id}`)).length).toBe(22);
     // The grid's cricket cases ride the builder default, not `test` (else the count above would double-count).
     expect(variantFor("cricket")).not.toBe("test");
   });
@@ -167,7 +167,7 @@ describe("planW1Driving — --only and --scenario", () => {
       expect([0, W1_DRIVING_SCENARIOS.length], `${row}|${sport} drops ${drops} of the four scripts`).toContain(drops);
       cellsSeen++;
     }
-    expect(cellsSeen).toBe(231);
+    expect(cellsSeen).toBe(220);
     const leagueTests = cricketTests().filter((c) => c.row === "league");
     expect(leagueTests.length).toBe(3);
     const lc = planW1Driving(variantFor, { only: "league|cricket", scenario: "LIFECYCLE" });
@@ -181,7 +181,7 @@ describe("planW1Driving — --only and --scenario", () => {
   it("--scenario alone narrows the whole grid to that scenario (and keeps the test cases only for LIFECYCLE)", () => {
     // The offered cells: every cell but the 24 the product refuses (chess americano/mexicano, the standalone stepladder / page playoff).
     const cells = ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length;
-    expect(cells).toBe(207);
+    expect(cells).toBe(196);
     expect(planW1Driving(variantFor, { scenario: "M1" }).length).toBe(cells);
     expect(planW1Driving(variantFor, { scenario: "F1" }).length).toBe(cells);
     expect(planW1Driving(variantFor, { scenario: "LIFECYCLE" }).length).toBe(cells + plannedCricketTests().length);
@@ -279,7 +279,7 @@ describe("the committed-file readers (PF-11)", () => {
       expect(() => dropIndexOf(bad), JSON.stringify(bad)).toThrow(DropListUnreadable);
     }
   });
-  it("readVariantsFile reads the committed variants: every sport, cricket's 25 test cases among them", () => {
+  it("readVariantsFile reads the committed variants: every sport, cricket's 24 test cases among them", () => {
     const f = readVariantsFile();
     expect(f.sports.map((s) => s.sport).sort()).toEqual([...SPORT_KEYS].sort());
     expect(f.sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test").length).toBe(cricketTests().length);
@@ -291,7 +291,7 @@ describe("the w1-driving planner (run.ts --set w1-driving) and the slice planner
     const whole = makeW1DrivingPlanner()({});
     expect([...whole.sports]).toEqual([...SPORT_KEYS]);
     expect(whole.deniesFeatures).toBe(false);
-    expect(whole.plan(variantFor).length).toBe(851);
+    expect(whole.plan(variantFor).length).toBe(806);
     const one = makeW1DrivingPlanner()({ only: "league_ko|football", scenario: "LIFECYCLE" });
     expect([...one.sports]).toEqual(["football"]);
     expect(one.plan(variantFor).map((c) => c.caseId)).toEqual([`league_ko|football|${variantFor("football")}|LIFECYCLE`]);

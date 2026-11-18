@@ -1,5 +1,6 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
 import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { detectTemplate } from "../../../apps/web/src/lib/format-templates.ts";
 
 /**
  * Format matrix W5 round-robin app PR A, Task 2 (X-CU-6 FX-G1 #879; FX-G21) — the smoke proof, over real HTTP against a live
@@ -67,6 +68,10 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * Task 14 (X-BD-2; NEW-W1d-5): the Groups only picker card's stage list - ONE group stage, three pools, no progression - is accepted as one
  * stage and draws an eleven-entrant field into three pools (4, 4, 3: 15 lines), with no second stage. (Main: the picker had no such card.)
  *
+ * Task 16 (X-RR-6; ruling 287): a league created over the API with `legs: 3` is accepted, draws three legs (4 entrants: 18 lines) and
+ * reads back as a plain `league` with `config.legs` 3 - the product's own `detectTemplate` over the stage read back from the API
+ * names no template of its own for three legs. (Main: it read back as the retired template.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -87,7 +92,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 12: 1 (the first Generate of 7 entrants in 4 pools is refused STAGE_NOT_READY naming 3, and writes nothing).
   // Task 12b: 1 (a league + knockout whose Top 8 is asked of 6 entrants is refused RR_CUT_EXCEEDS_FIELD naming 6, and writes nothing; Top 6 draws).
   // Task 14: 1 (the Groups only card's one-stage list: three pools of eleven, 15 lines, no second stage).
-  const EXPECTED_CHECKS = 21;
+  // Task 16: 1 (a legs-3 league over the API draws 18 lines and reads back as a league with its 3 legs).
+  const EXPECTED_CHECKS = 22;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -939,6 +945,40 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-BD-2: the Groups only card's one-stage list draws three pools of eleven (15 lines, everyone in one) with no second stage" +
         (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, stages ${posted.length}/${stages.length}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 200)}, lines ${lines.length}, named ${named.size}`),
+      ok,
+    );
+  }
+
+  // Check 19 - Task 16 (X-RR-6, ruling 287): a league created over the API with legs 3 is accepted (RB5-G1 keeps legs 1-8), draws three
+  // legs of four entrants (6 pairs x 3 = 18 lines) and reads back through the product's own detectTemplate as `league`, `legs` 3 - never a
+  // template of its own. In the second org, a competition of its own.
+  {
+    const second = newSession();
+    await signIn(second, `delivered+w5a2_${tag}@resend.dev`);
+    const cRes = await v1(second, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A three legs ${tag}`, visibility: "private" });
+    const compId = v1data<{ id: string } | undefined>(cRes)?.id;
+    const dRes = await v1(second, `/api/v1/competitions/${compId ?? "no-competition"}/divisions`, "POST", {
+      name: "Three legs",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const made = v1data<{ id: string }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `L3 ${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const posted = await v1(second, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: { legs: 3 } });
+    const stageId = v1data<{ id: string } | undefined>(posted)?.id;
+    const gen = await v1(second, `/api/v1/stages/${stageId}/generate`, "POST");
+    const lines = (v1data<Fx[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const back = (v1data<{ id: string; kind: string; config: { legs?: number } | null; progression: unknown }[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/stages`)) ?? []).find((x) => x.id === stageId);
+    const ok =
+      cRes.status === 201 && dRes.status === 201 && made.length === 4 && posted.status === 201 && gen.status === 200 && lines.length === 18 &&
+      back !== undefined && back.config?.legs === 3 && detectTemplate([{ kind: back.kind, config: back.config, progression: back.progression as never }]) === "league";
+    w5Check(
+      "w5a X-RR-6: a league created with legs 3 draws three legs (18 lines) and reads back as a league with its 3 legs, never a template of its own" +
+        (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, stage ${posted.status}, generate ${gen.status}, lines ${lines.length}, back ${JSON.stringify(back)?.slice(0, 200)}`),
       ok,
     );
   }

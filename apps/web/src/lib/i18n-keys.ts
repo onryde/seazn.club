@@ -3349,8 +3349,6 @@ export type DictionaryKey =
   | "format.template.swiss_knockout.label"
   | "format.template.swiss_playoff.help"
   | "format.template.swiss_playoff.label"
-  | "format.template.triple_rr.help"
-  | "format.template.triple_rr.label"
   | "formatChange.button"
   | "formatChange.chip.custom"
   | "formatChange.chip.none"

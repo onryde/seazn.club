@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, cellId, isKnobRow, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import {
-  API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
+  API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
   layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
 import { NotApiOnlyRow, RefusedApiOnlyRow, apiOnlyUiPath, apiOnlyUiRoute } from "../lib/api-only-ui.ts";
@@ -28,8 +28,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RAW = JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: L2Run[] };
 /** The slice's cells, from its declared rows × sports (never a typed list). */
 const SLICE_CELLS: ReadonlySet<string> = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
-/** The slice's committed L2 runs, in file order — 70 today (65 swiss|badminton,
- *  2 swiss|generic, 1 knockout|generic, 2 knockout|badminton). Only this filter's own length is
+/** The slice's committed L2 runs, in file order — 69 today (65 swiss|badminton,
+ *  1 swiss|generic, 1 knockout|generic, 2 knockout|badminton). Only this filter's own length is
  *  asserted, so a regenerated catalogue moves the test, not the plan. */
 const SLICE_RUNS = RAW.runs.filter((r) => SLICE_CELLS.has(cellId(r.row, r.sport)));
 const ATOM = new Map(ATOMIC.map((a) => [a.id, a]));
@@ -100,12 +100,16 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(checked).toBeGreaterThan(0);
     // File order; none dropped, none added.
     expect(cases.map((c) => c.run!.n)).toEqual(SLICE_RUNS.map((r) => r.n));
-    // Witness: the committed widths are NOT the plain (n - 1) % 7 rotation for some
-    // slice run, so a planner that re-derived widths could not pass the loop above.
-    expect(SLICE_RUNS.some((r) => r.width !== L2_WIDTHS[(r.n - 1) % L2_WIDTHS.length])).toBe(true);
+    // Witness: a planner that re-derived widths from (n - 1) % 7 could not pass the loop above. Since W5 T16 (the row count is no
+    // longer a multiple of 7, so pairs.ts's lap shift no longer applies) every committed width IS the plain rotation, so the
+    // witness is built: one committed run's width is moved off the rotation in memory and the planner must hand back THAT width.
+    const moved = SLICE_RUNS[0]!;
+    const off = L2_WIDTHS.find((w) => w !== L2_WIDTHS[(moved.n - 1) % L2_WIDTHS.length])!;
+    const planned = planL2({ runs: SLICE_RUNS.map((r) => (r === moved ? { ...r, width: off } : r)) }, SLICE_CELLS);
+    expect(planned.find((c) => c.run!.n === moved.n)!.width, "the committed width, not the rotation's").toBe(off);
   });
 
-  it("slice L2 = 70 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
+  it("slice L2 = 69 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
     const cases = planL2(committed, SLICE_CELLS);
     expect(cases).toHaveLength(SLICE_RUNS.length);
     // The expected split, from the catalogue's own declarations.
@@ -164,7 +168,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // `?? atom.l2NoPath` arm and its reason are reached from the cells outside it.
   it("the l2NoPath arm: every committed run whose atom has l2NoPath (and no knownNoPath) is planned 🚫 naming that wave, with the route-exists reason", () => {
     // A run on a cell the builder does not offer is the CELL arm (layers.ts: the cell's route outranks the atom's;
-    // layers-grid.test.ts proves every such run): the retired Triple round robin's M12b runs route to its wave, not W2.
+    // layers-grid.test.ts proves every such run): the pair formats' M12b runs on those cells route to W7, not W2.
     const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && l2NoPathFor(a, r.sport) !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario) && !isNoOrganiserPathCell(cellId(r.row, r.sport)); };
     const gapRuns = RAW.runs.filter(isL2Gap);
     const cells = new Set(gapRuns.map((r) => cellId(r.row, r.sport)));
@@ -187,8 +191,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // W2e Task 32 (B2-3): the committed M12b runs, planned per sport. The four sports whose pad gained the control are no
   // longer 🚫 ("no screen sends it" is false for them); they are ░ until a scenario script drives the control. Cricket and
   // generic keep 🚫 W2 (dispositions CK-DV-3, GN-DV-1). Match Day C9 review I5, option 2: a run on a cell the builder does
-  // not offer (americano/mexicano on those sports: W7; the retired Triple round robin on every sport, owner ruling
-  // 2026-11-01: W5) is 🚫 whatever its atom - the cell has no organiser path at all.
+  // not offer (americano/mexicano on those sports: W7) is 🚫 whatever its atom - the cell has no organiser path at all.
   it("W2e T32: M12b is ░ in football, volleyball, hockey and ice hockey and still 🚫 W2 in every other sport, run by committed run", () => {
     const m12b = RAW.runs.filter((r) => r.scenario === "M12b");
     const cells = new Set(m12b.map((r) => cellId(r.row, r.sport)));

@@ -160,7 +160,7 @@ describe("designWaves: design section 8's rows, numbered waves only", () => {
 describe("backingOf: a gap's wave is a row of design section 8 (T19 review m3)", () => {
   const waves = designWaves(readFileSync(DEFAULT_DESIGN, "utf8"));
   // Typed from section 8: W4's scope reads "knockout, ko_plate, qualifying_main, third place, stepladder, page_playoff"; W5's reads
-  // "league, triple_rr, group, league_ko, groups_ko, group_stepladder, group_playoffs"; W7's name reads "americano, mexicano, ladder".
+  // "league, group, league_ko, groups_ko, group_stepladder, group_playoffs" (the three-leg template's row left with it, W5 T16); W7's name reads "americano, mexicano, ladder".
   const named: [string, string, string][] = [
     ["knockout_third_place", "W4", "third place"],
     ["page_playoff_only", "W4", "page_playoff"],

@@ -23,9 +23,8 @@ import { DivisionBuilder, type SportOption } from "@/components/v2/division-buil
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 
-// The builder offers every template but the Triple round robin, retired from every sport's offer (owner ruling
-// 2026-11-01, Match Day D1); its copy still renders in Settings for a division stored as one.
-const PICKER_TEMPLATES = STAGE_TEMPLATES.filter((t) => t.key !== "triple_rr");
+// The builder offers every template in STAGE_TEMPLATES.
+const PICKER_TEMPLATES = STAGE_TEMPLATES;
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
 import esUi from "@/dictionaries/es/ui.json";

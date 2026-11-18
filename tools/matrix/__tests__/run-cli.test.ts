@@ -2374,15 +2374,15 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: the 207 offered cells (231 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 31 with no organiser path (10 API-only, 21 the builder does not offer: C9 review I5's ten and the retired Triple round robin's eleven) recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 196 offered cells (220 less chess americano/mexicano and the 22 refused standalone cells) at 1280, the 20 with no organiser path (10 API-only, 10 the builder does not offer: C9 review I5's ten) recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
     expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "g1", "--report-dir", dir])).toBe(0);
     const r = runIn(dir, "g1");
     expect(r.cases).toHaveLength(OFFERED);
-    expect(CELLS).toBe(231);
-    expect(OFFERED).toBe(207);
+    expect(CELLS).toBe(220);
+    expect(OFFERED).toBe(196);
     expect(r.cases.every((c) => c.layer === "L1" && c.width === 1280 && c.caseId.endsWith("@1280"))).toBe(true);
     expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(OFFERED);
     expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
@@ -2390,7 +2390,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     // 10 API-only cells no builder control builds (4 rows x 11 sports = 44, less the 22 the product refuses, W4 T16, less knockout_third_place's 11 — the
     // builder's Third place control builds it, W4 app PR B T15, less group_group_ko's t20-super8 cell, the one a gallery card reaches; group_only left the API-only
     // rows when the picker gained its Groups only card, W5 T14), plus the cells the builder does not
-    // offer (C9 review I5, option 2; the retired Triple round robin on every sport, owner ruling 2026-11-01).
+    // offer (C9 review I5, option 2).
     // W5 X-BD-3: and the super-groups card reaches group_group_ko on every sport but cricket (t20-super8), so those 10 are driven too.
     const noPathPlanned = 10 + NO_ORGANISER_PATH_CELLS.length;
     expect(planned).toHaveLength(noPathPlanned);
@@ -2404,7 +2404,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,589 runs at their own widths — 48 driven, 282 🚫, 1,216 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,513 runs at their own widths — 48 driven, 206 🚫, 1,216 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2413,22 +2413,17 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(r.cases).toHaveLength(RAW_RUNS.length);
     expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
-    // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503. W2e Task 32: 19 M12b runs have a screen
-    // path (🚫 164 -> 145, ░ 1,503 -> 1,522; layers-grid.test.ts). Match Day C9 review I5, option 2: every run on the ten
-    // no-organiser-path cells is 🚫 (driven 62 -> 56, 🚫 145 -> 279, ░ 1,522 -> 1,394; layers-grid.test.ts). The retired
-    // Triple round robin's 77 runs are 🚫 too (driven 56 -> 53, 🚫 279 -> 349, ░ 1,394 -> 1,327; layers-grid.test.ts).
-    // W4 T16 + T24 (on the pre-triple_rr figures): the 22 refused standalone cells leave (driven 56 -> 51, 🚫 279 -> 222,
-    // ░ 1,394 -> 1,271) and the settled atoms Q4b, D4b (⛔ 11 + 17) and D4a (⏳ 17) leave 🚫 - recorded as planned, never driven.
-    // Both together: triple_rr's 77 runs go 🚫 on top of W4's figures, 2 of them W4's settled D4a/D4b on triple_rr|cricket
-    // (a no-organiser-path cell keeps them 🚫): driven 48, 🚫 294, ░ 1,204, ⛔ 27 (11 + 16), ⏳ 16 (layers-grid.test.ts).
-    // W4 app PR B, Task 15: knockout_third_place is a builder knob row, no longer API-only, so Q4a's 12 runs on its cells (an atom
-    // with an organiser path and no HARNESS_SCENARIO script) leave 🚫 for ░: 🚫 294 -> 282, ░ 1,204 -> 1,216; driven stays 48.
+    // Ruling 65's figures, by the pair file's own history: X-DR-1 (W2a) 1,731 -> 1,729 runs; W2e Task 32 gave 19 M12b runs a screen path;
+    // Match Day C9 review I5 put every run on the ten no-organiser-path cells on 🚫; W4 T16 + T24 took the refused standalone cells'
+    // runs off and the settled atoms Q4b, D4b (⛔) and D4a (⏳) off 🚫; W4 app PR B Task 15 moved Q4a's 12 runs to ░. W5 T16 (ruling
+    // 287) deletes the three-leg template's row: its 76 runs were all 🚫, so driven 48, ⛔ 27 and ⏳ 16 stay and 🚫 282 -> 206
+    // (1,589 -> 1,513 runs; layers-grid.test.ts).
     expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(48);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(282);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(206);
     expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1216);
     expect(r.cases.filter((c) => c.state === "refused" && c.planned === true)).toHaveLength(27);
     expect(r.cases.filter((c) => c.state === "later" && c.planned === true)).toHaveLength(16);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(282 + 1216 + 27 + 16);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(206 + 1216 + 27 + 16);
     expect(r.cases.filter((c) => c.state === "refused").every((c) => ["Q4b", "D4b"].includes(c.scenario))).toBe(true);
     expect(r.cases.filter((c) => c.state === "later").every((c) => c.scenario === "D4a")).toBe(true);
     expect(r.cases.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).every((c) => c.state === "no_path")).toBe(true);

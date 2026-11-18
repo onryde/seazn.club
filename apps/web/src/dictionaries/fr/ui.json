@@ -2477,8 +2477,6 @@
   "format.template.knockout.help": "Tableau à élimination simple.",
   "format.template.double_elim.label": "Double élimination",
   "format.template.double_elim.help": "Tableau des perdants + grande finale.",
-  "format.template.triple_rr.label": "Championnat triple",
-  "format.template.triple_rr.help": "Tout le monde affronte tout le monde trois fois.",
   "format.template.americano.label": "Americano",
   "format.template.americano.help": "Chaque joueur change de partenaire à chaque tour ; points personnels.",
   "format.template.mexicano.label": "Mexicano",

@@ -9,7 +9,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import { parseResults } from "../lib/results.ts";
-import { LOCK_PATH, REPO, TRUTH_RUNS, judgeRun, livePlan, noVariant, readLock, sweepCommitted, thawed } from "./committed-plans.ts";
+import { LOCK_PATH, REPO, TRUTH_RUNS, judgeRun, livePlan, noVariant, noWidth, readLock, sweepCommitted, thawed } from "./committed-plans.ts";
 
 const tomorrow = vi.hoisted(() => ({ atom: false, cell: false }));
 
@@ -67,7 +67,18 @@ describe("the committed evidence is judged against its frozen plans, not today's
   it("one more scripted L2 atom (M2 → the M1 script) reds w1c-l2 judged live, and leaves the frozen sweep green", () => {
     tomorrow.atom = true;
     // Teeth: tomorrow's planner drives an M2 run that w1c-l2 recorded as ░.
-    const live = judgeRun(casesOf("w1c-l2"), livePlan("--layer L2")).wrong;
+    // W5 T16 deleted a template row, so the width rotation (run n at width (n - 1) % 7) re-seated most runs: the frozen run's ids carry
+    // yesterday's widths. They are put on today's width in memory for THIS probe only (the run and its lock are untouched), so the
+    // probe still asks "does today's planner drive a case the run recorded as ░" and not "do the widths still line up".
+    const plan = livePlan("--layer L2");
+    const widthOf = new Map([...plan.driven, ...plan.planned.keys()].map((k) => [noWidth(k), k.slice(k.lastIndexOf("@") + 1)]));
+    const evidence = casesOf("w1c-l2");
+    const reseated = evidence.map((c) => {
+      const w = widthOf.get(noWidth(noVariant(c.caseId)));
+      return w === undefined ? c : { ...c, caseId: c.caseId.replace(/@\d+$/, `@${w}`) };
+    });
+    expect(reseated.filter((c, i) => c.caseId !== evidence[i]!.caseId).length, "anti-vacuity: some widths moved, so the re-seat is doing work").toBeGreaterThan(0);
+    const live = judgeRun(reseated, plan).wrong;
     expect(live.filter((w) => w.includes("the plan DRIVES this case")).length, live.join("\n")).toBeGreaterThan(0);
     const r = sweepCommitted();
     expect(r.wrong).toEqual([]);

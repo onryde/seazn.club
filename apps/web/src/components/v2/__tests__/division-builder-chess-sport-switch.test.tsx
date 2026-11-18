@@ -31,8 +31,7 @@ const CHESS: SportOption = { key: "boardgame", name: "Chess", variants: [{ key: 
 const FOOTBALL: SportOption = { key: "football", name: "Football", variants: [{ key: "score", name: "Score", system: true }], entrants: engineEntrantChoice("football") };
 const GENERIC: SportOption = { key: "generic", name: "Generic", variants: [{ key: "score", name: "Score", system: true }], entrants: engineEntrantChoice("generic") };
 const REFUSED_FOR_CHESS = ["americano", "mexicano"];
-// Retired from every sport's offer (owner ruling 2026-11-01, Match Day D1): triple-rr-retired.test.tsx sweeps it.
-const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr");
+const OFFERED_KEYS = STAGE_TEMPLATES.map((t) => t.key);
 
 /** The builder, opening on `sports[0]`: it opens on the first tile shown (C9 round 3), so the organisation's history
  *  names `sports[0]` - the real path to that opening - and the mount checks it landed there. */

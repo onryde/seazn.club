@@ -26,6 +26,7 @@ import { offlineBuilderDefault } from "../lib/variants.ts";
 import { main } from "../judge.ts";
 import { planOf, runSlice, scopeOf } from "../run.ts";
 import { REPO, TRUTH_RUNS, livePlan } from "./committed-plans.ts";
+import { noVariant, noWidth } from "../lib/expected-plan.ts";
 import { deps, fakeBrowserRun } from "./run-deps.ts";
 import { CHESS_REFUSED_CELLS, REFUSED_CELLS, STANDALONE_REFUSED_CELLS, isRefusedCell } from "./refused-cells.ts";
 
@@ -318,17 +319,40 @@ describe("matchPlanIds (T4-IDS): the run's case ids are exactly the planner's fo
     const onRefused = real.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
     expect(onRefused.length).toBe(79);
     expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...STANDALONE_REFUSED_CELLS].sort());
-    const kept = real.cases.filter((c) => !isRefusedCell(`${c.row}|${c.sport}`));
+    // W5 T16 (ruling 287): the evidence also ran the four scripts on the row of the template since deleted (4 scripts x 11 sports + the
+    // cricket `test` case), a row today's planner no longer has: set aside the same way, counted - the evidence file stays untouched.
+    const inGrid = (c: { row: string }) => (ROW_KEYS as readonly string[]).includes(c.row);
+    const gone = real.cases.filter((c) => !inGrid(c));
+    expect(gone.length, "the deleted row's cases in the committed evidence").toBe(4 * SPORT_KEYS.length + 2);
+    expect(new Set(gone.map((c) => c.row)).size, "one deleted row").toBe(1);
+    const kept = real.cases.filter((c) => inGrid(c) && !isRefusedCell(`${c.row}|${c.sport}`));
     const plan = livePlan("--set w1-driving");
+    const planIds = new Set([...plan.driven, ...plan.planned.keys()]);
+    const keyOf = (id: string) => noWidth(noVariant(id));
+    // W5 T16 also re-seated cricket `test` cases: the pairwise cover that seats them on rows ran again without the deleted row, so a
+    // few sit on another row today. The evidence is not re-baselined: the cases it ran on the old seats are set aside, and the
+    // plan's new seats are counted - both sides are cricket LIFECYCLE test cases, and nothing else differs.
+    const reseated = kept.filter((c) => !planIds.has(keyOf(c.caseId)));
+    const evidenceIds = new Set(kept.map((c) => keyOf(c.caseId)));
+    const newSeats = [...planIds].filter((k) => !evidenceIds.has(k));
+    expect(reseated.length, "cricket test cases the evidence ran on a seat the plan no longer has").toBe(6);
+    expect(newSeats.length, "the plan's new seats for them").toBe(7);
+    expect(reseated.every((c) => c.sport === "cricket" && c.scenario === "LIFECYCLE")).toBe(true);
+    expect(newSeats.every((k) => /^[a-z_]+\|cricket\|LIFECYCLE\|cricket#\d+$/.test(k))).toBe(true);
+    const settled = kept.filter((c) => planIds.has(keyOf(c.caseId)));
+    // Two independent sources agree on everything else: the planner (derived from the registry) and the committed evidence.
+    expect(plan.driven.size + plan.planned.size).toBe(settled.length + newSeats.length);
+    expect(settled.length).toBeGreaterThan(790);
+    expect(kept.length + onRefused.length + gone.length).toBe(real.cases.length);
     const asRun = { ...real, plan: "--set w1-driving", cases: kept } as unknown as RunResults;
-    // Two independent sources agree: the planner (derived from the registry) and the committed evidence less the set-aside.
-    expect(plan.driven.size + plan.planned.size).toBe(kept.length);
-    expect(matchPlanIds(asRun).compared).toBe(kept.length);
-    expect(kept.length + onRefused.length).toBe(real.cases.length);
+    // The judge names exactly that drift: the 7 new seats missing, the 6 old ones extra - and nothing more.
+    expect(() => matchPlanIds(asRun)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining("missing 7") }));
+    expect(() => matchPlanIds(asRun)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining("extra 6") }));
     expect(kept.length).toBeGreaterThan(800);
     // …and it is a real check: one case dropped is refused, and so is the set-aside put back (extras).
     expect(() => matchPlanIds({ ...asRun, cases: asRun.cases.slice(1) })).toThrow(expect.objectContaining({ name: "PlanIdsMismatch" }));
-    expect(() => matchPlanIds({ ...asRun, cases: real.cases } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
+    // Everything the planner no longer makes, put back: the refused cells, the deleted row, and the re-seated cricket cases.
+    expect(() => matchPlanIds({ ...asRun, cases: real.cases } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length + gone.length + reseated.length}`) }));
   });
 
   it("the OLDER w1drv L3 run is what the planner no longer makes: it ran the four scripts on the refused chess americano/mexicano cells (set aside, counted), and put back into the current evidence they are refused as extras", () => {
@@ -341,9 +365,13 @@ describe("matchPlanIds (T4-IDS): the run's case ids are exactly the planner's fo
     expect(onRefused.filter((c) => CHESS_REFUSED_CELLS.includes(`${c.row}|${c.sport}`)).length).toBe(CHESS_REFUSED_CELLS.length * 4);
     expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...REFUSED_CELLS].sort());
     const current = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w2e-final", "ci", "L3", "results.json"), "utf8")));
-    const kept = current.cases.filter((c) => !isRefusedCell(`${c.row}|${c.sport}`));
+    const kept = current.cases.filter((c) => (ROW_KEYS as readonly string[]).includes(c.row) && !isRefusedCell(`${c.row}|${c.sport}`));
     const asRun = { ...current, plan: "--set w1-driving" } as unknown as RunResults;
-    expect(() => matchPlanIds({ ...asRun, cases: [...kept, ...onRefused] } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
+    // ...and the 6 cricket test cases the regenerated catalogue seats elsewhere (the first test of this pair counts them) are extras too.
+    const planIds = new Set([...livePlan("--set w1-driving").driven, ...livePlan("--set w1-driving").planned.keys()]);
+    const reseated = kept.filter((c) => !planIds.has(noWidth(noVariant(c.caseId))));
+    expect(reseated.length).toBe(6);
+    expect(() => matchPlanIds({ ...asRun, cases: [...kept, ...onRefused] } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length + reseated.length}`) }));
   });
 
   it("a case dropped (one id missing) is refused PlanIdsMismatch, naming it and the count", () => {
@@ -1013,17 +1041,17 @@ describe("the seam, end to end: runSlice's own shards, through the real merge, i
     expect(r.cases).toHaveLength(PLAN_IDS.length);
   }, 120_000);
 
-  it("L1 --scope grid, unsharded: 207 cases (the 231 cells less chess americano/mexicano and the 22 standalone stepladder/page playoff cells, refused), scope 'L1 (grid)', identity clean against the GRID planner", async () => {
+  it("L1 --scope grid, unsharded: 196 cases (the 220 cells less chess americano/mexicano and the 22 standalone stepladder/page playoff cells, refused), scope 'L1 (grid)', identity clean against the GRID planner", async () => {
     const reportDir = mkdtempSync(join(tmpdir(), "w1d-judge-grid-"));
     const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
     const live = { ...d, openDb: async () => ({ ...(await d.openDb()), variantKeysInBuilderOrder: async (s: string) => [...(await import("../lib/variants.ts")).offlineVariantOrder(s)] }) };
     expect(await runSlice(live, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "seamg", "--report-dir", reportDir])).toBe(0);
     const r = parseResults(JSON.parse(readFileSync(join(reportDir, "seamg", "results.json"), "utf8"))) as RunResults;
     expect(r.cases).toHaveLength(ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length);
-    expect(r.cases).toHaveLength(207);
+    expect(r.cases).toHaveLength(196);
     expect(r.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(r.scope).toBe("L1 (grid)");
-    expect(matchPlanIds(r).compared).toBe(207);
+    expect(matchPlanIds(r).compared).toBe(196);
     expect(judgeCli(["faults", f(r)])).not.toBe(2);
   }, 180_000);
 });

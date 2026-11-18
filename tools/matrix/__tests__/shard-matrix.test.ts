@@ -27,12 +27,12 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const TR = join(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
-/** L3 is `--set w1-driving`: the 828 grid cases (231 cells x 4 scripts - the 24 refused cells x 4: chess americano/mexicano and, since W4 T16, the 22
+/** L3 is `--set w1-driving`: the 784 grid cases (220 cells x 4 scripts - the 24 refused cells x 4: chess americano/mexicano and, since W4 T16, the 22
  *  standalone stepladder/page playoff cells, whose 11 F1 drops it subsumes; w1-driving-set.test.ts
  *  derives the same figure from the drop list) plus cricket's `test` variant cases, which the COMMITTED variants.json holds. Their count is READ from
  *  that file, not typed: a catalogue regen moves it (24 -> 25 at T36a, 29378e40ad, when T28's two cricket factors joined the pairwise cover and a
  *  typed L3 total of 929 went stale in three places). The file is read directly, not through the planner this total is checked against. */
-const L3_GRID = 828;
+const L3_GRID = 784;
 // A `test` case on a cell the product refuses is held, not planned (W4 T24: option A keeps the refused rows as variant levels).
 const L3_TEST_CASES = (JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: { preset: string; row: string }[] }[] })
   .sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test" && !isRefusedCell(`${c.row}|cricket`)).length;
@@ -409,14 +409,16 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
     // 2 cells off the L1 grid (231 -> 229), and their 4 scripts each off the w1-driving set (937 -> 929); the w1-driving total then
     // moves with the committed cricket `test` cases (L3_PLAN: 929 with 24, 930 with 25). W4 T16 (ruling 269) takes the 22 standalone
     // stepladder / page playoff cells off too: L1 grid 229 -> 207, L2 grid 1,729 -> 1,589, w1-driving 930 -> 851 (the grid 905 -> 828;
-    // the two cricket `test` cases on those rows are held, 25 -> 23).
+    // the two cricket `test` cases on those rows are held, 25 -> 23). W5 T16 (ruling 287) takes the deleted template's row off the
+    // grid: L1 grid 207 -> 196 (231 -> 220 cells), L2 grid 1,589 -> 1,513, the grid cases 828 -> 784 (the row's cricket `test` cases
+    // leave with it); the slice's L2 plan 70 -> 69 (swiss|generic held 2 runs, now 1; still 3 driven).
     expect(drivenInPlanOrder("--layer L1").length).toBe(6);
-    expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(207);
+    expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(196);
     // W4 app PR B T15 (c27aade8cc regenerated l2-pairs.json): the slice's L2 plan is 70 items, not 68 — 65 swiss|badminton + 2 swiss|generic
     // + 1 knockout|generic + 2 knockout|badminton (Q3@768, Q4a@390); the knockout cells held 1 run before. Still 3 driven.
-    expect(drivenInPlanOrder("--layer L2").length).toBe(70);
+    expect(drivenInPlanOrder("--layer L2").length).toBe(69);
     expect(drivenInPlanOrder("--layer L2").filter(Boolean).length).toBe(3);
-    expect(drivenInPlanOrder("--layer L2 --scope grid").length).toBe(1589);
+    expect(drivenInPlanOrder("--layer L2 --scope grid").length).toBe(1513);
     expect(L3_TEST_CASES, "the committed variants.json holds cricket `test` cases (zero would make L3_PLAN the grid alone)").toBeGreaterThan(0);
     expect(drivenInPlanOrder("--set w1-driving").length).toBe(L3_PLAN);
     expect(drivenInPlanOrder("--set pr-sample --rows none").length).toBe(33);
@@ -425,7 +427,7 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
   it("livePlan, rebuilt on the same ordered list, still carries each planned item's state AND reason (the refactor kept the stored reason)", () => {
     // Nothing else reads `reason` today (judge.ts reads only the keys), so a refactor that dropped it would pass every other suite.
     const p = livePlan("--layer L2");
-    expect(p.planned.size).toBe(67); // 70 items, 3 driven
+    expect(p.planned.size).toBe(66); // 69 items, 3 driven
     const states = new Set<string>();
     for (const [key, v] of p.planned) {
       expect(v.reason.length, key).toBeGreaterThan(0);
@@ -487,7 +489,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const r = runs.get(j.layer)![j.k - 1];
       const workers = j.args.includes("--workers 4") ? 4 : 1;
       // L2's plan size is the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 207, L2: 1589, L3: L3_PLAN }[j.layer] });
+      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 196, L2: 1513, L3: L3_PLAN }[j.layer] });
       expect(r.cases.length).toBeGreaterThan(0);
       // The budget basis: the cases the stripe DROVE (no `planned` marker), counted from the evidence the runner wrote.
       const drivenReal = r.cases.filter((c) => c.planned !== true).length;
@@ -505,7 +507,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     expect(runs.get("L1")![0].scope).toBe("L1 (grid)");
     // Non-vacuity: the stripes differ in how much they drove (the L2 grid's 48 driven items do not split evenly across any 8).
     // Match Day C9 review I5, option 2: the ten cells the builder does not offer are 🚫 (L1 176 -> 166 driven, L2 62 -> 56;
-    // layers-grid.test.ts), and so are the retired Triple round robin's (owner ruling 2026-11-01: L1 166 -> 155, L2 56 -> 53). W4 app PR B T15: knockout_third_place is a builder knob row, so its 11 cells (one per sport) are driven again: L1 155 -> 166.
+    // layers-grid.test.ts), and so were the retired three-leg row's (L1 166 -> 155, L2 56 -> 53; the row is deleted since W5 T16, ruling 287, 155 stays). W4 app PR B T15: knockout_third_place is a builder knob row, so its 11 cells (one per sport) are driven again: L1 155 -> 166.
     const l1 = runs.get("L1")!.map((r) => r.cases.filter((c) => c.planned !== true).length);
     // W5 T14 (X-BD-2): group_only is a template row now, so ten of its eleven cells (badminton's was the box-league gallery card's, never an L1 grid case) were 🚫 and are now driven through the builder's card: L1 166 -> 176.
     expect(l1.reduce((a, b) => a + b, 0)).toBe(155 + 11 + 10);
@@ -524,18 +526,18 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const m = mergeShards(inputs, `ci-1-1-${l.toLowerCase()}`);
       expect(m.merged.shards, l).toBe(shards.length);
       // L2 checks the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(m.checked, l).toBe({ L1: 207, L2: 1589, L3: L3_PLAN }[l]);
+      expect(m.checked, l).toBe({ L1: 196, L2: 1513, L3: L3_PLAN }[l]);
       expect(matchPlanIds(m.merged).compared, l).toBe(m.checked);
       merged++;
     }
     expect(merged).toBe(3);
   });
 
-  it("the smoke scope: six jobs, each accepted by run.ts, each stripe non-empty (L1 has 6 items, L2 70 of which 3 driven, L3 the fixed 33)", { timeout: 300_000 }, async () => {
+  it("the smoke scope: six jobs, each accepted by run.ts, each stripe non-empty (L1 has 6 items, L2 69 of which 3 driven, L3 the fixed 33)", { timeout: 300_000 }, async () => {
     const { jobs, runs } = await drive("smoke");
     expect(jobs).toHaveLength(6);
     expect(runs.get("L1")!.map((r) => r.cases.length)).toEqual([3, 3]);
-    expect(runs.get("L2")!.map((r) => r.cases.length)).toEqual([35, 35]);
+    expect(runs.get("L2")!.map((r) => r.cases.length)).toEqual([35, 34]);
     expect(runs.get("L3")!.map((r) => r.cases.length)).toEqual([17, 16]);
     expect(runs.get("L2")!.flatMap((r) => r.cases).filter((c) => c.planned !== true)).toHaveLength(3);
     expect(runs.get("L3")![0].plan).toBe("--set pr-sample --rows none");
@@ -590,7 +592,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
     expect(m.include.map((j) => j.id)).toEqual(["l1-s1", "l1-s2", "l1-s3", "l1-s4", "l1-s5", "l1-s6", "l1-s7", "l1-s8", "l2-s1", "l2-s2", "l3-s1", "l3-s2"]);
     expect(m.include.every((j) => Object.keys(j).sort().join() === "args,id,k,layer,of,timeout")).toBe(true);
     expect(m.include.every((j) => j.timeout <= 300)).toBe(true);
-    expect(io.err).toMatch(/L1.*207.*176/);
+    expect(io.err).toMatch(/L1.*196.*176/);
   });
 
   it("--scope smoke is 6 jobs; --scope pr-sample --rows <r> is one; and --rows beside full or smoke is ignored", () => {
@@ -694,7 +696,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
 
   it("a plan that would time out past the cap is a refusal at plan time, named (ShardTimeoutTooLong), never at minute 360", () => {
     const c = JSON.parse(shardsText) as { maxTimeoutMinutes: number; layers: Record<string, { full: { shards: number } }> };
-    // Two stripes of one browser worker for L1's 166 driven cases (83 in stripe 1; the retired Triple round robin's 🚫 took it to 78 and W4's third-place cells
+    // Two stripes of one browser worker for L1's 166 driven cases (83 in stripe 1; a retired row's 🚫 once took it to 78 and W4's third-place cells
     // brought it back to 83). Against the real 300-minute cap that
     // fits - so the cap is lowered to 200 minutes,
     // which 78 cases at L1's committed ceiling (setup and slack aside) outrun whatever that ceiling rounds to above 150 s.

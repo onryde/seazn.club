@@ -2477,8 +2477,6 @@
   "format.template.knockout.help": "Single elimination bracket.",
   "format.template.double_elim.label": "Double elimination",
   "format.template.double_elim.help": "Losers bracket + grand final.",
-  "format.template.triple_rr.label": "Triple round robin",
-  "format.template.triple_rr.help": "Everyone plays everyone three times.",
   "format.template.americano.label": "Americano",
   "format.template.americano.help": "Individuals rotate partners each round; personal points.",
   "format.template.mexicano.label": "Mexicano",

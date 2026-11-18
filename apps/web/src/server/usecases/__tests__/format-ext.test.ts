@@ -1,4 +1,4 @@
-// Integration tests for PROMPT-28 (Jul3/08): triple RR, americano pair
+// Integration tests for PROMPT-28 (Jul3/08): a three-leg league, americano pair
 // entrants, cross-stage feeds + early fill, placement ranks, auto-advance,
 // ladder challenges, DAG + Pro gates. Real Postgres required.
 import { afterAll, describe, expect, it } from "vitest";
@@ -116,13 +116,13 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("format extensions (Jul3/08)", () => {
-  it("triple round robin generates n(n−1)/2·3 fixtures", async () => {
+  it("a three-leg league generates n(n−1)/2·3 fixtures", async () => {
     const { auth } = await seedOrg();
     const { division } = await seedDivision(auth, ["A", "B", "C", "D"]);
     const [stage] = await createStages(auth, division.id, {
       seq: 1,
       kind: "league",
-      name: "Triple",
+      name: "Three legs",
       config: { legs: 3 },
     });
     const { created } = await generateStageFixtures(auth, stage!.id);

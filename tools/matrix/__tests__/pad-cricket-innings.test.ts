@@ -251,19 +251,26 @@ describe("cricket two innings a side — the over route (W1d item 16)", () => {
   });
 });
 
-/** The cricket `test` cases the catalogue declares and the committed run drives: 24 when W1d wrote this (w1drv-l3), 25 since a
- *  25th was added (W2e Task 35 moved the pin to the W2e truth run's CI L3, which holds all 25). Asserted against BOTH below. */
-const TEST_CASES = 25;
+/** The cricket `test` cases the catalogue declares: 24 when W1d wrote this (w1drv-l3), 25 from W2e Task 35, 24 again once W5 T16 (ruling 287)
+ *  deleted the row that held one of them. The committed W2e run (EVIDENCE_CASES, never re-baselined) still ran 25 on the catalogue as it
+ *  was: its ids are positional (cricket#NNN is a row's slot), so 15 of them still name the same test case on the same row and 10 name a
+ *  case the regenerated catalogue seats elsewhere. The streams are folded for the catalogue's cases - those are what today's planner drives. */
+const TEST_CASES = 24;
+const EVIDENCE_CASES = 25;
+const EVIDENCE_STILL_SEATED = 15;
 describe("the committed cricket `test` cases (w2e-final CI L3): each event type their streams hold is a route or a named 🚫", () => {
   interface CommittedCase { caseId: string; state: string }
   interface CatalogueCase { id: string; preset: string; overrides: Record<string, unknown> }
   let cases: CommittedCase[] = [];
+  let evidence: CommittedCase[] = [];
   let catalogue: Map<string, CatalogueCase> = new Map();
   beforeAll(() => {
     const run = JSON.parse(readFileSync(join(PROMPTS, "truth-runs/w2e-final/ci/L3/results.json"), "utf8")) as { cases: CommittedCase[] };
-    cases = run.cases.filter((c) => c.caseId.includes("|cricket|test|"));
-    const v = JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: CatalogueCase[] }[] };
-    catalogue = new Map(v.sports.find((s) => s.sport === "cricket")!.cases.map((c) => [c.id, c]));
+    evidence = run.cases.filter((c) => c.caseId.includes("|cricket|test|"));
+    const v = JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: (CatalogueCase & { row: string })[] }[] };
+    const all = v.sports.find((s) => s.sport === "cricket")!.cases;
+    catalogue = new Map(all.map((c) => [c.id, c]));
+    cases = all.filter((c) => c.preset === "test").map((c) => ({ caseId: `${c.row}|cricket|test|LIFECYCLE|${c.id}`, state: "catalogue" }));
   });
 
   /** The outcomes a scenario sends a fixture (defaultPolicy: win either way, a draw where the stage allows one) and the tie the generator builds. */
@@ -271,6 +278,15 @@ describe("the committed cricket `test` cases (w2e-final CI L3): each event type 
 
   it("exactly TEST_CASES cases, each one a `test` case of the catalogue with its own overrides (the count is the run's, and the catalogue's)", () => {
     expect(cases).toHaveLength(TEST_CASES);
+    // The committed run, untouched: 25 cases on the catalogue it ran on; those whose id still names a `test` case on the SAME row are
+    // counted, the rest are the re-seated ones (positional ids) and are not folded here.
+    expect(evidence).toHaveLength(EVIDENCE_CASES);
+    const stillSeated = evidence.filter((c) => {
+      const parts = c.caseId.split("|");
+      const now = catalogue.get(parts.at(-1)!) as (CatalogueCase & { row?: string }) | undefined;
+      return now !== undefined && now.preset === "test" && now.row === parts[0];
+    });
+    expect(stillSeated.length, "committed cases still seated as they were").toBe(EVIDENCE_STILL_SEATED);
     const ids = cases.map((c) => c.caseId.split("|").at(-1)!);
     expect(new Set(ids).size).toBe(TEST_CASES);
     for (const id of ids) {

@@ -229,15 +229,15 @@ export async function jul3Suite(admin: Session, orgId: string, orgSlug: string):
     stats.status === 200 && Array.isArray(v1data<{ rows: unknown[] }>(stats).rows),
   );
 
-  // -- PROMPT-28: format extensions (triple RR + ladder challenge) ------
-  const tripleComp = v1data<{ id: string }>(
+  // -- PROMPT-28: format extensions (a three-leg league + ladder challenge) ------
+  const legsComp = v1data<{ id: string }>(
     await v1(admin, "/api/v1/competitions", "POST", { ends_on: "2030-12-31",
-      name: `Triple ${tag}`,
+      name: `Three legs ${tag}`,
       visibility: "private",
     }),
   );
-  const tripleDiv = v1data<{ id: string }>(
-    await v1(admin, `/api/v1/competitions/${tripleComp.id}/divisions`, "POST", {
+  const legsDiv = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${legsComp.id}/divisions`, "POST", {
       name: "T",
       sport_key: "generic",
       variant_key: "score",
@@ -246,7 +246,7 @@ export async function jul3Suite(admin: Session, orgId: string, orgSlug: string):
   ).id;
   await v1(
     admin,
-    `/api/v1/divisions/${tripleDiv}/entrants`,
+    `/api/v1/divisions/${legsDiv}/entrants`,
     "POST",
     ["A", "B", "C", "D"].map((n, i) => ({
       kind: "individual",
@@ -254,19 +254,19 @@ export async function jul3Suite(admin: Session, orgId: string, orgSlug: string):
       seed: i + 1,
     })),
   );
-  const tripleStage = v1data<{ id: string }>(
-    await v1(admin, `/api/v1/divisions/${tripleDiv}/stages`, "POST", {
+  const legsStage = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/divisions/${legsDiv}/stages`, "POST", {
       seq: 1,
       kind: "league",
-      name: "Triple",
+      name: "Three legs",
       config: { legs: 3 },
     }),
   ).id;
-  const tripleGen = await v1(admin, `/api/v1/stages/${tripleStage}/generate`, "POST");
-  check("jul3 triple RR = 18 fixtures", v1data<{ created: number }>(tripleGen).created === 18);
+  const legsGen = await v1(admin, `/api/v1/stages/${legsStage}/generate`, "POST");
+  check("jul3 a legs-3 league = 18 fixtures", v1data<{ created: number }>(legsGen).created === 18);
 
   // Ladder challenge (formats.advanced): a stage + an in-range challenge.
-  const ladderStage = await v1(admin, `/api/v1/divisions/${tripleDiv}/stages`, "POST", {
+  const ladderStage = await v1(admin, `/api/v1/divisions/${legsDiv}/stages`, "POST", {
     seq: 2,
     kind: "ladder",
     name: "Ladder",

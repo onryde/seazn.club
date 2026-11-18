@@ -16,7 +16,7 @@
 // The snake that fills the pools (RB5-G4) and the pool sizes are re-derived here from the seeds, not read back from the stage.
 //
 // Enumerated, never sampled:
-//   templates — every non-retired STAGE_TEMPLATES entry whose first built stage is a league or group (lib/format-templates.ts),
+//   templates — every STAGE_TEMPLATES entry whose first built stage is a league or group (lib/format-templates.ts),
 //               pinned to the six the brief names (Task 14 added group_only). A seventh reds the pin rather than slipping past.
 //   kinds     — every `entrants.kind` (EntrantKind), each played by a sport whose engine module DECLARES it and offers every
 //               entry template (`entrantModel.kinds`, `templatesForSport`), its natural sport first. Derived, never typed.
@@ -70,7 +70,6 @@ const POOL_COUNT = KNOBS.poolCount;
 
 /** Every template whose FIRST stage is a league or group, off the templates' own graphs. */
 const ENTRY_TEMPLATES = STAGE_TEMPLATES.filter((t) => {
-  if (t.retired) return false;
   const first = t.build(KNOBS)[0];
   return first !== undefined && (first.kind === "league" || first.kind === "group");
 }).map((t) => t.key);

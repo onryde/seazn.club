@@ -36,7 +36,7 @@ describe("the fixed sample's own arithmetic (anti-vacuity: the sets it is built 
     expect(SLICE_ROWS.length * SLICE_SPORTS.length * SCENARIO_KEYS.length).toBe(24);
     expect(OTHER_SPORTS).toHaveLength(SPORT_KEYS.length - SLICE_SPORTS.length);
     expect(OTHER_SPORTS.length).toBe(9);
-    expect(ROW_KEYS.length).toBe(21);
+    expect(ROW_KEYS.length).toBe(20);
   });
 });
 
@@ -57,7 +57,7 @@ describe("parseRows (R27): what follows `Matrix rows:`", () => {
     expect(parseRows(text)).toEqual(want);
   });
 
-  it("every catalogue row is accepted by name, one at a time (anti-vacuity: 21 rows)", () => {
+  it("every catalogue row is accepted by name, one at a time (anti-vacuity: 20 rows)", () => {
     let checked = 0;
     for (const row of ROW_KEYS) {
       expect(parseRows(row), row).toEqual([row]);
@@ -75,7 +75,7 @@ describe("parseRows (R27): what follows `Matrix rows:`", () => {
     expect((thrown as Error).name).toBe("UnknownRow");
     expect(msg).toMatch(/leage/);
     expect(msg).toContain(ROW_KEYS.join(", "));
-    expect(ROW_KEYS.length).toBe(21);
+    expect(ROW_KEYS.length).toBe(20);
   });
 
   it.each([
@@ -234,7 +234,7 @@ describe("planPrSample", () => {
     const committed = all.filter((c) => !isRefusedCell(`${c.row}|cricket`));
     expect(all.length - committed.length, "the held cricket test cases on a refused row").toBe(2);
     const rowsWithTests = [...new Set(committed.map((c) => c.row))];
-    expect(committed.length).toBe(23);
+    expect(committed.length).toBe(22);
     expect(rowsWithTests).toContain("league");
     let checked = 0;
     for (const row of ROW_KEYS) {
@@ -349,10 +349,17 @@ describe("the sample against the real baseline (review C3c)", () => {
 
   it("every case the sample plans for ANY declaration has a baseline twin, so no PR reports a case absent by construction", () => {
     const have = new Set(baseline().cases.map((c) => c.caseId));
+    // W5 T16 (ruling 287): the pairwise cover that seats the cricket `test` cases on rows ran again without the deleted row, so 7 sit on
+    // a row the committed baseline (the W4 truth run, not re-baselined here) did not seat them on. Those 7, and nothing else, are
+    // absent from it - counted, every one a cricket test case, until the lane's next truth run re-baselines.
+    const reseated = ids(planPrSample("all", offlineBuilderDefault)).filter((id) => !have.has(id));
+    expect(reseated.length, "cricket test cases seated on a row the baseline does not have them on").toBe(7);
+    expect(reseated.every((id) => /^[a-z_]+\|cricket\|test\|LIFECYCLE\|/.test(id))).toBe(true);
     let checked = 0;
     for (const rows of ["all", ...ROW_KEYS.map((r) => [r])] as const) {
       const missing = ids(planPrSample(rows, offlineBuilderDefault)).filter((id) => !have.has(id));
-      expect(missing, formatRows(rows)).toEqual([]);
+      const mine = rows === "all" ? reseated : reseated.filter((id) => id.startsWith(`${rows[0]}|`));
+      expect(missing, formatRows(rows)).toEqual(mine);
       checked++;
     }
     expect(checked).toBe(ROW_KEYS.length + 1);

@@ -122,13 +122,4 @@ export const TEMPLATES: Record<string, (q: number) => StageSpec[]> = {
       },
     },
   ],
-  // Jul3/08 formats
-  triple_rr: () => [
-    {
-      kind: "league",
-      name: "Triple RR",
-      config: { legs: 3 },
-      progression: null,
-    },
-  ],
 };

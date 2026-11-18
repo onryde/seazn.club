@@ -89,7 +89,7 @@ describe("X-SD-9 byes and slotOrder stay API-only", () => {
     let stages = 0;
     let knockoutFamily = 0;
     const leaks: string[] = [];
-    // Every template the product declares, retired ones included (a division stored with one re-applies it).
+    // Every template the product declares.
     for (const t of STAGE_TEMPLATES) {
       for (const knobs of combos) {
         const drafts = formatStagesFor(t.key, knobs);

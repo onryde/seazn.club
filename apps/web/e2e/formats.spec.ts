@@ -11,6 +11,8 @@ import {
   showAllFormats,
   stageCardOf,
 } from "./helpers";
+import { openFormatDialog } from "./helpers/rules-strip";
+import { uiEn } from "./entrant-rename-kit";
 
 // PROMPT-28 formats: the new stage presets are reachable from the division
 // builder, and a ladder division renders its challenge panel.
@@ -50,12 +52,6 @@ test("division builder exposes the Jul3/08 format presets", async ({ page, reque
   await expect(cards.getByText("Swiss Playoff", { exact: true })).toBeVisible();
   await expect(cards.getByText("Swiss Knockout", { exact: true })).toBeVisible();
   await expect(cards.getByText("Swiss", { exact: true })).toBeVisible();
-  // Owner ruling 2026-11-01 (Match Day D1, legs Option A): the Triple round
-  // robin is offered to no sport any more. Asserted only now, with the
-  // picker's cards on screen, so an unrendered picker cannot pass it.
-  await expect(page.locator('input[name="template"]').first()).toBeAttached();
-  await expect(page.getByText("Triple round robin")).toHaveCount(0);
-
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 375, height: 812 });
   await expectNoHorizontalScroll(page);
@@ -541,4 +537,45 @@ test("americano renders the rotation grid", async ({ page, request }) => {
   await expect(grid.getByRole("heading", { name: "Personal points" })).toBeVisible();
   // the scored pair's players now carry 24 points on the leaderboard
   await expect(grid.getByRole("cell", { name: "24", exact: true }).first()).toBeVisible();
+});
+
+// X-RR-6 (W5 app PR A Task 16, owner ruling 287): the three-leg format is deleted, not hidden. The picker never lists it, and a
+// league stored with legs 3 opens in the Format dialog as League with 3 legs (the dialog's picked card and its legs control),
+// where the retired template used to be listed for it. The word is matched without its spelling ("triple"), so a card under
+// any wording of it fails this.
+test("X-RR-6 the format picker never offers a three-leg format, and a three-leg league opens as League", async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `X-RR-6 ${TAG}`,
+    visibility: "private",
+  });
+  expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+
+  // The builder's picker, every card unfolded: cards are on screen (so an unrendered picker cannot pass), none says "triple".
+  await page.goto(await competitionPath(request, comp.data!.id, "/d/new"));
+  await page.getByRole("textbox").first().fill(`X-RR-6 ${TAG}`);
+  await pickBuilderSport(page, "badminton");
+  await page.getByRole("button", { name: "Format", exact: true }).click();
+  await showAllFormats(page);
+  await expect(page.locator('input[name="template"]').first()).toBeAttached();
+  expect(await page.locator("label[data-template]").count(), "the picker lists its cards").toBeGreaterThan(5);
+  await expect(page.locator("label[data-template]").filter({ hasText: /triple/i })).toHaveCount(0);
+  await expect(page.locator('label[data-template="league"]')).toHaveCount(1);
+
+  // A league created with legs 3 over the API: its Format dialog opens at League, the Legs control on 3.
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Three legs",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  expect(div.status, JSON.stringify(div.error)).toBe(201);
+  const stage = await apiJson(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: { legs: 3 } });
+  expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+  const dialog = await openFormatDialog(page, (await divisionPath(request, div.data!.id)).split("?")[0]!);
+  await expect(dialog.locator('label[data-template="league"] input[type="radio"]'), "the stored league opens as League").toBeChecked();
+  await expect(dialog.locator("label[data-template]").filter({ hasText: /triple/i }), "no card of its own for three legs").toHaveCount(0);
+  // Legs offers 1 and 2; a stored 3 is kept and NAMED under the control (never clamped to 2), with the count in the sentence.
+  await expect(dialog.getByTestId("legs-choice-stored"), "its 3 legs are shown").toHaveText(uiEn["format.legs.storedOutOfRange"]!.replace("{n}", "3"));
 });

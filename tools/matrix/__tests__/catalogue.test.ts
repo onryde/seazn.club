@@ -62,11 +62,11 @@ function preferredVariantPin(src: string): Record<string, string> {
 const takeOf = (stages: { progression: { sources: { take: unknown[] }[] } | null }[]) => stages[1]!.progression!.sources[0]!.take;
 
 describe("catalogue — empty case first", () => {
-  it("is never empty: 17 template rows + 4 API-only rows, 11 sports", () => {
-    expect(TEMPLATE_ROW_KEYS.length).toBe(17);
+  it("is never empty: 16 template rows + 4 API-only rows, 11 sports", () => {
+    expect(TEMPLATE_ROW_KEYS.length).toBe(16);
     expect(API_ONLY_ROWS.length).toBe(4);
-    expect(ROW_KEYS.length).toBe(21);
-    expect(new Set(ROW_KEYS).size).toBe(21);
+    expect(ROW_KEYS.length).toBe(20);
+    expect(new Set(ROW_KEYS).size).toBe(20);
     expect(SPORT_KEYS.length).toBe(11);
   });
 });
@@ -122,7 +122,7 @@ describe("catalogue — rows", () => {
       expect(stagesForRow(row).map((s) => [s.kind, s.name]), row).toEqual(own.map((s) => [s.kind, s.name]));
       checked++;
     }
-    expect(checked).toBe(17);
+    expect(checked).toBe(16);
   });
 
   it("stamps seq 1..n and the builder's knob defaults (swiss rounds, legs)", () => {
@@ -133,12 +133,8 @@ describe("catalogue — rows", () => {
     expect(stagesForRow("league_ko")[1]!.progression!.carry).toBeUndefined();
     expect(stagesForRow("swiss")[0]!.config.rounds).toBe(BUILDER_DEFAULT_KNOBS.swissRounds);
     // buildTemplateStages overwrites legs with the knob (format-templates.ts
-    // buildTemplateStages): triple_rr through the builder defaults was legs 1,
-    // not 3 — recorded as a false premise. The builder no longer offers it at
-    // all (owner ruling 2026-11-01, Match Day D1: STAGE_TEMPLATES marks it
-    // `retired`, applicability.test.ts pins the offer); the row stays, as the
-    // body the builder used to post, because the API still takes it.
-    expect(stagesForRow("triple_rr")[0]!.config.legs).toBe(BUILDER_DEFAULT_KNOBS.legs);
+    // buildTemplateStages): a league through the builder defaults is legs 1.
+    expect(stagesForRow("league")[0]!.config.legs).toBe(BUILDER_DEFAULT_KNOBS.legs);
   });
 
   it("clamps qualified and poolCount exactly like the builder — below the floor and above the ceiling", () => {
@@ -267,7 +263,7 @@ describe("API-only rows — bodies derived from product authorities", () => {
     expect(() => stagesForRow("")).toThrow(UnknownRow);
   });
 
-  it("every one of the 21 rows builds, seq 1..n, and none throws RowBuildDeferred", () => {
+  it("every one of the 20 rows builds, seq 1..n, and none throws RowBuildDeferred", () => {
     let built = 0;
     for (const row of ROW_KEYS) {
       const s = stagesForRow(row);
@@ -284,14 +280,17 @@ describe("API-only rows — bodies derived from product authorities", () => {
       expect(builderStages(row), row).toEqual(product(row));
       checked++;
     }
-    expect(checked).toBe(17);
+    expect(checked).toBe(16);
   });
 
   it("X-BD-2 the harness no longer routes group_only API-only: it is a template row, built by its own card, and still groups_ko's stage 1 alone", () => {
     // differential: before W5 T14 group_only sat in API_ONLY_ROWS (no picker card), so apiOnlyUiRoute named a wave (W5) that owed one
     expect((API_ONLY_ROWS as readonly string[]).includes("group_only")).toBe(false);
     expect((TEMPLATE_ROW_KEYS as readonly string[]).includes("group_only")).toBe(true);
-    expect(ROW_KEYS.indexOf("group_only"), "keeps its place in the row order").toBe(TEMPLATE_ROW_KEYS.length - 1);
+    // W5 T16 deleted the template that held slot 1 and group_only took it: the committed L2 rotation is positional (row i meets sport i),
+    // so every other row keeps its index. It is a template row (index below the API-only rows') and sits at 1, not at the end.
+    expect(ROW_KEYS.indexOf("group_only"), "takes the vacated slot, not the end of the row order").toBe(1);
+    expect(ROW_KEYS.indexOf("group_only")).toBeLessThan(TEMPLATE_ROW_KEYS.length);
     expect(stagesForRow("group_only")).toEqual([{ ...product("groups_ko")[0], seq: 1 }]);
     expect(stagesForRow("group_only")).toHaveLength(1);
   });
@@ -421,7 +420,7 @@ describe("API-only rows — bodies derived from product authorities", () => {
     expect(stagesForRow("stepladder_only")[0]!.kind).toBe("stepladder");
   });
 
-  it("a second call builds the same bodies, and editing one call's output never reaches the next (all 21 rows)", () => {
+  it("a second call builds the same bodies, and editing one call's output never reaches the next (all 20 rows)", () => {
     let checked = 0;
     for (const row of ROW_KEYS) {
       const first = stagesForRow(row);
