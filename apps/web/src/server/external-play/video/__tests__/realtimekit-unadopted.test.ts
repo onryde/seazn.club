@@ -38,8 +38,8 @@ import {
   adoptRooms,
   cappedBudget,
   ensureMeeting,
-  peerReportCamera,
   platformSpend,
+  peerReportCamera,
   refreshParticipantToken,
   retireStaleMeeting,
   seatCameraEvidence,
@@ -254,6 +254,7 @@ describe.skipIf(!DB)("unadopted rooms", () => {
       ensureMeeting: async () => room,
       addParticipant: (a) => addParticipant(a),
       seatCameraEvidence: (a) => seatCameraEvidence(a),
+      peerReportCamera: (id) => peerReportCamera(id),
       refreshParticipantToken: (a) => refreshParticipantToken(a),
     };
     await expect(seatPlayer({ fixtureId: s.fixtureId, personId: s.home.personId }, { now: new Date(), video: skipsAdoption })).rejects.toMatchObject({

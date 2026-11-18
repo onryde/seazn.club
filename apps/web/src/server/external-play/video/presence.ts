@@ -258,20 +258,37 @@ export async function everJoined(db: AnySql, a: Who): Promise<boolean> {
   return r!.ever;
 }
 
-/** A row from the seat's own vendor read (plan 2): source 'read'; an existing row (of either source) is never overwritten. */
+/** A row from the seat's own vendor read (plan 2): source 'read'; an existing row (of either source) is never overwritten.
+ *
+ *  It takes the receiver's KEY SHARE on the board's fixture row (webhook.ts step 4) before it writes, in a transaction of its own or
+ *  the caller's: a read racing the fixture's delete either commits first (the delete waits, and its V527 trigger purges the row) or
+ *  finds the fixture gone and writes none. A deleted board's meeting is still HELD through the room the delete parked (V460), so
+ *  without the lock a read after the delete would re-insert a person's id into the sealed table. A meeting held nowhere has no board
+ *  to lock and keeps its row with no board, as before. Still lock-free with respect to the MEETING's advisory lock, by ruling: a
+ *  read row is trusted PRESENCE_READ_TRUST_MS at most, and a webhook for the same peer upgrades it. */
 export async function recordPresenceFromRead(
   db: AnySql,
   a: Who & { peerId: string; sessionId: string | null; joinedAt: Date },
   receivedAt: Date,
 ): Promise<void> {
-  // The row carries the board like every other row (the shadow report scopes by it); null only when the meeting is held nowhere.
-  const board = await heldMeeting(db, a.meetingId);
-  await db`
-    insert into fixture_video_presence
-      (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, session_id, joined_at, source, received_at)
-    values (${a.meetingId}, ${a.peerId}, ${board?.fixtureId ?? null}, ${board?.side ?? null}, ${a.participantId}, ${a.customParticipantId}, ${a.sessionId},
-            ${a.joinedAt}, 'read', ${receivedAt})
-    on conflict (meeting_id, peer_id) do nothing`;
+  const write = async (tx: AnySql) => {
+    // The row carries the board like every other row (the shadow report scopes by it); null only when the meeting is held nowhere.
+    const board = await heldMeeting(tx, a.meetingId);
+    if (board !== null) {
+      const [alive] = await tx`select 1 from fixtures where id = ${board.fixtureId} for key share`;
+      if (!alive) return;
+    }
+    await tx`
+      insert into fixture_video_presence
+        (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, session_id, joined_at, source, received_at)
+      values (${a.meetingId}, ${a.peerId}, ${board?.fixtureId ?? null}, ${board?.side ?? null}, ${a.participantId}, ${a.customParticipantId}, ${a.sessionId},
+              ${a.joinedAt}, 'read', ${receivedAt})
+      on conflict (meeting_id, peer_id) do nothing`;
+  };
+  // A TransactionSql is told from the pool by its `savepoint` method (as underMeetingLock does).
+  const open = db as Partial<Pick<postgres.TransactionSql, "savepoint">>;
+  if (typeof open.savepoint === "function") return write(db);
+  await (db as postgres.Sql).begin((tx) => write(tx));
 }
 
 /** Every peer of a participant in a meeting, in the presence order (oldest join first). A row with a null joined_at (a left that
@@ -407,8 +424,7 @@ export const PRESENCE_RETENTION_MS = 30 * 24 * 60 * 60_000;
  *  `fixtures`, which deletes the rows COMMITTED when it runs). The webhook writer keeps that complete: it takes KEY SHARE on the held
  *  board's fixture row before writing (webhook.ts step 4), so a delete either waits for the delivery to commit and then purges its
  *  rows, or ran first and the delivery (its meeting still held through the room the delete parked) writes none. The READ writer
- *  (`recordPresenceFromRead`, plan 2's seat) takes no such lock: a read racing its fixture's delete can leave a row this prune
- *  takes within PRESENCE_RETENTION_MS, so plan 2 owes it the same key share before it ships a caller. A row carries a person's id (a player's `custom_participant_id` is the
+ *  (`recordPresenceFromRead`, plan 2's seat) takes the same key share (plan 2 Task 6), so it cannot leave one either. A row carries a person's id (a player's `custom_participant_id` is the
  *  person id, an arbiter's the user id and a nonce): when a PERSON or USER is deleted, their rows stay until this prune takes them,
  *  up to PRESENCE_RETENTION_MS (30 days). That is deliberate and not purged by custom id: the ids are pseudonymous (no name, email or
  *  contact detail sits in any of these tables, and the tables are sealed from every tenant role), the window is short, and the fixture

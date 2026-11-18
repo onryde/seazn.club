@@ -8,6 +8,10 @@ import "server-only";
 // client-uploaded telemetry too, read from the vendor — the accepted
 // residual, spec §5.2.)
 //
+// Check-in capacity plan 2 Task 6 (EXTERNAL_PLAY_PRESENCE_PROOF=1): the presence table (webhooks, plan 1) says WHO to read and WHEN,
+// and ONE peer-report read is the verdict. The browser's own camera report (camera-reported.ts) only SCHEDULES - it can start the
+// counted fallback's clock or skip the 1.5 s first-read wait - and never seats anyone: nothing in this file lets it. See judgeSeat.
+//
 // D12: the window hangs off `stage_round_opens.opened_at` (read through
 // round-open.ts, the one reader of the stamp), not `fixtures.scheduled_at`.
 // "The window has not started" is its OWN refusal (`round_not_open`), not
@@ -21,6 +25,7 @@ import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
+import { currentPresence, recordPresenceFromRead } from "@/server/external-play/video/presence";
 import type { GrantRefusal } from "@/server/external-play/types";
 import { assertLichessConsentForPlay } from "../external-accounts";
 import {
@@ -28,6 +33,7 @@ import {
   RealtimeKitError,
   addParticipant,
   ensureMeeting,
+  peerReportCamera,
   refreshParticipantToken,
   seatCameraEvidence,
   currentBudgetKey,
@@ -35,6 +41,7 @@ import {
   type SeatCamera,
 } from "@/server/external-play/video/realtimekit";
 import { CAMERA_EVIDENCE_BACKOFF_MS, CAMERA_EVIDENCE_DEADLINE_MS, type LineWire } from "@/components/public-site/match-room/room-snapshot";
+import { reportedCamera } from "./camera-reported";
 import { countedCheckIns } from "./check-ins";
 import {
   effectiveBridge,
@@ -110,6 +117,8 @@ type Video = {
   ensureMeeting: typeof ensureMeeting;
   addParticipant: typeof addParticipant;
   seatCameraEvidence: typeof seatCameraEvidence;
+  /** The one-read proof's read (EXTERNAL_PLAY_PRESENCE_PROOF=1): GET /sessions/peer-report/{peerId}, one vendor call. */
+  peerReportCamera: typeof peerReportCamera;
   refreshParticipantToken: typeof refreshParticipantToken;
 };
 
@@ -122,7 +131,7 @@ export type PreflightDeps = {
   line?: { at?: Date; afterRead?: () => void | Promise<void> };
 };
 
-const REAL_VIDEO: Video = { ensureMeeting, addParticipant, seatCameraEvidence, refreshParticipantToken };
+const REAL_VIDEO: Video = { ensureMeeting, addParticipant, seatCameraEvidence, peerReportCamera, refreshParticipantToken };
 
 /** T2's assertLichessConsentForPlay as a seat reason: its two 422s map to
  *  `lichess_link_required` / `lichess_reconsent_required` (the codes T14's
@@ -263,7 +272,7 @@ export async function seatPlayer(a: SeatAsk, deps: PreflightDeps = {}): Promise<
         return { seated: true, participant: null, cameraRetry: true };
       }
       const meeting = await video.ensureMeeting(a.fixtureId, player.side);
-      return { seated: true, participant: await issuePlayerToken(a, player.side, meeting.meetingId, video) };
+      return { seated: true, participant: await issuePlayerToken(a, player.side, meeting.meetingId, video, now) };
     } catch (err) {
       if (!(err instanceof RealtimeKitError)) throw err;
       // D21: a deferral (the call budget is spent) is not an outage, and is not reported as one.
@@ -450,7 +459,7 @@ async function verifyRequiredSeat(a: SeatAsk, side: Side, now: Date, video: Vide
     // joined by a peer - nobody had its token - so there is no camera to read: the answer is the way in, and the claim
     // costs the vendor the mint and nothing else.
     const verdict: SeatVerdict =
-      minted !== null ? { seated: false, reason: "camera_required" } : await judgeSeat(a, { fixtureId: a.fixtureId, participantId }, meeting.meetingId, now, video);
+      minted !== null ? { seated: false, reason: "camera_required" } : await judgeSeat(a, { fixtureId: a.fixtureId, participantId }, side, meeting.meetingId, now, video);
 
     if (verdict.seated === false && verdict.reason === "video_unavailable") return verdict;
     // T9's re-verify is read by the server alone: no token, nobody joins with it.
@@ -462,6 +471,7 @@ async function verifyRequiredSeat(a: SeatAsk, side: Side, now: Date, video: Vide
       return { ...verdict, participant: null };
     }
     const participant = minted ?? (await video.refreshParticipantToken({ meetingId: meeting.meetingId, participantId }));
+    await stampTokenIssued({ fixtureId: a.fixtureId, participantId }, now);
     return { ...verdict, participant };
   } catch (err) {
     // D21: the call budget refused a request.
@@ -484,10 +494,13 @@ type SeatVerdict =
   | { seated: false; reason: "video_unavailable" };
 
 /** The camera's verdict for a participant that has been on file since an earlier claim: a read the cache allows, or the
- *  cache's word. May throw: a RealtimeKit failure (the outage path), a deferral (the budget). */
-async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Date, video: Video): Promise<SeatVerdict> {
-  const [prior] = await sql<{ last_publisher_seen_at: Date | null; seat_reads: number }[]>`
-    select last_publisher_seen_at, seat_reads from fixture_video_participants
+ *  cache's word. May throw: a RealtimeKit failure (the outage path), a deferral (the budget).
+ *
+ *  With EXTERNAL_PLAY_PRESENCE_PROOF=1 the read is the one-read proof (`proofCamera`); without it, today's three-call session read. Both
+ *  end in the same verdict (`verdictFromCamera`), so a seat is judged by one set of rules whichever way the camera was read. */
+async function judgeSeat(a: SeatAsk, mine: SeatRead, side: Side, meetingId: string, now: Date, video: Video): Promise<SeatVerdict> {
+  const [prior] = await sql<{ last_publisher_seen_at: Date | null; seat_reads: number; token_issued_at: Date | null }[]>`
+    select last_publisher_seen_at, seat_reads, token_issued_at from fixture_video_participants
      where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}`;
 
   // D21-fix-3 (F2): T9's re-verify trusts a pass read a moment ago, without a vendor call - provided no later read has
@@ -504,14 +517,23 @@ async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Dat
 
   let camera: SeatCameraRead;
   let cached = false;
-  if (await claimEvidenceRead(mine, now)) {
+  if (presenceProofOn()) {
+    const proof = await proofCamera(a, mine, side, meetingId, now, video, prior?.token_issued_at ?? null);
+    if ("verdict" in proof) return proof.verdict;
+    camera = proof.camera;
+    cached = proof.cached;
+  } else if (await claimEvidenceRead(mine, now)) {
     camera = await video.seatCameraEvidence({ meetingId, participantId: mine.participantId });
     await recordEvidence(mine, camera);
   } else {
     camera = await cachedEvidence(mine, now);
     cached = true;
   }
+  return verdictFromCamera(camera, cached, mine, now, prior?.last_publisher_seen_at != null);
+}
 
+/** What a camera read says about a seat, the same rules on either read path. */
+async function verdictFromCamera(camera: SeatCameraRead, cached: boolean, mine: SeatRead, now: Date, hadPassed: boolean): Promise<SeatVerdict> {
   if (camera.state === "blocked") return { seated: false, reason: "camera_blocked" };
   if (camera.state === "starting" || camera.state === "unreadable") {
     // Waited from the peer's OWN join; a vendor clock ahead of ours is a
@@ -533,21 +555,201 @@ async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Dat
   }
   // `last_publisher_seen_at` is EVIDENCE — when this participant was last verified live — and a player's own claim never
   // seats on it: every such claim re-asks the meeting (or the cache of the last read, which keeps only the two not-yet
-  // verdicts, never a pass). The ONE reader that seats on it is T9's re-verify (`recheck`, top of this function): inside
+  // verdicts, never a pass). The ONE reader that seats on it is T9's re-verify (`recheck`, top of judgeSeat): inside
   // SEAT_RECHECK_TRUST_MS of the stamp, and with no later read outstanding (`seat_reads = 0`), it stands without a vendor
   // call (D21-fix-3, F2; the cost is stated at SEAT_RECHECK_TRUST_MS). Nothing clears it. Clearing it on a loss (the
   // brief's design) made a repeat claim with the camera still off answer camera_required, telling a player who HAD passed
   // that they never had.
-  const hadPassed = prior?.last_publisher_seen_at != null;
   return { seated: false, reason: hadPassed ? "camera_lost" : "camera_required" };
+}
+
+// ─── The one-read proof (check-in capacity plan 2 Task 6; EXTERNAL_PLAY_PRESENCE_PROOF=1) ───────────────────────────────────────
+
+/** Read from `process.env` at call time (a test flips it per case), and only the exact value "1" turns it on. */
+const presenceProofOn = (): boolean => process.env.EXTERNAL_PLAY_PRESENCE_PROOF === "1";
+
+/** Presence younger than this, and no live report from the browser: the camera has had no time to produce a report, so the claim
+ *  answers `camera_starting` and makes no call (spec §6.3). A `live` report from the browser skips the wait: the page says the
+ *  camera is running, and the one read is made now. Measured on OUR clock: see `proofCamera`. */
+export const FIRST_READ_AFTER_JOIN_MS = 1_500;
+/** The no-presence fallback's wait: the browser has said `live` for this long since it held a token and no join webhook has arrived,
+ *  so a webhook was probably lost - and only then does the seat spend the three-call session read to find out (spec §6.3). */
+export const PRESENCE_FALLBACK_MS = 10_000;
+
+// What one vendor read of a camera costs. Local to this file until Task 7 (the line's stamped price) replaces them with seat-line.ts's
+// LINE_READ_CALLS (re-valued to 1) and LINE_FALLBACK_READ_CALLS; seat-line.ts's LINE_READ_CALLS is still today's 3 and is read by the
+// gate, so it cannot be imported for this yet.
+const PROOF_READ_CALLS = 1;
+const FALLBACK_READ_CALLS = 3;
+
+/** What one vendor read of a camera costs NOW: one call with EXTERNAL_PLAY_PRESENCE_PROOF=1, else today's three. The seat hands it
+ *  to the gate (GateAsk.readCalls, Task 7). */
+export function seatReadCalls(): number {
+  return presenceProofOn() ? PROOF_READ_CALLS : FALLBACK_READ_CALLS;
+}
+
+let fallbackReads = 0;
+/** How many claims this process answered through a three-call fallback, either kind (the load test expects 0). The log line carries
+ *  the same fact and the kind. */
+export function presenceFallbackCount(): number {
+  return fallbackReads;
+}
+
+type FallbackKind = "no_presence" | "departed_peer";
+
+/** What the proof's read produced: a verdict that needed no read at all, or the camera to judge (`cached`: from the last read's
+ *  record, because another claim held the read slot). */
+type Proof = { verdict: SeatVerdict } | { camera: SeatCameraRead; cached: boolean };
+const startingVerdict: Proof = { verdict: { seated: false, reason: "camera_starting" } };
+
+/**
+ * The seat's camera read under the proof flag. Presence (plan 1's table, fed by the vendor's webhooks) says WHO to read and WHEN;
+ * one peer-report read is the verdict; the browser's own report only schedules.
+ *
+ * PRESENCE on file (a webhook row, or a fallback's read row for PRESENCE_READ_TRUST_MS):
+ *   - nothing waits on the browser: a stale fallback clock is cleared;
+ *   - `since = least(joinedAt, receivedAt)`: the vendor's join, bounded by our own receipt so a vendor clock running AHEAD cannot
+ *     make the wait longer than it is;
+ *   - under FIRST_READ_AFTER_JOIN_MS of `since` with no live report from the browser: `camera_starting`, no call;
+ *   - else ONE peer-report read, under the same read slot as every read (racing claims make one between them):
+ *     on / off / blocked as reported; starting or none: `camera_starting` until the deadline from `since`; unreadable: waited out,
+ *     then the outage path;
+ *   - `left` (owner ruling R4): the report names a peer the vendor says has GONE, so its leave webhook was lost. The player is never
+ *     judged on a departed peer's last camera events. In the same claim and the same slot the claim takes the DEPARTED-PEER
+ *     FALLBACK: the session read (the participants list is authoritative about who is there), recording a current peer it finds.
+ *     No current peer is `absent`: camera_required / camera_lost, never a seat. Nothing is written to close the departed row: only
+ *     a webhook closes a row.
+ * NO presence on file: the browser's report schedules the fallback and nothing else.
+ *   - no `live` report, or no token ever handed to this participant (`token_issued_at` null): nobody can have joined, so the answer
+ *     is `absent` with no call, and the clock is cleared;
+ *   - a claim from a browser that does NOT hold this participant's token (a first visit, a reload: the answer hands it one now)
+ *     cannot be in the room yet either, however long the previous page was live: `camera_starting`, no call (this is what keeps a
+ *     reload from being read as a lost webhook; the next claim, from the holder, runs the clock from the new token's stamp);
+ *   - else the clock `presence_fallback_from = greatest(coalesce(presence_fallback_from, first-live receipt of the browser's run),
+ *     token_issued_at)`, kept in one statement: it starts at the FIRST live report of the current run (never the latest heartbeat)
+ *     and never before the token this page was handed. Under PRESENCE_FALLBACK_MS: `camera_starting`, no call. Past it: the no-presence
+ *     FALLBACK, under the read slot like every read: the session read, recording the peer it finds, the counter and a warning.
+ */
+async function proofCamera(
+  a: SeatAsk,
+  mine: SeatRead,
+  side: Side,
+  meetingId: string,
+  now: Date,
+  video: Video,
+  tokenIssuedAt: Date | null,
+): Promise<Proof> {
+  const who = { meetingId, participantId: mine.participantId, customParticipantId: a.personId };
+  const presence = await currentPresence(sql, { ...who, now });
+  const report = await reportedCamera(sql, { fixtureId: mine.fixtureId, side, participantId: mine.participantId, now });
+
+  if (presence === null) {
+    if (report.state !== "live" || tokenIssuedAt === null) {
+      await clearFallbackClock(mine);
+      const absent: SeatCamera = { state: "absent" };
+      await recordEvidence(mine, absent);
+      return { camera: absent, cached: false };
+    }
+    // The browser holds no token of this participant's (or this is T9's re-verify, which has no browser at all and judges as the
+    // holder would): see the doc above.
+    const holdsToken = a.recheck === true || a.heldParticipantId === mine.participantId;
+    if (!holdsToken) return startingVerdict;
+    const [clock] = await sql<{ from: Date }[]>`
+      update fixture_video_participants
+         set presence_fallback_from = greatest(coalesce(presence_fallback_from, ${report.firstLiveAt ?? now}::timestamptz), token_issued_at)
+       where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}
+       returning presence_fallback_from as "from"`;
+    // A fresh `live` with no stamp (a seat already live at the V529 deploy, until its next report) is a run starting now.
+    if (clock === undefined) throw meetingReplaced(mine.fixtureId);
+    if (now.getTime() - clock.from.getTime() < PRESENCE_FALLBACK_MS) return startingVerdict;
+    if (!(await claimEvidenceRead(mine, now))) return { camera: await cachedEvidence(mine, now), cached: true };
+    const camera = await sessionFallbackRead("no_presence", a, mine, meetingId, now, video);
+    await recordEvidence(mine, camera);
+    return { camera, cached: false };
+  }
+
+  await clearFallbackClock(mine);
+  const since = new Date(Math.min(presence.joinedAt.getTime(), presence.receivedAt.getTime()));
+  if (now.getTime() - since.getTime() < FIRST_READ_AFTER_JOIN_MS && report.state !== "live") return startingVerdict;
+  if (!(await claimEvidenceRead(mine, now))) return { camera: await cachedEvidence(mine, now), cached: true };
+
+  const read = await video.peerReportCamera(presence.peerId);
+  let camera: SeatCameraRead;
+  switch (read.camera) {
+    case "on":
+    case "off":
+    case "blocked":
+      camera = { state: read.camera, since };
+      break;
+    // RealtimeKit's own "no report for this peer yet" is `none`: not an outage and not a camera.
+    case "starting":
+    case "none":
+      camera = { state: "starting", since };
+      break;
+    case "unreadable":
+      camera = { state: "unreadable", since, error: read.error };
+      break;
+    case "left":
+      // The departed peer is NEVER judged. The read slot is already ours, so the session read happens in this same claim.
+      camera = await sessionFallbackRead("departed_peer", a, mine, meetingId, now, video);
+      break;
+  }
+  await recordEvidence(mine, camera);
+  return { camera, cached: false };
+}
+
+/** The counted fallback: today's session read (up to three calls), for a seat the presence table cannot answer. A present peer it
+ *  finds is recorded (`recordPresenceFromRead`: a hint the seat trusts PRESENCE_READ_TRUST_MS, never a fact), so the claims that
+ *  follow it take the one-read path. Counted and logged whatever the read finds, but not when the budget refused it (no request
+ *  was made, so nothing fell back). */
+async function sessionFallbackRead(kind: FallbackKind, a: SeatAsk, mine: SeatRead, meetingId: string, now: Date, video: Video): Promise<SeatCamera> {
+  let camera: SeatCamera;
+  try {
+    camera = await video.seatCameraEvidence({ meetingId, participantId: mine.participantId });
+  } catch (err) {
+    if (!(err instanceof RealtimeKitDeferred)) countFallback(kind, meetingId, mine.fixtureId);
+    throw err;
+  }
+  countFallback(kind, meetingId, mine.fixtureId);
+  // `"peerId" in camera`, not `cached`: only a present state names a peer (SeatCamera's `absent` carries none).
+  if ("peerId" in camera) {
+    await recordPresenceFromRead(
+      sql,
+      { meetingId, participantId: mine.participantId, customParticipantId: a.personId, peerId: camera.peerId, sessionId: camera.sessionId, joinedAt: camera.since },
+      now,
+    );
+  }
+  return camera;
+}
+
+function countFallback(kind: FallbackKind, meetingId: string, fixtureId: string): void {
+  fallbackReads += 1;
+  log.warn(
+    { meetingId, fixtureId, kind },
+    kind === "no_presence"
+      ? "seat: no presence on file; fell back to the vendor's session read"
+      : "seat: the peer on file has left (its leave webhook was lost); fell back to the vendor's session read",
+  );
+}
+
+/** Presence arrived, or there is no live report to run a clock from: a clock left over from an earlier silent stretch must not
+ *  carry into the next one. */
+async function clearFallbackClock(r: SeatRead): Promise<void> {
+  await sql`
+    update fixture_video_participants set presence_fallback_from = null
+     where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId} and presence_fallback_from is not null`;
 }
 
 type SeatRead = { fixtureId: string; participantId: string };
 
-/** A not-yet verdict replayed from the stored columns (`cachedEvidence`): it names no peer, because no read was made. */
+/** A verdict that names no peer: a not-yet verdict replayed from the stored columns (`cachedEvidence`: no read was made), or the one-read
+ *  proof's own report of the presence's peer (`proofCamera`: the peer is the presence row's, which that caller already holds). */
+type PeerlessRead =
+  | { state: "on" | "off" | "blocked" | "starting"; since: Date }
+  | { state: "unreadable"; since: Date; error: RealtimeKitError };
 type CachedVerdict = { state: "starting"; since: Date } | { state: "unreadable"; since: Date; error: RealtimeKitError };
-/** What the seat's gate judges: a vendor read (`SeatCamera`, which names the peer and session it read) or a cached verdict. */
-type SeatCameraRead = SeatCamera | CachedVerdict;
+/** What the seat's gate judges: a vendor read (`SeatCamera`, which names the peer and session it read) or a verdict naming none. */
+type SeatCameraRead = SeatCamera | PeerlessRead;
 
 /** Claim the right to read this participant's camera at the vendor, in ONE statement so that claims racing each other —
  *  two tabs, T9's freshness check beside a poll, two machines — make one read between them. Allowed when no starting
@@ -680,9 +882,23 @@ async function playerParticipant(a: SeatAsk, side: Side, meetingId: string, vide
 }
 
 /** The caller's token for their participant: the one a first claim minted, else a regenerated one. */
-async function issuePlayerToken(a: SeatAsk, side: Side, meetingId: string, video: Video): Promise<ParticipantToken> {
+async function issuePlayerToken(a: SeatAsk, side: Side, meetingId: string, video: Video, now: Date): Promise<ParticipantToken> {
   const have = await playerParticipant(a, side, meetingId, video, true);
-  return have.minted ?? video.refreshParticipantToken({ meetingId, participantId: have.participantId });
+  const token = have.minted ?? (await video.refreshParticipantToken({ meetingId, participantId: have.participantId }));
+  await stampTokenIssued({ fixtureId: a.fixtureId, participantId: have.participantId }, now);
+  return token;
+}
+
+/** The token stamp (check-in capacity plan 2 Task 6, finding 6): when this participant's page was last handed a token. ONE helper,
+ *  called on BOTH handout paths (verifyRequiredSeat's answer and issuePlayerToken) after the token is in hand, never before: a claim
+ *  that hands none (a recheck, a `camera_starting` to the browser that already holds the token) stamps nothing. The no-presence
+ *  fallback's clock never starts before it (a page cannot be in the room before it holds a token), and a row with none (from before
+ *  V529) has no page that can have joined. The pre-mint makes no participant, so every player row is written by a claim that hands
+ *  its token and stamps it. Written under every flag state: nothing reads it with the flag off. */
+async function stampTokenIssued(r: SeatRead, now: Date): Promise<void> {
+  await sql`
+    update fixture_video_participants set token_issued_at = ${now}::timestamptz
+     where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;
 }
 
 /** R2-2: the board was re-paired, or its meeting replaced, while this seat minted a participant. Nothing was stored;
@@ -707,6 +923,33 @@ export async function storedPlayerParticipant(
      order by created_at, id
      limit 1`;
   return row?.participant_id ?? null;
+}
+
+/** What a stay's FIRST claim will meet - the price table (check-in capacity plan 2, owner ruling R1), by what is on file:
+ *  - `"none"`: a CURRENT room and the player's live participant on it (an earlier claim made it: a restarted stay). The claim pays
+ *    only for the token and the reads. The pre-mint job never makes a participant (owner ruling 2026-11-17 (2)), so only a claim does;
+ *  - `"room"`: a current room and no such participant: the normal round, the job's own room. The claim adds the participant;
+ *  - `"all"`: anything else - no row, a row stamped for an EARLIER pairing (its retirement is the design's uncovered +4), or an ENDED
+ *    row (the claim makes the room and the participant).
+ *  "The player's participant" is preset 'player' on the side's row: `removed_at` is not asked, because the table's own check
+ *  (`fixture_video_participants_removed_check`) allows it on an arbiter row only, so a player row is never removed.
+ *  A row is CURRENT when it is unended and either unadopted (both stamps null: the pre-mint job's room for a board that had no
+ *  pairing when it was made, whichever pairing the board has now) or stamped for the fixture's current pairing. Task 7 prices the
+ *  stay with this; it is read by `(fixture, side)`, the keys the source guard asks every video-table reference to name. */
+export type StayMint = "none" | "room" | "all";
+export async function stayMintOf(db: AnySql, a: { fixtureId: string; side: Side; personId: string }): Promise<StayMint> {
+  const [row] = await db<{ current: boolean; mine: boolean }[]>`
+    select (m.ended_at is null
+            and ((m.home_entrant_id is null and m.away_entrant_id is null)
+                 or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))) as current,
+           exists (select 1 from fixture_video_participants vp
+                    where vp.fixture_id = m.fixture_id and vp.side = m.side and vp.person_id = ${a.personId}
+                      and vp.preset = 'player') as mine
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where m.fixture_id = ${a.fixtureId} and m.side = ${a.side}`;
+  if (!row || !row.current) return "all";
+  return row.mine ? "none" : "room";
 }
 
 /** A RealtimeKit failure the seat absorbs (as video_unavailable, or as no

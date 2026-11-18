@@ -166,7 +166,37 @@ async function retireBoardsMeetings(
   await tx`
     delete from fixture_video_meetings m
      where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is not null ${spare}`;
+  if (mode === "reopen") await resetKeptSeats(tx, fixtureIds, now);
   return [...new Set(marked.filter((r) => r.ended_at === null).map((r) => r.fixture_id))];
+}
+
+/** Check-in capacity plan 2 Task 6 (batch-3 review m2): a re-open KEEPS the current pairing's rooms, and with them the participants
+ *  seated in them. What those participants carry from the LAST window, written by the SEAT, is a verdict or a schedule, and a new
+ *  window must not inherit either:
+ *  - `last_publisher_seen_at`: the pass the re-verify (`recheck`) trusts for SEAT_RECHECK_TRUST_MS, and what turns a refused camera
+ *    into `camera_lost` rather than `camera_required`;
+ *  - `seat_reads`, `seat_read_at`, `seat_read_state`, `seat_read_since`: the read back-off schedule and the not-yet verdict it caches;
+ *  - `presence_fallback_from`: the no-presence fallback's clock, which the seat stored (the clock is recomputed from the page's own
+ *    instants at the next claim, so what carries is only what the seat once wrote).
+ *  Reset here, in the re-open's own transaction, rather than judged against the window's `opened_at` at every reader: there are five
+ *  readers of these columns (the seat's judge, its read slot, its cache, the recheck and the clock), each would owe the comparison, and
+ *  one forgotten is a stale proof that seats a player or refuses one. NOT reset, because they are the PAGE's and the page is still the
+ *  same page: `token_issued_at` (which token it holds) and the browser's own report (`camera_reported*`, `camera_live_first_at`: what its
+ *  camera says and since when - the camera-report writer's columns, which only that writer and its reader name, source guard rule 2).
+ *  The presence rows are the vendor's own facts about who is in the room, which a re-open does not change.
+ *  Only the rooms this call KEPT are reset: an unended room that is unadopted or stamped for the current pairing, with no game behind it
+ *  (a board a game stands behind is left exactly as it was). A retired room's participants go with it. A re-arm keeps nothing. */
+async function resetKeptSeats(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<void> {
+  await tx`
+    update fixture_video_participants vp
+       set seat_reads = 0, seat_read_at = null, seat_read_state = null, seat_read_since = null,
+           last_publisher_seen_at = null, presence_fallback_from = null
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where vp.fixture_id = m.fixture_id and vp.side = m.side and vp.preset = 'player'
+       and m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is null
+       and (m.home_entrant_id is null or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))
+       and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
 }
 
 

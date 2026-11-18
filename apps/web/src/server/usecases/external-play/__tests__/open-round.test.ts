@@ -114,7 +114,7 @@ import { openRound, roundOpenedAt } from "../open-round";
 import { bridgeTakesInvites } from "../invite";
 import { organiserOverrideVideo, seatPlayer, type PreflightDeps } from "../preflight";
 import { sweepExternalPlay } from "../sweep";
-import { RealtimeKitDeferred, addParticipant, endMeeting, ensureMeeting, refreshParticipantToken } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, addParticipant, endMeeting, ensureMeeting, peerReportCamera, refreshParticipantToken } from "@/server/external-play/video/realtimekit";
 import { log } from "@/server/logger";
 import { createGameIfReady } from "../create-game";
 import { resolveExternalPlay } from "../resolve";
@@ -1580,6 +1580,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       ensureMeeting: (fixtureId, side) => ensureMeeting(fixtureId, side, { fetch }),
       addParticipant: (a) => addParticipant(a, { fetch }),
       seatCameraEvidence: async () => ({ state: "on" as const, since: new Date(), peerId: "peer-fake", sessionId: "sess-fake" }),
+      peerReportCamera,
       refreshParticipantToken: (a) => refreshParticipantToken(a, { fetch }),
     };
     return { http, video, end: (meetingId: string) => endMeeting(meetingId, { fetch }) };

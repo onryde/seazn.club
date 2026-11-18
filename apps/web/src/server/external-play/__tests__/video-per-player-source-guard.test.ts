@@ -11,20 +11,23 @@
 //    must SELECT `side` (or be identified by its own primary key), because the per-row consumer needs it.
 //    The statements that mean BOTH sides on purpose are listed below with a reason; a listed entry that no longer matches
 //    exactly that many references fails.
-// 2. NOTHING BUT THE PILL READS THE CAMERA REPORT (§5.6.3). `camera_reported` and `camera_reported_at` are a player's browser's
-//    word for the OPPONENT's presence pill; the seat gate, `camera_lost`, the evidence read and the teardown stay on vendor-side
-//    sources. The columns are named in exactly two production files (the usecase that writes them and the snapshot composer
-//    that reads them).
+// 2. NOTHING BUT THE WRITER AND THE ONE READER NAMES THE CAMERA REPORT (§5.6.3). `camera_reported`, `camera_reported_at` and
+//    `camera_live_first_at` are a player's browser's word about its own camera. The report may SCHEDULE a vendor read or the seat's
+//    counted fallback (check-in capacity plan 2 Task 6: the seat reads it, through the leaf, to know when a read is worth making) and it
+//    NEVER decides a seat: the verdict is the vendor's peer report alone, `camera_lost` and the teardown stay on vendor-side sources.
+//    The columns are named in exactly two production files: the usecase that writes them (which keeps its own lock read) and the leaf
+//    `camera-reported.ts`, the ONE reader that room.ts (the pill), preflight.ts (the seat's schedule) and, in plan 3, arbiter.ts call.
 //
 // Anti-vacuity (TEST-STRATEGY.md): every sweep reports what it checked and zero checked is a FAILURE; the scanner is itself
 // tested on fixtures that must pass AND on their mutants that must fail; and the guards were mutated by hand (below).
 // Single-sport reason: no sport is involved - these are SQL statements.
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyAllowList,
+  CAMERA_REPORT_COLUMNS,
   filesNamingCameraReport,
   lex,
   productionSources,
@@ -92,8 +95,12 @@ const BOTH_SIDES: readonly BothSides[] = [
   },
 ];
 
-/** The only production files that may name a camera-report column. Paths under `src`. */
-const CAMERA_REPORT_FILES = ["server/usecases/external-play/camera-report.ts", "server/usecases/external-play/room.ts"] as const;
+/** The only production files that may name a camera-report column. Paths under `src`: the writer (which also keeps its own lock read,
+ *  finding 11: it needs the RAW state and stamp under a lock, which the reader's judge-on-`now` cannot give) and the ONE reader, a leaf
+ *  (check-in capacity plan 2 Task 6). room.ts, preflight.ts and (plan 3) arbiter.ts reach the report through the leaf, never by column. */
+const CAMERA_REPORT_FILES = ["server/usecases/external-play/camera-report.ts", "server/usecases/external-play/camera-reported.ts"] as const;
+/** The production files that import the leaf reader (`reportedCamera`), pinned: a new consumer is a decision (plan 3 adds `arbiter.ts`). */
+const CAMERA_REPORT_CONSUMERS = ["server/usecases/external-play/preflight.ts", "server/usecases/external-play/room.ts"] as const;
 /** The OpenAPI document and the schemas that build it describe the wire, not the column (§5.6.3). */
 const SCHEMA_MODULES = readdirSync(join(SRC, "server/api-v1/schemas")).filter((f) => f.endsWith(".ts")).map((f) => `server/api-v1/schemas/${f}`);
 const WIRE_DESCRIBERS = ["server/api-v1/openapi.ts", ...SCHEMA_MODULES] as const;
@@ -349,12 +356,38 @@ describe("every fixture-keyed reference to a video table names the side (§5.6.1
 
 // ─── 2. The camera report ────────────────────────────────────────────────────────────────────────────────────────────
 
-describe("nothing but the pill reads the camera report (§5.6.3)", () => {
-  it("the two columns are named in exactly the usecase that writes them and the composer that reads them", () => {
+// The constraint as it now is (check-in capacity plan 2 Task 6): the report may SCHEDULE a read or the fallback (the seat reads it, through the
+// leaf, to decide when a vendor read is worth making), and it NEVER decides a seat: nothing in the report seats a player, and the verdict is
+// the vendor's peer report alone (spec §2, §6.3). What this guard pins is WHO may name the columns; the verdict rule is preflight's tests.
+describe("nothing but the writer and the one reader names the camera report (§5.6.3)", () => {
+  it("the three columns are named in exactly the usecase that writes them and the leaf that reads them", () => {
     const r = filesNamingCameraReport(SRC, WIRE_DESCRIBERS);
     console.info(`[source guard 5.6.3] files scanned ${r.scanned}; naming a camera-report column: ${JSON.stringify(r.named)}; lexer fallbacks ${r.lexFailures.length}`);
     expect(r.scanned, "zero scanned is a failure").toBeGreaterThan(500);
     expect(r.named, "a file that reads the report outside the two").toEqual([...CAMERA_REPORT_FILES].sort());
+  });
+
+  it("the report's columns include the first-live stamp (the scanner's regex is word-bounded: it is not matched through the older two)", () => {
+    expect([...CAMERA_REPORT_COLUMNS]).toContain("camera_live_first_at");
+    const dir = mkdtempSync(join(tmpdir(), "camera-first-live-"));
+    try {
+      mkdirSync(join(dir, "usecases"), { recursive: true });
+      writeFileSync(join(dir, "usecases/stamp.ts"), "export const q = sql`select camera_live_first_at from p`;");
+      expect(filesNamingCameraReport(dir, []).named, "a file naming ONLY the new column is found").toEqual(["usecases/stamp.ts"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the leaf reader's consumers are pinned, each really imports it, and the leaf imports nothing that could close a cycle", () => {
+    const consumers = productionSources(SRC).filter((f) => /from "(?:\.\/|@\/server\/usecases\/external-play\/)camera-reported"/.test(readFileSync(join(SRC, f), "utf8")));
+    console.info(`[source guard 5.6.3] consumers of the leaf reader: ${JSON.stringify(consumers)}`);
+    expect(consumers.length, "zero checked is a failure").toBeGreaterThan(0);
+    expect(consumers, "a new reader of the report is a decision, not an import").toEqual([...CAMERA_REPORT_CONSUMERS].sort());
+    // The leaf: its static imports are the stale constant and a type, so room.ts, preflight.ts and arbiter.ts can all import it with no cycle.
+    const leaf = readFileSync(join(SRC, "server/usecases/external-play/camera-reported.ts"), "utf8");
+    const imports = [...leaf.matchAll(/^import (?!type\b)[^;]*?from "([^"]+)";/gms)].map((m) => m[1]!).filter((m) => m !== "server-only");
+    expect(imports, "the leaf's runtime imports").toEqual(["@/components/public-site/match-room/room-snapshot"]);
   });
 
   it("each allowed file really names a column, and each excluded file exists (a rename cannot pass by finding nothing)", () => {

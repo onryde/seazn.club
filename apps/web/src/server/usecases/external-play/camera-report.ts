@@ -3,12 +3,18 @@ import "server-only";
 // their own now, so the viewer's browser cannot see the opponent at all, and nothing is read from the vendor (its report
 // is the same browser telemetry, in batches, at a call each). A player's tab reports its camera's CURRENT state here, on
 // every change and again every CAMERA_REPORT_HEARTBEAT_MS in both states; this stamps it on the caller's own player
-// participant row, on the SERVER's clock, and the room snapshot (room.ts) reads it back for the opponent.
+// participant row, on the SERVER's clock, and `reportedCamera` (camera-reported.ts, the ONE reader) reads it back.
 //
-// It makes no RealtimeKit call, so it spends nothing from the platform's call budget, and NOTHING ELSE READS IT: not the
-// seat gate, not camera_lost, not the evidence read, the teardown or any flag. A client-claimed signal is exactly what the
-// design rejects as a safeguard (§5.2, §10); the source guard pins that these columns are named in two files only - this
-// one, which writes them, and room.ts, whose snapshot composer reads them.
+// It makes no RealtimeKit call, so it spends nothing from the platform's call budget. The report may SCHEDULE a vendor read (the
+// seat's `camera_starting` wait, and the counted fallback after the first live report: check-in capacity plan 2 Task 6) and it paints
+// the opponent's pill; it NEVER decides a seat. A client-claimed signal is exactly what the design rejects as a safeguard (§5.2,
+// §10): the verdict is the vendor's peer report alone. The source guard pins that the columns are named in two files only - this
+// one, which writes them (and keeps its own lock read: it needs the RAW state under `for update`), and the leaf reader.
+//
+// `camera_live_first_at` (V529) is the FIRST receipt of the current live run: stamped by the first `live` report after anything else
+// (nothing stored, `off`, or a live report too old to be fresh), kept by every fresh `live` after it, and cleared by EVERY write that
+// is not `live`. It is written in the same UPDATE as the state, so V529's pair check (a stamp only beside a stored `live`) holds after
+// every statement. A heartbeat the rules IGNORE writes nothing, so it cannot clear the stamp either.
 import { sql } from "@/lib/db";
 import { CAMERA_FAULT_PING_LIMIT, CAMERA_REPORT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { HttpError } from "@/lib/errors";
@@ -83,8 +89,19 @@ export async function reportOwnCamera(
       outcome = "written";
       ping = true;
     }
+    // The first-live stamp, judged against the row's OWN stored values (an UPDATE's expressions all see the old row, and the row is
+    // locked above): a live report over a fresh live run keeps the stamp (filling a NULL from before V529 with now), anything else
+    // live starts a run at now, and every non-live state clears it.
+    const freshAfter = new Date(now.getTime() - CAMERA_REPORT_STALE_MS);
     await tx`
-      update fixture_video_participants set camera_reported = ${body.state}, camera_reported_at = ${now}
+      update fixture_video_participants
+         set camera_reported = ${body.state}::text,
+             camera_reported_at = ${now},
+             camera_live_first_at = case
+               when ${body.state}::text = 'live' then
+                 case when camera_reported = 'live' and camera_reported_at > ${freshAfter} then coalesce(camera_live_first_at, ${now}) else ${now} end
+               else null
+             end
        where fixture_id = ${fixtureId} and side = ${side} and participant_id = ${participantId}`;
     return { outcome, ping };
   });

@@ -8,6 +8,7 @@ import { vi } from "vitest";
 import {
   addParticipant,
   ensureMeeting,
+  peerReportCamera,
   refreshParticipantToken,
   seatCameraEvidence,
 } from "@/server/external-play/video/realtimekit";
@@ -160,6 +161,10 @@ export function fakeRealtimeKit(opts: { budget?: CallBudget } = {}) {
     seatCameraEvidence: (a) => {
       adapter.push("seatCameraEvidence");
       return seatCameraEvidence(a, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
+    },
+    peerReportCamera: (peerId) => {
+      adapter.push("peerReportCamera");
+      return peerReportCamera(peerId, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
     },
     refreshParticipantToken: (a) => {
       adapter.push("refreshParticipantToken");

@@ -4,8 +4,9 @@
 // stamps it on that player's own participant row, on the server's clock, for the OPPONENT's pill. The rules under test:
 // a change always writes and pings; a heartbeat is judged against the stored row in four cases; a reordered pair is
 // harmless; a heartbeat that only refreshes pings nobody; the ping is rate-limited per seat; and only the seat's own
-// player, in an open meeting, can write it. Single-sport by construction: online play exists only for `boardgame`
-// (guard.ts), so there is no other sport to sweep.
+// player, in an open meeting, can write it. Check-in capacity plan 2 Task 6 adds the FIRST-LIVE stamp (`camera_live_first_at`,
+// owner ruling 2026-11-17) and its one reader (`reportedCamera`). Single-sport by construction: online play exists only for
+// `boardgame` (guard.ts), so there is no other sport to sweep.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { CAMERA_FAULT_PING_LIMIT, CAMERA_REPORT_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
@@ -13,6 +14,7 @@ import { CAMERA_REPORT_STALE_MS } from "@/components/public-site/match-room/room
 import { mintMatchRoomToken } from "../match-room-token";
 import { readRoom, type RoomDeps } from "../external-play/room";
 import { reportOwnCamera, type CameraReportOutcome } from "../external-play/camera-report";
+import { reportedCamera } from "../external-play/camera-reported";
 import { makeUser } from "./_seed";
 import { putVideoMeeting, putVideoParticipant, seedOnlineChessFixture, type SeedOnlineChessFixtureResult } from "./_external-play-seed";
 
@@ -260,5 +262,182 @@ describe.skipIf(!process.env.DATABASE_URL)("camera report - the limits", () => {
     const stranger = await makeUser("camera-report-budget");
     await expect(reportOwnCamera({ kind: "session", userId: stranger.id }, s.fixtureId, { state: "off", heartbeat: false }, deps())).rejects.toMatchObject({ status: 404 });
     expect([...counts.keys()].filter((k) => k.startsWith("room-camera-report")), "no key was touched").toEqual([]);
+  });
+});
+
+// ─── Task 6: the first-live stamp (owner ruling 2026-11-17) ──────────────────────────────────────────────────────────────
+
+const stampOf = async (participantId: string) =>
+  (await sql<{ first: Date | null }[]>`select camera_live_first_at as first from fixture_video_participants where participant_id = ${participantId}`)[0]!.first;
+
+describe.skipIf(!process.env.DATABASE_URL)("camera report - the first-live stamp (owner ruling 2026-11-17)", () => {
+  /** What the stamp must read after the report: the report's own instant, the stamp it already had, or nothing. */
+  type After = "now" | "kept" | "null";
+  type Row = {
+    label: string;
+    /** `firstAgeMs`: how old the stored stamp is (live only; null = a live row from before V529, no stamp). */
+    stored: { state: State; ageMs: number; firstAgeMs?: number | null } | null;
+    body: { state: State; heartbeat: boolean };
+    outcome: CameraReportOutcome;
+    after: After;
+  };
+  const FRESH = 1_000;
+  const FIRST_AGE = 5 * 60_000; // a live run that began five minutes ago
+  const JUST_FRESH = CAMERA_REPORT_STALE_MS - 1;
+  const JUST_STALE = CAMERA_REPORT_STALE_MS;
+  // Written out from the ruling, never read from the code: a stamp starts a live run at the first receipt and only an interruption
+  // (off, or a live row too old to be fresh) ends one.
+  const TABLE: Row[] = [
+    { label: "null -> live (change) stamps it", stored: null, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
+    { label: "null -> live (heartbeat) stamps it", stored: null, body: { state: "live", heartbeat: true }, outcome: "written", after: "now" },
+    { label: "fresh live -> live heartbeat keeps it (refreshed)", stored: { state: "live", ageMs: FRESH, firstAgeMs: FIRST_AGE }, body: { state: "live", heartbeat: true }, outcome: "refreshed", after: "kept" },
+    { label: "fresh live -> live change keeps it (written)", stored: { state: "live", ageMs: FRESH, firstAgeMs: FIRST_AGE }, body: { state: "live", heartbeat: false }, outcome: "written", after: "kept" },
+    { label: "live ONE ms inside the window -> live heartbeat keeps it", stored: { state: "live", ageMs: JUST_FRESH, firstAgeMs: FIRST_AGE }, body: { state: "live", heartbeat: true }, outcome: "refreshed", after: "kept" },
+    { label: "live exactly at the window -> live heartbeat restarts it", stored: { state: "live", ageMs: JUST_STALE, firstAgeMs: FIRST_AGE }, body: { state: "live", heartbeat: true }, outcome: "refreshed", after: "now" },
+    { label: "stale live -> live change restarts it", stored: { state: "live", ageMs: JUST_STALE + 5_000, firstAgeMs: FIRST_AGE }, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
+    { label: "long-stale live -> live heartbeat restarts it", stored: { state: "live", ageMs: 10 * CAMERA_REPORT_STALE_MS, firstAgeMs: 20 * CAMERA_REPORT_STALE_MS }, body: { state: "live", heartbeat: true }, outcome: "refreshed", after: "now" },
+    { label: "fresh live -> off change clears it", stored: { state: "live", ageMs: FRESH, firstAgeMs: FIRST_AGE }, body: { state: "off", heartbeat: false }, outcome: "written", after: "null" },
+    { label: "stale live -> off change clears it", stored: { state: "live", ageMs: JUST_STALE + 5_000, firstAgeMs: FIRST_AGE }, body: { state: "off", heartbeat: false }, outcome: "written", after: "null" },
+    { label: "stale live -> off heartbeat is applied as a change and clears it", stored: { state: "live", ageMs: JUST_STALE, firstAgeMs: FIRST_AGE }, body: { state: "off", heartbeat: true }, outcome: "written", after: "null" },
+    { label: "fresh off -> live change stamps the new receipt", stored: { state: "off", ageMs: FRESH }, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
+    { label: "stale off -> live heartbeat (applied) stamps the new receipt", stored: { state: "off", ageMs: JUST_STALE + 5_000 }, body: { state: "live", heartbeat: true }, outcome: "written", after: "now" },
+    { label: "a fresh live over a NULL stamp (a seat already live at the V529 deploy) FILLS it - never stays null (change)", stored: { state: "live", ageMs: FRESH, firstAgeMs: null }, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
+    { label: "a fresh live over a NULL stamp is filled by a heartbeat too (refreshed)", stored: { state: "live", ageMs: FRESH, firstAgeMs: null }, body: { state: "live", heartbeat: true }, outcome: "refreshed", after: "now" },
+    { label: "off -> off keeps it null", stored: { state: "off", ageMs: FRESH }, body: { state: "off", heartbeat: true }, outcome: "refreshed", after: "null" },
+    { label: "an IGNORED live heartbeat over a fresh off leaves it null", stored: { state: "off", ageMs: FRESH }, body: { state: "live", heartbeat: true }, outcome: "ignored", after: "null" },
+    { label: "an IGNORED off heartbeat over a fresh live leaves the stamp UNTOUCHED (not cleared)", stored: { state: "live", ageMs: FRESH, firstAgeMs: FIRST_AGE }, body: { state: "off", heartbeat: true }, outcome: "ignored", after: "kept" },
+  ];
+
+  async function boardWith(side: Side, row: Row["stored"]) {
+    const { s, part } = await board({ [side]: row ? { state: row.state, ageMs: row.ageMs } : null });
+    let seeded: Date | null = null;
+    if (row && row.state === "live" && row.firstAgeMs != null) {
+      seeded = new Date(NOW.getTime() - row.firstAgeMs);
+      await sql`update fixture_video_participants set camera_live_first_at = ${seeded} where participant_id = ${part[side]}`;
+    }
+    return { s, part, seeded };
+  }
+
+  it("each transition, both sides, counted: null->live stamps; fresh live->live keeps (heartbeat or change); stale live->live restarts; live->off clears; off->live stamps; a fresh live over null fills; an ignored report touches nothing", async () => {
+    let checked = 0;
+    const seenOutcomes = new Set<string>();
+    const seenAfter = new Set<string>();
+    for (const side of ["home", "away"] as const) {
+      for (const row of TABLE) {
+        const { s, part, seeded } = await boardWith(side, row.stored);
+        const label = `${side}: ${row.label}`;
+        const out = await reportOwnCamera(me(s, side), s.fixtureId, row.body, deps());
+        expect(out, `${label}: outcome`).toEqual({ outcome: row.outcome });
+        const first = await stampOf(part[side]);
+        if (row.after === "now") expect(first?.getTime(), `${label}: the stamp is this report's own instant`).toBe(NOW.getTime());
+        else if (row.after === "kept") expect(first?.getTime(), `${label}: the stamp is the one it already had`).toBe(seeded!.getTime());
+        else expect(first, `${label}: no stamp`).toBeNull();
+        // The strict V529 pair: a stamp never sits beside anything but a stored `live`.
+        const [r] = await sql<{ state: string | null }[]>`select camera_reported as state from fixture_video_participants where participant_id = ${part[side]}`;
+        if (first !== null) expect(r!.state, `${label}: a stamp only beside live`).toBe("live");
+        // It never touches the OTHER player's row.
+        const other = side === "home" ? "away" : "home";
+        expect(await stampOf(part[other]), `${label}: the other player's stamp`).toBeNull();
+        seenOutcomes.add(out.outcome);
+        seenAfter.add(row.after);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: every row on both sides").toBe(TABLE.length * 2);
+    expect(seenOutcomes, "all three outcomes are in the table").toEqual(new Set(["written", "refreshed", "ignored"]));
+    expect(seenAfter, "stamp, keep and clear are all in the table").toEqual(new Set(["now", "kept", "null"]));
+  });
+
+  it("a second live heartbeat does not move camera_live_first_at (outcome 'refreshed'; camera_reported_at does move) - through a run of heartbeats", async () => {
+    const { s, part } = await board();
+    const t0 = NOW;
+    expect(await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: false }, deps(t0))).toEqual({ outcome: "written" });
+    expect((await stampOf(part.home))?.getTime(), "the change stamped it").toBe(t0.getTime());
+    let beats = 0;
+    for (let at = 30_000; at <= 5 * 30_000; at += 30_000) {
+      const out = await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: true }, deps(new Date(t0.getTime() + at)));
+      expect(out, `beat at +${at} ms`).toEqual({ outcome: "refreshed" });
+      expect((await stampOf(part.home))?.getTime(), `beat at +${at} ms: the stamp stays at the first receipt`).toBe(t0.getTime());
+      expect((await rowOf(part.home)).at?.getTime(), `beat at +${at} ms: the latest receipt moves`).toBe(t0.getTime() + at);
+      beats += 1;
+    }
+    expect(beats, "anti-vacuity: the beats that held it").toBe(5);
+  });
+
+  it("sequence: live -> off -> live is a NEW run (the stamp is the later receipt), and the camera heard from again after a gap longer than the window starts one too", async () => {
+    const { s, part } = await board();
+    const t0 = NOW;
+    await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: false }, deps(t0));
+    await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "off", heartbeat: false }, deps(new Date(t0.getTime() + 10_000)));
+    expect(await stampOf(part.home), "off clears").toBeNull();
+    await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: false }, deps(new Date(t0.getTime() + 20_000)));
+    expect((await stampOf(part.home))?.getTime(), "the new run starts at ITS first receipt").toBe(t0.getTime() + 20_000);
+    // The tab goes quiet for longer than the window; the next heartbeat is a new run, not a continuation.
+    const back = new Date(t0.getTime() + 20_000 + CAMERA_REPORT_STALE_MS + 1_000);
+    expect(await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: true }, deps(back))).toEqual({ outcome: "refreshed" });
+    expect((await stampOf(part.home))?.getTime()).toBe(back.getTime());
+  });
+});
+
+// ─── Task 6: reportedCamera, the one reader ─────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!process.env.DATABASE_URL)("reportedCamera - the one reader of the report outside the writer, judged on `now`", () => {
+  const read = (s: SeedOnlineChessFixtureResult, participantId: string, side: Side = "home", now: Date = NOW) =>
+    reportedCamera(sql, { fixtureId: s.fixtureId, side, participantId, now });
+
+  it("fresh live / fresh off as reported; a stale one, none yet, no such participant and an ENDED meeting all read unknown - counted", async () => {
+    const cases: { label: string; stored: { state: State; ageMs: number } | null; want: "live" | "off" | "unknown" }[] = [
+      { label: "fresh live", stored: { state: "live", ageMs: 1_000 }, want: "live" },
+      { label: "live one ms inside the window", stored: { state: "live", ageMs: CAMERA_REPORT_STALE_MS - 1 }, want: "live" },
+      { label: "live exactly at the window: stale, so unknown (never `off`, never hidden)", stored: { state: "live", ageMs: CAMERA_REPORT_STALE_MS }, want: "unknown" },
+      { label: "fresh off", stored: { state: "off", ageMs: 1_000 }, want: "off" },
+      { label: "stale off", stored: { state: "off", ageMs: CAMERA_REPORT_STALE_MS + 1 }, want: "unknown" },
+      { label: "nothing reported yet", stored: null, want: "unknown" },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const { s, part } = await board({ home: c.stored });
+      const got = await read(s, part.home);
+      expect(got.state, c.label).toBe(c.want);
+      checked += 1;
+    }
+    // A participant that is not on file, and one whose meeting has ENDED: its room is over, so it reads nothing.
+    const { s, part } = await board({ home: { state: "live", ageMs: 1_000 } });
+    expect((await read(s, "no-such-participant")).state, "no participant on file").toBe("unknown");
+    checked += 1;
+    await sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${s.fixtureId} and side = 'home'`;
+    expect((await read(s, part.home)).state, "an ended meeting reads nothing").toBe("unknown");
+    checked += 1;
+    expect(checked, "anti-vacuity").toBe(cases.length + 2);
+  });
+
+  it("`at` is the LATEST receipt and `firstLiveAt` the first of the live run, null unless the stored state is live and fresh", async () => {
+    // Through the real writer: a run of live reports, then an off.
+    const { s, part } = await board();
+    const t0 = NOW;
+    await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: false }, deps(t0));
+    await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "live", heartbeat: true }, deps(new Date(t0.getTime() + 30_000)));
+    const live = await read(s, part.home, "home", new Date(t0.getTime() + 31_000));
+    expect({ state: live.state, at: live.at?.getTime(), first: live.firstLiveAt?.getTime() }, "live: the latest receipt and the run's first").toEqual({
+      state: "live",
+      at: t0.getTime() + 30_000,
+      first: t0.getTime(),
+    });
+    const stale = await read(s, part.home, "home", new Date(t0.getTime() + 30_000 + CAMERA_REPORT_STALE_MS));
+    expect({ state: stale.state, first: stale.firstLiveAt }, "a stale live is unknown and names no run").toEqual({ state: "unknown", first: null });
+    await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "off", heartbeat: false }, deps(new Date(t0.getTime() + 40_000)));
+    const off = await read(s, part.home, "home", new Date(t0.getTime() + 41_000));
+    expect({ state: off.state, first: off.firstLiveAt }, "off names no run").toEqual({ state: "off", first: null });
+    // A fresh live from before V529: live, with no stamp - returned as it is, for the seat to treat as a run starting now.
+    const pre = await board({ home: { state: "live", ageMs: 1_000 } });
+    const old = await read(pre.s, pre.part.home);
+    expect({ state: old.state, first: old.firstLiveAt }, "live over a null stamp").toEqual({ state: "live", first: null });
+  });
+
+  it("the other side's participant is not read through this side's key (side-keyed)", async () => {
+    const { s, part } = await board({ home: { state: "live", ageMs: 1_000 }, away: { state: "off", ageMs: 1_000 } });
+    expect((await read(s, part.home, "home")).state).toBe("live");
+    expect((await read(s, part.away, "away")).state).toBe("off");
+    expect((await read(s, part.home, "away")).state, "home's participant under away's side is nobody").toBe("unknown");
   });
 });

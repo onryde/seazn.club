@@ -30,7 +30,7 @@ import {
 } from "../../../../e2e/realtimekit-fixture-server";
 import { CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
 import { seatPlayer, type PreflightDeps, type SeatResult } from "../external-play/preflight";
-import { RealtimeKitDeferred, addParticipant, ensureMeeting, refreshParticipantToken, seatCameraEvidence } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, addParticipant, ensureMeeting, peerReportCamera, refreshParticipantToken, seatCameraEvidence } from "@/server/external-play/video/realtimekit";
 import { RTK_BUDGET_WINDOW_MS, RTK_CALLS_PER_WINDOW, RTK_VENDOR_LIMIT_PER_WINDOW, takeRealtimeKitCall } from "@/server/external-play/video/budget";
 import { cameraEvidenceDelayMs, CAMERA_EVIDENCE_MAX_POLLS } from "@/components/public-site/match-room/room-snapshot";
 import { randomUUID } from "node:crypto";
@@ -397,6 +397,7 @@ function metered(budget: () => Promise<boolean>): Video {
     ensureMeeting: (id, side) => ensureMeeting(id, side, { budget }),
     addParticipant: (a) => addParticipant(a, { budget }),
     seatCameraEvidence: (a) => seatCameraEvidence(a, { budget }),
+    peerReportCamera: (id) => peerReportCamera(id, { budget }),
     refreshParticipantToken: (a) => refreshParticipantToken(a, { budget }),
   };
 }

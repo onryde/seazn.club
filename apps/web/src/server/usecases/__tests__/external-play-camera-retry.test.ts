@@ -30,6 +30,7 @@ import {
   addParticipant,
   ensureMeeting,
   RealtimeKitError,
+  peerReportCamera,
   refreshParticipantToken,
   seatCameraEvidence,
 } from "@/server/external-play/video/realtimekit";
@@ -94,6 +95,7 @@ function metered(budget: () => Promise<boolean>): Video {
     ensureMeeting: (id, side) => ensureMeeting(id, side, { budget }),
     addParticipant: (a) => addParticipant(a, { budget }),
     seatCameraEvidence: (a) => seatCameraEvidence(a, { budget }),
+    peerReportCamera: (id) => peerReportCamera(id, { budget }),
     refreshParticipantToken: (a) => refreshParticipantToken(a, { budget }),
   };
 }
@@ -113,6 +115,9 @@ const down: Video = {
     throw new RealtimeKitError(503, "unavailable", "test outage");
   },
   seatCameraEvidence: async () => {
+    throw new RealtimeKitError(503, "unavailable", "test outage");
+  },
+  peerReportCamera: async () => {
     throw new RealtimeKitError(503, "unavailable", "test outage");
   },
   refreshParticipantToken: async () => {

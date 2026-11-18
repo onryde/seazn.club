@@ -106,6 +106,7 @@ const VIDEO: NonNullable<PreflightDeps["video"]> = {
   ensureMeeting: down,
   addParticipant: down,
   seatCameraEvidence: down,
+  peerReportCamera: down,
   refreshParticipantToken: down,
 };
 
