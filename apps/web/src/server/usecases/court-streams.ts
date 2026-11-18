@@ -35,7 +35,8 @@ import { resolveCandidateCourts } from "./court-candidates";
 import { competitionZone, dayBounds } from "./match-day-codes";
 import { loadSettings } from "./schedule/settings";
 import {
-  CODE_RETRIES, SLOT, activeCodeOf, drawCode, fixtureOf, freshTok, isCodeCollision, lockFixtureCode, requireSessionEditor, sha256Hex,
+  CODE_RETRIES, SLOT, activeCodeOf, drawCode, fixtureOf, freshTok, isCodeCollision, lockFixtureCode, ownCodeCompetes, requireSessionEditor,
+  sha256Hex,
 } from "./stream-codes";
 
 export type CourtStreamShown = {
@@ -260,9 +261,11 @@ export async function liveCourtLinkFor(
 
 /**
  * The match's Stream switch (spec §5.2): ON hands the match to its court's phone. OFF by default; turning it on spends no
- * credit (the credit is taken when a session starts). On is refused by name while the match has its own ACTIVE code
- * (`has_own_stream_code`) or its court has no live link now (`court_not_streaming`); off is never refused. It takes the
- * fixture's code lock first, the lock `ensureStreamCode` takes, so a mint and a switch-on cannot both succeed. An upsert that
+ * credit (the credit is taken when a session starts). On is refused by name while the match has its own ACTIVE code that a
+ * phone holds or a session runs on (`has_own_stream_code`, `ownCodeCompetes`) or its court has no live link now
+ * (`court_not_streaming`); off is never refused. An ACTIVE own code nobody uses is retired by the ON (Web G). It takes the
+ * fixture's code lock first, the lock `ensureStreamCode` takes, so a switch-on never ends with a live own code beside it: a
+ * mint that commits first is either held (ON refused) or retired by the ON; a mint after the ON is refused `court_streamed`. An upsert that
  * never touches `target_id` / `target_chosen` (plan R-1), bumping `revision`.
  *
  * O17 (owner, 2026-11-17: "switching Stream off should stop the video now"): OFF while the match's court session is
@@ -280,12 +283,21 @@ export async function setCourtStream(
   await sql.begin(async (tx) => {
     await lockFixtureCode(tx, fixtureId);
     if (on) {
-      if (await activeCodeOf(tx, fixtureId)) {
+      const [{ competes }] = await tx<{ competes: boolean }[]>`select ${ownCodeCompetes(tx, tx`${fixtureId}::uuid`, now)} as competes`;
+      if (competes) {
         throw new HttpError(409, "This match has its own stream code; end it before the court streams the match", "has_own_stream_code");
       }
       const [f] = await tx<{ court_id: string | null }[]>`select court_id from fixtures where id = ${fixtureId}`;
       if (!(await liveCourtLinkFor(tx, { orgId: auth.orgId, courtId: f?.court_id ?? null, now }))) {
         throw new HttpError(409, "This match's court is not streaming right now", "court_not_streaming");
+      }
+      // Web G: an own code nobody uses any more is retired here, in the same transaction and under the same lock, so the
+      // court's phone is the match's only streamer. Ended as `withdrawn` by the organiser (its tok wiped), never deleted:
+      // its ended sessions and their replays stay. A phone that comes back to it is refused `code_ended` (C1).
+      const idle = await activeCodeOf(tx, fixtureId);
+      if (idle) {
+        await wipeStreamCodeTok(tx, idle.id, "withdrawn", auth.userId);
+        log.info({ orgId: auth.orgId, fixtureId, codeId: idle.id }, "court stream: switched on — the match's idle own code was retired (Web G)");
       }
     }
     await tx`
@@ -397,7 +409,8 @@ export async function courtRefusalOf(orgId: string, courtId: string, fixtureIds:
 
 /**
  * The desk's read of court streams for Match Day (spec §5.5): per court the live link with its phone's status and the court's
- * latest stored refusal, per match its switch and whether it has its own ACTIVE code. Two statements however many courts and
+ * latest stored refusal, per match its switch and whether it has its own ACTIVE code that competes (`ownCodeCompetes`: a
+ * phone holds it or a session runs on it — the predicate `setCourtStream` refuses ON by). Two statements however many courts and
  * matches: one over the links (the pairing and the open session by lateral join), one over the matches. No tok, no code.
  * The refusal is the newest stored one among the court's unfinished matches that have no open session (a success or a Go live
  * clears it); `competition_frozen` is served for a stored `not_entitled` while the competition is frozen (as `streamPhone`).
@@ -468,7 +481,7 @@ export async function courtStreamsForDay(
     select f.id, f.court_id, d.competition_id, st.court_stream, st.auto_start_refusal, st.auto_start_attempted_at,
            (f.status not in ('scheduled', 'in_play')
             or exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.state in ${sql([...ACTIVE_STATES])})) as settled,
-           exists (select 1 from fixture_stream_codes k where k.fixture_id = f.id and k.ended_at is null) as own_code
+           ${ownCodeCompetes(sql, sql`f.id`, now)} as own_code
       from fixtures f
       join divisions d on d.id = f.division_id
       left join fixture_stream_settings st on st.fixture_id = f.id

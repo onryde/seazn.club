@@ -2,7 +2,14 @@
 // DATABASE_URL. Rules under test are the brief's, typed here: the switch is OFF by default and turning it on spends no
 // credit; it is refused by name when the match has its own ACTIVE code (has_own_stream_code) or its court has no live link
 // now (court_not_streaming); turning off is never refused; ensure/reissue refuse a court-streamed match (court_streamed);
-// and a mint racing a switch-on has exactly one winner, the loser refused by name.
+// and a mint racing a switch-on never leaves the switch on beside a live own code.
+//
+// Web G (controller's ruling on the owner's "Ok", 2026-11-18), typed here, never imported from the code under test: the own
+// code refuses ON only while it COMPETES — a phone holds it (a current pairing whose last beat is within §6.9's present
+// window, max(60 s floor, cadence + 30 s)) or a session of the match is requested/provisioning/warming/live/ending. Otherwise
+// ON succeeds and, in the same transaction, ends the own code (`withdrawn`, by the organiser, tok wiped; never deleted, its
+// ended sessions stay); the phone that comes back to it is refused `401 code_ended`; the desk's `own_stream_code` reads the
+// same predicate. A refused ON (either reason) retires nothing.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 
@@ -24,9 +31,12 @@ vi.mock("@/server/relay/secret-columns", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { rigApiTarget } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, rigApiTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
+import { CaptureRefusalError } from "@/server/api-v1/capture-http";
+import type { SessionDeps } from "../stream-sessions/deps";
+import { postBeat } from "../capture-phone";
+import { courtStreamsForDay, linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { ensureStreamCode, reissueStreamCode } from "../stream-codes";
 import { streamPhone } from "../stream-phone";
 import { place, seedDay, type Day } from "./_match-day-seed";
@@ -61,6 +71,23 @@ const settingsOf = async (fixtureId: string) => {
 };
 const activeCodes = async (fixtureId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`)[0]!.n;
+const codesOf = (fixtureId: string) => sql<{ id: string; ended_at: Date | null; end_cause: string | null; ended_by: string | null; sealed: boolean }[]>`
+  select id, ended_at, end_cause, ended_by, tok_enc is not null as sealed from fixture_stream_codes where fixture_id = ${fixtureId} order by created_at`;
+/** §6.9's present window is at most max(60 s, 60 s far cadence + 30 s) = 90 s: ten minutes is silent at any cadence. */
+const SILENT_AGO_MS = 10 * 60_000;
+const NO_DRIVERS = new Proxy({}, { get: () => { throw new Error("no driver is reachable from a beat on an ended code"); } }) as SessionDeps["drivers"];
+const beatOn = (qr: { code: string; tok: string }, phone: string, at: Date) => postBeat(qr.code, qr.tok, {
+  code: qr.code, slot: 0, phone, claim: null, device: null, sid: null, at: at.toISOString(), state: "paired", cause: null,
+  notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
+  deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null, appVersion: "session-rig",
+}, { drivers: NO_DRIVERS, now: () => at, appUrl: "http://rig.test" }, at);
+const captureRefusal = async (p: Promise<unknown>): Promise<string> => {
+  try { await p; } catch (e) {
+    if (e instanceof CaptureRefusalError) return `${e.status}:${e.code}`;
+    throw e;
+  }
+  throw new Error("expected a capture refusal");
+};
 
 describe.skipIf(!HAS_DB)("court stream switch", () => {
   let day: Day;
@@ -100,12 +127,77 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     expect(JSON.stringify(read), "a label only: no link or target id on the panel read").not.toMatch(/court_link|target_id|tok/);
   });
 
-  it("turning on a match that has its own stream code is 409 has_own_stream_code, nothing written", async () => {
+  /** The desk's `own_stream_code` for `fixtureId` (Match Day's switch lock), read through the desk's own read. */
+  const deskOwnCode = async (fixtureId: string) =>
+    (await courtStreamsForDay(day.orgId, [day.courts.c2], [fixtureId], new Date())).switches.get(fixtureId)?.ownCode;
+
+  it("Web G: a phone holding the match's own code (beat within the present window) is 409 has_own_stream_code; desk locked", async () => {
     await linkCourt2();
     await ensureStreamCode(day.auth, fx);
+    await pairPresentPhone(fx, { at: new Date(Date.now() - 20_000) }); // 20 s ago: present at any cadence
+    expect(await deskOwnCode(fx), "desk switch locked own_code").toBe(true);
     const f = await failure(setCourtStream(day.auth, fx, true));
     expect([f.status, f.code]).toEqual([409, "has_own_stream_code"]);
     expect(await settingsOf(fx)).toBeNull();
+    expect(await activeCodes(fx), "a refused ON retires nothing").toBe(1);
+  });
+
+  it("Web G: an active session of the match (no phone beating) is 409 has_own_stream_code; desk locked", async () => {
+    const shown = await linkCourt2();
+    await ensureStreamCode(day.auth, fx);
+    const [t] = await sql<{ target_id: string }[]>`select target_id from court_stream_links where id = ${shown.id}`;
+    for (const state of ["requested", "provisioning", "warming", "live", "ending"]) {
+      const sid = await sessionOnTarget(day.orgId, fx, t!.target_id, state);
+      expect(await deskOwnCode(fx), `desk locked while ${state}`).toBe(true);
+      const f = await failure(setCourtStream(day.auth, fx, true));
+      expect([f.status, f.code], state).toEqual([409, "has_own_stream_code"]);
+      await sql`update fixture_stream_sessions set state = 'failed', ended_at = now() where id = ${sid}`;
+    }
+    expect(await settingsOf(fx)).toBeNull();
+    expect(await activeCodes(fx)).toBe(1);
+  });
+
+  it("Web G: an ended-only session and a phone gone silent — ON succeeds, the own code is retired (not deleted), the desk unlocks, the phone is refused", async () => {
+    const shown = await linkCourt2();
+    const qr = (await ensureStreamCode(day.auth, fx)).qr;
+    const { phone } = await pairPresentPhone(fx, { at: new Date(Date.now() - SILENT_AGO_MS) });
+    const [t] = await sql<{ target_id: string }[]>`select target_id from court_stream_links where id = ${shown.id}`;
+    const sid = await sessionOnTarget(day.orgId, fx, t!.target_id, "failed"); // "Ended before going live"
+    expect(await deskOwnCode(fx), "desk switch enabled: the code competes with nothing").toBe(false);
+
+    expect(await setCourtStream(day.auth, fx, true)).toEqual({ on: true });
+    expect(await settingsOf(fx)).toMatchObject({ court_stream: true });
+    const codes = await codesOf(fx);
+    expect(codes, "retired, never deleted").toHaveLength(1);
+    expect(codes[0]).toMatchObject({ end_cause: "withdrawn", ended_by: day.auth.userId, sealed: false });
+    expect(codes[0]!.ended_at).not.toBeNull();
+    expect((await sql`select 1 from fixture_stream_sessions where id = ${sid}`).length, "its ended session stays").toBe(1);
+    expect(await deskOwnCode(fx)).toBe(false);
+
+    expect(await captureRefusal(beatOn(qr, phone, new Date())), "the phone that held it is refused").toBe("401:code_ended");
+    expect((await failure(ensureStreamCode(day.auth, fx))).code, "and the match mints no new code").toBe("court_streamed");
+    const panel = await streamPhone(day.auth, fx, { now: () => new Date() });
+    expect(panel.code).toMatchObject({ state: "ended", endCause: "withdrawn" });
+    expect(panel.court).toEqual({ name: "Court 2", targetLabel: "Club channel" });
+  });
+
+  it("Web G: a code no phone ever claimed is retired by ON; a second ON is idempotent", async () => {
+    await linkCourt2();
+    await ensureStreamCode(day.auth, fx);
+    expect(await deskOwnCode(fx)).toBe(false);
+    expect(await setCourtStream(day.auth, fx, true)).toEqual({ on: true });
+    expect(await setCourtStream(day.auth, fx, true)).toEqual({ on: true });
+    const codes = await codesOf(fx);
+    expect(codes.map((c) => c.end_cause)).toEqual(["withdrawn"]);
+    expect(await activeCodes(fx)).toBe(0);
+    expect(await settingsOf(fx)).toMatchObject({ court_stream: true, revision: 2 });
+  });
+
+  it("Web G: an ON refused court_not_streaming retires nothing", async () => {
+    await ensureStreamCode(day.auth, fx); // Court 2 never linked
+    expect((await failure(setCourtStream(day.auth, fx, true))).code).toBe("court_not_streaming");
+    expect(await activeCodes(fx)).toBe(1);
+    expect((await codesOf(fx))[0]).toMatchObject({ ended_at: null, sealed: true });
   });
 
   it("turning on a match whose court is not streaming is 409 court_not_streaming", async () => {
@@ -162,19 +254,19 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     expect((await ensureStreamCode(day.auth, fx)).qr.code).toMatch(/\S/);
   });
 
-  it("racing a mint and a switch-on: exactly one wins, the other is refused by name", async () => {
+  it("racing a mint and a switch-on: the switch ends on, and never beside a live own code (Web G: a fresh code is no competitor)", async () => {
     await linkCourt2();
-    const [a, b] = await Promise.allSettled([ensureStreamCode(day.auth, fx), setCourtStream(day.auth, fx, true)]);
-    const fulfilled = [a, b].filter((r) => r.status === "fulfilled");
-    expect(fulfilled).toHaveLength(1);
-    const lost = (a.status === "rejected" ? a : b) as PromiseRejectedResult;
-    expect(lost.reason).toBeInstanceOf(HttpError);
-    expect((lost.reason as HttpError).code).toBe(a.status === "rejected" ? "court_streamed" : "has_own_stream_code");
-    const s = await settingsOf(fx);
-    expect((await activeCodes(fx) === 1) !== (s?.court_stream === true)).toBe(true);
+    for (let i = 0; i < 3; i++) {
+      await setCourtStream(day.auth, fx, false);
+      const [a, b] = await Promise.allSettled([ensureStreamCode(day.auth, fx), setCourtStream(day.auth, fx, true)]);
+      expect(b.status, "the switch-on always wins: a mint before it holds no phone").toBe("fulfilled");
+      if (a.status === "rejected") expect((a.reason as HttpError).code).toBe("court_streamed");
+      expect(await settingsOf(fx)).toMatchObject({ court_stream: true });
+      expect(await activeCodes(fx), "never on beside a live own code").toBe(0);
+    }
   });
 
-  it("a mint held open between its reads and its write still blocks a switch-on: the switch waits on the lock and is refused", async () => {
+  it("a mint held open between its reads and its write: the switch waits on the lock, then retires the code no phone holds", async () => {
     await linkCourt2();
     let reached!: () => void;
     const atInsert = new Promise<void>((r) => { reached = r; });
@@ -182,12 +274,25 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     try {
       const mint = ensureStreamCode(day.auth, fx);
       await atInsert; // the mint has read "no code, switch off" and holds the fixture's lock
-      const sw = failure(setCourtStream(day.auth, fx, true));
+      const sw = setCourtStream(day.auth, fx, true);
       expect(await mint).toHaveProperty("qr");
-      expect((await sw).code).toBe("has_own_stream_code");
+      expect(await sw).toEqual({ on: true });
     } finally { hold.gate = null; }
-    expect(await settingsOf(fx)).toBeNull();
-    expect(await activeCodes(fx)).toBe(1);
+    expect(await settingsOf(fx)).toMatchObject({ court_stream: true });
+    expect((await codesOf(fx)).map((c) => c.end_cause)).toEqual(["withdrawn"]);
+  });
+
+  it("Web G: a silent phone's beat racing a switch-on never leaves the switch on beside a live own code", async () => {
+    await linkCourt2();
+    await ensureStreamCode(day.auth, fx);
+    await pairPresentPhone(fx, { at: new Date(Date.now() - SILENT_AGO_MS) });
+    // A beat takes no fixture lock: it may land before the ON reads (ON refused) or after (ON retires the code; that beat, or the
+    // phone's next, is refused code_ended). Either way the match is never court-streamed while its own code is live.
+    const [, on] = await Promise.allSettled([pairPresentPhone(fx), setCourtStream(day.auth, fx, true)]);
+    if (on.status === "rejected") expect((on.reason as HttpError).code).toBe("has_own_stream_code");
+    const switchOn = (await settingsOf(fx))?.court_stream === true;
+    expect(switchOn && (await activeCodes(fx)) > 0, "never on beside a live own code").toBe(false);
+    expect(switchOn || (await activeCodes(fx)) === 1, "a refused ON retires nothing").toBe(true);
   });
 
   it("an API key or a device link cannot set it (403)", async () => {
