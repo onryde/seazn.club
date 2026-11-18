@@ -343,6 +343,13 @@ function pairingChanged(fixtureId: string): HttpError {
   return new HttpError(409, `the video meeting for fixture ${fixtureId} belongs to an earlier pairing's game`, "VIDEO_MEETING_PAIRING_CHANGED");
 }
 
+/** Does the board have NO complete pairing now? A missing fixture reads false: the caller's own refusal (404) follows. */
+async function boardIsUnpaired(fixtureId: string): Promise<boolean> {
+  const [row] = await sql<{ unpaired: boolean }[]>`
+    select (home_entrant_id is null or away_entrant_id is null) as unpaired from fixtures where id = ${fixtureId}`;
+  return row?.unpaired === true;
+}
+
 /** R2-2, the empty case: a board with no pairing (unpaired, or a bye) has nobody to meet. */
 function unpaired(fixtureId: string): HttpError {
   return new HttpError(409, `fixture ${fixtureId} has no pairing to make a video meeting for`, "VIDEO_MEETING_UNPAIRED");
@@ -549,6 +556,12 @@ export async function ensureMeeting(
     }
     if (existing.evidence) throw pairingChanged(fixtureId);
     await retireStaleMeeting(fixtureId, now, (id) => endMeeting(id, deps));
+  } else if (opts.unpaired === "allow" && (await boardIsUnpaired(fixtureId))) {
+    // The pre-mint job's call, on a board with no pairing yet (a placeholder): there is no pairing for a sibling room to be stale
+    // AGAINST, and the sweep's teardown leaves an unpaired board's rooms alone for exactly that reason (its `retirable` needs a paired
+    // board: an organiser who unpairs and re-pairs the same players keeps their rooms). So a room of the sibling side stamped for an
+    // earlier pairing is not ended from here (check-in capacity plan 2 Task 8, batch-3 review m4): the claim on the re-paired board,
+    // or the sweep once the board has a pairing, retires it.
   } else {
     // A re-pair makes EVERY row of the board stale at once (§5.6.1, R3-1 unchanged), but it is a claim that finds a stale row
     // on ITS OWN side that retires them. A newcomer who lands on the side where nothing is on file finds none, and the

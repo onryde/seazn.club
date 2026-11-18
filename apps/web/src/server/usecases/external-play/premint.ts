@@ -23,7 +23,9 @@ import "server-only";
 // included. The per-club flag asks (PostHog, a remote call that can hang to its own timeout) never pass through it, and a club
 // the flag keeps off makes no vendor request at all, so the row loop checks the same wall-clock budget before every row.
 import { sql } from "@/lib/db";
+import { SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN } from "@/lib/swiss-shell";
 import { log } from "@/server/logger";
+import { anyCheckinWindowOpen, windowDeferralOn } from "@/server/external-play/round-open";
 import {
   RealtimeKitDeferred,
   RealtimeKitError,
@@ -75,7 +77,8 @@ export type PremintReport = {
   deferred: number;
   /** `failures.length`, derived ONCE as the pass returns. */
   failed: number;
-  /** 1: a check-in window was open, so the pass made no vendor call. Informational, not a failure. Task 8 sets it. */
+  /** 1: a check-in window was open (R3: any round of the scope opened up to ROUND_WINDOW_TAIL_MS ago), so the pass made no vendor
+   *  call and counted every candidate `deferred`. Informational, not a failure. */
   windowsOpen: 0 | 1;
   /** One per row whose `ensureMeeting` threw: a code, never a message (the report is returned to the cron caller). */
   failures: { fixtureId: string; side: "home" | "away"; code: string }[];
@@ -99,6 +102,9 @@ export type PremintDeps = {
   wait?: (ms: number) => Promise<void>;
   /** Is online chess offered to this club (the PostHog flag, online-chess-flag.ts)? Asked once per club per pass. */
   offered?: (asker: { orgId: string; userId: null }) => Promise<boolean>;
+  /** TEST SEAM - is a check-in window open (owner ruling R3, "as the sweep does")? Asked ONCE per pass, after the flag and the lock.
+   *  Default: `windowDeferralOn() && anyCheckinWindowOpen(sql, now, deps.orgIds)` - the REAL scoped check. Production passes none. */
+  windowsOpen?: () => Promise<boolean>;
 };
 
 function emptyReport(over: Partial<Pick<PremintReport, "skipped" | "disabled">> = {}): PremintReport {
@@ -106,15 +112,37 @@ function emptyReport(over: Partial<Pick<PremintReport, "skipped" | "disabled">> 
 }
 
 /**
- * The candidate (board, side) rows, nearest round first. One statement.
- *
- * A BOARD is wanted when its division is an online one (`onlinePlayDivisionWhere`: the division's half of the online-board
+ * THE board half of the candidate rule, for the aliases `f` (fixtures), `s` (stages), `d` (divisions) and `c` (competitions): a
+ * board is wanted when its division is an online one (`onlinePlayDivisionWhere`: the division's half of the online-board
  * rule alone - its started-division conjunct would refuse the paired Swiss round-1 board of a division still in setup, which
  * R3 wants), the division has started OR the board is paired (the first arm is the negation of `divisionScoringClosed`,
  * lib/division-phase.ts; the second is there because Swiss shells and round-1 pairings exist before Start, and a placeholder
  * in a division still in setup is never wanted; a COMPLETED division is never wanted either: nothing of it will be opened), the camera policy is not `off` (the SQL form of camera-policy.ts
- * `effectivePolicy`: the nearest set level wins, the competition's is NOT NULL), the fixture is playable, and its round has
- * never been opened. A SIDE is wanted when no `fixture_video_meetings` row exists for it, whatever that row is.
+ * `effectivePolicy`: the nearest set level wins, the competition's is NOT NULL), the fixture is playable, it is not an UNSEATED
+ * Swiss bye shell (a bye has nobody to meet: two creates and, once the round's first pass ends them, four more calls per bye per
+ * round - `isSwissByeShellExtKey` and no seat filled, the SQL form of `isUnseatedSwissByeShell`; the `coalesce` is load-bearing: a
+ * fixture with no ext_key reads NULL against the pattern, and `not (null and ...)` would drop the board), and its round has never been
+ * opened.
+ *
+ * It is the ONE spelling of "a board the pre-mint job still wants": the sweep's teardown asks its NEGATION to decide that a
+ * never-opened room belongs to a board that left the set (check-in capacity G2: the two jobs' predicates are disjoint by
+ * construction, so the sweep never ends a room this job would make again, and no pass of either undoes the other).
+ */
+export function premintBoardWhere() {
+  return sql`${onlinePlayDivisionWhere()}
+         and (d.status not in ('setup', 'scheduled') or (f.home_entrant_id is not null and f.away_entrant_id is not null))
+         and d.status <> 'completed'
+         and coalesce(s.camera_policy, d.camera_policy, c.camera_policy) <> 'off'
+         and f.status in ${sql(PLAYABLE_STATUSES as string[])}
+         and not (coalesce(f.ext_key ~ ${SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN}, false) and f.home_entrant_id is null and f.away_entrant_id is null)
+         and not exists (select 1 from stage_round_opens po where po.stage_id = f.stage_id and po.round_no = f.round_no)`;
+}
+
+/**
+ * The candidate (board, side) rows, nearest round first. One statement.
+ *
+ * A BOARD is wanted when `premintBoardWhere` says so. A SIDE is wanted when no `fixture_video_meetings` row exists for it,
+ * whatever that row is.
  *
  * The order is the point of a capped pass: the round whose earliest board is scheduled first leads, unscheduled rounds come
  * after every scheduled one, lowest round number first; inside a round the rest is a stable tie-break. The round's key is
@@ -131,12 +159,7 @@ export async function premintCandidates(orgIds?: readonly string[]): Promise<Pre
         join stages s on s.id = f.stage_id
         join divisions d on d.id = f.division_id
         join competitions c on c.id = d.competition_id
-       where ${onlinePlayDivisionWhere()}
-         and (d.status not in ('setup', 'scheduled') or (f.home_entrant_id is not null and f.away_entrant_id is not null))
-         and d.status <> 'completed'
-         and coalesce(s.camera_policy, d.camera_policy, c.camera_policy) <> 'off'
-         and f.status in ${sql(PLAYABLE_STATUSES as string[])}
-         and not exists (select 1 from stage_round_opens o where o.stage_id = f.stage_id and o.round_no = f.round_no)
+       where ${premintBoardWhere()}
          ${scope}
     )
     select b.id as "fixtureId", b.org_id as "orgId", sd.side
@@ -216,8 +239,16 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
   });
   const vendor: RealtimeKitDeps = { ...rtk, budget };
 
+  // R3, "as the sweep does": while a check-in window is open every vendor call belongs to a player's claim, so the pass makes none
+  // (not even the flag ask: nothing is started) and counts every candidate deferred. Read ONCE, after the flag and the lock.
+  const windowOpen = await (deps.windowsOpen ?? (async () => windowDeferralOn() && (await anyCheckinWindowOpen(sql, new Date(), deps.orgIds))))();
   const rows = await premintCandidates(deps.orgIds);
   report.scanned = rows.length;
+  if (windowOpen) {
+    report.windowsOpen = 1;
+    report.deferred = rows.length;
+    return report;
+  }
   const offered = deps.offered ?? onlineChessOffered;
   const asked = new Map<string, Promise<boolean>>();
   const offeredTo = (orgId: string): Promise<boolean> => {

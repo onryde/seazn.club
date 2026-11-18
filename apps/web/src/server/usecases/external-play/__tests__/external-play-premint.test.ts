@@ -17,6 +17,8 @@ import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { sql } from "@/lib/db";
 import { divisionScoringClosed } from "@/lib/division-phase";
+import { isSwissByeShellExtKey, SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN } from "@/lib/swiss-shell";
+import { ROUND_WINDOW_TAIL_MS } from "@/server/external-play/window";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { CAMERA_POLICIES } from "@/lib/camera-policy";
 import { effectivePolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
@@ -873,5 +875,117 @@ describe.skipIf(!DB)("premint, through its real consumers", () => {
     expect(seatAway).toMatchObject({ seated: true });
     expect(fx.participantFor(b.away.personId)?.meetingId, "the away participant joined ITS pre-made room").toBe(roomOf("away"));
     expect(creates().length, "two rooms in all, both made by the pass").toBe(2);
+  });
+});
+
+// ─── check-in capacity plan 2 Task 8: the open-window deferral, unseated bye shells, the placeholder's sibling (m4) ─────────────────
+
+describe.skipIf(!DB)("premint (Task 8)", () => {
+  /** A SECOND round of the round's stage, opened `agoMs` ago (a one-row round, stamped directly: the product stamps exactly these
+   *  columns). Its board is in an OPENED round, so it is no candidate itself; its window is what the pre-mint job must read. */
+  async function openOwnWindow(r: Round, agoMs: number) {
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+      values (${r.stageId}, ${r.divisionId}, ${r.orgId}, ${r.roundNo + 1}, 1, ${`w-${randomUUID().slice(0, 8)}`}, 'scheduled')`;
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+      values (${r.stageId}, ${r.orgId}, ${r.roundNo + 1}, ${new Date(Date.now() - agoMs)}, ${r.ownerUserId}, false)`;
+  }
+
+  it("R3, the window: with an own round's window open the pass makes no vendor call, reports windowsOpen 1 and counts every candidate deferred; EXTERNAL_PLAY_WINDOW_DEFER=0 lifts it; with no window it mints", async () => {
+    const quiet = await seedRound(2); // an org with no round open: the control
+    const r = await seedRound(2);
+    await openOwnWindow(r, MIN);
+    const held = await run([r.orgId]);
+    expect(held, "4 candidates (2 boards x 2 sides), all deferred, the window reported").toEqual({
+      skipped: 0, disabled: 0, scanned: 4, roomsMade: 0, deferred: 4, failed: 0, windowsOpen: 1, failures: [],
+    });
+    expect(fx.calls, "no vendor call").toEqual([]);
+    expect(await roomsOf(ids(r)), "no room made").toEqual([]);
+
+    const free = await run([quiet.orgId]);
+    expect(free, "no window in THIS scope: it mints").toMatchObject({ scanned: 4, roomsMade: 4, deferred: 0, windowsOpen: 0 });
+    expect(createsFor(ids(quiet)), "4 creates").toHaveLength(4);
+
+    vi.stubEnv("EXTERNAL_PLAY_WINDOW_DEFER", "0");
+    const lifted = await run([r.orgId]);
+    expect(lifted, "the deferral switched off: it mints under the open window").toMatchObject({ scanned: 4, roomsMade: 4, deferred: 0, windowsOpen: 0 });
+    expect(createsFor(ids(r))).toHaveLength(4);
+  });
+
+  it("R3, the window closes: an own round opened longer ago than its bound (derived from window.ts) no longer defers - the boundary, one ms each side", async () => {
+    let checked = 0;
+    for (const [agoMs, deferred] of [[ROUND_WINDOW_TAIL_MS - 1_000, true], [ROUND_WINDOW_TAIL_MS + 1_000, false]] as const) {
+      const r = await seedRound(1);
+      await openOwnWindow(r, agoMs);
+      const out = await run([r.orgId]);
+      expect([out.windowsOpen, out.deferred, out.roomsMade], `opened ${agoMs} ms ago`).toEqual(deferred ? [1, 2, 0] : [0, 0, 2]);
+      checked += 1;
+    }
+    expect(checked, "both sides of the bound").toBe(2);
+  });
+
+  it("the unseated Swiss bye shell is no candidate (batch-3 m1): the SQL pattern agrees with isSwissByeShellExtKey over a table of keys, and a real odd Swiss field's bye shells yield no row while its board shells do", async () => {
+    const keys = ["sw-r1-bye", "sw-r12-bye", "sw-r1-b1", "sw-r1-bye2", "xsw-r1-bye", "sw-r-bye", "SW-R1-BYE", "adhoc-1", "t19-ab12cd34"];
+    let agree = 0;
+    let isBye = 0;
+    for (const k of keys) {
+      const [row] = await sql<{ matches: boolean }[]>`select ${k} ~ ${SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN} as matches`;
+      expect(row!.matches, `${k}: SQL and TS agree`).toBe(isSwissByeShellExtKey(k));
+      agree += 1;
+      if (row!.matches) isBye += 1;
+    }
+    expect([agree, isBye], "anti-vacuity: every key judged, and the table has both answers").toEqual([keys.length, 2]);
+
+    const s = await seedOnlineSwiss({ players: 5, rounds: 3, pairing: "fold", cameraPolicy: "optional" });
+    const shells = await sql<{ id: string; ext_key: string; unseated: boolean }[]>`
+      select id, ext_key, (home_entrant_id is null and away_entrant_id is null) as unseated from fixtures where stage_id = ${s.stageId}`;
+    const byeShells = shells.filter((f) => isSwissByeShellExtKey(f.ext_key) && f.unseated);
+    const boardShells = shells.filter((f) => !isSwissByeShellExtKey(f.ext_key) && f.unseated);
+    expect(byeShells.length, "premise: the odd field minted unseated bye shells").toBeGreaterThan(0);
+    expect(boardShells.length, "premise: and board shells").toBeGreaterThan(0);
+    const got = (await rowsOf([s.orgId])).map((c) => c.fixtureId);
+    expect(got.filter((id) => byeShells.some((f) => f.id === id)), "no row for a bye shell").toEqual([]);
+    for (const f of boardShells) expect(got, `the board shell ${f.ext_key} is wanted`).toContain(f.id);
+  });
+
+  it("a placeholder with NO ext_key is still a candidate: the bye test reads NULL against the pattern, and `not (null and ...)` would drop it", async () => {
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    await sql`update fixtures set ext_key = null where id = ${ids(r)[0]!}`;
+    expect(keysOf(await rowsOf([r.orgId])).sort()).toEqual(bothSides(ids(r)));
+  });
+
+  it("m4: on a PLACEHOLDER board the pass never ends the sibling room stamped for an earlier pairing (the sweep leaves an unpaired board's rooms too); on a PAIRED board the same sibling IS retired - ended, row deleted, a fresh room made", async () => {
+    const quietEnded = () => fx.calls.filter((c) => c.route === "PATCH /meetings/:id" || c.route.endsWith("/kick-all"));
+    // Placeholder: home has a room made for the board's earlier pairing; its pairing is gone.
+    const a = await seedRound(1);
+    const fa = ids(a)[0]!;
+    const old = await ensureMeeting(fa, "home"); // the real adapter against the fixture server: a real room, stamped for the pairing
+    await unseat([fa]);
+    expect(keysOf(await rowsOf([a.orgId])), "premise: only the away side is a candidate").toEqual([`${fa}/away`]);
+    const markA = fx.calls.length;
+    expect(await run([a.orgId])).toMatchObject({ scanned: 1, roomsMade: 1, failed: 0 });
+    expect(quietEnded().filter((c) => fx.calls.indexOf(c) >= markA), "no vendor end call").toEqual([]);
+    const rooms = await roomsOf([fa]);
+    expect(rooms.map((m) => [m.side, m.ended_at]), "the sibling is still on file, unended; the away room made beside it").toEqual([["away", null], ["home", null]]);
+    expect(rooms.find((m) => m.side === "home")!.meeting_id, "the sibling is the same room").toBe(old.meetingId);
+    expect(rooms.find((m) => m.side === "away")!.home, "the new room is unadopted").toBeNull();
+
+    // Paired: the pairing changed (the entrants swapped), so the sibling is stale against a pairing that exists - retired by the claim's rule.
+    const b = await seedRound(1);
+    const fb = ids(b)[0]!;
+    const stale = await ensureMeeting(fb, "home");
+    await sql`update fixtures set home_entrant_id = ${b.boards[0]!.away.entrantId}, away_entrant_id = ${b.boards[0]!.home.entrantId} where id = ${fb}`;
+    const markB = fx.calls.length;
+    expect(await run([b.orgId])).toMatchObject({ scanned: 1, roomsMade: 1, failed: 0 });
+    const after = fx.calls.slice(markB);
+    expect(after.filter((c) => c.path.includes(stale.meetingId)).map((c) => c.route), "the stale sibling was ended at the vendor: kick-all, then the deactivate").toEqual([
+      "POST /meetings/:id/active-session/kick-all",
+      "PATCH /meetings/:id",
+    ]);
+    const roomsB = await roomsOf([fb]);
+    expect(roomsB.map((m) => m.meeting_id), "its row is gone and a fresh room stands").not.toContain(stale.meetingId);
+    expect(roomsB.map((m) => m.side)).toEqual(["away"]);
   });
 });
