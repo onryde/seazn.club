@@ -1622,6 +1622,8 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w5a5_${tag}@resend.dev`,
     `delivered+w5a6_${tag}@resend.dev`,
     `delivered+w5a7_${tag}@resend.dev`,
+    // w5a8 Task 21's started two-pool group whose weekly digest and round recap list every pool.
+    `delivered+w5a8_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

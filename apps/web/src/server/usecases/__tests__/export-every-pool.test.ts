@@ -201,7 +201,7 @@ async function onePerPool(fam: Family, s: Scene, pools: readonly { id: string; k
   return played;
 }
 
-describe.skipIf(!HAS_DB)("export every pool — a group stage's standings export prints each group, in group order, headed", () => {
+describe.skipIf(!HAS_DB)("X-SF-3 the standings export prints every pool — a group stage's export prints each group, in group order, headed", () => {
   for (const fam of FAMILIES) {
     it(`${fam.sport}: a 2-group stage, one result per group, the two tables tied on updated_at, then B newer and first in the export's own read — two sections, A then B, each headed, each its own rows`, async () => {
       // the brief's three families: generic, a set-based sport (badminton) and ice hockey
@@ -268,7 +268,7 @@ describe.skipIf(!HAS_DB)("export every pool — a group stage's standings export
     });
   }
 
-  it("(a) 3 groups, results recorded C, then A, then B — three sections, A, B, C, each headed, each its own pair", async () => {
+  it("X-SF-3 (a) 3 groups, results recorded C, then A, then B — three sections, A, B, C, each headed, each its own pair", async () => {
     // single-sport: the pool order and headings are the stage's (sport-agnostic); every family runs the 2-group case above
     const s = await pooled(GENERIC, 3);
     const order = [s.pools[2]!, s.pools[0]!, s.pools[1]!];

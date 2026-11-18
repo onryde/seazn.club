@@ -7,20 +7,27 @@
 // shape (e.g. competition-schedule-*.test.ts for schedule-ai/).
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { builtinModules } from "@seazn/engine/sports";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { isoWeekKeyUtc } from "@/server/news/enrichment";
 import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
+  assembleDigestStandings,
   digestCandidateOrgIds,
+  draftPostsForDecidedFixture,
   generateWeeklyDigest,
   newsAutoCompetitionScope,
   sweepWeeklyDigests,
   listPosts,
 } from "../org-posts";
 import { scoreEvent } from "../scoring";
+import { startDivision } from "../schedule";
+import { playToDecided } from "./_quick-match-probe";
+import { BADMINTON, FOOTBALL, rig, type Rig, type SportPick } from "./_w5-t3-rig";
+import { levelLeague } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { systemAuth } from "@/lib/quick-match-auth";
 import { QUICK_MATCH_SYSTEM_ORG_ID, QUICK_MATCH_SYSTEM_USER_ID } from "@/lib/quick-match-constants";
@@ -629,5 +636,243 @@ describe.skipIf(!HAS_DB)("weekly digest (P3 / D7)", () => {
     const ctx = await seedOrg("pro", "Pacific/Auckland");
     const post = await generateWeeklyDigest(ctx.auth, ctx.orgId);
     expect(post.kind).toBe("weekly_digest");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W5 app PR A, Task 21 (X-SF-2; ST-G6): the digest and the round recap list EVERY pool of a pooled stage, in the stage's own pool
+// order, one section per pool. A stage with several pools has no single table (`readSingleTableSnapshot` answers undefined for it by
+// design), so before this task both surfaces dropped a pooled division's standings without a word - the absent symptom reads as "no
+// standings yet". Driven through the real producers: the stage by `createStages` + `generateStageFixtures`, each result by the real
+// scoring path (`playToDecided`) which writes the per-pool snapshots, the digest by `generateWeeklyDigest`, the recap by
+// `draftPostsForDecidedFixture`. Expected values: the pool a fixture belongs to is the stored `fixtures.pool_id`, the winner the stored
+// outcome's, the heading the public dictionary's own `table.poolLabel` (never typed here), the order the pools' keys A, B, C.
+// ---------------------------------------------------------------------------
+
+type PoolLocale = "en" | "es" | "fr" | "nl";
+const publicDict = (locale: PoolLocale) =>
+  JSON.parse(readFileSync(new URL(`../../../dictionaries/${locale}/public.json`, import.meta.url), "utf8")) as Record<string, string>;
+const groupLabel = (locale: PoolLocale, key: string) => publicDict(locale)["table.poolLabel"]!.replace("{key}", key);
+
+interface PooledPlay {
+  r: Rig;
+  /** Pool keys in the stage's order, each with the winner and loser of its one decided match (stored outcome, never recomputed). */
+  pools: { id: string; key: string; winner: string; loser: string }[];
+}
+
+/** A group stage of `poolCount` pools of two, every pool's one match decided through the real write path. */
+async function pooledPlay(sport: SportPick, poolCount: number, onlyPools?: number[]): Promise<PooledPlay> {
+  const r = await rig({ n: poolCount * 2, kind: "group", pools: poolCount, sport });
+  await startDivision(r.auth, r.divisionId);
+  const pools = await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${r.stageId} order by key`;
+  expect(pools, "premise: the generator made every pool").toHaveLength(poolCount);
+  const out: PooledPlay["pools"] = [];
+  for (const [i, p] of pools.entries()) {
+    const [fx] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId} and pool_id = ${p.id}`;
+    if (onlyPools && !onlyPools.includes(i)) {
+      out.push({ ...p, winner: "", loser: "" });
+      continue;
+    }
+    expect(await playToDecided(r.auth, fx!.id), `premise: pool ${p.key}'s match decided`).toMatchObject({ kind: "decided" });
+    const [{ outcome }] = await sql<{ outcome: { winner: string; loser: string } }[]>`select outcome from fixtures where id = ${fx!.id}`;
+    const names = await sql<{ id: string; display_name: string }[]>`select id, display_name from entrants where id in ${sql([outcome.winner, outcome.loser])}`;
+    const nameOf = (id: string) => names.find((n) => n.id === id)!.display_name;
+    out.push({ ...p, winner: nameOf(outcome.winner), loser: nameOf(outcome.loser) });
+  }
+  return { r, pools: out };
+}
+
+/** Re-write pool `key`'s snapshot row so it is the physically last (and newest) row of the stage: heap and `updated_at` order then
+ *  disagree with the pool order, so only the pools' own order can put A before B (AGENTS class 18). */
+async function makeSnapshotLatest(stageId: string, poolId: string): Promise<void> {
+  const moved = await sql`
+    with d as (delete from standings_snapshots where stage_id = ${stageId} and pool_id = ${poolId} returning *)
+    insert into standings_snapshots (stage_id, pool_id, org_id, rows, computed_through_seq, updated_at, previous_rows)
+    select stage_id, pool_id, org_id, rows, computed_through_seq, now() + interval '1 hour', previous_rows from d returning 1`;
+  expect(moved, "premise: the snapshot row was re-written").toHaveLength(1);
+  // the pool's own row too: an update writes a new tuple at the end of the heap, so a pool read with no order of its own reads B first
+  const touched = await sql`update pools set name = name where id = ${poolId} returning 1`;
+  expect(touched, "premise: the pool row was re-written").toHaveLength(1);
+}
+
+/** Pool `i`'s stored table replaced by a level one (a started pool with nothing counted, X-TB-6), over its own two entrants. */
+async function makePoolLevel(s: PooledPlay, i: number): Promise<void> {
+  const ids = await sql<{ home_entrant_id: string; away_entrant_id: string }[]>`
+    select home_entrant_id, away_entrant_id from fixtures where stage_id = ${s.r.stageId} and pool_id = ${s.pools[i]!.id}`;
+  const level = levelLeague([ids[0]!.home_entrant_id, ids[0]!.away_entrant_id]);
+  const set = await sql`update standings_snapshots set rows = ${sql.json(level.rows as never)} where stage_id = ${s.r.stageId} and pool_id = ${s.pools[i]!.id} returning 1`;
+  expect(set, `premise: pool ${s.pools[i]!.key}'s stored table is now level`).toHaveLength(1);
+}
+
+const DIGEST_SPORTS = [BADMINTON, FOOTBALL];
+
+describe.skipIf(!HAS_DB)("X-SF-2 the weekly digest lists every pool of a pooled stage, in pool order", () => {
+  for (const sport of DIGEST_SPORTS) {
+    // differential: today none - a stage with several pools yields no standings section at all
+    it(`X-SF-2 a pooled division's digest lists every pool (${sport.key}): one section per pool, its own top and its own heading, A before B though A's snapshot was written last`, async () => {
+      const s = await pooledPlay(sport, 2);
+      await makeSnapshotLatest(s.r.stageId, s.pools[0]!.id);
+      const post = await generateWeeklyDigest(s.r.auth, s.r.auth.orgId);
+      const body = post.bodyMd;
+      let checked = 0;
+      const at = (needle: string) => {
+        const i = body.indexOf(needle);
+        expect(i, `${needle} is in the digest:\n${body}`).toBeGreaterThanOrEqual(0);
+        checked += 1;
+        return i;
+      };
+      const headA = at(`_Open — ${groupLabel("en", "A")}_`);
+      const headB = at(`_Open — ${groupLabel("en", "B")}_`);
+      expect(headA, "pool A's section reads before pool B's").toBeLessThan(headB);
+      // each pool's own winner is under its own heading, and the other pool's players are not
+      for (const [i, p] of s.pools.entries()) {
+        const from = i === 0 ? headA : headB;
+        const to = i === 0 ? headB : body.length;
+        const slice = body.slice(from, to);
+        expect(slice, `pool ${p.key}'s winner is in its section`).toContain(p.winner);
+        expect(slice, `pool ${p.key}'s loser is in its section`).toContain(p.loser);
+        const other = s.pools[1 - i]!;
+        expect(slice, `pool ${other.key}'s winner is not in pool ${p.key}'s section`).not.toContain(other.winner);
+        checked += 3;
+      }
+      expect(checked, "anti-vacuity: every pool's three facts and both headings were checked").toBe(8);
+      expect(body).not.toContain("undefined");
+    });
+  }
+
+  it("X-SF-2 three pools, only the first and last have a counted result: those two are listed, in order, and the empty pool is no section (anti-goal 3: nobody reads as first)", async () => {
+    const s = await pooledPlay(BADMINTON, 3, [0, 2]);
+    const sections = await withTenant(s.r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }]));
+    expect(sections.map((x) => x.poolLabel)).toEqual([groupLabel("en", "A"), groupLabel("en", "C")]);
+    expect(sections.map((x) => x.top3[0]!.name)).toEqual([s.pools[0]!.winner, s.pools[2]!.winner]);
+  });
+
+  it("X-SF-2 a pool whose table is level (started, nothing counted) is no digest section, while the other pool is listed", async () => {
+    const s = await pooledPlay(BADMINTON, 2);
+    await makePoolLevel(s, 1);
+    const sections = await withTenant(s.r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }]));
+    expect(sections.map((x) => x.poolLabel)).toEqual([groupLabel("en", "A")]);
+  });
+
+  it("X-SF-2 each pool's section carries its own climber, read from its own previous table", async () => {
+    const s = await pooledPlay(BADMINTON, 2);
+    // pool B's winner stood second before; pool A has no previous table
+    await sql`
+      update standings_snapshots set previous_rows = (
+        select jsonb_agg(jsonb_set(r, '{rank}', to_jsonb(case when r->>'rank' = '1' then 2 else 1 end))) from jsonb_array_elements(rows) r)
+      where stage_id = ${s.r.stageId} and pool_id = ${s.pools[1]!.id}`;
+    const sections = await withTenant(s.r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }]));
+    expect(sections).toHaveLength(2);
+    expect(sections[0]!.climber, "pool A has nobody who climbed").toBeUndefined();
+    expect(sections[1]!.climber?.entrantName, "pool B's climber is its own winner").toBe(s.pools[1]!.winner);
+  });
+
+  it("X-SF-2 the heading is the public dictionary's label in each of the four locales (Group / Grupo / Poule / Poule)", async () => {
+    const s = await pooledPlay(BADMINTON, 2);
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const sections = await withTenant(s.r.auth.orgId, (tx) =>
+        assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }], locale),
+      );
+      expect(sections.map((x) => x.poolLabel), locale).toEqual([groupLabel(locale, "A"), groupLabel(locale, "B")]);
+      checked += sections.length;
+    }
+    expect(checked, "anti-vacuity: 4 locales x 2 pools").toBe(8);
+    expect(groupLabel("nl", "A"), "the dictionary is really translated, not an English echo").not.toBe(groupLabel("en", "A"));
+  });
+
+  // pin, no defect expected: today a league's section is the stage's own, headed by the division alone
+  it("X-SF-2 a league's digest is unchanged: one section, no pool heading, the division's name alone", async () => {
+    const r = await rig({ n: 2, kind: "league" });
+    await startDivision(r.auth, r.divisionId);
+    const [fx] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId}`;
+    expect(await playToDecided(r.auth, fx!.id)).toMatchObject({ kind: "decided" });
+    const sections = await withTenant(r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: r.stageId, division_name: "Open" }]));
+    expect(sections).toHaveLength(1);
+    expect("poolLabel" in sections[0]!, "a league names no pool").toBe(false);
+    expect(sections[0]!.top3).toHaveLength(2);
+    const post = await generateWeeklyDigest(r.auth, r.auth.orgId);
+    expect(post.bodyMd).toContain("_Open_");
+    expect(post.bodyMd).not.toContain(groupLabel("en", "A"));
+  });
+
+  // pin: a group of ONE pool reads as a league (X-BD-7) - not "Group A"
+  it("X-SF-2 a one-pool group's digest is a league's: one section, no pool heading", async () => {
+    const r = await rig({ n: 2, kind: "group" });
+    await startDivision(r.auth, r.divisionId);
+    const [fx] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId}`;
+    expect(await playToDecided(r.auth, fx!.id)).toMatchObject({ kind: "decided" });
+    const sections = await withTenant(r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: r.stageId, division_name: "Open" }]));
+    expect(sections).toHaveLength(1);
+    expect("poolLabel" in sections[0]!).toBe(false);
+  });
+});
+
+describe.skipIf(!HAS_DB)("X-SF-2 the round recap lists every pool of a pooled stage, in pool order", () => {
+  /** The round recap the LAST decided fixture of round 1 drafts (the real hook: `draftPostsForDecidedFixture`). */
+  async function recapBody(s: PooledPlay, locale: PoolLocale = "en"): Promise<string> {
+    await sql`update divisions set auto_posts = true where id = ${s.r.divisionId}`;
+    await sql`update organizations set default_locale = ${locale} where id = ${s.r.auth.orgId}`;
+    const fixtures = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s.r.stageId} order by pool_id`;
+    await withTenant(s.r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, fixtures.at(-1)!.id, true));
+    const recap = (await listPosts(s.r.auth, s.r.auth.orgId)).filter((p) => p.kind === "round_recap");
+    expect(recap, "the round is complete: one recap").toHaveLength(1);
+    return recap[0]!.bodyMd;
+  }
+
+  for (const sport of DIGEST_SPORTS) {
+    // differential: today none - a pooled stage's recap has no standings block at all
+    it(`X-SF-2 the recap lists every pool in pool order (${sport.key}): a block per pool, its own rows, A before B though A's snapshot was written last`, async () => {
+      const s = await pooledPlay(sport, 2);
+      await makeSnapshotLatest(s.r.stageId, s.pools[0]!.id);
+      const body = await recapBody(s);
+      const lines = body.split("\n");
+      const headings = lines.map((l, i) => ({ l, i })).filter((x) => x.l.startsWith("**Standings"));
+      expect(headings.map((h) => h.l)).toEqual([`**Standings — ${groupLabel("en", "A")}**`, `**Standings — ${groupLabel("en", "B")}**`]);
+      let checked = 0;
+      for (const [k, p] of s.pools.entries()) {
+        const from = headings[k]!.i + 1;
+        const to = headings[k + 1]?.i ?? lines.length;
+        const rows = lines.slice(from, to).filter((l) => /^\d\. /.test(l));
+        expect(rows.map((r) => r.replace(/^\d\. (.*?) — .*$/, "$1")).sort(), `pool ${p.key}'s block lists its own two players`).toEqual([p.winner, p.loser].sort());
+        expect(rows[0], `pool ${p.key}'s leader is its winner, ranked 1`).toMatch(new RegExp(`^1\\. ${p.winner} — `));
+        checked += 2;
+      }
+      expect(checked, "anti-vacuity: both pools, a leader and a membership each").toBe(4);
+    });
+  }
+
+  it("X-SF-2 the recap's pool heading is the org's language (Dutch: Poule)", async () => {
+    const s = await pooledPlay(BADMINTON, 2);
+    const body = await recapBody(s, "nl");
+    expect(body).toContain(`${groupLabel("nl", "A")}**`);
+    expect(body).toContain(`${groupLabel("nl", "B")}**`);
+    expect(body).not.toContain(groupLabel("en", "A"));
+  });
+
+  it("X-SF-2 a pool whose table is level is no recap block, while the other pool is listed", async () => {
+    const s = await pooledPlay(BADMINTON, 2);
+    await makePoolLevel(s, 1);
+    const body = await recapBody(s);
+    expect(body.split("\n").filter((l) => l.startsWith("**Standings"))).toEqual([`**Standings — ${groupLabel("en", "A")}**`]);
+  });
+
+  it("X-SF-2 a pool with nothing counted yet is no block in the recap (pool B untouched), and a league's recap keeps its single un-headed block", async () => {
+    const s = await pooledPlay(BADMINTON, 2, [0]);
+    // the round is open (pool B's match is undecided), so draft the recap by deciding it after the table of A alone is read
+    const [untouched] = await sql<{ rows: unknown[] }[]>`select rows from standings_snapshots where stage_id = ${s.r.stageId} and pool_id = ${s.pools[1]!.id}`;
+    expect(untouched?.rows ?? [], "premise: pool B has no counted result, so no rows to rank").toEqual([]);
+    const sections = await withTenant(s.r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }]));
+    expect(sections.map((x) => x.poolLabel), "a one-table pooled stage still names its pool").toEqual([groupLabel("en", "A")]);
+
+    const r = await rig({ n: 2, kind: "league" });
+    await startDivision(r.auth, r.divisionId);
+    const [fx] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId}`;
+    expect(await playToDecided(r.auth, fx!.id)).toMatchObject({ kind: "decided" });
+    await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
+    await withTenant(r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, fx!.id, true));
+    const recap = (await listPosts(r.auth, r.auth.orgId)).find((p) => p.kind === "round_recap");
+    expect(recap, "premise: the league recapped").toBeDefined();
+    expect(recap!.bodyMd.split("\n").filter((l) => l.startsWith("**Standings"))).toEqual(["**Standings**"]);
   });
 });

@@ -456,3 +456,49 @@ describe("credited results say which (Loop R M-11)", () => {
     expect(plain.bodyMd.split("\n").filter((l) => l.startsWith("- "))).toEqual([lines[0]]);
   });
 });
+
+// W5 app PR A, Task 21 (X-SF-2): the pooled blocks. The labels arrive pre-rendered (the caller's locale), the order is the caller's.
+describe("X-SF-2 pooled standings in the recap and the digest (pure render)", () => {
+  const RECAP = {
+    locale: "en" as const,
+    competitionName: "Spring Cup",
+    divisionName: "Premier",
+    roundNo: 1,
+    results: [{ homeName: "Riverside", homeScore: "3", awayName: "Northside", awayScore: "1" }],
+    standings: [] as { position: number; name: string; played: number; points: string }[],
+  };
+
+  it("the recap prints one block per pool in the order given, each headed, and no un-headed block beside them", () => {
+    const { bodyMd } = roundRecapDraft({
+      ...RECAP,
+      poolStandings: [
+        { label: "Group A", rows: [{ position: 1, name: "Riverside", played: 1, points: "3" }] },
+        { label: "Group B", rows: [{ position: 1, name: "Eastend", played: 1, points: "3" }, { position: 2, name: "Westgate", played: 1, points: "0" }] },
+      ],
+    });
+    const lines = bodyMd.split("\n");
+    expect(lines.filter((l) => l.startsWith("**Standings"))).toEqual(["**Standings — Group A**", "**Standings — Group B**"]);
+    expect(bodyMd.indexOf("Group A")).toBeLessThan(bodyMd.indexOf("Group B"));
+    expect(lines.filter((l) => /^\d+\. /.test(l))).toHaveLength(3);
+  });
+
+  it("a recap without poolStandings is byte-identical to one with an empty list (a league's recap)", () => {
+    const withRows = { ...RECAP, standings: [{ position: 1, name: "Riverside", played: 1, points: "3" }] };
+    expect(roundRecapDraft({ ...withRows, poolStandings: [] })).toEqual(roundRecapDraft(withRows));
+    expect(roundRecapDraft(withRows).bodyMd).toContain("**Standings**");
+  });
+
+  it("the digest heads a pool's section with the division and the pool label; a league's section keeps the division alone", () => {
+    const base = { locale: "en" as const, orgName: "Riverside FC", weekOfYmd: "2026-08-03", leaders: [], upcoming: [], upcomingOverflow: 0 };
+    const top3 = [{ position: 1, name: "Riverside", points: "3" }];
+    const { bodyMd } = weeklyDigestDraft({
+      ...base,
+      standings: [
+        { divisionName: "Premier", poolLabel: "Group A", top3 },
+        { divisionName: "Premier", poolLabel: "Group B", top3 },
+        { divisionName: "Cup", top3 },
+      ],
+    });
+    expect(bodyMd.split("\n").filter((l) => l.startsWith("_"))).toEqual(["_Premier — Group A_", "_Premier — Group B_", "_Cup_"]);
+  });
+});

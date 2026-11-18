@@ -29,13 +29,15 @@ import { loadLineupPair } from "@/server/engine-db/lineups";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { getDictionary } from "@/lib/i18n";
+import { poolLabel } from "@/lib/pool-label";
 import { isLevelTable, pointsText } from "@seazn/engine/competition";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { playerStatsWithoutWaiting } from "./player-stats";
-import { readSingleTableSnapshot } from "./stage-table-snapshot";
+import { readPoolTables, readSingleTableSnapshot } from "./stage-table-snapshot";
 import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import {
@@ -631,6 +633,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   }));
 
   const standings = await topStandings(tx, fx.stage_id);
+  const poolStandings = await topPoolStandings(tx, fx.stage_id, locale);
   const enrichment = await assembleRecapEnrichment(tx, fx, results);
   const enriched = Object.keys(enrichment).length > 0;
 
@@ -641,6 +644,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     roundNo,
     results,
     standings,
+    ...(poolStandings.length > 0 ? { poolStandings } : {}),
     ...(enriched ? { enrichment } : {}),
   });
   const autoSource = {
@@ -1129,8 +1133,14 @@ async function pointsUnitOf(tx: Tx, stageId: string) {
  *  table (started, nothing counted — X-TB-6) has no top: its order is the seed
  *  list, so it is no table at all here (anti-goal 3: nobody reads as first). */
 async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP): Promise<StandingRow[]> {
-  const snap = await readSingleTableSnapshot<{ entrantId: string; played: number; points: number; rank?: number; level?: boolean }[]>(tx, stageId);
-  const table = snap?.rows;
+  const snap = await readSingleTableSnapshot<StoredRow[]>(tx, stageId);
+  return topOfTable(tx, stageId, snap?.rows, top);
+}
+
+type StoredRow = { entrantId: string; played: number; points: number; rank?: number; level?: boolean };
+
+/** The top `top` rows of one stored table, ranked and named, as `topStandings` returns them. Shared by the single table and every pool's. */
+async function topOfTable(tx: Tx, stageId: string, table: StoredRow[] | undefined, top: number): Promise<StandingRow[]> {
   if (!table || table.length === 0 || isLevelTable(table)) return [];
   const unit = await pointsUnitOf(tx, stageId);
   const sorted = [...table].sort(
@@ -1150,6 +1160,24 @@ async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP):
     played: r.played,
     points: pointsText(r.points, unit),
   }));
+}
+
+/**
+ * W5 app PR A, Task 21 (X-SF-2; ST-G6): the top of EVERY pool's table of a stage with several pools, in the stage's pool order, each
+ * headed by the public pool label in `locale` (`poolLabel` over the public dictionary - never `pools.name`, which is English).
+ * Empty for a league, a Swiss stage and a one-pool group (their table is `topStandings`'). A pool with nothing counted, or a level
+ * table, has no top and so no block (anti-goal 3: nobody reads as first).
+ */
+async function topPoolStandings(tx: Tx, stageId: string, locale: Locale): Promise<{ label: string; rows: StandingRow[] }[]> {
+  const tables = await readPoolTables<StoredRow[]>(tx, stageId);
+  if (tables.length === 0) return [];
+  const dict = await getDictionary(locale, "public");
+  const out: { label: string; rows: StandingRow[] }[] = [];
+  for (const t of tables) {
+    const rows = await topOfTable(tx, stageId, t.rows, RECAP_STANDINGS_TOP);
+    if (rows.length > 0) out.push({ label: poolLabel(dict, t.key), rows });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1294,6 +1322,8 @@ async function activeTableStagesInWindow(
 export async function assembleDigestStandings(
   tx: Tx,
   stages: readonly ActiveTableStage[],
+  // The org's copy locale (`digestForOrg` threads it, as for `assembleDigestUpcoming`): only a pooled stage's pool heading reads it.
+  locale: Locale = "en",
 ): Promise<DigestStandingsSection[]> {
   const out: DigestStandingsSection[] = [];
   for (const stage of stages) {
@@ -1314,37 +1344,47 @@ export async function assembleDigestStandings(
       // away from `invalid input syntax for type uuid` — that is the exact
       // trigger org-posts-digest.test.ts now reproduces.
       await tx.savepoint(async (sp) => {
-        const snap = await readSingleTableSnapshot<RankedEntrantRow[]>(sp, stage.stage_id);
-        // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
-        if (!snap || snap.rows.length === 0 || isLevelTable(snap.rows)) return;
-        const unit = await pointsUnitOf(sp, stage.stage_id);
-        const sorted = [...snap.rows].sort(
-          (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
-        );
-        const top3 = sorted.slice(0, 3);
-        if (top3.length === 0) return;
-        const names = new Map(
-          (
-            await sp<{ id: string; display_name: string }[]>`
-              select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
-          ).map((e) => [e.id, e.display_name]),
-        );
-        let climberOut: DigestStandingsSection["climber"];
-        const climber = biggestClimber(snap.rows, snap.previous_rows);
-        if (climber) {
-          const [entrant] = await sp<{ display_name: string }[]>`
-            select display_name from entrants where id = ${climber.entrantId}`;
-          if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+        // W5 T21 (X-SF-2): a stage with SEVERAL pools has no single table - each pool is one, so one section per pool in the stage's
+        // pool order, headed by the pool. Any other stage keeps its one un-headed section.
+        const pooled = await readPoolTables<RankedEntrantRow[]>(sp, stage.stage_id);
+        const single = pooled.length === 0 ? await readSingleTableSnapshot<RankedEntrantRow[]>(sp, stage.stage_id) : undefined;
+        const tables: { snap: { rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }; key?: string }[] = pooled.length > 0
+          ? pooled.map((t) => ({ snap: t, key: t.key }))
+          : single ? [{ snap: single }] : [];
+        const dict = pooled.length > 0 ? await getDictionary(locale, "public") : null;
+        for (const { snap, key } of tables) {
+          // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
+          if (snap.rows.length === 0 || isLevelTable(snap.rows)) continue;
+          const unit = await pointsUnitOf(sp, stage.stage_id);
+          const sorted = [...snap.rows].sort(
+            (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
+          );
+          const top3 = sorted.slice(0, 3);
+          if (top3.length === 0) continue;
+          const names = new Map(
+            (
+              await sp<{ id: string; display_name: string }[]>`
+                select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
+            ).map((e) => [e.id, e.display_name]),
+          );
+          let climberOut: DigestStandingsSection["climber"];
+          const climber = biggestClimber(snap.rows, snap.previous_rows);
+          if (climber) {
+            const [entrant] = await sp<{ display_name: string }[]>`
+              select display_name from entrants where id = ${climber.entrantId}`;
+            if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+          }
+          out.push({
+            divisionName: stage.division_name,
+            ...(dict && key !== undefined ? { poolLabel: poolLabel(dict, key) } : {}),
+            top3: top3.map((r, i) => ({
+              position: r.rank ?? i + 1,
+              name: names.get(r.entrantId) ?? "—",
+              points: pointsText(r.points, unit),
+            })),
+            ...(climberOut ? { climber: climberOut } : {}),
+          });
         }
-        out.push({
-          divisionName: stage.division_name,
-          top3: top3.map((r, i) => ({
-            position: r.rank ?? i + 1,
-            name: names.get(r.entrantId) ?? "—",
-            points: pointsText(r.points, unit),
-          })),
-          ...(climberOut ? { climber: climberOut } : {}),
-        });
       });
     } catch (err) {
       log.warn(
@@ -1615,7 +1655,7 @@ async function digestForOrg(
 
   let standings: DigestStandingsSection[] = [];
   try {
-    standings = await assembleDigestStandings(tx, stages);
+    standings = await assembleDigestStandings(tx, stages, locale);
   } catch (err) {
     log.warn({ orgId, source: "digestStandings", err: String(err) }, "news enrichment: source failed, dropping section");
   }

@@ -267,6 +267,9 @@ export interface RoundRecapDraftInput {
   results: { homeName: string; homeScore: string; awayName: string; awayScore: string; tag?: string | null; creditsNobody?: boolean }[];
   /** Top of the table (caller slices top-N). */
   standings: { position: number; name: string; played: number; /** As the public table prints it ("1½"). */ points: string }[];
+  /** W5 T21 (X-SF-2): a stage with several pools prints one standings block per pool, in the stage's pool order, each headed by the
+   *  pool's public label in the org's locale. Absent for every other stage: byte-identical. */
+  poolStandings?: { label: string; rows: RoundRecapDraftInput["standings"] }[];
   /** P3 — optional, same byte-identical-when-absent contract as
    *  ResultDraftInput.enrichment. */
   enrichment?: RecapEnrichment;
@@ -290,6 +293,13 @@ export function roundRecapDraft(input: RoundRecapDraftInput): { title: string; b
     lines.push("");
     lines.push(`**${s.standings}**`);
     for (const row of input.standings) {
+      lines.push(`${row.position}. ${row.name} — ${row.points} ${s.points} (${row.played})`);
+    }
+  }
+  for (const pool of input.poolStandings ?? []) {
+    lines.push("");
+    lines.push(`**${s.standings} — ${pool.label}**`);
+    for (const row of pool.rows) {
       lines.push(`${row.position}. ${row.name} — ${row.points} ${s.points} (${row.played})`);
     }
   }
@@ -331,6 +341,9 @@ export function roundRecapDraft(input: RoundRecapDraftInput): { title: string; b
 
 export interface DigestStandingsSection {
   divisionName: string;
+  /** W5 T21 (X-SF-2): the pool this section is, as the public pages label it ("Group A", in the org's locale), for a stage with
+   *  several pools - one section per pool. Absent for a league, a Swiss stage and a one-pool group: byte-identical. */
+  poolLabel?: string;
   /** Caller slices top-N (design: top 3). */
   /** `points` as the public table prints it ("1½" — RB2B-17). */
   top3: { position: number; name: string; points: string }[];
@@ -417,7 +430,7 @@ export function weeklyDigestDraft(input: WeeklyDigestDraftInput): { title: strin
     lines.push(`**${msgFor(input.locale, "news.digest.section.standings")}**`);
     for (const section of input.standings) {
       lines.push("");
-      lines.push(`_${section.divisionName}_`);
+      lines.push(`_${section.divisionName}${section.poolLabel ? ` — ${section.poolLabel}` : ""}_`);
       for (const row of section.top3) {
         lines.push(
           msgFor(input.locale, "news.digest.standings.row", {

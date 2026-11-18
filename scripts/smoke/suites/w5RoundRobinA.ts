@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { call, check, html, newSession, setPlan, signIn, tag, v1, v1data } from "../harness.ts";
 import { detectTemplate } from "../../../apps/web/src/lib/format-templates.ts";
 
 /**
@@ -81,6 +81,11 @@ import { detectTemplate } from "../../../apps/web/src/lib/format-templates.ts";
  * else's carries a status; P2 is disqualified -> his row reads "disqualified" beside hers; P1's Reinstate takes hers away and leaves
  * his. (Main: no hub row ever carried a status.)
  *
+ * Task 21 (X-SF-2 <- RB5-T12; ST-G6): a started group stage of TWO pools in its OWN org, w5a8 (own plan caps, set to Pro for `news.auto`), each pool's one match decided; the
+ * organiser's weekly digest draft lists both pools - `_Pooled - Group A_` then `_Pooled - Group B_`, each with its own two players - and the
+ * round recap the last result drafts has one headed standings block per pool, A then B. (Main: a pooled stage's table was read as
+ * `pool_id is null`, found nothing and the digest and the recap carried no standings at all.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -104,7 +109,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 16: 1 (a legs-3 league over the API draws 18 lines and reads back as a league with its 3 legs).
   // Task 14b: 1 (a finished two-pool Groups only division's public hub document names each pool's winner and crowns no one).
   // Task 20: 1 (the public hub's table marks a withdrawn and a disqualified row, and Reinstate takes the first away).
-  const EXPECTED_CHECKS = 24;
+  // Task 21: 1 (a pooled stage's weekly digest and round recap list every pool, in pool order, each with its own players).
+  const EXPECTED_CHECKS = 25;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -1103,6 +1109,63 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-SF-1: the public hub's table marks a withdrawn and a disqualified row (and no other); Reinstate takes the mark away" +
         (ok ? "" : ` - div ${dRes.status}, start ${started.status}, calm ${JSON.stringify(calm)}, withdraw ${out.status} ${JSON.stringify(afterW.by)}, dq ${dq.status} ${JSON.stringify(afterDq.by)}, back ${back.status} ${JSON.stringify(afterBack.by)}`),
+      ok,
+    );
+  }
+
+  // Task 21 (X-SF-2, ST-G6): the weekly digest and the round recap list every pool of a pooled stage, in pool order.
+  {
+    const fourth = newSession();
+    const who4 = await signIn(fourth, `delivered+w5a8_${tag}@resend.dev`);
+    // news.auto (the weekly digest and the auto-drafts) is a paid key: a fresh org is Community and would be refused 402
+    await setPlan(who4.org_id, "pro", fourth);
+    const c4 = v1data<{ id: string } | undefined>(
+      await v1(fourth, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A pools ${tag}`, visibility: "private" }),
+    );
+    const dRes = await v1(fourth, `/api/v1/competitions/${c4?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Pooled",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const toggle = await v1(fourth, `/api/v1/divisions/${divId}`, "PATCH", { auto_posts: true });
+    const es =
+      v1data<{ id: string; display_name: string }[] | undefined>(
+        await v1(fourth, `/api/v1/divisions/${divId}/entrants`, "POST",
+          [1, 2, 3, 4].map((i) => ({ kind: "individual", display_name: `Pooler${i} ${tag}`, seed: i }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(fourth, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "group", name: "Pools", config: { pools: { count: 2 } } }),
+    )?.id;
+    await v1(fourth, `/api/v1/stages/${stageId}/generate`, "POST");
+    const started = await v1(fourth, `/api/v1/divisions/${divId}/start`, "POST");
+    const lines = (v1data<(Fx & { pool_id?: string | null })[] | undefined>(await v1(fourth, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const poolIds = [...new Set(lines.map((f) => f.pool_id).filter((x): x is string => !!x))];
+    // each line decided, home side winning: the winner of each pool is its line's home entrant
+    for (const f of lines) {
+      await v1(fourth, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+      await v1(fourth, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+    }
+    const nameOf = (id: string | null) => es.find((e) => e.id === id)?.display_name ?? "?";
+    const digest = await v1(fourth, `/api/v1/orgs/${who4.org_id}/posts/digest`, "POST");
+    const body = v1data<{ body_md?: string } | undefined>(digest)?.body_md ?? "";
+    const a = body.indexOf("_Pooled \u2014 Group A_");
+    const b = body.indexOf("_Pooled \u2014 Group B_");
+    const inDigest = lines.length === 2 && a >= 0 && b > a && lines.every((f) => body.includes(nameOf(f.home_entrant_id)) && body.includes(nameOf(f.away_entrant_id)));
+    // the recap is drafted after the scoring transaction commits: poll for it
+    let recapBody = "";
+    for (let i = 0; i < 20 && !recapBody; i++) {
+      const posts = v1data<{ kind: string; body_md: string }[] | undefined>(await v1(fourth, `/api/v1/orgs/${who4.org_id}/posts?status=draft`)) ?? [];
+      recapBody = posts.find((x) => x.kind === "round_recap")?.body_md ?? "";
+      if (!recapBody) await new Promise((r) => setTimeout(r, 500));
+    }
+    const heads = recapBody.split("\n").filter((l) => l.startsWith("**Standings"));
+    const inRecap = heads.length === 2 && heads[0] === "**Standings \u2014 Group A**" && heads[1] === "**Standings \u2014 Group B**";
+    const ok = dRes.status === 201 && toggle.status === 200 && es.length === 4 && started.status === 200 && poolIds.length === 2 && digest.status === 201 && inDigest && inRecap;
+    w5Check(
+      "w5a X-SF-2: a pooled stage's weekly digest and round recap list every pool, in pool order, each with its own players" +
+        (ok ? "" : ` - div ${dRes.status}, toggle ${toggle.status}, entrants ${es.length}, start ${started.status}, lines ${lines.length}, pools ${poolIds.length}, digest ${digest.status} A@${a} B@${b} ${JSON.stringify(body).slice(0, 300)}, recap heads ${JSON.stringify(heads)}`),
       ok,
     );
   }

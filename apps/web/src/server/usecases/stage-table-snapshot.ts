@@ -8,9 +8,11 @@ import "server-only";
 // symptom reads as "no standings yet". This is the one place that knows both shapes:
 //   - a table stored under no pool (a league, a Swiss stage, a group drawn before W5 T3), else
 //   - the table of the stage's ONLY pool.
-// A stage with several pools has no single table: undefined, as before (each pool is a table of its own).
+// A stage with several pools has no single table: undefined, as before (each pool is a table of its own) - `readPoolTables` below is
+// the reader of those, for the surfaces that print every pool (the news recap and digest, W5 T21).
 import type postgres from "postgres";
 import type { Tx } from "@/lib/db";
+import { comparePools } from "@/lib/pool-order";
 
 export async function readSingleTableSnapshot<Rows = unknown>(
   tx: Tx,
@@ -23,6 +25,30 @@ export async function readSingleTableSnapshot<Rows = unknown>(
      order by (ss.pool_id is null) desc
      limit 1`;
   return snap;
+}
+
+/**
+ * W5 app PR A, Task 21 (X-SF-2; ST-G6): the tables of a stage that has SEVERAL pools, one per pool, in the stage's pool order
+ * (`comparePools` - the one authority the public pages, the export and the console share: the pool KEY, never insertion, `updated_at`
+ * or id). Empty for a stage with no pool or one pool: that stage's table is `readSingleTableSnapshot`'s. A pool with no stored table
+ * yet is simply absent (nothing was decided in it); a pool whose stored table is empty is returned with no rows, and the caller
+ * decides what an empty or level table prints.
+ */
+export async function readPoolTables<Rows = unknown>(
+  tx: Tx,
+  stageId: string,
+): Promise<{ poolId: string; key: string; rows: Rows; previous_rows: Rows | null }[]> {
+  const pools = await tx<{ id: string; key: string; name: string }[]>`select id, key, name from pools where stage_id = ${stageId}`;
+  if (pools.length < 2) return [];
+  const snaps = await tx<{ pool_id: string; rows: Rows; previous_rows: Rows | null }[]>`
+    select pool_id, rows, previous_rows from standings_snapshots where stage_id = ${stageId} and pool_id = any(${pools.map((p) => p.id)})`;
+  const byPool = new Map(snaps.map((x) => [x.pool_id, x]));
+  return [...pools]
+    .sort(comparePools)
+    .flatMap((p) => {
+      const snap = byPool.get(p.id);
+      return snap ? [{ poolId: p.id, key: p.key, rows: snap.rows, previous_rows: snap.previous_rows }] : [];
+    });
 }
 
 /** The pool a stage's single table sits under: the stage's only pool, or null when it has none or several (the no-pool table). */
