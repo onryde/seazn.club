@@ -308,6 +308,16 @@ function press(h: Island, label: string): void {
   (propsOf(button).onClick as () => void)();
 }
 
+/** The builder's "Plan for" entrants box. W5 T12b (X-BD-8): a Top N is judged against this field and refused when it cannot be filled,
+ *  so a test that sends the ceiling (Top 32) must plan a field of at least 32. */
+function planEntrants(h: Island, n: number): void {
+  const input = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-plan-entrants");
+  if (!input) throw new Error("no Plan-for entrants box on screen");
+  (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value: String(n) } });
+}
+/** A field big enough for every Top N the bounds allow. */
+const FIELD_FOR_CEILING = FORMAT_BOUNDS.qualify.max + 8;
+
 /** The stages body of the LAST call to `path`. */
 function postedStages(path: RegExp): { kind: string; config: Record<string, unknown>; progression: unknown }[] {
   const calls = apiV1Mock.mock.calls.filter(([url]) => path.test(String(url)));
@@ -338,6 +348,7 @@ describe("the builder posts the legs the organiser picked", () => {
   it("a Top N at the ceiling reaches the knockout the builder sends", async () => {
     const h = mountBuilder();
     pickBuilderTemplate(h, "swiss_knockout");
+    planEntrants(h, FIELD_FOR_CEILING);
     const qualify = h.tree().find((e) => propsOf(e)["data-format-bound"] === "qualify");
     (propsOf(qualify!).onChange as (e: { target: { value: string } }) => void)({
       target: { value: String(FORMAT_BOUNDS.qualify.max) },
@@ -414,12 +425,13 @@ describe("the builder refuses a format knob outside its bounds before any POST (
     (propsOf(input).onChange as (e: { target: { value: string } }) => void)({ target: { value } });
   }
   /** A builder on its Format step (Who plays passed with a name), on `template`. */
-  function onFormat(template: string): Island {
+  function onFormat(template: string, plan?: number): Island {
     const h = mountBuilder();
     const name = h.tree().find((e) => propsOf(e)["data-testid"] === "division-builder-name");
     (propsOf(name!).onChange as (e: { target: { value: string } }) => void)({ target: { value: "Open" } });
     press(h, uiEn["wizard.tab.format"]);
     pickBuilderTemplate(h, template);
+    if (plan !== undefined) planEntrants(h, plan);
     return h;
   }
   const errorText = (h: Island) => {
@@ -439,7 +451,8 @@ describe("the builder refuses a format knob outside its bounds before any POST (
     let refused = 0;
     let accepted = 0;
     for (const value of [...REFUSED, ...ACCEPTED]) {
-      const h = onFormat("league_ko");
+      // The ceiling is accepted only against a field that can fill it (X-BD-8); the refused values never reach that gate.
+      const h = onFormat("league_ko", ACCEPTED.includes(value) ? FIELD_FOR_CEILING : undefined);
       type(h, "qualify", value);
       press(h, uiEn["wizard.next"]);
       if (REFUSED.includes(value)) {
@@ -455,11 +468,30 @@ describe("the builder refuses a format knob outside its bounds before any POST (
     expect([refused, accepted]).toEqual([4, 2]);
   });
 
+  it("X-BD-8: Top 32 at the DEFAULT plan field is refused by name (32 can't qualify from the field), stays on Format, and sends no preview", async () => {
+    apiV1Mock.mockClear();
+    const h = onFormat("league_ko");
+    type(h, "qualify", "32");
+    press(h, uiEn["wizard.next"]);
+    const text = errorText(h);
+    expect(text, "the cut gate names the Top N it refuses").toMatch(/^Qualify to finals: 32 can't qualify from \d+ entrants\./);
+    expect(currentStep(h)).toBe("format");
+    press(h, uiEn["wizard.showExample"]);
+    await flush();
+    expect(calls(/format-preview/)).toBe(0);
+    // The same Top N against a field that can fill it is accepted: the refusal is the field's, not the value's.
+    const ok = onFormat("league_ko", FIELD_FOR_CEILING);
+    type(ok, "qualify", "32");
+    press(ok, uiEn["wizard.next"]);
+    expect(errorText(ok)).toBeNull();
+    expect(wentOn(ok)).toBe(true);
+  });
+
   it("Show example: a refused Top N says so and draws nothing; an accepted one draws the knockout it names", async () => {
     let checked = 0;
     for (const value of [...REFUSED, ...ACCEPTED]) {
       apiV1Mock.mockClear();
-      const h = onFormat("league_ko");
+      const h = onFormat("league_ko", ACCEPTED.includes(value) ? FIELD_FOR_CEILING : undefined);
       type(h, "qualify", value);
       press(h, uiEn["wizard.showExample"]);
       await flush();

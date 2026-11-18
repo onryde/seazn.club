@@ -53,6 +53,7 @@ async function genericOrg(): Promise<AuthCtx> {
 
 /** A one-pool group of 6 feeding a knockout of its top 4. */
 async function groupThenKnockout(timing: "setup" | "on_complete") {
+  // single-sport: the division is created here on the generic rig genericOrg() builds, for the same reason - seeding reads ranks, never a sport rule.
   const auth = await genericOrg();
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Op " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
   const division = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: "score", config: CFG } as never);

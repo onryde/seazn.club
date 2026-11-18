@@ -35,7 +35,12 @@ const lockSpy = vi.hoisted(() => ({ divisionLockedFields: vi.fn() }));
 const featureSpy = vi.hoisted(() => ({ hasFeature: vi.fn() }));
 
 vi.mock("@/server/page-auth", () => pageAuth);
-vi.mock("@/server/usecases/stages", () => stagesSpies);
+// `competition-desk.ts` imports `./withdrawal`, whose module-level WITHDRAWAL_WALKOVER_KINDS reads BRACKET_WALKOVER_KINDS from stages: a
+// bare-spies mock leaves it undefined and the whole suite fails to COLLECT. The real constant is taken, never retyped here.
+vi.mock("@/server/usecases/stages", async (importOriginal) => ({
+  BRACKET_WALKOVER_KINDS: (await importOriginal<typeof import("@/server/usecases/stages")>()).BRACKET_WALKOVER_KINDS,
+  ...stagesSpies,
+}));
 vi.mock("@/server/usecases/rule-locks", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/rule-locks")>()),
   ...lockSpy,
