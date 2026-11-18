@@ -32,6 +32,11 @@
 //    controller's Task 12 ruling). No builder control reaches these rows, so
 //    the browser layer records them without running them — never a silent
 //    pass, never an error red.
+//    Empty since W5 T14 + X-BD-3 (every API-only row now has an organiser
+//    path or is refused): kept, not retired, as the named door a future
+//    API-only row lands in — run.ts refuses the empty plan by name
+//    (NothingPlanned, exit 2; pinned in run-cli.test.ts), so it never passes
+//    silently on zero cases.
 //  - `--set w1-driving-l1` (W1-driving Task 13, ruling 47, D11, D13): one L1
 //    cell per capability W1-driving added (team rosters, the seed advance, the
 //    ladder, americano, mexicano), then the two template-only cells, each

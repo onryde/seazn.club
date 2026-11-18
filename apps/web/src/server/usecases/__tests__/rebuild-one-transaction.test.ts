@@ -744,11 +744,29 @@ describe.skipIf(!HAS_DB)("RB-1 Rebuild keeps times and courts on a league of one
     const written = await layOut(before, venueId, courts);
 
     await patchEntrant(auth, entrants[5]!, { status: "withdrawn" });
-    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E7", seed: 7, members: [] }]);
+    const [e7] = await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E7", seed: 7, members: [] }]);
     const out = await rebuildStageFixtures(auth, stage!.id);
 
     const after = await rowsOf(stage!.id);
     expect(after.map(position).sort()).toEqual(before.map(position).sort());
+    // B4 fix wave (T18 m2): each pool of three sits one out a round, per leg, and the Rebuild rewrites those byes POOL BY POOL.
+    // Expected from the engine's own schedule (generateRoundRobin over each pool's members as the rebuilt lines seat them).
+    const seedOf = new Map<string, number>([...entrants.map((id, i) => [id, i + 1] as const), [e7!.id, 7]]);
+    const stored = ((await configOf(stage!.id)).round_byes ?? []) as { pool: string | null; round_no: number; leg: number; entrant_id: string }[];
+    let poolsChecked = 0;
+    for (const pool of new Set(after.map((r) => r.pool_id))) {
+      const members = [...new Set(after.filter((r) => r.pool_id === pool).flatMap((r) => [r.home_entrant_id!, r.away_entrant_id!]))].sort(
+        (a, b) => seedOf.get(a)! - seedOf.get(b)!,
+      );
+      expect(members, `pool ${pool}: premise, a pool of three`).toHaveLength(3);
+      const engine = generateRoundRobin({ entrants: members, seeds: new Map(members.map((id) => [id, seedOf.get(id)!])), config: { legs: 2 } });
+      const want = engine.rounds.flatMap((r) => (r.bye === undefined ? [] : [`L${r.leg} r${r.roundNo}:${r.bye}`]));
+      expect(want, `pool ${pool}: premise, one bye a round, three rounds a leg`).toHaveLength(6);
+      expect(stored.filter((b) => b.pool === pool).map((b) => `L${b.leg} r${b.round_no}:${b.entrant_id}`), `pool ${pool}: its byes`).toEqual(want);
+      poolsChecked++;
+    }
+    expect(poolsChecked).toBe(2);
+    expect(stored, "no bye names a pool the Rebuild did not draw").toHaveLength(12);
     let checked = 0;
     for (const r of after) {
       expect(slotOf(r), position(r)).toEqual(written.get(position(r)));
@@ -947,6 +965,41 @@ describe.skipIf(!HAS_DB)("RB-1 Rebuild and the rank pins (RB5-P5, G7): a pool wh
     await rebuildStageFixtures(auth, stage!.id);
 
     expect((await configOf(stage!.id)).rank_overrides).toEqual(before);
+  });
+
+  // B4 fix wave (T18 m3): a second Rebuild in a row is a no-op on the stage's config (byes, pins), and a one-pool group's pin
+  // follows the one-pool rule: kept while its one table's membership stands, dropped when it changes.
+  it("RB-1 a second Rebuild with nothing changed leaves the config byte-identical and keeps the pins", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 7);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "group", name: "G", config: { pools: { count: 2 } }, progression: null });
+    await generateStageFixtures(auth, stage!.id); // a pool of four and a pool of three (byes)
+    await overrideStandings(auth, stage!.id, { rows: [pinOf(entrants[0]!, 1), pinOf(entrants[1]!, 1)] });
+    await rebuildStageFixtures(auth, stage!.id);
+    const once = await configOf(stage!.id);
+    expect((once.rank_overrides as unknown[]).length, "premise: both pins survive the first Rebuild").toBe(2);
+    expect((once.round_byes as unknown[]).length, "premise: the pool of three records byes").toBeGreaterThan(0);
+
+    await rebuildStageFixtures(auth, stage!.id);
+
+    expect(JSON.stringify(await configOf(stage!.id)), "the second Rebuild rewrites the config to the same bytes").toBe(JSON.stringify(once));
+  });
+
+  it("RB-1 a one-pool group's pin stays through a Rebuild that moves nobody and goes when its table's membership changes", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 4);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "group", name: "G", config: { pools: { count: 1 } }, progression: null });
+    await generateStageFixtures(auth, stage!.id);
+    await overrideStandings(auth, stage!.id, { rows: [pinOf(entrants[0]!, 1)] });
+    const pinned = (await configOf(stage!.id)).rank_overrides as { pool_id?: string | null }[];
+    expect(pinned, "premise: stored").toHaveLength(1);
+
+    await rebuildStageFixtures(auth, stage!.id);
+    expect((await configOf(stage!.id)).rank_overrides, "nobody moved: kept").toEqual(pinned);
+
+    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+    await rebuildStageFixtures(auth, stage!.id);
+    expect((await configOf(stage!.id)).rank_overrides, "its one table changed: dropped").toEqual([]);
   });
 
   it("RB-1 a league's pin goes when its one table's membership changes (a league is one pool)", async () => {

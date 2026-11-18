@@ -300,8 +300,9 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     // W4 T16 + T24: the 22 refused standalone cells leave the grid (140 held runs, 5 of them driven: the pairwise cover keeps their
     // width slots, so no other run moves), and the settled runs leave 🚫 (⛔ and ⏳ new).
     // W5 T16 (ruling 287): the deleted three-leg template's row is gone, 76 runs with it, all 🚫 (its cells were no-organiser-path, so
-    // none was driven or settled): 🚫 282 -> 206, 1,589 -> 1,513 runs. group_only took its slot in ROW_KEYS, so no other template row's
-    // run moves in n (every committed width is now the plain rotation: pairs.ts's lap shift applied only while the rows were a multiple of 7).
+    // none was driven or settled): 🚫 282 -> 206, 1,589 -> 1,513 runs. group_only took its slot in ROW_KEYS, so every other template
+    // row keeps its index - but the counts here MOVED, and the widths with them: every committed width is now the plain rotation
+    // (pairs.ts's lap shift applied only while the rows were a multiple of 7), so these totals were re-pinned, not carried.
     // W4 app PR B, Task 15: Q4a's 12 runs off the no-path cells are ░ (an atom with an organiser path and no HARNESS_SCENARIO script).
     expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 48, noPath: 206, notRun: 1216, settled: 43, all: 1513 });
     expect(settled.filter((c) => c.settled!.state === "refused").length).toBe(27);

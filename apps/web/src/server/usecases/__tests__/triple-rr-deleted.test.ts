@@ -194,7 +194,9 @@ describe("X-RR-6 the key is refused by name at the one door that takes a templat
 
 describe("X-RR-6 no source names triple_rr", () => {
   const ROOT = resolve(HERE, "../../../../../..");
-  const SCOPE = ["apps/web/src", "apps/web/e2e", "tools/matrix", "content", "scripts", "packages"];
+  // B4 fix wave (T16): every app (not only web's src and e2e) and the migrations (`db`), so a seed row or a second app naming the
+  // key is seen.
+  const SCOPE = ["apps", "db", "tools/matrix", "content", "scripts", "packages"];
   /** This file's own literals are the whole allowlist (no door was found, so no refusal literal exists either). */
   const ALLOWLIST = ["apps/web/src/server/usecases/__tests__/triple-rr-deleted.test.ts"];
   // The key, its kebab and camel spellings, and the two display names it carried (label "Triple round robin", seed "Triple RR").

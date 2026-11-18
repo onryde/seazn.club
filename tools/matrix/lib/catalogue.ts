@@ -2,8 +2,9 @@
 // it is a reviewed diff, never a runtime draw). Rows are the 16 builder
 // templates in offered-matrix order, then the 4 API-only shapes. The row of the deleted three-leg template (W5 T16, owner
 // ruling 287) is gone: a league with legs 3 is a league, not a row of its own. group_only (W5 T14 appended it last) takes
-// the vacated second slot, so every other template row keeps its index: the committed L2 rotation is positional (row i
-// is paired with sport i), and the smoke slice's driven runs (swiss|badminton) stay where they were.
+// the vacated second slot, so every other template row keeps its INDEX (the L2 rotation is positional: row i is paired with
+// sport i) and the smoke slice's driven runs (swiss|badminton) stay where they were. The L2 COUNTS did move: the row's runs
+// left, and with the rows no longer a multiple of 7 pairs.ts's lap shift stops applying, so the committed widths were re-pinned.
 // A template row the builder does not OFFER on a sport (americano/mexicano where the engine entrant
 // model holds no individuals) is a no-organiser-path cell (noOrganiserPathCell below): every browser case on it is
 // 🚫, since the builder's picker has no radio to tick, and its HTTP cases run. Columns are
