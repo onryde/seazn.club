@@ -23,7 +23,7 @@ import "server-only";
 //   lookups              shared loaders: settings, division context (and its projection from the submit's own read), registration rows by token / ref / org, token match
 //   people               the person behind a registration: lookup / create / reconcile, and claim invites
 //   materialise          confirmed entry -> entrant: materialise, join an existing entrant, clear the expiry
-//   waitlist             waitlist promotion: the queue order and a place in it (sibling-only), the move back to its end (returnToWaitlist, sibling-only), the seat gate, the organiser's room check (capacity confirm, plan limit), promote the oldest, the promoted notice
+//   waitlist             waitlist promotion: the queue order and a place in it (sibling-only), the move back to its end (returnToWaitlist, sibling-only), the seat gate, the organiser's room check (capacity confirm, plan limit; Promote, confirm and waive share it), promote the oldest (judging the entry it picks), the promoted notice
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
 //   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed, promotion skipped): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
@@ -34,14 +34,14 @@ import "server-only";
 //   pay-page-checkout    the payment page's Pay: reuse-or-expire on the entry's own session, mint for the entry, return to the page
 //   checkout-completion  payment completion: the checkout webhooks, confirmPaidRegistration, reconcile-on-return
 //   refunds              refund money and policy: stripeRefund, receipts, the failure alert, the resolved policy
-//   disputes             chargeback handling, where a cart's chargeback stands (open / lost / won), and the dispute evidence pack
+//   disputes             chargeback handling (the organiser's mails and the staff alert), where a cart's chargeback stands (open / lost / won; cartDisputeLost gates the refund paths), and the dispute evidence pack
 //   withdraw             withdrawal core shared by the public and organiser paths, and the solo placement release
 //   public-status        token- and ref-gated public views: status, cart, public withdraw
 //   group-status         the group (cart) read model behind the /r/[ref] status page
 //   status-facts         what the status page states beyond the cart: the one venue a competition's published fixtures share, how each entry settled (card / offline / waived); the SettledBy type is re-exported, the rest is sibling-only
 //   sweep                the hourly pay-window sweep: reminders, expiries, promotions
 //   list                 organiser list read and the solo-pool capacity helpers it shares
-//   organiser-actions    organiser actions: confirm, mark paid, waive, remind, waitlist, withdraw, refund
+//   organiser-actions    organiser actions: confirm, mark paid, waive (confirm and waive room-checked like Promote), remind, waitlist, withdraw, refund
 //   reminder-window      the payment-reminder cap's window: one SQL count read by the press (cap) and the hub row; sibling-only
 //   csv-ics              files: the organiser CSV export and the registrant .ics attachment
 
