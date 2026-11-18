@@ -17,6 +17,7 @@ import type { MatrixData } from "@/lib/pricing-matrix";
 import { hasHelpTokens, resolveHelpTokens } from "@/server/help-tokens";
 import { rehypeHelpHeadingIds, type HelpHeading } from "@/server/help-heading-ids";
 import { HELP_PUBLIC_ROOT, rehypeHelpFigures } from "@/server/help-figures";
+import { rehypeHelpCallouts } from "@/server/help-callouts";
 
 export const HELP_ROOT = join(process.cwd(), "content", "help");
 
@@ -77,8 +78,10 @@ function buildPipeline(publicRoot: string) {
     // author writes can name one), and this step then gives h2/h3 their own, derived from the
     // heading text. See help-heading-ids.ts. The figure step is after it for the same reason:
     // an author's image arrives with src/alt/title only, and the figure, its dimensions and
-    // its lazy loading are ours. See help-figures.ts.
+    // its lazy loading are ours. See help-figures.ts. Callouts likewise (help-callouts.ts): the
+    // sanitiser allows no aside, class or data attribute, so only a labelled blockquote makes one.
     .use(rehypeHelpFigures, { publicRoot })
+    .use(rehypeHelpCallouts)
     .use(rehypeHelpHeadingIds)
     .use(rehypeStringify);
 }

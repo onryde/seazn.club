@@ -313,6 +313,29 @@ body {
   .competition-prose blockquote {
     @apply my-4 border-l-4 border-accent-line bg-accent-soft/50 px-4 py-2 text-zinc-600;
   }
+  /* Help callouts (server/help-callouts.ts): a labelled blockquote. The label is the
+     first <strong>, kept as visible text, so the kind never rests on colour alone. */
+  .competition-prose aside.help-callout {
+    @apply my-4 rounded-r-lg border-l-4 px-4 py-2 text-zinc-700;
+  }
+  .competition-prose aside.help-callout > :first-child {
+    @apply mt-0;
+  }
+  .competition-prose aside.help-callout > :last-child {
+    @apply mb-0;
+  }
+  .competition-prose aside.help-callout > p:first-child > strong:first-child {
+    @apply font-display text-sm font-semibold uppercase tracking-wide text-ink;
+  }
+  .competition-prose aside.help-callout[data-kind="note"] {
+    @apply border-purple-300 bg-purple-50;
+  }
+  .competition-prose aside.help-callout[data-kind="warning"] {
+    @apply border-red-300 bg-red-50;
+  }
+  .competition-prose aside.help-callout[data-kind="example"] {
+    @apply border-zinc-300 bg-zinc-50;
+  }
   .competition-prose hr {
     @apply my-6 border-zinc-200;
   }
