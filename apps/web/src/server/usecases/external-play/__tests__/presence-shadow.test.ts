@@ -625,7 +625,8 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
         verified: 1, covered: 1, missing: [], open: [], closedByEnded: 2, endedWhileNewest: 1, endedSuperseded: 1, blocksProofFlag: true, strict: { pass: true, reasons: [] },
       });
       const body = strict.json() as unknown as { note: string };
-      expect(body.note).toMatch(/endedSuperseded > 0/);
+      expect(body.note).toMatch(/closedByEnded > 0/);
+      expect(body.note).toMatch(/endedWhileNewest 1, endedSuperseded 1/);
       expect(body.note).toMatch(/EXTERNAL_PLAY_PRESENCE_PROOF/);
       expect(body.note).toMatch(/plan 1 Task 12 step 5/);
 
@@ -634,7 +635,7 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
       expect(plain.json()).toHaveProperty("blocksProofFlag", true);
     }, 60_000);
 
-    it("endedWhileNewest alone (the peer was still in the room at the end) does NOT set blocksProofFlag; its own note points at Task 12 step 5 (m4)", async () => {
+    it("endedWhileNewest alone (the peer was still in the room at the end) STILL sets blocksProofFlag: any closed-by-end row blocks (owner ruling 2026-11-17, plan 1 Task 12 step 5); the note says so and names the kind (m4)", async () => {
       const stamp = new Date(Date.now() - 60_000);
       const K = await seedBoard();
       fixturesMade.push(K.fixtureId);
@@ -643,11 +644,15 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
       const args = ["--since", iso(new Date(stamp.getTime() - 30_000)), "--fixture", K.fixtureId];
       const strict = lines();
       expect(await run(["--strict", ...args], { sql, out: strict.say })).toBe(0);
-      expect(strict.json()).toMatchObject({ verified: 1, covered: 1, closedByEnded: 1, endedWhileNewest: 1, endedSuperseded: 0, blocksProofFlag: false, strict: { pass: true, reasons: [] } });
+      expect(strict.json()).toMatchObject({ verified: 1, covered: 1, closedByEnded: 1, endedWhileNewest: 1, endedSuperseded: 0, blocksProofFlag: true, strict: { pass: true, reasons: [] } });
       const body = strict.json() as unknown as { note: string };
-      expect(body.note).toMatch(/endedWhileNewest > 0/);
+      expect(body.note).toMatch(/closedByEnded > 0/);
+      expect(body.note).toMatch(/endedWhileNewest 1, endedSuperseded 0/);
+      expect(body.note).toMatch(/EXTERNAL_PLAY_PRESENCE_PROOF/);
       expect(body.note).toMatch(/plan 1 Task 12 step 5/);
-      expect(body.note).not.toMatch(/blocks turning/);
+      const plain = lines();
+      expect(await run(args, { sql, out: plain.say })).toBe(0);
+      expect(plain.json()).toHaveProperty("blocksProofFlag", true);
     }, 60_000);
 
     it("reads in ONE repeatable-read transaction: `set transaction read only` and a 30 s statement timeout first, then exactly the report's three selects", async () => {

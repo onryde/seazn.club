@@ -18,9 +18,9 @@
 // ended) and `endedSuperseded` (a newer row of the same participant exists in the meeting: a reload's old peer the vendor never reported
 // leaving, the R4 risk). `joinLatencyMs` ({p50, p95, n}: received_at - joined_at over the scope's webhook rows, nearest-rank) and `noEcho` (webhook
 // rows stored with no participant: our customParticipantId did not echo back) are spec §6.8 step 3's numbers for owner ruling R4; printed,
-// never gated. A non-zero `endedSuperseded` prints `blocksProofFlag: true` and a note: it blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on
-// until every counted row is explained and recorded (plan 1 Task 12 step 5), which is a separate decision from this script's exit code.
-// `endedWhileNewest` alone does not set the flag; its note points at the same step, whose gate bullet counts every closedByEnded row.
+// never gated. ANY closed-by-end row (`closedByEnded` > 0, either kind) prints `blocksProofFlag: true` and a note: it blocks turning
+// EXTERNAL_PLAY_PRESENCE_PROOF on until every counted row is explained and recorded (owner ruling 2026-11-17, plan 1 Task 12 step 5), which
+// is a separate decision from this script's exit code. The split is information: the note names how many rows of each kind there are.
 //
 // --strict needs at least one --fixture (exit 2 without: the gate reads a named round, never every fixture in the window), and exits 1 when `verified === 0` (an empty run is a failure, never a pass), or `missing` or `open` is non-empty. It is meant for a
 // QUIESCENT scope (every meeting in it ended); run mid-round, `open` lists the live peers and the operator reads it rather than gating on it.
@@ -129,12 +129,10 @@ const USAGE =
 /** A full ISO timestamp WITH a zone. `new Date("2026-11-17T08:30:00")` is the operator's local time and `new Date("2026-11-17")` is UTC:
  *  the gate's window must never depend on which machine ran it, so neither is accepted. */
 const ISO_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
-/** Printed with `blocksProofFlag: true`; never changes the exit code. */
-const PROOF_FLAG_NOTE =
-  "endedSuperseded > 0: a reload's old peer was closed only by meeting.ended (the vendor did not report it leaving; owner ruling R4's risk). This blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on until every counted row is explained and recorded beside the baseline (plan 1 Task 12 step 5). Not a failure of this run: the exit code is unchanged.";
-/** Printed when only `endedWhileNewest` is non-zero; never changes the exit code. */
-const WHILE_NEWEST_NOTE =
-  "endedWhileNewest > 0: peers that were still their participant's newest when the meeting ended, closed by meeting.ended. They do not set blocksProofFlag; plan 1 Task 12 step 5 still asks every closedByEnded row to be explained beside the baseline. Not a failure of this run: the exit code is unchanged.";
+/** Printed with `blocksProofFlag: true`; never changes the exit code. The split says WHICH kind of closed-by-end row it is; it does not
+ *  change whether the flag is set (any such row does). */
+const proofFlagNote = (r: { closedByEnded: number; endedWhileNewest: number; endedSuperseded: number }): string =>
+  `closedByEnded > 0 (${r.closedByEnded}: endedWhileNewest ${r.endedWhileNewest}, endedSuperseded ${r.endedSuperseded}): any row closed only by meeting.ended blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on until every counted row is explained and recorded beside the baseline (plan 1 Task 12 step 5; owner ruling 2026-11-17). The split says which kind: endedWhileNewest is a peer still in the room when the meeting ended (a participantLeft that never arrived), endedSuperseded is a reload's old peer the vendor did not report leaving (owner ruling R4's risk). Not a failure of this run: the exit code is unchanged.`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_HOURS = 24;
 
@@ -201,8 +199,8 @@ export async function run(
     out(`Could not read presence: ${oneLine(e, [])}`);
     return 2;
   }
-  const blocksProofFlag = report.endedSuperseded > 0;
-  const note = blocksProofFlag ? PROOF_FLAG_NOTE : report.endedWhileNewest > 0 ? WHILE_NEWEST_NOTE : null;
+  const blocksProofFlag = report.closedByEnded > 0;
+  const note = blocksProofFlag ? proofFlagNote(report) : null;
 
   const reasons: string[] = [];
   if (report.verified === 0) reasons.push("verified 0: no seat in scope read a camera on, so there is nothing to compare (an empty run is a failure)");
