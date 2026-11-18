@@ -10,8 +10,9 @@ export const f4UnequalPools: Scenario = {
   key: "W5A_F4",
   entrantCount: 8,
   canaryCheck: null,
-  async run() {
-    throw new ScenarioUnsupported("W5", WHY);
+  // not async: nothing is awaited; the refusal is a rejected promise, the shape a deferral takes in the runner
+  run() {
+    return Promise.reject(new ScenarioUnsupported("W5", WHY));
   },
 };
 

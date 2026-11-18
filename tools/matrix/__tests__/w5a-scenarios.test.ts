@@ -21,7 +21,7 @@ import { departedQualifierItems, eligibleCut } from "../lib/scenarios/q2-departe
 import { ALREADY_PLACED_CODE, STAGE_COMPLETE_CODE, alreadyPlacedItems, catchUpItems, refusedLateItems, snakePoolIndex, type LateAddObs } from "../lib/scenarios/r2-late-entry.ts";
 import { finalizedExpungeItems, type FinalizedExpungeObs } from "../lib/scenarios/r4-atomic.ts";
 import { surfaceItems, type SurfaceObs } from "../lib/scenarios/surfaces-table.ts";
-import { ScenarioUnsupported, W5A_SCENARIO_KEYS, type CaseSpec, type ScenarioContext, type W5aScenarioKey } from "../lib/scenarios/types.ts";
+import { ScenarioUnsupported, W5A_SCENARIO_KEYS, type CaseSpec, type ScenarioContext } from "../lib/scenarios/types.ts";
 import type { TLine } from "../lib/scenarios/w5a-table.ts";
 import { Recorder, playDivision, setUpDivision } from "../lib/scenarios/common.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
@@ -122,8 +122,6 @@ describe("W5A registration: eight keys, opt-in, six that run and two planned and
     }
     expect(SCENARIOS.W5A_F4).toBe(f4UnequalPools);
     expect(SCENARIOS.W5A_C5).toBe(c5AdjustPoints);
-    const spec = null as unknown as CaseSpec;
-    expect(spec).toBeNull();
   });
 });
 
@@ -546,7 +544,7 @@ describe("playDivision's afterAdvance hook: the window between a confirmed desti
     const seen: { seq: number; status: number; filled: number; stage2Posts: number; stage1Posts: number }[] = [];
     const { plays } = await play("league_ko", {
       afterAdvance: async (stage, advance) => {
-        const ids2 = new Set((await driver.listFixtures("d1")).filter((f) => f.stage_id === stage.id).map((f) => f.id));
+        const ids2 = new Set((await driver.listFixtures()).filter((f) => f.stage_id === stage.id).map((f) => f.id));
         const posted = driver.trace.filter((c) => c.startsWith("postStream ")).map((c) => c.split(" ")[1]!);
         seen.push({ seq: stage.seq, status: advance.status, filled: advance.filled, stage2Posts: posted.filter((id) => ids2.has(id)).length, stage1Posts: posted.filter((id) => !ids2.has(id)).length });
       },

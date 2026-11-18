@@ -93,7 +93,7 @@ export function catchUpItems(o: LateAddObs, wantCase: "catch_up" | "rebuild_offe
     const ordered = [...keyed].sort((x, y) => x[1].localeCompare(y[1]));
     const snake = ordered[snakePoolIndex(o.newcomerSeed, ordered.length)];
     const snakeIsSmallest = snake !== undefined && sizes.get(snake[0]) === smallest;
-    items.push({ ok: !snakeIsSmallest || snake![0] === poolId, note: `${o.label}: the seed snake gives seed ${o.newcomerSeed} pool ${snake?.[1] ?? "(none)"}, which is among the smallest, but the newcomer joined ${a.pool_key} (RB5-L9's tie rule)` });
+    items.push({ ok: !snakeIsSmallest || snake[0] === poolId, note: `${o.label}: the seed snake gives seed ${o.newcomerSeed} pool ${snake?.[1] ?? "(none)"}, which is among the smallest, but the newcomer joined ${a.pool_key} (RB5-L9's tie rule)` });
   } else {
     items.push({ ok: a.pool_key === undefined, note: `${o.label}: a league newcomer names pool ${a.pool_key ?? ""}, expected none` });
   }
@@ -133,7 +133,7 @@ export function catchUpItems(o: LateAddObs, wantCase: "catch_up" | "rebuild_offe
     const f = line === undefined ? undefined : named.find((x) => x.fixture_id === line.id);
     if (line === undefined || f === undefined) continue;
     const absent = rounds.filter((r) => !here.some((l) => l.round === r && holds(l, m)));
-    const byeRound = o.originals.has(m) && absent.length === 1 ? absent[0]! : null;
+    const byeRound = o.originals.has(m) && absent.length === 1 ? absent[0] : null;
     const takesBye = byeRound !== null && !started(byeRound);
     if (takesBye) {
       items.push({ ok: f.placement === "bye_slot" && line.round === byeRound, note: `${o.label}: vs ${m}: placed ${f.placement} in round ${line.round}, expected the bye slot of round ${byeRound} (RB5-L3: ${m} sits out that future, unstarted round)` });
@@ -217,7 +217,7 @@ const r2: Scenario = {
     const stage = setup.stage;
     if (stage.kind !== "league" && stage.kind !== "group") throw new Error(`scenario: W5A_R2's entry stage is a ${stage.kind}, not a table`);
     const stageKind = stage.kind;
-    if (stage.config.legs !== undefined && Number(stage.config.legs) !== 1) throw new Error(`scenario: W5A_R2 reads a one-leg stage, the posted body says legs ${String(stage.config.legs)}`);
+    if (stage.config.legs !== undefined && Number(stage.config.legs) !== 1) throw new Error(`scenario: W5A_R2 reads a one-leg stage, the posted body says legs ${JSON.stringify(stage.config.legs)}`);
     const originals = new Set(setup.entrants.map((e) => e.id));
     const drawn = await stageLines(ctx, setup, stage.id);
     const poolKeyOf = new Map<string, string>(stageKind === "group" ? (await poolsOf(ctx, stage.id)).pools.map((p) => [p.id, p.key] as const) : []);

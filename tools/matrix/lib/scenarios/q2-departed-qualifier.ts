@@ -33,7 +33,7 @@ export function eligibleCut(takes: readonly TakeRule[], tables: Tables, departed
     const sorted = rows.filter((r) => !departed.has(r.entrantId)).sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity));
     const inside = sorted.slice(from - 1, to);
     if (inside.length === 0) return;
-    const last = inside[inside.length - 1]!;
+    const last = inside[inside.length - 1];
     const edge = last.rank ?? Infinity;
     // A tie at the cut's edge: equal rank; and, when the confirm itself picked a tie ("seeding tie(s) picked", observed.ts seeding_tie_picked), equal
     // POINTS - the confirm orders level rows by the product's listed order, which the table's tiebreak ranks need not match (X-PD-8, ruling 288).
@@ -139,7 +139,7 @@ const q2: Scenario = {
       {
         beforeComplete: async (stage) => {
           const pools = (await poolsOf(ctx, stage.id)).pools;
-          const poolId = pools.length === 0 ? null : pools[0]!.id;
+          const poolId = pools.length === 0 ? null : pools[0].id;
           const table = await d.standings(stage.id, poolId);
           const top = [...table.rows].sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity))[0];
           if (top === undefined) return;

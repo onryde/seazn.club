@@ -9,7 +9,6 @@
 //   after the void   the cut (read off the stage's own table, the Q2 oracle) differs; the destination's seats are back - no entrant seated (RB5-K6);
 //   after the repost the table is the table it was; the organiser re-proposes and re-confirms; the destination seats the original cut again.
 import { DriverMisuse, type FixtureRow, type OrganiserDriver } from "../driver/types.ts";
-import type { StagePostBody } from "../catalogue.ts";
 import { assertion, type Item } from "./assertions.ts";
 import { Recorder, liveEvents, recordPosted, setUpDivision } from "./common.ts";
 import { confirmAdvance, sourcePoolCount, takesOf, type AdvanceObs, type TakeRule } from "./advance.ts";
@@ -78,8 +77,8 @@ const c6a: Scenario = {
     if (setup.stages.length < 2) throw new Error(`scenario: W5A_C6A needs a fed row, ${ctx.spec.row} has ${setup.stages.length} stage`);
     const source = setup.stage;
     const target = setup.stages[1];
-    const body = setup.built.posted.stages.find((b) => b.seq === target.seq) as StagePostBody | undefined;
-    const sourceBody = setup.built.posted.stages.find((b) => b.seq === source.seq) as StagePostBody | undefined;
+    const body = setup.built.posted.stages.find((b) => b.seq === target.seq);
+    const sourceBody = setup.built.posted.stages.find((b) => b.seq === source.seq);
     if (body === undefined || sourceBody === undefined) throw new Error("scenario: W5A_C6A's posted stage bodies are missing");
     const takes = takesOf(body);
     let obs: CorrectionObs | null = null;
@@ -110,7 +109,7 @@ const c6a: Scenario = {
     };
     const repost = async (f: FixtureRow, index: number): Promise<void> => {
       const prior = rec.streams.get(f.id)!;
-      const event = prior[index]!;
+      const event = prior[index];
       const posted = await d.postStream(f.id, [event], `${ctx.tag}:${f.id}:c6a${n++}`);
       recordPosted(rec, f.id, prior, [event], posted);
       rec.events += 1;

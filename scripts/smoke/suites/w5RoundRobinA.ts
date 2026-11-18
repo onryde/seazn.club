@@ -1112,9 +1112,9 @@ export async function w5RoundRobinASuite(): Promise<void> {
     const afterBack = await marks();
     const ok =
       es.length === 4 && started.status === 200 && calm.http === 200 && calm.rows === 4 && Object.values(calm.by).every((x) => x === undefined) &&
-      out.status === 200 && afterW.by[p1!] === "withdrawn" && [p2, p3, p4].every((id) => afterW.by[id!] === undefined) &&
-      dq.status === 200 && afterDq.by[p1!] === "withdrawn" && afterDq.by[p2!] === "disqualified" && afterDq.by[p3!] === undefined && afterDq.by[p4!] === undefined &&
-      back.status === 200 && afterBack.by[p1!] === undefined && afterBack.by[p2!] === "disqualified";
+      out.status === 200 && afterW.by[p1] === "withdrawn" && [p2, p3, p4].every((id) => afterW.by[id] === undefined) &&
+      dq.status === 200 && afterDq.by[p1] === "withdrawn" && afterDq.by[p2] === "disqualified" && afterDq.by[p3] === undefined && afterDq.by[p4] === undefined &&
+      back.status === 200 && afterBack.by[p1] === undefined && afterBack.by[p2] === "disqualified";
     w5Check(
       "w5a X-SF-1: the public hub's table marks a withdrawn and a disqualified row (and no other); Reinstate takes the mark away" +
         (ok ? "" : ` - div ${dRes.status}, start ${started.status}, calm ${JSON.stringify(calm)}, withdraw ${out.status} ${JSON.stringify(afterW.by)}, dq ${dq.status} ${JSON.stringify(afterDq.by)}, back ${back.status} ${JSON.stringify(afterBack.by)}`),
@@ -1130,7 +1130,7 @@ export async function w5RoundRobinASuite(): Promise<void> {
       const named = es.every((e, i) => by[e.id]?.name === `Chip${i + 1} ${tag}`);
       const ok22 =
         pub.status === 200 && rows.length === 4 && named &&
-        by[p1!]?.status === "active" && by[p2!]?.status === "disqualified" && by[p3!]?.status === "active" && by[p4!]?.status === "active" &&
+        by[p1]?.status === "active" && by[p2]?.status === "disqualified" && by[p3]?.status === "active" && by[p4]?.status === "active" &&
         rows.every((r) => r.pool === null && r.rank === null);
       w5Check(
         "w5a X-SF-6: the public standings payload names every row, marks the disqualified one, and serves a level table's rank as null with no pool" +

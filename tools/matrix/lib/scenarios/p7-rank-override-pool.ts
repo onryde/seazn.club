@@ -38,15 +38,15 @@ export function pinnedTableItems(label: string, natural: StandingsOut["rows"], a
     for (const r of rest) items.push({ ok: (post.get(r.entrantId) ?? 0) >= 2, note: `${label}: ${r.entrantId} ranks ${post.get(r.entrantId) ?? "(none)"} behind a pin on rank 1, expected 2 or lower` });
   }
   for (let i = 1; i < rest.length; i++) {
-    const a = post.get(rest[i - 1]!.entrantId);
-    const b = post.get(rest[i]!.entrantId);
-    items.push({ ok: a !== undefined && b !== undefined && a !== null && b !== null && a <= b, note: `${label}: ${rest[i - 1]!.entrantId} (${a ?? "-"}) now ranks behind ${rest[i]!.entrantId} (${b ?? "-"}) - the pin changed the unpinned order` });
+    const a = post.get(rest[i - 1].entrantId);
+    const b = post.get(rest[i].entrantId);
+    items.push({ ok: a !== undefined && b !== undefined && a !== null && b !== null && a <= b, note: `${label}: ${rest[i - 1].entrantId} (${a ?? "-"}) now ranks behind ${rest[i].entrantId} (${b ?? "-"}) - the pin changed the unpinned order` });
   }
   return items;
 }
 
 /** A refused override: the named refusal, and the table it left exactly as it was. */
-export function refusedOverrideItems(label: string, refusal: RefusedCall | undefined | unknown, code: string, before: StandingsOut["rows"], after: StandingsOut["rows"]): Item[] {
+export function refusedOverrideItems(label: string, refusal: unknown, code: string, before: StandingsOut["rows"], after: StandingsOut["rows"]): Item[] {
   const r = refusal instanceof RefusedCall ? refusal : undefined;
   return [
     { ok: r !== undefined, note: `${label}: the override was accepted - expected 422 ${code}` },
@@ -78,7 +78,7 @@ const p7: Scenario = {
       async (plays, observed) => {
         // the non-table refusal (RB5-P7), on every stage of the row that is no table; the pin must not be stored
         const nonTable = setup.stages.filter((s) => !TABLE_KINDS.has(s.kind));
-        const anyone = setup.entrants[0]!.id;
+        const anyone = setup.entrants[0].id;
         for (const s of nonTable) {
           const out = await attempt(rec, `override on the ${s.kind} stage`, () => d.overrideRanks(s.id, [{ entrant_id: anyone, rank: 1, reason }]));
           const stored = (await d.listStages(setup.division.id)).find((x) => x.id === s.id)?.config.rank_overrides;
@@ -124,7 +124,7 @@ const p7: Scenario = {
           for (const id of poolIds.slice(1)) items.push({ ok: JSON.stringify(afterOne.get(id)!.map((r) => [r.entrantId, r.rank])) === JSON.stringify(natural.get(id)!.map((r) => [r.entrantId, r.rank])), note: `step 1: pool ${id} changed on a pin the body did not name it in (RB5-P5: per pool)` });
           // step 2: a second override naming ONE pool - the other pool when there is one, else the league's again with a different entrant
           const second = poolIds.length > 1 ? poolIds[1]! : first;
-          const target2 = second === first ? byRank(natural.get(first)!)[0]!.entrantId : lastOf(second);
+          const target2 = second === first ? byRank(natural.get(first)!)[0].entrantId : lastOf(second);
           if (second === first && target2 === lastOf(first)) throw new Error("scenario: W5A_P7's league has one row, nothing to replace a pin with");
           await d.overrideRanks(st.id, [{ entrant_id: target2, rank: 1, reason }]);
           pinnedAtEnd.set(second, target2);
@@ -144,10 +144,10 @@ const p7: Scenario = {
           const size = natural.get(first)!.length;
           const members = byRank(natural.get(first)!);
           if (members.length >= 2) {
-            const dup = await attempt(rec, "the same rank twice in one pool", () => d.overrideRanks(st.id, [{ entrant_id: members[0]!.entrantId, rank: 1, reason }, { entrant_id: members[1]!.entrantId, rank: 1, reason }]));
+            const dup = await attempt(rec, "the same rank twice in one pool", () => d.overrideRanks(st.id, [{ entrant_id: members[0].entrantId, rank: 1, reason }, { entrant_id: members[1].entrantId, rank: 1, reason }]));
             items.push(...refusedOverrideItems("the same rank twice in one pool (RB5-P5)", dup, RANK_OVERRIDE_POOL_CODE, afterTwo.get(first)!, (await d.standings(st.id, first)).rows));
           } else items.push({ ok: false, note: "the first pool holds fewer than two rows - the duplicate-rank refusal cannot be reached" });
-          const above = await attempt(rec, "a rank above the pool's size", () => d.overrideRanks(st.id, [{ entrant_id: members[0]!.entrantId, rank: size + 1, reason }]));
+          const above = await attempt(rec, "a rank above the pool's size", () => d.overrideRanks(st.id, [{ entrant_id: members[0].entrantId, rank: size + 1, reason }]));
           items.push(...refusedOverrideItems(`a rank above the pool's size ${size} (RB5-P5)`, above, RANK_OVERRIDE_POOL_CODE, afterTwo.get(first)!, (await d.standings(st.id, first)).rows));
         },
       },

@@ -109,11 +109,11 @@ const surf: Scenario = {
         const names = new Map((await d.listEntrants(setup.division.id)).map((e) => [e.id, e.display_name] as const));
         const listedPools = (await poolsOf(ctx, stage.id)).pools;
         const perPool = new Map<string | null, readonly Row[]>();
-        for (const id of listedPools.length === 0 ? [null] : listedPools.map((p) => p.id)) perPool.set(id, (await d.standings(stage.id, id)).rows as Row[]);
+        for (const id of listedPools.length === 0 ? [null] : listedPools.map((p) => p.id)) perPool.set(id, (await d.standings(stage.id, id)).rows);
         const allPools = listedPools.length > 1 ? ((await d.standings(stage.id, null)).rows as Row[]) : null;
         const pub: PublicStandingsOut = await d.publicStandings({ orgSlug: ctx.orgSlug, competitionSlug: setup.competition.slug, divisionSlug: setup.division.slug });
         const publicPools = new Map<string | null, readonly Row[]>();
-        for (const t of pub.standings.filter((s) => s.stage_id === stage.id)) publicPools.set(t.pool_id, t.rows as Row[]);
+        for (const t of pub.standings.filter((s) => s.stage_id === stage.id)) publicPools.set(t.pool_id, t.rows);
         return [assertion("w5a-surf-table-surfaces", surfaceItems({ departed, names, declaredPools: entryPools(ctx.spec.row), listedPools, perPool, allPools, publicPools }))];
       },
       {
