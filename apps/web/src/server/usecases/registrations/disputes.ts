@@ -40,6 +40,16 @@ export function disputeOutcomeSql(db: AnySql, groupAlias: string, competitionId:
     end`;
 }
 
+/** Whether the cart's chargeback was LOST (`disputeOutcomeSql` says 'lost'): Stripe has already repaid the cardholder and the loss is
+ *  written off, so no refund of that payment may be sent. Read under the caller's lock on the entry, so a refund and a dispute close
+ *  cannot both pass. The dispute handler raises the CART's `refunded_cents` only; the entry's own stays 0, which is why the refund
+ *  paths' own cap (`amount_cents - ownPaymentRefundedCents`) cannot see a lost dispute and this is asked separately. */
+export async function cartDisputeLost(db: AnySql, groupId: string, competitionId: string): Promise<boolean> {
+  const [row] = await db<{ outcome: string | null }[]>`
+    select ${disputeOutcomeSql(db, "g", db`${competitionId}::uuid`)} as outcome from registration_groups g where g.id = ${groupId}`;
+  return row?.outcome === "lost";
+}
+
 /**
  * Tell staff about an entry-fee dispute (registration defects fix round 1 I3, owner decision 2026-11-18): the organiser's alert says
  * Seazn Club responds to the bank on their behalf, so Seazn Club must be told one exists. Queued on the outbox to STAFF_ALERT_EMAIL

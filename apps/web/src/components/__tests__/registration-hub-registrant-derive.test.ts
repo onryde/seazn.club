@@ -776,6 +776,14 @@ describe("deriveRegistrantActionFlags", () => {
   describe("canRefund (RS007 #16)", () => {
     const base = { approval: "auto", division_fee_cents: 2500 } as const;
 
+    // Fix round 1 Q: a LOST chargeback already returned the money (booked on the cart; the entry's own refunded_cents stays 0), so the
+    // server refuses Refund (422) and the control is hidden. Won, open and never-disputed keep it.
+    it("is false once the dispute was LOST, and only then (won, open, never disputed keep Refund)", () => {
+      const paid = { ...NOT_A_SOLO_SIGNUP, ...base, status: "confirmed", amount_cents: 2500, refunded_cents: 0, payment_intent_id: "pi_1", entry_payment_intent_id: "pi_1" } as const;
+      const offered = (dispute: "open" | "lost" | "won" | null) => deriveRegistrantActionFlags({ ...paid, dispute }).canRefund;
+      expect([offered(null), offered("won"), offered("open"), offered("lost")]).toEqual([true, true, true, false]);
+    });
+
     it("is false with no payment on file — refundRegistration answers 'No payment to refund'", () => {
       expect(
         deriveRegistrantActionFlags({ ...NOT_A_SOLO_SIGNUP,

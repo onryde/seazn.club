@@ -16,6 +16,7 @@ import { assertOrganiserPromotionHasRoom, openRegistrationSeatGateFor, returnToW
 import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt, recordRefundFailure, registrationRefundKey } from "./refunds";
+import { cartDisputeLost } from "./disputes";
 import { withdrawCore } from "./withdraw";
 import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lifecycle-mail";
 import { remindersInWindowSql } from "./reminder-window";
@@ -348,6 +349,10 @@ export async function refundRegistration(
     // entry sent real money back off it. An entry with no payment of its own has nothing to refund; null fails closed (V387/H1).
     const intent = reg.entry_payment_intent_id;
     if (!intent) throw new HttpError(422, "No payment to refund");
+    // A LOST chargeback already returned this money to the cardholder (booked on the CART; the entry's own cap below cannot see it).
+    if (await cartDisputeLost(tx, reg.group_id, ctx.competition_id)) {
+      throw new HttpError(422, "This payment was lost to a chargeback: the cardholder has already been repaid, so there is nothing to refund");
+    }
     // RS002 (V368): reg.refunded_cents is THIS entry's own column now (hazard 3
     // fixed) — a sibling's earlier refund can no longer drive this negative and
     // falsely report an untouched entry as "already fully refunded".
