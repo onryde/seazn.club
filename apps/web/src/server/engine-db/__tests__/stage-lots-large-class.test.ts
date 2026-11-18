@@ -9,7 +9,8 @@
 //
 // Real Postgres. Two layers, so neither proves only itself:
 //   - the producer/consumer chain: a result through the product's own `scoreEvent` on a stage whose unplayed field is one
-//     class of 78, the table read back from `standings_snapshots`;
+//     class of 72 (the smallest that overflowed the old index: 74 entrants, so each chain stays cheap on CI's DB shard),
+//     the table read back from `standings_snapshots`;
 //   - the index itself, through `persistLotsDraws`, across the class sizes either side of the old limit: the live key
 //     still holds (one live draw per stage, pool and member set), a superseded draw still allows a new live one.
 // Expected values come from the rulebook and the engine's declarations (`membersKeyOf`, the btree maximum Postgres itself
@@ -40,6 +41,11 @@ afterAll(async () => {
 /** The btree v4 maximum index row Postgres reports ("... exceeds btree version 4 maximum 2704"). A key longer than this
  *  cannot be indexed as text — the premise every case below states for itself. */
 const BTREE_V4_MAX = 2704;
+
+/** The row V475's index stored for a key, by Postgres's index tuple layout: an 8-byte IndexTupleData header, the stage and
+ *  the coalesced pool (16-byte uuids), the key as a varlena (4-byte header, its bytes: membersKeyOf is ASCII), MAXALIGNed
+ *  to 8. For the 72-entrant key that is 2712 bytes, the size the old index refused. */
+const oldIndexRowBytes = (key: string) => Math.ceil((8 + 16 + 16 + 4 + Buffer.byteLength(key)) / 8) * 8;
 
 interface DrawRow {
   id: string;
@@ -87,18 +93,18 @@ const WRITERS = [
 
 describe.skipIf(!HAS_DB)("V528: a lots draw of a large tie class is stored", () => {
   for (const w of WRITERS) {
-    it(`${w.sport}: an 80-entrant Swiss — a result posts, the 78 who have not played are ONE stored draw, the table ranks them by it`, async () => {
+    it(`${w.sport}: a 74-entrant Swiss — a result posts, the 72 who have not played are ONE stored draw, the table ranks them by it`, async () => {
       const t = await tableScene({
         sport: w.sport,
         variant: w.variant,
-        entrants: 80,
+        entrants: 74,
         stages: { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3, ...w.stageConfig }, progression: null } as never,
       });
       const stageId = t.stageIds[0]!;
       await startDivision(t.auth, t.divisionId);
-      await generateStageFixtures(t.auth, stageId); // pairs round 1: 40 boards
+      await generateStageFixtures(t.auth, stageId); // pairs round 1: 37 boards
       const boards = await seatedFixtures(stageId);
-      expect(boards.length, "premise: 80 entrants, 40 boards in round 1").toBe(40);
+      expect(boards.length, "premise: 74 entrants, 37 boards in round 1").toBe(37);
       expect(await draws(stageId), "premise: nothing drawn before a result (an empty table stores no draw)").toEqual([]);
 
       // 1. the first result. Before V528 this REJECTED with the btree error — after committing the result.
@@ -107,17 +113,17 @@ describe.skipIf(!HAS_DB)("V528: a lots draw of a large tie class is stored", () 
       const [row] = await sql<{ status: string }[]>`select status from fixtures where id = ${first.id}`;
       expect(row!.status, "the result stands").toBe("decided");
 
-      // the rulebook's answer: two entrants have played; the other 78 are level on every criterion (none has played, no
+      // the rulebook's answer: two entrants have played; the other 72 are level on every criterion (none has played, no
       // head-to-head), so they are one tie class — and a class of two or more is drawn.
       const unplayed = t.entrants.filter((e) => e !== first.home && e !== first.away);
-      expect(unplayed.length, "premise: a class of 78").toBe(78);
-      expect(membersKeyOf(unplayed).length, "premise: its key is longer than a btree page can index as text").toBeGreaterThan(BTREE_V4_MAX);
+      expect(unplayed.length, "premise: a class of 72").toBe(72);
+      expect(oldIndexRowBytes(membersKeyOf(unplayed)), "premise: the old index's row for its key is over the btree maximum").toBeGreaterThan(BTREE_V4_MAX);
       const lots1 = await live(stageId);
       expect(lots1, "one live draw").toHaveLength(1);
-      expect(sameSet(lots1[0]!.members, unplayed), "the draw is exactly the 78 who have not played").toBe(true);
+      expect(sameSet(lots1[0]!.members, unplayed), "the draw is exactly the 72 who have not played").toBe(true);
       expect(lots1[0]!.members_key, "its key is the engine's key of its members").toBe(membersKeyOf(lots1[0]!.members));
 
-      // the stored table: the winner first, the other 78 in the stored order, nobody missing
+      // the stored table: the winner first, the other 72 in the stored order, nobody missing
       const [snap1] = await sql<{ rows: { entrantId: string; played: number }[] }[]>`
         select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
       const ids1 = snap1!.rows.map((r) => r.entrantId);
@@ -130,26 +136,33 @@ describe.skipIf(!HAS_DB)("V528: a lots draw of a large tie class is stored", () 
       expect(again.map((r) => r.entrantId), "a refold ranks the class by the stored order").toEqual(ids1);
       expect((await draws(stageId)).length, "a refold stores no further draw").toBe(1);
 
-      // 3. a second result shrinks the class to 76 (still over the old limit): the 78-draw is superseded, the 76 is live
+      // 3. a second result shrinks the class to 70: the 72-draw is superseded, the 70 is live
       const second = boards.find((b) => b.id !== first.id)!;
       await w.win(t.auth, second.id, second.home);
       const unplayed2 = unplayed.filter((e) => e !== second.home && e !== second.away);
-      expect(unplayed2.length, "premise: a class of 76").toBe(76);
+      expect(unplayed2.length, "premise: a class of 70").toBe(70);
       const all2 = await draws(stageId);
       const liveNow = all2.filter((d) => d.superseded_at === null);
       expect(
-        liveNow.filter((d) => d.members.length > 70).map((d) => d.members.length),
-        "exactly one live draw of the large class, and it is the 76",
-      ).toEqual([76]);
-      expect(all2.find((d) => d.id === lots1[0]!.id)!.superseded_at, "the 78-draw is history now").not.toBeNull();
+        liveNow.filter((d) => sameSet(d.members, unplayed2)).length,
+        "exactly one live draw of the unplayed class, and it is the 70",
+      ).toBe(1);
+      expect(all2.find((d) => d.id === lots1[0]!.id)!.superseded_at, "the 72-draw is history now").not.toBeNull();
 
-      // 4. a void takes the table back toward empty: nothing breaks, nothing is drawn afresh, the history is kept
+      // 4. a void of the second result: that fixture is open again, its two entrants rejoin the unplayed class, so the class is
+      //    the first draw's 72 once more - and it ranks in THAT draw's stored order (nothing is drawn afresh, the history is kept)
       const [res] = await sql<{ id: string }[]>`
         select id from score_events where fixture_id = ${second.id} and type in ('generic.result', 'boardgame.result')`;
       await post(t.auth, second.id, "core.void", { event_id: res!.id });
+      const [reopened] = await sql<{ status: string }[]>`select status from fixtures where id = ${second.id}`;
+      expect(reopened!.status, "the voided fixture is no longer decided").not.toBe("decided");
       const afterVoid = await draws(stageId);
       expect(afterVoid.length, "the void stores no new draw").toBe(all2.length);
-      expect((await recomputeStandings(t.auth.orgId, stageId)).length, "the table still reads every entrant").toBe(80);
+      const [snap2] = await sql<{ rows: { entrantId: string }[] }[]>`
+        select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+      const ids2 = snap2!.rows.map((r) => r.entrantId);
+      expect(ids2.length, "the stored table reads every entrant").toBe(74);
+      expect(ids2.filter((id) => unplayed.includes(id)), "the class of 72 ranks in the first draw's stored order").toEqual(lots1[0]!.drawn_order);
     }, 600_000);
   }
 

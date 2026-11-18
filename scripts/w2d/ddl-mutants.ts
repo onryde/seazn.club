@@ -1,4 +1,6 @@
-// W2d Task 7 (review m6) — the V475 mutants that no text row can express, re-runnable by anyone.
+// W2d Task 7 (review m6) — the V475 mutants that no text row can express, re-runnable by anyone. The lots table's live key
+// is V528's since 2026-11-18 (the same key over md5(members_key): V475's raw-text key overflowed a btree row at 72+
+// entrants), so the live-key mutants below are built on, and restore, V528's shape.
 //
 // `pnpm mutate` edits the delta's TEXT, and the pin test installs the delta's functions from that text inside a
 // rolled-back transaction, so a text mutant of a function is judged by the pin test. The rest of V475 is judged against
