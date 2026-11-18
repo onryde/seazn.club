@@ -145,8 +145,8 @@ export async function activeCodeOf(tx: Tx, fixtureId: string): Promise<ActiveCod
  * Court stream, Web G (controller's rulings on the owner's "Ok", 2026-11-18): the one SQL answer to "does this match's own
  * code compete with its court's phone?". The guard exists so two phones never stream one match. An ACTIVE code
  * (`ended_at is null`) competes UNLESS it has been used and is now idle — free to retire only when ALL hold:
- *  - it has had a session: at least one own-code session of the match (`court_link_id is null`) created since the code was
- *    (an unscanned code, perhaps already printed, is never withdrawn silently: second ruling);
+ *  - it has had a session: at least one session started on THIS code (`code_id`), so a session of a code it replaced does
+ *    not count (an unscanned code, perhaps already printed, is never withdrawn silently: second ruling);
  *  - no session of the match is open (`ACTIVE_STATES`: requested, provisioning, warming, live, and `ending`, whose stop is
  *    still in flight);
  *  - no phone holds it: no current pairing (`ended_at is null`) PRESENT in §6.9's sense — last beat newer than
@@ -161,8 +161,7 @@ export function ownCodeCompetes(q: Tx | typeof sql, fixtureRef: ReturnType<typeo
   return q`exists (
     select 1 from fixture_stream_codes k
      where k.fixture_id = ${fixtureRef} and k.ended_at is null
-       and (not exists (select 1 from fixture_stream_sessions s
-                         where s.fixture_id = k.fixture_id and s.court_link_id is null and s.created_at >= k.created_at)
+       and (not exists (select 1 from fixture_stream_sessions s where s.code_id = k.id)
             or exists (select 1 from fixture_stream_sessions s where s.fixture_id = k.fixture_id and s.state in ${q([...ACTIVE_STATES])})
             or exists (select 1 from fixture_stream_pairings p
                         where p.code_id = k.id and p.ended_at is null

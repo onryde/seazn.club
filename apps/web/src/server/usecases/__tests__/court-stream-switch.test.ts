@@ -32,13 +32,16 @@ vi.mock("@/server/relay/secret-columns", async (importOriginal) => {
 
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { pairPresentPhone, rigApiTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { pairPresentPhone, resealTargetDestination, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
+import { startBroadcast } from "../stream-sessions";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
 import type { SessionDeps } from "../stream-sessions/deps";
 import { postBeat } from "../capture-phone";
 import { courtStreamsForDay, linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
-import { ensureStreamCode, reissueStreamCode } from "../stream-codes";
+import { ensureStreamCode, lockFixtureCode, reissueStreamCode } from "../stream-codes";
+import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { streamPhone } from "../stream-phone";
 import { place, seedDay, type Day } from "./_match-day-seed";
 
@@ -77,8 +80,8 @@ const codesOf = (fixtureId: string) => sql<{ id: string; ended_at: Date | null; 
 /** §6.9's present window is at most max(60 s, 60 s far cadence + 30 s) = 90 s: ten minutes is silent at any cadence. */
 const SILENT_AGO_MS = 10 * 60_000;
 const NO_DRIVERS = new Proxy({}, { get: () => { throw new Error("no driver is reachable from a beat on an ended code"); } }) as SessionDeps["drivers"];
-const beatOn = (qr: { code: string; tok: string }, phone: string, at: Date) => postBeat(qr.code, qr.tok, {
-  code: qr.code, slot: 0, phone, claim: null, device: null, sid: null, at: at.toISOString(), state: "paired", cause: null,
+const beatOn = (qr: { code: string; tok: string }, phone: string, at: Date, claim: "new" | null = null) => postBeat(qr.code, qr.tok, {
+  code: qr.code, slot: 0, phone, claim, device: null, sid: null, at: at.toISOString(), state: "paired", cause: null,
   notReady: null, startFailed: null, stopped: null, mode: "operator", transport: null, bitrateKbps: null, delivery: "unknown",
   deliveredLagS: null, audioOk: null, battery: null, thermal: null, dataUsedMB: null, appVersion: "session-rig",
 }, { drivers: NO_DRIVERS, now: () => at, appUrl: "http://rig.test" }, at);
@@ -128,9 +131,12 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     expect(JSON.stringify(read), "a label only: no link or target id on the panel read").not.toMatch(/court_link|target_id|tok/);
   });
 
-  /** Web G: the code has been used — one own-code session of the match, ended ("Ended before going live"). */
-  const endedSession = async (fixtureId: string) =>
-    sessionOnTarget(day.orgId, fixtureId, (await rigApiTarget(day.orgId, "Own phone channel")).targetId, "failed");
+  /** Web G: the code has been used — one session ON the active own code (`code_id`), ended ("Ended before going live"). */
+  const endedSession = async (fixtureId: string) => {
+    const sid = await sessionOnTarget(day.orgId, fixtureId, (await rigApiTarget(day.orgId, "Own phone channel")).targetId, "failed");
+    await sql`update fixture_stream_sessions set code_id = (select id from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null) where id = ${sid}`;
+    return sid;
+  };
   /** The desk's `own_stream_code` for `fixtureId` (Match Day's switch lock), read through the desk's own read. */
   const deskOwnCode = async (fixtureId: string) =>
     (await courtStreamsForDay(day.orgId, [day.courts.c2], [fixtureId], new Date())).switches.get(fixtureId)?.ownCode;
@@ -145,6 +151,18 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     expect([f.status, f.code]).toEqual([409, "has_own_stream_code"]);
     expect(await settingsOf(fx)).toBeNull();
     expect(await activeCodes(fx), "a refused ON retires nothing").toBe(1);
+  });
+
+  it("Web G: a beat 75 s ago at a 60 s cadence is still present (window max(60, 60 + 30) = 90 s): ON refused, desk locked", async () => {
+    await linkCourt2();
+    await ensureStreamCode(day.auth, fx);
+    await endedSession(fx);
+    const { pairingId } = await pairPresentPhone(fx);
+    await sql`update fixture_stream_pairings set last_beat_at = now() - interval '75 seconds', answered_poll_seconds = 60 where id = ${pairingId}`;
+    expect(await deskOwnCode(fx)).toBe(true);
+    expect((await failure(setCourtStream(day.auth, fx, true))).code).toBe("has_own_stream_code");
+    await sql`update fixture_stream_pairings set last_beat_at = now() - interval '95 seconds' where id = ${pairingId}`;
+    expect(await deskOwnCode(fx), "past 90 s it is silent").toBe(false);
   });
 
   it("Web G: an active session of the match (no phone beating) is 409 has_own_stream_code; desk locked", async () => {
@@ -305,18 +323,79 @@ describe.skipIf(!HAS_DB)("court stream switch", () => {
     expect(await activeCodes(fx)).toBe(1);
   });
 
-  it("Web G: a silent phone's beat racing a switch-on never leaves the switch on beside a live own code", async () => {
+  it("Web G: a silent phone that beats BEFORE the switch-on is present again: ON refused, the code stays", async () => {
     await linkCourt2();
     await ensureStreamCode(day.auth, fx);
     await endedSession(fx);
     await pairPresentPhone(fx, { at: new Date(Date.now() - SILENT_AGO_MS) });
-    // A beat takes no fixture lock: it may land before the ON reads (ON refused) or after (ON retires the code; that beat, or the
-    // phone's next, is refused code_ended). Either way the match is never court-streamed while its own code is live.
-    const [, on] = await Promise.allSettled([pairPresentPhone(fx), setCourtStream(day.auth, fx, true)]);
-    if (on.status === "rejected") expect((on.reason as HttpError).code).toBe("has_own_stream_code");
-    const switchOn = (await settingsOf(fx))?.court_stream === true;
-    expect(switchOn && (await activeCodes(fx)) > 0, "never on beside a live own code").toBe(false);
-    expect(switchOn || (await activeCodes(fx)) === 1, "a refused ON retires nothing").toBe(true);
+    await pairPresentPhone(fx); // its beat, now
+    expect((await failure(setCourtStream(day.auth, fx, true))).code).toBe("has_own_stream_code");
+    expect(await activeCodes(fx)).toBe(1);
+    expect(await settingsOf(fx)).toBeNull();
+  });
+
+  it("Web G: a silent phone that beats AFTER the switch-on is refused code_ended; a new phone's claim on the withdrawn code too", async () => {
+    await linkCourt2();
+    const qr = (await ensureStreamCode(day.auth, fx)).qr;
+    await endedSession(fx);
+    const { phone } = await pairPresentPhone(fx, { at: new Date(Date.now() - SILENT_AGO_MS) });
+    expect(await setCourtStream(day.auth, fx, true)).toEqual({ on: true });
+    expect(await captureRefusal(beatOn(qr, phone, new Date()))).toBe("401:code_ended");
+    const fresh = `phone-new-${fx}`;
+    expect(await captureRefusal(beatOn(qr, fresh, new Date(), "new")), "pair on a withdrawn code").toBe("401:code_ended");
+    const [n] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_pairings where phone = ${fresh}`;
+    expect(n!.n, "the refused claim paired nothing").toBe(0);
+  });
+
+  it("Web G review: a start on the own code that an ON retired after it was read is refused, and writes no session", async () => {
+    await linkCourt2();
+    await ensureStreamCode(day.auth, fx);
+    await endedSession(fx);
+    const { pairingId } = await pairPresentPhone(fx, { at: new Date(Date.now() - SILENT_AGO_MS) });
+    expect(await setCourtStream(day.auth, fx, true)).toEqual({ on: true }); // retires the code under the fixture lock
+    const targetId = await rigTarget(day.orgId);
+    await resealTargetDestination(targetId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key" }); // a key that opens
+    const now = new Date();
+    const deps: SessionDeps = {
+      drivers: { ingest: new FakeIngest({ clock: () => now.getTime() }), runner: new FakeRunner() }, now: () => now, appUrl: "http://rig.test",
+    };
+    const sessions = async () => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx}`)[0]!.n;
+    const before = await sessions();
+    const opts = { targetId, phone: "present" as const, mode: "passthrough" as const };
+    const phoneStart = startBroadcast({ userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId }, fx, { ...opts, startCause: "operator" }, deps);
+    expect(await captureRefusal(phoneStart)).toBe("401:code_ended");
+    const desk = await failure(startBroadcast({ userId: day.auth.userId!, orgId: day.orgId, source: "organiser", pairingId }, fx, { ...opts, startCause: "organiser" }, deps));
+    expect([desk.status, desk.code]).toEqual([409, "phone_not_paired"]);
+    expect(await sessions(), "no session row").toBe(before);
+  });
+
+  it("Web G review: a start racing an ON's retire waits on the fixture's code lock, then is refused code_ended", async () => {
+    await linkCourt2();
+    await ensureStreamCode(day.auth, fx);
+    const { pairingId, codeId } = await pairPresentPhone(fx);
+    const targetId = await rigTarget(day.orgId);
+    await resealTargetDestination(targetId, { url: "rtmps://a.rtmps.youtube.com/live2", streamKey: "yt-key" });
+    const now = new Date();
+    const deps: SessionDeps = {
+      drivers: { ingest: new FakeIngest({ clock: () => now.getTime() }), runner: new FakeRunner() }, now: () => now, appUrl: "http://rig.test",
+    };
+    // The ON's transaction, as setCourtStream writes it: the fixture's code lock, the retire, then (held open) the commit. The
+    // start reads the code as ACTIVE before its transaction; only the lock makes it see the retire.
+    let locked!: () => void;
+    const holding = new Promise<void>((r) => { locked = r; });
+    const on = sql.begin(async (tx) => {
+      await lockFixtureCode(tx, fx);
+      await wipeStreamCodeTok(tx, codeId, "withdrawn", day.auth.userId);
+      locked();
+      await new Promise((r) => setTimeout(r, 1500));
+    });
+    await holding;
+    const start = captureRefusal(startBroadcast({ userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId }, fx,
+      { targetId, phone: "present", mode: "passthrough", startCause: "operator" }, deps));
+    await on;
+    expect(await start).toBe("401:code_ended");
+    const [n] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where fixture_id = ${fx}`;
+    expect(n!.n, "no session stranded on the withdrawn code").toBe(0);
   });
 
   it("an API key or a device link cannot set it (403)", async () => {

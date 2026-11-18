@@ -1,6 +1,6 @@
 import "server-only";
 // Go live: createSession and the ONE start path every start comes through (see ./index.ts).
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -36,7 +36,8 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { creditBalance, ensureMonthlyStreamGrant, restartAllowance } from "../stream-credits";
 import { DestinationNotAllowedError } from "../stream-targets";
-import { writeStreamSettings } from "../stream-codes";
+import { lockFixtureCode, writeStreamSettings } from "../stream-codes";
+import { codeEnded } from "@/server/api-v1/capture-http";
 import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { type SessionDeps, youtubeOf } from "./deps";
 import { fixtureContext, activeSessionIdFor } from "./lookups";
@@ -77,6 +78,16 @@ export interface StartActor {
 const START_EVENT_SOURCE = { organiser: "client", phone: "phone", auto: "domain" } as const satisfies Record<StartActor["source"], EventSource>;
 
 /** The organiser's Go live's phone: its pairing, its standing, and the court link it streams under (null: the fixture's own code). */
+/** Web G review (finding 1): under the fixture's code lock, the own code a start rides must not have been withdrawn by the
+ *  Stream switch. Any other end keeps its existing rules (a reissued code's holder, C1b; an expired code, C2 in admission). */
+async function refuseIfOwnCodeEnded(tx: Tx, fixtureId: string, codeId: string, source: StartActor["source"]): Promise<void> {
+  await lockFixtureCode(tx, fixtureId);
+  const [c] = await tx<{ withdrawn: boolean }[]>`select end_cause = 'withdrawn' as withdrawn from fixture_stream_codes where id = ${codeId}`;
+  if (c?.withdrawn !== true) return;
+  if (source === "organiser") throw new HttpError(409, "no phone is paired on this match's stream code", "phone_not_paired");
+  throw codeEnded();
+}
+
 /** O17 fix round 1: a court start whose match was switched off while it was being prepared. */
 export const COURT_STREAM_OFF = "court_stream_off";
 
@@ -395,6 +406,12 @@ export async function startBroadcast(
   const defaultDelayMs = overlayDelayDefaultMs(opts.courtLinkId !== undefined);
 
   const sessionId = await (sql.begin(async (tx) => {
+    // Web G review (finding 1): a start on the match's OWN code takes the fixture's code lock — the lock the Stream switch's
+    // ON takes to retire an idle own code — and re-reads the code under it. A start whose code an ON retired (`withdrawn`, the
+    // only cause that ends a FIXTURE's code from the switch) after this start read it is refused (the phone's and the automatic start `401 code_ended`; the organiser's Go live, whose own code
+    // is gone, `phone_not_paired`), so no session is stranded on a withdrawn code. An ON after this commits sees the session.
+    // A REISSUED code is not refused here: its holder still starts on it as before (C1b / T30, stream-auto.test.ts).
+    if (pairing !== null && opts.courtLinkId === undefined) await refuseIfOwnCodeEnded(tx, fixtureId, pairing.code_id, actor.source);
     // Spec §5.2: the target ROW LOCK, taken inside the admission transaction and BEFORE admit reads it — Replace key and
     // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
     // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
