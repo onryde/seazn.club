@@ -716,7 +716,7 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  here rather than restating the pair: three pages each spelling it out, and
  *  each getting half of it, is precisely the C1 defect that left a
  *  disqualified entrant unmarked in the public standings. The presentation
- *  half lives in `DEPARTED_STATUS_CHIPS` (standings-table.tsx) and is pinned
+ *  half lives in `DEPARTED_STATUS_CHIPS` (lib/departed-status-chips.ts) and is pinned
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
 
