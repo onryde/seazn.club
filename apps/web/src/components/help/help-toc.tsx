@@ -11,7 +11,7 @@
 // The rail scrolls on its own when it is taller than the window, so the navigation is focusable
 // (tabIndex 0) and named, as every scrolling region here owes (AGENTS.md class 23).
 import { useEffect, useId, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { HelpTocEntry } from "@/lib/help-toc";
 
 /** A heading counts as reached once its top passes this far down the window: below the sticky site nav, plus air. */
@@ -67,7 +67,8 @@ export function HelpToc({ entries, className = "" }: { entries: HelpTocEntry[]; 
         <span>On this page</span>
         <span className="flex shrink-0 items-center gap-1.5 text-xs font-normal text-slate-500">
           {entries.length} sections
-          <ChevronDown aria-hidden className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} strokeWidth={2} />
+          {/* Swapped, not rotated: a rotating icon's box overhangs its row mid-turn (measured 81px in 78px). */}
+          {open ? <ChevronUp aria-hidden className="h-4 w-4" strokeWidth={2} /> : <ChevronDown aria-hidden className="h-4 w-4" strokeWidth={2} />}
         </span>
       </button>
       <nav

@@ -7,7 +7,7 @@
 // scrolling region and owes no tab stop.
 import Link from "next/link";
 import { useId, useState } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import type { HelpSectionEntry } from "@/lib/help";
 
 export function HelpSectionNav({ sections, currentHref }: { sections: HelpSectionEntry[]; currentHref: string }) {
@@ -30,7 +30,8 @@ export function HelpSectionNav({ sections, currentHref }: { sections: HelpSectio
         </span>
         <span className="flex shrink-0 items-center gap-1.5 text-xs text-slate-500">
           {current ? `${current.pages.length} ${current.pages.length === 1 ? "page" : "pages"}` : null}
-          <ChevronDown aria-hidden className={`h-4 w-4 transition-transform ${open ? "rotate-180" : ""}`} strokeWidth={2} />
+          {/* Swapped, not rotated: a rotating icon's box overhangs its row mid-turn (measured 81px in 78px). */}
+          {open ? <ChevronUp aria-hidden className="h-4 w-4" strokeWidth={2} /> : <ChevronDown aria-hidden className="h-4 w-4" strokeWidth={2} />}
         </span>
       </button>
       <nav id={navId} aria-label="Help sections" className={open ? "max-md:mt-3 max-md:rounded-xl max-md:border max-md:border-slate-200 max-md:p-4" : "max-md:hidden"}>
