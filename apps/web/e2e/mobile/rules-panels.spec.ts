@@ -1030,6 +1030,11 @@ test("stage tools sheet: a settled action closes it, so the outcome notice is vi
 
   const folded = await trigger.isVisible(); // gated on the trigger being visible, never on a width literal (AGENTS.md rule 22)
   if (folded) {
+    // Scrolled DOWN at the card first, as an organiser is when they open its tools: the notice sits at the top of the page, so
+    // without the scroll-into-view after the close it is above the sticky header.
+    await trigger.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, 400));
+    expect(await page.evaluate(() => window.scrollY), "premise: the page is scrolled down at the card").toBeGreaterThan(100);
     await trigger.click();
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
     await expect(page.getByTestId("stage-rail-backdrop"), "premise: the scrim is up while the sheet is open").toHaveCount(1);
@@ -1043,7 +1048,24 @@ test("stage tools sheet: a settled action closes it, so the outcome notice is vi
     await expect(trigger, "the sheet is closed").toHaveAttribute("aria-expanded", "false");
     await expect(trigger, "focus returns to the control that opened the sheet").toBeFocused();
   }
-  await notice.scrollIntoViewIfNeeded();
+  if (folded) {
+    // Below md the close brings the notice into view by itself (no scrollIntoViewIfNeeded here: that would hide a missing scroll).
+    // Smooth scroll: poll until it has landed - top at or below the sticky header's bottom edge, and inside the viewport.
+    await expect
+      .poll(
+        async () =>
+          page.evaluate(() => {
+            const el = document.querySelector<HTMLElement>('[data-testid="schedule-notice"]')!;
+            const r = el.getBoundingClientRect();
+            const headerBottom = document.querySelector("header")!.getBoundingClientRect().bottom;
+            return r.top >= headerBottom - 1 && r.bottom <= window.innerHeight;
+          }),
+        { message: "the notice is in view under the sticky header after the sheet closes", timeout: 5_000 },
+      )
+      .toBe(true);
+  } else {
+    await notice.scrollIntoViewIfNeeded();
+  }
   const hit = await notice.evaluate((el) => {
     const r = el.getBoundingClientRect();
     const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);

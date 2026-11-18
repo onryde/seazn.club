@@ -732,7 +732,33 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // the action SETTLES - landed, a no-op or refused - never on the tap, and only if it is THIS stage's sheet that is open (a
   // late answer must not close a sheet the organiser has since opened on another stage). Closing runs the rail's effect
   // cleanup, which hands focus back to the trigger that opened it. At `md` and up there is no sheet and this changes nothing.
-  const closeRailSheet = (stageId: string) => setOpenRailFor((cur) => (cur === stageId ? null : cur));
+  // Fix round 1 (controller, same day): closing the sheet uncovers the line but leaves the page scrolled down at the card, with
+  // the line - at the top of the page - above the sticky header. So a settle that closed a PHONE sheet also bumps `outcomeScroll`,
+  // and the effect below brings the first outcome line into view under the header. `openRailRef` is the live value (the async
+  // `act` closure holds a stale `openRailFor`). Focus is NOT moved to the line: it returns to the trigger that opened the sheet
+  // (the rail's existing a11y contract), and the lines carry their own announcement where they have one (`role="status"`).
+  const openRailRef = useRef<string | null>(null);
+  useEffect(() => {
+    openRailRef.current = openRailFor;
+  }, [openRailFor]);
+  const [outcomeScroll, setOutcomeScroll] = useState(0);
+  const closeRailSheet = (stageId: string) => {
+    if (openRailRef.current === stageId && typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) {
+      setOutcomeScroll((n) => n + 1);
+    }
+    setOpenRailFor((cur) => (cur === stageId ? null : cur));
+  };
+  useEffect(() => {
+    if (outcomeScroll === 0 || typeof document === "undefined") return;
+    const line = document.querySelector<HTMLElement>("[data-outcome-line]");
+    if (!line) return;
+    // The sticky site header's bottom edge (+ a breath): the line lands just under it, never behind it.
+    const header = document.querySelector("header");
+    const under = header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+    line.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    line.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+  }, [outcomeScroll]);
   // Board slots for the fixture "When" / add-match "When" fields (quarter-
   // hour-time-select design). This panel doesn't otherwise hold the
   // division's schedule config, so it's fetched once here; a failed fetch or
@@ -1163,7 +1189,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     <div className="space-y-6">
       {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
       {notice && (
-        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" data-testid="schedule-notice">
+        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" data-outcome-line data-testid="schedule-notice">
           {notice}
           {undoable && (
             <button
@@ -1182,7 +1208,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           banner: "Générer les matchs" did nothing because the entrants can't
           fill the configured groups yet, not because it was already done. */}
       {warning && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="schedule-warning">
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-outcome-line data-testid="schedule-warning">
           {warning}
         </p>
       )}
@@ -1190,7 +1216,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           own beside the caution above; no button - the way out (Finish after the round just paired) is said in the sentence,
           and the rail offers it once that round is decided. */}
       {nextRound && (
-        <p role="status" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="swiss-next-round-warning">
+        <p role="status" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-outcome-line data-testid="swiss-next-round-warning">
           {nextRoundText(nextRound, msg)}
         </p>
       )}
@@ -1200,6 +1226,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       {pairingRefusal && (
         <div
           role="status"
+          data-outcome-line
           data-testid="schedule-pairing-refusal"
           className="flex flex-col gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800"
         >
@@ -1221,7 +1248,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       )}
       {gameExists && <OnlineGameExistsNotice arbiterHref={arbiterHref} />}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-testid="schedule-error">
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-outcome-line data-testid="schedule-error">
           {error}
         </p>
       )}
