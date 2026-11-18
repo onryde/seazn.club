@@ -48,7 +48,7 @@ export const TRIGGER_CRON = "17 * * * *";
 export const STREAM_TICK_CRON = "*/5 * * * *";
 
 /** Every minute. Prod's one fast trigger: it REPLACES `*\/5` there (still 2 triggers per env, 4 of the Free plan's 5),
- *  so the stream tick and the email outbox's worker run every minute on prod, and the one 5-minute job left (the
+ *  so the stream tick, the pre-mint pass and the email outbox's worker run every minute on prod, and the one 5-minute job left (the
  *  external-play sweep) rides it on its `minuteMod` firings. */
 export const MINUTE_CRON = "* * * * *";
 
@@ -170,6 +170,27 @@ export const JOBS: readonly Job[] = [
     retry: false,
     manual: true,
     failureCounts: ["data.failed", "data.youtube.failed"],
+  },
+  // Check-in capacity spec 2026-11-05 §11, plan 2 Task 5: the pre-mint pass. It makes the video rooms of every board of an
+  // unopened round BEFORE its check-in window opens, a vendor call a second, so a player's first claim finds its room waiting
+  // (rooms only: it never adopts one and never makes a participant). Due on EVERY firing of the env's fast trigger, so on
+  // prod the rooms of a hundred boards are made over a handful of one-a-minute passes; placed after `stream-tick` and before
+  // `external-play` because the Worker runs a firing's rows one after another, in this order (accepted by the owner
+  // 2026-11-17, plan 2 Revision notes, Resolved 1). OFF by default: the route answers `disabled: 1` and makes no vendor call
+  // unless EXTERNAL_PLAY_PREMINT is "1" on the app, and it stays off until the sweep's retirement rules land (plan 2 Task 8),
+  // so a flag-off pass is healthy here, not a failure. Never retried: the next firing IS the retry, and the pass's lock answers
+  // an overlapping re-send with `skipped`. `failed` counts boards whose room could not be made (a down vendor is at most three
+  // of them a pass, then the rest is deferred) and `skipped` is 1 when another pass held the lock - a pass that overlaps the
+  // next firing ran for a minute; both are failures. `deferred` (a budget or the platform's bucket ran out), `disabled` and
+  // `windowsOpen` are not: the next firing reaches those rows.
+  {
+    id: "external-play-premint",
+    path: "/api/cron/external-play-premint",
+    trigger: FAST_TRIGGER,
+    due: { kind: "every" },
+    retry: false,
+    manual: true,
+    failureCounts: ["data.failed", "data.skipped"],
   },
   // Chess in-page board design §4: "The 5-minute cron … is NOT optional". One pass of the external-play sweep: the
   // deadline no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence
