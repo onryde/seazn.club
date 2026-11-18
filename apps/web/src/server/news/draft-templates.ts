@@ -115,7 +115,7 @@ const STRINGS: Record<Locale, LocaleStrings> = {
 
 /** RB5-W1 (owner fix-now 2026-11-18, "marked on every surface"): a standings line names a leaver with the word her table chip prints,
  *  "Ann (Withdrawn)". A competing row has no `departed` and prints its bare name. */
-function markedName(row: { name: string; departed?: string }): string {
+export function markedName(row: { name: string; departed?: string }): string {
   return row.departed ? `${row.name} (${row.departed})` : row.name;
 }
 

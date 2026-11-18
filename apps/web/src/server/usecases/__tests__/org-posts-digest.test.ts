@@ -761,10 +761,12 @@ describe.skipIf(!HAS_DB)("X-SF-2 the weekly digest lists every pool of a pooled 
 
   it("X-SF-2 each pool's section carries its own climber, read from its own previous table", async () => {
     const s = await pooledPlay(BADMINTON, 2);
-    // pool B's winner stood second before; pool A has no previous table
+    // pool B's winner stood second before; pool A has no previous table. B5 G3 (n1): the previous table is the one BEFORE the result,
+    // so both sides of the pool's one match had played one fewer - a step a result made.
     await sql`
       update standings_snapshots set previous_rows = (
-        select jsonb_agg(jsonb_set(r, '{rank}', to_jsonb(case when r->>'rank' = '1' then 2 else 1 end))) from jsonb_array_elements(rows) r)
+        select jsonb_agg(jsonb_set(jsonb_set(r, '{rank}', to_jsonb(case when r->>'rank' = '1' then 2 else 1 end)), '{played}', to_jsonb((r->>'played')::int - 1)))
+          from jsonb_array_elements(rows) r)
       where stage_id = ${s.r.stageId} and pool_id = ${s.pools[1]!.id}`;
     const sections = await withTenant(s.r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }]));
     expect(sections).toHaveLength(2);
@@ -910,9 +912,10 @@ describe.skipIf(!HAS_DB)("X-SF-2 a pooled fixture's movement and climber read it
   }
   /** Pool `poolId`'s stored table with `entrantId` at rank `rank` (the other row at the other rank), and a previous table in which that entrant stood second. */
   async function setTable(stageId: string, poolId: string, winnerId: string, rank: 1 | 2, previous: boolean): Promise<void> {
-    const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number }[] }[]>`select rows from standings_snapshots where stage_id = ${stageId} and pool_id = ${poolId}`;
+    const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number; played: number }[] }[]>`select rows from standings_snapshots where stage_id = ${stageId} and pool_id = ${poolId}`;
     const now = rows.map((x) => ({ ...x, rank: x.entrantId === winnerId ? rank : 3 - rank }));
-    const prev = rows.map((x) => ({ ...x, rank: x.entrantId === winnerId ? 2 : 1 }));
+    // B5 G3 (n1): the table before the result - both sides of the pool's one match had played one fewer.
+    const prev = rows.map((x) => ({ ...x, rank: x.entrantId === winnerId ? 2 : 1, played: x.played - 1 }));
     await sql`update standings_snapshots set rows = ${sql.json(now as never)}, previous_rows = ${previous ? sql.json(prev as never) : null} where stage_id = ${stageId} and pool_id = ${poolId}`;
   }
   async function ctxOf(fixtureId: string): Promise<FixtureCtx> {
@@ -970,9 +973,11 @@ describe.skipIf(!HAS_DB)("X-SF-2 a pooled fixture's movement and climber read it
     const [{ outcome }] = await sql<{ outcome: { winner: string } }[]>`select outcome from fixtures where id = ${f!.id}`;
     const [w] = await sql<{ display_name: string }[]>`select display_name from entrants where id = ${outcome.winner}`;
     await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
+    // B5 G3 (n1): the table before the result - both sides had played one fewer.
     await sql`
       update standings_snapshots set previous_rows = (
-        select jsonb_agg(jsonb_set(x, '{rank}', to_jsonb(case when x->>'entrantId' = ${outcome.winner} then 2 else 1 end))) from jsonb_array_elements(rows) x)
+        select jsonb_agg(jsonb_set(jsonb_set(x, '{rank}', to_jsonb(case when x->>'entrantId' = ${outcome.winner} then 2 else 1 end)), '{played}', to_jsonb((x->>'played')::int - 1)))
+          from jsonb_array_elements(rows) x)
       where stage_id = ${r.stageId}`;
     await withTenant(r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, f!.id, true));
     const posts = await listPosts(r.auth, r.auth.orgId);
@@ -1174,3 +1179,108 @@ describe.skipIf(!HAS_DB)("RB5-W1 posts mark who left, with the word every table 
     for (const m of ANY_MARK) expect(back.bodyMd, `after Reinstate no line carries ${m}`).not.toContain(m);
   });
 });
+
+// ---------------------------------------------------------------------------
+// B5 fix wave G3 (batch review m3 + controller ruling n1, owner standing "apply rec"). m3, RB5-W1 "marked on every surface": the result
+// post's score line, the streak line and the recap's results list name a leaver with her table chip's word, as the standings rows
+// already do - differential: today (880f1529b7) only `topOfTable` and the digest's top 3 mark her. n1: "Biggest climber" / "moves up"
+// measure a move a RESULT caused - a withdrawal, a Reinstate, a DQ or a late entry never makes a climber, and a leaver never "moves up".
+// differential: today the digest right after a Reinstate prints "Biggest climber: <her> (4 → 1)" (B5 batch probe, n1).
+// Expected words: the public dictionary's chip labels and the UI catalog's streak sentence, read from the files - never typed, never
+// from the code under test. Single sport (badminton singles): the marks and the climber read statuses and stored rows, never a sport
+// field (the RB5-W1 block above sweeps the four locales and two stage kinds).
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("B5 G3 posts mark a leaver on every line; a climber climbs on results only", () => {
+  const uiDict = (locale: PoolLocale) =>
+    JSON.parse(readFileSync(new URL(`../../../dictionaries/${locale}/ui.json`, import.meta.url), "utf8")) as Record<string, string>;
+  const chip = (locale: PoolLocale, status: "withdrawn" | "disqualified") => publicDict(locale)[`table.${status}`]!;
+
+  async function freshPosts(r: Rig, fixtureId: string, locale: PoolLocale) {
+    await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
+    await sql`update organizations set default_locale = ${locale} where id = ${r.auth.orgId}`;
+    await sql`delete from org_posts where org_id = ${r.auth.orgId} and kind in ('result', 'round_recap')`;
+    await withTenant(r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, fixtureId, true));
+    const posts = await listPosts(r.auth, r.auth.orgId);
+    const result = posts.find((p) => p.kind === "result");
+    return { title: result?.title, result: result?.bodyMd, recap: posts.find((p) => p.kind === "round_recap")?.bodyMd };
+  }
+
+  it("m3 a league of three: she wins both her matches and then withdraws - her result post's score and streak lines and the recap's result line carry the chip's word (en, nl); no line says she moves up", async () => {
+    const r = await rig({ n: 3, kind: "league", sport: BADMINTON });
+    await startDivision(r.auth, r.divisionId);
+    const lines = await sql<{ id: string; round_no: number; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, round_no, home_entrant_id, away_entrant_id from fixtures where stage_id = ${r.stageId} order by round_no, seq_in_round`;
+    const target = lines[0]!.home_entrant_id;
+    const hers = lines.filter((l) => l.home_entrant_id === target || l.away_entrant_id === target);
+    expect(hers, "premise: a league of three plays her twice").toHaveLength(2);
+    for (const l of lines) await playBadminton(r.auth, l.id, hers.includes(l) ? l.home_entrant_id === target : true);
+    await withdrawEntrantCascade(r.auth, target);
+    const [{ display_name: name, status }] = await sql<{ display_name: string; status: string }[]>`select display_name, status from entrants where id = ${target}`;
+    expect(status, "premise: she has left").toBe("withdrawn");
+    const lastWin = hers[hers.length - 1]!;
+
+    let checked = 0;
+    for (const locale of ["en", "nl"] as const) {
+      const marked = `${name} (${chip(locale, "withdrawn")})`;
+      const { title, result, recap } = await freshPosts(r, lastWin.id, locale);
+      expect(result, `${locale}: premise - a result post was drafted`).toBeTruthy();
+      expect(recap, `${locale}: premise - the round's recap was drafted`).toBeTruthy();
+      const resultLines = result!.split("\n");
+      // The score line (the post's title, "Home s-s Away") names her marked.
+      expect(title, `${locale}: the result post's score line names her marked`).toContain(marked);
+      // The streak sentence, as the catalog writes it, with her marked name (she won both: 2 in a row).
+      const streak = uiDict(locale)["news.enrich.streak.win"]!.replace("{entrant}", marked).replace("{length}", "2");
+      expect(result, `${locale}: the streak line marks her:\n${result}`).toContain(streak);
+      // No line names her bare: every occurrence of her name carries the mark.
+      expect(result!.split(name).length - 1, `${locale}: every mention of her in the result post is marked`).toBe(result!.split(marked).length - 1);
+      // n1: her place was set by her withdrawal, not by this result - no "moves up" line names her.
+      expect(resultLines.filter((l) => l.includes(name) && /moves up|stijgt|monte|sube/i.test(l)), `${locale}: no movement line for a leaver`).toEqual([]);
+      // The recap's results list: her line marked, every mention of her marked.
+      const recapResults = recap!.split("\n").filter((l) => l.startsWith("- "));
+      expect(recapResults.some((l) => l.includes(marked)), `${locale}: the recap's result line marks her:\n${recap}`).toBe(true);
+      expect(recap!.split(name).length - 1, `${locale}: every mention of her in the recap is marked`).toBe(recap!.split(marked).length - 1);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("n1 a league of four: withdraw (results stand) then Reinstate - the digest names no climber at either step, though the stored table moved her 4 -> 1", async () => {
+    const r = await rig({ n: 4, kind: "league", sport: BADMINTON });
+    await startDivision(r.auth, r.divisionId);
+    const lines = await sql<{ id: string; round_no: number; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, round_no, home_entrant_id, away_entrant_id from fixtures where stage_id = ${r.stageId} order by round_no, seq_in_round`;
+    const target = lines[0]!.home_entrant_id;
+    // She plays (and wins) her first two lines; every other line but one is played (home wins), so she leads with 2 of 3 played.
+    let hers = 0;
+    const open: string[] = [];
+    for (const l of lines) {
+      const isHers = l.home_entrant_id === target || l.away_entrant_id === target;
+      if (isHers && hers++ >= 2) continue;
+      if (!isHers && open.length === 0 && l.round_no === 3) {
+        open.push(l.id);
+        continue;
+      }
+      await playBadminton(r.auth, l.id, isHers ? l.home_entrant_id === target : true);
+    }
+    const [{ display_name: name }] = await sql<{ display_name: string }[]>`select display_name from entrants where id = ${target}`;
+    const rankOf = async (col: "rows" | "previous_rows") => {
+      const [snap] = await sql<{ r: { entrantId: string; rank?: number }[] | null }[]>`
+        select ${sql(col)} as r from standings_snapshots where stage_id = ${r.stageId} and pool_id is null`;
+      return snap?.r?.find((x) => x.entrantId === target)?.rank;
+    };
+    const climberLines = (body: string) => body.split("\n").filter((l) => l.includes(uiDict("en")["news.digest.standings.climber"]!.split("{entrant}")[0]!));
+
+    await withdrawEntrantCascade(r.auth, target);
+    expect(await rankOf("rows"), "premise RB5-W1: ranked last after leaving").toBe(4);
+    const afterLeave = await generateWeeklyDigest(r.auth, r.auth.orgId);
+    expect(climberLines(afterLeave.bodyMd), `a withdrawal makes no climber:\n${afterLeave.bodyMd}`).toEqual([]);
+
+    await patchEntrant(r.auth, target, { status: "confirmed" });
+    // differential: the stored step the old rule read - she went from 4th back to 1st, a "climb" only a Reinstate caused.
+    expect([await rankOf("previous_rows"), await rankOf("rows")], "premise: the table's last step moved her 4 -> 1").toEqual([4, 1]);
+    const afterBack = await generateWeeklyDigest(r.auth, r.auth.orgId);
+    expect(afterBack.bodyMd, "premise: the digest lists the table").toContain(name);
+    expect(climberLines(afterBack.bodyMd), `a Reinstate makes no climber:\n${afterBack.bodyMd}`).toEqual([]);
+  });
+});
+

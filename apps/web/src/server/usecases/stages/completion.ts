@@ -531,7 +531,12 @@ export async function overrideStandings(
   await recomputeStandings(auth.orgId, stageId);
   // B4 fix wave (m3): and on the public pages - the division and competition tags a result write clears (the pool winners banner and
   // the table read the recomputed snapshots). Best-effort: the pin is written.
-  await fireStageRevalidate(auth.orgId, stageId);
+  // B5 fix wave G3 (m1): the Redis copies too - the hub document the hub poll reads (15 s) and the division's public documents the
+  // standings API serves (`standings-v3`, 30 s), or the poll paints the old order back over the fresh page. `afterScheduleWrite` is
+  // the one helper that DELs both and fires the same tags (no fixture moved: no fixture key, no fixture push).
+  const pinned = seen.stage;
+  if (pinned !== undefined) afterScheduleWrite(pinned.division_id, pinned.competition_id, "schedule", []);
+  else await fireStageRevalidate(auth.orgId, stageId);
   // D4a (P5): a correction here invalidates any dependent `timing:"setup"`
   // stage's draft proposal — mark it stale and recompute a fresh one.
   //

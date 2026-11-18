@@ -19,7 +19,23 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
   };
 });
 
+// B5 fix wave G3 (batch review m1): the Redis copies too. Spied at the real seam every public write deletes through (`cacheDel`), passed
+// through to the real one.
+const deleted = vi.hoisted(() => [] as string[][]);
+vi.mock("@/lib/cache", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/cache")>();
+  return {
+    ...real,
+    cacheDel: (...keys: string[]) => {
+      deleted.push(keys);
+      return real.cacheDel(...keys);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
+import { publicDivisionCacheKeys } from "@/server/public-site/division-doc-cache-keys";
+import { publicHubCacheKey } from "@/server/public-site/hub-doc-cache-keys";
 import { post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -53,8 +69,16 @@ describe.runIf(HAS_DB)("m3: a rank override clears the public division's tags", 
         await completeStage(auth, stage!.id, { publish: false });
       }
       fired.length = 0;
+      deleted.length = 0;
       await overrideStandings(auth, stage!.id, { rows: [{ entrant_id: es[3]!.id, rank: 1, reason: "placement game" }] });
       expect(fired.filter((f) => f.divisionId === d.id), "the division's public tags, with its competition").toContainEqual({ divisionId: d.id, competitionId: comp.id });
+      // B5 G3 (m1): the hub poll (`pub:v1:hub:{competition}`, 15 s) and the public standings API (`standings-v3`, 30 s) read Redis, not
+      // the ISR page — so the pin deletes the hub doc and every public division document, or the poll paints the old order back.
+      // differential: today (880f1529b7) `overrideStandings` deletes no key at all. Expected keys: the key builders' own declarations.
+      const want = [publicHubCacheKey(comp.id), ...publicDivisionCacheKeys(d.id)];
+      expect(want.length, "anti-vacuity: keys to clear").toBeGreaterThan(1);
+      const all = deleted.flat();
+      for (const key of want) expect(all, `the pin deletes ${key}`).toContain(key);
     }, 120_000);
   }
 });

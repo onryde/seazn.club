@@ -43,6 +43,7 @@ import { readFixtureTable, readPoolTables, readSingleTableSnapshot } from "./sta
 import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import {
+  markedName,
   resultDraft,
   roundRecapDraft,
   weeklyDigestDraft,
@@ -567,12 +568,14 @@ async function draftResult(tx: Tx, fx: FixtureCtx & CreditedCtx, locale: Locale)
     : null;
   const enrichment = await assembleResultEnrichment(tx, fx, scorers);
   const enriched = Object.keys(enrichment).length > 0;
+  // B5 fix wave G3 (m3, RB5-W1 "marked on every surface"): a side who has left the field is named with her table chip's word.
+  const named = await leaverNamer(tx, locale, [fx.home_entrant_id, fx.away_entrant_id]);
 
   const { title, bodyMd } = resultDraft({
     locale,
     // Unreachable: this only runs on an fx whose status just became DECIDED via appendEvent, which throws WRONG_PHASE on a null entrant (append-event.ts) — a decided fx never has a TBD side.
-    homeName: fx.home_name ?? "TBD",
-    awayName: fx.away_name ?? "TBD",
+    homeName: fx.home_name === null ? "TBD" : named(fx.home_entrant_id, fx.home_name),
+    awayName: fx.away_name === null ? "TBD" : named(fx.away_entrant_id, fx.away_name),
     homeScore: sideLine(state?.summary, fx.home_entrant_id),
     awayScore: sideLine(state?.summary, fx.away_entrant_id),
     competitionName: fx.competition_name,
@@ -614,9 +617,17 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   if (open > 0) return null; // round not complete yet
 
   const resultRows = await tx<
-    ({ home_name: string | null; away_name: string | null; home_id: string | null; away_id: string | null; summary: unknown } & CreditedCtx)[]
+    ({
+      home_name: string | null;
+      away_name: string | null;
+      home_status: string | null;
+      away_status: string | null;
+      home_id: string | null;
+      away_id: string | null;
+      summary: unknown;
+    } & CreditedCtx)[]
   >`
-    select h.display_name as home_name, a.display_name as away_name,
+    select h.display_name as home_name, a.display_name as away_name, h.status as home_status, a.status as away_status,
            f.home_entrant_id as home_id, f.away_entrant_id as away_id, m.summary,
            f.outcome, ${activeAbandonReasonSql(tx, "f")} as abandon_reason
     from fixtures f
@@ -626,10 +637,12 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     where f.division_id = ${fx.division_id} and f.stage_id = ${fx.stage_id} and f.round_no = ${roundNo}
       and f.status in ${tx([...DECIDED])}
     order by f.fixture_no nulls last, f.id`;
+  // RB5-W1: a leaver in a result line carries the hub chip's word in the org's language (B5 fix wave G3, m3)
+  const wordFor = await leaverWords(locale);
   const results = resultRows.map((r) => ({
     // Unreachable: every row here is a DECIDED/FINALIZED/FORFEITED TABLE_KINDS (league/group/swiss) fixture, and those never get a null entrant — round-robin/swiss generation and addFixture always seat both sides, and appendEvent refuses to decide a fixture with one still null.
-    homeName: r.home_name ?? "TBD",
-    awayName: r.away_name ?? "TBD",
+    homeName: r.home_name === null ? "TBD" : leaverMarked(wordFor, r.home_name, r.home_status),
+    awayName: r.away_name === null ? "TBD" : leaverMarked(wordFor, r.away_name, r.away_status),
     homeScore: sideLine(r.summary, r.home_id),
     awayScore: sideLine(r.summary, r.away_id),
     // Loop R M-11: a credited line says which; a double walkover's tag stands in its 0–0's place.
@@ -638,7 +651,6 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   }));
 
   // RB5-W1: a leaver listed in a short table carries the hub chip's word in the org's language
-  const wordFor = await leaverWords(locale);
   const mark = <R extends { status?: DepartedStatus }>(row: R) => (row.status ? { ...row, departed: wordFor(row.status) } : row);
   const standings = (await topStandings(tx, fx.stage_id)).map(mark);
   const poolStandings = (await topPoolStandings(tx, fx.stage_id, locale)).map((p) => ({ ...p, rows: p.rows.map(mark) }));
@@ -983,12 +995,14 @@ export async function assembleResultEnrichment(
           select outcome from fixtures where id = ${fx.fixture_id}`;
         const outcome = row?.outcome as { kind?: string; winner?: string } | null;
         if (outcome && (outcome.kind === "win" || outcome.kind === "award") && outcome.winner) {
-          const [entrant] = await sp<{ display_name: string }[]>`
-            select display_name from entrants where id = ${outcome.winner}`;
+          const [entrant] = await sp<{ display_name: string; status: string }[]>`
+            select display_name, status from entrants where id = ${outcome.winner}`;
           const recent = await entrantRecentOutcomes(sp, fx.division_id, fx.stage_id, outcome.winner, 10);
           const streak = computeStreak(recent);
           if (streak && entrant) {
-            out.streak = { entrantName: entrant.display_name, kind: streak.kind, length: streak.length };
+            // B5 fix wave G3 (m3, RB5-W1): a winner who has since left is named with her table chip's word.
+            const entrantName = leaverMarked(await leaverWords(toLocale(fx.default_locale)), entrant.display_name, entrant.status);
+            out.streak = { entrantName, kind: streak.kind, length: streak.length };
           }
         }
       });
@@ -1068,9 +1082,12 @@ export async function assembleRecapEnrichment(
       if (snap) {
         const climber = biggestClimber(snap.rows, snap.previous_rows);
         if (climber) {
-          const [entrant] = await sp<{ display_name: string }[]>`
-            select display_name from entrants where id = ${climber.entrantId}`;
-          if (entrant) out.standingsMoves = [{ entrantName: entrant.display_name, from: climber.from, to: climber.to }];
+          const [entrant] = await sp<{ display_name: string; status: string }[]>`
+            select display_name, status from entrants where id = ${climber.entrantId}`;
+          // B5 fix wave G3 (m3): marked like every other line naming a leaver. After n1 a leaver no longer climbs (her place is set by
+          // her departure, not by a result: `biggestClimber`), so this is the format kept in step, not a line expected to print.
+          const entrantName = entrant ? leaverMarked(await leaverWords(toLocale(fx.default_locale)), entrant.display_name, entrant.status) : null;
+          if (entrantName !== null) out.standingsMoves = [{ entrantName, from: climber.from, to: climber.to }];
         }
       }
     });
@@ -1111,10 +1128,14 @@ async function winnerMovement(
         return null;
       }
       const rows = await topStandings(sp, fx.stage_id, Number.MAX_SAFE_INTEGER, fx.pool_id);
-      const [row] = await sp<{ display_name: string }[]>`
-        select display_name from entrants where id = ${outcome.winner}`;
+      const [row] = await sp<{ display_name: string; status: string }[]>`
+        select display_name, status from entrants where id = ${outcome.winner}`;
       const idx = rows.findIndex((r) => r.entrantId === outcome.winner);
       if (idx < 0 || !row) return null;
+      // B5 fix wave G3 (controller ruling n1): "moves up" is a move a RESULT made. A winner who has since left the field stands where
+      // her departure put her (RB5-W1: ranked last), so no movement line is said for her - a marked "X (Withdrawn) moves up to 4th"
+      // would still tell the reader something false.
+      if (departedOf(row.status) !== undefined) return null;
       return { team: row.display_name, position: rows[idx]!.position };
     });
   } catch {
@@ -1146,6 +1167,22 @@ function departedOf(status: string | null | undefined): DepartedStatus | undefin
 async function leaverWords(locale: Locale): Promise<(status: DepartedStatus) => string> {
   const dict = await getDictionary(locale, "public");
   return (status) => t(dict, DEPARTED_STATUS_CHIPS[status].label);
+}
+
+/** B5 fix wave G3 (m3, RB5-W1 "marked on every surface"): a name a post prints, "Ann (Withdrawn)" for a leaver - the standings rows'
+ *  own format (`markedName`) and her table chip's word (`leaverWords`); a competing entrant's name is bare. */
+function leaverMarked(wordFor: (status: DepartedStatus) => string, name: string, status: string | null | undefined): string {
+  const departed = departedOf(status);
+  return markedName(departed === undefined ? { name } : { name, departed: wordFor(departed) });
+}
+
+/** `leaverMarked` for the sides of one fixture: their statuses read once. */
+async function leaverNamer(tx: Tx, locale: Locale, ids: readonly (string | null)[]): Promise<(id: string | null, name: string) => string> {
+  const present = ids.filter((id): id is string => id !== null);
+  const rows = present.length === 0 ? [] : await tx<{ id: string; status: string }[]>`select id, status from entrants where id = any(${present})`;
+  const statusOf = new Map(rows.map((r) => [r.id, r.status]));
+  const wordFor = await leaverWords(locale);
+  return (id, name) => leaverMarked(wordFor, name, id === null ? undefined : statusOf.get(id));
 }
 
 /** The unit a stage's stored points print in — the public table's own (`tableLayoutFor` over the one loader's rules). */
@@ -1411,9 +1448,10 @@ export async function assembleDigestStandings(
           let climberOut: DigestStandingsSection["climber"];
           const climber = biggestClimber(snap.rows, snap.previous_rows);
           if (climber) {
-            const [entrant] = await sp<{ display_name: string }[]>`
-              select display_name from entrants where id = ${climber.entrantId}`;
-            if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+            const [entrant] = await sp<{ display_name: string; status: string }[]>`
+              select display_name, status from entrants where id = ${climber.entrantId}`;
+            // B5 fix wave G3 (m3): marked as the top 3 is (and, after n1, unreachable for a leaver - see the recap's climber).
+            if (entrant) climberOut = { entrantName: leaverMarked(wordFor, entrant.display_name, entrant.status), from: climber.from, to: climber.to };
           }
           out.push({
             divisionName: stage.division_name,
