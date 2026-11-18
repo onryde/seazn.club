@@ -32,6 +32,7 @@ import {
   seatCameraEvidence,
 } from "@/server/external-play/video/realtimekit";
 import { applyPresenceEvent, currentPresence } from "@/server/external-play/video/presence";
+import { closeGuardFault, guardFaultSpans, hasOpenGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { receiveRealtimeKitWebhook } from "@/server/external-play/video/webhook";
 import type { RealtimeKitEvent } from "@/server/external-play/video/webhook-event";
 import {
@@ -918,6 +919,54 @@ describe.skipIf(!DB)("a re-open that KEEPS a room resets its participants' per-w
     expect(reasonOf(recheck), "the earlier window's pass is NOT trusted by the re-verify").toBe("camera_required");
     const next = await claim(home, new Date());
     expect(reasonOf(next), "never `camera_lost`: this window has no earlier pass").toBe("camera_required");
+  });
+
+  // PR-2 whole review m4: an OPEN guard fault is window state too - while it is open the opponent's room shows no presence pill, and
+  // the seat's next stamp is `open_already` - so a kept room must not carry one into the new window.
+  it("m4: a re-open that KEEPS a room closes its open guard fault at the re-open's clock (one stamped after that clock closes at its own start, never refusing the open), and the new window's first stamp opens a FRESH one; a room a game stands behind keeps its open fault", async () => {
+    stubOutboxEnv();
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    const [b, game] = r.boards;
+    fixturesMade.push(b!.fixtureId, game!.fixtureId);
+    const end = (id: string) => endMeeting(id);
+    mail.fail.add(b!.home.email).add(b!.away.email).add(game!.home.email).add(game!.away.email);
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true, invited: 0 });
+    const boardOf = (x: NonNullable<typeof b>): Board => ({ fixtureId: x.fixtureId, orgId: r.orgId, home: x.home, away: x.away }) as unknown as Board;
+    const home = await arrive({ board: boardOf(b!), side: "home" });
+    const away = await arrive({ board: boardOf(b!), side: "away" });
+    const g = await arrive({ board: boardOf(game!) });
+    await sql`insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, challenge_id) values (${g.b.fixtureId}, ${r.orgId}, now(), ${"lichess-game-" + randomUUID().slice(0, 6)})
+              on conflict (fixture_id) do update set challenge_id = excluded.challenge_id`;
+    const seat = (a: Arrival) => ({ fixtureId: a.b.fixtureId, side: a.side, personId: a.personId });
+    const spans = async (a: Arrival) => (await guardFaultSpans(sql, seat(a))).map((s) => ({ from: s.from.getTime(), to: s.to?.getTime() ?? null }));
+    const T = new Date(); // the re-open's clock
+    // HOME: a stamp already closed (history), then one still OPEN. AWAY: one open whose start is AFTER the re-open's clock.
+    expect((await openGuardFault(sql, { ...seat(home), at: at(T, -10 * MIN) })).outcome).toBe("opened");
+    expect(await closeGuardFault(sql, { ...seat(home), at: at(T, -9 * MIN) })).toBe(true);
+    expect((await openGuardFault(sql, { ...seat(home), at: at(T, -5 * MIN) })).outcome, "premise: home has an open fault").toBe("opened");
+    expect((await openGuardFault(sql, { ...seat(away), at: at(T, MIN) })).outcome, "premise: away has an open fault, stamped after T").toBe("opened");
+    expect((await openGuardFault(sql, { ...seat(g), at: at(T, -5 * MIN) })).outcome, "premise: the game board's player has one").toBe("opened");
+    const gameBefore = await spans(g);
+    mail.fail.clear();
+
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end, now: T })).toMatchObject({ opened: true });
+    const audit = await sql<{ type: string }[]>`
+      select type from competition_events where competition_id = ${r.competitionId} and type like 'external_play.round_%' order by created_at, id`;
+    expect(audit.map((x) => x.type), "premise: the second open was a RE-OPEN").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
+    const keptRooms = await sql<{ side: Side; meeting_id: string }[]>`select side, meeting_id from fixture_video_meetings where fixture_id = ${b!.fixtureId} order by side`;
+    expect(keptRooms.map((x) => x.meeting_id), "premise: both rooms were KEPT").toEqual([away.meetingId, home.meetingId]);
+
+    const t = (ms: number) => at(T, ms).getTime();
+    expect(await spans(home), "home: the open fault closed at the re-open's clock; the closed one untouched").toEqual([
+      { from: t(-10 * MIN), to: t(-9 * MIN) },
+      { from: t(-5 * MIN), to: T.getTime() },
+    ]);
+    expect(await spans(away), "away: closed at its own start (an interval never ends before it begins)").toEqual([{ from: t(MIN), to: t(MIN) }]);
+    expect(await spans(g), "the game board's fault: left exactly as it was, still open").toEqual(gameBefore);
+    expect(await hasOpenGuardFault(sql, seat(g))).toBe(true);
+    // SEQUENCE: the new window's first stamp is a fresh interval (left open, it would have been `open_already`, nothing written).
+    expect((await openGuardFault(sql, { ...seat(home), at: at(T, 2 * MIN) })).outcome, "home's next stamp opens").toBe("opened");
+    expect((await openGuardFault(sql, { ...seat(away), at: at(T, 2 * MIN) })).outcome, "and so does away's").toBe("opened");
   });
 
   it("SEQUENCE on the NO-presence branch (webhooks down): the re-open keeps the page's columns (first-live stamp, token stamp, a live report), so the new window's first claim finds the fallback clock already elapsed - it cannot SEAT on them: one counted fallback read judges the camera as it is now, and a second claim reads nothing more", async () => {

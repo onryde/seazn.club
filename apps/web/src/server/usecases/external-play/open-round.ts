@@ -196,19 +196,29 @@ async function retireBoardsMeetings(
  *  same page: `token_issued_at` (which token it holds) and the browser's own report (`camera_reported*`, `camera_live_first_at`: what its
  *  camera says and since when - the camera-report writer's columns, which only that writer and its reader name, source guard rule 2).
  *  The presence rows are the vendor's own facts about who is in the room, which a re-open does not change.
+ *  The kept room's OPEN guard fault (guard-faults.ts) is closed too, at the re-open's clock (PR-2 whole review m4): while one is open the
+ *  opponent's room shows no presence pill and the seat's next stamp is `open_already`, so an interval the last window opened and never
+ *  closed would carry both into this one. A fault stamped after that clock is closed at its own start (the interval check refuses an end
+ *  before the start, which would fail the whole re-open). Closed faults stay: they are history, and the per-seat stamp cap counts them.
  *  Only the rooms this call KEPT are reset: an unended room that is unadopted or stamped for the current pairing, with no game behind it
  *  (a board a game stands behind is left exactly as it was). A retired room's participants go with it. A re-arm keeps nothing. */
 async function resetKeptSeats(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<void> {
+  const kept = tx`m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is null
+       and (m.home_entrant_id is null or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))
+       and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
   await tx`
     update fixture_video_participants vp
        set seat_reads = 0, seat_read_at = null, seat_read_state = null, seat_read_since = null,
            last_publisher_seen_at = null, presence_fallback_from = null
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
-     where vp.fixture_id = m.fixture_id and vp.side = m.side and vp.preset = 'player'
-       and m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is null
-       and (m.home_entrant_id is null or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))
-       and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
+     where vp.fixture_id = m.fixture_id and vp.side = m.side and vp.preset = 'player' and ${kept}`;
+  await tx`
+    update fixture_video_guard_faults gf
+       set ended_at = greatest(${now}, gf.started_at)
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where gf.fixture_id = m.fixture_id and gf.side = m.side and gf.ended_at is null and ${kept}`;
 }
 
 
