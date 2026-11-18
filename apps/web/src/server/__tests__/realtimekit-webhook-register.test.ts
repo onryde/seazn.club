@@ -129,6 +129,33 @@ describe("run", () => {
     expect(calls[0].url).toBe("http://127.0.0.1:9/accounts/acct1/realtime/kit/app1/webhooks");
   });
 
+  it("a BLANK REALTIMEKIT_BASE_URL (an empty env line) is unset: the calls go to Cloudflare, not to a relative URL", async () => {
+    const { fetch, calls } = recordingFetch([{ json: { success: true, data: [] } }, { json: { success: true, data: hook() } }]);
+    expect(await run(["--url", URL_OK], { fetch, env: { ...ENV, REALTIMEKIT_BASE_URL: "" }, out: () => undefined })).toBe(0);
+    expect(calls).toHaveLength(2);
+    expect(calls.every((x) => x.url.startsWith(`${PREFIX}/webhooks`))).toBe(true);
+  });
+
+  it("the webhook id is printed only when it looks like an id; anything else (a quoted token, a line break, an over-long string) prints \"(not returned)\"", async () => {
+    let checked = 0;
+    for (const id of [`wh ${TOKEN}`, `wh-1\nINJECTED`, "x".repeat(65), "", "a b"]) {
+      const c = capture();
+      const { fetch } = recordingFetch([{ json: { success: true, data: [] } }, { json: { success: true, data: hook({ id, url: URL_OK }) } }]);
+      expect(await run(["--url", URL_OK], { fetch, env: ENV, out: c.out }), JSON.stringify(id)).toBe(0);
+      const text = c.lines.join("\n");
+      expect(text, JSON.stringify(id)).toContain("id=(not returned)");
+      expect(text, JSON.stringify(id)).not.toContain(TOKEN);
+      expect(text, JSON.stringify(id)).not.toContain("INJECTED");
+      checked += 1;
+    }
+    expect(checked).toBe(5);
+    // the boundary that still prints: 64 id characters
+    const c = capture();
+    const ok = "a".repeat(64);
+    await run(["--url", URL_OK], { fetch: recordingFetch([{ json: { success: true, data: [] } }, { json: { success: true, data: hook({ id: ok }) } }]).fetch, env: ENV, out: c.out });
+    expect(c.lines.join("\n")).toContain(`id=${ok}`);
+  });
+
   it("a vendor refusal exits 1 and the token never reaches out, even when the vendor body echoes it", async () => {
     const c = capture();
     const echo = { success: false, errors: [{ message: `bad token ${TOKEN}` }] };

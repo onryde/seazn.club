@@ -28,6 +28,7 @@ export type VendorWebhook = { id: string; name: string; url: string; events: str
 const DEFAULT_NAME = "seazn-presence";
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 const TIMEOUT_MS = 15_000;
+const VENDOR_ID = /^[\w-]{1,64}$/;
 
 /** Pure: what to send. An existing webhook of the same name is PATCHed to the wanted url/events/enabled; none is POSTed.
  *  `path` is relative to the app's `/accounts/{account}/realtime/kit/{app}` prefix. */
@@ -102,7 +103,8 @@ export async function run(
     out(`RealtimeKit is not configured: ${missing.join(", ")} must be set.`);
     return 2;
   }
-  const base = (env.REALTIMEKIT_BASE_URL ?? CF_BASE).replace(/\/$/, "");
+  // `||`, not `??`: a blank `REALTIMEKIT_BASE_URL=` line in an env file is the empty string, which means "unset", never "call a relative URL".
+  const base = (env.REALTIMEKIT_BASE_URL || CF_BASE).replace(/\/$/, "");
   const prefix = `/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/realtime/kit/${env.REALTIMEKIT_APP_ID}`;
 
   // One vendor call. A transport error can quote the URL and a vendor body can quote the token: neither is printed.
@@ -139,7 +141,8 @@ export async function run(
   const done = await call(plan.method, plan.path, plan.body);
   if (!done) return 1;
   const w = (done.json as { data?: unknown } | null)?.data;
-  const id = isWebhook(w) ? w.id : "(not returned)";
+  // Printed only when it looks like an id: a vendor body can quote anything (the token, a line break), and an id is all this line is for.
+  const id = isWebhook(w) && VENDOR_ID.test(w.id) ? w.id : "(not returned)";
   out(`OK: ${plan.method} ${plan.path} answered ${done.status}. Webhook "${want.name}" id=${id}.`);
   return 0;
 }
