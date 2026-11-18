@@ -89,8 +89,9 @@ interface StageFixture extends RrStoredRow {
   status: string;
 }
 
-/** The stage's legs, as the generator clamps them (`roundRobinStagePlan`: 1..8). */
-function legsOf(config: Record<string, unknown>): number {
+/** The stage's legs, as the generator clamps them (`roundRobinStagePlan`: 1..8). Exported for the desk's pool picker
+ *  (`table-desk.ts`), which says how many matches a newcomer owes in each pool. */
+export function legsOf(config: Record<string, unknown>): number {
   const raw = typeof config.legs === "number" ? Math.trunc(config.legs) : 1;
   return Math.min(Math.max(raw, 1), 8);
 }

@@ -301,7 +301,7 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       // W5 T2 (X-CU-6): after Start a league's Generate never reshapes - an entrant added since its lines were drawn is refused by
       // name (usecases/stages/roundrobin-reconcile.ts, RR_GENERATE_AFTER_START). Swiss has its own path, below.
       if (!this.#swiss && this.#divisionStatus === "active" && this.#lateEntrant && this.fixtures.length > 0) {
-        throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "RR_GENERATE_AFTER_START", "Play has started, so Generate won't change the fixtures. Use Add late player.");
+        throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "RR_GENERATE_AFTER_START", "Play has started, so Generate won't change the fixtures. Players waiting to join are listed on this stage: use Add to the table.");
       }
       // usecases/stages/: a pending stage goes active on its first generate, Start or not.
       if (this.stage.status === "pending") this.stage.status = "active";

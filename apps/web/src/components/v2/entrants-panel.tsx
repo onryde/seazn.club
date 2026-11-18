@@ -51,6 +51,8 @@ import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import { undoRefusalText } from "@/lib/undo-refusals";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
+import type { TableLatePools } from "@/server/usecases/table-desk";
+import { poolPickerShown, TableLatePoolSelect } from "@/components/v2/table-late-pool-select";
 
 /** RS007/V380 — the division columns this panel badges above the roster.
  *  Replaces the retired jsonb `eligibility` array (a `Record<string,
@@ -197,6 +199,10 @@ interface Props {
    *  knockout still running: an entrant added here takes a free place in round 1 (a bye or a withdrawn player's place) or
    *  is refused by name, so the form says so. The same add form and the same notice as a Swiss's — never a second form. */
   knockoutLateEntry?: boolean;
+  /** W5 T23 (X-CU-7, X-CU-11; R24 pick 1A) — set when the division has started and its entry stage is a root league or group still
+   *  running with its fixtures drawn (`readTableLatePools`): an entrant added here joins it late and plays catch-up matches, so the
+   *  form says so; a group of several pools adds the Group field (default the smallest), sent as `late_entry_pool`. */
+  tableLateEntry?: Pick<TableLatePools, "kind" | "pools" | "defaultKey"> | null;
 }
 
 /** The late-entry answers on a create's response: the POST answers one row for an object body, an array for a batch. */
@@ -248,6 +254,7 @@ export function EntrantsPanel({
   divisionStatus,
   swissLateEntry,
   knockoutLateEntry = false,
+  tableLateEntry = null,
 }: Props) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -260,6 +267,11 @@ export function EntrantsPanel({
   const [busy, setBusy] = useState(false);
   // W3 T10 — the late-entry notice for the LAST add (replaced by the next one, cleared by a refusal).
   const [lateNotice, setLateNotice] = useState<LateEntryNoticeLine[]>([]);
+  // W5 T23 (X-CU-11): the Group a late add joins — the organiser's pick, else the server's own default (the smallest pool).
+  const [latePool, setLatePool] = useState<string | null>(null);
+  const latePools = tableLateEntry?.pools;
+  const pooledLateEntry = poolPickerShown(latePools);
+  const latePoolValue = latePool !== null && latePools?.some((p) => p.key === latePool) ? latePool : (tableLateEntry?.defaultKey ?? latePools?.[0]?.key ?? "");
   // W4 T19 — what the LAST Reinstate / Withdraw / Disqualify did to a started knockout (how a reinstated player rejoins it;
   // the lucky loser who took a withdrawn qualifier's seat). Its own line, drawn whether or not the add form is: a lucky
   // loser seats in a FED knockout, whose division's roster is locked and has no add form at all.
@@ -531,6 +543,7 @@ export function EntrantsPanel({
         lateEntryNotice(results, { ...known, ...names }, {
           locale,
           onlineRoundOpen: (stageId, round) => openRounds.has(`${stageId}:${round}`),
+          pooled: pooledLateEntry,
         }),
       );
     } catch (err) {
@@ -596,6 +609,14 @@ export function EntrantsPanel({
               {msg("entrants.knockoutLate.note")}
             </p>
           )}
+          {tableLateEntry && (
+            <p
+              data-testid="entrants-table-late-note"
+              className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800"
+            >
+              {msg(tableLateEntry.kind === "group" ? "entrants.tableLate.noteGroup" : "entrants.tableLate.noteLeague")}
+            </p>
+          )}
           <AddEntrantForm
             persons={persons}
             personsReady={personsLoad === "ready"}
@@ -609,11 +630,32 @@ export function EntrantsPanel({
             heldBy={heldBy}
             entrantModel={entrantModel}
             busy={busy}
+            poolField={
+              pooledLateEntry ? (
+                <div data-testid="entrants-late-pool-field" className="space-y-1">
+                  <TableLatePoolSelect
+                    id="entrants-late-pool"
+                    testId="entrants-late-pool"
+                    pools={latePools}
+                    defaultKey={tableLateEntry?.defaultKey ?? null}
+                    value={latePoolValue}
+                    onChange={setLatePool}
+                    disabled={busy}
+                  />
+                  <p className="text-xs text-slate-500">{msg("entrants.tableLate.poolHint")}</p>
+                </div>
+              ) : null
+            }
             onSubmit={(payload) =>
               addEntrants((override) =>
                 apiV1<{ roster_keys_dropped?: number }>(
                   `/api/v1/divisions/${divisionId}/entrants`,
-                  { method: "POST", json: withOverride(payload, override) },
+                  {
+                    method: "POST",
+                    // W5 T23 (X-CU-11): the Group field rides the one add as `late_entry_pool` (the server refuses a letter that is no
+                    // pool of the stage by name). A CSV batch sends none: each of its rows joins the smallest pool at that moment.
+                    json: withOverride(pooledLateEntry && latePoolValue !== "" ? { ...payload, late_entry_pool: latePoolValue } : payload, override),
+                  },
                 ),
               )
             }
@@ -1036,6 +1078,7 @@ function AddEntrantForm({
   busy,
   onSubmit,
   importControls,
+  poolField,
 }: {
   persons: Person[];
   /** Players has finished loading, so New player's duplicate check sees the whole directory. */
@@ -1056,6 +1099,8 @@ function AddEntrantForm({
   ) => Promise<{ roster_keys_dropped?: number } | undefined>;
   /** Inline CSV-import controls rendered in the footer row. */
   importControls?: React.ReactNode;
+  /** W5 T23 (X-CU-11): the late add's Group field, under the form's title, above whichever mode's fields. */
+  poolField?: React.ReactNode;
 }) {
   // "Existing team" mode enrolls a whole team, so it only makes sense when this
   // division actually accepts a team kind AND the org has teams (created by
@@ -1094,6 +1139,7 @@ function AddEntrantForm({
         )}
       </div>
 
+      {poolField}
       {mode === "existing" && canExisting ? (
         <ExistingTeamFields
           teams={teams}

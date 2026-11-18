@@ -18,6 +18,7 @@ import { unseatedForfeitLoser, type ForfeitCopy, type ForfeitWords } from "@/lib
 import { finalTitleTag } from "@/lib/final-title-tag";
 import { ForfeitTagChip } from "./forfeit-tag-chip";
 import { bracketForfeitWords } from "@/lib/bracket-forfeit-words";
+import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 // Every word here arrives finished, in the ORG's locale (P6 fix round 1 #2,
 // N1d d5, N1e e5). This is a Client Component ("use client" above) with no
 // locale or <DictProvider> in its tree, and msgFor() carries `server-only`, so
@@ -138,6 +139,9 @@ export interface ScheduleCopy {
    *  dictionary's `matchCentre.status.abandoned`, the match centre's own word. Optional: a caller that hands none shows no word,
    *  but the row is still struck and shows no time and no score. */
   abandoned?: string;
+  /** W5 T23 (X-CU-7; R24 pick 2A): the round view's tag on a round appended for a late player's catch-up matches — the public
+   *  dictionary's `division.catchUp`. Optional: a caller that hands none shows no tag. */
+  catchUp?: string;
   /** W4 B5b (pick 3A): a deciding final ruled joint winners reads this in the result's place - the public dictionary's
    *  `title.joint`, the page banner's own words. Optional: a caller that hands none shows no label, exactly as before. */
   jointWinners?: string;
@@ -609,6 +613,16 @@ export function Schedule({
         <section key={key} className="mb-6">
           <h3 className="mb-2 flex items-center gap-3 font-display text-sm font-semibold uppercase tracking-[0.18em] text-ink-muted">
             {groupLabel(key)}
+            {/* W5 T23 (X-CU-7; R24 pick 2A): a catch-up round keeps its number (the board's, stage-wide); the tag adds the one new
+                fact. The ROUND view only: a day mixes rounds. */}
+            {mode === "round" && copy.catchUp !== undefined && list.some((f) => isCatchUpRoundExtKey(f.ext_key)) ? (
+              <span
+                data-testid="schedule-catch-up"
+                className="rounded-full bg-accent-soft px-2 py-0.5 font-sans text-[10px] font-semibold normal-case tracking-normal text-accent-strong"
+              >
+                {copy.catchUp}
+              </span>
+            ) : null}
             {(() => {
               const anchor = list.find((x) => x.scheduled_at)?.scheduled_at;
               return anchor ? (

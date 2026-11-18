@@ -224,3 +224,10 @@ export function rrCatchUpExtKey(prefix: string, kind: CatchUpFixture["placement"
 export function isCatchUpExtKey(extKey: string | null): boolean {
   return extKey !== null && /^(?:p[^-]*-)?rr-(?:cu|by)-r\d+-c\d+-L\d+$/.test(extKey);
 }
+
+/** W5 T23 (X-CU-7; R24 pick 2A): whether a stored `ext_key` is a line of an APPENDED catch-up round (`rr-cu-`), never a consumed
+ *  bye's (`rr-by-`, which plays in a round the draw already had). The board's and the public list's round bar say "Catch-up" on a
+ *  round holding one: the round keeps its number (stage-wide), the tag adds the one new fact. */
+export function isCatchUpRoundExtKey(extKey: string | null | undefined): boolean {
+  return extKey != null && /^(?:p[^-]*-)?rr-cu-r\d+-c\d+-L\d+$/.test(extKey);
+}

@@ -23,7 +23,7 @@ import { createDivision } from "../divisions";
 import { createEntrants, deleteEntrant, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures, getStandings, overrideStandings } from "../stages";
+import { completeStage, createStages, generateStageFixtures, getStandings, overrideStandings, rebuildStageFixtures } from "../stages";
 import { withdrawEntrantCascade } from "../withdrawal";
 import { seedOrg } from "./_seed";
 
@@ -558,5 +558,32 @@ describe.skipIf(!HAS_DB)("X-PO-4 (RB5-P7, ruling 288): a pin on a stage with no 
     expect(await overrideStandings(l.auth, l.stageId, { rows: [pin(l.id.get("P1")!, 1)] })).toEqual({ overridden: 1 });
     const g = await rig({ n: 8, kind: "group", pools: 2 });
     expect(await overrideStandings(g.auth, g.stageId, { rows: [pin(g.id.get("P1")!, 1)] })).toEqual({ overridden: 1 });
+  });
+});
+
+// W5 app-A Task 23 (Task 18 review: "Rebuild drops pins silently"): Rebuild drops the pins of every pool whose membership changed
+// (T18) — and now SAYS how many, as Generate's redraw does (`pins_cleared`, additive on `RebuildResult`). Absent at zero, never 0.
+// Expected counts from the snake of nine growing to ten (pool B changes, A does not), as the Generate case above.
+describe.skipIf(!HAS_DB)("W5 T23 Rebuild reports the manual ranks it cleared", () => {
+  it("a Rebuild that changes pool B clears B's one pin and says 1; A's pin stays", async () => {
+    const r = await rig({ n: 9, kind: "group", pools: 2 });
+    const ids = await poolIds(r.stageId);
+    await overrideStandings(r.auth, r.stageId, { rows: [pin(r.id.get("P4")!, 1), pin(r.id.get("P3")!, 1)] });
+    await r.add("P10", 10);
+    const out = await rebuildStageFixtures(r.auth, r.stageId);
+    expect(out.pins_cleared).toBe(1);
+    expect(await storedOverrides(r.stageId)).toEqual([{ entrant_id: r.id.get("P4")!, rank: 1, pool_id: ids.get("A")! }]);
+  });
+
+  it("the empty cases: a Rebuild that moves nobody, and one with no pin at all, carry no pins_cleared key", async () => {
+    const same = await rig({ n: 8, kind: "group", pools: 2 });
+    await overrideStandings(same.auth, same.stageId, { rows: [pin(same.id.get("P1")!, 1)] });
+    const kept = await rebuildStageFixtures(same.auth, same.stageId);
+    expect("pins_cleared" in kept, "nothing moved: the key is absent").toBe(false);
+    expect((await storedOverrides(same.stageId))?.length, "positive pair: the pin is still there").toBe(1);
+
+    const bare = await rig({ n: 9, kind: "group", pools: 2 });
+    await bare.add("P10", 10);
+    expect("pins_cleared" in (await rebuildStageFixtures(bare.auth, bare.stageId))).toBe(false);
   });
 });

@@ -18,6 +18,7 @@ import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { dayLabel, dayLabelLong } from "@/lib/day-label";
 import { isResultMissing, isUnscheduledFixture } from "@/lib/division-phase";
+import { isCatchUpRoundExtKey } from "@/lib/roundrobin-late-entry";
 import {
   ROUND_SEQUENCE_STAGE_KINDS,
   BRACKET_STAGE_KINDS,
@@ -674,6 +675,14 @@ export function RunSheet({
                     <span data-run-sheet-round-span>
                       {" · "}
                       {when.from === when.to ? when.from : `${when.from}\u2013${when.to}`}
+                    </span>
+                  )}
+                  {/* W5 T23 (X-CU-7; R24 pick 2A): a round appended for a late player's catch-up matches keeps its number and says
+                      so — on the WHOLE round (`section.all`), so a filter that hides its row does not drop the tag. */}
+                  {section.all.some((f) => isCatchUpRoundExtKey(f.ext_key)) && (
+                    <span data-run-sheet-round-catch-up>
+                      {" · "}
+                      {msg("runsheet.round.catchUp")}
                     </span>
                   )}
                   {sitsOut?.get(section.round) !== undefined && (

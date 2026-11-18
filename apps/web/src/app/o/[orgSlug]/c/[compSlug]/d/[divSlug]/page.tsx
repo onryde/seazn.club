@@ -29,6 +29,7 @@ import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
 import { listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
+import { listTableWaiting, readTableLatePools } from "@/server/usecases/table-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { listNamedPools } from "@/server/usecases/stage-table-snapshot";
 import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
@@ -90,7 +91,7 @@ import { redirect } from "next/navigation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
-import { ROOT_KNOCKOUT_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
+import { ROOT_KNOCKOUT_KINDS, TABLE_STAGE_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
 import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
@@ -453,6 +454,11 @@ export default async function DivisionPage({
   // for a division nobody waits in).
   const knockoutWaiting =
     tab === "fixtures" && editable && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listKnockoutWaiting(auth, id) : [];
+  // W5 T23 (X-CU-8; Task 6 ruling I2): the same for a running root league or group — the card's "Waiting to join the table" strip,
+  // and (a group of several pools) the pools its Group field offers. Read only where a table stage exists and somebody waits.
+  const tableWaiting =
+    tab === "fixtures" && editable && stages.some((s) => TABLE_STAGE_KINDS.includes(s.kind)) ? await listTableWaiting(auth, id) : [];
+  const tableWaitingPools = tableWaiting.length > 0 ? await readTableLatePools(auth, id, division.status) : null;
   // W4 T20 (K5 "shown"; R24 pick 3A): the seed each knockout stage's newest Generate drew with, shown under its header as "Random draw · #…".
   // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
   const drawSeeds =
@@ -672,6 +678,10 @@ export default async function DivisionPage({
   // W4 T19 (X-LE-3): and on a started division whose entry stage is a root knockout still running, an add takes a free place
   // in round 1 or is refused by name — the same form says so (`divisionTakesKnockoutLateEntry`, the rail's own rule).
   const knockoutLateEntry = tab === "entrants" && editable && divisionTakesKnockoutLateEntry(division.status, stages);
+  // W5 T23 (X-CU-7, X-CU-11): and on a started division whose entry stage is a root league or group still running with its fixtures
+  // drawn, an add plays catch-up matches — the form says so, and a group of several pools offers its Group field.
+  const tableLateEntry =
+    tab === "entrants" && editable && stages.some((s) => TABLE_STAGE_KINDS.includes(s.kind)) ? await readTableLatePools(auth, id, division.status) : null;
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
@@ -998,6 +1008,7 @@ export default async function DivisionPage({
               divisionStatus={division.status}
               swissLateEntry={swissLateEntry}
               knockoutLateEntry={knockoutLateEntry}
+              tableLateEntry={tableLateEntry}
             />
           </div>
         )}
@@ -1138,6 +1149,8 @@ export default async function DivisionPage({
               swissRoundControls={swissRoundControls}
               swissCutDrift={swissCutDrift}
               knockoutWaiting={knockoutWaiting}
+              tableWaiting={tableWaiting}
+              tableLatePools={tableWaitingPools}
               drawSeeds={drawSeeds}
               thirdPlaceDropped={thirdPlaceDropped}
               startedKnockoutStageIds={startedKnockoutStageIds}

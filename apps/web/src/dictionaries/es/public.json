@@ -822,5 +822,6 @@
   "forfeit.sentence.doubleWalkover": "Ninguno de los dos se presentó — ambos pierden",
   "forfeit.sentence.doubleWalkoverNext": "Ninguno de los dos se presentó — ambos pierden. Próxima ronda: {next} pasa por incomparecencia",
   "forfeit.sentence.abandoned": "Suspendido ({reason}) — {result}",
-  "forfeit.sentence.abandonedBare": "Suspendido ({reason})"
+  "forfeit.sentence.abandonedBare": "Suspendido ({reason})",
+  "division.catchUp": "Recuperación"
 }

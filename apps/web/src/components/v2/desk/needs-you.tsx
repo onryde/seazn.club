@@ -104,7 +104,12 @@ export function needsYouItems(
             // — "1 fixtures unscheduled" on the common end-of-scheduling
             // case. `plural()` picks the `.one`/`.other` form.
             title: plural(dict, "desk.needsYou.unscheduled", a.count, locale, { division: d.name }),
-            sub: t(dict, "desk.needsYou.unscheduled.sub"),
+            // W5 T23 (X-CU-12; R24 pick 3A): when some of them are a late player's catch-up matches (written unscheduled, RB5-L13),
+            // the row says how many — the count IS the flag and clears as each gets a slot (Task 5).
+            sub:
+              a.catchUp !== undefined && a.catchUp > 0
+                ? `${t(dict, "desk.needsYou.unscheduled.sub")} ${plural(dict, "desk.needsYou.unscheduled.catchUp", a.catchUp, locale)}`
+                : t(dict, "desk.needsYou.unscheduled.sub"),
             action: { label: t(dict, "desk.needsYou.unscheduled.action"), href: routes.divisionSchedule(org, comp, d.slug) },
           });
           break;
@@ -211,7 +216,12 @@ export function needsYouItems(
             key: needsYouKey(d.id, "late_players_waiting"), severity: sev, kind: a.kind,
             title: a.table ? plural(dict, "roundrobin.lateWaiting", a.count, locale) : plural(dict, "knockout.lateWaiting", a.count, locale),
             sub: t(dict, a.table ? "roundrobin.lateWaiting.sub" : "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
-            action: { label: t(dict, a.table ? "roundrobin.lateWaiting.action" : "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+            // W5 T23 (X-CU-8; Task 6 ruling I2): a table's row lands ON the "Waiting to join the table" strip (`#table-waiting`, the
+            // stage card's strip — one root table per division), where its tap is.
+            action: {
+              label: t(dict, a.table ? "roundrobin.lateWaiting.action" : "knockout.lateWaiting.action"),
+              href: a.table ? `${routes.division(org, comp, d.slug, "fixtures")}#table-waiting` : routes.division(org, comp, d.slug, "fixtures"),
+            },
           });
           break;
         // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the table finished — named, no tap (a finished table takes

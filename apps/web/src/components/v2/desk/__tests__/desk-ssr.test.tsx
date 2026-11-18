@@ -306,7 +306,8 @@ describe("NeedsYou", () => {
       expect(rest, "one row").toEqual([]);
       expect(item).toMatchObject({ kind: "late_players_waiting", severity: "amber", title: want[count] });
       expect(item!.sub).toBe("Premier Division · Table: joined after Start, no fixtures yet.");
-      expect(item!.action).toEqual({ label: "Open fixtures", href: "/o/org/c/comp/d/premier-division?tab=fixtures" });
+      // W5 T23 (X-CU-8): the row lands ON the table card's waiting strip (`id="table-waiting"`), where the tap is.
+      expect(item!.action).toEqual({ label: "Open fixtures", href: "/o/org/c/comp/d/premier-division?tab=fixtures#table-waiting" });
       checked++;
     }
     for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {

@@ -31,6 +31,8 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     held: t(dict, "matchCentre.status.needs_decision"),
     // B5 (RB5-W2): a match a withdrawal removed - the match centre's own word for it, so the row and the page it opens agree.
     abandoned: t(dict, "matchCentre.status.abandoned"),
+    // W5 T23 (X-CU-7): the round view's tag on a late player's catch-up round.
+    catchUp: t(dict, "division.catchUp"),
     tbd: ui("schedule.tbd"),
     filterLabel: t(dict, "division.filter.showFor"),
     viewLabel: t(dict, "division.view.label"),

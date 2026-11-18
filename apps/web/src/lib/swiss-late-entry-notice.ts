@@ -26,6 +26,7 @@ import type { MessageKey } from "@/lib/messages";
 import { KO_LATE_ENTRY_PLAYED_ON, KO_LATE_ENTRY_SCHEDULE_FROZEN } from "@/lib/knockout-late-entry";
 import { swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
+import { TABLE_LATE_ENTRY_MESSAGE_KEYS, TABLE_LATE_ENTRY_PLURAL_KEYS, tableLateEntryLines } from "@/lib/roundrobin-late-entry-notice";
 
 /** The plain keys this module emits — tied to the English catalog by `satisfies`, so a missing key is a tsc error. */
 export const LATE_ENTRY_MESSAGE_KEYS = [
@@ -48,6 +49,8 @@ export const LATE_ENTRY_MESSAGE_KEYS = [
   "knockout.lateEntry.unfreezeFirst",
   // T26c fix round 1 (I2): placed, but left unscheduled because the schedule is frozen.
   "knockout.lateEntry.unscheduledFrozen",
+  // W5 T23 — a league / group late entry (`lib/roundrobin-late-entry-notice.ts`).
+  ...TABLE_LATE_ENTRY_MESSAGE_KEYS,
 ] as const satisfies readonly MessageKey[];
 export type LateEntryMessageKey = (typeof LATE_ENTRY_MESSAGE_KEYS)[number];
 
@@ -58,6 +61,8 @@ export const LATE_ENTRY_PLURAL_KEYS = [
   "swiss.lateEntry.joinedAfterLast",
   // W4 T19 — the T11 desk flag's own sentence ("1 late player waiting — add to bracket").
   "knockout.lateWaiting",
+  // W5 T23 — a league / group late entry.
+  ...TABLE_LATE_ENTRY_PLURAL_KEYS,
 ] as const;
 export type LateEntryPluralKey = (typeof LATE_ENTRY_PLURAL_KEYS)[number];
 
@@ -80,6 +85,9 @@ export interface LateEntryNoticeOptions {
   /** Whether round `round` of stage `stageId` is already open for online play (its boards' games were created). Only a
    *  (b) asks: an (a) never fires on an opened round, since an online game counts as a start (T9 C5 re-ruling). */
   onlineRoundOpen?: (stageId: string, round: number) => boolean;
+  /** W5 T23: whether the league / group the answers are about names its pools (more than one; owner R24: a one-pool division
+   *  shows no pool letter). Absent reads as not pooled: the joined-pool line is left out, never a "Pool A" nobody else shows. */
+  pooled?: boolean;
 }
 
 /**
@@ -114,7 +122,19 @@ export function lateEntryNotice(
 
   const waiting = results.filter((r) => r.format === "knockout" && r.case === "waiting").length;
   let waitingSaid = false;
+  // W5 T23: a league / group's waiting players are counted on THEIR line ("add to the table"), never folded into the bracket's.
+  const tableWaiting = results.filter((r) => (r.format === "league" || r.format === "group") && r.case === "waiting").length;
+  let tableWaitingSaid = false;
   for (const r of results) {
+    if (r.format === "league" || r.format === "group") {
+      if (r.case === "waiting") {
+        if (!tableWaitingSaid) push({ plural: "roundrobin.lateWaiting", count: tableWaiting, params: {}, tone: "todo" });
+        tableWaitingSaid = true;
+        continue;
+      }
+      for (const line of tableLateEntryLines(r, nameOf, { locale: opts.locale, pooled: opts.pooled === true })) push(line);
+      continue;
+    }
     if (r.format === "knockout") {
       if (r.case === "waiting") {
         if (!waitingSaid) push({ plural: "knockout.lateWaiting", count: waiting, params: {}, tone: "todo" });

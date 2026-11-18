@@ -257,6 +257,9 @@ export interface RebuildOutcome extends GenerateOutcome {
    *  boards `chooseDoomedBoards` keeps); `freed` — slots no rebuilt fixture inherits; `unscheduled` — rebuilt fixtures
    *  at a new position with nothing to inherit, counted only when the stage had a layout. */
   slots: { kept: number; freed: number; unscheduled: number };
+  /** W5 T23 (Task 18 review): how many manual ranks the Rebuild dropped — every pin of a pool whose membership changed
+   *  (`dropPinsOfChangedPools`). Absent when none was, as Generate's redraw reports it (`reconcile.pins_cleared`). */
+  pins_cleared?: number;
 }
 
 /**
@@ -317,13 +320,13 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
     const seatedBefore = (await readStagePins(tx, stageId)).length > 0 ? await readPoolMembers(tx, stageId) : null;
     const regen = await regenerateStageInTx(tx, auth, stageId, stage);
-    if (seatedBefore !== null) await dropPinsOfChangedPools(tx, stageId, seatedBefore);
+    const pinsCleared = seatedBefore !== null ? await dropPinsOfChangedPools(tx, stageId, seatedBefore) : 0;
     // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
     // desk flagged are in the new bracket, and the flag goes with them.
     await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
     // W5 T6 (X-CU-8; storage table G7): the same for a league or group — the late arrivals waiting on it are in the redraw.
     await tx`update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId}`;
-    return regen;
+    return { ...regen, pinsCleared };
   });
 
   // After the commit, and only after it. A refusal anywhere above rolled the
@@ -345,7 +348,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       afterScheduleWrite(write.generated.divisionId, write.generated.competitionId, "schedule", write.removedIds);
     }
   }
-  return { ...outcome, removed: write.removedIds.length, slots: write.slots };
+  return { ...outcome, removed: write.removedIds.length, slots: write.slots, ...(write.pinsCleared > 0 ? { pins_cleared: write.pinsCleared } : {}) };
 }
 // ---------------------------------------------------------------------------
 // MD-1 Task 5 (Match Day spec §7, Review Focus 4): the next Swiss round, previewed for an approval on the phone and then

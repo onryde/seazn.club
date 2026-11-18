@@ -28,6 +28,7 @@ import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
@@ -159,7 +160,9 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 // header for why it stays presentational (props only, no data hook).
 import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
 import { KnockoutWaitingStrip } from "@/components/v2/desk/knockout-waiting-strip";
+import { TableWaitingStrip } from "@/components/v2/desk/table-waiting-strip";
 import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
+import type { TableLatePools } from "@/server/usecases/table-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 import { StageThirdPlace } from "@/components/v2/stage-third-place";
@@ -515,6 +518,11 @@ interface Props {
    *  division page for an organiser on this tab): each stage card lists its own in a "Waiting to join the bracket" strip with
    *  one "Add to bracket" tap. Optional: absent ⇒ no strip (a viewer; the pre-existing panel tests). */
   knockoutWaiting?: readonly KnockoutWaitingEntrant[];
+  /** W5 T23 (X-CU-8; Task 6 ruling I2): the players waiting to join the division's running root league or group
+   *  (`listTableWaiting`) — the table card's "Waiting to join the table" strip, one "Add to the table" each. */
+  tableWaiting?: readonly KnockoutWaitingEntrant[];
+  /** W5 T23 (X-CU-11): the running root group's pools (`readTableLatePools`), for the strip's Group field. */
+  tableLatePools?: TableLatePools | null;
   /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
    *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
   drawSeeds?: Readonly<Record<string, number>>;
@@ -649,7 +657,7 @@ function scrollUnderHeader(el: HTMLElement) {
   el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
 }
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1075,7 +1083,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   async function rebuildStage(stageId: string) {
     const ok = await confirmDialog({
       title: msg("progression.rosterDrift.confirmTitle"),
-      body: [msg("progression.rosterDrift.confirmBody"), attachmentWarning(rosterDrift[stageId], msg, locale)]
+      body: [
+        msg("progression.rosterDrift.confirmBody"),
+        // W5 T23 (B2 batch M4): the confirm states the real number of fixtures the Rebuild deletes — this stage's own lines as the
+        // desk holds them (a late player's catch-up lines included) — never only the generic sentence. What it draws in their place
+        // is the server's to say, after: `rebuiltNotice`.
+        rebuildConfirmCount(fixtures.filter((f) => f.stage_id === stageId).length, msgPlural),
+        attachmentWarning(rosterDrift[stageId], msg, locale),
+      ]
         .filter(Boolean)
         .join(" "),
       confirmLabel: msg("progression.rosterDrift.confirmLabel"),
@@ -1097,7 +1112,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         `/api/v1/stages/${stageId}/rebuild`,
         { method: "POST", json: {} },
       );
-      setNotice(rebuiltNotice(out, msg));
+      setNotice(rebuiltNotice(out, msg, msgPlural));
       router.refresh();
     } catch (err) {
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
@@ -1652,6 +1667,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const tableDrift = tableCutDriftOf(stage, canEdit, tableCutDrift);
         // W4 T19: this card's waiting players (`listKnockoutWaiting` already leaves out a finished stage and a departed player).
         const waitingHere = knockoutWaiting.filter((w) => w.stageId === stage.id);
+        const tableWaitingHere = tableWaiting.filter((w) => w.stageId === stage.id);
         // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
         const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
@@ -1931,6 +1947,23 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 {/* W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after the draw and wait to join this knockout, each with
                     one "Add to bracket". An organiser's strip, drawn only while someone waits here; a tap that seats them says so in
                     the panel's own notice line (it outlives the strip), one that cannot leaves its reason and exits in the row. */}
+                {/* W5 T23 (X-CU-8): the same strip for a running root league or group — "Add to the table", with the Group field
+                    on a group of several pools. A tap that places them says so in the panel's own notice lines. */}
+                {canEdit && tableWaitingHere.length > 0 && (
+                  <TableWaitingStrip
+                    stageId={stage.id}
+                    waiting={tableWaitingHere}
+                    names={entrantNames}
+                    pools={tableLatePools?.stageId === stage.id ? tableLatePools.pools : undefined}
+                    defaultPool={tableLatePools?.stageId === stage.id ? tableLatePools.defaultKey : null}
+                    registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
+                    onPlaced={(said) => {
+                      setError(null);
+                      setNotice(said.done.length > 0 ? said.done.join(" ") : null);
+                      setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                    }}
+                  />
+                )}
                 {canEdit && waitingHere.length > 0 && (
                   <KnockoutWaitingStrip
                     stageId={stage.id}
@@ -2577,6 +2610,8 @@ export type GenerateNoticeWire = {
     suggested?: number | null;
     /** W5 T2 fix round 3: an in-place patch took lines that carried setup with it - the rows, and whose fixtures they were. */
     setups_removed?: { count: number; names: string[] };
+    /** W5 T13 fix round 1: a `regenerated` redraw dropped this many manual ranks (their pool changed). Absent at zero. */
+    pins_cleared?: number;
   };
 };
 
@@ -2628,6 +2663,8 @@ export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg:
       slots && slots.kept + slots.freed + slots.unscheduled > 0
         ? msg("progression.rosterDrift.rebuiltSlots", { kept: slots.kept, freed: slots.freed, unscheduled: slots.unscheduled })
         : null,
+      // W5 T23 (Task 18 review): the redraw's dropped manual ranks — on the wire since W5 T13, said nowhere until now.
+      pinsClearedText(reconcile.pins_cleared, msgPlural),
       msg("progression.rosterDrift.sheetsStop"),
     ]
       .filter((c): c is string => c !== null)
@@ -2718,6 +2755,23 @@ export function reshapeNotice(
 export interface RebuiltOutcome {
   removed: number;
   slots: { kept: number; freed: number; unscheduled: number };
+  /** The fixtures the Rebuild drew (GenerateResult's own `created`). Absent in a hand-built outcome: then only "replaced" is said. */
+  created?: number;
+  /** W5 T23 (Task 18 review): how many manual ranks the Rebuild dropped because their pool's membership changed. Absent at zero. */
+  pins_cleared?: number;
+}
+
+/** W5 T23 (B2 batch M4): the Rebuild confirm's count of the fixtures it deletes; nothing for a stage with none (nothing to count). */
+export function rebuildConfirmCount(fixtureCount: number, msgPlural: MsgPlural): string | null {
+  return fixtureCount > 0 ? msgPlural("progression.rosterDrift.confirmCount", fixtureCount) : null;
+}
+
+/** W5 T23 (Task 18 review): the clause that names the manual ranks a redraw dropped (Rebuild's, and Generate's own redraw). */
+function pinsClearedText(pinsCleared: number | undefined, msgPlural: MsgPlural | undefined): string | null {
+  if (pinsCleared === undefined || pinsCleared === 0) return null;
+  // A count the server reported is never dropped silently for want of the plural reader.
+  if (msgPlural === undefined) throw new Error("pinsClearedText: a cleared-pins count needs msgPlural");
+  return msgPlural("progression.rosterDrift.pinsCleared", pinsCleared);
 }
 
 /**
@@ -2731,11 +2785,17 @@ export interface RebuiltOutcome {
  * layout (`carrySlots`), so it reports 0/0/0. Exported pure, like the
  * classifiers below.
  */
-export function rebuiltNotice(out: RebuiltOutcome, msg: Msg): string {
-  const head = msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed });
+export function rebuiltNotice(out: RebuiltOutcome, msg: Msg, msgPlural?: MsgPlural): string {
   const { kept, freed, unscheduled } = out.slots;
-  if (freed + unscheduled === 0) return head;
-  return `${head} ${msg("progression.rosterDrift.rebuiltSlots", { kept, freed, unscheduled })}`;
+  return [
+    msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed }),
+    // W5 T23 (B2 batch M4): a Rebuild that drew a different number than it removed (a late player joined, or left) says how many.
+    out.created !== undefined && out.created !== out.removed ? msg("progression.rosterDrift.rebuiltCreated", { created: out.created }) : null,
+    freed + unscheduled === 0 ? null : msg("progression.rosterDrift.rebuiltSlots", { kept, freed, unscheduled }),
+    pinsClearedText(out.pins_cleared, msgPlural),
+  ]
+    .filter((c): c is string => c !== null)
+    .join(" ");
 }
 
 export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {
@@ -2810,6 +2870,13 @@ export function classifyActError(
   // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED, carrying the code as `cause`
   // (B4 fix wave), and is said by the wrap's branch above.
   if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+  }
+  // W5 T23 (B2 batch M2): every other round-robin refusal a stage action meets — Generate after Start (RR_GENERATE_AFTER_START, which
+  // points at the waiting strip's "Add to the table"), a redraw that would clear setup or drop an Add match row — in the reader's
+  // language, never the server's English. Amber: the stage stands; the sentence says what to do. A refresh: the strip it points at
+  // may hold someone the desk's last read did not.
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
     return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);

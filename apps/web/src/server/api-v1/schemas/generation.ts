@@ -106,6 +106,9 @@ export const RebuildResult = GenerateResult.extend({
     freed: z.number().int(),
     unscheduled: z.number().int(),
   }),
+  /** W5 T23 (Task 18 review): the manual ranks (rank overrides) this Rebuild dropped because their pool's membership changed.
+   *  Absent when none was — the same field Generate's redraw reports as `reconcile.pins_cleared`. */
+  pins_cleared: z.number().int().optional(),
 });
 
 /** POST /stages/{id}/unpair — clears the latest seated Swiss round onto kept shells. */

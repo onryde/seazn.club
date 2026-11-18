@@ -5,7 +5,8 @@
 // stages-panel-reshape-notice.test.ts does; the English expected strings are typed here from the copy decision, never read
 // from the dictionary under test.
 import { describe, expect, it } from "vitest";
-import { generateNoticeText, reconcileNotice, type GenerateNoticeWire } from "../stages-panel";
+import { classifyActError, generateNoticeText, rebuildConfirmCount, rebuiltNotice, reconcileNotice, type GenerateNoticeWire } from "../stages-panel";
+import { ApiV1Error } from "@/lib/client-v1";
 import { plural as pluralRuntime, t as tRuntime } from "@/lib/i18n-runtime";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
@@ -172,5 +173,81 @@ describe("the Generate notice after a knockout reconcile (FX-G2)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// W5 app-A Task 23 (B2 batch M2/M4, Task 18 review): what a redraw SAYS it did. The Rebuild confirm states the real count of fixtures
+// it deletes; the notice after it says how many it drew when that differs, and — Rebuild's and Generate's redraw alike — how
+// many manual ranks it cleared (`pins_cleared`, on the wire since W5 T13 and said nowhere until now). And Generate after Start
+// is refused in the reader's language, pointing at "Add to the table", never the server's English. Expected English typed out.
+describe("W5 T23 the redraw's counts and the round-robin refusals on the desk", () => {
+  const SLOTS = { kept: 0, freed: 0, unscheduled: 0 };
+
+  it("the Rebuild confirm states how many fixtures it deletes; a stage with none says no count (the empty case)", () => {
+    const { msgPlural } = bind("en");
+    expect(rebuildConfirmCount(12, msgPlural)).toBe("It deletes 12 fixtures.");
+    expect(rebuildConfirmCount(1, msgPlural)).toBe("It deletes 1 fixture.");
+    expect(rebuildConfirmCount(0, msgPlural)).toBeNull();
+  });
+
+  it("a Rebuild that drew another number says so; a same-size redraw keeps its one line (the w3 notice)", () => {
+    const { msg, msgPlural } = bind("en");
+    expect(rebuiltNotice({ removed: 10, created: 15, slots: SLOTS }, msg as never, msgPlural)).toBe(
+      "Rebuilt — 10 fixture(s) replaced. 15 fixture(s) drawn in their place.",
+    );
+    expect(rebuiltNotice({ removed: 10, created: 10, slots: SLOTS }, msg as never, msgPlural)).toBe("Rebuilt — 10 fixture(s) replaced.");
+  });
+
+  it("pins_cleared is named on Rebuild and on Generate's redraw, singular and plural; zero or absent says nothing", () => {
+    const { msg, msgPlural } = bind("en");
+    expect(rebuiltNotice({ removed: 6, created: 6, slots: SLOTS, pins_cleared: 2 }, msg as never, msgPlural)).toBe(
+      "Rebuilt — 6 fixture(s) replaced. 2 manual ranks were cleared: their groups changed.",
+    );
+    expect(rebuiltNotice({ removed: 6, created: 6, slots: SLOTS, pins_cleared: 1 }, msg as never, msgPlural)).toContain(
+      "1 manual rank was cleared: its group changed.",
+    );
+    expect(rebuiltNotice({ removed: 6, created: 6, slots: SLOTS, pins_cleared: 0 }, msg as never, msgPlural)).toBe("Rebuilt — 6 fixture(s) replaced.");
+    const redraw = (pins_cleared?: number) =>
+      reconcileNotice({ kind: "regenerated", placed: [], vacated: [], vacated_seats: 0, ...(pins_cleared === undefined ? {} : { pins_cleared }) }, msg as never, msgPlural);
+    expect(redraw(3)).toContain("3 manual ranks were cleared: their groups changed.");
+    expect(redraw(undefined)).not.toContain("manual rank");
+    expect(redraw(0)).not.toContain("manual rank");
+  });
+
+  it("a cleared-pins count is never dropped for want of the plural reader", () => {
+    const { msg } = bind("en");
+    expect(() => rebuiltNotice({ removed: 6, slots: SLOTS, pins_cleared: 2 }, msg as never)).toThrow(/msgPlural/);
+  });
+
+  it("every locale says the new counts translated, with no raw key and no unfilled placeholder", () => {
+    let checked = 0;
+    const english = (() => {
+      const { msg, msgPlural } = bind("en");
+      return rebuiltNotice({ removed: 6, created: 9, slots: SLOTS, pins_cleared: 2 }, msg as never, msgPlural);
+    })();
+    for (const locale of LOCALES) {
+      const { msg, msgPlural } = bind(locale);
+      const line = rebuiltNotice({ removed: 6, created: 9, slots: SLOTS, pins_cleared: 2 }, msg as never, msgPlural);
+      expect(line, locale).toMatch(/6\D+9\D+2/);
+      expect(line, `${locale}: no raw key`).not.toMatch(/progression\.rosterDrift/);
+      expect(line, `${locale}: no placeholder`).not.toMatch(/\{\w+\}/);
+      expect(rebuildConfirmCount(4, msgPlural), locale).toMatch(/4/);
+      if (locale !== "en") expect(line, `${locale} translated`).not.toBe(english);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("B2 M2: Generate after Start is said in the reader's language and points at Add to the table, amber, with a refresh", () => {
+    const { msg } = bind("en");
+    const err = new ApiV1Error("Play has started", 409, "RR_GENERATE_AFTER_START");
+    expect(classifyActError(err, msg as never, "en")).toEqual({
+      tone: "warning",
+      text: "Play has started, so Generate won't change the fixtures. Players waiting to join are listed on this stage: use Add to the table.",
+      refresh: true,
+    });
+    const fr = classifyActError(err, bind("fr").msg as never, "fr");
+    expect(fr.text, "fr: not the server's English").not.toBe(err.message);
+    expect(fr.text).not.toMatch(/roundrobin\.refusal/);
   });
 });

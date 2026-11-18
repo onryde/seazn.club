@@ -822,5 +822,6 @@
   "forfeit.sentence.doubleWalkover": "Neither side turned up — both lose",
   "forfeit.sentence.doubleWalkoverNext": "Neither side turned up — both lose. Next round: walkover for {next}",
   "forfeit.sentence.abandoned": "Abandoned ({reason}) — {result}",
-  "forfeit.sentence.abandonedBare": "Abandoned ({reason})"
+  "forfeit.sentence.abandonedBare": "Abandoned ({reason})",
+  "division.catchUp": "Catch-up"
 }

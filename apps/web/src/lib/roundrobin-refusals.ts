@@ -54,7 +54,7 @@ export interface RoundRobinRefusalRow {
 export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefusalRow> = {
   RR_GENERATE_AFTER_START: {
     status: 409,
-    en: "Play has started, so Generate won't change the fixtures. Use Add late player.",
+    en: "Play has started, so Generate won't change the fixtures. Players waiting to join are listed on this stage: use Add to the table.",
     key: "roundrobin.refusal.RR_GENERATE_AFTER_START",
   },
   RR_LATE_ENTRY_STAGE_COMPLETE: {
