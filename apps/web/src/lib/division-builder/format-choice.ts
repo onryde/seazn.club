@@ -52,9 +52,9 @@ export interface FormatKnobsShown {
 export function formatKnobsShown(template: string): FormatKnobsShown {
   return {
     secondStage: template === "league_ko" || template === "groups_ko" || template === "group_stepladder" || template === "swiss_knockout",
-    pools: template === "groups_ko",
+    pools: template === "groups_ko" || template === "group_only",
     rounds: template === "swiss" || template === "swiss_playoff" || template === "swiss_knockout",
-    legs: template === "league" || template === "league_ko" || template === "groups_ko" || template === "group_stepladder",
+    legs: template === "league" || template === "league_ko" || template === "groups_ko" || template === "group_only" || template === "group_stepladder",
     carry: templateHasProgression(template),
     thirdPlace: hasKnockoutStage(template),
   };

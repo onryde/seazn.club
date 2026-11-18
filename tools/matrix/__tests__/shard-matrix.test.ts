@@ -507,7 +507,8 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     // Match Day C9 review I5, option 2: the ten cells the builder does not offer are 🚫 (L1 176 -> 166 driven, L2 62 -> 56;
     // layers-grid.test.ts), and so are the retired Triple round robin's (owner ruling 2026-11-01: L1 166 -> 155, L2 56 -> 53). W4 app PR B T15: knockout_third_place is a builder knob row, so its 11 cells (one per sport) are driven again: L1 155 -> 166.
     const l1 = runs.get("L1")!.map((r) => r.cases.filter((c) => c.planned !== true).length);
-    expect(l1.reduce((a, b) => a + b, 0)).toBe(155 + 11);
+    // W5 T14 (X-BD-2): group_only is a template row now, so ten of its eleven cells (badminton's was the box-league gallery card's, never an L1 grid case) were 🚫 and are now driven through the builder's card: L1 166 -> 176.
+    expect(l1.reduce((a, b) => a + b, 0)).toBe(155 + 11 + 10);
     expect(new Set(l1).size).toBeGreaterThan(1);
     // W4 T16 on top: the 22 refused standalone cells leave the L2 grid with 5 driven runs of their own (L2 53 -> 48;
     // layers-grid.test.ts). L1's driven count is untouched: those API-only cells were 🚫 there, never driven.
@@ -589,7 +590,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
     expect(m.include.map((j) => j.id)).toEqual(["l1-s1", "l1-s2", "l1-s3", "l1-s4", "l1-s5", "l1-s6", "l1-s7", "l1-s8", "l2-s1", "l2-s2", "l3-s1", "l3-s2"]);
     expect(m.include.every((j) => Object.keys(j).sort().join() === "args,id,k,layer,of,timeout")).toBe(true);
     expect(m.include.every((j) => j.timeout <= 300)).toBe(true);
-    expect(io.err).toMatch(/L1.*207.*166/);
+    expect(io.err).toMatch(/L1.*207.*176/);
   });
 
   it("--scope smoke is 6 jobs; --scope pr-sample --rows <r> is one; and --rows beside full or smoke is ignored", () => {

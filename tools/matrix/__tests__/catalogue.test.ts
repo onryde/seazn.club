@@ -62,9 +62,9 @@ function preferredVariantPin(src: string): Record<string, string> {
 const takeOf = (stages: { progression: { sources: { take: unknown[] }[] } | null }[]) => stages[1]!.progression!.sources[0]!.take;
 
 describe("catalogue — empty case first", () => {
-  it("is never empty: 16 template rows + 5 API-only rows, 11 sports", () => {
-    expect(TEMPLATE_ROW_KEYS.length).toBe(16);
-    expect(API_ONLY_ROWS.length).toBe(5);
+  it("is never empty: 17 template rows + 4 API-only rows, 11 sports", () => {
+    expect(TEMPLATE_ROW_KEYS.length).toBe(17);
+    expect(API_ONLY_ROWS.length).toBe(4);
     expect(ROW_KEYS.length).toBe(21);
     expect(new Set(ROW_KEYS).size).toBe(21);
     expect(SPORT_KEYS.length).toBe(11);
@@ -122,7 +122,7 @@ describe("catalogue — rows", () => {
       expect(stagesForRow(row).map((s) => [s.kind, s.name]), row).toEqual(own.map((s) => [s.kind, s.name]));
       checked++;
     }
-    expect(checked).toBe(16);
+    expect(checked).toBe(17);
   });
 
   it("stamps seq 1..n and the builder's knob defaults (swiss rounds, legs)", () => {
@@ -284,11 +284,16 @@ describe("API-only rows — bodies derived from product authorities", () => {
       expect(builderStages(row), row).toEqual(product(row));
       checked++;
     }
-    expect(checked).toBe(16);
+    expect(checked).toBe(17);
   });
 
-  it("group_only = the builder's groups_ko stage 1, alone", () => {
+  it("X-BD-2 the harness no longer routes group_only API-only: it is a template row, built by its own card, and still groups_ko's stage 1 alone", () => {
+    // differential: before W5 T14 group_only sat in API_ONLY_ROWS (no picker card), so apiOnlyUiRoute named a wave (W5) that owed one
+    expect((API_ONLY_ROWS as readonly string[]).includes("group_only")).toBe(false);
+    expect((TEMPLATE_ROW_KEYS as readonly string[]).includes("group_only")).toBe(true);
+    expect(ROW_KEYS.indexOf("group_only"), "keeps its place in the row order").toBe(TEMPLATE_ROW_KEYS.length - 1);
     expect(stagesForRow("group_only")).toEqual([{ ...product("groups_ko")[0], seq: 1 }]);
+    expect(stagesForRow("group_only")).toHaveLength(1);
   });
 
   it("group_only takes the builder's clamped poolCount knob; group_group_ko keeps the template's pool counts whatever the knob says", () => {
@@ -346,7 +351,7 @@ describe("API-only rows — bodies derived from product authorities", () => {
     } finally {
       rows.splice(rows.indexOf("zz_api_only"), 1);
     }
-    expect(API_ONLY_ROWS).toHaveLength(5);
+    expect(API_ONLY_ROWS).toHaveLength(4);
   });
 
   it("generateArm fails loudly on source it cannot bound — no closer, no function, no arm", () => {

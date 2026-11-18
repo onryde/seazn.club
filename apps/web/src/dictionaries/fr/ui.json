@@ -2461,6 +2461,8 @@
   "format.template.league_ko.help": "Poule unique puis les meilleurs en élimination directe.",
   "format.template.groups_ko.label": "Poules + élimination directe",
   "format.template.groups_ko.help": "Poules de 2 à 8 équipes ; les meilleurs passent en élimination directe.",
+  "format.template.group_only.label": "Poules seules",
+  "format.template.group_only.help": "Toutes rondes par poule ; les classements des poules sont le résultat.",
   "format.template.group_stepladder.label": "Groupe + escalier",
   "format.template.group_stepladder.help": "Poule unique puis une finale en escalier — la tête de série la plus basse grimpe.",
   "format.template.group_playoffs.label": "Groupe + Playoffs (style IPL)",

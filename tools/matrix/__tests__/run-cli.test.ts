@@ -2086,12 +2086,13 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
 
   it("--set api-only-browser --driver browser: one 🚫 per API-only row, in catalogue order, naming W4/W5 (D7 as ruled) — no browser, no org; exit 0; never vacuous, never an error red", async () => {
     const io = capture();
-    const WAVE: Readonly<Record<string, string>> = { group_only: "W5" };
+    const WAVE: Readonly<Record<string, string>> = { group_group_ko: "W5" };
     // W4 T16 (ruling 269): the refused standalone rows are in no layer, so the set holds one 🚫 per OFFERED API-only row.
     const refusedRows = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
     // W4 app PR B T15: knockout_third_place is a builder knob row (the Third place control builds it), so it is no 🚫 row either.
     const owed = API_ONLY_ROWS.filter((r) => !refusedRows.includes(r) && !isKnobRow(r));
-    expect([...owed], "the rows still owed a control: the two group formats, W5's").toEqual(["group_only", "group_group_ko"]);
+    // W5 T14 (X-BD-2): group_only left - the picker's Groups only card builds it - so only the two-tier group format is still owed one.
+    expect([...owed], "the rows still owed a control: the two-tier group format, W5's").toEqual(["group_group_ko"]);
     expect(isKnobRow("knockout_third_place"), "the third-place row is the one that left").toBe(true);
     expect(API_ONLY_ROWS.length - refusedRows.length - owed.length, "API-only rows offered and built by the builder").toBe(1);
     // W5 X-BD-3: the super-groups card reaches group_group_ko on generic, so only group_only is still 🚫 here (no card builds it on generic).
@@ -2386,9 +2387,11 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(OFFERED);
     expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     const planned = r.cases.filter((c) => c.planned === true);
-    // 20 API-only cells no builder control builds (53 less the 22 the product refuses, W4 T16, less knockout_third_place's 11 — the builder's Third place control builds it, W4 app PR B T15), plus the cells the builder does not
+    // 10 API-only cells no builder control builds (4 rows x 11 sports = 44, less the 22 the product refuses, W4 T16, less knockout_third_place's 11 — the
+    // builder's Third place control builds it, W4 app PR B T15, less group_group_ko's t20-super8 cell, the one a gallery card reaches; group_only left the API-only
+    // rows when the picker gained its Groups only card, W5 T14), plus the cells the builder does not
     // offer (C9 review I5, option 2; the retired Triple round robin on every sport, owner ruling 2026-11-01).
-    // W5 X-BD-3: and the super-groups card reaches group_group_ko on every sport, so those 10 (cricket's is t20-super8) are driven: 20 -> 10.
+    // W5 X-BD-3: and the super-groups card reaches group_group_ko on every sport but cricket (t20-super8), so those 10 are driven too.
     const noPathPlanned = 10 + NO_ORGANISER_PATH_CELLS.length;
     expect(planned).toHaveLength(noPathPlanned);
     expect(planned.every((c) => c.state === "no_path" && ((API_ONLY_ROWS as readonly string[]).includes(c.row) || isNoOrganiserPathCell(`${c.row}|${c.sport}`)))).toBe(true);
@@ -3297,7 +3300,7 @@ describe("runSlice — a plain browser plan reaches the template cells (W1d Task
   const baseline = (only: string) => planW1Driving((s) => offlineBuilderDefault(s), { only });
   const idsOf = (dir: string, runId: string) => resultsIn(dir, runId).cases.map((c) => c.caseId);
 
-  it("--driver browser --only group_only|badminton plans every script through the box-league card: its own variant, template set, each case on its own org", async () => {
+  it("--driver browser --only group_only|badminton plans every script through the BUILDER's Groups only card (X-BD-2): the builder's variant, no template, each case on its own org", async () => {
     const io = capture();
     const dir = dirFor();
     const fb = fakeBrowserRun();
@@ -3307,12 +3310,15 @@ describe("runSlice — a plain browser plan reaches the template cells (W1d Task
     expect(code, `a refusal or abort would plan nothing: ${io.err()}`).toBeLessThan(EXIT.REFUSED);
     const plain = baseline("group_only|badminton");
     expect(plain.length, "the baseline plans the cell").toBeGreaterThan(0);
+    // differential: this cell was re-planned onto the box-league gallery card (variant "short", template set) while no builder control built group_only.
     const card = catalog("box-league");
     expect([card.sportKey, card.variantKey]).toEqual(["badminton", "short"]);
-    // The case has teeth only if the template's variant is not what the builder would have picked.
+    // The case has teeth only if the template's variant is not what the builder picks: the plan carries the builder's.
     expect(offlineBuilderDefault("badminton")).not.toBe(card.variantKey);
-    expect(fb.opts.map((o) => o.spec)).toEqual(plain.map((s) => ({ ...s, caseId: `group_only|badminton|${card.variantKey}|${s.scenario}`, variant: card.variantKey, template: "box-league" })));
-    expect(idsOf(dir, "t20a")).toEqual(plain.map((s) => `group_only|badminton|${card.variantKey}|${s.scenario}@1280`));
+    expect(plain.every((s) => s.variant === offlineBuilderDefault("badminton") && s.template === undefined)).toBe(true);
+    expect(fb.opts.map((o) => o.spec)).toEqual(plain);
+    expect(fb.opts.some((o) => o.spec.template !== undefined), "no case drives a gallery card").toBe(false);
+    expect(idsOf(dir, "t20a")).toEqual(plain.map((s) => `${s.caseId}@1280`));
     // Each case is provisioned its own org, so the public-dashboard quota a template create spends is that org's and
     // never accumulates across cases (the gallery sends no visibility: page-objects.test.ts pins that text).
     expect(d.orgs).toHaveLength(plain.length);

@@ -17,11 +17,11 @@
 //
 // Enumerated, never sampled:
 //   templates — every non-retired STAGE_TEMPLATES entry whose first built stage is a league or group (lib/format-templates.ts),
-//               pinned to the five the brief names. A sixth (Task 14's group_only) reds the pin rather than slipping past.
+//               pinned to the six the brief names (Task 14 added group_only). A seventh reds the pin rather than slipping past.
 //   kinds     — every `entrants.kind` (EntrantKind), each played by a sport whose engine module DECLARES it and offers every
 //               entry template (`entrantModel.kinds`, `templatesForSport`), its natural sport first. Derived, never typed.
 //   cases     — the wire's four (`catch_up`, `rebuild_offered`, `refused`, `waiting`) plus `tapped` (a waiting arrival placed by
-//               the organiser's one tap, answering `catch_up` with source "organiser"): 5 x 3 x 5 = 75.
+//               the organiser's one tap, answering `catch_up` with source "organiser"): 6 x 3 x 5 = 90.
 //   fed tail  — the four bracket-fed templates x kinds = 12: the bracket never seats a late entrant (X-LE-2, RB5-L2).
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -74,7 +74,7 @@ const ENTRY_TEMPLATES = STAGE_TEMPLATES.filter((t) => {
   const first = t.build(KNOBS)[0];
   return first !== undefined && (first.kind === "league" || first.kind === "group");
 }).map((t) => t.key);
-const PINNED_ENTRY_TEMPLATES = ["league", "league_ko", "groups_ko", "group_stepladder", "group_playoffs"];
+const PINNED_ENTRY_TEMPLATES = ["league", "league_ko", "groups_ko", "group_only", "group_stepladder", "group_playoffs"];
 /** The entry templates with a bracket fed from the table. */
 const FED_TEMPLATES = ENTRY_TEMPLATES.filter((t) => buildTemplateStages(t, KNOBS).length > 1);
 const PINNED_FED_TEMPLATES = ["league_ko", "groups_ko", "group_stepladder", "group_playoffs"];
@@ -650,7 +650,7 @@ const RULES: Record<CaseKey, string> = {
 const NEEDS_BACK: Record<CaseKey, boolean> = { catch_up: false, rebuild_offered: false, refused: true, waiting: true, tapped: true };
 
 describe("W5 T7: the axes are what the registry and the templates declare", () => {
-  it("the entry templates are the five the brief names, and the bracket-fed ones four", () => {
+  it("the entry templates are the six the brief names, and the bracket-fed ones four", () => {
     expect(ENTRY_TEMPLATES.length, "anti-vacuity: entry templates").toBeGreaterThan(0);
     expect([...ENTRY_TEMPLATES].sort()).toEqual([...PINNED_ENTRY_TEMPLATES].sort());
     expect([...FED_TEMPLATES].sort()).toEqual([...PINNED_FED_TEMPLATES].sort());
@@ -719,13 +719,13 @@ describe.skipIf(!HAS_DB)("W5 T7: a bracket fed from a table never seats a late e
 });
 
 describe.skipIf(!HAS_DB)("W5 T7: the sweep checked every cell", () => {
-  it("75 cells (5 templates x 3 kinds x 5 cases) and 12 fed-tail rows, none vacuous", () => {
+  it("90 cells (6 templates x 3 kinds x 5 cases) and 12 fed-tail rows, none vacuous", () => {
     const expectedCells = ENTRY_TEMPLATES.length * KINDS.length * CASES.length;
     const expectedFed = FED_TEMPLATES.length * KINDS.length;
     console.log(`W5 T7 matrix: checked ${checked.size}/${expectedCells} cells, ${fedChecked.size}/${expectedFed} fed-tail rows`);
-    expect(expectedCells, "the brief's arithmetic: 5 x 3 x 5").toBe(75);
+    expect(expectedCells, "the brief's arithmetic: 6 x 3 x 5").toBe(90);
     expect(expectedFed, "the brief's arithmetic: 4 x 3").toBe(12);
-    expect(checked.size, "every cell ran to the end").toBe(75);
+    expect(checked.size, "every cell ran to the end").toBe(90);
     expect(fedChecked.size, "every fed-tail row ran to the end").toBe(12);
     for (const t of ENTRY_TEMPLATES) for (const k of KINDS) for (const c of CASES) expect(checked.has(cellKey(t, k, c)), cellKey(t, k, c)).toBe(true);
   });

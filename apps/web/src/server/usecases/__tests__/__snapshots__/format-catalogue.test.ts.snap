@@ -51,6 +51,16 @@ exports[`format catalogue — shape regression (F1 Task 5) > every shipped forma
     "stages": "group:->knockout:Q",
   },
   {
+    "key": "group_only",
+    "rounds": [
+      [
+        "Group A",
+        "Group B",
+      ],
+    ],
+    "stages": "group:-",
+  },
+  {
     "key": "group_stepladder",
     "rounds": [
       [

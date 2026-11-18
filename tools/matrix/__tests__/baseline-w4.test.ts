@@ -65,7 +65,7 @@ describe("W4 T17: the committed L3 baseline is the W4 truth run", () => {
     // the whole row is gone, every scenario, so no sibling cell kept the red alive
     expect(BASELINE.cases.filter((c) => c.row === "stepladder_only" || c.row === "page_playoff_only")).toEqual([]);
     // the pair: the other API-only rows are still offered where they were
-    expect(API_ONLY_ROWS.filter((r) => SPORT_KEYS.some((s) => refusedCell(r, s) === null)).sort()).toEqual(["group_group_ko", "group_only", "knockout_third_place"]);
+    expect(API_ONLY_ROWS.filter((r) => SPORT_KEYS.some((s) => refusedCell(r, s) === null)).sort()).toEqual(["group_group_ko", "knockout_third_place"]); // group_only left the list: the picker has its card (W5 T14, X-BD-2)
   });
 
   it("nothing ELSE the W3 baseline held works went red in W4 (the judge's regression, counted over the whole L3)", () => {

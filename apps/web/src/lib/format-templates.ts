@@ -165,6 +165,15 @@ export const STAGE_TEMPLATES: {
     },
   },
   {
+    // W5 T14 (X-BD-2, RB5-S1; NEW-W1d-5): pools, each a round robin, and the pool tables are the result - groups_ko's first stage
+    // alone. No progression, so no second stage, no Top N and no carry: the knobs are Pools and Legs (buildTemplateStages stamps both
+    // on every group stage). The stage is groups_ko's own, so the two formats draw a pool identically.
+    key: "group_only",
+    build: ({ poolCount }) => [
+      { kind: "group", name: "Group stage", config: { legs: 1, pools: { count: poolCount } }, progression: null },
+    ],
+  },
+  {
     key: "group_stepladder",
     build: ({ qualified: q }) => [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
@@ -405,6 +414,9 @@ export function detectTemplate(
   }
   if (kinds === "league+knockout") return "league_ko";
   if (kinds === "group+knockout") return "groups_ko";
+  // A lone group stage is group_only - unless it carries a progression: it has nothing to progress from, so that is a custom graph
+  // (re-applying group_only would drop it). Pools and legs are the stage's own knobs, whatever their value.
+  if (kinds === "group") return stages[0]?.progression == null ? "group_only" : null;
   if (kinds === "league+stepladder") return "group_stepladder";
   if (kinds === "league+page_playoff") return "group_playoffs";
   if (kinds === "swiss") return "swiss";

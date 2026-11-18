@@ -9,7 +9,7 @@ import { previewDivisionFixtures, type PreviewStageInput } from "@/server/usecas
 import { STAGE_TEMPLATES, buildTemplateStages, type TemplateKnobs } from "@/lib/format-templates";
 import { estimateMinutes, estimatePlateField, estimateTemplate } from "../format-estimate";
 import { foldFirstLosses } from "./first-loss-fold";
-import { formatBoundIssue, formatBoundText } from "../format-choice";
+import { formatBoundIssue, formatBoundText, formatChoiceFromStages, formatKnobsShown, formatStagesFor } from "../format-choice";
 import { msg } from "@/lib/messages";
 
 const BYE = "Bye";
@@ -116,6 +116,70 @@ describe("X-BD-1 the builder's Next refuses with the same numbers the server doe
       checked++;
     }
     expect(checked).toBe(3);
+  });
+});
+
+// W5 Task 14 (X-BD-2, NEW-W1d-5): `group_only` is the picker's pools-only card. Its estimate is the group stage's own, its pool knob is
+// judged against the field like groups_ko's (X-BD-1), and it has no Top N so the cut gate (X-BD-8) never applies to it.
+describe("X-BD-2 group_only in the format picker's model", () => {
+  const TEMPLATE = "group_only";
+
+  it("X-BD-2 the estimate equals the group stage's: the real draw's matches and rounds, one stage, every field 4..16 x pools x legs", () => {
+    let checked = 0;
+    for (let n = 4; n <= 16; n++) {
+      for (const poolCount of [2, 3, 4]) {
+        if (poolCount * 2 > n) continue;
+        for (const legs of [1, 2]) {
+          const knobs: TemplateKnobs = { qualified: 4, swissRounds: 3, poolCount, legs };
+          const drafts = buildTemplateStages(TEMPLATE, knobs);
+          const phase = previewDivisionFixtures(drafts as unknown as PreviewStageInput[], n)[0]!;
+          const est = estimateTemplate(TEMPLATE, n, knobs);
+          expect(est.stages, `n=${n}`).toHaveLength(1);
+          expect(est.matches, `n=${n} pools ${poolCount} legs ${legs}`).toBe(phase.sections.reduce((sum, s) => sum + realMatches(s), 0));
+          // The same stage groups_ko plays first.
+          expect(est.stages[0], `n=${n}`).toEqual(estimateTemplate("groups_ko", n, knobs).stages[0]);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity").toBeGreaterThan(30);
+  });
+
+  it("shows the Pools and Legs knobs and none of the knockout ones", () => {
+    expect(formatKnobsShown(TEMPLATE)).toEqual({ secondStage: false, pools: true, rounds: false, legs: true, carry: false, thirdPlace: false });
+  });
+
+  it("X-BD-1 the pools knob is judged against the field exactly as groups_ko's is, and the Top N is never judged (n 2..16 x pools 2..8 x a Top N from 2 to far over the field)", () => {
+    let checked = 0, refused = 0;
+    for (let n = 2; n <= 16; n++) {
+      for (let pools = 2; pools <= 8; pools++) {
+        for (const qualified of [2, 32, 99]) {
+          const knobs = { qualified, swissRounds: 3, poolCount: pools };
+          const issue = formatBoundIssue(TEMPLATE, knobs, n);
+          const koIssue = formatBoundIssue("groups_ko", { ...knobs, qualified: 2 }, n);
+          // The pool-size half is the same sentence's numbers; only groups_ko can carry a cut refusal.
+          expect(issue?.poolSize, `${n} into ${pools}`).toEqual(koIssue?.poolSize);
+          expect(issue?.cut, `${n} into ${pools} with a Top ${qualified}`).toBeUndefined();
+          if (issue !== null) { expect(issue.field).toBe("pools"); refused++; }
+          checked++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(15 * 7 * 3);
+    expect(refused).toBeGreaterThan(0);
+    // The named case: 7 into 4 pools offers 3, exactly as for Groups + Knockout.
+    expect(formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 4 }, 7)!.poolSize).toEqual({ entrants: 7, pools: 4, size: 1, suggested: 3 });
+    expect(formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 3 }, 7)).toBeNull();
+  });
+
+  it("the picker sends one group stage with the clamped knobs and no third-place flag (formatStagesFor)", () => {
+    const stages = formatStagesFor(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 0, legs: 2, standingsCarry: "none", thirdPlace: "shared" }, 12);
+    expect(stages).toEqual([{ kind: "group", name: "Group stage", config: { legs: 2, pools: { count: 2 } }, progression: null }]);
+  });
+
+  it("a stored group_only division reopens as group_only at its own pools and legs (formatChoiceFromStages)", () => {
+    const stored = [{ kind: "group", config: { legs: 2, pools: { count: 5 } }, progression: null }];
+    expect(formatChoiceFromStages(stored)).toMatchObject({ template: "group_only", poolCount: 5, legs: 2, qualified: 4, standingsCarry: "none", thirdPlace: "shared" });
   });
 });
 

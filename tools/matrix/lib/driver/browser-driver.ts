@@ -699,6 +699,11 @@ export class BrowserDriver implements OrganiserDriver {
     const compSlug = this.#competitions.get(competitionId);
     if (compSlug === undefined) throw new DriverMisuse(`browser: competition ${competitionId} was not created by this driver, or was refused — there is no slug to build a division in`);
     const row = this.#spec.row;
+    // A template case's division is its card's, on ANY row: group_only left the API-only rows when the picker gained its own card (W5 T14),
+    // so the API-only guard below no longer stands between box-league's case and a second division built through the blank wizard.
+    if (this.#spec.template !== undefined) {
+      throw new DriverMisuse(`browser: ${row}|${this.#spec.sport} is built through catalog template ${this.#spec.template} — its division is the card's (createFromTemplate), never a createDivision`);
+    }
     const apiOnly = isApiOnly(row);
     if (apiOnly || !this.#wants("createDivision")) {
       // Judged first: a refused path records no invocation.

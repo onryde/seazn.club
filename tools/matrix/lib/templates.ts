@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { API_ONLY_ROWS, SPORT_KEYS, stagesForRow, type ApiOnlyRowKey, type StagePostBody } from "./catalogue.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "./catalogue.ts";
 import type { EntrantKind, TemplateChoiceInput } from "./driver/types.ts";
 import type { CaseSpec } from "./scenarios/types.ts";
 
@@ -130,10 +130,10 @@ export function templateField(key: string, dir: string = CATALOG_DIR, pick?: Tem
 
 /** The API-only row each driven template builds (the two template-only cells,
  *  ruling 47). The cell's sport is the template's own (templateField). */
-export const TEMPLATE_ROW: Readonly<Record<string, ApiOnlyRowKey>> = Object.freeze({ "box-league": "group_only", "t20-super8": "group_group_ko", "super-groups": "group_group_ko" });
+export const TEMPLATE_ROW: Readonly<Record<string, RowKey>> = Object.freeze({ "box-league": "group_only", "t20-super8": "group_group_ko", "super-groups": "group_group_ko" });
 
 /** The row `key` builds, checked against the catalogue's bodies for that row. */
-export function templateRow(key: string, dir: string = CATALOG_DIR): ApiOnlyRowKey {
+export function templateRow(key: string, dir: string = CATALOG_DIR): RowKey {
   if (!Object.prototype.hasOwnProperty.call(TEMPLATE_ROW, key)) throw new UnknownTemplate(key, `the harness drives only ${Object.keys(TEMPLATE_ROW).join(", ")} (TEMPLATE_ROW)`);
   const row = TEMPLATE_ROW[key];
   const built = templateField(key, dir).stageKinds;

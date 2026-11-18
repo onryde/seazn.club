@@ -42,13 +42,15 @@ const REFUSED_API_ONLY_CELLS = REFUSED_CELLS.filter((c) => (API_ONLY_ROWS as rea
 /** Every no-organiser-path cell is a BUILDER row's too (Match Day C9 review I5, option 2; the retired Triple round robin,
  *  owner ruling 2026-11-01): it comes off the driven count and onto the 🚫 one, and every L2 run on it is 🚫. */
 const NO_PATH_TEMPLATE_CELLS = NO_ORGANISER_PATH_CELLS.filter((c) => (TEMPLATE_ROW_KEYS as readonly string[]).includes(c.split("|")[0]!)).length;
-/** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. */
+/** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. A template whose row
+ *  is a BUILDER row (box-league builds group_only since W5 T14 gave it a picker card) reaches no API-only cell, so it is not one. */
 const TEMPLATE_CELLS = (() => {
   const cells = new Map<string, { key: string; row: string; sport: string; variant: string | null }>();
   // W5 X-BD-3: an any-sport template (super-groups) has no sport of its own: the catalog JSON's "any" reaches the row on EVERY
   // engine sport, the case playing variantFor's variant for its sport. A card with a sport of its own holds its cell
   // (cricket's group_group_ko stays t20-super8), so those are placed first and an "any" card only fills the cells still free.
-  const byOwnSportFirst = Object.entries(TEMPLATE_ROW).sort(([a], [b]) => Number(rawCatalogTemplate(a).divisions[0]!.sportKey === "any") - Number(rawCatalogTemplate(b).divisions[0]!.sportKey === "any"));
+  const apiOnly = Object.entries(TEMPLATE_ROW).filter(([, row]) => (API_ONLY_ROWS as readonly string[]).includes(row));
+  const byOwnSportFirst = apiOnly.sort(([a], [b]) => Number(rawCatalogTemplate(a).divisions[0]!.sportKey === "any") - Number(rawCatalogTemplate(b).divisions[0]!.sportKey === "any"));
   for (const [key, row] of byOwnSportFirst) {
     const d = rawCatalogTemplate(key).divisions[0]!;
     const any = d.sportKey === "any";
@@ -108,9 +110,9 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered s
     expect(REFUSED_TEMPLATE_CELLS).toBe(CHESS_REFUSED_CELLS.length);
     expect(REFUSED_API_ONLY_CELLS).toBe(STANDALONE_REFUSED_CELLS.length);
     expect(NO_PATH_TEMPLATE_CELLS).toBe(NO_ORGANISER_PATH_CELLS.length);
-    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size + KNOB_DRIVEN); // 166 (155 + the 11 knockout_third_place cells)
+    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size + KNOB_DRIVEN); // 176 (166 + the 10 group_only cells that left the API-only rows, W5 T14; the 11 knockout_third_place cells are in)
     const p = planned(cases);
-    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS - KNOB_DRIVEN); // 41
+    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS - KNOB_DRIVEN); // 31
     expect(driven(cases).length + p.length).toBe(OFFERED);
     let checked = 0;
     for (const c of p) {
@@ -394,7 +396,7 @@ describe("the grid takes no filter: the whole grid is the plan (refused by name,
 });
 
 describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare --layer is the slice (the second call: the default did not move)", () => {
-  it("--layer L1 --scope grid is the 207 offered cells (166 driven, 41 planned); --layer L1 is still the slice's 6", () => {
+  it("--layer L1 --scope grid is the 207 offered cells (176 driven, 31 planned); --layer L1 is still the slice's 6", () => {
     const grid = livePlan("--layer L1 --scope grid");
     expect(grid.plan).toBe("--layer L1 --scope grid");
     expect(grid.layered).toBe(true);

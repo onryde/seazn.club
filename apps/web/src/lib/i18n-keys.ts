@@ -3321,6 +3321,8 @@ export type DictionaryKey =
   | "format.template.americano.label"
   | "format.template.double_elim.help"
   | "format.template.double_elim.label"
+  | "format.template.group_only.help"
+  | "format.template.group_only.label"
   | "format.template.group_playoffs.help"
   | "format.template.group_playoffs.label"
   | "format.template.group_stepladder.help"

@@ -376,8 +376,9 @@ describe("the layered sets", () => {
 
   it("api-only browser set: one case per API_ONLY row, in catalogue order — each planned 🚫 naming its owning wave (D7 as ruled), never driven", () => {
     // Design §8 via plan D7, restated here rather than read from the harness.
-    // W5 X-BD-3: group_group_ko is reachable on generic through the super-groups card, so it is driven (layers-grid), not 🚫.
-    const WAVE: Readonly<Record<string, string>> = { group_only: "W5" };
+    // W5 T14 (X-BD-2): group_only left the API-only rows; W5 X-BD-3: group_group_ko is reachable on generic through the super-groups
+    // card, so it is driven (layers-grid), not 🚫. B4 merge: together, no API-only row is left without an organiser control on generic.
+    const WAVE: Readonly<Record<string, string>> = { group_group_ko: "W5" };
     // W4 T16 (ruling 269): the standalone stepladder and page playoff are refused, so no wave owes them a control and the set holds no case for them.
     const REFUSED_ROWS = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
     expect(REFUSED_ROWS.sort()).toEqual(["page_playoff_only", "stepladder_only"]);
@@ -389,10 +390,10 @@ describe("the layered sets", () => {
     expect(KNOB).toEqual(["knockout_third_place"]);
     const owed = API_ONLY_ROWS.filter((r) => !REFUSED_ROWS.includes(r) && !isKnobRow(r));
     expect(owed.length).toBe(API_ONLY_ROWS.length - 2 - 1);
-    expect(owed).toEqual(["group_only", "group_group_ko"]);
-    // The rows with no organiser control on generic: group_group_ko has one now (super-groups), so the set holds group_only alone.
+    expect(owed, "group_only left the list: the picker has its card (W5 T14, X-BD-2)").toEqual(["group_group_ko"]);
+    // The rows with no organiser control on generic: group_group_ko has one now (super-groups), so the set is EMPTY (B4 merge of T14 + X-BD-3).
     const noControl = owed.filter((r) => templateFor(r, "generic") === null);
-    expect(noControl).toEqual(["group_only"]);
+    expect(noControl).toEqual([]);
     expect(templateFor("group_group_ko", "generic")).toBe("super-groups");
     expect(cases.map((c) => identityOf(c).row)).toEqual(noControl);
     let checked = 0;
@@ -412,12 +413,14 @@ describe("the layered sets", () => {
     for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => apiOnlyBrowserPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });
 
-  it("W1-driving Task 13: the two API-only cells a catalog template reaches are REACHABLE through its card — no wave owes them; every other API-only cell still names its row's wave", () => {
-    const cells: [ApiOnlyRowKey, string, string][] = [["group_only", "badminton", "box-league"], ["group_group_ko", "cricket", "t20-super8"]];
+  it("W1-driving Task 13: the one API-only cell a catalog template reaches is REACHABLE through its card — no wave owes it; every other API-only cell still names its row's wave", () => {
+    const cells: [ApiOnlyRowKey, string, string][] = [["group_group_ko", "cricket", "t20-super8"]];
     for (const [row, sport, template] of cells) {
       expect(apiOnlyUiPath(row, sport)).toEqual({ reachable: true, wave: null, template, reason: `built through catalog template ${template} (template-card-${template})` });
     }
-    expect(apiOnlyUiPath("group_only", "generic")).toEqual({ reachable: false, wave: "W5", template: null, reason: "no organiser control builds group_only" });
+    expect(apiOnlyUiPath("group_group_ko", "generic")).toEqual({ reachable: false, wave: "W5", template: null, reason: "no organiser control builds group_group_ko" });
+    // X-BD-2: group_only has the picker's own card now - it is no API-only row, so asking for its route is refused by name.
+    expect(() => apiOnlyUiPath("group_only" as ApiOnlyRowKey, "generic")).toThrow(NotApiOnlyRow);
     // A row the builder does build is refused by name, never answered `undefined` (strip-types runs no tsc).
     for (const row of ["league", "toString", "__proto__"]) expect(() => apiOnlyUiPath(row as ApiOnlyRowKey, "generic"), row).toThrow(NotApiOnlyRow);
   });
@@ -449,8 +452,7 @@ describe("the layered sets", () => {
   });
 
   it("guard: a 🚫 is never planned for a cell a template reaches — apiOnlyNoPath refuses it by name (the api-only set plans generic only, so only this reaches it)", () => {
-    expect(apiOnlyNoPath("group_only", "generic")).toEqual({ wave: "W5", reason: "no organiser control builds group_only" });
-    expect(() => apiOnlyNoPath("group_only", "badminton")).toThrow(TemplateReachable);
+    expect(apiOnlyNoPath("group_group_ko", "generic")).toEqual({ wave: "W5", reason: "no organiser control builds group_group_ko" });
     expect(() => apiOnlyNoPath("group_group_ko", "cricket")).toThrow(/t20-super8/);
   });
 

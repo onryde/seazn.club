@@ -2461,6 +2461,8 @@
   "format.template.league_ko.help": "Todos contra todos y luego los mejores a eliminatoria.",
   "format.template.groups_ko.label": "Grupos + eliminatoria",
   "format.template.groups_ko.help": "Todos contra todos por grupos (2-8); los mejores pasan a la eliminatoria.",
+  "format.template.group_only.label": "Solo grupos",
+  "format.template.group_only.help": "Todos contra todos por grupos; las tablas de cada grupo son el resultado.",
   "format.template.group_stepladder.label": "Grupo + escalera",
   "format.template.group_stepladder.help": "Todos contra todos y luego una final en escalera: el peor cabeza de serie asciende.",
   "format.template.group_playoffs.label": "Grupo + Playoffs (estilo IPL)",

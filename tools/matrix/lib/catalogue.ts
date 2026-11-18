@@ -1,6 +1,6 @@
 // The frozen row list of the format × sport matrix (design §3; R11 — changing
-// it is a reviewed diff, never a runtime draw). Rows are the 16 builder
-// templates in offered-matrix order, then the 5 API-only shapes. One template
+// it is a reviewed diff, never a runtime draw). Rows are the 17 builder
+// templates in offered-matrix order (group_only last: W5 T14 gave it a picker card, and it keeps its row's place in ROW_KEYS), then the 4 API-only shapes. One template
 // row, triple_rr, is no longer OFFERED by the builder (owner ruling 2026-11-01:
 // STAGE_TEMPLATES marks it `retired`), but it stays a row: the API still takes
 // it and stored divisions still play it. So its cells are no-organiser-path
@@ -42,11 +42,11 @@ import {
 export const TEMPLATE_ROW_KEYS = [
   "league", "triple_rr", "league_ko", "groups_ko", "group_stepladder", "group_playoffs",
   "swiss", "swiss_playoff", "swiss_knockout", "knockout", "ko_plate", "qualifying_main",
-  "double_elim", "americano", "mexicano", "ladder",
+  "double_elim", "americano", "mexicano", "ladder", "group_only",
 ] as const;
 
 export const API_ONLY_ROWS = [
-  "group_only", "group_group_ko", "knockout_third_place", "page_playoff_only", "stepladder_only",
+  "group_group_ko", "knockout_third_place", "page_playoff_only", "stepladder_only",
 ] as const;
 
 export type TemplateRowKey = (typeof TEMPLATE_ROW_KEYS)[number];
@@ -160,14 +160,13 @@ const feed = (placement: "snake" | "rank_order"): NonNullable<StageDraft["progre
   timing: "setup",
 });
 
-/** The five shapes the builder does not offer, each built from a product
+/** The four shapes the builder does not offer (group_only left this list when the picker gained its Groups only card, W5 T14: it is a
+ *  template row now, built by buildTemplateStages like the others), each built from a product
  *  authority: the builder's own stage bodies, the t20-super8 catalog template
  *  (pool counts and both feeds), and the knockout generate's
  *  `cfg.thirdPlace` read (usecases/stages/generators.ts generate()). */
 function apiOnlyStages(row: ApiOnlyRowKey, knobs: TemplateKnobs): StageDraft[] {
   switch (row) {
-    case "group_only":
-      return [builderStages("groups_ko", knobs)[0]];
     case "group_group_ko": {
       const group = builderStages("groups_ko", knobs)[0];
       return [

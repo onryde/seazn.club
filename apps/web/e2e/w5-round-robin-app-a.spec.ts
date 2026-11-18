@@ -1256,3 +1256,76 @@ test.describe("X-BD-8 the builder refuses a cut the field cannot supply and name
     await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
   });
 });
+
+test.describe("X-BD-2 the builder makes a groups-only division", () => {
+  // differential: the picker had no pools-only card - "Groups only" (pools, each a round robin, the pool tables the result) could be reached
+  // only through the API (NEW-W1d-5), so an organiser who wanted no knockout had to take Groups + Knockout and ignore its finals. R24 pick 9A: its
+  // own card, the Pools and Legs knobs, and none of the knockout ones.
+  test("the Groups only card shows Pools and Legs and no Top N, third place or carry; Review names it; Create stores ONE group stage with no progression, at every width", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `X-BD-2 groups only ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    await page.goto(await competitionPath(request, comp.data!.id, "/d/new"));
+    await dismissCookieBanner(page);
+    await page.getByTestId("division-builder-name").fill(`Groups only ${TAG}`);
+    await pickBuilderSport(page, "badminton");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+
+    const card = page.locator('label[data-template="group_only"]');
+    if (!(await card.isVisible())) await showAllFormats(page);
+    await expect(card, "the card is on the picker").toBeVisible();
+    // The card's words are the dictionary's (label, help), and it draws the group stage alone (one stage, no chevron).
+    await expect(card).toContainText(uiEn["format.template.group_only.label"]!);
+    await expect(card).toContainText(uiEn["format.template.group_only.help"]!);
+    await expect(card.locator("[data-format-shape]")).toHaveAttribute("data-format-shape", "group");
+    const order = await page.locator("label[data-template]").evaluateAll((els) => els.map((el) => el.getAttribute("data-template") ?? ""));
+    expect(order, "group_only is among the cards").toContain("group_only");
+    await card.click();
+    await expect(card.locator('input[type="radio"]')).toBeChecked();
+
+    // The knobs it shows: Pools and Legs. None of the knockout ones (the empty case: nothing a knockout owns is on screen).
+    const pools = page.locator('input[data-format-bound="pools"]');
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(pools, `${width}: Pools`).toBeVisible();
+      await expect(page.getByTestId("legs-choice"), `${width}: Legs`).toBeVisible();
+      await expect(page.locator('input[data-format-bound="qualify"]'), `${width}: no Top N`).toHaveCount(0);
+      await expect(page.getByTestId("division-builder-carry"), `${width}: no carry`).toHaveCount(0);
+      await expect(page.getByTestId("third-place-choice"), `${width}: no third place`).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The pool gate is the groups_ko one (X-BD-1): 7 entrants in 4 pools stops Next naming 3.
+    await page.getByTestId("division-builder-plan-entrants").fill("7");
+    await pools.fill("4");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+    await expect(page.getByTestId("division-builder-error")).toContainText("3");
+    // 12 entrants in 3 pools is fine, and nothing about a Top N is ever asked.
+    await page.getByTestId("division-builder-plan-entrants").fill("12");
+    await pools.fill("3");
+    await expect(page.getByTestId("division-builder-error")).toHaveCount(0);
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "review");
+    const format = page.locator('[data-review-row="format"]');
+    await expect(format).toContainText(uiEn["format.template.group_only.label"]!);
+    await expect(format).toContainText("3");
+    await expect(format).not.toContainText(uiEn["format.template.groups_ko.label"]!);
+
+    await page.getByTestId("division-builder-create").click();
+    await page.waitForURL(/\/d\/[^/?]+/, { timeout: 60_000 });
+    // The record: the division holds ONE stage, a group stage of three pools, nothing fed into it.
+    const divisions = await apiJson<{ id: string }[]>(request, `/api/v1/competitions/${comp.data!.id}/divisions`);
+    expect(divisions.status, JSON.stringify(divisions.error)).toBe(200);
+    expect(divisions.data!, "one division however it was reached").toHaveLength(1);
+    const stages = await apiJson<{ kind: string; config: { pools?: { count?: number }; legs?: number }; progression: unknown }[]>(request, `/api/v1/divisions/${divisions.data![0]!.id}/stages`);
+    expect(stages.data!.map((s) => s.kind), "no second stage").toEqual(["group"]);
+    expect(stages.data![0]!.config.pools?.count, "the Pools box's number").toBe(3);
+    expect(stages.data![0]!.config.legs, "once").toBe(1);
+    expect(stages.data![0]!.progression, "nothing progresses out of it").toBeNull();
+  });
+});

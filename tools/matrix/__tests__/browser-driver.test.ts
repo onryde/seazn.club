@@ -582,7 +582,7 @@ function designScopes(): Map<string, string[]> {
 }
 /** D7 as the plan restates it: the stage shape that makes each API-only row. */
 const API_ONLY_SHAPE: Readonly<Record<(typeof API_ONLY_ROWS)[number], string>> = {
-  knockout_third_place: "third place", page_playoff_only: "page_playoff", stepladder_only: "stepladder", group_only: "group", group_group_ko: "group",
+  knockout_third_place: "third place", page_playoff_only: "page_playoff", stepladder_only: "stepladder", group_group_ko: "group",
 };
 /** The wave whose §8 scope names the row's shape — exactly one must. */
 function waveFor(row: (typeof API_ONLY_ROWS)[number], scopes: Map<string, string[]>): string {
@@ -630,13 +630,14 @@ function templateOnlyCells(): Record<string, string> {
 }
 
 describe("BrowserDriver — API-only rows (D7)", () => {
-  it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, and coverage exempts createDivision — while the two template-only cells are refused by name unless the case carries its template (Task 13)", async () => {
+  it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, and coverage exempts createDivision — while the one template-only cell is refused by name unless the case carries its template (Task 13)", async () => {
     const scopes = designScopes();
     const cells = templateOnlyCells();
-    // The cells a card reaches: box-league on badminton and t20-super8 on cricket hold their own; the any-sport super-groups
-    // reaches group_group_ko on every other engine sport (W5 X-BD-3).
+    // The cells a card reaches: t20-super8 on cricket holds its own; the any-sport super-groups reaches group_group_ko on every
+    // other engine sport (W5 X-BD-3). differential: box-league's group_only|badminton was a second template-only cell until the
+    // picker gained its Groups only card (W5 T14, X-BD-2).
     expect(cells).toEqual({
-      "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8",
+      "group_group_ko|cricket": "t20-super8",
       ...Object.fromEntries(SPORT_KEYS.filter((s) => s !== "cricket").map((s) => [`group_group_ko|${s}`, "super-groups"])),
     });
     let checked = 0;

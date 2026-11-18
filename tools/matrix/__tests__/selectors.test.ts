@@ -270,7 +270,7 @@ describe("selectors are pinned to the product's text", () => {
 
   it("templateLabel reads the en dictionary for every template row", () => {
     for (const row of TEMPLATE_ROW_KEYS) expect(templateLabel(row)).toBe(JSON.parse(src("apps/web/src/dictionaries/en/ui.json"))[`format.template.${row}.label`]);
-    expect(TEMPLATE_ROW_KEYS.length).toBe(16);
+    expect(TEMPLATE_ROW_KEYS.length).toBe(17);
     expect(templateLabel("league")).toBe("League");
     // The key shape is the builder's own (its picker, format-picker.tsx since FMT5, renders the radio's label from it).
     expect(src("apps/web/src/components/v2/division-builder.tsx")).toContain("{formatPickerFields({");

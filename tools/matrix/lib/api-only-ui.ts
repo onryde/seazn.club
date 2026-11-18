@@ -18,7 +18,6 @@ import { templateFor } from "./templates.ts";
  *  sport has none: `page_playoff_only` and `stepladder_only` are refused standalone (W4 T16; RB4-S6, ruling 269 —
  *  catalogue.ts refusedCell, STANDALONE_REFUSED_REASON), so no wave owes them a control and no layer plans them. */
 export const API_ONLY_UI_WAVE: Readonly<Partial<Record<ApiOnlyRowKey, Route>>> = Object.freeze({
-  group_only: routeTo("W5", "no builder control for a group stage with no knockout (design §8)"),
   group_group_ko: routeTo("W5", "no builder control for two group stages (design §8)"),
 });
 /** No organiser control builds the cell: `wave` owes one. */

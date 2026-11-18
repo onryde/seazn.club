@@ -2461,6 +2461,8 @@
   "format.template.league_ko.help": "Round robin, then top N knockout.",
   "format.template.groups_ko.label": "Groups + Knockout",
   "format.template.groups_ko.help": "Round robin in pools (2-8), top finishers cross into a knockout.",
+  "format.template.group_only.label": "Groups only",
+  "format.template.group_only.help": "Round robin in pools; the pool tables are the result.",
   "format.template.group_stepladder.label": "Group + Stepladder",
   "format.template.group_stepladder.help": "Round robin, then a stepladder final — lowest seed climbs.",
   "format.template.group_playoffs.label": "Group + Playoffs (IPL style)",

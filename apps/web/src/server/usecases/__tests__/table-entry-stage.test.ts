@@ -38,8 +38,8 @@ afterAll(async () => {
 /** Main's Start-lock sentence (entrants.ts), typed here. */
 const LOCKED = "This tournament has started — the entrant list is locked. Withdrawing entrants still works.";
 const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
-/** The templates whose entry stage is a league or group (rulebook; Task 14 adds `group_only`). */
-const TABLE_TEMPLATES = ["league", "league_ko", "groups_ko", "group_stepladder", "group_playoffs"];
+/** The templates whose entry stage is a league or group (rulebook; Task 14 added `group_only`). */
+const TABLE_TEMPLATES = ["league", "league_ko", "groups_ko", "group_only", "group_stepladder", "group_playoffs"];
 /** Of those, the ones that carry a bracket behind the table (X-LE-2: fed, takes nobody). */
 const WITH_FED_STAGE = ["league_ko", "groups_ko", "group_stepladder", "group_playoffs"];
 
@@ -162,12 +162,12 @@ describe.skipIf(!HAS_DB)("W5 T4: a root league or group keeps the entrant list o
   });
 
   it("X-CU-9 every template whose entry stage is a table keeps the list open, in every sport the registry offers it", async () => {
-    // The five templates on badminton; league and groups_ko on every sport whose picker offers them (the sport set is
+    // The six templates on badminton; league, groups_ko and group_only on every sport whose picker offers them (the sport set is
     // the engine's own declaration). Counted: zero checked is a failure.
     const cells: [string, string][] = TABLE_TEMPLATES.map((t) => ["badminton", t]);
     for (const m of builtinModules) {
       if (m.key === "badminton") continue;
-      for (const t of ["league", "groups_ko"]) if (offers(m.key, t)) cells.push([m.key, t]);
+      for (const t of ["league", "groups_ko", "group_only"]) if (offers(m.key, t)) cells.push([m.key, t]);
     }
     let checked = 0;
     const sports = new Set<string>();
@@ -182,7 +182,7 @@ describe.skipIf(!HAS_DB)("W5 T4: a root league or group keeps the entrant list o
       sports.add(sport);
       checked++;
     }
-    expect(TABLE_TEMPLATES.length, "premise: the rulebook's five").toBe(5);
+    expect(TABLE_TEMPLATES.length, "premise: the rulebook's six").toBe(6);
     expect(checked, "anti-vacuity: every cell ran").toBe(cells.length);
     expect(sports.size, "more than one sport was swept").toBeGreaterThan(1);
     expect(checked).toBeGreaterThanOrEqual(TABLE_TEMPLATES.length + 1);

@@ -182,6 +182,84 @@ describe("detectTemplate — existing templates still round-trip (regression)", 
   });
 });
 
+// W5 app-A Task 14 (X-BD-2, RB5-S1; NEW-W1d-5): `group_only` - pools, each a round robin, the pool tables the result - joins the
+// picker. Expected values are the rulebook's: one group stage, the Pools and Legs knobs, no progression, so no second stage.
+describe("X-BD-2 group_only: one group stage, pools and legs, no progression", () => {
+  const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 3, legs: 2 };
+
+  it("X-BD-2 group_only builds one group stage with pools and legs and no second stage", () => {
+    // differential: today unknown template - buildTemplateStages falls back to STAGE_TEMPLATES[0], a one-league graph
+    const stages = buildTemplateStages("group_only", KNOBS);
+    expect(stages).toHaveLength(1);
+    expect(stages[0]!.kind).toBe("group");
+    expect(stages[0]!.config).toEqual({ legs: 2, pools: { count: 3 } });
+    expect(stages[0]!.progression).toBeNull();
+    expect(templateHasProgression("group_only")).toBe(false);
+  });
+
+  it("the stage is groups_ko's own first stage, so the two formats cannot disagree about a pool (counts)", () => {
+    let checked = 0;
+    for (const poolCount of [2, 3, 8]) {
+      for (const legs of [1, 2]) {
+        const knobs = { ...KNOBS, poolCount, legs };
+        expect(buildTemplateStages("group_only", knobs)).toEqual([buildTemplateStages("groups_ko", knobs)[0]]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("X-BD-2 detectTemplate recognises a stored group_only division, and steals neither groups_ko nor league (pools 1..8 x legs 1..3)", () => {
+    let checked = 0;
+    for (let pools = 1; pools <= 8; pools++) {
+      for (let legs = 1; legs <= 3; legs++) {
+        const lone = { kind: "group", config: { legs, pools: { count: pools } }, progression: null };
+        expect(detectTemplate([lone]), `group ${pools} pools x ${legs} legs`).toBe("group_only");
+        // The same group stage with a knockout behind it is groups_ko, and a league of the same legs stays a league.
+        expect(detectTemplate([lone, { kind: "knockout", config: {} }]), `+ knockout, ${pools} pools`).toBe("groups_ko");
+        expect(detectTemplate([{ kind: "league", config: { legs } }]), `league x ${legs}`).toBe(legs >= 3 ? "triple_rr" : "league");
+        checked++;
+      }
+    }
+    expect(checked).toBe(8 * 3);
+  });
+
+  it("a lone group stage carrying a progression, or no config at all, is read as what is stored (custom / group_only), never as another format", () => {
+    const fed = { sources: [{ stage: "previous" as const, take: [{ kind: "rankRange" as const, from: 1, to: 2 }] }], placement: "rank_order" as const, timing: "setup" as const };
+    // A progression on a lone group stage has nothing to progress from: a custom graph, so the format select does not claim it
+    // (re-applying group_only would drop the stored progression).
+    expect(detectTemplate([{ kind: "group", config: { pools: { count: 2 } }, progression: fed }])).toBeNull();
+    expect(detectTemplate([{ kind: "group" }])).toBe("group_only");
+    expect(detectTemplate([{ kind: "group", config: null }])).toBe("group_only");
+    // Two group stages are group_group_ko's shape (API-only), not a picker format.
+    expect(detectTemplate([{ kind: "group" }, { kind: "group" }])).toBeNull();
+  });
+
+  it("every offered template's own graph detects as itself, group_only included (counts)", () => {
+    let checked = 0;
+    for (const t of STAGE_TEMPLATES) {
+      if (t.retired) continue;
+      expect(detectTemplate(buildTemplateStages(t.key, KNOBS)), t.key).toBe(t.key);
+      checked++;
+    }
+    expect(checked, "every non-retired template").toBe(STAGE_TEMPLATES.filter((t) => !t.retired).length);
+    expect(STAGE_TEMPLATES.some((t) => t.key === "group_only"), "group_only is in the list").toBe(true);
+  });
+
+  it("group_only sits right after groups_ko, and is offered to every registered sport (the registry swept)", () => {
+    const keys = STAGE_TEMPLATES.map((t) => t.key);
+    expect(keys.indexOf("group_only")).toBe(keys.indexOf("groups_ko") + 1);
+    let checked = 0;
+    for (const m of builtinModules) {
+      const kinds = effectiveEntrantModel(m.entrantModel, null).kinds;
+      expect(templatesForSport(m.key, kinds).map((t) => t.key), m.key).toContain("group_only");
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(builtinModules.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
 // F2 plan Task 5 Step 1 — every template now emits `progression`, never
 // `qualification`; `rankRange` is the collapsed survivor for what used to be
 // `topN` (owner ruling 4 / Decision 2).

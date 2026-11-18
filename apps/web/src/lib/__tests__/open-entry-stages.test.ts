@@ -345,7 +345,7 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
 
   it("every template answers the lock its rulebook row names", () => {
     // Open after Start: the root knockouts (X-LE-1), the root Swiss templates (W3, X-SW-12), the open formats (Jul3/08).
-    // W5 (X-CU-9): and the five whose entry stage is a root league or group (RB5-L1, L2), `triple_rr` (retired, stored
+    // W5 (X-CU-9): and the six whose entry stage is a root league or group (RB5-L1, L2), `triple_rr` (retired, stored
     // as a league) among them.
     const OPEN = new Set([
       ...ROOT_KNOCKOUT_TEMPLATES,
@@ -358,6 +358,7 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
       "league",
       "league_ko",
       "groups_ko",
+      "group_only",
       "group_stepladder",
       "group_playoffs",
       "triple_rr",
@@ -442,17 +443,17 @@ describe("W5 T4: a root league or group keeps the entrant list open after Start"
   const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
   const rowsOf = (key: string): (Row & { name: string })[] =>
     buildTemplateStages(key, KNOBS).map((d, i) => ({ ...d, seq: i + 1, status: "active" }));
-  /** The templates whose entry stage is a league or group: pinned by name (Task 14 adds `group_only`). */
-  const TABLE_TEMPLATES = ["league", "league_ko", "groups_ko", "group_stepladder", "group_playoffs"];
+  /** The templates whose entry stage is a league or group: pinned by name (Task 14 added `group_only`). */
+  const TABLE_TEMPLATES = ["league", "league_ko", "groups_ko", "group_only", "group_stepladder", "group_playoffs"];
 
-  it("X-CU-9 the templates whose entry stage is a table are exactly the five the rulebook names", () => {
+  it("X-CU-9 the templates whose entry stage is a table are exactly the six the rulebook names", () => {
     const opening = STAGE_TEMPLATES.filter((t) => {
       if (t.retired) return false;
       const [first] = buildTemplateStages(t.key, KNOBS);
       return (first?.kind === "league" || first?.kind === "group") && first.progression === null;
     }).map((t) => t.key);
     expect([...opening].sort()).toEqual([...TABLE_TEMPLATES].sort());
-    expect(opening.length, "anti-vacuity").toBe(5);
+    expect(opening.length, "anti-vacuity").toBe(6);
   });
 
   it("X-CU-9 a root league or group keeps the list open after Start, and the Start dialog says so", () => {

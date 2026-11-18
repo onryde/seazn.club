@@ -649,9 +649,11 @@ describe("the sweep's line-fate oracle (no database)", () => {
       expect(t!.retired, `${key} is offered (not retired), so its exclusion is a ruling`).toBeUndefined();
     }
     expect(Object.keys(EXCLUDED), "the excluded keys").toHaveLength(EXCLUDED_COUNT);
-    // The catalogue's size, as a literal (16, retired included): a template added or removed is a scope decision this
-    // sweep must take, not one it absorbs into IN_SCOPE unseen.
-    expect(STAGE_TEMPLATES.map((t) => t.key), "the STAGE_TEMPLATES catalogue, retired included").toHaveLength(16);
+    // The catalogue's size, as a literal (17, retired included): a template added or removed is a scope decision this
+    // sweep must take, not one it absorbs into IN_SCOPE unseen. W5 T14 added group_only (a group stage drawn and placed like
+    // groups_ko's first stage): IN SCOPE, so the sweep generates and places it at every field, sport and kind.
+    expect(STAGE_TEMPLATES.map((t) => t.key), "the STAGE_TEMPLATES catalogue, retired included").toHaveLength(17);
+    expect(IN_SCOPE, "group_only is swept").toContain("group_only");
     expect(IN_SCOPE.length, "anti-vacuity: templates in scope").toBeGreaterThan(0);
     expect(SPORTS.length, "two or more sports (one per declared default entrant kind)").toBeGreaterThanOrEqual(2);
     expect(new Set(SPORTS.map((s) => s.kind)).size, "the sports differ in entrant model").toBe(SPORTS.length);

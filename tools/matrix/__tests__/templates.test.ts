@@ -109,7 +109,7 @@ describe("the API-only row each driven template builds", () => {
     expect(() => templateRow("slam128")).toThrow(UnknownTemplate);
   });
 
-  it("templateFor: every API-only row × every sport — the two own-sport cells keep their card, super-groups reaches the rest of group_group_ko, null elsewhere", () => {
+  it("templateFor: every API-only row × every sport — t20-super8 keeps its own-sport cell, super-groups reaches the rest of group_group_ko, null elsewhere (group_only left: its picker card drives it, X-BD-2)", () => {
     const found: Record<string, string> = {};
     let checked = 0;
     for (const row of API_ONLY_ROWS) {
@@ -121,13 +121,17 @@ describe("the API-only row each driven template builds", () => {
     }
     expect(checked).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length);
     expect(checked).toBeGreaterThan(0);
-    // The cells browser-driver.test.ts derives from the catalog JSON (templateOnlyCells): the two cards with a sport of their own
-    // hold their cell, and the any-sport super-groups reaches group_group_ko on every OTHER engine sport (X-BD-3).
-    const want: Record<string, string> = { "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" };
+    // The cells browser-driver.test.ts derives from the catalog JSON (templateOnlyCells): t20-super8 holds its own-sport cell, and the
+    // any-sport super-groups reaches group_group_ko on every OTHER engine sport (X-BD-3).
+    // differential: box-league used to answer group_only|badminton, a cell no builder control reached.
+    const want: Record<string, string> = { "group_group_ko|cricket": "t20-super8" };
     for (const sport of SPORT_KEYS) if (sport !== "cricket") want[`group_group_ko|${sport}`] = "super-groups";
     expect(found).toEqual(want);
     expect(Object.values(found).filter((k) => k === "super-groups")).toHaveLength(SPORT_KEYS.length - 1);
     expect(templateFor("league", "badminton")).toBeNull();
+    // group_only is a template row now (the picker's Groups only card builds it on every sport), so no gallery card stands in for it;
+    // box-league still BUILDS its shape (TEMPLATE_ROW above) and the w1-driving set still drives it.
+    expect(templateFor("group_only", "badminton")).toBeNull();
   });
 });
 
@@ -223,13 +227,14 @@ describe("routeViaTemplate — the plain browser plan reaches the template cells
   const spec = (row: RowKey, sport: string, scenario: CaseSpec["scenario"] = "LIFECYCLE", more: Partial<CaseSpec> = {}): CaseSpec =>
     ({ caseId: `${row}|${sport}|builder-default|${scenario}`, row, sport, variant: "builder-default", scenario, canary: false, ...more });
 
-  it("a spec on group_only|badminton becomes the box-league card's case: the template's own variant in id and field, template set, every script kept", () => {
-    const want = raw("box-league").divisions[0]!;
-    expect([want.sportKey, want.variantKey]).toEqual(["badminton", "short"]);
+  it("a spec on group_only|badminton stays the BUILDER's case (X-BD-2: the picker has its card), and a spec on group_group_ko|cricket becomes the t20-super8 card's: the template's own variant in id and field, template set, every script kept", () => {
     let checked = 0;
     for (const scenario of ["LIFECYCLE", "M1", "R4", "F1"] as const) {
-      const out = routeViaTemplate(spec("group_only", "badminton", scenario));
-      expect(out, scenario).toEqual({ caseId: `group_only|badminton|${want.variantKey}|${scenario}`, row: "group_only", sport: "badminton", variant: want.variantKey, scenario, canary: false, template: "box-league" });
+      // differential: this cell was re-planned onto the box-league gallery card while no builder control built group_only.
+      const s = spec("group_only", "badminton", scenario);
+      const out = routeViaTemplate(s);
+      expect(out, scenario).toBe(s);
+      expect(out.template, scenario).toBeUndefined();
       checked++;
     }
     expect(checked).toBe(4);
@@ -239,8 +244,8 @@ describe("routeViaTemplate — the plain browser plan reaches the template cells
     });
   });
 
-  it("every cell of the grid: exactly the cells a card reaches are re-planned (two own-sport cards, and super-groups on every other group_group_ko sport), every other spec comes back as the SAME object", () => {
-    const reached = new Set(["group_only|badminton", "group_group_ko|cricket", ...SPORT_KEYS.filter((x) => x !== "cricket").map((x) => `group_group_ko|${x}`)]);
+  it("every cell of the grid: exactly the cells a card reaches are re-planned (t20-super8 on cricket, and super-groups on every other group_group_ko sport), every other spec comes back as the SAME object", () => {
+    const reached = new Set(["group_group_ko|cricket", ...SPORT_KEYS.filter((x) => x !== "cricket").map((x) => `group_group_ko|${x}`)]);
     let checked = 0;
     const routed: string[] = [];
     for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {

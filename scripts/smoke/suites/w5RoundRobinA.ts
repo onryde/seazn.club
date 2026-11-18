@@ -64,6 +64,9 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * group_too_few_entrants, and the body names the pool count that works (3: floor(7/3)=2) beside the numbers it always carried; nothing
  * is written. (Main named no count.) In the second org, which has room in its competition.
  *
+ * Task 14 (X-BD-2; NEW-W1d-5): the Groups only picker card's stage list - ONE group stage, three pools, no progression - is accepted as one
+ * stage and draws an eleven-entrant field into three pools (4, 4, 3: 15 lines), with no second stage. (Main: the picker had no such card.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -83,7 +86,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 17: 1 (a second Complete answers already_complete, leaves the draft proposal and the knockout as they were, and mints nothing).
   // Task 12: 1 (the first Generate of 7 entrants in 4 pools is refused STAGE_NOT_READY naming 3, and writes nothing).
   // Task 12b: 1 (a league + knockout whose Top 8 is asked of 6 entrants is refused RR_CUT_EXCEEDS_FIELD naming 6, and writes nothing; Top 6 draws).
-  const EXPECTED_CHECKS = 20;
+  // Task 14: 1 (the Groups only card's one-stage list: three pools of eleven, 15 lines, no second stage).
+  const EXPECTED_CHECKS = 21;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -895,6 +899,46 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-BD-8: a Top 8 of 6 entrants is refused RR_CUT_EXCEEDS_FIELD naming 6 and writes nothing, and the same division as a Top 6 of 6 draws" +
         (ok ? "" : ` - div ${dRes.status}, entrants ${made.length}, finals ${finals}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 260)}, written ${written.length}, top-6 generate ${drew.status} ${JSON.stringify(drew.json).slice(0, 160)}`),
+      ok,
+    );
+  }
+
+  // Check 18 - Task 14 (X-BD-2, RB5-S1; NEW-W1d-5): the stage list the builder's Groups only card posts (one group stage, `pools.count` 3,
+  // legs 1, no progression - lib/division-builder/format-choice.ts `formatStagesFor("group_only")`) is accepted as ONE stage and draws
+  // three pools of an eleven-entrant field (4, 4 and 3: 6 + 6 + 3 = 15 lines) with no second stage and no progression. The second org, in
+  // a competition of its own (the first holds the cap's four divisions).
+  {
+    const second = newSession();
+    await signIn(second, `delivered+w5a2_${tag}@resend.dev`);
+    const cRes = await v1(second, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A groups only ${tag}`, visibility: "private" });
+    const compId = v1data<{ id: string } | undefined>(cRes)?.id;
+    const dRes = await v1(second, `/api/v1/competitions/${compId ?? "no-competition"}/divisions`, "POST", {
+      name: "Groups only",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const made = v1data<{ id: string }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 11 }, (_, i) => ({ kind: "individual", display_name: `Go ${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const posted = v1data<{ id: string; kind: string; progression: unknown }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/stages`, "PUT", [
+        { seq: 1, kind: "group", name: "Group stage", config: { legs: 1, pools: { count: 3 } }, progression: null },
+      ]),
+    ) ?? [];
+    const stageId = posted[0]?.id;
+    const gen = await v1(second, `/api/v1/stages/${stageId}/generate`, "POST");
+    const lines = (v1data<(Fx & { pool_id?: string | null })[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const stages = v1data<{ id: string }[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/stages`)) ?? [];
+    const named = new Set(lines.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null));
+    const ok =
+      cRes.status === 201 && dRes.status === 201 && made.length === 11 && posted.length === 1 && posted[0]?.kind === "group" && posted[0]?.progression === null &&
+      gen.status === 200 && stages.length === 1 && lines.length === 15 && named.size === 11;
+    w5Check(
+      "w5a X-BD-2: the Groups only card's one-stage list draws three pools of eleven (15 lines, everyone in one) with no second stage" +
+        (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, stages ${posted.length}/${stages.length}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 200)}, lines ${lines.length}, named ${named.size}`),
       ok,
     );
   }

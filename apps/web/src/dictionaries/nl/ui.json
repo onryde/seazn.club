@@ -2461,6 +2461,8 @@
   "format.template.league_ko.help": "Iedereen tegen iedereen, dan de besten naar een knock-out.",
   "format.template.groups_ko.label": "Groepen + knock-out",
   "format.template.groups_ko.help": "Groepsfase in poules (2-8); de besten gaan door naar de knock-out.",
+  "format.template.group_only.label": "Alleen groepen",
+  "format.template.group_only.help": "Iedereen tegen iedereen per poule; de poulestanden zijn de uitslag.",
   "format.template.group_stepladder.label": "Groep + stepladder",
   "format.template.group_stepladder.help": "Groepsfase, dan een stepladder-finale — de laagst geplaatste klimt naar boven.",
   "format.template.group_playoffs.label": "Groep + Play-offs (IPL-stijl)",
