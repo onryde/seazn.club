@@ -3,9 +3,11 @@
 // in server-only modules and cannot be imported from a client component. `standings-table.tsx` re-exports `DEPARTED_STATUS_CHIPS`,
 // so every existing importer is unchanged; this stays the ONE place that decides which statuses count as departed.
 import type { TKey } from "@/lib/i18n-runtime";
+import { DEPARTED_STATUS_KEYS } from "./departed-status-keys";
 
-/** The departed vocabulary as a tuple, so a wire schema (`TableRow.status`) can be built from it instead of restating it. */
-export const DEPARTED_STATUS_KEYS = ["withdrawn", "disqualified"] as const;
+// The tuple lives in an import-free leaf so a wire schema can build its enum from it (see `departed-status-keys.ts`); re-exported so
+// every existing importer is unchanged.
+export { DEPARTED_STATUS_KEYS };
 
 /**
  * Every way OUT of a competing field, and the chip each one prints.

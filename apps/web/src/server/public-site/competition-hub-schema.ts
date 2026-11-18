@@ -35,7 +35,7 @@ import { deriveHubTabs } from "../../lib/matches-hub.ts";
 import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state-names.ts";
 // The camera-policy vocabulary, from its import-free leaf (same `.ts`-extension reason as above).
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
-import { DEPARTED_STATUS_KEYS } from "../../lib/departed-status-chips.ts";
+import { DEPARTED_STATUS_KEYS } from "../../lib/departed-status-keys.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe
