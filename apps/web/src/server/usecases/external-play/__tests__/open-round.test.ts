@@ -1912,7 +1912,9 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     const gameBoard = x!.fixtureId === b!.fixtureId ? y! : x!;
     // The game's meeting was made for the EARLIER pairing (the T3 re-open spares an unended room of the CURRENT pairing on its
     // own, so a current-pairing stamp here would let that clause cover for the game-evidence one - two guards hiding each
-    // other, and neither tested).
+    // other, and neither tested). That puts the game-evidence clause in a state the product forbids (an EARLIER pairing's room with
+    // a game behind it: M-10's lock refuses a re-pair over a game), the only state in which it is witnessed at all. Not witnessed
+    // anywhere: an ENDED room of the CURRENT pairing on a game board (the delete's own game-evidence spare).
     const earlier = first.find((f) => f.fixtureId === gameBoard.fixtureId)!;
     expect(pairKey(earlier), "premise: the re-pair changed the game board's pairing").not.toBe(pairKey(gameBoard));
     // A game on file that no open bound (so the round still reads "nobody invited", and the window re-stamps): its
@@ -1957,7 +1959,9 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       const [board] = await swissRound1(s.stageId);
       // Every case's meeting is stamped for the EARLIER pairing, "stale" in the only sense that is left: the T3 re-open spares an
       // unended room of the CURRENT pairing whatever its game evidence, so a current-pairing stamp would make the evidence clause
-      // unwitnessable here (a kept case would pass on the pairing clause, a retired one would be spared by it).
+      // unwitnessable here (a kept case would pass on the pairing clause, a retired one would be spared by it). The price: the
+      // evidence clause is witnessed only in a state the product forbids (an earlier pairing's room with a game behind it - M-10's
+      // lock refuses a re-pair over a game).
       expect(board!.fixtureId, `${c.label}: premise - the same board`).toBe(first!.fixtureId);
       expect(pairKey(board!), `${c.label}: premise - re-paired`).not.toBe(pairKey(first!));
       const reopenAt = new Date(t0.getTime() + 2 * MIN);

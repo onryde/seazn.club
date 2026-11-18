@@ -117,9 +117,9 @@ type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
 type Tx = postgres.TransactionSql | postgres.Sql;
 
 /** D16 review G1: retire the video meetings of these boards in the open's transaction - BOTH players' rows, by board on purpose
- *  (allow-listed in the source guard). EVERY row is MARKED first (RETIRED_PAIR), ended or not; then the ENDED ones are
- *  deleted (no room is left upstream; their participants cascade), and the boards whose rows were still ACTIVE when they
- *  were marked are returned for the caller to end after the commit (retireStaleMeeting). The order is the point (D16 fix-2
+ *  (allow-listed in the source guard). EVERY row is MARKED first (RETIRED_PAIR), ended or not (but see `mode`: a re-open
+ *  keeps some); then the ENDED ones are deleted (no room is left upstream; their participants cascade), and the boards whose
+ *  rows were still ACTIVE when they were marked are returned for the caller to end after the commit (retireStaleMeeting). The order is the point (D16 fix-2
  *  R1): the old shape deleted the ended rows and THEN marked the active ones, and under READ COMMITTED a room ended
  *  between the two statements was missed by both - not deleted, not marked, left on the old pairing, and the same-pair
  *  claim that followed was refused VIDEO_MEETING_ENDED for ever. Marking first takes the row whatever happens to it next;
@@ -135,20 +135,15 @@ type Tx = postgres.TransactionSql | postgres.Sql;
  *    unadopted (both stamps null: the pre-mint job's room for a board with no pairing yet) or stamped for the fixture's
  *    CURRENT pairing is kept, unmarked - it is a room this window needs, made before anyone checked in, and retiring it would
  *    make the first claim of every player pay for another. Only an EARLIER pairing's room is retired. An ENDED room is never
- *    kept, whatever it names: spared, it would refuse every later claim for the board VIDEO_MEETING_ENDED (ensureMeeting: the
- *    same pair and `endedAt !== null`), so the board could never check in again. The clause is in the mark, so an ended room
- *    stays on the path it always had (marked, then deleted). It is not the only thing that retires one: the delete takes every
- *    ended row on its own, so dropping the conjunct alone changes nothing observable - measured, an equivalent mutant - and
- *    only both together (an ended room spared by the mark AND the delete) fail the ended-room case. A kept room that is ended
- *    between the two statements is deleted as the ended row it has become.
+ *    kept, whatever it names (spared, it would refuse every later claim VIDEO_MEETING_ENDED): the delete below takes it.
  *  - `"rearm"` (D17, a board replayed after its bridge finished with no game): every room of the board without a game, stamped
  *    for what it likes. The replay's bridge row is made afresh, and nobody ruled that a room carrying the old attempt's
  *    `last_publisher_seen_at` and seat cache may carry into it. A re-stamp that re-arms a board runs both: the re-open's call
  *    keeps its current-pairing rooms, and the re-arm's call, after it, takes what that kept.
  *
- *  `is not distinct from`, not `=`: a fixture with no pairing reads NULL against a stamp, and `not NULL` would KEEP the room of
- *  a pairing that is gone. openRound only passes boards it has just read paired, under the division lock - but the guard is
- *  here, not in that reading. */
+ *  `is not distinct from`, not `=`: defensive, unreachable via openRound (it only passes boards it has just read paired, under
+ *  the division lock), and unpinned by any test. With `=` a fixture with no pairing reads NULL against a stamp, and `not NULL`
+ *  would KEEP the room of a pairing that is gone. */
 async function retireBoardsMeetings(
   tx: Tx,
   fixtureIds: readonly string[],
@@ -159,8 +154,8 @@ async function retireBoardsMeetings(
   const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
   const keepCurrent =
     mode === "reopen"
-      ? tx`and not (m.ended_at is null and (m.home_entrant_id is null
-             or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id)))`
+      ? tx`and not (m.home_entrant_id is null
+             or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))`
       : tx``;
   const marked = await tx<{ fixture_id: string; ended_at: Date | null }[]>`
     update fixture_video_meetings m
@@ -433,10 +428,10 @@ export async function openRound(
       // N-2: the meetings of the last window's pairing. A board a game IS or MAY BE on file behind keeps its
       // meeting — the camera evidence of that game: a recorded challenge, a sent create (T9's marker), or a LIVE mint
       // claim (T9 in flight, before its marker; R2-3) — gameEvidenceOn, the one rule ensureMeeting keeps too. Every
-      // other board's meeting of an EARLIER pairing, and every ended one, goes, with its participants: players who checked in
-      // through the lobby inside the old window are kicked too, because the window starts now for everyone. An unended room
-      // made for the board's CURRENT pairing, or unadopted, is the pre-mint job's (check-in capacity, spec §11) and stays: see
-      // retireBoardsMeetings. Only the still-active meetings are ended at RealtimeKit, after the commit. D16: a board has a
+      // other board's meeting of an EARLIER pairing, and every ended one, goes, with its participants. A room kept because it is
+      // the board's CURRENT pairing's (or unadopted: the pre-mint job's, check-in capacity spec §11) keeps its participants
+      // seated too: nobody in it is kicked, a lobby check-in into it included, not only the pre-mint job's empty rooms. Only
+      // the still-active meetings that are retired are ended at RealtimeKit, after the commit. D16: a board has a
       // meeting PER PLAYER and this deletes BY BOARD on purpose - every row it takes goes, and every one returned is ended
       // below, not the first (allow-listed in the source guard).
       retireBoards = await retireBoardsMeetings(tx, ids, now, "reopen");
