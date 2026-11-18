@@ -15,6 +15,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 // court/venue in this org" 404 in the product.
 import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "../venues";
 import { departedEntrantIds } from "./helpers";
+import { missingFromLadder } from "../ladder-late-entry";
 
 // ---------------------------------------------------------------------------
 // Ladder challenges (Jul3/08 §6): no pre-generated fixtures — players issue
@@ -75,6 +76,15 @@ export async function issueChallenge(
       // Server-side merge (design §T2): `stage.config` was read before the
       // advisory lock, so anything written while this transaction waited must
       // not be spread back over.
+      await tx`update stages set config = config || ${tx.json({ ladder_order: order } as never)}
+               where id = ${stageId}`;
+    }
+    // Backstop (ladder-late-entry.ts): the doors that admit an entrant append them to this order themselves; a reader
+    // that waved through an unlisted entrant as "foreign" would strand a player any door ever forgot, so the order is
+    // completed here, under the same division lock, before the challenge is judged.
+    const unlisted = await missingFromLadder(tx, stage.division_id, order);
+    if (unlisted.length > 0) {
+      order = [...order, ...unlisted];
       await tx`update stages set config = config || ${tx.json({ ladder_order: order } as never)}
                where id = ${stageId}`;
     }

@@ -3,6 +3,7 @@ import "server-only";
 // W3 T9 (X-SW-13): a confirmed entry or a promotion into a running Swiss is an automatic arrival — case (c) only.
 import { admitKnockoutLateEntrant } from "../knockout-late-entry";
 import { admitSwissLateEntrant } from "../swiss-late-entry";
+import { appendToLadderOrder } from "../ladder-late-entry";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { type SeatGate } from "../online-seat-gate";
 import { assertDivisionTakesKind, loadEntrantShape } from "../entrant-shape";
@@ -231,6 +232,8 @@ export async function materialise(
   if ((await admitSwissLateEntrant(tx, null, reg.division_id, entrant.id, arrival)) === null) {
     await admitKnockoutLateEntrant(tx, null, reg.division_id, entrant.id, arrival);
   }
+  // A running ladder takes the confirmed entry at the bottom of its order (a no-op for any other format).
+  await appendToLadderOrder(tx, reg.division_id);
   await tx`
     update registrations
     set entrant_id = ${entrant.id}, status = 'confirmed', updated_at = now()

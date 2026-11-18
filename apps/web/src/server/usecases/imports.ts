@@ -43,6 +43,7 @@ import {
 } from "./registration-eligibility";
 import { admitKnockoutLateEntrant } from "./knockout-late-entry";
 import { admitSwissLateEntrant } from "./swiss-late-entry";
+import { appendToLadderOrder } from "./ladder-late-entry";
 import { heldMemberships, personOnOtherTeamError, type HeldMembershipRow } from "./entrants";
 
 type Tx = postgres.TransactionSql;
@@ -734,6 +735,8 @@ async function executePlan(tx: Tx, auth: AuthCtx, ops: ImportOp[]): Promise<stri
         if ((await admitSwissLateEntrant(tx, auth, op.divisionId, row!.id, "import")) === null) {
           await admitKnockoutLateEntrant(tx, auth, op.divisionId, row!.id, "import");
         }
+        // A running ladder: the imported entrant joins the bottom of its order (a no-op for any other format).
+        await appendToLadderOrder(tx, op.divisionId);
         break;
       }
       case "squad.add": {
