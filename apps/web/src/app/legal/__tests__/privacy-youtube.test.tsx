@@ -418,6 +418,21 @@ describe("privacy — Google's Limited Use affirmation (Google API Services User
   });
 });
 
+describe("privacy — how long the phone app's broadcast recording is kept", () => {
+  // The number is read from the sweep's own declaration (server/relay/config.ts RECORDING_RETENTION_DAYS), never typed here, so moving the
+  // retention moves this test. Cloudflare's own floor is 30 days; the 3-day promise is our scheduled delete, so the policy must state it.
+  const days = Number(/export const RECORDING_RETENTION_DAYS = (\d+);/.exec(src("../../../server/relay/config.ts"))?.[1]);
+  const text = renderToStaticMarkup(PrivacyPage()).replace(/<[^>]*>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ");
+
+  it("reads a positive retention from the sweep's declaration (anti-vacuity)", () => {
+    expect(Number.isInteger(days) && days > 0).toBe(true);
+  });
+
+  it("says the broadcast recording is kept for that many days, why (a disputed match), and then deleted", () => {
+    expect(text).toContain(`a recording of the broadcast is kept for up to ${days} days so that a disputed match can be checked, then deleted`);
+  });
+});
+
 describe("privacy — regression: every section that existed before T19 still renders (O4)", () => {
   // Snapshot of /legal/privacy as of main da17c2bc50 (19 October 2026 text): each heading (number stripped - the YouTube section is
   // inserted at 7 and the later ones moved down one) with a sentence distinctive of its body. The sibling tests pin sections 5 and 6 in
