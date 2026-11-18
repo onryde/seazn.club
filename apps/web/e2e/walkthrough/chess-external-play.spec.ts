@@ -385,11 +385,15 @@ async function premintPass(page: Page): Promise<PremintReport> {
   throw new Error("the pre-mint pass's lock was held for 10 s: another pass never finished");
 }
 
-/** The rooms on file for these boards (one per player and board, D16), in a stable order. */
-async function meetingRowsOf(fixtureIds: string[]): Promise<{ fixture_id: string; side: string; meeting_id: string; ended_at: Date | null }[]> {
+type RoomRow = { fixture_id: string; side: string; meeting_id: string; ended_at: Date | null; home_entrant_id: string | null; away_entrant_id: string | null };
+
+/** The rooms on file for these boards (one per player and board, D16), in a stable order, with the pairing each was made for: the board's
+ *  two entrants, or NULL in both for a room the pre-mint job made while the board was still a placeholder ("unadopted"). */
+async function meetingRowsOf(fixtureIds: string[]): Promise<RoomRow[]> {
   return withDb(
-    (sql) => sql<{ fixture_id: string; side: string; meeting_id: string; ended_at: Date | null }[]>`
-      select fixture_id, side, meeting_id, ended_at from fixture_video_meetings where fixture_id in ${sql(fixtureIds)} order by fixture_id, side`,
+    (sql) => sql<RoomRow[]>`
+      select fixture_id, side, meeting_id, ended_at, home_entrant_id, away_entrant_id
+        from fixture_video_meetings where fixture_id in ${sql(fixtureIds)} order by fixture_id, side`,
   );
 }
 
@@ -1148,8 +1152,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(await resultEventCountSql(boardB.fixtureId), "the sweep wrote the result twice").toBe(once);
   });
 
-  test("round 2 waits for the organiser: paired on Generate, silent until opened, then opened from the same column and played", async ({ page, browser }) => {
-    test.setTimeout(liveBudget(2, budget(8)));
+  test("round 2 waits for the organiser: its rooms were pre-made as placeholders, paired on Generate with no vendor call, silent until opened, then opened from the same column and played", async ({ page, browser }) => {
+    // Four cameras brought on through `goLive` (two on each of the round's boards).
+    test.setTimeout(liveBudget(4, budget(12)));
     const stamp1 = await roundOpenedAtSql(round.stageId, 1);
     const round2 = () =>
       withDb((sql) => sql<{ id: string; home: string | null; away: string | null }[]>`
@@ -1160,8 +1165,28 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const seated2 = <R extends { home: string | null; away: string | null }>(rows: R[]) => rows.filter((f) => f.home !== null && f.away !== null);
     expect(seated2(await round2()), "round 2 paired itself").toHaveLength(0);
 
+    // ── round 2's rooms exist BEFORE it is paired ─────────────────────────────────────────────────────────────────────────────────
+    // The pre-mint job covers EVERY unopened round's boards, placeholder shells included (spec 2026-11-05 §6.1: "a later round's placeholders
+    // exist while the previous round is current, so its rooms can be made then", and "the first Generate mints shells for every round at
+    // once"; premint.ts). The round-1 passes above made round 2's rooms for the two shells that already existed, UNADOPTED: both entrant
+    // columns null, "made for this board's first pairing, whichever it is". Generate is not the claim, so it must leave them alone.
+    const shellIds = (await round2()).map((f) => f.id);
+    expect(shellIds, "premise: two placeholder shells wait for round 2").toHaveLength(2);
+    const preRooms = await meetingRowsOf(shellIds);
+    expect(preRooms.length, "the job made a room for each side of each shell, before round 1 was even opened").toBe(2 * shellIds.length);
+    for (const r of preRooms) {
+      expect([r.home_entrant_id, r.away_entrant_id], `${r.fixture_id} ${r.side}: made for no pairing yet (unadopted)`).toEqual([null, null]);
+    }
+    const preRoomIds = new Set(preRooms.map((r) => r.meeting_id));
+    expect(preRoomIds.size, "four different meetings at the vendor").toBe(preRooms.length);
+    expect(
+      video.calls.slice(0, openMark).filter((c) => c.route === "POST /meetings" && c.meetingId !== null && preRoomIds.has(c.meetingId)),
+      "each was created by a pre-mint pass, before round 1 was opened",
+    ).toHaveLength(preRooms.length);
+
     const everyone = round.boards.flatMap((b) => [b.home, b.away]);
     const callsBefore = lichessCallsFor(everyone).length;
+    const genMark = video.calls.length;
     const paired = await apiJson(page.request, `/api/v1/stages/${round.stageId}/generate`, "POST", {});
     expect(paired.status, `generate round 2: ${JSON.stringify(paired.error)}`).toBeLessThan(300);
     const boards2 = seated2(await round2());
@@ -1171,11 +1196,20 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(await roundOpenedAtSql(round.stageId, 2)).toBeNull();
     for (const f of boards2) expect(await bridgeRow(f.id), `no bridge for ${f.id} before the open`).toBeNull();
     expect(lichessCallsFor(everyone).length - callsBefore, "pairing round 2 called Lichess for its players").toBe(0);
-    for (const f of boards2) {
-      const [v] = await withDb((sql) => sql<{ n: number }[]>`
-        select (select count(*) from fixture_video_meetings where fixture_id = ${f.id})::int as n`);
-      expect(v!.n, `pairing round 2 made a meeting for ${f.id}`).toBe(0);
-    }
+    // Pairing a shell moves no room: the very shells that were pre-made are the paired boards, their rooms are exactly as the job left them
+    // (none made, none adopted - the adoption is the first claim's - none replaced), and Generate made no vendor request that makes a room or
+    // a participant.
+    expect([...boards2.map((f) => f.id)].sort(), "Generate paired the shells the job had made rooms for").toEqual([...shellIds].sort());
+    expect(await meetingRowsOf(shellIds), "pairing round 2 left every pre-made room as it was").toEqual(preRooms);
+    expect(video.calls.slice(genMark).filter((c) => c.method === "POST"), "pairing round 2 made no vendor request that makes anything").toEqual([]);
+    // The job had not reached every board of every round when this one opens, and a round opens whatever the job has done: board 2's two rooms
+    // are taken off the books here - the state "nothing on file" (spec §5's floor), exactly what a board the job never reached is - so the claims
+    // on it make their own, the other price in the table (`all`). Board 1 keeps its pre-made rooms (the adopt path).
+    const notReached = boards2[1]!;
+    const deleted = await withDb((sql) => sql`delete from fixture_video_meetings where fixture_id = ${notReached.id}`);
+    expect(deleted.count, "board 2's two pre-made rooms were on file to take off").toBe(2);
+    const keptRooms = preRooms.filter((r) => r.fixture_id === boards2[0]!.id);
+    expect(keptRooms, "board 1 keeps both of its rooms").toHaveLength(2);
 
     // Round 1 is over (a resign and a flag were written as its results), so the column is in its playing phase and offers round 2's press
     // beside it; opening it moves the panel on to round 2, whose check-in hero names it.
@@ -1183,7 +1217,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     await page.goto(round.arbiterPath);
     const column = page.getByTestId("arbiter-round-column");
     await expect(column, "round 1 played out: the column's playing phase").toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
-    // Round 2 is opened WITHOUT the pre-mint job (nothing fires it for this round): nothing is on file for its boards, so each claim makes its own room.
+    // Round 2 opens with board 1's rooms pre-made and board 2's not: nothing fires the pre-mint job for this round after Generate.
     const openMark2 = video.calls.length;
     await openFromColumn(page, round, 2);
     await expect(column.getByTestId("arbiter-checkin-hero").getByRole("heading", { name: fill("runsheet.round.heading", { round: 2 }) })).toBeVisible({
@@ -1193,6 +1227,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(stamp2, "round 2 opened").not.toBeNull();
     expect(stamp2!.getTime(), "a NEW stamp, after round 1's").toBeGreaterThan(stamp1!.getTime());
     for (const f of boards2) expect(await bridgeRow(f.id)).toMatchObject({ status: "pending" });
+    // The open adopted nothing and called no vendor for the pre-made rooms - not the organiser's panel either (nobody has come, so it joins none).
+    expect(await meetingRowsOf([boards2[0]!.id]), "the open left board 1's pre-made rooms as they were").toEqual(keptRooms);
+    expect(callsOnMeetings(new Set(keptRooms.map((r) => r.meeting_id)), openMark2), "the open made no video call for board 1's rooms").toEqual([]);
 
     // Both halves wired to each other: round 2's first board is played — its
     // two players seat on the meeting's word and the game is made.
@@ -1214,27 +1251,48 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(lichess.game(game2)?.status, "round 2's game is live at Lichess").toBe("started");
     await expect(screen(p)).toHaveAttribute("data-screen", "live", { timeout: IDLE_POLL_MS + 10_000 });
 
-    // ── what this board cost the vendor since ITS open, with nothing pre-made (check-in capacity plan 2, Task 10, step 3) ─────────────────
-    // Each stay is priced `all` (nothing on file: the claim makes the room and adds the participant), so the bound is the dearer one. A LOCAL
-    // pre-check against the fixture, like board 2 of round 1's census above; the expected numbers are the price table and a hand count.
-    const rooms2 = await meetingRowsOf([b2.fixtureId]);
-    expect(rooms2.map((r) => r.side), "round 2's board has a room for each of its two players, made by their claims").toEqual(["away", "home"]);
-    const sinceOpen2 = playerCallsOnMeetings(new Set(rooms2.map((r) => r.meeting_id)), openMark2);
-    const by2 = routesOf(sinceOpen2);
-    const seen2 = `round 2's board: ${sinceOpen2.length} calls since its open, by route: ${JSON.stringify(by2)}`;
-    const declared2 = LINE_LOAD.stayPrice.proof.all * 2 + LINE_LOAD.recheckCost.proof;
-    expect(sinceOpen2.length, `${seen2} - more than the declared bound of ${declared2}`).toBeLessThanOrEqual(declared2);
-    expect(by2["POST /meetings"] ?? 0, `${seen2} - nothing was pre-made, so each player's claim makes their own room`).toBe(2);
-    expect(by2["POST /meetings/:id/participants"] ?? 0, `${seen2} - and adds their participant`).toBe(2);
-    for (const route of ["GET /meetings/:id/active-session", "GET /sessions/:id/participants", "GET /sessions"]) {
-      expect(by2[route] ?? 0, `${seen2} - the one-read proof never takes ${route}`).toBe(0);
+    // ── what each round-2 board cost the vendor since the open (check-in capacity plan 2, Task 10, steps 2 and 3) ─────────────────────────
+    // A LOCAL pre-check against the fixture, like board 2 of round 1's census above; the expected numbers are the price table and hand counts.
+    const forbidden = ["GET /meetings/:id/active-session", "GET /sessions/:id/participants", "GET /sessions"];
+
+    // Board 1: its rooms were pre-made as placeholders, so its claims ADOPT them (a stamp, no vendor call) and add the participants: the `room` price.
+    const adopted = await meetingRowsOf([boards2[0]!.id]);
+    expect(adopted.map((r) => r.meeting_id), "the very rooms the job made - adopted, never replaced").toEqual(keptRooms.map((r) => r.meeting_id));
+    for (const r of adopted) {
+      expect([r.home_entrant_id, r.away_entrant_id], `board 1 ${r.side}: adopted for the board's pairing`).toEqual([boards2[0]!.home, boards2[0]!.away]);
     }
-    // The hand count is 8 or 9: each player's room and participant (2), one peer-report read and the seat's token (4 a player, 8), plus the
-    // re-verify's read unless it is trusted. Only the floor is pinned here, besides the declared bound above: this board has a browser page open
-    // (the home player's), whose own claims are not part of what the declared price is measured against, so a tighter ceiling would pin the
-    // page's behaviour. Board 2 of round 1 above has no page and carries the hand-count ceiling.
-    const perPlayer2 = 2 + 1 + 1;
-    expect(sinceOpen2.length, `${seen2} - fewer than the hand count's floor of ${2 * perPlayer2}: the census is short a call it must have seen`).toBeGreaterThanOrEqual(2 * perPlayer2);
+    const sinceOpen1 = playerCallsOnMeetings(new Set(keptRooms.map((r) => r.meeting_id)), openMark2);
+    const by1 = routesOf(sinceOpen1);
+    const seen1 = `round 2 board 1 (pre-made, adopted): ${sinceOpen1.length} calls since the open, by route: ${JSON.stringify(by1)}`;
+    const declared1 = LINE_LOAD.stayPrice.proof.room * 2 + LINE_LOAD.recheckCost.proof;
+    expect(sinceOpen1.length, `${seen1} - more than the declared bound of ${declared1}`).toBeLessThanOrEqual(declared1);
+    expect(by1["POST /meetings"] ?? 0, `${seen1} - adopting a pre-made room makes no room`).toBe(0);
+    expect(by1["POST /meetings/:id/participants"] ?? 0, `${seen1} - each player's first claim adds their participant`).toBe(2);
+    for (const route of forbidden) expect(by1[route] ?? 0, `${seen1} - the one-read proof never takes ${route}`).toBe(0);
+
+    // Board 2: nothing on file, so each claim makes its own room and adds the participant: the `all` price, the dearer bound. API claims only (no
+    // page on this board), so the hand count carries a ceiling: each player's room, participant, one peer-report read and the seat's token (4 a
+    // player, 8), plus the re-verify's read unless it is trusted (8 or 9).
+    const b3: RoundBoard = { fixtureId: notReached.id, home: players.get(notReached.home!)!, away: players.get(notReached.away!)! };
+    for (const pl of [b3.home, b3.away]) {
+      expect((await claimByLink(page, b3, pl)).seat, `${pl.name}: premise - the seat waits on the camera`).toMatchObject({ seated: false, reason: "camera_required" });
+      await goLive(participantOf(pl));
+      expect((await claimByLink(page, b3, pl)).seat, `${pl.name}: a camera on file and aged enough seats on the proof's one read`).toMatchObject({ seated: true });
+    }
+    await expect.poll(async () => (await bridgeRow(b3.fixtureId))?.challenge_id ?? null, { timeout: 30_000 }).not.toBeNull();
+    const rooms3 = await meetingRowsOf([b3.fixtureId]);
+    expect(rooms3.map((r) => r.side), "board 2 has a room for each of its two players, made by their claims").toEqual(["away", "home"]);
+    const sinceOpen3 = playerCallsOnMeetings(new Set(rooms3.map((r) => r.meeting_id)), openMark2);
+    const by3 = routesOf(sinceOpen3);
+    const seen3 = `round 2 board 2 (nothing pre-made): ${sinceOpen3.length} calls since the open, by route: ${JSON.stringify(by3)}`;
+    const declared3 = LINE_LOAD.stayPrice.proof.all * 2 + LINE_LOAD.recheckCost.proof;
+    expect(sinceOpen3.length, `${seen3} - more than the declared bound of ${declared3}`).toBeLessThanOrEqual(declared3);
+    expect(by3["POST /meetings"] ?? 0, `${seen3} - nothing was pre-made, so each player's claim makes their own room`).toBe(2);
+    expect(by3["POST /meetings/:id/participants"] ?? 0, `${seen3} - and adds their participant`).toBe(2);
+    for (const route of forbidden) expect(by3[route] ?? 0, `${seen3} - the one-read proof never takes ${route}`).toBe(0);
+    const perPlayer3 = 2 + 1 + 1;
+    expect(sinceOpen3.length, `${seen3} - fewer than the hand count's floor of ${2 * perPlayer3}: the census is short a call it must have seen`).toBeGreaterThanOrEqual(2 * perPlayer3);
+    expect(sinceOpen3.length, `${seen3} - more than the hand count's ceiling of ${2 * perPlayer3 + 1}`).toBeLessThanOrEqual(2 * perPlayer3 + 1);
   });
 
   test("N-2: a re-paired board's newcomer checks in to a FRESH meeting — unpaired, the old room closed by the sweep, re-paired, re-opened", async ({ page, browser, request }) => {
