@@ -2,6 +2,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { endMeeting } from "@/server/external-play/video/realtimekit";
+import { prunePresence } from "@/server/external-play/video/presence";
 import { createGameIfReady } from "../create-game";
 import { reconcile } from "../reconcile";
 import { each, type Pass, type SweepDeps, type SweepReport } from "./pass";
@@ -102,6 +103,16 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   await each(pass, "camera_evidence", await cameraCandidates(pass), (c) => cameraEvidence(pass, c, rtk));
   // After the teardown too: a room ended in THIS pass took its watches with it.
   await each(pass, "arbiter_revoke", await arbiterCandidates(pass), (c) => arbiterRevoke(pass, c, rtk));
+  // Task 10b retention: webhook deliveries and presence rows past their retention. Not a SWEEP_JOBS member (no vendor call, no budget,
+  // no fixture), so a failure is logged and never `report.failures`; caught here so it can starve neither the jobs above nor job 3b
+  // below, which must stay LAST.
+  const prune = deps.prunePresence ?? ((now: Date) => prunePresence(sql, now));
+  try {
+    const pruned = await prune(pass.now);
+    log.info({ ...pruned }, "sweep: presence pruned");
+  } catch (err) {
+    log.error({ err }, "sweep: presence prune failed");
+  }
   // LAST (D16 fix-3): job 3b's candidate read is outside `each`, so a table that is missing or broken makes the pass throw, and
   // the cron hears it (a swallowed undefined_table would hide a deploy that ran before its migration). Anything after it would
   // never run: it must be able to starve only itself, never the camera evidence or the arbiter-watch revocation above.

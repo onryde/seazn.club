@@ -5833,6 +5833,74 @@ describe.runIf(HAS_DB)("expectedEnd's base for a game created past the deadline 
   });
 });
 
+describe.runIf(HAS_DB)("Task 10b - the pass prunes the webhook deliveries and presence past their retention", () => {
+  // The pass runs on the REAL clock (no `now`), as production does: every pass in this file prunes whatever a week-old delivery row
+  // there is in the shared database, so rows seeded on a made-up date would be racing every other pass. The seeded rows are a few
+  // days either side of the week, never a second, and the assertions are by id (CI runs the DB files in parallel on one database).
+  const DAY = 86_400_000;
+  const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit" | "orgIds"> = { reconcile: async () => null, realtimeKit: RTK, orgIds: [randomUUID()] };
+  const mine: string[] = [];
+  afterEach(async () => {
+    if (mine.length > 0) await sql`delete from realtimekit_webhook_deliveries where rtk_uuid in ${sql(mine)}`;
+    mine.length = 0;
+  });
+  const seed = async (days: number) => {
+    const id = `t10b-sweep-${randomUUID()}`;
+    mine.push(id);
+    await sql`insert into realtimekit_webhook_deliveries (rtk_uuid, event, received_at) values (${id}, 'meeting.ended', ${new Date(Date.now() - days * DAY)})`;
+    return id;
+  };
+  const exists = async (id: string) => (await sql`select 1 from realtimekit_webhook_deliveries where rtk_uuid = ${id}`).length === 1;
+
+  it("one pass removes a delivery row received 8 days ago and keeps one received 6 days ago; a second pass changes neither", async () => {
+    const old = await seed(8);
+    const young = await seed(6);
+    const r = await checkedPass({ ...quiet });
+    expect(r.failures, "the prune is no sweep job: nothing listed").toEqual([]);
+    expect([await exists(old), await exists(young)], "the old row is gone, the young one stays").toEqual([false, true]);
+    await checkedPass({ ...quiet });
+    expect([await exists(old), await exists(young)], "a second pass: the same").toEqual([false, true]);
+  });
+
+  it("the prune runs BEFORE the parked-rooms job, which stays last", async () => {
+    const order: string[] = [];
+    await checkedPass({
+      ...quiet,
+      prunePresence: async () => {
+        order.push("prune");
+        return { deliveries: 0, presence: 0, endedSessions: 0 };
+      },
+      parkedRooms: async () => {
+        order.push("parked");
+        return [];
+      },
+    });
+    expect(order).toEqual(["prune", "parked"]);
+  });
+
+  it("a prune that throws is logged and never fails the pass, and the parked-rooms job still runs after it", async () => {
+    const err = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    let parked = 0;
+    try {
+      const r = await checkedPass({
+        ...quiet,
+        prunePresence: async () => {
+          throw new Error("test: the delivery table is locked");
+        },
+        parkedRooms: async () => {
+          parked++;
+          return [];
+        },
+      });
+      expect([r.failures, r.failed], "not a sweep failure (it has no job and no fixture)").toEqual([[], 0]);
+      expect(parked, "the job after it ran").toBe(1);
+      expect(err.mock.calls.some((c) => c[1] === "sweep: presence prune failed"), "the failure is logged").toBe(true);
+    } finally {
+      err.mockRestore();
+    }
+  });
+});
+
 describe.runIf(HAS_DB)("N-1 — `failed` equals the listed failures, over every failure kind", () => {
   it("every pass in this file held failed = failures.length, and those passes reported every job's failure and the give-up", () => {
     const kinds: readonly string[] = [...SWEEP_JOBS, GIVE_UP];

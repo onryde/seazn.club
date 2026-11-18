@@ -20,7 +20,9 @@ import { log } from "@/server/logger";
 import type { RealtimeKitEvent } from "../webhook-event";
 import {
   PRESENCE_READ_TRUST_MS,
+  PRESENCE_RETENTION_MS,
   SHADOW_ARRIVAL_TOLERANCE_MS,
+  WEBHOOK_DELIVERY_RETENTION_MS,
   applyPresenceEvent,
   currentPeerOf,
   currentPresence,
@@ -28,6 +30,7 @@ import {
   heldMeeting,
   peersOf,
   presenceShadowReport,
+  prunePresence,
   recordPresenceFromRead,
   resolveParticipant,
 } from "../presence";
@@ -1040,5 +1043,106 @@ describe.skipIf(!DB)("presenceShadowReport", () => {
     expect(none).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0 });
     const noIds = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [] });
     expect(noIds, "an explicit empty fixture list is an empty scope, not 'everything'").toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0 });
+  });
+});
+
+// ─── prunePresence (Task 10b: retention) ───────────────────────────────────────────────────────────────────────────────
+
+// The prune deletes by `received_at` over the WHOLE table, and CI runs the DB files in parallel on one database (every sweep pass in
+// another file prunes too). So each case runs inside a transaction it rolls back: the rows it seeds are invisible to every other
+// connection (no pass can delete them mid-case) and the prune, run on the clock of the year 2000 so its cutoffs fall in 1999, finds
+// no committed row of any other suite to delete or count. The counts returned are therefore this case's own rows alone.
+describe.skipIf(!DB)("prunePresence (retention)", () => {
+  const NOW = new Date("2000-01-01T00:00:00.000Z");
+  const DAY = 86_400_000;
+  const ago = (ms: number) => new Date(NOW.getTime() - ms);
+  // The retention figures typed from the spec (Task 10b: a week for the vendor's retry horizon, 30 days for a stay).
+  const WEEK = 7 * DAY;
+  const MONTH = 30 * DAY;
+  const ROLLBACK = new Error("t10b: roll the case back");
+
+  /** Runs `fn` in a transaction and always rolls it back; the case's own assertions run inside, so a failure still rolls back. */
+  const inRolledBackTx = async (fn: (tx: postgres.TransactionSql) => Promise<void>) => {
+    try {
+      await sql.begin(async (tx) => {
+        await fn(tx);
+        throw ROLLBACK;
+      });
+    } catch (e) {
+      if (e !== ROLLBACK) throw e;
+    }
+  };
+
+  let n = 0;
+  const delivery = async (tx: postgres.TransactionSql, age: number) => {
+    const id = `t10b-d-${randomUUID()}-${n++}`;
+    await tx`insert into realtimekit_webhook_deliveries (rtk_uuid, event, received_at) values (${id}, 'meeting.participantJoined', ${ago(age)})`;
+    return id;
+  };
+  const presence = async (tx: postgres.TransactionSql, age: number) => {
+    const m = `t10b-p-${randomUUID()}-${n++}`;
+    await tx`insert into fixture_video_presence (meeting_id, peer_id, custom_participant_id, source, received_at)
+             values (${m}, 'peer', 'custom', 'webhook', ${ago(age)})`;
+    return m;
+  };
+  const ended = async (tx: postgres.TransactionSql, age: number) => {
+    const m = `t10b-e-${randomUUID()}-${n++}`;
+    await tx`insert into realtimekit_ended_sessions (meeting_id, session_id, ended_at, received_at) values (${m}, 's', ${ago(age)}, ${ago(age)})`;
+    return m;
+  };
+  const deliveryExists = async (tx: postgres.TransactionSql, id: string) => (await tx`select 1 from realtimekit_webhook_deliveries where rtk_uuid = ${id}`).length === 1;
+  const presenceExists = async (tx: postgres.TransactionSql, m: string) => (await tx`select 1 from fixture_video_presence where meeting_id = ${m}`).length === 1;
+  const endedExists = async (tx: postgres.TransactionSql, m: string) => (await tx`select 1 from realtimekit_ended_sessions where meeting_id = ${m}`).length === 1;
+
+  it("pins the two retention figures: a week for deliveries, 30 days for presence and ended sessions", () => {
+    expect(WEBHOOK_DELIVERY_RETENTION_MS).toBe(WEEK);
+    expect(PRESENCE_RETENTION_MS).toBe(MONTH);
+  });
+
+  it("a row a second older than its table's cutoff goes, one a second younger stays; deliveries cut at a week, the others at 30 days", async () => {
+    await inRolledBackTx(async (tx) => {
+      const dOld = await delivery(tx, WEEK + SEC);
+      const dYoung = await delivery(tx, WEEK - SEC);
+      const pOld = await presence(tx, MONTH + SEC);
+      const pTen = await presence(tx, 10 * DAY); // older than a week, younger than 30 days: the deliveries' cutoff must not reach it
+      const pYoung = await presence(tx, MONTH - SEC);
+      const eOld = await ended(tx, MONTH + SEC);
+      const eTen = await ended(tx, 10 * DAY);
+      const eYoung = await ended(tx, MONTH - SEC);
+      const dTen = await delivery(tx, 10 * DAY); // older than a week: the presence cutoff must not spare it
+
+      const r = await prunePresence(tx, NOW);
+
+      expect(r, "one old row per table, plus the ten-day delivery").toEqual({ deliveries: 2, presence: 1, endedSessions: 1 });
+      expect([await deliveryExists(tx, dOld), await deliveryExists(tx, dTen)], "both deliveries past a week are gone").toEqual([false, false]);
+      expect([await presenceExists(tx, pOld), await endedExists(tx, eOld)], "the 30-day-old presence and ended rows are gone").toEqual([false, false]);
+      const kept = [
+        await deliveryExists(tx, dYoung),
+        await presenceExists(tx, pTen),
+        await presenceExists(tx, pYoung),
+        await endedExists(tx, eTen),
+        await endedExists(tx, eYoung),
+      ];
+      expect(kept, "every younger row is still there").toEqual([true, true, true, true, true]);
+      expect(kept.length, "anti-vacuity: five kept rows checked").toBe(5);
+    });
+  });
+
+  it("a second call finds nothing to delete (zeros), and the kept rows survive it", async () => {
+    await inRolledBackTx(async (tx) => {
+      await delivery(tx, WEEK + SEC);
+      await presence(tx, MONTH + SEC);
+      await ended(tx, MONTH + SEC);
+      const young = await presence(tx, MONTH - SEC);
+      expect(await prunePresence(tx, NOW), "premise: the first call deleted one of each").toEqual({ deliveries: 1, presence: 1, endedSessions: 1 });
+      expect(await prunePresence(tx, NOW)).toEqual({ deliveries: 0, presence: 0, endedSessions: 0 });
+      expect(await presenceExists(tx, young)).toBe(true);
+    });
+  });
+
+  it("an empty case: nothing seeded, nothing deleted", async () => {
+    await inRolledBackTx(async (tx) => {
+      expect(await prunePresence(tx, NOW)).toEqual({ deliveries: 0, presence: 0, endedSessions: 0 });
+    });
   });
 });

@@ -359,3 +359,27 @@ export async function presenceShadowReport(db: AnySql, scope: ShadowScope): Prom
     closedByEnded: ended!.n,
   };
 }
+
+/** Dedupe needs only the vendor's retry horizon (unmeasured; spec §3): a week is generous. */
+export const WEBHOOK_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+/** A presence row outlives any stay, round and shadow-report window (`--since` is at most days). */
+export const PRESENCE_RETENTION_MS = 30 * 24 * 60 * 60_000;
+
+/** Retention (Task 10b). Deletes delivery rows received before `now - WEBHOOK_DELIVERY_RETENTION_MS`, and presence and ended-session
+ *  rows received before `now - PRESENCE_RETENTION_MS`: one statement per table, each on its `received_at` index. Returns the counts.
+ *  A row exactly at its cutoff stays (strictly before). The external-play sweep calls it once a pass (sweep/run.ts).
+ *
+ *  WHAT THIS IS NOT. It is the age bound only. A row that outlives its FIXTURE is the fixture delete's to remove (V527's trigger on
+ *  `fixtures`), so no person UUID outlives a deleted board. A row carries a person's id (a player's `custom_participant_id` is the
+ *  person id, an arbiter's the user id and a nonce): when a PERSON or USER is deleted, their rows stay until this prune takes them,
+ *  up to PRESENCE_RETENTION_MS (30 days). That is deliberate and not purged by custom id: the ids are pseudonymous (no name, email or
+ *  contact detail sits in any of these tables, and the tables are sealed from every tenant role), the window is short, and the fixture
+ *  delete above already removes them with the board. */
+export async function prunePresence(db: AnySql, now: Date): Promise<{ deliveries: number; presence: number; endedSessions: number }> {
+  const deliveryCutoff = new Date(now.getTime() - WEBHOOK_DELIVERY_RETENTION_MS);
+  const presenceCutoff = new Date(now.getTime() - PRESENCE_RETENTION_MS);
+  const deliveries = await db`delete from realtimekit_webhook_deliveries where received_at < ${deliveryCutoff}`;
+  const presence = await db`delete from fixture_video_presence where received_at < ${presenceCutoff}`;
+  const endedSessions = await db`delete from realtimekit_ended_sessions where received_at < ${presenceCutoff}`;
+  return { deliveries: deliveries.count, presence: presence.count, endedSessions: endedSessions.count };
+}

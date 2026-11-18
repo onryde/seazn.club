@@ -119,6 +119,9 @@ export type SweepDeps = {
   /** TEST SEAM — job 3b's read of the parked rooms (V460). Production reads `video_rooms_to_end`; a test passes a reader that
    *  throws to prove a broken or missing table cannot starve the jobs that run before it. */
   parkedRooms?: () => Promise<readonly ParkedRoom[]>;
+  /** TEST SEAM — Task 10b's retention prune (`prunePresence`, on the pass's clock). A test passes one that throws to prove a failing
+   *  prune is logged, never fails the pass, and cannot starve the parked-rooms job after it, or one that records its call order. */
+  prunePresence?: (now: Date) => Promise<{ deliveries: number; presence: number; endedSessions: number }>;
 };
 
 /** Final review I-1: the pass stops STARTING network work (NETWORK_JOBS) once this much wall-clock time has gone. The
