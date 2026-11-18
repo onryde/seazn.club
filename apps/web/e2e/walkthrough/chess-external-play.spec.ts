@@ -284,6 +284,8 @@ const sourceConstant = (relPath: string, name: string): number => {
 /** preflight.ts: with the one-read proof, a join must be this old before a claim may read its camera (a live report from the browser skips
  *  the wait, and this spec's pages never send one: their SDK is refused the fixture's token). */
 const FIRST_READ_AFTER_JOIN_MS = sourceConstant("src/server/usecases/external-play/preflight.ts", "FIRST_READ_AFTER_JOIN_MS");
+/** preflight.ts: how long a camera read ON stands for T9's re-verify, which then makes no call (the census's exact hand counts below). */
+const SEAT_RECHECK_TRUST_MS = sourceConstant("src/server/usecases/external-play/preflight.ts", "SEAT_RECHECK_TRUST_MS");
 /** premint.ts: how long one pass runs before it stops STARTING vendor calls (it paces them a second apart). */
 const PREMINT_PASS_BUDGET_MS = sourceConstant("src/server/usecases/external-play/premint.ts", "PREMINT_PASS_BUDGET_MS");
 /** After a camera comes on, how long `goLive` lets the join age: the proof's wait plus a margin for the two clocks and the hop. */
@@ -299,8 +301,27 @@ const PER_ACTION_MS = LICHESS_TIMEOUT_MS / 2 + LIVE_POLL_MS + 2_000;
 const SEED_MS = 60_000;
 const budget = (actions: number) => Math.max(120_000, SEED_MS + actions * PER_ACTION_MS + 2 * IDLE_POLL_MS);
 /** The same, for a test that brings `lives` cameras on through `goLive`: each waits out its join webhook (the panel's poll budget is the longest
- *  a delivery is given) and then lets the join age (class 20: a derived cost beside a flat timeout is a latent red). */
-const liveBudget = (lives: number, baseMs: number) => budgetFor(lives, baseMs) + lives * JOIN_SETTLE_MS;
+ *  a delivery is given) and then lets the join age; and takes `darks` cameras off through `goDark`, each waiting out its LEAVE webhook on the
+ *  same poll budget (class 20: a derived cost beside a flat timeout is a latent red). */
+const liveBudget = (lives: number, baseMs: number, darks = 0) => budgetFor(lives + darks, baseMs) + lives * JOIN_SETTLE_MS;
+
+/** The routes the one-read proof never takes, as a census by meeting sees them. Not "GET /sessions" (the session LIST): the fixture logs it
+ *  with no meeting (its meeting is a query parameter), so a census by meeting can never count it and a zero for it would pass whatever. */
+const PROOF_NEVER_TAKES = ["GET /meetings/:id/active-session", "GET /sessions/:id/participants"] as const;
+
+/** The re-verify's vendor reads (0 or 1) on a board whose two players were seated by API claims, HOME first: T9's create runs inside the
+ *  SECOND seated claim, on that claim's clock, and re-reads the FIRST player's camera unless their pass is no older than
+ *  SEAT_RECHECK_TRUST_MS (preflight.ts: `<=` stands). Each seated claim stamps its own clock as the player's check-in (room.ts), and the
+ *  seat's pass carries the same clock, so both instants are on file - read from the database, never from the code that spends the call. */
+async function recheckReads(board: RoundBoard): Promise<0 | 1> {
+  const first = await checkedInAt(board.fixtureId, board.home.personId);
+  const second = await checkedInAt(board.fixtureId, board.away.personId);
+  expect(first, `premise: ${board.home.name} was seated (a check-in stamp)`).not.toBeNull();
+  expect(second, `premise: ${board.away.name} was seated (a check-in stamp)`).not.toBeNull();
+  const gap = second!.getTime() - first!.getTime();
+  expect(gap, "premise: home was seated first").toBeGreaterThanOrEqual(0);
+  return gap > SEAT_RECHECK_TRUST_MS ? 1 : 0;
+}
 
 const NOT_POINTED = (what: string) =>
   `the server under test made NO ${what} call to the local fixture server. It is almost certainly still pointed at ` +
@@ -707,6 +728,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const pass1 = await premintPass(page);
     const note1 = `pass 1 reported ${JSON.stringify(pass1)}`;
     expect(pass1.failed, `${note1}: no room failed`).toBe(0);
+    // A GUARD on the server's configuration, not a test of the deferral: the server under test runs with EXTERNAL_PLAY_WINDOW_DEFER=0, which
+    // never asks about windows, so 0 is forced. A server without it (other specs' rounds open beside this one) would defer the pass, and the
+    // room counts below would read short for a reason that is not the job's - this fails first, and says why.
     expect(pass1.windowsOpen, `${note1}: no check-in window deferred it (EXTERNAL_PLAY_WINDOW_DEFER=0 on the server)`).toBe(0);
     const rooms1 = await meetingRowsOf(boardIds);
     // D16 (§5.6.1): a room PER PLAYER, so two a board. From the rulebook, never from the job's own report.
@@ -740,7 +764,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const pass2 = await premintPass(page);
     const note2 = `pass 2 reported ${JSON.stringify(pass2)}`;
     expect(pass2.failed, `${note2}: no room failed`).toBe(0);
-    expect(pass2.windowsOpen, `${note2}: no check-in window deferred it`).toBe(0);
+    expect(pass2.windowsOpen, `${note2}: no check-in window deferred it (the same configuration guard as pass 1's)`).toBe(0);
     expect(await meetingRowsOf(boardIds), `${note2}: the same rooms are on file - none made, none replaced`).toEqual(rooms1);
     expect(callsOnMeetings(roomIds, mark2), `${note2}: the second pass made no vendor call for these boards`).toEqual([]);
     expect(video.calls.slice(mark2).filter((c) => c.route !== "POST /meetings").map((c) => c.route), `${note2}: nothing but room creations`).toEqual([]);
@@ -823,8 +847,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   let gameA: string;
 
   test("board 1 seats only on the SERVER's word: camera required (2), lost (3), video down (4) — then both in, and the game made at Lichess", async ({ browser }) => {
-    // Ten scripted actions, plus three cameras brought on through `goLive` (each waits on its join webhook's presence row, then lets the join age): derived, never a flat bump (class 20).
-    test.setTimeout(liveBudget(3, budget(10)));
+    // Ten scripted actions, plus three cameras brought on through `goLive` (each waits on its join webhook's presence row, then lets the join age)
+    // and one taken off through `goDark` (it waits on its leave webhook's row): derived, never a flat bump (class 20).
+    test.setTimeout(liveBudget(3, budget(10), 1));
     boardA = round.boards[0]!;
     // Colours are recorded at creation (T9), so the players are first and
     // second here, White and Black only once the game exists.
@@ -1096,17 +1121,18 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(sinceOpen.length, `${seen} - more than the declared bound of ${declared}`).toBeLessThanOrEqual(declared);
     expect(by["POST /meetings"] ?? 0, `${seen} - a room was made since the open: the pre-mint job should have made both`).toBe(0);
     expect(by["POST /meetings/:id/participants"] ?? 0, `${seen} - each player's first claim adds their participant, and nothing else does`).toBe(2);
-    for (const route of ["GET /meetings/:id/active-session", "GET /sessions/:id/participants", "GET /sessions"]) {
+    for (const route of PROOF_NEVER_TAKES) {
       expect(by[route] ?? 0, `${seen} - the one-read proof never takes ${route}`).toBe(0);
     }
-    // The hand count (7): each player's add (its own token goes to the browser), one peer-report read and the seat's token - 3 a player, 6 -
-    // and the re-verify's read of the opponent's camera, which a pass seen inside SEAT_RECHECK_TRUST_MS stands on at no call (so 6 or 7).
+    // The hand count: each player's add (its own token goes to the browser), one peer-report read and the seat's token - 3 a player, 6 - and
+    // the re-verify's read of the first player's camera, which T9's create makes inside the SECOND seated claim, on that claim's clock, unless
+    // the first player's pass is no older than SEAT_RECHECK_TRUST_MS (it then stands, at no call). Both instants are on file: each seated
+    // claim stamps its own clock as the player's check-in.
     const perPlayer = 1 + 1 + 1;
+    const reread = await recheckReads(boardB);
     expect(by["POST /meetings/:id/participants/:pid/token"] ?? 0, `${seen} - one token a seat`).toBe(2);
-    expect(by["GET /sessions/peer-report/:peer"] ?? 0, `${seen} - one peer-report read a seat, plus the re-verify's unless trusted`).toBeGreaterThanOrEqual(2);
-    expect(by["GET /sessions/peer-report/:peer"] ?? 0, `${seen} - one peer-report read a seat, plus the re-verify's unless trusted`).toBeLessThanOrEqual(3);
-    expect(sinceOpen.length, `${seen} - fewer than the hand count's floor`).toBeGreaterThanOrEqual(2 * perPlayer);
-    expect(sinceOpen.length, `${seen} - more than the hand count's 7`).toBeLessThanOrEqual(2 * perPlayer + 1);
+    expect(by["GET /sessions/peer-report/:peer"] ?? 0, `${seen} - one peer-report read a seat, plus the re-verify's (${reread})`).toBe(2 + reread);
+    expect(sinceOpen.length, `${seen} - the hand count: ${2 * perPlayer} + the re-verify's ${reread}`).toBe(2 * perPlayer + reread);
     const B = await colours(boardB);
     expect(await actByLink(page, boardB, B.white, { kind: "move", uci: "d2d4" })).toMatchObject({ ok: true });
     expect(await actByLink(page, boardB, B.black, { kind: "move", uci: "d7d5" })).toMatchObject({ ok: true });
@@ -1253,7 +1279,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
 
     // ── what each round-2 board cost the vendor since the open (check-in capacity plan 2, Task 10, steps 2 and 3) ─────────────────────────
     // A LOCAL pre-check against the fixture, like board 2 of round 1's census above; the expected numbers are the price table and hand counts.
-    const forbidden = ["GET /meetings/:id/active-session", "GET /sessions/:id/participants", "GET /sessions"];
+    const forbidden = PROOF_NEVER_TAKES;
 
     // Board 1: its rooms were pre-made as placeholders, so its claims ADOPT them (a stamp, no vendor call) and add the participants: the `room` price.
     const adopted = await meetingRowsOf([boards2[0]!.id]);
@@ -1271,8 +1297,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     for (const route of forbidden) expect(by1[route] ?? 0, `${seen1} - the one-read proof never takes ${route}`).toBe(0);
 
     // Board 2: nothing on file, so each claim makes its own room and adds the participant: the `all` price, the dearer bound. API claims only (no
-    // page on this board), so the hand count carries a ceiling: each player's room, participant, one peer-report read and the seat's token (4 a
-    // player, 8), plus the re-verify's read unless it is trusted (8 or 9).
+    // page on this board), so the hand count is exact: each player's room, participant, one peer-report read and the seat's token (4 a player,
+    // 8), plus the re-verify's read unless the first player's pass is trusted (as round 1's board 2: `recheckReads`).
     const b3: RoundBoard = { fixtureId: notReached.id, home: players.get(notReached.home!)!, away: players.get(notReached.away!)! };
     for (const pl of [b3.home, b3.away]) {
       expect((await claimByLink(page, b3, pl)).seat, `${pl.name}: premise - the seat waits on the camera`).toMatchObject({ seated: false, reason: "camera_required" });
@@ -1291,8 +1317,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     expect(by3["POST /meetings/:id/participants"] ?? 0, `${seen3} - and adds their participant`).toBe(2);
     for (const route of forbidden) expect(by3[route] ?? 0, `${seen3} - the one-read proof never takes ${route}`).toBe(0);
     const perPlayer3 = 2 + 1 + 1;
-    expect(sinceOpen3.length, `${seen3} - fewer than the hand count's floor of ${2 * perPlayer3}: the census is short a call it must have seen`).toBeGreaterThanOrEqual(2 * perPlayer3);
-    expect(sinceOpen3.length, `${seen3} - more than the hand count's ceiling of ${2 * perPlayer3 + 1}`).toBeLessThanOrEqual(2 * perPlayer3 + 1);
+    const reread3 = await recheckReads(b3);
+    expect(by3["GET /sessions/peer-report/:peer"] ?? 0, `${seen3} - one peer-report read a seat, plus the re-verify's (${reread3})`).toBe(2 + reread3);
+    expect(sinceOpen3.length, `${seen3} - the hand count: ${2 * perPlayer3} + the re-verify's ${reread3}`).toBe(2 * perPlayer3 + reread3);
   });
 
   test("N-2: a re-paired board's newcomer checks in to a FRESH meeting — unpaired, the old room closed by the sweep, re-paired, re-opened", async ({ page, browser, request }) => {
