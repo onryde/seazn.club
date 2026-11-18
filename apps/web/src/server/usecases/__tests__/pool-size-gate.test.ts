@@ -86,17 +86,19 @@ describe.skipIf(!HAS_DB)("X-BD-1 C38 names a pool count that works (both sports)
     expect(checked).toBe(2);
   });
 
-  it("X-BD-1 3/2 names 1, and 2/4 (no pairing at all) names 1: both C38 throws carry the count", async () => {
+  it("X-BD-1 3/2 and 2/4 (no pairing at all) name no count (one pool is a League): both C38 throws say add entrants", async () => {
     let checked = 0;
     for (const sport of [BADMINTON, FOOTBALL]) {
-      // The stranded throw: 3 snaked into 2 pools leave pool B holding seed 2 alone. floor(3/1)=3 >= 2, so one pool works.
+      // The stranded throw: 3 snaked into 2 pools leave pool B holding seed 2 alone. One pool would work, but one pool is a League, not a pool count.
       const stranded = await rig(3, 2, sport);
       const a = await refusal(generateStageFixtures(stranded.auth, stranded.stageId));
-      expect(a.data, `${sport.key} stranded`).toMatchObject({ reason: "group_too_few_entrants", groups: 2, entrants: 3, required: 4, suggested: 1 });
-      // The empty-gen throw: 2 snaked into 4 pools pair nobody. floor(2/1)=2, so one pool works.
+      expect(a.data, `${sport.key} stranded`).toMatchObject({ reason: "group_too_few_entrants", groups: 2, entrants: 3, required: 4, suggested: null });
+      // The empty-gen throw: 2 snaked into 4 pools pair nobody. Two pools or three leave a pool of one (floor(2/2)=1); only one pool works.
       const empty = await rig(2, 4, sport);
       const b = await refusal(generateStageFixtures(empty.auth, empty.stageId));
-      expect(b.data, `${sport.key} empty`).toMatchObject({ reason: "group_too_few_entrants", groups: 4, entrants: 2, required: 8, suggested: 1 });
+      expect(b.data, `${sport.key} empty`).toMatchObject({ reason: "group_too_few_entrants", groups: 4, entrants: 2, required: 8, suggested: null });
+      expect(a.message, `${sport.key} stranded`).toContain("add entrants");
+      expect(a.message, `${sport.key} stranded`).not.toContain("use 1 group");
       expect(await counts(empty.stageId)).toEqual({ fixtures: 0, pools: 0 });
       checked += 2;
     }

@@ -103,9 +103,9 @@ describe("X-BD-1 the builder's Next refuses with the same numbers the server doe
     expect(formatBoundText(formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 9 }, 7)!, msg)).toBe("Pools: choose a whole number from 2 to 8.");
   });
 
-  it("a field no pool count can fill (2 into 2 pools, suggested 1 is a League, not a pool knob) says to add entrants and names no count", () => {
+  it("a field no pool count can fill (3 into 2 pools: one pool is a League, not a pool knob) says to add entrants and names no count", () => {
     const issue = formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 2 }, 3)!;
-    expect(issue.poolSize).toEqual({ entrants: 3, pools: 2, size: 1, suggested: 1 });
+    expect(issue.poolSize).toEqual({ entrants: 3, pools: 2, size: 1, suggested: null });
     expect(formatBoundText(issue, msg)).toBe("Pools: 2 pools need at least 4 entrants in total, 2 per pool (have 3). Add entrants.");
   });
 

@@ -59,6 +59,21 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(checked).toBe(4);
   });
 
+  // T12 review m-1: a suggestion under the pools bound (one pool is a League) is no suggestion - "set groups to 1" was the wrong advice.
+  it("a suggested count of 1 says to add entrants, exactly as null does, in every locale", () => {
+    const send = (suggested: number | null) =>
+      new ApiV1Error("not enough entrants", 422, "STAGE_NOT_READY", { reason: "group_too_few_entrants", groups: 2, entrants: 3, required: 4, suggested });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      expect(generatePreconditionMessage(send(1), say), locale).toBe(generatePreconditionMessage(send(null), say));
+      expect(generatePreconditionMessage(send(1), say), locale).not.toBe(generatePreconditionMessage(send(2), say));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
   // F2a (P7 follow-up): the seeded-path analogue — a `.seeding` group stage
   // whose placed qualifiers can't fill its configured pools
   // (generateSeededStageFixtures) throws the same STAGE_NOT_READY shape with

@@ -7,13 +7,16 @@
 // The pools a seeded snake deals `entrants` into hold floor(entrants / pools) or one more, so the smallest pool is
 // floor(entrants / pools). PR B maps the engine's `validatePoolSizes().suggestedPools` onto this.
 
+import { FORMAT_BOUNDS } from "@/lib/format-bounds";
+
 /** The smallest pool a group stage may hold: a pool of one has no match, so its entrant stands in no table (ST-G5). */
 export const MIN_POOL_SIZE = 2;
 
 export interface PoolSizeIssue {
   /** The smallest pool the split leaves: floor(entrants / pools). */
   size: number;
-  /** The largest pool count <= `pools` that leaves every pool at least `min` strong, or null when no count does. */
+  /** The largest pool count <= `pools` that leaves every pool at least `min` strong, or null when no count does. A count under the
+   *  pools knob's own minimum (one pool is a League, not a pool count) is no count: null, and every screen says "add entrants". */
   suggested: number | null;
 }
 
@@ -25,7 +28,7 @@ export function poolSizeIssue(entrants: number, pools: number, min: number = MIN
   if (!Number.isInteger(min) || min < 1) throw new RangeError(`poolSizeIssue: min must be a whole number >= 1, got ${min}`);
   const size = Math.floor(entrants / pools);
   if (size >= min) return null;
-  for (let count = pools - 1; count >= 1; count--) {
+  for (let count = pools - 1; count >= FORMAT_BOUNDS.pools.min; count--) {
     if (Math.floor(entrants / count) >= min) return { size, suggested: count };
   }
   return { size, suggested: null };
@@ -33,5 +36,5 @@ export function poolSizeIssue(entrants: number, pools: number, min: number = MIN
 
 /** The server's English remedy clause for a refusal (C38's message; the screens say it in the reader's language from `suggested`). */
 export function poolRemedy(suggested: number | null): string {
-  return suggested === null ? "add entrants" : `use ${suggested} ${suggested === 1 ? "group" : "groups"} or add entrants`;
+  return suggested === null ? "add entrants" : `use ${suggested} groups or add entrants`;
 }

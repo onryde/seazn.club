@@ -2,7 +2,7 @@
 // The builder's Next and the server's first Generate (C38) both read this function, so they say the same numbers.
 // Expected values are the rulebook's (7 into 4 leaves a pool of floor(7/4)=1; 3 pools hold floor(7/3)=2), never the function's own.
 import { describe, expect, it } from "vitest";
-import { poolSizeIssue } from "../pool-size-gate";
+import { poolRemedy, poolSizeIssue } from "../pool-size-gate";
 
 describe("poolSizeIssue (X-BD-1)", () => {
   it("X-BD-1 7 into 4 is refused naming 3", () => {
@@ -20,8 +20,11 @@ describe("poolSizeIssue (X-BD-1)", () => {
     expect(poolSizeIssue(5, 2)).toBeNull();
   });
 
-  it("X-BD-1 3 into 2 names 1", () => {
-    expect(poolSizeIssue(3, 2)).toEqual({ size: 1, suggested: 1 });
+  it("X-BD-1 3 into 2 names none: one pool is a League, not a pool count, so the remedy is entrants (T12 review m-1)", () => {
+    // differential: this said suggested 1, and the desk then told the organiser to "set groups to 1" while the builder said add entrants.
+    expect(poolSizeIssue(3, 2)).toEqual({ size: 1, suggested: null });
+    expect(poolRemedy(poolSizeIssue(3, 2)!.suggested)).toBe("add entrants");
+    expect(poolRemedy(3)).toBe("use 3 groups or add entrants");
   });
 
   it("X-BD-1 1 into 1 names none (the empty case: no count works)", () => {
@@ -39,8 +42,9 @@ describe("poolSizeIssue (X-BD-1)", () => {
     let checked = 0, refused = 0, named = 0, none = 0;
     for (let entrants = 0; entrants <= 40; entrants++) {
       for (let pools = 1; pools <= 8; pools++) {
+        // A count under 2 is a League, not a pool count (FORMAT_BOUNDS.pools.min = 2): never offered.
         let want: number | null = null;
-        for (let c = pools; c >= 1; c--) if (Math.floor(entrants / c) >= 2) { want = c; break; }
+        for (let c = pools; c >= 2; c--) if (Math.floor(entrants / c) >= 2) { want = c; break; }
         const got = poolSizeIssue(entrants, pools);
         checked++;
         if (Math.floor(entrants / pools) >= 2) {
