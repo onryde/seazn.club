@@ -276,6 +276,26 @@ describe.runIf(HAS_DB)("X-SF-6 /stages/{id}/pools lists A and B", () => {
     expect(ids((await privateDoc(r, doc.pools[1]!.id)).rows)).toEqual(pools[1]!.entrants);
   }, 120_000);
 
+  it("X-SF-6 pool order is the product's natural order of the key (2 before 10), not string order, heap order or creation order - /pools, the all-pools standings and the public tables", async () => {
+    const { r, pools } = await pooled(BADMINTON, 3, [0, 1, 2]);
+    // The generator made A, B, C. Re-key them 10, 2, 1: the declared rule (lib/pool-order.ts: key, natural collation, "Pool 2" before
+    // "Pool 10") reads 1, 2, 10; plain string order reads 1, 10, 2; creation / heap order reads 10, 2, 1 - three different answers.
+    const rekey: Record<string, string> = { [pools[0]!.id]: "10", [pools[1]!.id]: "2", [pools[2]!.id]: "1" };
+    for (const [id, key] of Object.entries(rekey)) await sql`update pools set key = ${key}, name = ${"Pool " + key} where id = ${id}`;
+    const declared = ["1", "2", "10"];
+    expect([...declared].sort(), "premise: string order differs from the declared one").not.toEqual(declared);
+    const { GET } = await import("@/app/api/v1/stages/[id]/pools/route");
+    authState.userId = r.auth.userId ?? "";
+    const res = await call(GET, { id: r.stageId }, `/stages/${r.stageId}/pools`);
+    expect(S.StagePools.parse(res.data).pools.map((p) => p.key), "GET /pools").toEqual(declared);
+    const all = await privateDoc(r);
+    const seen = all.rows.map((x) => x.pool).filter((k, i, a) => a.indexOf(k) === i);
+    expect(all.rows, "premise: both rows of every pool").toHaveLength(6);
+    expect(seen, "the all-pools standings list its pools in that order").toEqual(declared);
+    const pub = await publicDoc(await publish(r));
+    expect(pub.standings.map((t) => rekey[t.pool_id!]), "the public tables, in that order").toEqual(declared);
+  }, 120_000);
+
   it("X-SF-6 a league and a group of one pool list no pools (a table that names none)", async () => {
     const { GET } = await import("@/app/api/v1/stages/[id]/pools/route");
     for (const spec of [{ kind: "league" as const }, { kind: "group" as const, pools: 1 }]) {

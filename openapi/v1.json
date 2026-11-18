@@ -32495,7 +32495,7 @@
         "tags": [
           "stages"
         ],
-        "x-required-scope": "none",
+        "x-required-scope": "read",
         "parameters": [
           {
             "name": "id",

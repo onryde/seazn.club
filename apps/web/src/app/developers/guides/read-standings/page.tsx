@@ -39,6 +39,33 @@ curl https://seazn.club/api/v1/stages/$STAGE_ID/standings \\
   -H "Authorization: Bearer sc_your_key"
 `}</CodeBlock>
 
+      <h2 className="mt-8 text-xl font-semibold text-slate-900">Pools, names and who left</h2>
+      <p className="mt-2 text-slate-600">
+        Every row names its entrant (<code className="font-mono text-sm">name</code>)
+        and says whether they are still in (<code className="font-mono text-sm">status</code>:{" "}
+        <code className="font-mono text-sm">active</code>,{" "}
+        <code className="font-mono text-sm">withdrawn</code> or{" "}
+        <code className="font-mono text-sm">disqualified</code>) — a withdrawn
+        entrant’s row stays while the table counts their results, and the
+        public standings name them too. A stage with several pools answers
+        every pool when you send no <code className="font-mono text-sm">pool_id</code>:
+        each row’s <code className="font-mono text-sm">pool</code> is the pool’s key
+        (<code className="font-mono text-sm">A</code>,{" "}
+        <code className="font-mono text-sm">B</code>, …) and{" "}
+        <code className="font-mono text-sm">rank</code> is the place{" "}
+        <em>within that pool</em>, so a rank repeats from pool to pool. List the
+        pools, then read one:
+      </p>
+      <CodeBlock title="pools of a stage">{`
+# the pools (empty for a league, a knockout or a group of one pool)
+curl https://seazn.club/api/v1/stages/$STAGE_ID/pools \\
+  -H "Authorization: Bearer sc_your_key"
+
+# one pool's table, by the id /pools gave you
+curl "https://seazn.club/api/v1/stages/$STAGE_ID/standings?pool_id=$POOL_ID" \\
+  -H "Authorization: Bearer sc_your_key"
+`}</CodeBlock>
+
       <h2 className="mt-8 text-xl font-semibold text-slate-900">Google Sheets</h2>
       <p className="mt-2 text-slate-600">
         Apps Script’s <code className="font-mono text-sm">UrlFetchApp</code> +
@@ -52,8 +79,8 @@ function pullStandings() {
   const rows = JSON.parse(res.getContentText()).data.rows;
   const sheet = SpreadsheetApp.getActiveSheet();
   sheet.clearContents();
-  sheet.appendRow(["Rank", "Entrant", "P", "Pts"]);
-  rows.forEach(r => sheet.appendRow([r.rank, r.entrant_name, r.played, r.points]));
+  sheet.appendRow(["Pool", "Rank", "Entrant", "Status", "P", "Pts"]);
+  rows.forEach(r => sheet.appendRow([r.pool, r.rank, r.name, r.status, r.played, r.points]));
 }
 `}</CodeBlock>
 
