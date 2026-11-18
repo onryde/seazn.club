@@ -1425,11 +1425,14 @@ test.describe("RB5-W7 an under-half pool leaver keeps her footnote", () => {
     const vName = name(0);
     const mateNames = mates.map((id) => name(ids.indexOf(id)));
     const deskPath = await divisionPath(request, divisionId, "?tab=standings");
-    const livePath = deskPath.replace(/^\/o\//, "/live/").replace(/\/c\//, "/").replace(/\/d\//, "/").replace(/\?tab=standings$/, "");
+    const livePath = deskPath.replace(/^\/o\//, "/live/").replace(/\/c\//, "/").replace(/\/d\//, "/");
+    // The live page opens on its Schedule tab: `?tab=standings` (an untranslated tab id) puts the table, and its note, in view.
+    expect(livePath, "premise: the live path keeps the Standings tab").toMatch(/^\/live\/.*\?tab=standings$/);
     for (const path of [deskPath, livePath]) {
       await page.goto(path);
       await dismissCookieBanner(page);
       const note = page.getByTestId(`standings-withdrawal-note-${v}`);
+      await expect(note, path).toBeVisible();
       await expect(note, path).toHaveText(`${vName} (withdrawn): left after 1 of 3, so their results are removed and their other matches are void.`);
       await expect(page.getByTestId("standings-withdrawal-notes"), `${path}: one table carries a note`).toHaveCount(1);
       // The innermost box holding both a table and the note is that table's own wrapper (document order: ancestors first).
