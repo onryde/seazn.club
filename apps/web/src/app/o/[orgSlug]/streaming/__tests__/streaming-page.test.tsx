@@ -233,6 +233,26 @@ describe("Streaming page — the disconnect-only page for an org that is not off
     expect(checked).toBe(3);
   });
 
+  // Court stream follow-up (2026-11-18): the full page's no-second-Nav guard had no twin on the restricted page. The /o layout owns
+  // the nav; a second one here was the cookie-led nav that showed another org. Both restricted states are checked: with a channel,
+  // and the emptied ?disconnected=1 page an editor lands on after the last disconnect.
+  it("the disconnect-only page renders no Nav of its own — with a channel and emptied (?disconnected=1), for each of the three reasons (count reported)", async () => {
+    let checked = 0;
+    for (const [why, apply] of reasons) {
+      for (const [state, connected, params] of [["with a channel", true, {}], ["emptied", false, { disconnected: "1" }]] as const) {
+        reset(apply);
+        m.hasLiveConnection.mockResolvedValue(connected);
+        m.listStreamTargets.mockResolvedValue(connected ? [{ id: "t-1", label: "Riverside FC" }] : []);
+        const html = await render(params);
+        expect(html, `${why}, ${state}: premise, the restricted page`).toContain(DISCONNECT_ONLY);
+        expect(html, `${why}, ${state}: the page's own chrome`).toContain("<h1");
+        expect(html, `${why}, ${state}: the /o layout owns the nav; the page renders none`).not.toContain('data-testid="nav"');
+        checked++;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
   it("an editor with NO connection is still a 404 for each reason (the empty case), then gets the page the moment a connection exists (the sequence)", async () => {
     let checked = 0;
     for (const [why, apply] of reasons) {
