@@ -240,6 +240,25 @@ describe("divisionChampion", () => {
     expect(divisionChampion(stages, [], standings)).toBe("p");
   });
 
+  it("W5 T14 (groups only): a group stage of TWO or more pools and no overall table crowns NOBODY - each pool's rank 1 has the same claim", () => {
+    // differential: the `?? find(stage_id)` fallback took the FIRST pool's table, so a two-pool Groups only division read
+    // "Champion <Pool A's winner>" on the division page, the hub and the OG card. The pool tables are the result.
+    const stages = [stage({ id: "s1", seq: 1, kind: "group", status: "complete" })];
+    let checked = 0;
+    for (const pools of [2, 3, 8]) {
+      const standings = Array.from({ length: pools }, (_, i) =>
+        snapshot({ stage_id: "s1", pool_id: `p${i + 1}`, rows: [{ entrantId: `top-${i + 1}`, rank: 1 }, { entrantId: `second-${i + 1}`, rank: 2 }] }),
+      );
+      expect(divisionChampion(stages, [], standings), `${pools} pools`).toBeNull();
+      expect(divisionTitle(stages, [], standings), `${pools} pools`).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // The same stage as one pool (the line above) still crowns, and an overall table still wins: the gate is "more than one pool".
+    const one = [snapshot({ stage_id: "s1", pool_id: "p1", rows: [{ entrantId: "only", rank: 1 }] })];
+    expect(divisionChampion(stages, [], one)).toBe("only");
+  });
+
   it("prefers the OVERALL snapshot over a pool one when both exist", () => {
     const stages = [stage({ id: "s1", seq: 1, kind: "group", status: "complete" })];
     const standings = [

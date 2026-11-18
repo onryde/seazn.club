@@ -299,7 +299,7 @@ export function decisiveStageOf<S extends ChampionStage>(stages: readonly S[]): 
  * fixtures is already decided — a fully-played stage is not always flipped to
  * `complete` — and its champion is rank 1 of the stage's overall snapshot,
  * falling back to the stage's only pool table when no overall one was
- * computed. A table never answers joint or vacant.
+ * computed (a stage of several pools and no overall table crowns nobody). A table never answers joint or vacant.
  */
 export function divisionTitle(
   stages: readonly ChampionStage[],
@@ -331,9 +331,10 @@ export function divisionTitle(
     (stageFixtures.length > 0 && stageFixtures.every(finished));
   if (!stageDone) return null;
 
-  const snap =
-    standings.find((s) => s.stage_id === decisive.id && !s.pool_id) ??
-    standings.find((s) => s.stage_id === decisive.id);
+  // The stage's overall table, else its ONLY pool's. Two or more pools and no overall table (a Groups only division, W5 T14)
+  // has no single rank 1: each pool's leader has the same claim, so nobody is crowned and the pool tables are the result.
+  const mine = standings.filter((s) => s.stage_id === decisive.id);
+  const snap = mine.find((s) => !s.pool_id) ?? (mine.length === 1 ? mine[0] : undefined);
   if (!snap) return null;
   const top = snap.rows.find((r) => r.rank === 1);
   return top ? { kind: "champion", champion: top.entrantId } : null;
