@@ -1,9 +1,11 @@
-import { autoStopDeadline, autoStopVerdict } from "../auto-stream";
+import { autoStartVerdict, autoStopDeadline, autoStopVerdict, type AutoStartFacts } from "../auto-stream";
 import { describe, expect, it } from "vitest";
 import {
   courtCodeView,
   courtFocus,
   courtPhoneStatus,
+  courtRestartsAfter,
+  courtStartFacts,
   courtTailEndsAt,
   startingOfCurrent,
   type CourtMatchFacts,
@@ -306,5 +308,52 @@ describe("one rule: the desk's tail ends exactly when the tick's delay_elapsed d
     const desk = courtTailEndsAt({ openState: "live", finishedAt: FIN, sessionPredatesResult: true, phoneMode: "automatic" }, now, 30);
     expect(desk !== null, `${ms} ms`).toBe(!tick.due);
     if (desk !== null) expect(desk).toEqual(autoStopDeadline(FIN, 30));
+  });
+});
+
+// Court follow-up (controller ruling, 2026-11-18): a court session that ended because its phone went away does not latch the
+// match. The rule, typed here: only `phone_lost` releases the two once-per-match latches (the automatic start has run; a session
+// received video); every other end, and no ended session at all, releases nothing; and the organiser's latch is never touched.
+describe("courtStartFacts (a phone gone mid-match: the court starts the match again)", () => {
+  const T = new Date("2026-11-07T10:00:00Z");
+  const latchedOnce: AutoStartFacts = {
+    autoStream: true, phoneMode: "automatic", phonePresent: true, fixtureStatus: "in_play", openSession: false,
+    autoStartedAt: T, autoStartBlockedAt: null, anySessionHadIngest: true, autoStartAttemptedAt: T,
+  };
+  const later = new Date(T.getTime() + 60 * 60_000);
+
+  it("phone_lost releases not_yet_started and no_broadcast_ran, and the start is due", () => {
+    expect(autoStartVerdict(latchedOnce, later, 30).failed, "premise: once-per-match holds the match").toEqual(["not_yet_started", "no_broadcast_ran"]);
+    const released = courtStartFacts(latchedOnce, "phone_lost");
+    expect(released).toEqual({ ...latchedOnce, autoStartedAt: null, anySessionHadIngest: false });
+    expect(autoStartVerdict(released, later, 30)).toEqual({ due: true, failed: [] });
+  });
+
+  it("every other end, and none, releases nothing (count reported)", () => {
+    let checked = 0;
+    for (const end of [null, "stopped", "operator_stopped", "auto_stopped", "max_duration", "relay_ended"] as const) {
+      expect(courtStartFacts(latchedOnce, end), String(end)).toBe(latchedOnce);
+      expect(courtRestartsAfter(end), String(end)).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(courtRestartsAfter("phone_lost")).toBe(true);
+  });
+
+  it("the organiser's latch, the switch, the match in play, an open session and the retry spacing still decide after a phone gone", () => {
+    const cases: [string, Partial<AutoStartFacts>, string, Date][] = [
+      ["the organiser's Stop", { autoStartBlockedAt: T }, "not_blocked", later],
+      ["Stream off", { autoStream: false }, "switch_on", later],
+      ["the result", { fixtureStatus: "decided" }, "in_play", later],
+      ["a session open", { openSession: true }, "no_open_session", later],
+      ["inside the retry spacing", { autoStartAttemptedAt: later }, "retry_spacing", later],
+    ];
+    let checked = 0;
+    for (const [label, over, conjunct, now] of cases) {
+      const v = autoStartVerdict(courtStartFacts({ ...latchedOnce, ...over }, "phone_lost"), now, 30);
+      expect(v, label).toEqual({ due: false, failed: [conjunct] });
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });
