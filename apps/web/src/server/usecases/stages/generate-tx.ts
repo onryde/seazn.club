@@ -889,6 +889,7 @@ export async function generateStageFixturesTx(
     competitionId: division!.competition_id,
     kind: stage.kind,
     ...(ledger === "step" ? { ledgerPayload: { fixture_ids: createdIds, ...(swissAudit ?? {}) } } : {}),
+    ...(swissAudit !== undefined ? { swissSeatedIds: swissAudit.seated_fixture_ids as string[] } : {}),
   };
 }
 

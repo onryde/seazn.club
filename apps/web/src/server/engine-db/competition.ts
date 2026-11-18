@@ -706,12 +706,11 @@ export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<Cros
  * result's step starts from the table as it now stands. No column: the step itself records the cause (a result's, or empty).
  * An unchanged table keeps its step whatever the cause (a same-answer rerun must not erase the real delta, as above).
  *
- * B5 fix wave fix round 3 (re-review 2 m5; controller ruling, owner "apply rec" + "fix now"): a `"bye"` refold - Pair next
- * seating a Swiss bye, a point awarded - is a RESULT too, and it EXTENDS the step the last result opened (`previous_rows` is kept,
- * `rows` takes the bye's point) rather than rolling a step of its own: the bye is the pairing's by-product, and a step of the bye
- * alone would replace the climber of the round just played with the bye holder's one-point move.
+ * B5 fix wave fix round 4 (m5; controller ruling, the reviewer's option a): Pair next seating a Swiss BYE is a result too - a
+ * point awarded - and it opens its OWN step like any result (`"result"`: the table just before the bye against the table just
+ * after it), whose climber is the bye's holder (`afterGenerateCommit`, usecases/stages/generate.ts).
  */
-export type SnapshotCause = "result" | "bye" | "roster";
+export type SnapshotCause = "result" | "roster";
 async function writeSnapshot(
   tx: Tx,
   stageId: string,
@@ -727,7 +726,6 @@ async function writeSnapshot(
       previous_rows = case
         when standings_snapshots.rows is not distinct from excluded.rows then standings_snapshots.previous_rows
         when ${cause}::text = 'result' then standings_snapshots.rows
-        when ${cause}::text = 'bye' then standings_snapshots.previous_rows
         else excluded.rows
       end,
       rows = excluded.rows, computed_through_seq = excluded.computed_through_seq, updated_at = now()

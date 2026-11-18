@@ -226,6 +226,17 @@ async function generateStageFixturesWrite(
   return write;
 }
 
+/** m5: whether the rows a Swiss pass seated (`seatedIds`) include a bye - one side seated, the other none. No seated ids (any other
+ *  kind, or a pass that seated nothing): no. */
+export function seatedABye(
+  fixtures: readonly { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[],
+  seatedIds: readonly string[] | undefined,
+): boolean {
+  if (seatedIds === undefined || seatedIds.length === 0) return false;
+  const seated = new Set(seatedIds);
+  return fixtures.some((f) => seated.has(f.id) && (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+}
+
 /** What follows a committed generate, outside its transaction: the table refold, the public-page revalidation and the
  *  activation event. Shared by `generateStageFixturesWrite` and `rebuildStageFixtures`, which commits its own
  *  delete-and-regenerate in one transaction and then does exactly this (W3 T1, X-RB-1). */
@@ -236,13 +247,14 @@ export async function afterGenerateCommit(auth: AuthCtx, stageId: string, write:
   // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. `created` counts a Swiss
   // seating too, so Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair:
   // the bye win shows at once, Finn/Gus). The kind gate and the empty-fold rule are `refoldStageTable`'s.
-  // B5 fix wave fix round 3 (m5; controller ruling): a Swiss seating that awards a bye (one side seated, the other none) folds a
-  // point in - a result, which extends the last result's step (`writeSnapshot`'s "bye"). A seating without one changes nothing in
-  // the table (pairing scores nobody), so its refold stays a roster refold: an unchanged table keeps its step either way, and
-  // anything else such a refold moves is not a result's.
+  // B5 fix wave fix rounds 3-4 (m5; controller ruling, the reviewer's option a): a Swiss seating that awards a bye folds a point in
+  // - a result, which opens its own step (the table just before the bye against the table just after it; its climber is the bye's
+  // holder). Read off the rows THIS pass seated (`swissSeatedIds`), never the stage's: an earlier round's bye is still there after a
+  // withdrawal has made the field even. A seating without one changes nothing in the table (pairing scores nobody), so its refold
+  // stays a roster refold: an unchanged table keeps its step either way, and anything else such a refold moves is not a result's.
   if (outcome.created > 0) {
-    const seatsABye = write.kind === "swiss" && outcome.fixtures.some((f) => (f.home_entrant_id === null) !== (f.away_entrant_id === null));
-    await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip", seatsABye ? "bye" : "roster");
+    const cause = seatedABye(outcome.fixtures, write.swissSeatedIds) ? "result" : "roster";
+    await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip", cause);
   }
   await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.

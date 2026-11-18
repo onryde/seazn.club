@@ -385,6 +385,9 @@ export interface GenerateWrite {
   /** W4 T8 (FX-G2): the fixtures a knockout reconcile changed in place, or deleted to regenerate — the publish names
    *  them so their match centres refetch. Absent on every other write (a plain Generate changes no existing fixture). */
   changedFixtureIds?: string[];
+  /** B5 fix wave fix round 4 (m5): Swiss only - the rows THIS pass seated (Pair next updates shells in place, so `outcome.fixtures`,
+   *  every fixture of the stage, cannot say which). Server-internal, never on the wire. */
+  swissSeatedIds?: string[];
 }
 
 /** What a Generate press may ask for beyond "generate". */
