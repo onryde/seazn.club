@@ -60,3 +60,16 @@ overrides:
   "baseline-browser-mapping@<2.11.0": "^2.11.26"
   "fflate@>=0.4.5 <0.4.9": "^0.4.9"
   "@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33": "^4.0.54"
+
+# postgres.js 3.4.9, patched (2026-11-18): `Connection.execute` calls sql.begin's
+# reservation hook (`onexecute`) for every statement it writes. Unpatched, a BEGIN
+# written as the statement that filled a connection's pipeline (100 deep), or
+# while its socket was over the high-water mark, was never reserved: the begin
+# failed with UNSAFE_TRANSACTION and the connection went back to the pool INSIDE
+# the open transaction, where later pooled writes were never committed. Every
+# package.json pins postgres to EXACTLY this version, so a bump is a deliberate
+# edit that pnpm refuses until this patch is re-made for (or dropped by) the new
+# release. Behaviour: apps/web/src/lib/__tests__/db-begin-pipeline.test.ts. The
+# Dockerfile copies patches/ before its install, or the image cannot build.
+patchedDependencies:
+  postgres@3.4.9: patches/postgres@3.4.9.patch

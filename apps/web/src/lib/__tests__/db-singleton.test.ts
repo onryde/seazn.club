@@ -70,16 +70,6 @@ describe("db client singleton", () => {
     expect(opts.idle_timeout).toBe(60);
   });
 
-  // What postgres() is handed for the pipeline depth: no cap (lib/db.ts MAX_PIPELINE). Left at the library's default of 100,
-  // a begin() written 101 deep onto a busy connection strands it inside the transaction (db-begin-pipeline.test.ts is
-  // the behaviour; this pins that the option reaches the client, which the pure options test cannot see).
-  it("postgres() gets connectionOptions' pipeline depth - uncapped", async () => {
-    const { connectionOptions } = await import("@/lib/db");
-    const opts = await clientOptions();
-    expect(opts.max_pipeline).toBe(connectionOptions("postgres://app@db.example.com:5432/app").maxPipeline);
-    expect(opts.max_pipeline).toBe(Number.MAX_SAFE_INTEGER);
-  });
-
   // postgres.js 3.4.9 registers EVERY array parser (text[]/uuid[] included)
   // through fetch_types. It must be passed EXPLICITLY true: left at the
   // default, a `?fetch_types=false` URL param turns it off.
