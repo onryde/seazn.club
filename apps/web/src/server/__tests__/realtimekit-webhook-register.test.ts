@@ -17,7 +17,9 @@ import {
 
 const URL_OK = "https://seazn.example/api/webhooks/realtimekit";
 const TOKEN = "tok-SECRET-0123456789";
-const ENV = { CLOUDFLARE_ACCOUNT_ID: "acct1", REALTIMEKIT_API_TOKEN: TOKEN, REALTIMEKIT_APP_ID: "app1" } as NodeJS.ProcessEnv;
+// ProcessEnv (@types/node + Next) makes NODE_ENV required; a partial env is exactly what these tests mean to pass.
+const penv = (e: Record<string, string>): NodeJS.ProcessEnv => e as unknown as NodeJS.ProcessEnv;
+const ENV = penv({ CLOUDFLARE_ACCOUNT_ID: "acct1", REALTIMEKIT_API_TOKEN: TOKEN, REALTIMEKIT_APP_ID: "app1" });
 const PREFIX = "https://api.cloudflare.com/client/v4/accounts/acct1/realtime/kit/app1";
 
 const hook = (over: Partial<VendorWebhook> = {}): VendorWebhook => ({
@@ -86,7 +88,7 @@ describe("registrationPlan", () => {
 describe("run", () => {
   it("--dry-run makes no request, needs no credentials, and exits 0", async () => {
     const c = capture();
-    const code = await run(["--url", URL_OK, "--dry-run"], { fetch: throwingFetch, env: {}, out: c.out });
+    const code = await run(["--url", URL_OK, "--dry-run"], { fetch: throwingFetch, env: penv({}), out: c.out });
     expect(code).toBe(0);
     expect(c.lines.length).toBeGreaterThan(0);
     expect(c.lines.join("\n")).toContain(URL_OK);
@@ -165,7 +167,7 @@ describe("run", () => {
       [["--url", "not a url"], ENV],
       [["--url", "http://seazn.example/api/webhooks/realtimekit"], ENV],
       [["--url", URL_OK, "--bogus"], ENV],
-      [["--url", URL_OK], { CLOUDFLARE_ACCOUNT_ID: "acct1" } as NodeJS.ProcessEnv],
+      [["--url", URL_OK], penv({ CLOUDFLARE_ACCOUNT_ID: "acct1" })],
     ];
     for (const [argv, env] of cases) {
       const c = capture();
@@ -177,7 +179,7 @@ describe("run", () => {
 
   it("the missing-env message names the variables, never their values", async () => {
     const c = capture();
-    await run(["--url", URL_OK], { fetch: throwingFetch, env: { REALTIMEKIT_API_TOKEN: TOKEN } as NodeJS.ProcessEnv, out: c.out });
+    await run(["--url", URL_OK], { fetch: throwingFetch, env: penv({ REALTIMEKIT_API_TOKEN: TOKEN }), out: c.out });
     const text = c.lines.join("\n");
     expect(text).toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(text).toContain("REALTIMEKIT_APP_ID");
