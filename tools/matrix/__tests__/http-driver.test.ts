@@ -7,6 +7,8 @@ import type { RawResult, Session } from "../../bench/lib/http.ts";
 import { HttpDriver, REQUEST_TIMEOUT_MS, TEMPLATE_VISIBILITY, type Transport } from "../lib/driver/http-driver.ts";
 import { DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, nextMatchFixtureId, voidTargetOf } from "../lib/driver/types.ts";
 import { START } from "../lib/streams/types.ts";
+import { SPORT_KEYS } from "../lib/catalogue.ts";
+import { resolveTemplate } from "../../../apps/web/src/server/templates/resolve.ts";
 import { nextMatchStartedText, schemasText, wireCodeFor } from "./product-text.ts";
 
 interface Call { path: string; method: string; body: unknown; cookies: number }
@@ -87,6 +89,31 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
       division: { id: "d9", slug: "main", sportKey: "badminton", variantKey: "short", config: { bestOf: 3 } },
       stages: [{ id: "s1", seq: 1, kind: "group", config: { pools: { count: 4 } }, status: "pending" }],
     });
+  });
+
+  it("X-BD-3 the real POST of an any-sport card, on every sport: the driver's body carries the four choice fields, the product's schema names each, and the product's own resolver takes that body", async () => {
+    const text = schemasText();
+    const block = text.slice(text.indexOf("export const CreateFromTemplate"), text.indexOf("export type CreateFromTemplate"));
+    for (const field of ["sport_key", "variant_key", "entrant_kind", "entrant_count"]) expect(block, field).toContain(field);
+    const catalog = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "apps/web/src/server/templates/catalog/super-groups.json"), "utf8")) as Parameters<typeof resolveTemplate>[0];
+    let checked = 0;
+    for (const sport of SPORT_KEYS) {
+      const { t, calls } = fake(replies({ answer: { templateKey: "super-groups" } }));
+      const choice = { sportKey: sport, variantKey: `${sport}-v`, entrantKind: "individual" as const, entrantCount: 16 };
+      await drv(t).createFromTemplate("super-groups", { name: "Matrix x", endsOn: "2030-12-31", choice });
+      const body = calls[0]!.body as Record<string, unknown>;
+      expect(body, sport).toEqual({ template_key: "super-groups", name: "Matrix x", ends_on: "2030-12-31", sport_key: sport, variant_key: `${sport}-v`, entrant_kind: "individual", entrant_count: 16 });
+      // The product's resolver (server/templates/resolve.ts, the one the route runs), fed exactly the wire body's fields.
+      const r = resolveTemplate(catalog, { sportKey: body.sport_key as string, variantKey: body.variant_key as string, entrantKind: body.entrant_kind as "individual", entrantCount: body.entrant_count as number });
+      expect(r.ok, sport).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
+    // A fixed card's POST carries none of them (the first test above pins its whole body).
+    const fixed = fake(replies());
+    await drv(fixed.t).createFromTemplate("box-league", { name: "M", endsOn: "2030-12-31" });
+    expect(Object.keys(fixed.calls[0]!.body as object).sort()).toEqual(["ends_on", "name", "template_key"]);
   });
 
   it("refuses, by name: a competition in another org, an applied visibility other than the default (note or not), a template with other than one division, stages that are not the ones it created", async () => {

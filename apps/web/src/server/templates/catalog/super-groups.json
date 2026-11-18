@@ -12,7 +12,7 @@
       "variantKey": "any",
       "entrantKind": "any",
       "entrantCount": 16,
-      "entrantCountOptions": [8, 12, 16, 24, 32],
+      "entrantCountOptions": [12, 16, 24, 32],
       "stages": [
         {
           "i18nNameKey": "templates.stage.groupStage",

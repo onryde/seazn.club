@@ -6364,6 +6364,7 @@
   "templates.detail.progression.line": "{source}: {take} → {target}",
   "templates.detail.count.label": "Aantal deelnemers",
   "templates.detail.count.hint": "Aantallen die precies in poules van 4 passen.",
+  "templates.detail.noSports": "Er is op dit moment geen sport beschikbaar om dit sjabloon op te bouwen, dus het kan niet worden ingesteld. Laad de pagina opnieuw of start een lege competitie.",
   "templates.detail.shape.pools": "{count} poules van {size}",
   "templates.detail.take.topNPerGroup": "De beste {n} per groep",
   "templates.detail.take.bestNth": "{count} beste nummers {nth}",

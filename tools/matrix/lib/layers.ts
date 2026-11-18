@@ -47,7 +47,7 @@
 // the leaf api-only-ui.ts, never from browser-driver.ts.
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, isKnobRow, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type KnobRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
-import { onTemplate, templateField, templateRow } from "./templates.ts";
+import { onTemplate, templateField, templateFor, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor, type AtomicScenario, type Settled } from "./scenario-catalogue.ts";
@@ -269,7 +269,7 @@ export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
       return at({ ...identity, canary: false });
     }
     const p = apiOnlyUiPath(row, sport);
-    if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template));
+    if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template, variantFor(sport)));
     const variant = variantFor(sport);
     return {
       spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
@@ -353,7 +353,9 @@ export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
       const variant = variantFor(sport);
       // A row the product refuses (catalogue.ts refusedCell: the standalone stepladder and page playoff, W4 T16) owes no
       // organiser path, so it is not planned 🚫 either.
-      return API_ONLY_ROWS.filter((row) => !isKnobRow(row) && refusedCell(row, sport) === null).map((row): PlannedLayerCase => ({
+      // W5 X-BD-3: a row a catalog card reaches on this sport has an organiser path, so it is driven (planL1Grid), never planned
+      // 🚫 here: super-groups reaches group_group_ko on generic, leaving group_only the one row with no control.
+      return API_ONLY_ROWS.filter((row) => !isKnobRow(row) && refusedCell(row, sport) === null && templateFor(row, sport) === null).map((row): PlannedLayerCase => ({
         spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
         layer: "L1", width: L1_WIDTH, noPath: apiOnlyNoPath(row, sport), notRun: null, run: null,
       }));

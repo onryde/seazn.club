@@ -601,8 +601,9 @@ function templateOnlyCells(): Record<string, string> {
     const t = JSON.parse(readFileSync(join(dir, f), "utf8")) as { key: string; divisions: { sportKey: string; stages: CatalogStage[] }[] };
     templates++;
     for (const d of t.divisions) {
-      // W5 X-BD-3: an any-sport template names no sport, so it is no cell of its own (the matrix routing task, W5 Task 24, routes it).
-      if (d.sportKey === "any") continue;
+      // W5 X-BD-3: an any-sport template names no sport: it reaches the row on every engine sport, unless a card with the
+      // sport of its own already holds the cell (cricket's group_group_ko is t20-super8).
+      const sports = d.sportKey === "any" ? SPORT_KEYS : [d.sportKey];
       for (const row of API_ONLY_ROWS) {
         const want = stagesForRow(row);
         if (kinds(d.stages) !== kinds(want)) continue;
@@ -612,7 +613,10 @@ function templateOnlyCells(): Record<string, string> {
           return Object.entries(w.config).every(([k, v]) => JSON.stringify(other[k]) === JSON.stringify(v)
             || JSON.stringify(d.stages[i]!.config?.[k] ?? d.stages[i]![k]) === JSON.stringify(v));
         }));
-        if (tellsApart) out[`${row}|${d.sportKey}`] = t.key;
+        if (!tellsApart) continue;
+        // A card with a sport of its own holds its cell; an "any" card fills the cells still free (files are read in name order,
+        // super-groups before t20-super8, so the own-sport card overwrites).
+        for (const sport of sports) if (d.sportKey !== "any" || out[`${row}|${sport}`] === undefined) out[`${row}|${sport}`] = t.key;
       }
     }
   }
@@ -624,7 +628,12 @@ describe("BrowserDriver — API-only rows (D7)", () => {
   it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, and coverage exempts createDivision — while the two template-only cells are refused by name unless the case carries its template (Task 13)", async () => {
     const scopes = designScopes();
     const cells = templateOnlyCells();
-    expect(cells).toEqual({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
+    // The cells a card reaches: box-league on badminton and t20-super8 on cricket hold their own; the any-sport super-groups
+    // reaches group_group_ko on every other engine sport (W5 X-BD-3).
+    expect(cells).toEqual({
+      "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8",
+      ...Object.fromEntries(SPORT_KEYS.filter((s) => s !== "cricket").map((s) => [`group_group_ko|${s}`, "super-groups"])),
+    });
     let checked = 0;
     let refused = 0;
     let refusedRows = 0;
@@ -2014,8 +2023,10 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
   });
 
   it("a division the harness built over http: the places come from the stages it posted, and from the stages it listed", async () => {
-    // An API-only row: its division is the harness's own, over http. Generic's `score` variant is a real one.
-    const gk = spec("group_group_ko", "generic", { variant: "score", caseId: "group_group_ko|generic|score|LIFECYCLE" });
+    // An API-only row: its division is the harness's own, over http. Generic's `score` variant is a real one. group_only on generic
+    // has no card (box-league is badminton's); group_group_ko on generic has one now (super-groups), so it is never built over http.
+    // The stages posted are three-stage bodies either way: the places are taken from what is posted, whatever the row.
+    const gk = spec("group_only", "generic", { variant: "score", caseId: "group_only|generic|score|LIFECYCLE" });
     const posted = new StagedHttp(ORG);
     const a = make({ http: posted, spec: gk });
     const { divId } = await built(a.driver, gk);

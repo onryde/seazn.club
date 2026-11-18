@@ -16,7 +16,7 @@ import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type JointWinnersOut, type JointWinnersUndoOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type TemplateCreateInput, type GenerateOut, type JointWinnersOut, type JointWinnersUndoOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -118,8 +118,13 @@ export class HttpDriver implements OrganiserDriver {
   /** W1-driving Task 13: the card's POST, then the read-back. The body is the
    *  gallery's (template-gallery.tsx submit) less its optional version guard
    *  and start date: no visibility, so the product's default applies. */
-  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
-    const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", { template_key: key, name: input.name, ends_on: input.endsOn });
+  async createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut> {
+    const c = input.choice;
+    // W5 X-BD-3: an any-sport template's choice rides the body, as the sheet's POST sends it (template-choice.ts choiceBody).
+    const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", {
+      template_key: key, name: input.name, ends_on: input.endsOn,
+      ...(c ? { sport_key: c.sportKey, variant_key: c.variantKey, entrant_kind: c.entrantKind, entrant_count: c.entrantCount } : {}),
+    });
     return this.readBackTemplate(answer, key);
   }
 

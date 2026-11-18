@@ -65,7 +65,7 @@ import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from ".
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, requireVoidTarget,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FinishSwissOut, type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateOut, type GenerateOut, type TemplateCreateInput, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StandingsRowWire, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -656,7 +656,7 @@ export class BrowserDriver implements OrganiserDriver {
    *  stage is ever posted. The product's answer is read back over http (org,
    *  visibility, division, stages — HttpDriver.readBackTemplate); only what
    *  held is registered for the page objects. */
-  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+  async createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut> {
     if (this.#spec.template !== key) {
       throw new DriverMisuse(`browser: case ${this.#spec.caseId} carries template ${this.#spec.template ?? "none"}; createFromTemplate(${key}) would build another shape under its name`);
     }

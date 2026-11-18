@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { API_ONLY_ROWS, SPORT_KEYS, stagesForRow, type ApiOnlyRowKey, type StagePostBody } from "./catalogue.ts";
+import type { EntrantKind, TemplateChoiceInput } from "./driver/types.ts";
 import type { CaseSpec } from "./scenarios/types.ts";
 
 /** server/templates/catalog/, resolved from this file — never the cwd. */
@@ -141,20 +142,49 @@ export function templateRow(key: string, dir: string = CATALOG_DIR): ApiOnlyRowK
   return row;
 }
 
-/** The template that builds `row` on `sport`, or null: no catalog card reaches the cell. */
+/** Whether `key` names no sport of its own (W5 X-BD-3): the cell supplies it, and the case sends it as the sheet's choice. */
+export function isAnySportTemplate(key: string, dir: string = CATALOG_DIR): boolean {
+  return templateField(key, dir).sport === ANY_SPORT;
+}
+
+/** The template that builds `row` on `sport`, or null: no catalog card reaches the cell. A card with the sport of its own
+ *  wins (cricket's group_group_ko is t20-super8); else an any-sport card reaches every engine sport (W5 X-BD-3: super-groups). */
 export function templateFor(row: string, sport: string): string | null {
   if (!(API_ONLY_ROWS as readonly string[]).includes(row)) return null;
+  let any: string | null = null;
   for (const key of Object.keys(TEMPLATE_ROW)) {
-    if (TEMPLATE_ROW[key] === row && templateField(key).sport === sport) return key;
+    if (TEMPLATE_ROW[key] !== row) continue;
+    const own = templateField(key).sport;
+    if (own === sport) return key;
+    if (own === ANY_SPORT && any === null && SPORT_KEYS.includes(sport)) any = key;
   }
-  return null;
+  return any;
+}
+
+/** A case on an any-sport template asked for its variant, and none was given: the card cannot guess one. */
+export class AnySportNeedsVariant extends Error {
+  constructor(key: string) {
+    super(`templates: '${key}' names no sport or variant of its own; a case on it carries the variant it plays (onTemplate's third argument)`);
+    this.name = "AnySportNeedsVariant";
+  }
+}
+
+/** The sheet's choice for a case on an any-sport template: its sport, its variant, the entrant kind its cfg plays and the
+ *  template's own field. Undefined for a template with a sport of its own (its card asks for nothing). */
+export function templateChoiceFor(key: string, spec: Pick<CaseSpec, "sport" | "variant">, entrantKind: EntrantKind, dir: string = CATALOG_DIR): TemplateChoiceInput | undefined {
+  const f = templateField(key, dir, { sport: spec.sport, variant: spec.variant });
+  if (templateField(key, dir).sport !== ANY_SPORT) return undefined;
+  return { sportKey: spec.sport, variantKey: spec.variant, entrantKind, entrantCount: f.entrantCount };
 }
 
 /** `spec` re-planned onto catalog template `key` (D11): the case drives through the template's card, so its variant
  *  (and the id that names it) is the template's own, never the builder default's, and `template` is set. Every other
  *  field is the spec's. The one builder the grid's L1 cells (layers.ts planL1Grid) and a plain browser plan share. */
-export function onTemplate(spec: Omit<CaseSpec, "variant" | "caseId">, key: string): CaseSpec {
-  const { variant } = templateField(key);
+export function onTemplate(spec: Omit<CaseSpec, "variant" | "caseId">, key: string, caseVariant?: string): CaseSpec {
+  const own = templateField(key);
+  // An any-sport card has no variant of its own: the case's (W5 X-BD-3). A fixed card's is its own, whatever is passed.
+  if (own.sport === ANY_SPORT && (caseVariant === undefined || caseVariant === "")) throw new AnySportNeedsVariant(key);
+  const variant = own.sport === ANY_SPORT ? caseVariant! : own.variant;
   return { ...spec, caseId: `${spec.row}|${spec.sport}|${variant}|${spec.scenario}`, variant, template: key };
 }
 
@@ -165,7 +195,7 @@ export function onTemplate(spec: Omit<CaseSpec, "variant" | "caseId">, key: stri
 export function routeViaTemplate(spec: CaseSpec): CaseSpec {
   if (spec.template !== undefined || spec.overrides !== undefined) return spec;
   const key = templateFor(spec.row, spec.sport);
-  return key === null ? spec : onTemplate(spec, key);
+  return key === null ? spec : onTemplate(spec, key, spec.variant);
 }
 
 /** The stage rows the product inserts for `key` (usecases/templates.ts

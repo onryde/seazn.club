@@ -60,12 +60,14 @@ describe("super-groups sheet (X-BD-3)", () => {
     expect(sports).toBeGreaterThan(0);
     // The rule: pools of 4 -> n/4 pools. Typed from the rule, per offered size.
     let sizes = 0;
-    for (const [n, pools] of [[8, 2], [12, 3], [16, 4], [24, 6], [32, 8]] as const) {
+    for (const [n, pools] of [[12, 3], [16, 4], [24, 6], [32, 8]] as const) {
       expect(html, String(n)).toContain(`<option value="${n}"`);
       expect(html, String(n)).toContain(`${n} entrants · ${pools} pools of 4`);
       sizes++;
     }
-    expect(sizes).toBe(5);
+    expect(sizes).toBe(4);
+    // 8 was dropped: its second tier (pools of 2, top 2) eliminates nobody.
+    expect(html).not.toContain('<option value="8"');
   });
 
   it("describes the default 16: Group Stage 4 pools of 4, Super groups 2 pools of 4, a knockout of 4", () => {
@@ -77,10 +79,21 @@ describe("super-groups sheet (X-BD-3)", () => {
     expect(html).toContain("Group Stage: Top 2 per group → Super groups");
   });
 
-  it("no sport to build on: the create is disabled, never a default sport", () => {
-    const html = sheet(SUPER, []);
-    expect(html).not.toContain('data-testid="template-choice"');
-    expect(html).toMatch(/data-testid="template-detail-submit"[^>]*disabled|disabled=""[^>]*data-testid="template-detail-submit"/);
+  it("no sport to build on: a notice says so in every locale, no empty Structure list, and the create is disabled (never a default sport)", () => {
+    let checked = 0;
+    for (const [locale, dict] of LOCALES) {
+      const html = sheet(SUPER, [], dict, locale);
+      expect(html, locale).not.toContain('data-testid="template-choice"');
+      expect(html, locale).toContain('data-testid="template-choice-empty"');
+      expect(html, locale).toContain(tRuntime(dict, "templates.detail.noSports").replace(/'/g, "&#x27;"));
+      expect(html, locale).not.toContain('data-testid="template-detail-structure"');
+      expect(html, locale).not.toContain('data-testid="template-detail-progression"');
+      expect(html, locale).toMatch(/data-testid="template-detail-submit"[^>]*disabled|disabled=""[^>]*data-testid="template-detail-submit"/);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // And with sports the notice is absent (the positive pair).
+    expect(sheet()).not.toContain('data-testid="template-choice-empty"');
   });
 
   it("a fixed template's sheet is what it was: no choice block, its own entrant count line", () => {

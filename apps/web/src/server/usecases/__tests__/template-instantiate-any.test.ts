@@ -17,6 +17,7 @@ import { createFromTemplate, TEMPLATE_INSTANTIATION_FAILED_CODE } from "../templ
 import { createEntrants } from "../entrants";
 import { templateSportOptions } from "../template-sports";
 import { choosableSports } from "@/lib/template-choice";
+import { getTemplate } from "@/server/templates/catalog";
 
 vi.mock("@/lib/posthog-server", () => ({ captureServer: vi.fn().mockResolvedValue(undefined) }));
 
@@ -112,6 +113,26 @@ describe.runIf(HAS_DB)("createFromTemplate — super-groups, the sport-agnostic 
     expect(new Set(seen).size).toBe(builtinModules.length);
   });
 
+  it("X-BD-3 every variant of every sport builds (a variant is a rule set, so each is its own case)", async () => {
+    await seedEverySport();
+    let built = 0;
+    for (const mod of builtinModules) {
+      const kind = defaultKindOf(mod);
+      for (const variantKey of Object.keys(mod.variants)) {
+        const auth = await seedOrg();
+        const out = await createFromTemplate(auth, body({ sport_key: mod.key, variant_key: variantKey, entrant_kind: kind, entrant_count: 16 }));
+        const { division, stages } = await readBack(out.divisions[0]!.id);
+        expect([division.sport_key, division.variant_key], `${mod.key}/${variantKey}`).toEqual([mod.key, variantKey]);
+        expect(stages.map((s) => s.kind), `${mod.key}/${variantKey}`).toEqual(["group", "group", "knockout"]);
+        built++;
+      }
+    }
+    // The registry's own variant count, derived, never typed.
+    const declared = builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0);
+    expect(built).toBe(declared);
+    expect(built).toBeGreaterThan(builtinModules.length);
+  });
+
   it("X-BD-3 every entrant kind a sport plays is built, and every kind it does not play is refused with nothing left behind", async () => {
     await seedEverySport();
     let built = 0;
@@ -120,7 +141,7 @@ describe.runIf(HAS_DB)("createFromTemplate — super-groups, the sport-agnostic 
       const played = kindsOf(mod);
       for (const kind of ["team", "pair", "individual"] as const) {
         const auth = await seedOrg();
-        const ask = () => createFromTemplate(auth, body({ sport_key: mod.key, variant_key: variantOf(mod), entrant_kind: kind, entrant_count: 8 }));
+        const ask = () => createFromTemplate(auth, body({ sport_key: mod.key, variant_key: variantOf(mod), entrant_kind: kind, entrant_count: 12 }));
         if (played.includes(kind)) {
           const out = await ask();
           const { division } = await readBack(out.divisions[0]!.id);
@@ -143,20 +164,24 @@ describe.runIf(HAS_DB)("createFromTemplate — super-groups, the sport-agnostic 
     await seedEverySport();
     const badminton = builtinModules.find((m) => m.key === "badminton")!;
     let checked = 0;
-    for (const [count, pools] of [[8, 2], [12, 3], [16, 4], [24, 6], [32, 8]] as const) {
+    // The offered sizes are the catalogue's own declaration; the pool count is the rule (pools of 4).
+    const offered = getTemplate(KEY)!.divisions[0]!.entrantCountOptions!;
+    for (const count of offered) {
+      const pools = count / POOL_SIZE;
       const auth = await seedOrg();
       const out = await createFromTemplate(auth, body({ sport_key: "badminton", variant_key: variantOf(badminton), entrant_kind: "pair", entrant_count: count }));
       const { stages } = await readBack(out.divisions[0]!.id);
       expect(stages.map((s) => s.config.pools?.count), `${count} pairs`).toEqual([pools, 2, undefined]);
       checked++;
     }
-    expect(checked).toBe(5);
+    expect(checked).toBe(offered.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("X-BD-3 the narrowed kind is real: a badminton pairs event takes a pair and refuses an individual", async () => {
     await seedEverySport();
     const auth = await seedOrg();
-    const out = await createFromTemplate(auth, body({ sport_key: "badminton", variant_key: "short", entrant_kind: "pair", entrant_count: 8 }));
+    const out = await createFromTemplate(auth, body({ sport_key: "badminton", variant_key: "short", entrant_kind: "pair", entrant_count: 12 }));
     const divisionId = out.divisions[0]!.id;
     const person = async (n: number) => (await sql<{ id: string }[]>`
       insert into persons (org_id, full_name) values (${auth.orgId}, ${"P" + n + randomUUID().slice(0, 4)}) returning id`)[0]!.id;

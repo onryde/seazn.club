@@ -6364,6 +6364,7 @@
   "templates.detail.progression.line": "{source}: {take} → {target}",
   "templates.detail.count.label": "Number of entrants",
   "templates.detail.count.hint": "Sizes that divide cleanly into pools of 4.",
+  "templates.detail.noSports": "No sport is available to build this template on right now, so it cannot be set up. Reload the page, or start a blank competition instead.",
   "templates.detail.shape.pools": "{count} pools of {size}",
   "templates.detail.take.topNPerGroup": "Top {n} per group",
   "templates.detail.take.bestNth": "{count} best {nth}-placed",

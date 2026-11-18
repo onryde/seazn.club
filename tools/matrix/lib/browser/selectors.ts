@@ -111,6 +111,11 @@ export const TESTID = testids({
   builderError: { id: "division-builder-error", file: `${V2}/division-builder.tsx`, needle: 'data-testid="division-builder-error"' },
   // W1-driving Task 13: the template detail sheet's "Use this template" (template-gallery.tsx:421).
   templateDetailSubmit: { id: "template-detail-submit", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-detail-submit"' },
+  // W5 X-BD-3: the sheet's choice block for an any-sport template (super-groups).
+  templateChoiceSport: { id: "template-choice-sport", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-choice-sport"' },
+  templateChoiceVariant: { id: "template-choice-variant", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-choice-variant"' },
+  templateChoiceKind: { id: "template-choice-kind", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-choice-kind"' },
+  templateChoiceCount: { id: "template-choice-count", file: `${V2}/template-gallery.tsx`, needle: 'data-testid="template-choice-count"' },
   // Pad and console chassis testids are NOT restated here (ruling 38): they are the bench's
   // START_MATCH_TESTID, SEND_NOW_TESTID, FINALIZE_TESTID, FORFEIT_TESTID, FORFEIT_SIDE_TESTID_PREFIX,
   // PROMPT_REASON_TESTID, PROMPT_SUBMIT_TESTID, DOCK_CHIP_TESTID_PREFIX (scorer.ts:165-176), and the

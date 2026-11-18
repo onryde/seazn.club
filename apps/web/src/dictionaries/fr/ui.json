@@ -6364,6 +6364,7 @@
   "templates.detail.progression.line": "{source} : {take} → {target}",
   "templates.detail.count.label": "Nombre de participants",
   "templates.detail.count.hint": "Des effectifs qui se répartissent en poules de 4 exactement.",
+  "templates.detail.noSports": "Aucun sport n'est disponible pour créer ce modèle pour le moment, il ne peut donc pas être configuré. Rechargez la page ou démarrez une compétition vierge.",
   "templates.detail.shape.pools": "{count} poules de {size}",
   "templates.detail.take.topNPerGroup": "Les {n} premiers par groupe",
   "templates.detail.take.bestNth": "{count} meilleurs {nth}èmes",

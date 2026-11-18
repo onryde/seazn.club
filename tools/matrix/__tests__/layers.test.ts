@@ -14,7 +14,7 @@ import {
   layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
 import { NotApiOnlyRow, RefusedApiOnlyRow, apiOnlyUiPath, apiOnlyUiRoute } from "../lib/api-only-ui.ts";
-import { templateField } from "../lib/templates.ts";
+import { templateField, templateFor } from "../lib/templates.ts";
 import { loadL2Pairs, parseL2Pairs, type L2Run } from "../lib/pairs.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
@@ -376,7 +376,8 @@ describe("the layered sets", () => {
 
   it("api-only browser set: one case per API_ONLY row, in catalogue order — each planned 🚫 naming its owning wave (D7 as ruled), never driven", () => {
     // Design §8 via plan D7, restated here rather than read from the harness.
-    const WAVE: Readonly<Record<string, string>> = { group_only: "W5", group_group_ko: "W5" };
+    // W5 X-BD-3: group_group_ko is reachable on generic through the super-groups card, so it is driven (layers-grid), not 🚫.
+    const WAVE: Readonly<Record<string, string>> = { group_only: "W5" };
     // W4 T16 (ruling 269): the standalone stepladder and page playoff are refused, so no wave owes them a control and the set holds no case for them.
     const REFUSED_ROWS = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
     expect(REFUSED_ROWS.sort()).toEqual(["page_playoff_only", "stepladder_only"]);
@@ -389,7 +390,11 @@ describe("the layered sets", () => {
     const owed = API_ONLY_ROWS.filter((r) => !REFUSED_ROWS.includes(r) && !isKnobRow(r));
     expect(owed.length).toBe(API_ONLY_ROWS.length - 2 - 1);
     expect(owed).toEqual(["group_only", "group_group_ko"]);
-    expect(cases.map((c) => identityOf(c).row)).toEqual([...owed]);
+    // The rows with no organiser control on generic: group_group_ko has one now (super-groups), so the set holds group_only alone.
+    const noControl = owed.filter((r) => templateFor(r, "generic") === null);
+    expect(noControl).toEqual(["group_only"]);
+    expect(templateFor("group_group_ko", "generic")).toBe("super-groups");
+    expect(cases.map((c) => identityOf(c).row)).toEqual(noControl);
     let checked = 0;
     for (const c of cases) {
       const id = identityOf(c);
@@ -401,7 +406,8 @@ describe("the layered sets", () => {
       expect(decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun })).toEqual({ state: "no_path", reason: `${WAVE[id.row]}: no organiser control builds ${id.row}` });
       checked++;
     }
-    expect(checked).toBe(owed.length);
+    expect(checked).toBe(noControl.length);
+    expect(checked).toBeGreaterThan(0);
     expect({ sports: p.sports, layer: p.layer, acceptsWidth: p.acceptsWidth }).toEqual({ sports: ["generic"], layer: "L1", acceptsWidth: 1280 });
     for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => apiOnlyBrowserPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });

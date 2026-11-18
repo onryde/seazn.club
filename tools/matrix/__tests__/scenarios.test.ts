@@ -2926,6 +2926,32 @@ describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
     expect(setup.competition.orgId).toBe(driver.orgId);
   });
 
+  it("X-BD-3 an any-sport card case: the sheet's choice (the case's sport, variant, its cfg's kind, the template's own field) rides createFromTemplate, and the division is built for THAT sport — on every sport", async () => {
+    // The league fake holds one stage, so the card's first stage alone is instantiated; the choice is what is under test.
+    let checked = 0;
+    for (const sport of SPORT_KEYS.filter((s) => s !== "cricket")) {
+      const driver = new FakeLeagueDriver();
+      driver.templateOverride = (raw) => ({ ...raw, divisions: [{ ...raw.divisions[0]!, stages: [raw.divisions[0]!.stages[0]!] }] });
+      // The variant the case plays is its sport's own, and the cfg is the one run.ts resolves for that sport and variant.
+      const realVariant = offlineBuilderDefault(sport);
+      const spec: CaseSpec = { caseId: `group_group_ko|${sport}|${realVariant}|LIFECYCLE`, row: "group_group_ko", sport, variant: realVariant, scenario: "LIFECYCLE", canary: false, template: "super-groups" };
+      const ctx: ScenarioContext = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, realVariant), tag: "t", denied: [] };
+      const sg = (JSON.parse(readFileSync(resolve(CATALOG, "super-groups.json"), "utf8")) as { divisions: { entrantCount: number }[] }).divisions[0]!.entrantCount;
+      const setup = await setUpDivision(ctx, new Recorder(), sg);
+      expect(driver.templateCalls, sport).toHaveLength(1);
+      expect(driver.templateCalls[0]!.input.choice, sport).toEqual({ sportKey: sport, variantKey: realVariant, entrantKind: entrantKindFor(sport, ctx.cfg), entrantCount: sg });
+      expect({ sport: setup.built.posted.sport, variant: setup.built.posted.variant }, sport).toEqual({ sport, variant: realVariant });
+      expect(driver.calls, sport).not.toContain("postStages");
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length - 1);
+    expect(checked).toBeGreaterThan(0);
+    // A fixed card is sent no choice at all.
+    const fixed = new FakeLeagueDriver();
+    await setUpDivision(boxCtx(fixed), new Recorder(), box.divisions[0]!.entrantCount);
+    expect(fixed.templateCalls[0]!.input).toEqual({ name: `Matrix group_only|badminton|short|LIFECYCLE`, endsOn: TEMPLATE_ENDS_ON });
+  });
+
   it("a team template seats full rosters, read back per entrant, as the builder path does (D2)", async () => {
     // The league fake holds one stage, so the team case is a one-stage template the test writes:
     // the product's own t20-super8 division, its first stage alone.

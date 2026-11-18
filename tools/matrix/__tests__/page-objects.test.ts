@@ -1749,6 +1749,7 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
       d,
       getByLabel: (t: string, n: { exact: boolean }) => loc(`${d} label:${t}${n.exact ? "" : " (inexact)"}`),
       fill: async (v: string) => act(`fill ${d} = ${v}`),
+      selectOption: async (v: string) => act(`select ${d} = ${v}`),
       waitFor: async () => undefined,
       first: () => loc(d),
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
@@ -1815,6 +1816,26 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     expect(visual(g.evidence)).toMatchObject({ verdict: "pass", checked: 2 });
   });
 
+  it("X-BD-3 an any-sport card: the sheet's sport first (it resets the variant and kind), then variant, kind and field, each through its testid; a fixed card selects nothing", async () => {
+    const g = galleryPage();
+    const choice = { sportKey: "badminton", variantKey: "short", entrantKind: "pair" as const, entrantCount: 24 };
+    await createFromTemplateUi(g.ctx, "super-groups", { ...INPUT, choice });
+    const selects = g.log.filter((l) => l.startsWith("select "));
+    expect(selects).toEqual([
+      `select testid:${TESTID.templateChoiceSport.id} = badminton`,
+      `select testid:${TESTID.templateChoiceVariant.id} = short`,
+      `select testid:${TESTID.templateChoiceKind.id} = pair`,
+      `select testid:${TESTID.templateChoiceCount.id} = 24`,
+    ]);
+    // The choice is made inside the sheet: after the card opens, before the picture and the submit.
+    expect(g.log.indexOf(selects[0]!)).toBeGreaterThan(g.log.indexOf(`click testid:${templateCardTestid("super-groups")}`));
+    expect(g.log.indexOf(selects[3]!)).toBeLessThan(g.log.indexOf("shot 01-competition-from-template-before"));
+    expect(TESTID.templateChoiceSport.id).toBe("template-choice-sport");
+    const fixed = galleryPage();
+    await createFromTemplateUi(fixed.ctx, "box-league", INPUT);
+    expect(fixed.log.filter((l) => l.startsWith("select "))).toEqual([]);
+  });
+
   it("a degraded create stays on /c/new behind the degrade modal: the answer comes back WITHOUT a wait for a landing that never comes, pictured", async () => {
     const g = galleryPage({ degraded: true });
     const out = await createFromTemplateUi(g.ctx, "box-league", INPUT);
@@ -1841,14 +1862,22 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     const product = readFileSync(resolve(REPO, "apps/web/src/components/v2/template-gallery.tsx"), "utf8");
     const at = product.indexOf('"/api/v1/competitions/from-template"');
     expect(at, "the gallery no longer posts to from-template").toBeGreaterThan(0);
-    const call = product.slice(at, product.indexOf("});", at));
-    const body = /json:\s*\{([^}]*)\}/.exec(call)?.[1];
+    // W5 X-BD-3: the body is built by lib/template-choice.ts templateRequestBody (the sheet and the choice share it), so the
+    // gallery's POST must hand its json to that one builder, and the keys are read from the builder's own return.
+    expect(product.slice(at, product.indexOf("});", at))).toContain("json: templateRequestBody({");
+    const builder = readFileSync(resolve(REPO, "apps/web/src/lib/template-choice.ts"), "utf8");
+    const from = builder.indexOf("export function templateRequestBody");
+    expect(from, "templateRequestBody is gone").toBeGreaterThan(0);
+    const call = builder.slice(from, builder.indexOf("\n}\n", from));
+    const body = /return\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/.exec(call)?.[1];
     expect(body, "the request's json body was not found").toBeDefined();
     const keys = [...body!.matchAll(/^\s*(\w+)\s*[:,]/gm)].map((m) => m[1]);
     expect(keys).toEqual(["template_key", "template_version", "name", "starts_on", "ends_on"]);
     expect(keys).not.toContain("visibility");
+    // The choice rides as a spread of its own four fields, never a fifth literal key.
+    expect(call).toContain("...(input.choice ? choiceBody(input.choice) : {})");
     // The parse reads a body that WOULD carry one: the same text with a visibility line yields it.
-    const withVis = /json:\s*\{([^}]*)\}/.exec(call.replace("ends_on: endsOn,", "ends_on: endsOn,\n          visibility: \"public\","))?.[1];
+    const withVis = /return\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/.exec(call.replace("ends_on: input.endsOn,", "ends_on: input.endsOn,\n    visibility: \"public\","))?.[1];
     expect([...withVis!.matchAll(/^\s*(\w+)\s*[:,]/gm)].map((m) => m[1])).toContain("visibility");
   });
 

@@ -82,7 +82,6 @@ describe("stageShapes — what the sheet says each stage is, for the chosen coun
   // Rule: pools of 4 (X-BD-3); the top 2 of every pool go on to two super groups (the template's own take); the top 2 of
   // each super group make the knockout of 4. Expected values typed from that rule, not read off the resolver.
   const EXPECTED: [count: number, pools: number, superPerGroup: number][] = [
-    [8, 2, 2],
     [12, 3, 3],
     [16, 4, 4],
     [24, 6, 6],

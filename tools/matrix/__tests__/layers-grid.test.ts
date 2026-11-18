@@ -43,12 +43,21 @@ const REFUSED_API_ONLY_CELLS = REFUSED_CELLS.filter((c) => (API_ONLY_ROWS as rea
  *  owner ruling 2026-11-01): it comes off the driven count and onto the 🚫 one, and every L2 run on it is 🚫. */
 const NO_PATH_TEMPLATE_CELLS = NO_ORGANISER_PATH_CELLS.filter((c) => (TEMPLATE_ROW_KEYS as readonly string[]).includes(c.split("|")[0]!)).length;
 /** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. */
-const TEMPLATE_CELLS = new Map(Object.entries(TEMPLATE_ROW).flatMap(([key, row]) => {
-  const d = rawCatalogTemplate(key).divisions[0]!;
-  // W5 X-BD-3: an any-sport template (super-groups) has no sport of its own, so it is no cell of its own here; routing it
-  // onto every sport's group_group_ko cell is the matrix routing task's (W5 Task 24), not the planner's today.
-  return d.sportKey === "any" ? [] : [[cellId(row, d.sportKey), { key, row, sport: d.sportKey, variant: d.variantKey }] as const];
-}));
+const TEMPLATE_CELLS = (() => {
+  const cells = new Map<string, { key: string; row: string; sport: string; variant: string | null }>();
+  // W5 X-BD-3: an any-sport template (super-groups) has no sport of its own: the catalog JSON's "any" reaches the row on EVERY
+  // engine sport, the case playing variantFor's variant for its sport. A card with a sport of its own holds its cell
+  // (cricket's group_group_ko stays t20-super8), so those are placed first and an "any" card only fills the cells still free.
+  const byOwnSportFirst = Object.entries(TEMPLATE_ROW).sort(([a], [b]) => Number(rawCatalogTemplate(a).divisions[0]!.sportKey === "any") - Number(rawCatalogTemplate(b).divisions[0]!.sportKey === "any"));
+  for (const [key, row] of byOwnSportFirst) {
+    const d = rawCatalogTemplate(key).divisions[0]!;
+    const any = d.sportKey === "any";
+    for (const sport of any ? SPORT_KEYS : [d.sportKey]) {
+      if (!cells.has(cellId(row, sport))) cells.set(cellId(row, sport), { key, row, sport, variant: any ? null : d.variantKey });
+    }
+  }
+  return cells;
+})();
 /** Whether the run's atom has a harness script (the scenario catalogue's own declaration). */
 const hasScript = (r: L2Run): boolean => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
 const driven = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec !== null);
@@ -173,22 +182,34 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered s
     expect(league).toBe(SPORT_KEYS.length);
   });
 
-  it("a template-reached cell carries its template and the template's OWN sport and variant (ruling 47, D11), never variantFor's", () => {
+  it("a template-reached cell carries its template; a card with a sport of its own plays its OWN sport and variant (ruling 47, D11), never variantFor's, and an any-sport card plays variantFor's variant for the cell's sport (X-BD-3)", () => {
     const t = planL1Grid(stubVariant).filter((c) => c.spec !== null && c.spec.template !== undefined);
     expect(t).toHaveLength(TEMPLATE_CELLS.size);
     let checked = 0;
+    let anyCards = 0;
+    let ownCards = 0;
     for (const c of t) {
       const want = TEMPLATE_CELLS.get(cellOf(c));
       expect(want, layerCaseId(c)).toBeDefined();
       expect(c.spec!.template).toBe(want!.key);
       expect(c.spec!.row).toBe(want!.row);
       expect(c.spec!.sport).toBe(want!.sport);
-      expect(c.spec!.variant).toBe(want!.variant);
-      // The stub's variant differs from the template's, so a variantFor leak would be seen.
-      expect(c.spec!.variant).not.toBe(stubVariant(want!.sport));
+      if (want!.variant === null) {
+        // An any-sport card names no variant: the cell's sport plays variantFor's (the stub's differs from any builder default).
+        expect(c.spec!.variant).toBe(stubVariant(want!.sport));
+        anyCards++;
+      } else {
+        expect(c.spec!.variant).toBe(want!.variant);
+        // The stub's variant differs from the template's, so a variantFor leak would be seen.
+        expect(c.spec!.variant).not.toBe(stubVariant(want!.sport));
+        ownCards++;
+      }
       checked++;
     }
     expect(checked).toBe(TEMPLATE_CELLS.size);
+    // Both halves are real: the own-sport cells (box-league badminton, t20-super8 cricket) and every other group_group_ko sport.
+    expect(ownCards).toBeGreaterThan(0);
+    expect(anyCards).toBe(SPORT_KEYS.length - 1);
     expect(planL1Grid(stubVariant).filter((c) => c.spec !== null && c.spec.template === undefined)).toHaveLength(driven(cases).length - TEMPLATE_CELLS.size);
   });
 

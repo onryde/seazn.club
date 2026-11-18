@@ -51,6 +51,10 @@ export interface FromTemplateAnswer {
   templateVersion: number;
 }
 /** What one template instantiation built, read back from the product. */
+/** W5 X-BD-3: what an any-sport template (super-groups) asks for in the sheet, and the POST carries (sport_key, variant_key,
+ *  entrant_kind, entrant_count). A fixed template takes none: its input has no `choice`. */
+export interface TemplateChoiceInput { readonly sportKey: string; readonly variantKey: string; readonly entrantKind: EntrantKind; readonly entrantCount: number }
+export interface TemplateCreateInput { readonly name: string; readonly endsOn: string; readonly choice?: TemplateChoiceInput }
 export interface FromTemplateOut { readonly competition: CompetitionRef; readonly division: DivisionRef; readonly stages: readonly StageRef[] }
 /** `kind` (W1-driving Task 8): the product serves it (entrants.ts COLS) and
  *  lists EVERY entrant of the division, the `pair` entrants an americano
@@ -219,7 +223,7 @@ export interface OrganiserDriver {
   /** W1-driving Task 13 (ruling 47): ONE organiser act builds a catalog
    *  template's competition, division and stages — and no entrant
    *  (usecases/templates.ts). The answer is the product's, read back. */
-  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut>;
+  createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut>;
   createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef>;
   getDivision(divisionId: string): Promise<DivisionRef>;
   postStages(divisionId: string, stages: readonly StagePostBody[]): Promise<StageRef[]>;

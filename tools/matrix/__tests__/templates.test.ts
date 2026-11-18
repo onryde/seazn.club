@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
 import {
-  TEMPLATE_ROW, TemplateDrifted, TemplateShapeUnsupported, UnknownTemplate, routeViaTemplate, templateBodies, templateField, templateFor, templateRow,
+  AnySportNeedsVariant, TEMPLATE_ROW, TemplateDrifted, TemplateShapeUnsupported, UnknownTemplate, isAnySportTemplate, onTemplate, routeViaTemplate, templateBodies, templateChoiceFor, templateField, templateFor, templateRow,
 } from "../lib/templates.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -109,7 +109,7 @@ describe("the API-only row each driven template builds", () => {
     expect(() => templateRow("slam128")).toThrow(UnknownTemplate);
   });
 
-  it("templateFor: every API-only row × every sport — a template on exactly the two cells the catalog reaches, null elsewhere", () => {
+  it("templateFor: every API-only row × every sport — the two own-sport cells keep their card, super-groups reaches the rest of group_group_ko, null elsewhere", () => {
     const found: Record<string, string> = {};
     let checked = 0;
     for (const row of API_ONLY_ROWS) {
@@ -121,15 +121,19 @@ describe("the API-only row each driven template builds", () => {
     }
     expect(checked).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length);
     expect(checked).toBeGreaterThan(0);
-    // The two cells browser-driver.test.ts derives from the catalog JSON (templateOnlyCells).
-    expect(found).toEqual({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
+    // The cells browser-driver.test.ts derives from the catalog JSON (templateOnlyCells): the two cards with a sport of their own
+    // hold their cell, and the any-sport super-groups reaches group_group_ko on every OTHER engine sport (X-BD-3).
+    const want: Record<string, string> = { "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" };
+    for (const sport of SPORT_KEYS) if (sport !== "cricket") want[`group_group_ko|${sport}`] = "super-groups";
+    expect(found).toEqual(want);
+    expect(Object.values(found).filter((k) => k === "super-groups")).toHaveLength(SPORT_KEYS.length - 1);
     expect(templateFor("league", "badminton")).toBeNull();
   });
 });
 
 // W5 X-BD-3 (NEW-W1d-5): the super-groups template names no sport; the case's cell supplies it.
 describe("an any-sport template resolves its sport per cell (X-BD-3)", () => {
-  it("X-BD-3 the harness resolves group_group_ko × every sport", () => {
+  it("X-BD-3 templateField resolves super-groups's sport and variant per cell, with group_group_ko's stage kinds and bodies, on every sport", () => {
     // differential: today no template reaches group_group_ko on any sport but cricket
     const want = stagesForRow("group_group_ko");
     let checked = 0;
@@ -235,8 +239,8 @@ describe("routeViaTemplate — the plain browser plan reaches the template cells
     });
   });
 
-  it("every cell of the grid: exactly the two the catalog reaches are re-planned, every other spec comes back as the SAME object", () => {
-    const reached = new Set(["group_only|badminton", "group_group_ko|cricket"]);
+  it("every cell of the grid: exactly the cells a card reaches are re-planned (two own-sport cards, and super-groups on every other group_group_ko sport), every other spec comes back as the SAME object", () => {
+    const reached = new Set(["group_only|badminton", "group_group_ko|cricket", ...SPORT_KEYS.filter((x) => x !== "cricket").map((x) => `group_group_ko|${x}`)]);
     let checked = 0;
     const routed: string[] = [];
     for (const row of ROW_KEYS) for (const sport of SPORT_KEYS) {
@@ -249,6 +253,31 @@ describe("routeViaTemplate — the plain browser plan reaches the template cells
     expect(checked).toBe(ROW_KEYS.length * SPORT_KEYS.length);
     expect(checked).toBeGreaterThan(0);
     expect(routed.sort()).toEqual([...reached].sort());
+  });
+
+  it("X-BD-3 an any-sport card plays the case's own variant: id and spec carry it, the case's other fields are kept, and a case with no variant is refused by name", () => {
+    let checked = 0;
+    for (const sport of SPORT_KEYS.filter((x) => x !== "cricket")) {
+      const s = { ...spec("group_group_ko", sport), variant: `v-${sport}` };
+      const out = routeViaTemplate(s);
+      expect(out, sport).toEqual({ ...s, caseId: `group_group_ko|${sport}|v-${sport}|LIFECYCLE`, template: "super-groups" });
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length - 1);
+    expect(checked).toBeGreaterThan(0);
+    expect(() => onTemplate({ row: "group_group_ko", sport: "football", scenario: "LIFECYCLE", canary: false }, "super-groups")).toThrow(AnySportNeedsVariant);
+    expect(() => onTemplate({ row: "group_group_ko", sport: "football", scenario: "LIFECYCLE", canary: false }, "super-groups", "")).toThrow(AnySportNeedsVariant);
+    // A card with a sport of its own ignores a variant passed: it plays its own.
+    expect(onTemplate({ row: "group_only", sport: "badminton", scenario: "LIFECYCLE", canary: false }, "box-league", "bwf").variant).toBe("short");
+  });
+
+  it("X-BD-3 templateChoiceFor: an any-sport card is told the case's sport, variant, kind and the template's own field; a fixed card, nothing", () => {
+    const s = { sport: "badminton", variant: "short" };
+    expect(templateChoiceFor("super-groups", s, "pair")).toEqual({ sportKey: "badminton", variantKey: "short", entrantKind: "pair", entrantCount: 16 });
+    expect(templateChoiceFor("box-league", s, "individual")).toBeUndefined();
+    expect(templateChoiceFor("t20-super8", { sport: "cricket", variant: "t20" }, "team")).toBeUndefined();
+    expect(isAnySportTemplate("super-groups")).toBe(true);
+    expect(isAnySportTemplate("box-league")).toBe(false);
   });
 
   it("a spec that already carries a template, or a variant case's overrides, is left alone: the card sets no rule, and a cricket `test` case is not the t20 card", () => {

@@ -610,9 +610,17 @@ export function TemplateDetailSheet({
         {anyDivision && choice && (
           <TemplateChoiceFields msg={msg} division={anyDivision} template={template} sports={sports} choice={choice} onChange={setChoice} />
         )}
+        {anyDivision && choice === null && (
+          // The page could not read any sport to build on (a failed read is soft): say so, rather than show an empty
+          // Structure list and a Submit that stays disabled with no word why.
+          <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status" data-testid="template-choice-empty">
+            {msg("templates.detail.noSports")}
+          </p>
+        )}
 
         <p>{msg(template.i18n.descriptionKey)}</p>
 
+        {!(anyDivision && choice === null) && (
         <div>
           <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
             {msg("templates.detail.structureTitle")}
@@ -638,8 +646,9 @@ export function TemplateDetailSheet({
             )}
           </ul>
         </div>
+        )}
 
-        {progressionLines.length > 0 && (
+        {progressionLines.length > 0 && !(anyDivision && choice === null) && (
           <div>
             <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
               {msg("templates.detail.progressionTitle")}

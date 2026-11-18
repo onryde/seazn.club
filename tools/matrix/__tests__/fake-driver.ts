@@ -34,7 +34,7 @@ import { canon, type ForfeitReason, type StreamEvent, type StreamLineups } from 
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, VOID_EVENT, idempotencyKey, inSquadOrder, voidTargetOf,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type AmericanoViewOut, type ChallengeOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type TemplateChoiceInput, type TemplateCreateInput, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
 import { bracketWithdrawalPolicyText, bracketWithdrawalText, wireCodeFor, withdrawalReason } from "./product-text.ts";
@@ -191,18 +191,24 @@ export class FakeLeagueDriver implements OrganiserDriver {
   // progression verbatim, and NO entrant (templates.ts:351-366). The league
   // fake holds one stage, so a multi-stage template is refused by name.
   /** Every createFromTemplate the HTTP path made, as asked. */
-  readonly templateCalls: { key: string; input: { name: string; endsOn: string } }[] = [];
+  readonly templateCalls: { key: string; input: TemplateCreateInput }[] = [];
   /** A test's edit of the catalog JSON before the fake instantiates it. */
   templateOverride: ((raw: RawCatalogTemplate) => RawCatalogTemplate) | null = null;
-  #instantiate(key: string): FromTemplateAnswer {
+  #instantiate(key: string, choice?: TemplateChoiceInput): FromTemplateAnswer {
     const raw0 = rawCatalogTemplate(key);
     const raw = this.templateOverride === null ? raw0 : this.templateOverride(raw0);
     const d = raw.divisions[0];
     if (raw.divisions.length !== 1 || d.stages.length !== 1) throw new Error(`fake: league only — the league fake instantiates a one-division, one-stage template (${key} has ${raw.divisions.length} division(s), ${d.stages.length} stage(s))`);
-    this.sport = d.sportKey;
-    this.variant = d.variantKey;
-    this.cfg = resolveSportCfg(d.sportKey, d.variantKey, {});
-    this.divisionConfig = { ...(resolveSportCfg(d.sportKey, d.variantKey, {}) as Record<string, unknown>) };
+    // W5 X-BD-3: an any-sport template builds the sport and variant the sheet's choice names (resolve.ts); with none it is refused,
+    // as the product refuses it (TEMPLATE_CHOICE_REQUIRED). A template with a sport of its own takes none.
+    if (d.sportKey === "any" && choice === undefined) throw new Error(`fake: template ${key} names no sport of its own and the case sent no choice (TEMPLATE_CHOICE_REQUIRED)`);
+    if (d.sportKey !== "any" && choice !== undefined) throw new Error(`fake: template ${key} has a sport of its own and takes no choice (TEMPLATE_CHOICE_NOT_OFFERED)`);
+    const sport = choice?.sportKey ?? d.sportKey;
+    const variant = choice?.variantKey ?? d.variantKey;
+    this.sport = sport;
+    this.variant = variant;
+    this.cfg = resolveSportCfg(sport, variant, {});
+    this.divisionConfig = { ...(resolveSportCfg(sport, variant, {}) as Record<string, unknown>) };
     const st = d.stages[0];
     this.stage = { id: "s1", seq: 1, kind: st.kind, config: templateStageConfig(st), status: "pending" };
     return { competitionId: "c1", slug: `tmpl-${key}`, visibility: "public", divisions: [{ id: "d1", stages: [{ id: "s1", fixtureCount: 0 }] }], templateKey: key, templateVersion: raw.version };
@@ -215,14 +221,14 @@ export class FakeLeagueDriver implements OrganiserDriver {
     };
   }
   /** The card's product side (what the gallery's POST does), for the browser tests' fake page. */
-  instantiateTemplate(key: string): FromTemplateAnswer { this.log("instantiateTemplate", key); return this.#instantiate(key); }
+  instantiateTemplate(key: string, choice?: TemplateChoiceInput): FromTemplateAnswer { this.log("instantiateTemplate", key); return this.#instantiate(key, choice); }
   /** HttpDriver.readBackTemplate's product side; `trace` keeps the key the caller asked for (T13-R1 m-7). */
   readBackTemplate(a: FromTemplateAnswer, key: string): Promise<FromTemplateOut> { return settle(() => { this.log("readBackTemplate", key); return this.#readBack(a); }); }
-  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+  createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut> {
     return settle(() => {
       this.log("createFromTemplate", key);
       this.templateCalls.push({ key, input: { ...input } });
-      return this.#readBack(this.#instantiate(key));
+      return this.#readBack(this.#instantiate(key, input.choice));
     });
   }
   /** entrant id → its stored roster, in the product's order; person ids `p-<entrant>-<m>`. */

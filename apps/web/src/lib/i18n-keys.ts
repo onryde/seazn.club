@@ -11381,6 +11381,7 @@ export type DictionaryKey =
   | "templates.boxLeague.name"
   | "templates.detail.count.hint"
   | "templates.detail.count.label"
+  | "templates.detail.noSports"
   | "templates.detail.progression.line"
   | "templates.detail.progressionTitle"
   | "templates.detail.shape.pools"

@@ -226,7 +226,7 @@ describe("template catalog", () => {
   describe("super-groups — the sport-agnostic two-tier groups template (X-BD-3)", () => {
     // The rule's own numbers (brief, Task 15): pools of 4, and the field sizes the card offers.
     const POOL_SIZE = 4;
-    const COUNT_OPTIONS = [8, 12, 16, 24, 32];
+    const COUNT_OPTIONS = [12, 16, 24, 32];
 
     it("X-BD-3 super-groups is t20-super8's shape (group, group, knockout) with no sport, variant or kind of its own", () => {
       // differential: today no such template
@@ -265,12 +265,32 @@ describe("template catalog", () => {
     it("X-BD-3 a count outside the offered options is refused by name", () => {
       const t = getTemplate("super-groups")!;
       let refused = 0;
-      for (const count of [0, 1, 4, 7, 10, 15, 17, 20, 33, 64]) {
+      for (const count of [0, 1, 4, 7, 8, 10, 15, 17, 20, 33, 64]) {
         const r = resolveTemplate(t, { sportKey: "football", variantKey: "11-a-side", entrantKind: "team", entrantCount: count });
         expect(r, String(count)).toMatchObject({ ok: false, code: "TEMPLATE_COUNT_NOT_OFFERED" });
         refused++;
       }
-      expect(refused).toBe(10);
+      expect(refused).toBe(11);
+    });
+
+    it("X-BD-3 every offered count leaves the second tier's pools larger than the take, so the second tier eliminates someone (8 was dropped for this)", () => {
+      // The options and the take are read from the catalog entry itself, never typed here: a change to either moves this test.
+      const d = getTemplate("super-groups")!.divisions[0]!;
+      const take = d.stages[1]!.progression!.sources[0]!.take[0] as { kind: string; n: number };
+      expect(take.kind).toBe("topNPerGroup");
+      const options = d.entrantCountOptions!;
+      let checked = 0;
+      for (const count of options) {
+        // Each second-tier pool holds count / pool size entrants (the first tier's top 2 of every pool, over 2 groups).
+        const secondTierPool = count / POOL_SIZE;
+        expect(secondTierPool, `${count} entrants: a pool of ${secondTierPool} with a take of ${take.n} cuts nobody`).toBeGreaterThan(take.n);
+        checked++;
+      }
+      expect(checked).toBe(options.length);
+      expect(checked).toBeGreaterThan(0);
+      // The default is offered, and the smallest option is the smallest field that passes (12 -> pools of 3 > 2).
+      expect(options).toContain(d.entrantCount);
+      expect(Math.min(...options) / POOL_SIZE).toBeGreaterThan(take.n);
     });
 
     it("X-BD-3 t20-super8 is byte-identical", () => {

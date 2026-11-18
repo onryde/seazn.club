@@ -6364,6 +6364,7 @@
   "templates.detail.progression.line": "{source}: {take} → {target}",
   "templates.detail.count.label": "Número de participantes",
   "templates.detail.count.hint": "Tamaños que se reparten en grupos exactos de 4.",
+  "templates.detail.noSports": "Ahora mismo no hay ningún deporte disponible para crear esta plantilla, así que no se puede configurar. Recarga la página o empieza una competición en blanco.",
   "templates.detail.shape.pools": "{count} grupos de {size}",
   "templates.detail.take.topNPerGroup": "Los {n} primeros de cada grupo",
   "templates.detail.take.bestNth": "{count} mejores del puesto {nth}",
