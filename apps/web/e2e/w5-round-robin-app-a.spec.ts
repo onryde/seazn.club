@@ -1,6 +1,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats, activeOrgIdFromRequest } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { waitForHydration } from "./directory-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { dictString } from "./spectator-w2-kit";
 import { LONG_NAME_SUFFIX, seedFinishedGroupsOnly } from "./support/pool-winners-kit";
@@ -1519,5 +1520,79 @@ test.describe("X-SF-1 the hub marks the leaver", () => {
       }, { timeout: 60_000, intervals: [2_000], message: "after Reinstate the hub's table no longer marks her" })
       .toBe(0);
     await expect(chip(p2, "disqualified")).toHaveCount(1);
+  });
+});
+
+// B5 owner fix-now (e), n1: Complete from the open-stages warning (competition settings, Status -> Completed) on a stage whose OWN
+// completion commits but whose next stage cannot be seeded (STAGE_COMPLETED_SEEDING_FAILED: 7 into pools of 4 and 3, the knockout
+// asks for three per pool and the best 4th - the 4th of a pool of three does not exist, RB5-E6). The stage rail says "Stage completed
+// - but ..." in amber with the cut's own sentence and refreshes; the warning said "Couldn't complete this stage" in red and kept listing
+// a completed stage. Expected words: the en catalog's sentences with the numbers the rulebook gives (7 asked, 6 suppliable).
+test.describe("n1 the open-stages warning says completed, but", () => {
+  test("Complete stage on a group whose knockout cannot be seeded: the amber 'completed, but' line with the cut's sentence, the stage complete and gone from the list; no page scroll at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `n1 wrap ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const added = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST",
+      Array.from({ length: 7 }, (_, i) => ({ kind: "individual", display_name: `n1 P${i + 1} ${TAG}`, seed: i + 1 })));
+    expect(added.status, JSON.stringify(added.error)).toBe(201);
+    const seedOf = new Map(added.data!.map((e, i) => [e.id, i + 1]));
+    const groups = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 2 } } });
+    expect(groups.status, JSON.stringify(groups.error)).toBe(201);
+    const finals = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+      seq: 2,
+      kind: "knockout",
+      name: "Finals",
+      config: {},
+      progression: {
+        sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 3 }, { kind: "bestNth", nth: 4, count: 1, normaliseUnequalPools: true }] }],
+        placement: "rank_order",
+        timing: "setup",
+      },
+    });
+    expect(finals.status, JSON.stringify(finals.error)).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${groups.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    // after Start a later stage's Generate is not gated, so the shortfall reaches the completion's proposal (the resolve backstop)
+    const fin = await apiJson(request, `/api/v1/stages/${finals.data!.id}/generate`, "POST");
+    expect(fin.status, JSON.stringify(fin.error)).toBe(200);
+    const lines = (await stageFixtures(request, divisionId, groups.data!.id)) as Pairing[];
+    expect(lines.length, "anti-vacuity: pools of 4 and 3 play 6 + 3 lines").toBe(9);
+    for (const f of lines) {
+      const homeWins = seedOf.get(f.home_entrant_id!)! < seedOf.get(f.away_entrant_id!)!;
+      for (const [type, payload] of [["core.start", {}], ["generic.result", homeWins ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 }]] as const) {
+        const state = await apiJson<{ last_seq: number }>(request, `/api/v1/fixtures/${f.id}/state`);
+        const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: state.data!.last_seq, type, payload });
+        expect(res.status, `${type}: ${JSON.stringify(res.error)}`).toBe(201);
+      }
+    }
+    const stageStatus = async (id: string) => (await apiJson<{ status: string }>(request, `/api/v1/stages/${id}`)).data?.status;
+    expect(await stageStatus(groups.data!.id), "premise: auto-advance off leaves the played group open").toBe("active");
+
+    await page.goto(await competitionPath(request, comp.data!.id, "/settings"));
+    await dismissCookieBanner(page);
+    const warning = page.getByTestId("compset-open-stages");
+    await page.locator("select").filter({ has: page.locator('option[value="completed"]') }).selectOption("completed");
+    await expect(warning).toBeVisible();
+    const complete = warning.locator(`[data-complete-stage="${groups.data!.id}"]`);
+    await waitForHydration(complete);
+    await complete.click();
+
+    const reason = uiEn["roundrobin.refusal.RR_CUT_EXCEEDS_FIELD"]!.replace("{qualified}", "7").replace("{max}", "6");
+    const want = uiEn["schedule.error.completedSeedingFailed"]!.replace("{reason}", reason);
+    const notice = warning.locator('[data-notice-tone="warning"]');
+    await expect(notice, "the amber 'completed, but' line with the cut's own sentence").toHaveText(want, { timeout: 30_000 });
+    await expect(warning, "never the red 'could not complete' line").not.toContainText(uiEn["compset.openStages.completeFailed"]!);
+    await expect.poll(() => stageStatus(groups.data!.id), { timeout: 30_000 }).toBe("complete");
+    await expect(warning.locator(`[data-open-stage="${groups.data!.id}"]`), "the refresh drops the completed stage from the list").toHaveCount(0);
+    await expect(notice, "and its line stays").toHaveText(want);
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(notice).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
   });
 });

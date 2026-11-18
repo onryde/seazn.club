@@ -28,6 +28,7 @@ import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
+import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
@@ -2774,17 +2775,10 @@ export function classifyActError(
   // complete and the organiser has one concrete thing to fix — and a refresh,
   // because otherwise the board keeps showing a completed stage as active and
   // the next click lands on an already-complete stage.
-  if (err instanceof ApiV1Error && err.code === "STAGE_COMPLETED_SEEDING_FAILED") {
-    // B4 fix wave (12b m1): a cut the field cannot supply rides inside the wrap by name (`cause`, completion.ts) with its numbers, so
-    // the reason is the cut's own sentence in the reader's language, never the server's English.
-    const cause = err.extra?.cause;
-    const reason = cause === "RR_CUT_EXCEEDS_FIELD" ? undoRefusalText(cause, err.extra, msg) : err.message;
-    return {
-      tone: "warning",
-      text: msg("schedule.error.completedSeedingFailed", { reason }),
-      refresh: true,
-    };
-  }
+  // B4 fix wave (12b m1): a cut the field cannot supply rides inside the wrap by name with its numbers - said in the reader's
+  // language by the one home of this sentence, which the open-stages warning shares (B5 n1).
+  const completedBut = completedSeedingFailedText(err, msg);
+  if (completedBut !== null) return { tone: "warning", text: completedBut, refresh: true };
   // Swiss round-1 pairing, review ruling R4 — the server refused the pick
   // (the round moved on under the desk, or the stage is not Swiss). Its
   // `*_MESSAGE` is English wire text and must never reach the desk, so the

@@ -9,11 +9,11 @@
 // (and with what), and the warning island is driven on its own.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { CompetitionSettings } from "../competition-settings";
 import { OpenStagesWarning } from "../open-stages-warning";
 import { expandSettingsCard } from "./_settings-card-expand";
-import { apiV1 } from "@/lib/client-v1";
+import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { plural, t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
@@ -234,5 +234,49 @@ describe("OpenStagesWarning — the list itself", () => {
     await click(completeButtons(island.tree())[0]!);
     expect(island.text()).toContain(say("compset.openStages.completeFailed"));
     expect(island.text()).not.toContain("boom");
+  });
+
+  // B5 owner fix-now (e), n1: STAGE_COMPLETED_SEEDING_FAILED means the stage DID complete (its own transaction committed) and only the
+  // next stage's seeding failed. The stage rail says so in amber, with the carried cause, and refreshes (`classifyActError`); this
+  // warning said "Couldn't complete this stage" in red and left the completed stage listed as open, so a second tap answered
+  // already_complete. Expected words: the en catalog's own sentences, the cause's fields as the server sends them beside the code.
+  // differential: today the red completeFailed line, no refresh.
+  const WRAP_ENGLISH = "Stage completed, but the next stage's seed proposal could not be prepared: the cut exceeds the field";
+  const cutWrap = () =>
+    new ApiV1Error(WRAP_ENGLISH, 409, "STAGE_COMPLETED_SEEDING_FAILED", { cause: "RR_CUT_EXCEEDS_FIELD", qualified: 8, max: 6 });
+
+  it("n1: a stage that completed but whose next stage could not be seeded says 'completed, but' with its cause, in amber, and refreshes", async () => {
+    api.mockRejectedValueOnce(cutWrap());
+    const island = warn();
+    await click(completeButtons(island.tree())[0]!);
+    const want = say("schedule.error.completedSeedingFailed", { reason: say("roundrobin.refusal.RR_CUT_EXCEEDS_FIELD", { qualified: 8, max: 6 }) });
+    expect(island.text()).toContain(want);
+    expect(island.text(), "never the 'could not complete' line: it did complete").not.toContain(say("compset.openStages.completeFailed"));
+    expect(island.text(), "the reader's language, never the server's English").not.toContain(WRAP_ENGLISH);
+    expect(refresh, "the stage is complete: the list is re-read").toHaveBeenCalledTimes(1);
+    const line = island.tree().find((el) => el.type === "p" && textOf(el) === want)!;
+    expect(line, "the notice is its own line").toBeDefined();
+    expect(String(propsOf(line).className), "amber like the rail's warning, not red").toMatch(/\btext-amber-/);
+    expect(String(propsOf(line).className)).not.toMatch(/\btext-red-/);
+  });
+
+  it("n1: after the refresh drops the completed stage from the list, its 'completed, but' line stays on screen", async () => {
+    api.mockRejectedValueOnce(cutWrap());
+    const island = warn();
+    await click(completeButtons(island.tree())[0]!);
+    const want = say("schedule.error.completedSeedingFailed", { reason: say("roundrobin.refusal.RR_CUT_EXCEEDS_FIELD", { qualified: 8, max: 6 }) });
+    island.rerender({ id: "w", stages: STAGES.filter((s) => s.stageId !== "s-ko"), canComplete: true });
+    expect(island.text(), "premise: the completed stage's row is gone").not.toContain(
+      say("compset.openStages.row", { division: STAGES[0]!.divisionName, seq: STAGES[0]!.seq, stage: STAGES[0]!.stageName }),
+    );
+    expect(island.text()).toContain(want);
+  });
+
+  it("n1: a wrap with any other cause still says 'completed, but' and refreshes (the rail's reason: the server's own sentence)", async () => {
+    api.mockRejectedValueOnce(new ApiV1Error("seed map ambiguous", 409, "STAGE_COMPLETED_SEEDING_FAILED", { cause: "SEEDING_MAP_SOURCE_AMBIGUOUS" }));
+    const island = warn();
+    await click(completeButtons(island.tree())[0]!);
+    expect(island.text()).toContain(say("schedule.error.completedSeedingFailed", { reason: "seed map ambiguous" }));
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

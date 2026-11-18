@@ -12,6 +12,7 @@ import { apiV1 } from "@/lib/client-v1";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { onlyCompletionLeft, type OpenStageRow, type OpenStageState } from "@/lib/open-stages";
+import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 
 /** One status line per state; `matches_left` is counted, so it is the plural key below. A `Record`, so a new state is a
  *  compile error here rather than a row with no line. */
@@ -47,7 +48,8 @@ export function OpenStagesWarning({
   const msgPlural = useMsgPlural();
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ stageId: string; text: string } | null>(null);
+  // `tone`: "error" - nothing was written; "warning" - the stage DID complete and something after it needs the organiser (B5 n1).
+  const [notice, setNotice] = useState<{ stageId: string; text: string; tone: "warning" | "error" } | null>(null);
 
   async function complete(stageId: string) {
     setBusy(stageId);
@@ -56,10 +58,18 @@ export function OpenStagesWarning({
       const out = await apiV1<{ completed: boolean; already_complete?: boolean }>(`/api/v1/stages/${stageId}/complete`, { method: "POST", json: {} });
       // X-BD-4: a stage that was already complete is done as far as this warning goes - refresh and the row is gone.
       if (out.completed || out.already_complete === true) router.refresh();
-      else setNotice({ stageId, text: msg("schedule.notice.notReady") });
-    } catch {
+      else setNotice({ stageId, text: msg("schedule.notice.notReady"), tone: "error" });
+    } catch (err) {
+      // B5 n1: the stage completed and only the next stage's seeding failed - the stage rail's own amber "completed, but" line with
+      // the carried cause, and a refresh (the stage is no longer open). Same sentence, same home (`completedSeedingFailedText`).
+      const completedBut = completedSeedingFailedText(err, msg);
+      if (completedBut !== null) {
+        setNotice({ stageId, text: completedBut, tone: "warning" });
+        router.refresh();
+        return;
+      }
       // The server's own sentence is English; the reader gets theirs, and where to look.
-      setNotice({ stageId, text: msg("compset.openStages.completeFailed") });
+      setNotice({ stageId, text: msg("compset.openStages.completeFailed"), tone: "error" });
     } finally {
       setBusy(null);
     }
@@ -92,11 +102,7 @@ export function OpenStagesWarning({
                   {msg("compset.openStages.row", { division: s.divisionName, seq: s.seq, stage: s.stageName })}
                 </p>
                 <p className={`mt-0.5 text-xs ${offer ? "text-amber-900" : "text-slate-600"}`}>{line}</p>
-                {notice?.stageId === s.stageId && (
-                  <p role="alert" className="mt-1 text-xs text-red-700">
-                    {notice.text}
-                  </p>
-                )}
+                {notice?.stageId === s.stageId && noticeLine(notice.tone, notice.text)}
               </div>
               {offer && (
                 <button
@@ -113,6 +119,17 @@ export function OpenStagesWarning({
           );
         })}
       </ul>
+      {/* B5 n1: a stage that completed leaves the list on the refresh; its "completed, but" line stays, under the list. */}
+      {notice !== null && !stages.some((s) => s.stageId === notice.stageId) && noticeLine(notice.tone, notice.text)}
     </div>
+  );
+}
+
+/** A plain function, not a component: the line stays in this island's own tree (the hook harness expands no child component). */
+function noticeLine(tone: "warning" | "error", text: string) {
+  return (
+    <p role="alert" data-notice-tone={tone} className={`mt-1 text-xs ${tone === "warning" ? "font-medium text-amber-900" : "text-red-700"}`}>
+      {text}
+    </p>
   );
 }
