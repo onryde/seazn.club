@@ -51,7 +51,11 @@
  * and LOAD_EVIDENCE_SWEEP_EVERY_S (20: after the last result the run keeps sweeping until every meeting is ended and its
  * camera evidence settled - the sweep reads it at least two minutes after a room ends), LOAD_SERVER_LOG (the server's
  * stdout file, to count the seat deferrals it logged), LOAD_DUMP_CALLS=1 (every recorded vendor call with its time, next
- * to the report), LOAD_REPORT (test-results/load/chess-30-boards.json). The report is written even when an assertion fails.
+ * to the report), LOAD_WEBHOOKS (0: the fixture emits webhooks but delivers none, the baseline; 1: delivered over HTTP to the server under
+ * test, which reads the key from the fixture's origin; the run then FAILS when it delivered none or one failed, when a presence row is left
+ * open once every meeting has ended, when a delivered participantLeft has no row closed by 'left', or when a delivered uuid is not in
+ * realtimekit_webhook_deliveries; its report carries `webhooks` and the shadow report's numbers - plan 1 Task 10c),
+ * LOAD_REPORT (test-results/load/chess-30-boards.json). The report is written even when an assertion fails.
  *
  * READING THE NUMBERS. "The busiest five minutes" is the busiest stretch the run had - when the run is shorter than five
  * minutes that is the whole run, and the report says so (`runSeconds`). The assertions are the invariants (every board got
@@ -115,9 +119,11 @@ import postgres from "postgres";
 import { matchRoomPathBySql, resultEventCountSql, forfeitEventCountSql } from "../helpers";
 import { seedOnlineRound, type RoundBoard, type RoundPlayer } from "../match-room-kit";
 import { startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
-import { startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../realtimekit-fixture-server";
+import { httpWebhookDeliver, startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../realtimekit-fixture-server";
 import { CLIENT_POLL, CLIENT_SEAT, LOAD_LIMITS, callsPerWindow, cameraRetryWaitMs, groupCalls, normalisePath, percentile, replayBucket, slidingWindowMax } from "./load-stats";
 import { positionRises, completionReorders, type PositionSample } from "./line-checks";
+// A root script with no `@/` imports (presence-shadow-report.ts's header): the harness runs the report's own SQL, never a retyped copy.
+import { shadowReportSql } from "../../../../scripts/presence-shadow-report";
 import {
   LINE_LOAD,
   admissionPace,
@@ -143,6 +149,8 @@ import {
   type StayCostInput,
   type StayInLine,
   type VendorCall,
+  webhookDigest,
+  webhookVerdict,
 } from "./line-load";
 
 const num = (name: string, fallback: number): number => {
@@ -193,6 +201,10 @@ const EVIDENCE_SWEEP_EVERY_S = num("LOAD_EVIDENCE_SWEEP_EVERY_S", 20);
  *  evidence read settles. 0: reports never finalise - the fixture's default, and the shape of a vendor that stops
  *  finalising: every sweep pass then re-reads every unsettled meeting (3 vendor calls each) until the 24 h give-up. */
 const REPORTS_FINAL = num("LOAD_REPORTS_FINAL", 1) === 1;
+/** 1: the fixture delivers its presence webhooks over HTTP to the server under test (which reads the key from the fixture's origin) and the run
+ *  asserts them at the end. 0 (default): the fixture emits webhooks and delivers none, so every presence measurement would be over an empty
+ *  table: a run that measures presence sets it, and a run that set it and delivered zero fails. */
+const WEBHOOKS = process.env.LOAD_WEBHOOKS === "1";
 const REPORT = process.env.LOAD_REPORT ?? "test-results/load/chess-30-boards.json";
 
 /** Move every seeded round's open this many seconds into the PAST (SQL, time only), before any link is minted. Unset: the real open. */
@@ -332,7 +344,10 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
   const random = rng(SEED);
 
   const lichess: LichessFixtureServer = await startLichessFixtureServer();
-  const video: RealtimeKitFixtureServer = await startRealtimeKitFixtureServer();
+  const video: RealtimeKitFixtureServer = await startRealtimeKitFixtureServer(
+    undefined,
+    WEBHOOKS ? { webhooks: httpWebhookDeliver(`${baseURL}/api/webhooks/realtimekit`) } : undefined,
+  );
   video.setReportsFinal(REPORTS_FINAL);
   const bucketKeyLike = `${video.url}|%`;
   const samples: Sample[] = [];
@@ -968,6 +983,37 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     await monitorDone;
     await ledgerDone;
 
+    // ------------------------------------------------------------------------------------------ presence webhooks (Task 10c)
+    // Every meeting has ended (the loop above), so every webhook the fixture will ever emit has been emitted: await the deliveries, then
+    // read the table the server wrote. The verdict is line-load.ts `webhookVerdict` (proved in line-load.test.ts); the SQL is only the count.
+    await video.webhooksSettled();
+    const webhookDigestOfRun = webhookDigest(video.webhooks, video.webhookOutcomes);
+    let webhookOpenRows = 0;
+    let webhookLeftClosed = 0;
+    let webhookRecorded = 0;
+    let shadow: Awaited<ReturnType<typeof shadowReportSql>> | null = null;
+    if (WEBHOOKS) {
+      // Scoped to the run's fixtures AND to every meeting a webhook named (a row written before its meeting row was found has no fixture_id).
+      const [openRow] = await monitor<{ n: number }[]>`
+        select count(*)::int as n from fixture_video_presence
+         where left_at is null
+           and (fixture_id = any(${monitor.array(fixtureIds)}::uuid[]) or meeting_id = any(${monitor.array(webhookDigestOfRun.meetingIds)}::text[]))`;
+      webhookOpenRows = openRow!.n;
+      const [leftRow] = await monitor<{ n: number }[]>`
+        select count(*)::int as n
+          from unnest(${monitor.array(webhookDigestOfRun.leftPeers.map((l) => l.meetingId))}::text[],
+                      ${monitor.array(webhookDigestOfRun.leftPeers.map((l) => l.peerId))}::text[]) as w(meeting_id, peer_id)
+         where exists (select 1 from fixture_video_presence f where f.meeting_id = w.meeting_id and f.peer_id = w.peer_id and f.left_by = 'left')`;
+      webhookLeftClosed = leftRow!.n;
+      const [recRow] = await monitor<{ n: number }[]>`
+        select count(*)::int as n from realtimekit_webhook_deliveries where rtk_uuid = any(${monitor.array(webhookDigestOfRun.deliveredUuids)}::text[])`;
+      webhookRecorded = recRow!.n;
+      shadow = await shadowReportSql(monitor, { since: new Date(startedAt), fixtureIds });
+    }
+    failures.push(
+      ...webhookVerdict({ enabled: WEBHOOKS, digest: webhookDigestOfRun, openRows: webhookOpenRows, leftClosed: webhookLeftClosed, recorded: webhookRecorded }),
+    );
+
     // ----------------------------------------------------------------------------------------------- the numbers
     const runSeconds = (times.end! - startedAt) / 1_000;
     const lichessCalls = lichess.calls;
@@ -1388,6 +1434,20 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       },
       requests: { total: samples.length, non2xx: samples.filter((s) => s.status < 200 || s.status >= 300).length, byLabel: Object.fromEntries(["room read", "seat claim", "move", "resign", "sweep"].map((l) => [l, samples.filter((s) => s.label === l).length])) },
       capacity,
+      webhooks: {
+        enabled: WEBHOOKS,
+        emitted: webhookDigestOfRun.emitted,
+        delivered: webhookDigestOfRun.delivered,
+        failed: webhookDigestOfRun.failed,
+        down: webhookDigestOfRun.down,
+        // The table reads below ran only with LOAD_WEBHOOKS=1; null is "not measured", never zero.
+        checks: WEBHOOKS
+          ? { openRows: webhookOpenRows, leftDelivered: webhookDigestOfRun.leftPeers.length, leftClosedByLeft: webhookLeftClosed, uuidsDelivered: webhookDigestOfRun.deliveredUuids.length, uuidsRecorded: webhookRecorded }
+          : null,
+        shadow: shadow
+          ? { verified: shadow.verified, covered: shadow.covered, missing: shadow.missing.length, missingSample: shadow.missing.slice(0, 5), open: shadow.open.length, closedByEnded: shadow.closedByEnded }
+          : null,
+      },
       failures,
     };
     mkdirSync(dirname(REPORT), { recursive: true });

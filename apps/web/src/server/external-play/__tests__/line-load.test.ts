@@ -52,6 +52,9 @@ import {
   type LineSample,
   type StayInLine,
   type VendorCall,
+  webhookDigest,
+  webhookVerdict,
+  type WebhookDigest,
 } from "../../../../e2e/load/line-load";
 
 describe("LINE_LOAD: every number the run copies is the server's own", () => {
@@ -468,5 +471,113 @@ describe("gateLevels: the lowest bucket level any gate decision saw, read from t
     const got = gateLevels([line('"decision":"go_idle","tokens":7.6'), line('"decision":"hold_recheck","tokens":3.9'), line('"decision":"go_idle"'), line('"decision":"go_idle","tokens":12'), '{"msg":"other","tokens":0.1}']);
     expect(got).toEqual({ decisions: 3, min: 3.9 });
     expect(gateLevels([line('"decision":"hold_pool","tokens":0')]), "a level of 0 is a level").toEqual({ decisions: 1, min: 0 });
+  });
+});
+
+describe("webhookDigest + webhookVerdict: the load run's end-of-run presence check (LOAD_WEBHOOKS)", () => {
+  // Written from the fixture's own record shape (realtimekit-fixture-server.ts `emit`): a uuid, an event and the signed JSON body.
+  const hook = (uuid: string, event: string, meetingId: string, peerId?: string) => ({
+    uuid,
+    event,
+    body: JSON.stringify({ event, meeting: { id: meetingId, sessionId: `s-${meetingId}` }, ...(peerId ? { participant: { peerId } } : {}) }),
+  });
+  const hooks = [
+    hook("u1", "meeting.participantJoined", "m1", "p1"),
+    hook("u2", "meeting.participantLeft", "m1", "p1"),
+    hook("u3", "meeting.ended", "m1"),
+    hook("u4", "meeting.participantJoined", "m2", "p2"),
+    hook("u5", "meeting.participantLeft", "m2", "p2"),
+    hook("u6", "meeting.participantLeft", "m3", "p3"), // this one failed
+    hook("u7", "meeting.participantLeft", "m1", "p1"), // a repeat of the same peer's leave, delivered twice
+  ];
+  const outcomes = new Map<string, string>([
+    ["u1", "delivered"], ["u2", "delivered"], ["u3", "delivered"], ["u4", "delivered"], ["u5", "delivered"], ["u6", "failed"], ["u7", "delivered"],
+  ]);
+
+  it("digests the fixture's record: counts by outcome, the delivered uuids, the DISTINCT delivered leaves and the meetings named", () => {
+    const d = webhookDigest(hooks, outcomes);
+    expect(d.emitted).toBe(7);
+    expect(d.delivered).toBe(6);
+    expect(d.failed).toBe(1);
+    expect(d.down).toBe(0);
+    expect(d.deliveredUuids).toEqual(["u1", "u2", "u3", "u4", "u5", "u7"]);
+    expect(d.leftPeers, "a failed leave is not owed; a repeated peer counts once").toEqual([
+      { meetingId: "m1", peerId: "p1" },
+      { meetingId: "m2", peerId: "p2" },
+    ]);
+    expect([...d.meetingIds].sort()).toEqual(["m1", "m2", "m3"]);
+  });
+
+  it("the empty record digests to zeros (and refuses, below), and an undelivered deliverer records every webhook as down", () => {
+    const e = webhookDigest([], new Map());
+    expect(e).toEqual({ emitted: 0, delivered: 0, failed: 0, down: 0, deliveredUuids: [], leftPeers: [], meetingIds: [] });
+    const down = webhookDigest(hooks.slice(0, 2), new Map([["u1", "down"], ["u2", "down"]]));
+    expect({ emitted: down.emitted, delivered: down.delivered, down: down.down }).toEqual({ emitted: 2, delivered: 0, down: 2 });
+  });
+
+  it("a delivered leave whose body names no meeting or peer is refused loudly, never counted as nothing", () => {
+    const bad = [{ uuid: "x", event: "meeting.participantLeft", body: JSON.stringify({ event: "meeting.participantLeft", meeting: { id: "m1" } }) }];
+    expect(() => webhookDigest(bad, new Map([["x", "delivered"]]))).toThrow(/participantLeft/);
+  });
+
+  const clean = (): { enabled: boolean; digest: WebhookDigest; openRows: number; leftClosed: number; recorded: number } => {
+    const digest = webhookDigest(hooks.filter((h) => h.uuid !== "u6"), new Map([...outcomes].filter(([k]) => k !== "u6")));
+    return { enabled: true, digest, openRows: 0, leftClosed: digest.leftPeers.length, recorded: digest.deliveredUuids.length };
+  };
+
+  it("a clean run passes, and the checks it ran were not vacuous", () => {
+    const c = clean();
+    expect(c.digest.delivered).toBeGreaterThan(0);
+    expect(c.digest.leftPeers.length, "leaves checked").toBe(2);
+    expect(webhookVerdict(c)).toEqual([]);
+  });
+
+  it("without LOAD_WEBHOOKS nothing is asserted, whatever the counts (the baseline delivers none)", () => {
+    const base = webhookDigest(hooks, new Map(hooks.map((h) => [h.uuid, "down"])));
+    expect(webhookVerdict({ enabled: false, digest: base, openRows: 3, leftClosed: 0, recorded: 0 })).toEqual([]);
+  });
+
+  it("delivered 0 (an inert run) fails, with the emitted count named", () => {
+    const d = webhookDigest(hooks, new Map(hooks.map((h) => [h.uuid, "down"])));
+    const v = webhookVerdict({ ...clean(), digest: d, leftClosed: 0, recorded: 0 });
+    expect(v.some((m) => /delivered 0 of 7/.test(m))).toBe(true);
+  });
+
+  it("an empty run (nothing emitted, nothing delivered) fails: zero checked is a failure", () => {
+    const v = webhookVerdict({ enabled: true, digest: webhookDigest([], new Map()), openRows: 0, leftClosed: 0, recorded: 0 });
+    expect(v.length).toBeGreaterThan(0);
+    expect(v.some((m) => /delivered 0/.test(m))).toBe(true);
+  });
+
+  it("failed > 0 fails", () => {
+    const d = webhookDigest(hooks, outcomes);
+    const v = webhookVerdict({ ...clean(), digest: d, leftClosed: d.leftPeers.length, recorded: d.deliveredUuids.length });
+    expect(v).toEqual([expect.stringMatching(/1 webhook\(s\) failed/)]);
+  });
+
+  it("an open presence row fails (every meeting ended, so it is a phantom)", () => {
+    expect(webhookVerdict({ ...clean(), openRows: 2 })).toEqual([expect.stringMatching(/2 presence row\(s\) still open/)]);
+  });
+
+  it("a delivered leave whose row is not closed by 'left' fails, naming how many of how many", () => {
+    expect(webhookVerdict({ ...clean(), leftClosed: 1 })).toEqual([expect.stringMatching(/1 of 2 delivered participantLeft/)]);
+  });
+
+  it("no delivered leave at all fails (zero checked), even with everything else clean", () => {
+    const only = hooks.filter((h) => h.event !== "meeting.participantLeft");
+    const d = webhookDigest(only, new Map(only.map((h) => [h.uuid, "delivered"])));
+    expect(d.leftPeers).toEqual([]);
+    expect(webhookVerdict({ enabled: true, digest: d, openRows: 0, leftClosed: 0, recorded: d.deliveredUuids.length })).toEqual([expect.stringMatching(/no participantLeft/)]);
+  });
+
+  it("a delivered uuid missing from realtimekit_webhook_deliveries fails", () => {
+    const c = clean();
+    expect(webhookVerdict({ ...c, recorded: c.recorded - 1 })).toEqual([expect.stringMatching(/5 of 6 delivered/)]);
+  });
+
+  it("a webhook that never settled (neither delivered, failed nor down) fails", () => {
+    const d = webhookDigest(hooks.slice(0, 2), new Map([["u1", "delivered"]])); // u2 has no outcome: still pending
+    const v = webhookVerdict({ enabled: true, digest: d, openRows: 0, leftClosed: 0, recorded: d.deliveredUuids.length });
+    expect(v.some((m) => /never settled/.test(m))).toBe(true);
   });
 });
