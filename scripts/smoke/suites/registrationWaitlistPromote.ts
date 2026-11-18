@@ -130,7 +130,7 @@ export async function registrationWaitlistPromoteSuite(): Promise<void> {
   check(
     "waitlist: promoting into a FULL division without confirming is refused 409 PROMOTE_OVER_CAPACITY",
     refusedPromote.status === 409 &&
-      (refusedPromote.json.error as { code?: string } | undefined)?.code === "PROMOTE_OVER_CAPACITY",
+      refusedPromote.json.error?.code === "PROMOTE_OVER_CAPACITY",
   );
   const stillWaitingRows = v1data<{ id: string }[]>(
     await v1(owner, `/api/v1/divisions/${div.id}/registrations?status=waitlisted`),

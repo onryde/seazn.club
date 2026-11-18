@@ -300,6 +300,7 @@ describe("deriveRegistrantPaymentState", () => {
       amount_cents: 1000,
       refunded_cents: 0,
       disputed_at: null,
+      dispute: null,
       entry_payment_intent_id: null,
       status: "confirmed", // A was just marked paid -> materialised to confirmed
     });
@@ -307,6 +308,7 @@ describe("deriveRegistrantPaymentState", () => {
       amount_cents: 2000,
       refunded_cents: 0,
       disputed_at: null,
+      dispute: null,
       entry_payment_intent_id: null, // B's own column, untouched by A's mark-paid
       status: "pending", // B's own status, untouched by A's mark-paid
     });
