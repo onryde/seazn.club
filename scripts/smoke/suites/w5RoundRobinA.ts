@@ -76,6 +76,11 @@ import { detectTemplate } from "../../../apps/web/src/lib/format-templates.ts";
  * winner per pool - the lowest seed of each pool, every match being a walkover for the better seed - and no row flagged champion. (Main:
  * the document had no such field, and the first pool's leader was crowned the division's champion.)
  *
+ * Task 20 (X-SF-1 <- RB5-T10; ST-G20): the PUBLIC hub's table marks a leaver (`tables[].rows[].status`, read anonymously) - a started public league
+ * of four in its OWN org, w5a7 (the first one's public competition is at its division cap): P1 withdraws -> her row reads "withdrawn" and nobody
+ * else's carries a status; P2 is disqualified -> his row reads "disqualified" beside hers; P1's Reinstate takes hers away and leaves
+ * his. (Main: no hub row ever carried a status.)
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -98,7 +103,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 14: 1 (the Groups only card's one-stage list: three pools of eleven, 15 lines, no second stage).
   // Task 16: 1 (a legs-3 league over the API draws 18 lines and reads back as a league with its 3 legs).
   // Task 14b: 1 (a finished two-pool Groups only division's public hub document names each pool's winner and crowns no one).
-  const EXPECTED_CHECKS = 23;
+  // Task 20: 1 (the public hub's table marks a withdrawn and a disqualified row, and Reinstate takes the first away).
+  const EXPECTED_CHECKS = 24;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -1044,6 +1050,59 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a T14b: a finished two-pool Groups only division publishes each pool's winner in the hub document and flags no row champion" +
         (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, generate ${gen.status}, start ${started.status}, lines ${lines.length}, walks ${walks.join(",")}, hub ${hubRes.status}, winners ${JSON.stringify(mine).slice(0, 300)}, want seeds ${wantSeeds.join(",")}, rows ${rows.length}`),
+      ok,
+    );
+  }
+
+  // Task 20 (X-SF-1, ST-G20): the public hub's table marks a withdrawn and a disqualified row; Reinstate takes the mark away.
+  {
+    const third = newSession();
+    await signIn(third, `delivered+w5a7_${tag}@resend.dev`);
+    const c3 = v1data<{ id: string; slug: string } | undefined>(
+      await v1(third, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A chip ${tag}`, visibility: "public" }),
+    );
+    const dRes = await v1(third, `/api/v1/competitions/${c3?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Chip",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const es =
+      v1data<{ id: string }[] | undefined>(
+        await v1(third, `/api/v1/divisions/${divId}/entrants`, "POST",
+          [1, 2, 3, 4].map((i) => ({ kind: "individual", display_name: `Chip${i} ${tag}`, seed: i }))),
+      ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(third, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "Chip" }),
+    )?.id;
+    await v1(third, `/api/v1/stages/${stageId}/generate`, "POST");
+    const started = await v1(third, `/api/v1/divisions/${divId}/start`, "POST");
+    const orgs = (await call(third, "/api/orgs")) as { id: string; slug: string }[];
+    const orgSlug = orgs[0]?.slug ?? "";
+    const [p1, p2, p3, p4] = es.map((e) => e.id);
+    /** Every hub row's status for this division's table, by entrant id (an absent key reads as undefined: still competing). */
+    const marks = async () => {
+      const res = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${c3?.slug}/hub`);
+      type HubTable = { divisionId: string; rows: { entrantId: string; status?: string }[] };
+      const table = (v1data<{ tables?: HubTable[] } | undefined>(res)?.tables ?? []).find((t) => t.divisionId === divId);
+      return { http: res.status, rows: table?.rows.length ?? 0, by: Object.fromEntries((table?.rows ?? []).map((r) => [r.entrantId, r.status])) as Record<string, string | undefined> };
+    };
+    const calm = await marks();
+    const out = await v1(third, `/api/v1/entrants/${p1}/withdraw`, "POST");
+    const afterW = await marks();
+    const dq = await v1(third, `/api/v1/entrants/${p2}`, "PATCH", { status: "disqualified" });
+    const afterDq = await marks();
+    const back = await v1(third, `/api/v1/entrants/${p1}`, "PATCH", { status: "registered" });
+    const afterBack = await marks();
+    const ok =
+      es.length === 4 && started.status === 200 && calm.http === 200 && calm.rows === 4 && Object.values(calm.by).every((x) => x === undefined) &&
+      out.status === 200 && afterW.by[p1!] === "withdrawn" && [p2, p3, p4].every((id) => afterW.by[id!] === undefined) &&
+      dq.status === 200 && afterDq.by[p1!] === "withdrawn" && afterDq.by[p2!] === "disqualified" && afterDq.by[p3!] === undefined && afterDq.by[p4!] === undefined &&
+      back.status === 200 && afterBack.by[p1!] === undefined && afterBack.by[p2!] === "disqualified";
+    w5Check(
+      "w5a X-SF-1: the public hub's table marks a withdrawn and a disqualified row (and no other); Reinstate takes the mark away" +
+        (ok ? "" : ` - div ${dRes.status}, start ${started.status}, calm ${JSON.stringify(calm)}, withdraw ${out.status} ${JSON.stringify(afterW.by)}, dq ${dq.status} ${JSON.stringify(afterDq.by)}, back ${back.status} ${JSON.stringify(afterBack.by)}`),
       ok,
     );
   }

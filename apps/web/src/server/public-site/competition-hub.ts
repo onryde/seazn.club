@@ -1053,6 +1053,9 @@ export async function loadCompetitionHub(
             stageKind: stage.kind,
             // W5 T8 (RB5-W7): this table's departures, in its own row order (a pool names only its pool)
             withdrawalNotes: withdrawalNotesFor(stage.id, (snap.rows as { entrantId: string }[]).map((r) => r.entrantId), tableWithdrawals, rowFactStatuses, names, snap.pool_id ?? null),
+            // W5 T20 (ST-G20, X-SF-1): every entrant's own status, so a withdrawn or disqualified row wears its chip on the hub as it
+            // does on the division page. Handed over whole: who counts as departed is `DEPARTED_STATUS_CHIPS`' call, not this site's.
+            statuses: rowFactStatuses,
           }),
         );
       }

@@ -51,6 +51,7 @@ import type { RowMarkerT, TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 import type { SwissRowFacts } from "./swiss-row-facts";
 import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
 
 /** The columns a phone shows without asking: played, won, lost, points.
  *  Everything else — draws, the sport's own metrics, the cascade's derived
@@ -613,6 +614,10 @@ export interface TableViewInput {
   /** W5 T8 (RB5-W7): THIS table's departure notes (`withdrawalNotesFor`), resolved here in the org's language like every
    *  other string the builder emits. Absent or empty: the view carries none. */
   withdrawalNotes?: readonly WithdrawalNote[];
+  /** W5 T20 (ST-G20, X-SF-1): EVERY entrant's own `status` (`entrant_id` -> status), as `StandingsTable`'s `entrantStatuses` is - not a
+   *  pre-filtered list of the departed. Which statuses count as left is decided once, by `DEPARTED_STATUS_CHIPS`; a departed row's
+   *  view carries `status` and the client prints its chip. Absent or all-competing: no row carries the key. */
+  statuses?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -668,6 +673,13 @@ export function buildTableView(input: TableViewInput): TableViewT {
     return markers.length > 0 ? { markers } : {};
   };
 
+  // W5 T20: only a DEPARTED row carries a status (a cached document and a competing row are one shape: the key absent). `Object.hasOwn`
+  // so an entrant id that happens to spell a prototype key never reads one; an unknown or competing status is not a chip.
+  const statusOf = (entrantId: string): { status?: DepartedStatus } => {
+    const s = input.statuses !== undefined && Object.hasOwn(input.statuses, entrantId) ? input.statuses[entrantId] : undefined;
+    return s !== undefined && Object.hasOwn(DEPARTED_STATUS_CHIPS, s) ? { status: s as DepartedStatus } : {};
+  };
+
   return {
     id: input.id,
     divisionId: input.division.id,
@@ -702,6 +714,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       champion: !level && input.championIds.includes(r.entrantId),
       // Only a marked row carries the key (a cached document and a plain table are one shape: absent = nothing to mark).
       ...markersOf(r.entrantId),
+      ...statusOf(r.entrantId),
     })),
     qualification: qual?.table ?? null,
     swissRound: input.swissRound ?? null,

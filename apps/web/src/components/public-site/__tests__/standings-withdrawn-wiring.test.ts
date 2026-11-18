@@ -15,13 +15,24 @@
 // pages then became ordinary wiring, and the last row below pins the SQL fact
 // they now depend on. Widen-then-forget is the failure this file exists for.
 //
-// Also NOT covered: `StandingsTableView` (the competition hub's own table,
-// `matches-hub/{table,overview}-tab.tsx`). It renders from a server-built
-// `TableViewT` rather than raw rows. The premise row below counts only bare
-// `<StandingsTable` mounts, so adding a new one of those still reds.
+// `StandingsTableView` (the competition hub's own table, `matches-hub/{table,overview}-tab.tsx`) renders from a server-built
+// `TableViewT` rather than raw rows, so the rows above cannot see it; the "X-SF-1" block at the foot of this file covers it
+// (W5 T20). The premise row below counts only bare `<StandingsTable` mounts, so adding a new one of those still reds.
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { StandingsRow } from "@seazn/engine/competition";
+import en from "@/dictionaries/en/public.json";
+import es from "@/dictionaries/es/public.json";
+import fr from "@/dictionaries/fr/public.json";
+import nl from "@/dictionaries/nl/public.json";
+import type { Dict } from "@/lib/i18n-constants";
+import { t, type TKey } from "@/lib/i18n-runtime";
+import { buildTableView } from "@/server/public-site/standings-view";
+import { DEPARTED_STATUS_CHIPS } from "../standings-table";
+import { StandingsTableView } from "../standings-table-view";
 
 const MARKED = {
   "organiser console division page":
@@ -139,5 +150,177 @@ describe("the withdrawn marker reaches every standings surface that can carry it
     const defs = viewDefinitions();
     const older = defs.filter((d) => /status in \('registered','confirmed'\)/.test(d.sql));
     expect(older.length, "no migration in the history filtered entrant status").toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W5 app PR A, Task 20 (X-SF-1 <- RB5-T10; ST-G20): the HUB's table (`buildTableView` -> `StandingsTableView`) carries the same
+// departed chip as the division page. The header of this file records the gap: the hub "renders from a server-built
+// `TableViewT` rather than raw rows" and was not covered. It is now, in three ways: the builder resolves a row's status, the
+// client prints the chip, and every `buildTableView(` call site hands the builder its `statuses` (an optional input nothing
+// sends is the inert seam this file exists for).
+//
+// Expected values: the chip's words are the owner-visible per-locale vocabulary typed here from the product copy, never read
+// back from the dictionary under test; who is departed is the engine's status vocabulary (`withdrawn` / `disqualified`).
+// differential: today (b6f93160a8) `buildTableView` takes no status and the hub row has no chip - every "carries the chip"
+// assertion below is red on it.
+// ---------------------------------------------------------------------------------------------------------------------
+
+const HUB_LOCALES: Record<string, { dict: Dict; withdrawn: string; disqualified: string }> = {
+  en: { dict: en as Dict, withdrawn: "Withdrawn", disqualified: "Disqualified" },
+  es: { dict: es as Dict, withdrawn: "Retirado", disqualified: "Descalificado" },
+  fr: { dict: fr as Dict, withdrawn: "Forfait", disqualified: "Disqualifié" },
+  nl: { dict: nl as Dict, withdrawn: "Teruggetrokken", disqualified: "Gediskwalificeerd" },
+};
+const LONG_NAME = "Riverside Rovers Community Football Club 2nd";
+const HUB_ROWS: StandingsRow[] = [
+  { entrantId: "a", played: 2, won: 2, drawn: 0, lost: 0, points: 6, metrics: {}, rank: 1 },
+  { entrantId: "b", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: {}, rank: 2 },
+  { entrantId: "w", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {}, rank: 3 },
+  { entrantId: "q", played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {}, rank: 4 },
+];
+const HUB_NAMES = { a: "Harbourside", b: "Millbrook", w: LONG_NAME, q: "Cliffside United" };
+
+function hubView(dict: Dict, statuses?: Readonly<Record<string, string>>) {
+  const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
+  return buildTableView({
+    id: "t1",
+    division: { id: "d1", slug: "div", name: "Div" },
+    caption: "League",
+    rules: null,
+    dateOf: () => null,
+    fullHref: "/live/o/c/div?tab=standings",
+    rows: HUB_ROWS,
+    metricSpecs: [],
+    cascade: ["points"],
+    entrantNames: HUB_NAMES,
+    entrantLogos: {},
+    entrantColours: {},
+    championIds: [],
+    updatedAt: "2026-11-18T00:00:00.000Z",
+    msg,
+    ...(statuses === undefined ? {} : { statuses }),
+  });
+}
+const hubHtml = (dict: Dict, statuses?: Readonly<Record<string, string>>) =>
+  renderToStaticMarkup(createElement(StandingsTableView, { view: hubView(dict, statuses), dict, testid: "mh-table-t1" }));
+/** Every departed-chip element in the markup, by its per-status testid prefix (anchored on `="`). */
+const chips = (html: string, status: string) => [...html.matchAll(new RegExp(`data-testid="mh-table-t1-${status}-([a-z]+)"`, "g"))].map((m) => m[1]);
+
+describe("X-SF-1: the hub's table carries the withdrawn and disqualified chip (ST-G20)", () => {
+  it("X-SF-1 a withdrawn row on the hub carries the chip (4 locales)", () => {
+    // differential: today no chip
+    let checked = 0;
+    for (const [loc, v] of Object.entries(HUB_LOCALES)) {
+      // the map is EVERY entrant's status, as the division page's `entrantStatuses` is: competing ones must not be branded
+      const html = hubHtml(v.dict, { a: "confirmed", b: "registered", w: "withdrawn", q: "confirmed" });
+      expect(chips(html, "withdrawn"), `${loc}: exactly the withdrawn row carries a chip`).toEqual(["w"]);
+      expect(chips(html, "disqualified"), `${loc}: nobody was disqualified`).toEqual([]);
+      const chip = new RegExp(`data-testid="mh-table-t1-withdrawn-w"[^>]*>[^<]*${v.withdrawn}[^<]*</span>`).exec(html)?.[0];
+      expect(chip, `${loc}: the chip says ${v.withdrawn}`).toBeDefined();
+      expect(chip, `${loc}: the chip wears the table's one withdrawn look`).toContain(DEPARTED_STATUS_CHIPS.withdrawn.className);
+      expect(html, `${loc}: no bare dictionary key printed`).not.toContain("table.withdrawn");
+      // it sits in the withdrawn entrant's own row, not another's
+      const row = html.slice(html.indexOf('data-testid="mh-table-t1-row-w"'), html.indexOf('data-testid="mh-table-t1-row-q"'));
+      expect(row).toContain('data-testid="mh-table-t1-withdrawn-w"');
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("X-SF-1 a disqualified row carries its own chip, never the withdrawn one (4 locales)", () => {
+    // differential: today no chip
+    let checked = 0;
+    for (const [loc, v] of Object.entries(HUB_LOCALES)) {
+      const html = hubHtml(v.dict, { w: "withdrawn", q: "disqualified" });
+      expect(chips(html, "disqualified"), `${loc}: exactly the disqualified row`).toEqual(["q"]);
+      expect(chips(html, "withdrawn"), `${loc}: the withdrawn one is its own`).toEqual(["w"]);
+      const dq = new RegExp(`data-testid="mh-table-t1-disqualified-q"[^>]*>[^<]*${v.disqualified}[^<]*</span>`).exec(html)?.[0];
+      expect(dq, `${loc}: the DQ chip says ${v.disqualified}`).toBeDefined();
+      expect(dq).toContain(DEPARTED_STATUS_CHIPS.disqualified.className);
+      // two different facts, two different looks (the product's own distinction: grey leaver, red removed)
+      expect(DEPARTED_STATUS_CHIPS.disqualified.className).not.toBe(DEPARTED_STATUS_CHIPS.withdrawn.className);
+      // the withdrawn word is never printed on the DQ row
+      const row = html.slice(html.indexOf('data-testid="mh-table-t1-row-q"'));
+      expect(row).not.toContain(`>${v.withdrawn}<`);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("X-SF-1 the empty case and the absent key: no statuses, an empty map, and an all-competing map print no chip and carry no key", () => {
+    const d = en as Dict;
+    const none = [undefined, {}, { a: "confirmed", b: "registered", w: "confirmed", q: "checked_in" }] as const;
+    for (const s of none) {
+      const view = hubView(d, s);
+      expect(view.rows.some((r) => "status" in r), `statuses ${JSON.stringify(s)}: a competing row carries a status key`).toBe(false);
+      const html = hubHtml(d, s);
+      expect(chips(html, "withdrawn")).toEqual([]);
+      expect(chips(html, "disqualified")).toEqual([]);
+    }
+    expect(none).toHaveLength(3);
+  });
+
+  it("X-SF-1 the builder carries the status by entrant id, whatever the row order, and a status for nobody in the table is ignored", () => {
+    const view = hubView(en as Dict, { q: "disqualified", w: "withdrawn", ghost: "withdrawn" });
+    expect(view.rows.map((r) => [r.entrantId, (r as { status?: string }).status ?? null])).toEqual([
+      ["a", null],
+      ["b", null],
+      ["w", "withdrawn"],
+      ["q", "disqualified"],
+    ]);
+  });
+
+  it("X-SF-1 a long name keeps its chip on a line of its own under the name (the 320px wrap case)", () => {
+    const html = hubHtml(en as Dict, { w: "withdrawn" });
+    const from = html.indexOf('data-testid="mh-table-t1-row-w"');
+    const row = html.slice(from, html.indexOf("</tr>", from));
+    expect(row).toContain(LONG_NAME);
+    // the chip follows the name, inside the markers line (a flex-wrap row under it), not beside it in the name's own flex row
+    expect(row.indexOf(LONG_NAME)).toBeLessThan(row.indexOf("mh-table-t1-withdrawn-w"));
+    expect(row).toMatch(/<span class="mt-1 flex flex-wrap[^"]*"[^>]*>(?:(?!<\/th>)[\s\S])*mh-table-t1-withdrawn-w/);
+  });
+});
+
+describe("X-SF-1: every buildTableView call site passes statuses (the inert-seam guard)", () => {
+  /** The argument text of every `buildTableView(` CALL under src/, outside tests; the declaration is not a call. */
+  function calls(): { file: string; args: string }[] {
+    const out: { file: string; args: string }[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) {
+          if (name === "__tests__" || name === "node_modules") continue;
+          walk(path);
+          continue;
+        }
+        if (!/\.tsx?$/.test(name) || /\.test\.tsx?$/.test(name)) continue;
+        // comments stripped: prose that names the builder is not a call
+        const src = readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+        for (const m of src.matchAll(/\bbuildTableView\s*\(/g)) {
+          if (/function\s+$/.test(src.slice(0, m.index))) continue;
+          let depth = 1;
+          let i = m.index! + m[0].length;
+          const start = i;
+          for (; i < src.length && depth > 0; i++) {
+            if (src[i] === "(") depth++;
+            else if (src[i] === ")") depth--;
+          }
+          out.push({ file: relative(process.cwd(), path).replace(/\\/g, "/"), args: src.slice(start, i - 1) });
+        }
+      }
+    };
+    walk(join(process.cwd(), "src"));
+    return out;
+  }
+
+  it("X-SF-1 every buildTableView call site passes statuses", () => {
+    const sites = calls();
+    // anti-vacuity: the scan sees the real call (the hub's), and a count of zero is a failure, not a pass
+    expect(sites.length, "no buildTableView( call found: the scan is blind").toBeGreaterThan(0);
+    expect(sites.map((s) => s.file)).toContain("src/server/public-site/competition-hub.ts");
+    for (const s of sites) {
+      expect(s.args, `${s.file}: buildTableView( is called without statuses - the chip would never reach this table`).toMatch(/\bstatuses\b/);
+    }
   });
 });

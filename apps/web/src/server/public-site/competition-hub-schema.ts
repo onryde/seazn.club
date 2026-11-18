@@ -35,6 +35,7 @@ import { deriveHubTabs } from "../../lib/matches-hub.ts";
 import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state-names.ts";
 // The camera-policy vocabulary, from its import-free leaf (same `.ts`-extension reason as above).
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
+import { DEPARTED_STATUS_KEYS } from "../../lib/departed-status-chips.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe
@@ -280,6 +281,11 @@ export const TableRow = z.object({
    *  because a hub document cached before the field existed (Redis 15s, ISR 30s) reaches the client without it - absent reads
    *  as "nothing to mark", as `cellNotes` above does. */
   markers: z.array(RowMarkerView).optional(),
+  /** W5 T20 (ST-G20): the entrant has left the field - `withdrawn` or `disqualified` (the table's one departed vocabulary,
+   *  `DEPARTED_STATUS_KEYS`) - so the row wears its chip. Only a departed row carries the key; absent = still competing, and a hub
+   *  document cached before the field existed (Redis 15s, ISR 30s) reaches the client without it, as `markers` above does. The
+   *  chip's WORD is the client's (`table.withdrawn` / `table.disqualified` in the page's dictionary), not a string on the wire. */
+  status: z.enum(DEPARTED_STATUS_KEYS).optional(),
 });
 /** W3 T16 (SW-L11): where a Swiss stage stands - `swissRoundState`'s verdict, published as data (the renderer fills the
  *  sentence from the org's dictionary, `swissRoundKey`). `of` is the stage's CURRENT round count. */

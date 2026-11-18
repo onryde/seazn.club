@@ -92,6 +92,7 @@ import { useState, type CSSProperties } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { DEPARTED_STATUS_CHIPS } from "@/lib/departed-status-chips";
 import { swissRoundKey, type SwissRoundStateName } from "@/lib/swiss-round-state";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsPopover } from "./standings-popover";
@@ -646,7 +647,17 @@ export function StandingsTableView({
                       </span>
                       {/* W3 app-B T3 (owner Q2): a Swiss bye / late join, on a line of its own under the name (words resolved by the
                           builder, `rowMarkers`). Nothing for an unmarked row, so every other table's markup is the one it was. */}
-                      <StandingsRowMarkers markers={r.markers} testid={`${testid}-marker-${r.entrantId}`} indented />
+                      {/* W5 T20 (ST-G20): a departed row's chip rides the same line, first. Its word is this page's dictionary's. */}
+                      <StandingsRowMarkers
+                        markers={r.markers}
+                        departed={
+                          r.status === undefined
+                            ? undefined
+                            : { status: r.status, label: t(dict, DEPARTED_STATUS_CHIPS[r.status].label), testid: `${testid}-${r.status}-${r.entrantId}` }
+                        }
+                        testid={`${testid}-marker-${r.entrantId}`}
+                        indented
+                      />
                     </th>
                     {view.columns.map((c, i) => {
                       // `cellNotes[i]` pairs with `cells[i]` exactly as the

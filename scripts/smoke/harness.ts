@@ -1615,11 +1615,13 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w5a2_${tag}@resend.dev`,
     // w5RoundRobinASuite's own further orgs, one per check that needs room (the first and second orgs are at their competition caps):
     // w5a3 Task 15's super-groups card; w5a4 Task 17's second-Complete check; w5a5 Task 13's rank-override check; w5a6 Task 14b's
-    // public competition for the pool winners' hub read. The same cascade.
+    // public competition for the pool winners' hub read; w5a7 Task 20's public league whose hub table marks a
+    // withdrawn and a disqualified row. The same cascade.
     `delivered+w5a3_${tag}@resend.dev`,
     `delivered+w5a4_${tag}@resend.dev`,
     `delivered+w5a5_${tag}@resend.dev`,
     `delivered+w5a6_${tag}@resend.dev`,
+    `delivered+w5a7_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

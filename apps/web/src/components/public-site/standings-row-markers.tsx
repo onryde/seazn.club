@@ -13,23 +13,38 @@
 // the `title`) - the same fold the column headers use. A phone has no hover, so the short text itself says what it is:
 // "Bye R3" and "From R3" read without the title.
 import type { RowMarkerT } from "@/server/public-site/competition-hub-schema";
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
 
 export function StandingsRowMarkers({
   markers,
+  departed,
   testid,
   indented = false,
 }: {
   markers: readonly RowMarkerT[] | undefined;
+  /** W5 T20 (ST-G20): the hub row's departed chip - the table's one vocabulary (`DEPARTED_STATUS_CHIPS`: its look; the caller's
+   *  dictionary: its word). It leads the line: the fact that she left outranks a bye. `testid` is the chip's own (per status, so a
+   *  count cannot confuse a leaver with a disqualified entrant). Absent: no chip. */
+  departed?: { status: DepartedStatus; label: string; testid: string };
   /** `${testid}-bye` / `${testid}-late` - the caller's per-row prefix (the hub's is per table, so a division's overall table
    *  and a pool's table, which both hold an entrant, never emit one id twice). */
   testid: string;
   /** The row has a crest: line the chips up under the name, not under the crest (20px crest + 8px gap). */
   indented?: boolean;
 }) {
-  if (markers === undefined || markers.length === 0) return null;
+  if ((markers === undefined || markers.length === 0) && departed === undefined) return null;
   return (
     <span className={`mt-1 flex flex-wrap gap-1${indented ? " pl-7" : ""}`}>
-      {markers.map((m) => (
+      {departed === undefined ? null : (
+        <span
+          data-departed={departed.status}
+          data-testid={departed.testid}
+          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium leading-tight ${DEPARTED_STATUS_CHIPS[departed.status].className}`}
+        >
+          {departed.label}
+        </span>
+      )}
+      {(markers ?? []).map((m) => (
         <span
           key={m.kind}
           data-marker={m.kind}

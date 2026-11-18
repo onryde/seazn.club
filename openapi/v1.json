@@ -101310,6 +101310,13 @@
                                         ],
                                         "additionalProperties": false
                                       }
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "withdrawn",
+                                        "disqualified"
+                                      ]
                                     }
                                   },
                                   "required": [

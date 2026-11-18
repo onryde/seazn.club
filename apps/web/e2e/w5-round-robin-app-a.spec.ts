@@ -1450,3 +1450,74 @@ test.describe("RB5-W7 an under-half pool leaver keeps her footnote", () => {
     await expect(page.getByTestId("standings-withdrawal-notes"), "after Reinstate the footnote is gone").toHaveCount(0);
   });
 });
+
+// W5 app PR A, Task 20 (X-SF-1 <- RB5-T10; ST-G20): the public hub's Table tab marks a leaver. The division page's table has worn a
+// "Withdrawn" / "Disqualified" chip since C1; the hub renders from a server-built view and wore none (`buildTableView` took no status).
+// Driven through the organiser's own doors (the withdraw route, the Disqualify status write, Reinstate) and read on the hub page a
+// visitor opens, at 1280, 768 and 320. P1 carries a 43-character name, the 320px wrap case. Expected words are the product copy, typed.
+test.describe("X-SF-1 the hub marks the leaver", () => {
+  test("a withdrawn and a disqualified player wear their own chip on the hub's table (never each other's, never a competing row's); Reinstate takes it away; no page scroll at 1280/768/320", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const { divisionId, stageId, ids } = await seedLeague(request, "HubChip", 4, "public");
+    expect((await generate(request, stageId)).status).toBe(200);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+    const [p1, p2, p3, p4] = ids as [string, string, string, string];
+    const longName = `Riverside Rovers Community Football Club 2nd ${TAG}`;
+    const renamed = await apiJson(request, `/api/v1/entrants/${p1}`, "PATCH", { display_name: longName });
+    expect(renamed.status, JSON.stringify(renamed.error)).toBe(200);
+    const left = await apiJson(request, `/api/v1/entrants/${p1}/withdraw`, "POST");
+    expect(left.status, JSON.stringify(left.error)).toBe(200);
+    const dq = await apiJson(request, `/api/v1/entrants/${p2}`, "PATCH", { status: "disqualified" });
+    expect(dq.status, JSON.stringify(dq.error)).toBe(200);
+
+    const div = await apiJson<{ competition_id: string }>(request, `/api/v1/divisions/${divisionId}`);
+    const organiser = await competitionPath(request, div.data!.competition_id);
+    const m = /^\/o\/([^/]+)\/c\/([^/?]+)$/.exec(organiser);
+    expect(m, `premise: an organiser competition path, got ${organiser}`).not.toBeNull();
+    const hubUrl = `/live/${m![1]}/${m![2]}?tab=table`;
+    const chip = (id: string, status: "withdrawn" | "disqualified") => page.locator(`[data-testid$="-${status}-${id}"]`);
+
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      // the hub document may be a few seconds behind a write (ISR): reload until the leaver's chip shows
+      await expect
+        .poll(async () => {
+          await page.goto(hubUrl);
+          await dismissCookieBanner(page);
+          return chip(p1, "withdrawn").count();
+        }, { timeout: 60_000, intervals: [2_000], message: `@${width}: the hub's table marks the withdrawn player` })
+        .toBe(1);
+      await expect(chip(p1, "withdrawn"), `@${width}`).toBeVisible();
+      await expect(chip(p1, "withdrawn"), `@${width}`).toHaveText("Withdrawn");
+      await expect(chip(p2, "disqualified"), `@${width}`).toBeVisible();
+      await expect(chip(p2, "disqualified"), `@${width}`).toHaveText("Disqualified");
+      // each fact is its own: no cross-wearing, and the players still in the field wear nothing
+      await expect(chip(p1, "disqualified"), `@${width}`).toHaveCount(0);
+      await expect(chip(p2, "withdrawn"), `@${width}`).toHaveCount(0);
+      for (const id of [p3, p4]) {
+        await expect(chip(id, "withdrawn"), `@${width}`).toHaveCount(0);
+        await expect(chip(id, "disqualified"), `@${width}`).toHaveCount(0);
+      }
+      // the long name keeps its chip on a line of its own: the chip sits BELOW the name, never beside it
+      const nameBox = await page.getByTitle(longName).first().boundingBox();
+      const chipBox = await chip(p1, "withdrawn").boundingBox();
+      expect(nameBox, `@${width}: the name is painted`).not.toBeNull();
+      expect(chipBox, `@${width}: the chip is painted`).not.toBeNull();
+      expect(chipBox!.y, `@${width}: the chip is under the name`).toBeGreaterThanOrEqual(nameBox!.y + nameBox!.height - 1);
+      await expectNoHorizontalScroll(page);
+    }
+
+    // Reinstate: the leaver's chip goes, the disqualified player's stays
+    const back = await apiJson(request, `/api/v1/entrants/${p1}`, "PATCH", { status: "registered" });
+    expect(back.status, JSON.stringify(back.error)).toBe(200);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect
+      .poll(async () => {
+        await page.goto(hubUrl);
+        return chip(p1, "withdrawn").count();
+      }, { timeout: 60_000, intervals: [2_000], message: "after Reinstate the hub's table no longer marks her" })
+      .toBe(0);
+    await expect(chip(p2, "disqualified")).toHaveCount(1);
+  });
+});

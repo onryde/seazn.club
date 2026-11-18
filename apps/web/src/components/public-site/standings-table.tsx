@@ -45,34 +45,10 @@ import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
 
-/**
- * Every way OUT of a competing field, and the chip each one prints.
- *
- * The two are deliberately NOT collapsed into one "Withdrawn" chip. They are
- * different facts — one entrant left, the other was removed — and the product
- * already draws that distinction elsewhere: `entrantStatusStyle` in
- * `components/v2/entrants-panel.tsx` paints a withdrawal grey and a
- * disqualification red in the roster editor. Labelling a disqualified entrant
- * "Withdrawn" on the public board would be worse than the gap it replaced,
- * because it would be wrong rather than merely silent.
- *
- * This is the ONE place that decides which statuses count as departed. The
- * call sites hand over raw statuses and nothing else, so adding a fifth status
- * to the product is an edit here plus a dictionary key — not three page edits
- * that can each be half-done. `standings-withdrawn-and-tiebreak-layer` checks
- * this table against `EntrantStatus` minus `FIELD_ENTRANT_STATUSES`, so a new
- * departure reds there rather than shipping an unmarked row.
- *
- * The test id is per status (`standings-withdrawn`, `standings-disqualified`):
- * one testid for both would make an e2e count blind to exactly the confusion
- * this table exists to prevent.
- */
-export const DEPARTED_STATUS_CHIPS = {
-  withdrawn: { label: "table.withdrawn", className: "bg-zinc-100 text-zinc-600" },
-  disqualified: { label: "table.disqualified", className: "bg-red-100 text-red-600" },
-} as const satisfies Record<string, { label: TKey; className: string }>;
-
-type DepartedStatus = keyof typeof DEPARTED_STATUS_CHIPS;
+// The departed vocabulary (which statuses mean "left the field" and the chip each wears) lives in `@/lib/departed-status-chips` since
+// W5 T20, so the hub's client table can read it too; re-exported here for every existing importer.
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
+export { DEPARTED_STATUS_CHIPS };
 
 interface Props {
   rows: StandingsRow[];
