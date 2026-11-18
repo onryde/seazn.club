@@ -305,6 +305,12 @@ export type ShadowReport = {
   /** rows in scope closed only by meeting.ended (left_by 'ended'): each is a participantLeft that never arrived, or a reload's old
    *  peer the vendor never reported leaving. Measured and printed, not gated (spec §3: the vendor's leave-on-reload is unmeasured) */
   closedByEnded: number;
+  /** of closedByEnded, the rows that were their participant's NEWEST peer in the meeting (no newer row of the same custom id): still
+   *  in the room when it ended. Reported, not the R4 risk */
+  endedWhileNewest: number;
+  /** of closedByEnded, the rows a NEWER row of the same participant (custom id) in the same meeting superseded, by the presence order:
+   *  a reload's old peer the vendor never reported leaving, the R4 risk. The script's `blocksProofFlag` keys on this */
+  endedSuperseded: number;
   /** spec §6.8 step 3: join -> webhook latency, `received_at - joined_at` in ms over the `source='webhook'` rows in scope with a
    *  joined_at, nearest-rank (`percentile_disc`) p50/p95; null when `n` is 0. CAVEAT: a row's received_at is the FIRST delivery that
    *  wrote it, so a row whose participantLeft arrived before its joined measures the leave's arrival, and a webhook that upgraded a
@@ -355,17 +361,25 @@ export async function presenceShadowReport(db: AnySql, scope: ShadowScope): Prom
   // One pass over the scope's rows: the end count, and the spec §6.8 step 3 numbers (join latency on OUR receipt clock against the
   // vendor's joinedAt, nearest-rank percentiles; and how many webhook rows stored no participant, i.e. their customParticipantId did not
   // echo back to a participant on file).
-  const [agg] = await db<{ ended: number; no_echo: number; lat_n: number; lat_p50: number | null; lat_p95: number | null }[]>`
+  // An ended row is SUPERSEDED when a newer row (the presence order: joined_at, received_at, seq) of the same participant (its custom
+  // id) exists in the same meeting: a reload's old peer the vendor never reported leaving, the R4 risk. Otherwise it was its
+  // participant's newest peer, still in the room when the meeting ended. A row with no joined_at compares as no newer and is newest.
+  const [agg] = await db<{ ended: number; ended_superseded: number; no_echo: number; lat_n: number; lat_p50: number | null; lat_p95: number | null }[]>`
     select count(*) filter (where left_by = 'ended')::int as ended,
+           count(*) filter (where left_by = 'ended' and exists (
+             select 1 from fixture_video_presence n
+              where n.meeting_id = x.meeting_id
+                and n.custom_participant_id = x.custom_participant_id
+                and (n.joined_at, n.received_at, n.seq) > (x.joined_at, x.received_at, x.seq)))::int as ended_superseded,
            count(*) filter (where source = 'webhook' and participant_id is null)::int as no_echo,
            count(*) filter (where source = 'webhook' and joined_at is not null)::int as lat_n,
            (percentile_disc(0.5) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
              filter (where source = 'webhook' and joined_at is not null))::int as lat_p50,
            (percentile_disc(0.95) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
              filter (where source = 'webhook' and joined_at is not null))::int as lat_p95
-      from fixture_video_presence
-     where received_at >= ${scope.since}
-       and (${ids}::uuid[] is null or fixture_id = any(${ids}::uuid[]))`;
+      from fixture_video_presence x
+     where x.received_at >= ${scope.since}
+       and (${ids}::uuid[] is null or x.fixture_id = any(${ids}::uuid[]))`;
 
   return {
     verified: seats.length,
@@ -373,6 +387,8 @@ export async function presenceShadowReport(db: AnySql, scope: ShadowScope): Prom
     missing: seats.filter((s) => !s.covered).map((s) => ({ fixtureId: s.fixture_id, side: s.side, participantId: s.participant_id, seenAt: s.seen_at })),
     open: open.map((o) => ({ meetingId: o.meeting_id, peerId: o.peer_id, participantId: o.participant_id, source: o.source, receivedAt: o.received_at })),
     closedByEnded: agg!.ended,
+    endedWhileNewest: agg!.ended - agg!.ended_superseded,
+    endedSuperseded: agg!.ended_superseded,
     joinLatencyMs: { p50: agg!.lat_p50, p95: agg!.lat_p95, n: agg!.lat_n },
     noEcho: agg!.no_echo,
   };

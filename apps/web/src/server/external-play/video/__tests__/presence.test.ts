@@ -1069,9 +1069,9 @@ describe.skipIf(!DB)("presenceShadowReport", () => {
 
   it("empty scope (no seats, no rows): verified 0 - the script's --strict treats verified 0 as a FAILURE (Task 9), never a pass", async () => {
     const none = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [randomUUID()] });
-    expect(none).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
+    expect(none).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, endedWhileNewest: 0, endedSuperseded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
     const noIds = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [] });
-    expect(noIds, "an explicit empty fixture list is an empty scope, not 'everything'").toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
+    expect(noIds, "an explicit empty fixture list is an empty scope, not 'everything'").toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, endedWhileNewest: 0, endedSuperseded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
   });
 });
 

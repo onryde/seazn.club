@@ -14,10 +14,13 @@
 // none and carries the seat's person id as its custom id on the seat's side (the readers' rule, presence.ts `currentPresence`). `missing` are
 // the seats no such row covers; `open` the presence rows still open at report time; `closedByEnded` the rows closed only by meeting.ended
 // (a participantLeft that never arrived, or a reload's old peer the vendor never reported leaving): measured and printed, never gated by
-// the exit code. `joinLatencyMs` ({p50, p95, n}: received_at - joined_at over the scope's webhook rows, nearest-rank) and `noEcho` (webhook
+// the exit code. It is split by kind: `endedWhileNewest` (the row was its participant's newest peer: still in the room when the meeting
+// ended) and `endedSuperseded` (a newer row of the same participant exists in the meeting: a reload's old peer the vendor never reported
+// leaving, the R4 risk). `joinLatencyMs` ({p50, p95, n}: received_at - joined_at over the scope's webhook rows, nearest-rank) and `noEcho` (webhook
 // rows stored with no participant: our customParticipantId did not echo back) are spec §6.8 step 3's numbers for owner ruling R4; printed,
-// never gated. A non-zero `closedByEnded` prints `blocksProofFlag: true` and a note: it blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on
+// never gated. A non-zero `endedSuperseded` prints `blocksProofFlag: true` and a note: it blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on
 // until every counted row is explained and recorded (plan 1 Task 12 step 5), which is a separate decision from this script's exit code.
+// `endedWhileNewest` alone does not set the flag; its note points at the same step, whose gate bullet counts every closedByEnded row.
 //
 // --strict exits 1 when `verified === 0` (an empty run is a failure, never a pass), or `missing` or `open` is non-empty. It is meant for a
 // QUIESCENT scope (every meeting in it ended); run mid-round, `open` lists the live peers and the operator reads it rather than gating on it.
@@ -45,6 +48,10 @@ export type ShadowReport = {
   missing: { fixtureId: string; side: Side; participantId: string; seenAt: Date }[];
   open: { meetingId: string; peerId: string; participantId: string | null; source: "webhook" | "read"; receivedAt: Date }[];
   closedByEnded: number;
+  /** of closedByEnded: rows that were their participant's newest peer in the meeting (still in the room at the end) */
+  endedWhileNewest: number;
+  /** of closedByEnded: rows a newer row of the same participant (custom id) in the same meeting superseded (a reload's old peer) */
+  endedSuperseded: number;
   /** join -> webhook latency over the scope's webhook rows (received_at - joined_at, ms, nearest-rank); null percentiles when n is 0 */
   joinLatencyMs: { p50: number | null; p95: number | null; n: number };
   /** webhook rows in scope stored with no participant (the vendor did not echo our customParticipantId) */
@@ -84,17 +91,25 @@ export async function shadowReportSql(db: AnySql, scope: ShadowScope): Promise<S
   // One pass over the scope's rows: the end count, and the spec §6.8 step 3 numbers (join latency on OUR receipt clock against the
   // vendor's joinedAt, nearest-rank percentiles; and how many webhook rows stored no participant, i.e. their customParticipantId did not
   // echo back to a participant on file).
-  const [agg] = await db<{ ended: number; no_echo: number; lat_n: number; lat_p50: number | null; lat_p95: number | null }[]>`
+  // An ended row is SUPERSEDED when a newer row (the presence order: joined_at, received_at, seq) of the same participant (its custom
+  // id) exists in the same meeting: a reload's old peer the vendor never reported leaving, the R4 risk. Otherwise it was its
+  // participant's newest peer, still in the room when the meeting ended. A row with no joined_at compares as no newer and is newest.
+  const [agg] = await db<{ ended: number; ended_superseded: number; no_echo: number; lat_n: number; lat_p50: number | null; lat_p95: number | null }[]>`
     select count(*) filter (where left_by = 'ended')::int as ended,
+           count(*) filter (where left_by = 'ended' and exists (
+             select 1 from fixture_video_presence n
+              where n.meeting_id = x.meeting_id
+                and n.custom_participant_id = x.custom_participant_id
+                and (n.joined_at, n.received_at, n.seq) > (x.joined_at, x.received_at, x.seq)))::int as ended_superseded,
            count(*) filter (where source = 'webhook' and participant_id is null)::int as no_echo,
            count(*) filter (where source = 'webhook' and joined_at is not null)::int as lat_n,
            (percentile_disc(0.5) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
              filter (where source = 'webhook' and joined_at is not null))::int as lat_p50,
            (percentile_disc(0.95) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
              filter (where source = 'webhook' and joined_at is not null))::int as lat_p95
-      from fixture_video_presence
-     where received_at >= ${scope.since}
-       and (${ids}::uuid[] is null or fixture_id = any(${ids}::uuid[]))`;
+      from fixture_video_presence x
+     where x.received_at >= ${scope.since}
+       and (${ids}::uuid[] is null or x.fixture_id = any(${ids}::uuid[]))`;
 
   return {
     verified: seats.length,
@@ -102,6 +117,8 @@ export async function shadowReportSql(db: AnySql, scope: ShadowScope): Promise<S
     missing: seats.filter((s) => !s.covered).map((s) => ({ fixtureId: s.fixture_id, side: s.side, participantId: s.participant_id, seenAt: s.seen_at })),
     open: open.map((o) => ({ meetingId: o.meeting_id, peerId: o.peer_id, participantId: o.participant_id, source: o.source, receivedAt: o.received_at })),
     closedByEnded: agg.ended,
+    endedWhileNewest: agg.ended - agg.ended_superseded,
+    endedSuperseded: agg.ended_superseded,
     joinLatencyMs: { p50: agg.lat_p50, p95: agg.lat_p95, n: agg.lat_n },
     noEcho: agg.no_echo,
   };
@@ -114,7 +131,10 @@ const USAGE =
 const ISO_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
 /** Printed with `blocksProofFlag: true`; never changes the exit code. */
 const PROOF_FLAG_NOTE =
-  "closedByEnded > 0 blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on until every counted row is explained and recorded beside the baseline (plan 1 Task 12 step 5). Not a failure of this run: the exit code is unchanged.";
+  "endedSuperseded > 0: a reload's old peer was closed only by meeting.ended (the vendor did not report it leaving; owner ruling R4's risk). This blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on until every counted row is explained and recorded beside the baseline (plan 1 Task 12 step 5). Not a failure of this run: the exit code is unchanged.";
+/** Printed when only `endedWhileNewest` is non-zero; never changes the exit code. */
+const WHILE_NEWEST_NOTE =
+  "endedWhileNewest > 0: peers that were still their participant's newest when the meeting ended, closed by meeting.ended. They do not set blocksProofFlag; plan 1 Task 12 step 5 still asks every closedByEnded row to be explained beside the baseline. Not a failure of this run: the exit code is unchanged.";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_HOURS = 24;
 
@@ -179,7 +199,8 @@ export async function run(
     out(`Could not read presence: ${oneLine(e, [])}`);
     return 2;
   }
-  const blocksProofFlag = report.closedByEnded > 0;
+  const blocksProofFlag = report.endedSuperseded > 0;
+  const note = blocksProofFlag ? PROOF_FLAG_NOTE : report.endedWhileNewest > 0 ? WHILE_NEWEST_NOTE : null;
 
   const reasons: string[] = [];
   if (report.verified === 0) reasons.push("verified 0: no seat in scope read a camera on, so there is nothing to compare (an empty run is a failure)");
@@ -192,7 +213,7 @@ export async function run(
         fixtureIds: fixtureIds ?? null,
         ...report,
         blocksProofFlag,
-        ...(blocksProofFlag ? { note: PROOF_FLAG_NOTE } : {}),
+        ...(note !== null ? { note } : {}),
         ...(args.strict ? { strict: { pass: reasons.length === 0, reasons } } : {}),
       },
       null,

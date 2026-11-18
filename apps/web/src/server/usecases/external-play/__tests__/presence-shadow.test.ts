@@ -138,7 +138,7 @@ const who = (p: Seated) => ({ meetingId: p.meetingId, participantId: p.participa
 describe.skipIf(!DB)("presence shadow report, driven by the fixture vendor and the seat's own reads", () => {
   it("empty case: a scope with no seats verifies nothing (zero is reported, never a pass)", async () => {
     const r = await presenceShadowReport(sql, { since: new Date(Date.now() - 5_000), fixtureIds: [crypto.randomUUID()] });
-    expect(r).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
+    expect(r).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, endedWhileNewest: 0, endedSuperseded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
   });
 
   it("after two players are seated by the seat's own vendor reads, the presence table names both, and the shadow report has nothing missing", async () => {
@@ -366,6 +366,7 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
     expect(fromUsecase.missing.map((m) => `${m.side}`).sort(), "B home (read), B away (late), C home (left before the stamp)").toEqual(["away", "home", "home"]);
     expect(fromUsecase.open, "A home, B home, B away, C away are open; A away and C home are closed").toHaveLength(4);
     expect(fromUsecase.closedByEnded, "A away").toBe(1);
+    expect([fromUsecase.endedWhileNewest, fromUsecase.endedSuperseded], "A away is its participant's only (so newest) row in its meeting").toEqual([1, 0]);
     // spec §6.8 step 3 (I2), by hand from the rows' own stamps (received_at - joined_at over the WEBHOOK rows; pB-h is a read and the decoy
     // is out of scope): pA-h 1000, pA-h0 1000, pA-a 1000, pC-h 1000, pC-a 15000, pB-a 16000 -> sorted [1000 x4, 15000, 16000]; nearest
     // rank: p50 = the 3rd (1000), p95 = the ceil(5.7) = 6th (16000). A linear interpolation would give 15950 for p95, and a mean 5833.
@@ -401,7 +402,7 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
     expect(ours).toEqual(theirs);
     expect(ours.missing.length + ours.open.length, "seed items compared").toBe(4 + 5);
 
-    expect(await shadowReportSql(sql, { ...seed.scope, fixtureIds: [] })).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
+    expect(await shadowReportSql(sql, { ...seed.scope, fixtureIds: [] })).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, endedWhileNewest: 0, endedSuperseded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
     const later = { ...seed.scope, since: new Date(seed.stamp.getTime() + 1_000) };
     expect(await shadowReportSql(sql, later)).toEqual(await presenceShadowReport(sql, later));
     expect((await shadowReportSql(sql, later)).verified).toBe(0);
@@ -441,6 +442,43 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
     expect(fromScript.verified).toBe(2);
     expect(fromScript.covered).toBe(2);
     expect(fromScript.open, "away is still in the room").toHaveLength(1);
+  }, 60_000);
+
+  it("splits closedByEnded by kind: superseded (a newer row of the SAME participant in the SAME meeting, by the presence order) vs newest, identically in both copies (m4)", async () => {
+    const stamp = new Date(Date.now() - 60_000);
+    const at = (ms: number) => new Date(stamp.getTime() + ms);
+    const M = await seedBoard();
+    const T = await seedBoard();
+    fixturesMade.push(M.fixtureId, T.fixtureId);
+    const mH = await stampedSeat(M, "home", stamp);
+    const mA = await stampedSeat(M, "away", stamp);
+    const tH = await stampedSeat(T, "home", stamp);
+    const end = at(5_000);
+    const rows: PresenceRow[] = [
+      // M home: a reload. The OLD peer (joined first) and the new one, both closed by the end: old SUPERSEDED, new NEWEST
+      rowFor(mH, stamp, { peerId: "m-old", joinedAt: at(-9_000), receivedAt: at(-8_000), leftAt: end, leftBy: "ended" }),
+      rowFor(mH, stamp, { peerId: "m-new", joinedAt: at(-5_000), receivedAt: at(-4_000), leftAt: end, leftBy: "ended" }),
+      // M away: its only peer, ended (NEWEST), though rows joined LATER exist: another participant's in ITS meeting, and the home
+      // person's custom id in it (neither is the same participant there), and its own custom id in the HOME meeting (another meeting)
+      rowFor(mA, stamp, { peerId: "a-only", joinedAt: at(-5_000), receivedAt: at(-4_000), leftAt: end, leftBy: "ended" }),
+      rowFor(mA, stamp, { peerId: "a-other", participantId: null, custom: "someone-else", joinedAt: at(-1_000), receivedAt: at(-500), leftAt: at(-100), leftBy: "left" }),
+      rowFor(mA, stamp, { peerId: "a-homeid", participantId: null, custom: mH.custom, joinedAt: at(-1_000), receivedAt: at(-500), leftAt: at(-100), leftBy: "left" }),
+      rowFor(mH, stamp, { peerId: "h-awayid", participantId: null, custom: mA.custom, joinedAt: at(-1_000), receivedAt: at(-500), leftAt: at(-100), leftBy: "left" }),
+      // T home: the SAME joined_at, told apart by received_at (the order's second key): t1 superseded by t2 (closed by its own leave).
+      // t2 is INSERTED first, so its seq is the LOWER: an order that skipped received_at would call t1 the newest
+      rowFor(tH, stamp, { peerId: "t2", joinedAt: at(-5_000), receivedAt: at(-3_000), leftAt: at(-2_000), leftBy: "left" }),
+      rowFor(tH, stamp, { peerId: "t1", joinedAt: at(-5_000), receivedAt: at(-4_000), leftAt: end, leftBy: "ended" }),
+    ];
+    for (const r of rows) await putPresence(r);
+    const scope = { since: at(-30_000), fixtureIds: [M.fixtureId, T.fixtureId] };
+    const fromUsecase = await presenceShadowReport(sql, scope);
+    const fromScript = await shadowReportSql(sql, scope);
+    expect(fromScript).toEqual(fromUsecase);
+    // by hand: ended rows m-old, m-new, a-only, t1; superseded m-old (m-new) and t1 (t2); newest m-new and a-only
+    expect(fromScript.closedByEnded, "rows closed by the end checked").toBe(4);
+    expect(fromScript.endedSuperseded, "m-old, t1").toBe(2);
+    expect(fromScript.endedWhileNewest, "m-new, a-only").toBe(2);
+    expect(fromScript.endedWhileNewest + fromScript.endedSuperseded).toBe(fromScript.closedByEnded);
   }, 60_000);
 
   describe("--strict (the staging gate)", () => {
@@ -552,25 +590,46 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
       expect(await run(["--since", "2026-11-17T08:30:00Z", "--fixture", crypto.randomUUID()], { sql, out: ok.say })).toBe(0);
     });
 
-    it("closedByEnded > 0 prints blocksProofFlag and a note naming the proof flag and plan 1 Task 12 step 5, and never changes the exit code", async () => {
-      // a CLEAN quiescent seed (verified 1, covered 1, nothing open) whose only row was closed by the meeting's end
+    it("endedSuperseded > 0 (a reload's old peer closed only by the end) prints blocksProofFlag and a note naming the proof flag and plan 1 Task 12 step 5, and never changes the exit code (m4)", async () => {
+      // a CLEAN quiescent seed (verified 1, covered 1, nothing open): the seat's OLD peer and its reload, both closed by the meeting's end
       const stamp = new Date(Date.now() - 60_000);
       const K = await seedBoard();
       fixturesMade.push(K.fixtureId);
       const k = await stampedSeat(K, "home", stamp);
-      await putPresence(rowFor(k, stamp, { peerId: "pK", leftAt: new Date(stamp.getTime() + 5_000), leftBy: "ended" }));
+      const end = new Date(stamp.getTime() + 5_000);
+      await putPresence(rowFor(k, stamp, { peerId: "pK-old", joinedAt: new Date(stamp.getTime() - 9_000), receivedAt: new Date(stamp.getTime() - 8_000), leftAt: end, leftBy: "ended" }));
+      await putPresence(rowFor(k, stamp, { peerId: "pK", leftAt: end, leftBy: "ended" }));
       const args = ["--since", iso(new Date(stamp.getTime() - 30_000)), "--fixture", K.fixtureId];
 
       const strict = lines();
       expect(await run(["--strict", ...args], { sql, out: strict.say }), "strict stays green").toBe(0);
-      expect(strict.json()).toMatchObject({ verified: 1, covered: 1, missing: [], open: [], closedByEnded: 1, blocksProofFlag: true, strict: { pass: true, reasons: [] } });
+      expect(strict.json()).toMatchObject({
+        verified: 1, covered: 1, missing: [], open: [], closedByEnded: 2, endedWhileNewest: 1, endedSuperseded: 1, blocksProofFlag: true, strict: { pass: true, reasons: [] },
+      });
       const body = strict.json() as unknown as { note: string };
+      expect(body.note).toMatch(/endedSuperseded > 0/);
       expect(body.note).toMatch(/EXTERNAL_PLAY_PRESENCE_PROOF/);
       expect(body.note).toMatch(/plan 1 Task 12 step 5/);
 
       const plain = lines();
       expect(await run(args, { sql, out: plain.say })).toBe(0);
       expect(plain.json()).toHaveProperty("blocksProofFlag", true);
+    }, 60_000);
+
+    it("endedWhileNewest alone (the peer was still in the room at the end) does NOT set blocksProofFlag; its own note points at Task 12 step 5 (m4)", async () => {
+      const stamp = new Date(Date.now() - 60_000);
+      const K = await seedBoard();
+      fixturesMade.push(K.fixtureId);
+      const k = await stampedSeat(K, "home", stamp);
+      await putPresence(rowFor(k, stamp, { peerId: "pK", leftAt: new Date(stamp.getTime() + 5_000), leftBy: "ended" }));
+      const args = ["--since", iso(new Date(stamp.getTime() - 30_000)), "--fixture", K.fixtureId];
+      const strict = lines();
+      expect(await run(["--strict", ...args], { sql, out: strict.say })).toBe(0);
+      expect(strict.json()).toMatchObject({ verified: 1, covered: 1, closedByEnded: 1, endedWhileNewest: 1, endedSuperseded: 0, blocksProofFlag: false, strict: { pass: true, reasons: [] } });
+      const body = strict.json() as unknown as { note: string };
+      expect(body.note).toMatch(/endedWhileNewest > 0/);
+      expect(body.note).toMatch(/plan 1 Task 12 step 5/);
+      expect(body.note).not.toMatch(/blocks turning/);
     }, 60_000);
 
     it("reads in ONE repeatable-read transaction: `set transaction read only` and a 30 s statement timeout first, then exactly the report's three selects", async () => {
