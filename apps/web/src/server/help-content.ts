@@ -15,7 +15,8 @@ import type { Options as SanitizeSchema } from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
 import type { MatrixData } from "@/lib/pricing-matrix";
 import { hasHelpTokens, resolveHelpTokens } from "@/server/help-tokens";
-import { rehypeHelpHeadingIds } from "@/server/help-heading-ids";
+import { rehypeHelpHeadingIds, type HelpHeading } from "@/server/help-heading-ids";
+import { HELP_PUBLIC_ROOT, rehypeHelpFigures } from "@/server/help-figures";
 
 export const HELP_ROOT = join(process.cwd(), "content", "help");
 
@@ -59,19 +60,35 @@ export const HELP_SCHEMA: SanitizeSchema = {
     td: ["align"],
     "*": [],
   },
-  protocols: { href: ["http", "https", "mailto"], src: ["http", "https"] },
+  // No real protocol is allowed on a picture, so only a scheme-less path survives (an external,
+  // javascript: or data: src is removed, and the figure step then refuses the picture). NOT `[]`:
+  // hast-util-sanitize reads an empty list as "no restriction", so the list holds one scheme
+  // that no URL uses.
+  protocols: { href: ["http", "https", "mailto"], src: ["no-remote-src"] },
 };
 
-const pipeline = unified()
-  .use(remarkParse)
-  .use(remarkGfm)
-  .use(remarkRehype)
-  .use(rehypeSanitize, HELP_SCHEMA)
-  // AFTER the sanitiser, deliberately: HELP_SCHEMA still strips every `id` (so nothing an
-  // author writes can name one), and this step then gives h2/h3 their own, derived from the
-  // heading text. See help-heading-ids.ts.
-  .use(rehypeHelpHeadingIds)
-  .use(rehypeStringify);
+function buildPipeline(publicRoot: string) {
+  return unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(remarkRehype)
+    .use(rehypeSanitize, HELP_SCHEMA)
+    // AFTER the sanitiser, deliberately: HELP_SCHEMA still strips every `id` (so nothing an
+    // author writes can name one), and this step then gives h2/h3 their own, derived from the
+    // heading text. See help-heading-ids.ts. The figure step is after it for the same reason:
+    // an author's image arrives with src/alt/title only, and the figure, its dimensions and
+    // its lazy loading are ours. See help-figures.ts.
+    .use(rehypeHelpFigures, { publicRoot })
+    .use(rehypeHelpHeadingIds)
+    .use(rehypeStringify);
+}
+
+const pipeline = buildPipeline(HELP_PUBLIC_ROOT);
+
+export interface HelpRenderOptions {
+  /** Directory that holds `help/<section>/<file>.webp`; defaults to `public/`. A seam for tests. */
+  publicRoot?: string;
+}
 
 /**
  * Plan tokens (`{{plan:<feature>:<plan>}}`, help-tokens.ts) resolve when the
@@ -79,9 +96,27 @@ const pipeline = unified()
  * The matrix is an argument, not loaded here, because loading it is async and
  * needs a database — see renderHelpArticleHtml for when it is loaded.
  */
-export async function renderHelpMarkdown(markdown: string, matrix?: MatrixData): Promise<string> {
+export async function renderHelpMarkdown(
+  markdown: string,
+  matrix?: MatrixData,
+  options: HelpRenderOptions = {},
+): Promise<string> {
   const resolved = matrix ? resolveHelpTokens(markdown, matrix) : markdown;
-  return String(await pipeline.process(resolved));
+  const run = options.publicRoot ? buildPipeline(options.publicRoot) : pipeline;
+  return String(await run.process(resolved));
+}
+
+/**
+ * An article's h2/h3 headings (depth, text, id), in document order, from the SAME tree walk
+ * that writes the ids into the rendered HTML — there is no second reading to drift from it.
+ * Headings cannot carry plan tokens (help-tree-shape pins that), so this needs no matrix.
+ */
+export async function helpHeadings(markdown: string, options: HelpRenderOptions = {}): Promise<HelpHeading[]> {
+  const run = options.publicRoot ? buildPipeline(options.publicRoot) : pipeline;
+  const headings = (await run.process(markdown)).data.helpHeadings;
+  // The heading step always sets this; a pipeline that stops doing so must fail loudly, not return [].
+  if (!Array.isArray(headings)) throw new Error("help renderer did not report headings (rehypeHelpHeadingIds missing from the pipeline?)");
+  return headings as HelpHeading[];
 }
 
 /**

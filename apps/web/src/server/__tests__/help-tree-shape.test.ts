@@ -7,7 +7,7 @@
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
-import { HELP_ROOT, allHelpArticles, renderHelpMarkdown } from "@/server/help-content";
+import { HELP_ROOT, allHelpArticles, helpHeadings, renderHelpMarkdown } from "@/server/help-content";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 
 /**
@@ -75,10 +75,99 @@ function familyProblem(c: Classified): string | null {
   return null;
 }
 
-/** ids the real renderer puts on an article's headings. */
+/** ids the real renderer puts on an article's headings (the renderer's own heading list, not a regex over its HTML). */
 async function renderedIds(markdown: string): Promise<Set<string>> {
-  const html = await renderHelpMarkdown(markdown);
-  return new Set([...html.matchAll(/<h[23] id="([^"]*)"/g)].map((m) => m[1]!));
+  return new Set((await helpHeadings(markdown)).map((h) => h.id));
+}
+
+interface SweepArticle {
+  slug: string;
+  markdown: string;
+}
+
+interface LinkSweep {
+  broken: string[];
+  tally: Record<Verdict, number>;
+  anchorsChecked: number;
+  familiesChecked: number;
+  images: number;
+  rawLinkOccurrences: number;
+  renderedTargets: number;
+}
+
+/**
+ * The link sweep as a function of the articles it is given, so the real tree AND a fixture run the same body:
+ * a branch that no real link exercises yet (a /help/formats/<family> link) is proven on the fixture, not skipped.
+ */
+async function sweepLinks(articles: ReadonlyMap<string, SweepArticle>): Promise<LinkSweep> {
+  const broken: string[] = [];
+  const tally: Record<Verdict, number> = {
+    checked: 0, "skipped-non-help": 0, "skipped-generated": 0, "skipped-external": 0, "broken-form": 0,
+  };
+  let anchorsChecked = 0;
+  let familiesChecked = 0;
+  let images = 0;
+  let rawLinkOccurrences = 0;
+  const idsOf = new Map<string, Set<string>>(); // each target rendered once
+
+  for (const a of articles.values()) {
+    rawLinkOccurrences += (a.markdown.match(/\]\(/g) ?? []).length;
+    images += [...a.markdown.matchAll(IMAGE)].length;
+    for (const m of a.markdown.matchAll(LINK)) {
+      const target = m[1]!;
+      const c = classify(target, a.slug);
+      tally[c.verdict] += 1;
+      const where = `content/help/${a.slug}.md -> ${target}`;
+      if (c.verdict === "broken-form") broken.push(`${where} (${c.reason})`);
+      if (c.verdict !== "checked") continue;
+      if (c.family !== undefined) {
+        familiesChecked += 1;
+        const problem = familyProblem(c);
+        if (problem) broken.push(`${where} (${problem})`);
+        continue;
+      }
+      const target_ = articles.get(c.slug!);
+      if (!target_) {
+        broken.push(`${where} (no article '${c.slug}')`);
+        continue;
+      }
+      if (c.fragment === undefined) continue;
+      if (!idsOf.has(target_.slug)) idsOf.set(target_.slug, await renderedIds(target_.markdown));
+      anchorsChecked += 1;
+      if (!idsOf.get(target_.slug)!.has(c.fragment)) {
+        broken.push(`${where} (article '${target_.slug}' has no heading id '${c.fragment}')`);
+      }
+    }
+  }
+  return { broken, tally, anchorsChecked, familiesChecked, images, rawLinkOccurrences, renderedTargets: idsOf.size };
+}
+
+interface PictureSweep {
+  /** Pictures found in the Markdown source (`![alt](src)`). */
+  checked: number;
+  problems: string[];
+}
+
+/**
+ * Renders every article through the real renderer and reconciles the pictures written with the figures produced. A refusal
+ * (missing file, empty alt, over budget, not webp, external src) throws inside the renderer and is reported against its article.
+ * Zero pictures is a legitimate answer while no page carries one; that case is proven on fixtures, below.
+ */
+async function sweepPictures(articles: ReadonlyMap<string, SweepArticle>, publicRoot?: string): Promise<PictureSweep> {
+  let checked = 0;
+  const problems: string[] = [];
+  for (const a of articles.values()) {
+    const written = [...a.markdown.matchAll(IMAGE)].length;
+    checked += written;
+    try {
+      const html = await renderHelpMarkdown(a.markdown, undefined, { publicRoot });
+      const figures = (html.match(/<figure>/g) ?? []).length;
+      if (figures !== written) problems.push(`content/help/${a.slug}.md: ${written} picture(s) written, ${figures} figure(s) rendered`);
+    } catch (e) {
+      problems.push(`content/help/${a.slug}.md: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return { checked, problems };
 }
 
 describe("help tree shape", () => {
@@ -92,56 +181,74 @@ describe("help tree shape", () => {
   });
 
   it("every help link resolves: article, format family, and any #fragment is a real heading id", async () => {
-    const broken: string[] = [];
-    const tally: Record<Verdict, number> = {
-      checked: 0, "skipped-non-help": 0, "skipped-generated": 0, "skipped-external": 0, "broken-form": 0,
-    };
-    let anchorsChecked = 0;
-    let familiesChecked = 0;
-    let images = 0;
-    let rawLinkOccurrences = 0;
-    const idsOf = new Map<string, Set<string>>(); // each target rendered once
-
-    for (const a of articles.values()) {
-      rawLinkOccurrences += (a.markdown.match(/\]\(/g) ?? []).length;
-      images += [...a.markdown.matchAll(IMAGE)].length;
-      for (const m of a.markdown.matchAll(LINK)) {
-        const target = m[1]!;
-        const c = classify(target, a.slug);
-        tally[c.verdict] += 1;
-        const where = `content/help/${a.slug}.md -> ${target}`;
-        if (c.verdict === "broken-form") broken.push(`${where} (${c.reason})`);
-        if (c.verdict !== "checked") continue;
-        if (c.family !== undefined) {
-          familiesChecked += 1;
-          const problem = familyProblem(c);
-          if (problem) broken.push(`${where} (${problem})`);
-          continue;
-        }
-        const target_ = articles.get(c.slug!);
-        if (!target_) {
-          broken.push(`${where} (no article '${c.slug}')`);
-          continue;
-        }
-        if (c.fragment === undefined) continue;
-        if (!idsOf.has(target_.slug)) idsOf.set(target_.slug, await renderedIds(target_.markdown));
-        anchorsChecked += 1;
-        if (!idsOf.get(target_.slug)!.has(c.fragment)) {
-          broken.push(`${where} (article '${target_.slug}' has no heading id '${c.fragment}')`);
-        }
-      }
-    }
+    const r = await sweepLinks(articles);
     // Reported so a run shows what was (and was not) examined.
     console.log(
-      `help-tree-shape: ${articles.size} articles; links ${JSON.stringify(tally)}; images ${images}; ` +
-        `anchors checked ${anchorsChecked}; format families checked ${familiesChecked}; rendered targets ${idsOf.size}`,
+      `help-tree-shape: ${articles.size} articles; links ${JSON.stringify(r.tally)}; images ${r.images}; ` +
+        `anchors checked ${r.anchorsChecked}; format families checked ${r.familiesChecked}; rendered targets ${r.renderedTargets}`,
     );
-    expect(tally.checked, "anti-vacuity: at least one article link was checked").toBeGreaterThan(0);
-    expect(anchorsChecked, "anti-vacuity: at least one #fragment was checked").toBeGreaterThan(0);
+    expect(r.tally.checked, "anti-vacuity: at least one article link was checked").toBeGreaterThan(0);
+    expect(r.anchorsChecked, "anti-vacuity: at least one #fragment was checked").toBeGreaterThan(0);
     // Reconcile with a count that does not use LINK: a regex that stops matching a link form shows as a gap.
-    const classified = Object.values(tally).reduce((s, n) => s + n, 0);
-    expect(classified + images, "every '](' in the tree is classified as a link or an image").toBe(rawLinkOccurrences);
-    expect(broken, `broken help links:\n${broken.join("\n")}`).toEqual([]);
+    const classified = Object.values(r.tally).reduce((n, c) => n + c, 0);
+    expect(classified + r.images, "every '](' in the tree is classified as a link or an image").toBe(r.rawLinkOccurrences);
+    expect(r.broken, `broken help links:\n${r.broken.join("\n")}`).toEqual([]);
+  });
+
+  // No article links to a /help/formats/<family> page today (only to /help/formats), so the real sweep checks zero of them.
+  // The same sweep body is run on a fixture holding a good link and a typo'd one, so that branch has a witness.
+  it("the link sweep catches a typo'd /help/formats/<family> link and passes a good one (fixture, same body)", async () => {
+    const good = FORMAT_FAMILIES[0]!.slug;
+    const fixture = new Map<string, SweepArticle>([
+      ["fx/good", { slug: "fx/good", markdown: `See [the format](/help/formats/${good}).\n` }],
+      ["fx/typo", { slug: "fx/typo", markdown: `See [the format](/help/formats/${good}x) and [again](/help/formats/${good}).\n` }],
+      ["fx/anchor", { slug: "fx/anchor", markdown: "Go to [below](#real-heading) or [missing](#not-there).\n\n## Real heading\n" }],
+    ]);
+    const r = await sweepLinks(fixture);
+    expect(r.familiesChecked, "anti-vacuity: the family branch ran on every family link").toBe(3);
+    expect(r.anchorsChecked).toBe(2);
+    expect(r.broken).toHaveLength(2);
+    expect(r.broken.some((b) => b.includes("fx/typo.md") && b.includes(`/help/formats/${good}x`) && /no format family/.test(b))).toBe(true);
+    expect(r.broken.some((b) => b.includes("fx/anchor.md") && b.includes("#not-there") && /no heading id 'not-there'/.test(b))).toBe(true);
+    expect(r.broken.some((b) => b.includes("fx/good.md")), "the good link is not reported").toBe(false);
+  });
+
+  // Pictures: no help page carries one yet, so the real tree checks zero. That is a legitimate answer, stated here, and the
+  // sweep body is proven on fixtures: a good picture, a missing file, an empty alt, and the empty tree.
+  describe("pictures", () => {
+    const FIXTURE_ROOT = join(__dirname, "fixtures", "help-public");
+    const GOOD = "/help/sample/screen-1.webp";
+    const fixture = (...pages: [string, string][]) =>
+      new Map<string, SweepArticle>(pages.map(([slug, markdown]) => [slug, { slug, markdown }]));
+
+    it("every picture written in the real tree renders as a figure (zero is reported, not hidden)", async () => {
+      const r = await sweepPictures(articles);
+      console.log(`help-tree-shape: pictures checked ${r.checked}${r.checked === 0 ? " (no help page carries a picture yet; the sweep body is proven on fixtures)" : ""}`);
+      expect(r.problems, `picture problems:\n${r.problems.join("\n")}`).toEqual([]);
+    });
+
+    it("counts and passes a good picture; reports a missing file and an empty alt against their article", async () => {
+      const ok = await sweepPictures(fixture(["fx/ok", `![The board](${GOOD} "Caption")\n`]), FIXTURE_ROOT);
+      expect(ok).toEqual({ checked: 1, problems: [] });
+
+      const bad = await sweepPictures(
+        fixture(
+          ["fx/missing", "![Gone](/help/sample/gone.webp)\n"],
+          ["fx/noalt", `![](${GOOD})\n`],
+          ["fx/ok", `![The board](${GOOD})\n`],
+        ),
+        FIXTURE_ROOT,
+      );
+      expect(bad.checked).toBe(3);
+      expect(bad.problems).toHaveLength(2);
+      expect(bad.problems.find((p) => p.includes("fx/missing.md"))).toMatch(/not found/);
+      expect(bad.problems.find((p) => p.includes("fx/noalt.md"))).toMatch(/alt text/);
+    });
+
+    it("an article with no picture, and an empty tree, check zero and report nothing", async () => {
+      expect(await sweepPictures(fixture(["fx/text", "Just words.\n"]), FIXTURE_ROOT)).toEqual({ checked: 0, problems: [] });
+      expect(await sweepPictures(new Map(), FIXTURE_ROOT)).toEqual({ checked: 0, problems: [] });
+    });
   });
 
   it("a heading's id cannot depend on a plan figure (tokens resolve after ids are fixed by the text)", () => {

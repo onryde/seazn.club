@@ -319,6 +319,19 @@ body {
   .competition-prose img {
     @apply my-4 max-h-96 max-w-full rounded-xl shadow-sm;
   }
+  /* Help pictures (server/help-figures.ts): <figure><img width height><figcaption>. The img
+     carries its real dimensions so the page does not jump; `height: auto` and no max-height
+     keep the aspect ratio when the width is capped to the column (the plain-img rule above
+     caps height, which would squash a figure's picture). */
+  .competition-prose figure {
+    @apply my-5;
+  }
+  .competition-prose figure img {
+    @apply my-0 h-auto max-h-none;
+  }
+  .competition-prose figcaption {
+    @apply mt-2 text-sm text-zinc-500;
+  }
   /* Help articles additionally use inline code, code blocks and tables. */
   .competition-prose code {
     @apply rounded bg-purple-50 px-1.5 py-0.5 font-mono text-[13px] text-purple-800;

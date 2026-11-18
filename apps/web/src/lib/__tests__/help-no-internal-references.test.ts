@@ -12,15 +12,18 @@
 // What is scanned: title, description and the body as helpPlainText gives it (inline code
 // included, as readers see it), PLUS fenced code blocks on every page outside
 // content/help/api (readers see those too; the API reference is the developer page).
-// NOT yet scanned: image alt text and captions. They are added here when help pages
-// carry pictures (the pictures task), so a leak in a caption cannot ship past this sweep.
+// Image alt text and captions are scanned too (pictureText below): a reader sees both, and
+// helpPlainText drops them. They are read from the REAL renderer's output, so what is scanned
+// is what is on the page. No help page carries a picture yet, so the real sweep scans none;
+// the unit case below proves a leak in an alt or a caption is caught.
 // Anti-vacuity: both sources (Markdown, generated formats) must scan > 0 pages
 // and every LEAK_ALLOW entry must have suppressed at least one real hit.
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 import { LEAK_ALLOW, LEAK_RULES, findLeaks, scanCopy, type LeakRule } from "@/lib/copy-leaks";
-import { allHelpArticles, helpPlainText } from "@/server/help-content";
+import { allHelpArticles, helpPlainText, renderHelpMarkdown } from "@/server/help-content";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import FormatGalleryPage from "@/app/help/formats/page";
 import FormatExplainerPage from "@/app/help/formats/[family]/page";
@@ -95,13 +98,25 @@ function fencedCode(markdown: string): string[] {
 }
 
 /** The text the sweep scans for one article: what a reader sees, code blocks included outside the API section. */
-function readerText(a: { title: string; description: string; markdown: string; section: string }): string {
+function readerText(
+  a: { title: string; description: string; markdown: string; section: string },
+  pictures: string[] = [],
+): string {
   return [
     a.title,
     a.description,
     helpPlainText(a.markdown),
     ...(isDeveloperPage(a.section) ? [] : fencedCode(a.markdown)),
+    ...pictures,
   ].join(" . ");
+}
+
+/** Alt text and captions of every picture in an article, read from the real renderer's HTML (entities decoded). */
+async function pictureText(markdown: string, publicRoot?: string): Promise<string[]> {
+  const html = await renderHelpMarkdown(markdown, undefined, { publicRoot });
+  const alts = [...html.matchAll(/<img\b[^>]*?\salt="([^"]*)"/g)].map((m) => htmlToText(m[1]!));
+  const captions = [...html.matchAll(/<figcaption>([\s\S]*?)<\/figcaption>/g)].map((m) => htmlToText(m[1]!));
+  return [...alts, ...captions];
 }
 
 describe("findLeaks: one positive and one negative per rule", () => {
@@ -193,6 +208,28 @@ describe("findLeaks: one positive and one negative per rule", () => {
     expect(findLeaks("See XR1·1 here.")).toEqual([]);
   });
 
+  it("a leak in a picture's alt text or caption is caught, though helpPlainText drops both", async () => {
+    const root = join(__dirname, "..", "..", "server", "__tests__", "fixtures", "help-public");
+    const src = "/help/sample/screen-1.webp";
+    const leaky = `![Screenshot from PR #123](${src} "As decided by the owner ruling")\n`;
+    expect(helpPlainText(leaky), "premise: the plain-text pass drops the whole image").not.toMatch(/PR|owner/);
+    const found = await pictureText(leaky, root);
+    expect(found, "alt and caption both read").toHaveLength(2);
+    const rules = findLeaks(readerText({ title: "A title here", description: "A description here", markdown: leaky, section: "billing" }, found)).map((l) => l.rule);
+    expect(rules).toContain("pr-number");
+    expect(rules).toContain("internal-ruling");
+    // the caption alone is enough, and so is the alt alone
+    expect(findLeaks((await pictureText(`![Plain alt](${src} "Per the owner ruling")\n`, root)).join(" . ")).map((l) => l.rule)).toContain("internal-ruling");
+    expect(findLeaks((await pictureText(`![Added by V519](${src})\n`, root)).join(" . ")).map((l) => l.rule)).toContain("migration-number");
+    // a clean picture, and a page with no picture, report nothing
+    const clean = await pictureText(`![The scheduling board with three courts](${src} "Drag a match onto a court")\n`, root);
+    expect(clean).toHaveLength(2);
+    expect(findLeaks(clean.join(" . "))).toEqual([]);
+    expect(await pictureText("No pictures here.\n", root)).toEqual([]);
+    // entities are decoded before scanning, so an ampersand in a caption is read as typed
+    expect(await pictureText(`![Fish & chips](${src} "Salt & vinegar")\n`, root)).toEqual(["Fish & chips", "Salt & vinegar"]);
+  });
+
   it("every LEAK_ALLOW entry has a phrase and a reason", () => {
     expect(LEAK_ALLOW.length, "anti-vacuity: the allow-list has entries").toBeGreaterThan(0);
     for (const a of LEAK_ALLOW) {
@@ -245,7 +282,8 @@ function htmlToText(html: string): string {
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
-    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, h: string) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
     .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -276,8 +314,11 @@ describe("help copy carries no internal references", () => {
     // Source 1: Markdown articles (title + description + body, as the reader sees them).
     const articles = allHelpArticles();
     let markdownScanned = 0;
+    let picturesScanned = 0;
     for (const a of articles.values()) {
-      record(a.section, a.slug, readerText(a), isDeveloperPage(a.section));
+      const pictures = await pictureText(a.markdown);
+      picturesScanned += pictures.length;
+      record(a.section, a.slug, readerText(a, pictures), isDeveloperPage(a.section));
       markdownScanned += 1;
     }
 
@@ -304,7 +345,7 @@ describe("help copy carries no internal references", () => {
     const knownPages = Object.values(KNOWN).reduce((n, s) => n + Object.keys(s).length, 0);
     console.log(
       `help-no-internal-references: markdown pages scanned=${markdownScanned}, ` +
-        `generated formats pages scanned=${formatsScanned}, leaking pages=${leaking.length}, KNOWN pages=${knownPages}, ` +
+        `picture alt/caption strings scanned=${picturesScanned}, generated formats pages scanned=${formatsScanned}, leaking pages=${leaking.length}, KNOWN pages=${knownPages}, ` +
         `allow-list uses=${JSON.stringify(Object.fromEntries(allowedUsed))}`,
     );
 
