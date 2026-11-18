@@ -78,14 +78,13 @@ const RETRY_MS = RETRY_S * 1_000;
 const AUTO_STOP_LATE_MS = 2 * BEAT_MS + 5_000;
 /** The window a "nothing starts" assertion watches: the retry spacing plus two beats that would act on it. */
 const QUIET_WINDOW_MS = RETRY_MS + 2 * BEAT_MS;
-const CLOCKS_MS = 1_000;
 const SEED_MS = 90_000;
 const NAV_MS = 30_000;
 /** The phone's build: above the server's COURT_MIN_APP_VERSION (1.0.14-1200). */
 const COURT_PHONE_BUILD = "1.0.14-1300";
 
-/** This file's one long hold: two videos seen, a quiet window, the tail, and polls between. The pool's limit judges it. */
-const OWN_LONGEST_HOLD_MS = 2 * INGEST_SEEN_MS + QUIET_WINDOW_MS + 2 * AUTO_STOP_MS + 2 * AUTO_STOP_LATE_MS + 6 * POLL_WAIT_MS;
+/** This file's one long hold: two videos seen, two quiet windows, a handover inside a tail, and polls between. The pool's limit judges it. */
+const OWN_LONGEST_HOLD_MS = 2 * INGEST_SEEN_MS + 2 * QUIET_WINDOW_MS + AUTO_STOP_MS + AUTO_STOP_LATE_MS + 6 * POLL_WAIT_MS;
 const POOL_HOLD = { file: "court-stream.spec.ts", holdMs: OWN_LONGEST_HOLD_MS } as const;
 const holdProblem = poolHoldProblem(POOL_HOLD);
 if (holdProblem) ENV_PROBLEMS.push(holdProblem);
@@ -427,7 +426,7 @@ async function expectCourtPanel(page: Page, rig: Rig, f: Fx, mints: string[]): P
 // ===========================================================================
 // The walk
 // ===========================================================================
-test("court stream: link Court 2, claim it, A then B then C — A starts, B starts inside A's tail and takes the court, C (switch off) streams nothing, B's tail ends it; two credits", async ({
+test("court stream: link Court 2, claim it, A then B then C — A starts, B starts inside A's tail and takes the court, B's switch going off stops its video at once, C (switch off) streams nothing; two credits", async ({
   page,
 }) => {
   test.setTimeout(Math.max(
@@ -523,38 +522,35 @@ test("court stream: link Court 2, claim it, A then B then C — A starts, B star
   await untilDbState(sessionB.id, ["live"], 2 * INGEST_SEEN_MS, "B goes live once the phone's video is seen");
   expect((await consumeRows(rig.orgId)).map((r) => r.session_id), "B's first video took the second credit").toEqual([sessionA.id, sessionB.id]);
 
-  // 5 — R5: Stream turned OFF on B while it is live never ends the video.
+  // 5 — O17 (owner, 2026-11-17: "switching Stream off should stop the video now"): Stream turned OFF on B while it is
+  //     live ends B's video at once — the organiser's Stop, not the tail. (Until that ruling this step proved the
+  //     opposite, R5: off never ended a live video.)
+  const offAt = Date.now();
   await putCourtSwitch(page, B, false);
   phone.silence();
-  for (let i = 0; i < 2; i++) {
-    const a = await phone.beat(publishing(sessionB.id)());
-    expect(a.ok?.state, `beat ${i + 1} after the switch went off: B is still live`).toBe("live");
-    await new Promise((r) => setTimeout(r, BEAT_MS));
-  }
-  expect((await sessionRow(sessionB.id)).state, "B's video runs on").toBe("live");
+  const over = await beatUntil(phone, "over", 2 * BEAT_MS + POLL_WAIT_MS, publishing(sessionB.id));
+  expect(over, "the phone hears over, stopped, for B").toMatchObject({ state: "over", sid: sessionB.id, endReason: "stopped" });
+  const endedB = await untilDbState(sessionB.id, ["ending", "completed"], POLL_WAIT_MS, "B ended when its switch went off");
+  expect(endedB.end_reason, "B ended by the organiser's Stop").toBe("stopped");
+  expect(endedB.ended_at!.getTime(), "…at the switch, not a tail later").toBeLessThan(offAt + AUTO_STOP_MS);
+  expect(await handoverEvents(sessionB.id), "…and nothing took the court from it").toEqual([]);
 
-  // 6 — C kicks off with its switch off: nothing starts, beat after beat, through a whole retry window.
+  // 6 — C kicks off with its switch off, and B is still in play with its switch off: nothing starts, beat after beat,
+  //     through a whole retry window.
   await deviceLinkEvent(linkC, C, "core.start", {});
   const quietUntil = Date.now() + QUIET_WINDOW_MS;
   let beats = 0;
   while (Date.now() < quietUntil) {
-    const a = await phone.beat(publishing(sessionB.id)());
+    const a = await phone.beat();
     beats++;
-    expect(a.ok?.state, `beat ${beats} with C in play, its switch off`).toBe("live");
+    expect(a.ok?.state, `beat ${beats} with B and C in play, both switches off`).not.toBe("go-live");
     await new Promise((r) => setTimeout(r, BEAT_MS));
   }
-  expect(beats, "C was beaten through the whole window").toBeGreaterThanOrEqual(2);
+  expect(beats, "the court was beaten through the whole window").toBeGreaterThanOrEqual(2);
   expect((await sessionsOf(rig.orgId)).map((s) => s.fixture_id), "C has no session; A and B have their one each").toEqual([A.id, B.id]);
 
-  // 7 — B's result: the tail ends B, the phone hears over; C still plays and nothing starts.
+  // 7 — B's result after its video was stopped: nothing restarts, and B's one session keeps its reason.
   await deviceLinkEvent(linkB, B, "generic.result", { p1Score: 2, p2Score: 0 });
-  const finishedB = await finishedAtOf(B);
-  const over = await beatUntil(phone, "over", AUTO_STOP_MS + AUTO_STOP_LATE_MS, publishing(sessionB.id));
-  expect(over, "the phone hears over, auto_stopped, for B").toMatchObject({ state: "over", sid: sessionB.id, endReason: "auto_stopped" });
-  const endedB = await sessionRow(sessionB.id);
-  expect(endedB.end_reason, "B ended auto_stopped").toBe("auto_stopped");
-  expect(endedB.ended_at!.getTime() - finishedB.getTime(), "no sooner than the tail after B's result").toBeGreaterThanOrEqual(AUTO_STOP_MS - CLOCKS_MS);
-  expect(await handoverEvents(sessionB.id), "…and this time it was the tail, not a handover").toEqual([]);
   const quietAfter = Date.now() + QUIET_WINDOW_MS;
   let idle = 0;
   while (Date.now() < quietAfter) {
@@ -563,6 +559,8 @@ test("court stream: link Court 2, claim it, A then B then C — A starts, B star
     expect(a.ok?.state, `beat ${idle} with only C in play`).not.toBe("go-live");
     await new Promise((r) => setTimeout(r, BEAT_MS));
   }
+  expect(idle, "…beaten through the whole window").toBeGreaterThanOrEqual(2);
+  expect((await sessionRow(sessionB.id)).end_reason, "B's result did not rewrite how its video ended").toBe("stopped");
   expect((await sessionsOf(rig.orgId)).map((s) => s.fixture_id), "still exactly A's and B's sessions: C was never streamed").toEqual([A.id, B.id]);
 
   // 8 — the money: exactly two credits, one per streamed match's video, none for C.

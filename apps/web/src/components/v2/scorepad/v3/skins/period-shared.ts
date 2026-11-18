@@ -403,7 +403,9 @@ export function buildClock(view: PadHostView): PadClockSpec | null {
     typeof asOf.elapsed === "number" &&
     Number.isFinite(asOf.elapsed) &&
     asOf.elapsed >= 0;
-  return fresh ? { period: phase, seed: asOf.elapsed } : { period: phase };
+  // `shared` (owner, 2026-11-18): the clock is the MATCH's, as football's is — the pad follows the ledger's newest
+  // clock event, the one the stream overlay already reads, so a reloaded or second pad shows what is on air.
+  return fresh ? { period: phase, seed: asOf.elapsed, shared: true } : { period: phase, shared: true };
 }
 
 // ---------------------------------------------------------------------------

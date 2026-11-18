@@ -1272,7 +1272,7 @@ describe("the shared clock reaches football and nothing else (S2-5 rulings 107, 
     entrantNames: {},
   });
 
-  it("football's spec is shared and hockey's is not, from real folds", () => {
+  it("football's spec is shared and so is hockey's (owner 2026-11-18), from real folds", () => {
     const cfg = footballCfg();
     const football = buildFootballClock(viewOf(cfg, foldFootball(cfg, [["core.start"]])))!;
     expect(football.shared).toBe(true);
@@ -1283,7 +1283,7 @@ describe("the shared clock reaches football and nothing else (S2-5 rulings 107, 
     const hcfg = periodCfg(hockey);
     const hockeySpec = buildClock(viewOf(hcfg, foldPeriod(hockey, hcfg, [["core.start"]])))!;
     expect(hockeySpec).not.toBeNull();
-    expect(hockeySpec.shared).toBeUndefined();
+    expect(hockeySpec.shared).toBe(true);
   });
 
   it("stampFor with a floor stamps a football.goal at asOf when the followed reading is below it", () => {
@@ -1323,23 +1323,25 @@ describe("the shared clock reaches football and nothing else (S2-5 rulings 107, 
     expect(correctionSurvives(held, followed, false)).toBe(false);
   });
 
-  it("hockey's correction row closes on a same-period seed, as it did before ruling 107 (review I2)", () => {
+  it("hockey's correction row survives a same-period seed, as football's does — its clock is shared (owner 2026-11-18)", () => {
     // A hockey pad mounted before any stamped event holds an UNKNOWN clock;
     // the first goal with an `at` seeds it in the same period, and reseatClock
-    // re-seats. The open correction row closed on that re-seat before ruling
-    // 107 and must still close.
+    // re-seats. While hockey's clock was pad-local that re-seat closed the open
+    // correction row (review I2); shared, it stays open in the same period, and
+    // an UNSHARED clock would still close it — the control below.
     const hcfg = periodCfg(hockey);
     const bare = buildClock(viewOf(hcfg, foldPeriod(hockey, hcfg, [["core.start"]])))!;
     const seeded = buildClock(
       viewOf(hcfg, foldPeriod(hockey, hcfg, [["core.start"], ["hockey.goal", { by: "A", at: { period: bare.period, elapsed: 250 } }]])),
     )!;
-    expect([seeded.period, seeded.seed, seeded.shared]).toEqual([bare.period, 250, undefined]);
+    expect([seeded.period, seeded.seed, seeded.shared]).toEqual([bare.period, 250, true]);
     const held = reconcileClock(null, bare, null, null)!;
     expect(held.known).toBe(false);
     const next = reconcileClock(held, seeded, null, null)!;
     expect(next).not.toBe(held);
     expect([next.period, next.base, next.known]).toEqual([bare.period, 250, true]);
-    expect(correctionSurvives(held, next, seeded.shared === true)).toBe(false);
+    expect(correctionSurvives(held, next, seeded.shared === true)).toBe(true);
+    expect(correctionSurvives(held, next, false)).toBe(false);
   });
 });
 

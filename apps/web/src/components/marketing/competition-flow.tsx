@@ -10,7 +10,7 @@ export { FLOW_ID, FLOW_STEPS };
 
 /**
  * The home page's "one competition, start to finish" section (owner-picked 2026-11-16: Option A with stage labels,
- * mock at seazn-artifacts/2026-11-16_home-feature-flow_hff16a01). Seven steps in the order an organiser does them,
+ * mock at seazn-artifacts/2026-11-16_home-feature-flow_hff16a01). Eight steps in the order an organiser does them,
  * each beside the thing the product shows at that step, all following ONE example competition so the same pairs
  * enter, pay, get scheduled, play and win.
  *
@@ -223,12 +223,21 @@ function LiveArt({ dict }: ArtProps) {
         </div>
         <p className="mkf-cap">{t(dict, "home.flow.live.publicCap")}</p>
       </div>
+    </div>
+  );
+}
+
+/** Streaming is its own step (owner 2026-11-18): with the pad and the public page it made one step so tall that the
+ *  progress marker sat on it for most of the scroll. */
+function StreamArt({ dict }: ArtProps) {
+  return (
+    <div className="mkf-art">
       <div className="mkf-strm">
-        <div className="mkf-vid" role="img" aria-label={t(dict, "home.flow.live.streamLabel")}>
+        <div className="mkf-vid" role="img" aria-label={t(dict, "home.flow.stream.videoLabel")}>
           <span className="mkf-court" />
           <span className="mkf-v-live">
             <span className="mkf-livedot" />
-            {t(dict, "home.flow.live.badge")}
+            {t(dict, "home.flow.stream.badge")}
           </span>
           <span className="mkf-v-score">
             <span>
@@ -239,12 +248,12 @@ function LiveArt({ dict }: ArtProps) {
             </span>
           </span>
         </div>
-        <p className="mkf-cap">{t(dict, "home.flow.live.streamCap")}</p>
+        <p className="mkf-cap">{t(dict, "home.flow.stream.cap")}</p>
         {/* Owner 2026-11-16: the price of streaming is the thing to see here. No figure: the pack prices live in one
             table (lib/stream-credit-packs.ts), and a number typed here would drift from it. */}
         <div className="mkf-offer" data-testid="flow-stream-offer">
-          <strong className="mk-cond">{t(dict, "home.flow.live.offer")}</strong>
-          <span>{t(dict, "home.flow.live.offerDetail")}</span>
+          <strong className="mk-cond">{t(dict, "home.flow.stream.offer")}</strong>
+          <span>{t(dict, "home.flow.stream.offerDetail")}</span>
         </div>
       </div>
     </div>
@@ -302,6 +311,7 @@ const ART: Record<FlowStepKey, (p: ArtProps) => React.ReactElement> = {
   entries: EntriesArt,
   schedule: ScheduleArt,
   live: LiveArt,
+  stream: StreamArt,
   winner: WinnerArt,
 };
 

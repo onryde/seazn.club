@@ -705,7 +705,6 @@ html:has(.mkf) { scroll-snap-type: y proximity; }
 @container mkf-live (min-width: 480px) {
   .mkf-pad, .mkf-pub { grid-row: 1; }
   .mkf-live { grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 20px 28px; align-items: center; }
-  .mkf-strm { grid-column: 1 / -1; }
 }
 
 .mkf-champ { display: flex; gap: 14px; align-items: center; background: var(--mk-night); color: var(--mk-cream); border-radius: 12px; padding: 14px 16px; border-left: 6px solid var(--mk-lime); }

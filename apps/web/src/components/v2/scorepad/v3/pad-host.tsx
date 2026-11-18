@@ -1234,8 +1234,9 @@ export function stampFor(
  * offering to nudge a period the scorer has left) or the clock goes; it stays
  * open when a SHARED clock follows a new anchor in the same period, since a
  * Correct from this pad is itself such an anchor, and a row that shut on every
- * one would shut under the scorer's finger. An UNSHARED clock (every skin but
- * football) closes it on any re-seat, as it did before ruling 107 (review I2).
+ * one would shut under the scorer's finger. An UNSHARED clock closes it on any re-seat,
+ * as it did before ruling 107 (review I2); no skin declares one today (hockey and ice hockey share theirs since
+ * 2026-11-18).
  */
 export function correctionSurvives(prev: PadClock | null, next: PadClock | null, shared: boolean): boolean {
   return shared && prev !== null && next !== null && prev.period === next.period;
@@ -2311,7 +2312,7 @@ export function PadHostV3(props: PadHostV3Props) {
   // running clock back to the last stamped event's time on every tap, since
   // `seed` is rebuilt from a fold that advances on every tap. See ../clock.ts.
   //
-  // S2-5 ruling 107 — then, for a SHARED spec only (football), it follows the
+  // S2-5 ruling 107 — then, for a SHARED spec (football, hockey, ice hockey), it follows the
   // ledger's newest standing clock event from any screen (`followAnchor`,
   // property 7), read in server time through the transport's measured offset.
   // `pipeline.events` is the durable ledger plus this pad's still-queued taps,
