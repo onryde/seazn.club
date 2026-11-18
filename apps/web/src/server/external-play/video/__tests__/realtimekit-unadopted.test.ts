@@ -18,8 +18,9 @@
 // Single sport, deliberately: online play exists only for boardgame (supportsOnlinePlay); every other sport is refused by the
 // guard before a seat or a room is reached (external-play-preflight.test.ts, "another sport").
 import { randomUUID } from "node:crypto";
+import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { sql } from "@/lib/db";
+import { connectionOptions, sql } from "@/lib/db";
 import {
   REALTIMEKIT_FIXTURE_ENV,
   startRealtimeKitFixtureServer,
@@ -111,6 +112,46 @@ const roomsOf = (fixtureId: string) =>
       from fixture_video_meetings where fixture_id = ${fixtureId} order by side`;
 
 const vendorCalls = (route: string) => fx.calls.filter((c) => c.route === route).length;
+
+/** Waits until a statement matching the (postgres) regex `pattern` is waiting on a lock, as seen from `tx`. `pg_stat_activity` is
+ *  snapshotted ONCE per transaction, so every poll clears the snapshot first - without it a poll inside the holder's transaction
+ *  keeps reading the first look (the statement not yet sent) and a slow-starting claim reads as "never queued". */
+async function untilQueued(tx: postgres.TransactionSql, pattern: string, what: string): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    await tx`select pg_stat_clear_snapshot()`;
+    const [queued] = await tx<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity
+       where datname = current_database() and wait_event_type = 'Lock' and query ~ ${pattern}`;
+    if (queued!.n > 0) return;
+    if (Date.now() > deadline) throw new Error(`${what} never queued behind a lock: the window was not reached`);
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** Runs `run` and lets `during` change the database AFTER `run` has read a room and BEFORE its adoption statement executes - the
+ *  window two concurrent claims race through. A SEPARATE connection (never the app pool: a transaction pinning one of the pool's
+ *  few connections starves the claim under test) holds a SHARE ROW EXCLUSIVE lock on the meetings table (readers pass, writers
+ *  queue), `run` starts, and the helper waits until `adoptRooms`' UPDATE is queued behind the lock - proof that `run`'s read has
+ *  already happened, so a test that never reached the window fails instead of passing vacuously - then makes its change in the
+ *  same transaction and commits; the queued UPDATE runs on the committed state. */
+async function betweenReadAndAdoption<T>(run: () => Promise<T>, during: (tx: postgres.TransactionSql) => Promise<void>): Promise<T> {
+  const opts = connectionOptions(process.env.DATABASE_URL!);
+  const holder = postgres(process.env.DATABASE_URL!, { max: 1, ssl: opts.ssl, connection: { search_path: opts.schema } });
+  let pending: Promise<T> | null = null;
+  try {
+    await holder.begin(async (tx) => {
+      await tx`lock table fixture_video_meetings in share row exclusive mode`;
+      pending = run();
+      pending.catch(() => undefined);
+      await untilQueued(tx, "update fixture_video_meetings m[[:space:]]+set home_entrant_id = f[.]home_entrant_id", "the adoption statement");
+      await during(tx);
+    });
+  } finally {
+    await holder.end();
+  }
+  return pending!;
+}
 
 describe.skipIf(!DB)("unadopted rooms", () => {
   it("ensureMeeting with unpaired 'allow' on a placeholder makes a room stamped (null, null); without it the placeholder is refused as today", async () => {
@@ -244,6 +285,131 @@ describe.skipIf(!DB)("unadopted rooms", () => {
       [s.home.entrantId, s.away.entrantId],
     ]);
     expect(await adoptRooms(sql, s.fixtureId), "idempotent").toBe(0);
+  });
+
+  it("adoptRooms is scoped to ITS fixture: with two paired boards each holding unadopted rooms, adopting one returns exactly its count and leaves the other's rooms (null, null)", async () => {
+    const a = await seed();
+    const b = await seed();
+    for (const s of [a, b]) {
+      await putRoom(s, "home", NULLS);
+      await putRoom(s, "away", NULLS);
+    }
+    expect(await adoptRooms(sql, a.fixtureId), "exactly the first board's two rooms").toBe(2);
+    expect((await roomsOf(a.fixtureId)).map((r) => [r.home, r.away]), "board A adopted").toEqual([
+      [a.home.entrantId, a.away.entrantId],
+      [a.home.entrantId, a.away.entrantId],
+    ]);
+    expect((await roomsOf(b.fixtureId)).map((r) => [r.home, r.away]), "board B untouched, though it is paired and unadopted too").toEqual([
+      [null, null],
+      [null, null],
+    ]);
+    expect(await adoptRooms(sql, b.fixtureId), "and B is still there to adopt").toBe(2);
+  });
+
+  describe("adoption that writes nothing is re-read, never assumed (a concurrent claim, or an unpair, between the read and the write)", () => {
+    it("ANOTHER claim adopted the room in the window: the re-read finds the board's own pairing on it and returns it, no vendor call", async () => {
+      const s = await seed();
+      const roomId = await putRoom(s, "home", NULLS);
+      const ref = await betweenReadAndAdoption(
+        () => ensureMeeting(s.fixtureId, "home"),
+        async (tx) => {
+          await tx`update fixture_video_meetings set home_entrant_id = ${s.home.entrantId}, away_entrant_id = ${s.away.entrantId} where fixture_id = ${s.fixtureId}`;
+        },
+      );
+      expect(ref).toEqual({ meetingId: roomId });
+      expect(fx.calls.length).toBe(0);
+      expect(await roomsOf(s.fixtureId)).toMatchObject([{ side: "home", meetingId: roomId, ...pairingOf(s) }]);
+    });
+
+    it("the board was UNPAIRED in the window: a seat is refused VIDEO_MEETING_UNPAIRED and the room stays unadopted; the job's 'allow' call gets the room back", async () => {
+      const s = await seed();
+      const roomId = await putRoom(s, "home", NULLS);
+      const unpairInWindow = async (tx: postgres.TransactionSql) => {
+        await tx`update fixtures set home_entrant_id = null, away_entrant_id = null where id = ${s.fixtureId}`;
+      };
+      await expect(betweenReadAndAdoption(() => ensureMeeting(s.fixtureId, "home"), unpairInWindow)).rejects.toMatchObject({ status: 409, code: "VIDEO_MEETING_UNPAIRED" });
+      expect(await roomsOf(s.fixtureId), "nothing was adopted").toMatchObject([{ meetingId: roomId, home: null, away: null }]);
+
+      await pair(s);
+      const ref = await betweenReadAndAdoption(() => ensureMeeting(s.fixtureId, "home", {}, { unpaired: "allow" }), unpairInWindow);
+      expect(ref, "the job's call is handed the room: an unpaired board's room is the job's").toEqual({ meetingId: roomId });
+      expect(await roomsOf(s.fixtureId)).toMatchObject([{ meetingId: roomId, home: null, away: null }]);
+      expect(fx.calls.length).toBe(0);
+    });
+
+    it("another claim adopted it for ANOTHER pair in the window: the room is another pairing's now, refused (503; a game behind it: 409 by name), never handed to this pairing", async () => {
+      let checked = 0;
+      for (const game of [false, true]) {
+        const s = await seed();
+        await putRoom(s, "home", NULLS);
+        const refusal = await betweenReadAndAdoption(
+          () => ensureMeeting(s.fixtureId, "home"),
+          async (tx) => {
+            await tx`update fixture_video_meetings set home_entrant_id = ${randomUUID()}, away_entrant_id = ${randomUUID()} where fixture_id = ${s.fixtureId}`;
+            if (game) {
+              await tx`
+                insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
+                values (${s.fixtureId}, ${s.orgId}, now(), 'ready', ${`gm-${RUN}-${randomUUID().slice(0, 6)}`})`;
+            }
+          },
+        ).then(
+          () => null,
+          (err: unknown) => err,
+        );
+        const want = game ? { status: 409, code: "VIDEO_MEETING_PAIRING_CHANGED" } : { status: 503, code: "unavailable", message: expect.stringMatching(/changed while it was being adopted/) };
+        expect(refusal, `game ${game}`).toMatchObject(want);
+        expect(fx.calls.length, `game ${game}: no vendor call, and no second room`).toBe(0);
+        expect(await roomsOf(s.fixtureId), `game ${game}: the room is left as it is`).toHaveLength(1);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: with and without a game").toBe(2);
+    });
+
+    it("the room was RETIRED (its row deleted) in the window: the re-read finds nothing and the claim is refused 503 - it neither answers from the stale read nor makes a room on top of a retire it did not see", async () => {
+      const s = await seed();
+      await putRoom(s, "home", NULLS);
+      await expect(
+        betweenReadAndAdoption(
+          () => ensureMeeting(s.fixtureId, "home"),
+          async (tx) => {
+            await tx`delete from fixture_video_meetings where fixture_id = ${s.fixtureId} and side = 'home'`;
+          },
+        ),
+      ).rejects.toMatchObject({ code: "unavailable", status: 503, message: expect.stringMatching(/vanished/) });
+      expect(await roomsOf(s.fixtureId), "nothing re-created").toEqual([]);
+      expect(fx.calls.length, "no vendor call").toBe(0);
+    });
+
+    it("the board was UNPAIRED for the adoption and PAIRED AGAIN before the re-read: an unadopted room on a paired board that nothing adopted is refused 503, never handed out", async () => {
+      const s = await seed();
+      await putRoom(s, "home", NULLS);
+      const opts = connectionOptions(process.env.DATABASE_URL!);
+      const second = postgres(process.env.DATABASE_URL!, { max: 1, ssl: opts.ssl, connection: { search_path: opts.schema } });
+      let repaired: Promise<unknown> | null = null;
+      try {
+        await expect(
+          betweenReadAndAdoption(
+            () => ensureMeeting(s.fixtureId, "home"),
+            async (tx) => {
+              await tx`update fixtures set home_entrant_id = null, away_entrant_id = null where id = ${s.fixtureId}`;
+              // A second session asks for the meetings table EXCLUSIVELY: queued behind the adoption statement, so it is granted the
+              // instant that (now empty) statement ends and holds the re-read off until it has paired the board again.
+              repaired = second.begin(async (tx2) => {
+                await tx2`lock table fixture_video_meetings in access exclusive mode`;
+                await tx2`update fixtures set home_entrant_id = ${s.home.entrantId}, away_entrant_id = ${s.away.entrantId} where id = ${s.fixtureId}`;
+              });
+              repaired.catch(() => undefined);
+              await untilQueued(tx, "lock table fixture_video_meetings in access exclusive mode", "the second session");
+            },
+          ),
+        ).rejects.toMatchObject({ code: "unavailable", status: 503, message: expect.stringMatching(/could not be adopted/) });
+        await repaired;
+      } finally {
+        await second.end();
+      }
+      expect(await roomsOf(s.fixtureId), "the room is still unadopted: nothing adopted it").toMatchObject([{ home: null, away: null }]);
+      expect(fx.calls.length).toBe(0);
+    });
   });
 
   it("adoptRooms takes a row for the fixture's CURRENT pairing as of its own statement, and never rewrites a room stamped for a pairing (adopted, or another's)", async () => {
@@ -480,6 +646,19 @@ describe("peerReportCamera", () => {
     expect(stub.calls, "the refused read never reached the vendor").toHaveLength(0);
   });
 
+  it("an empty (or blank) peer id is refused BEFORE any request: `/sessions/peer-report/` with nothing after it is another route, and its answer would be read as this peer's report", async () => {
+    configure();
+    const stub = stubFetch([]);
+    for (const bad of ["", " ", "\t\n"]) {
+      await expect(peerReportCamera(bad, { fetch: stub.fetch }), JSON.stringify(bad)).rejects.toThrow(/peer id/);
+    }
+    expect(stub.calls, "nothing was asked").toHaveLength(0);
+    // The positive pair: a real id still makes its one call.
+    const ok = stubFetch([report({ events: ON })]);
+    expect(await peerReportCamera("peer-x", { fetch: ok.fetch })).toEqual({ camera: "on" });
+    expect(ok.calls).toHaveLength(1);
+  });
+
   it("the REAL vendor fixture's own report: a peer that is present reads its camera, and the same peer after it LEAVES reads `left` with the row's left_at, though its last video event is still video_on", async () => {
     const meeting = await makeVendorRoom();
     const p = await addPlayerTo(meeting);
@@ -583,6 +762,14 @@ describe("platformSpend and cappedBudget", () => {
     const none = cappedBudget(0, null);
     expect(await none.budget("k"), "a cap of 0 refuses everything").toBe(false);
     expect(none.spent()).toBe(0);
+  });
+
+  it("cappedBudget refuses a cap that is not a non-negative integer (a NaN cap would grant every attempt: `attempts > NaN` is false), and takes 0 and a positive integer", () => {
+    const refused = [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
+    for (const cap of refused) expect(() => cappedBudget(cap, null), `cap ${cap}`).toThrow(RangeError);
+    expect(() => cappedBudget(0, null)).not.toThrow();
+    expect(() => cappedBudget(900, null)).not.toThrow();
+    expect(refused.length, "anti-vacuity: every bad cap was tried").toBe(5);
   });
 
   it("platformSpend is null for a fixture base without REALTIMEKIT_METER_ANY_BASE and a spender with it; null for a caller-supplied fetch whatever the base; the real spender for Cloudflare's own base", () => {

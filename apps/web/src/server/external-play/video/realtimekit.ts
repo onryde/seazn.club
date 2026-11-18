@@ -201,6 +201,9 @@ export function platformSpend(deps: RealtimeKitDeps): CallBudget | null {
  *  attempt is refused WITHOUT reaching `inner`, so a job's own ceiling never spends a platform token it will not use.
  *  `spent()` counts the attempts that reached `inner` - granted by it or not - and never a capped one. */
 export function cappedBudget(cap: number, inner: CallBudget | null): { budget: CallBudget; spent(): number } {
+  // `attempts > cap` is false for every attempt when `cap` is NaN, and for a negative or fractional cap it caps at the wrong
+  // count: a ceiling that fails OPEN spends the platform's tokens, so a cap that is not a count is refused up front.
+  if (!Number.isInteger(cap) || cap < 0) throw new RangeError(`cappedBudget needs a cap that is a non-negative integer, got ${cap}`);
   let attempts = 0;
   let reached = 0;
   return {
@@ -447,8 +450,10 @@ export async function retireStaleMeeting(
 
 /** Every UNADOPTED room of the board (both stamps null: made by the pre-mint job for a board with no pairing yet) takes the
  *  fixture's CURRENT pairing, in ONE statement: the stamps are written as a pair (V529's check refuses one without the other, so
- *  a two-step write would not even commit), and both sides' rooms are adopted together - the board has one pairing, and a room
- *  adopted for it must not leave its sibling to read as unadopted beside it. Returns the number of rows adopted: 0 when the
+ *  a two-step write would not even commit), and both sides' rooms are adopted together - the board has one pairing, so an
+ *  adoption never leaves one side stamped beside a sibling still unadopted. That is the ADOPT path only: a claim that CREATES a
+ *  room (nothing on file for its own side) stamps just that room, and a sibling still unadopted stays so until its own claim -
+ *  harmless, since an unadopted room already reads as the current pairing's. Returns the number of rows adopted: 0 when the
  *  fixture is unpaired (there is no pairing to take; the rooms stay unadopted), when nothing is unadopted (a second call), or
  *  when there is no room at all. A row stamped for a pairing - this one's or another's - is never rewritten. It is a database
  *  write and no vendor call: the room already exists. Its one production caller is `ensureMeeting`, i.e. a claim. */
@@ -464,6 +469,40 @@ export async function adoptRooms(db: postgres.Sql | postgres.TransactionSql, fix
        and f.home_entrant_id is not null and f.away_entrant_id is not null
     returning m.side`;
   return adopted.length;
+}
+
+/** A claim read an UNADOPTED row of its own side and answers from it. On a paired board it adopts the board's rooms
+ *  (`adoptRooms`); the count is a GUARD, not an assumption: 0 means the read is already stale - another claim adopted the
+ *  rooms, the board was re-paired or unpaired, or the row was retired, between the read and the write - so the row is READ
+ *  AGAIN and the claim answers from what it says now: unpaired and no `allow` is VIDEO_MEETING_UNPAIRED, a room made for
+ *  another pairing is `pairingChanged` (a game behind it) or a 503 (the caller retries; never handed to this pairing), a row
+ *  that is gone is a 503, and the board's own pairing is the room (adopted by the other claim). On an unpaired board nothing
+ *  is adopted and only the job's `unpaired: "allow"` is handed the room. Returns the row to answer from; throws to refuse. */
+async function claimUnadopted(
+  fixtureId: string,
+  side: MeetingSide,
+  row: MeetingOnFile,
+  opts: { unpaired?: "allow" },
+  now: Date,
+): Promise<MeetingOnFile> {
+  let current = row;
+  if (row.paired) {
+    if ((await adoptRooms(sql, fixtureId)) > 0) return row;
+    const reread = await meetingOnFile(fixtureId, side, now);
+    if (!reread) throw new RealtimeKitError(503, "unavailable", "meeting row vanished while it was being adopted");
+    current = reread;
+  }
+  if (!current.unadopted) {
+    if (current.samePair) return current;
+    if (current.evidence) throw pairingChanged(fixtureId);
+    throw new RealtimeKitError(503, "unavailable", "the board's meeting changed while it was being adopted");
+  }
+  if (!current.paired) {
+    if (opts.unpaired !== "allow") throw unpaired(fixtureId);
+    return current;
+  }
+  // Unadopted on a PAIRED board though the adoption just took no rows: never hand out a room that nothing adopted.
+  throw new RealtimeKitError(503, "unavailable", "the board's meeting could not be adopted");
 }
 
 /** Created when a PLAYER first arrives in the window, not after both check
@@ -500,10 +539,9 @@ export async function ensureMeeting(
   const existing = await meetingOnFile(fixtureId, side, now);
   if (existing) {
     if (existing.unadopted) {
-      if (existing.paired) await adoptRooms(sql, fixtureId);
-      else if (opts.unpaired !== "allow") throw unpaired(fixtureId);
-      if (existing.endedAt !== null) throw meetingEnded(fixtureId);
-      return { meetingId: existing.meetingId };
+      const claimed = await claimUnadopted(fixtureId, side, existing, opts, now);
+      if (claimed.endedAt !== null) throw meetingEnded(fixtureId);
+      return { meetingId: claimed.meetingId };
     }
     if (existing.samePair) {
       if (existing.endedAt !== null) throw meetingEnded(fixtureId);
@@ -566,14 +604,13 @@ export async function ensureMeeting(
   // behind it before the retire, or another pairing's create landed after it — is refused, never handed to a new
   // pairing. An UNADOPTED winner (the pre-mint job's room landing during our create) is the board's by definition: adopted
   // on a paired board, as on the first read above.
-  if (winner.unadopted) {
-    if (winner.paired) await adoptRooms(sql, fixtureId);
-  } else if (!winner.samePair) {
-    if (winner.evidence) throw pairingChanged(fixtureId);
+  const claimed = winner.unadopted ? await claimUnadopted(fixtureId, side, winner, opts, now) : winner;
+  if (!claimed.unadopted && !claimed.samePair) {
+    if (claimed.evidence) throw pairingChanged(fixtureId);
     throw new RealtimeKitError(503, "unavailable", "the board's meeting changed while one was being made");
   }
-  if (winner.endedAt !== null) throw meetingEnded(fixtureId);
-  return { meetingId: winner.meetingId };
+  if (claimed.endedAt !== null) throw meetingEnded(fixtureId);
+  return { meetingId: claimed.meetingId };
 }
 
 /** The preset names the role — the player publishes, the arbiter only
@@ -814,6 +851,8 @@ export async function peerReportCamera(
   | { camera: "unreadable"; error: RealtimeKitError }
   | { camera: "none" }
 > {
+  // An empty id would request `/sessions/peer-report/` - another route, whose answer would be read as this peer's report.
+  if (peerId.trim() === "") throw new Error("peerReportCamera needs a peer id");
   const cfg = requireConfig();
   let report: unknown;
   try {
