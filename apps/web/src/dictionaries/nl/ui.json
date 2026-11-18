@@ -2935,6 +2935,7 @@
   "roundrobin.refusal.RR_ADHOC_ROUND_INVALID": "Die ronde bestaat nog niet. Kies een bestaande ronde of de volgende.",
   "roundrobin.refusal.RR_RANK_OVERRIDE_POOL": "Elke rang kan één keer per groep worden vastgezet, en nooit boven de grootte van de groep.",
   "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE": "Rangen kunnen alleen worden vastgezet op de stand van een competitie, groep, Zwitserse fase of americano.",
+  "roundrobin.refusal.RR_RANK_OVERRIDE_UNDRAWN_POOLS": "Loot eerst de groepen: een rang wordt binnen de eigen groep vastgezet.",
   "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD": "{qualified} kunnen zich niet kwalificeren uit dit veld: het kan er hooguit {max} leveren.",
   "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "De competitie zou opnieuw ingedeeld moeten worden, en dat wist wat al bij de wedstrijden is ingesteld (officials, teamopstellingen, scoreapparaten, streams, beschikbaarheid van spelers of baanoproepen). Gebruik Wedstrijden herbouwen — dat laat eerst zien wat het wist.",
   "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH": "De competitie zou opnieuw ingedeeld moeten worden, en dat verwijdert de wedstrijden die je met Wedstrijd toevoegen hebt toegevoegd. Wedstrijden herbouwen verwijdert ze ook: noteer ze eerst en gebruik het daarna.",

@@ -22,7 +22,14 @@ export async function readStageSeating(tx: Tx, stageId: string): Promise<StageSe
       members.set(l.pool_id, set);
     }
   }
-  return { seated: lines.length > 0, poolOf, sizeOf: new Map([...members].map(([pool, set]) => [pool, set.size])) };
+  // B4 fix wave (m4): a group stage is drawn in pools (one or more), so before its draw a pin has no pool to name.
+  const [stage] = await tx<{ kind: string }[]>`select kind from stages where id = ${stageId}`;
+  return {
+    seated: lines.length > 0,
+    poolOf,
+    sizeOf: new Map([...members].map(([pool, set]) => [pool, set.size])),
+    pooled: stage?.kind === "group",
+  };
 }
 
 /** The same seating as membership sets: the shape `changedPools` compares across a redraw. */

@@ -32,6 +32,8 @@ export type RoundRobinRefusalCode =
   // Task 13 (ruling 288): a rank pinned twice in a pool, or above the pool's size; and a pin on a stage that has no table.
   | "RR_RANK_OVERRIDE_POOL"
   | "RR_RANK_OVERRIDE_NOT_TABLE"
+  // B4 fix wave (m4): a pin on a pooled stage before its pools are drawn - it could name no pool.
+  | "RR_RANK_OVERRIDE_UNDRAWN_POOLS"
   // Task 12b (RB5-E6): a cut larger than the field (or than any pool can supply).
   | "RR_CUT_EXCEEDS_FIELD"
   // Task 2 fix round 1: a Generate that would have to draw the stage again (a pool changed parity or a group re-snaked)
@@ -104,6 +106,11 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 422,
     en: "Ranks can only be pinned on a league, group, Swiss or americano table.",
     key: "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE",
+  },
+  RR_RANK_OVERRIDE_UNDRAWN_POOLS: {
+    status: 422,
+    en: "Draw the pools first: a rank is pinned within its pool.",
+    key: "roundrobin.refusal.RR_RANK_OVERRIDE_UNDRAWN_POOLS",
   },
   // Task 12b states the sentence's final wording with its builder gate; the two numbers are `details.qualified` / `details.max`.
   RR_CUT_EXCEEDS_FIELD: {

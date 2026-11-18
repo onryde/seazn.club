@@ -28,6 +28,7 @@ import { RANK_OVERRIDE_TABLE_KINDS, planRankOverride } from "@/lib/rank-override
 import { readStagePins, readStageSeating } from "../rank-override";
 import { inTheField } from "@/lib/entrant-field";
 import { roundRobinRefusal } from "../roundrobin-refusal";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -293,11 +294,14 @@ async function progressCompletedStage(
           { event: "seed_proposal_compute_failed", stageId, nextStageId: next!.id, err: String(err) },
           "stage completed, but computing the next stage's seed proposal failed",
         );
+        // B4 fix wave (12b m1): a round-robin refusal (RR_CUT_EXCEEDS_FIELD) rides inside the wrap by name with its own fields, so the
+        // desk says that sentence in the reader's language instead of the server's English reason.
+        const cause = err instanceof HttpError && err.code !== undefined && isRoundRobinRefusalCode(err.code) ? { ...err.extra, cause: err.code } : {};
         throw new HttpError(
           409,
           err instanceof Error ? err.message : String(err),
           "STAGE_COMPLETED_SEEDING_FAILED",
-          { stageId, nextStageId: next!.id },
+          { ...cause, stageId, nextStageId: next!.id },
         );
       }
       if (!(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE")) throw err;
@@ -495,6 +499,7 @@ export async function overrideStandings(
     const plan = planRankOverride(await readStagePins(tx, stageId), input.rows, seating);
     if (!plan.ok) {
       if (plan.reason === "unseated") throw new HttpError(422, "override references an entrant with no place in this stage's table");
+      if (plan.reason === "undrawn_pools") throw roundRobinRefusal("RR_RANK_OVERRIDE_UNDRAWN_POOLS");
       throw roundRobinRefusal("RR_RANK_OVERRIDE_POOL", {
         reason: plan.reason,
         rank: plan.rank,
@@ -524,6 +529,9 @@ export async function overrideStandings(
   });
   // pinned ranks land in the snapshots immediately
   await recomputeStandings(auth.orgId, stageId);
+  // B4 fix wave (m3): and on the public pages - the division and competition tags a result write clears (the pool winners banner and
+  // the table read the recomputed snapshots). Best-effort: the pin is written.
+  await fireStageRevalidate(auth.orgId, stageId);
   // D4a (P5): a correction here invalidates any dependent `timing:"setup"`
   // stage's draft proposal — mark it stale and recompute a fresh one.
   //

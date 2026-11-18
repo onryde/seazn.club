@@ -76,6 +76,28 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
 
   // W5 T12b (X-BD-8): Generate before Start, or the completion whose seeding tripped, is refused for a cut the field cannot supply: said in
   // the reader's language with both numbers, amber, and the board refreshes (the completion stood).
+  // B4 fix wave (12b m1): a setup-timing completion whose proposal trips the cut arrives WRAPPED (the stage completed): the organiser
+  // reads the cut's own sentence inside the "completed, but" line, in her language - never the server's English reason.
+  // differential: today the wrap's `{reason}` is the server's English message.
+  it("STAGE_COMPLETED_SEEDING_FAILED caused by RR_CUT_EXCEEDS_FIELD says the cut's sentence in every locale; another cause keeps the reason", () => {
+    const wire = "7 can't qualify from this field: it can supply at most 6.";
+    const err = new ApiV1Error(wire, 409, "STAGE_COMPLETED_SEEDING_FAILED", { cause: "RR_CUT_EXCEEDS_FIELD", qualified: 7, max: 6, reason: "bestnth_unsuppliable", stageId: "s1", nextStageId: "s2" });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      const out = classifyActError(err, say, "en");
+      const cutSentence = tRuntime(dict, "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD", { qualified: 7, max: 6 });
+      expect(out, locale).toEqual({ tone: "warning", refresh: true, text: tRuntime(dict, "schedule.error.completedSeedingFailed", { reason: cutSentence }) });
+      if (locale !== "en") expect(out.text, `${locale}: not the server's English`).not.toContain(wire);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // the pair: a wrap with no named cause keeps the server's reason, as before
+    const plain = new ApiV1Error("boom", 409, "STAGE_COMPLETED_SEEDING_FAILED", { stageId: "s1", nextStageId: "s2" });
+    expect(classifyActError(plain, msg, "en").text).toContain("boom");
+  });
+
   it("RR_CUT_EXCEEDS_FIELD is said in every locale with its two numbers, never the server's English", () => {
     const wire = "8 can't qualify from this field: it can supply at most 6.";
     const err = new ApiV1Error(wire, 422, "RR_CUT_EXCEEDS_FIELD", { qualified: 8, max: 6, reason: "cut_exceeds_field", stageId: "s2" });

@@ -241,6 +241,35 @@ describe.skipIf(!HAS_DB)("X-PO-3 (RB5-P5, ST-G14): a rank is pinned once PER POO
     expect(checked).toBe(4);
   });
 
+  // B4 fix wave (m4): a group stage created but not drawn (a `setup` super-groups tier, or Generate not yet run) has no pool ids, so a
+  // pin cannot name its pool: refused by name, nothing stored. differential: today it is stored with pool_id null. Its pair: an
+  // undrawn league is one table and still takes the pin; drawn, the group takes it (the tests above).
+  it("X-PO-3 a pin on a group stage before its pools are drawn is refused RR_RANK_OVERRIDE_UNDRAWN_POOLS, nothing stored; an undrawn league takes it", async () => {
+    let checked = 0;
+    for (const kind of ["group", "league"] as const) {
+      const { auth } = await seedOrg("pro");
+      const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "B4 m4 " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+      const division = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + randomUUID().slice(0, 6), sport_key: BADMINTON.key, variant_key: BADMINTON.variant, config: {} });
+      const made = await createEntrants(auth, division.id, Array.from({ length: 8 }, (_, i) => entrantInput(BADMINTON, `P${i + 1}`, i + 1)));
+      const [stage] = await createStages(auth, division.id, { seq: 1, kind, name: "Table", config: kind === "group" ? { pools: { count: 2 } } : {}, progression: null });
+      const body = { rows: [pin(made[0]!.id, 1)] };
+      if (kind === "group") {
+        const err = await refusal(overrideStandings(auth, stage!.id, body));
+        expect({ status: err.status, code: err.code }).toEqual({ status: 422, code: "RR_RANK_OVERRIDE_UNDRAWN_POOLS" });
+        expect(await storedOverrides(stage!.id), "nothing stored").toBeUndefined();
+        // drawn, the same pin is taken and names its pool
+        await generateStageFixtures(auth, stage!.id);
+        await overrideStandings(auth, stage!.id, body);
+        expect((await storedOverrides(stage!.id))?.map((x) => typeof x.pool_id)).toEqual(["string"]);
+      } else {
+        await overrideStandings(auth, stage!.id, body);
+        expect(await storedOverrides(stage!.id)).toEqual([{ entrant_id: made[0]!.id, rank: 1, pool_id: null }]);
+      }
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("X-PO-3 a pool the entrant is not seated in is not guessed: an entrant with no line in the stage is refused, nothing stored", async () => {
     const r = await rig({ n: 4, kind: "league" });
     const late = await r.add("P5", 5); // on the division, in no line of the table yet

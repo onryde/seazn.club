@@ -29,6 +29,15 @@ describe("planRankOverride (RB5-P5)", () => {
     expect(planRankOverride([], [{ entrant_id: "nobody", rank: 1 }], TWO_POOLS)).toEqual({ ok: false, reason: "unseated", entrant_id: "nobody" });
     expect(planRankOverride([], [{ entrant_id: "nobody", rank: 99 }], UNDRAWN)).toEqual({ ok: true, pins: [{ entrant_id: "nobody", rank: 99, pool_id: null }] });
   });
+  // B4 fix wave (m4): a POOLED stage not drawn yet has no pool a pin could name, and a pin stored with no pool was held back by the read
+  // side for good, with no signal. Refused, by name, until the pools are drawn. differential: today it is stored with pool_id null.
+  it("an undrawn POOLED stage refuses every pin (it must name its pool); an undrawn league still takes the body as its one table", () => {
+    const UNDRAWN_POOLED: StageSeating = { ...UNDRAWN, pooled: true };
+    expect(planRankOverride([], [{ entrant_id: "a1", rank: 1 }], UNDRAWN_POOLED)).toEqual({ ok: false, reason: "undrawn_pools" });
+    expect(planRankOverride([], [{ entrant_id: "a1", rank: 1 }], { ...UNDRAWN, pooled: false }).ok).toBe(true);
+    // drawn, a pooled stage checks per pool as before
+    expect(planRankOverride([], [{ entrant_id: "a1", rank: 1 }], { ...TWO_POOLS, pooled: true })).toEqual({ ok: true, pins: [{ entrant_id: "a1", rank: 1, pool_id: "A" }] });
+  });
   it("a second body replaces only the pools it names; an old pin with no pool_id is placed by its entrant's pool", () => {
     const existing = [{ entrant_id: "a1", rank: 1, pool_id: "A" }, { entrant_id: "b1", rank: 1 }, { entrant_id: "b2", rank: 2, pool_id: "B" }];
     const plan = planRankOverride(existing, [{ entrant_id: "b3", rank: 3 }], TWO_POOLS);

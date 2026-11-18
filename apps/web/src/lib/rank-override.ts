@@ -34,13 +34,16 @@ export interface StageSeating {
   poolOf: ReadonlyMap<string, string | null>;
   /** pool id (null: the stage has no pools) -> how many entrants hold a seat in it. */
   sizeOf: ReadonlyMap<string | null, number>;
+  /** B4 fix wave (m4): the stage is drawn in POOLS (a group stage), so an unseated one has no pool a pin could name. */
+  pooled?: boolean;
 }
 
 export type RankOverridePlan =
   | { ok: true; pins: RankPin[] }
   | { ok: false; reason: "duplicate"; pool_id: string | null; rank: number }
   | { ok: false; reason: "above_size"; pool_id: string | null; rank: number; size: number }
-  | { ok: false; reason: "unseated"; entrant_id: string };
+  | { ok: false; reason: "unseated"; entrant_id: string }
+  | { ok: false; reason: "undrawn_pools" };
 
 /** The pool a stored pin belongs to: what it says, else (an old pin) the pool its entrant sits in now, else unknown. */
 export function pinPool(pin: RankPin, seating: StageSeating): string | null | undefined {
@@ -59,6 +62,9 @@ export function planRankOverride(
   rows: readonly { entrant_id: string; rank: number }[],
   seating: StageSeating,
 ): RankOverridePlan {
+  // B4 fix wave (m4): a POOLED stage not drawn yet has no pool ids, and a pin stored with none would be held back by the read side
+  // (`locksThatFit`) for good, with no signal. A pin must name its pool, so it waits for the draw.
+  if (!seating.seated && seating.pooled === true) return { ok: false, reason: "undrawn_pools" };
   const poolOfRow = (entrantId: string): string | null | undefined => (seating.seated ? seating.poolOf.get(entrantId) : null);
   const incoming: RankPin[] = [];
   for (const row of rows) {

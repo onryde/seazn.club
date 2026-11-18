@@ -2775,9 +2775,13 @@ export function classifyActError(
   // because otherwise the board keeps showing a completed stage as active and
   // the next click lands on an already-complete stage.
   if (err instanceof ApiV1Error && err.code === "STAGE_COMPLETED_SEEDING_FAILED") {
+    // B4 fix wave (12b m1): a cut the field cannot supply rides inside the wrap by name (`cause`, completion.ts) with its numbers, so
+    // the reason is the cut's own sentence in the reader's language, never the server's English.
+    const cause = err.extra?.cause;
+    const reason = cause === "RR_CUT_EXCEEDS_FIELD" ? undoRefusalText(cause, err.extra, msg) : err.message;
     return {
       tone: "warning",
-      text: msg("schedule.error.completedSeedingFailed", { reason: err.message }),
+      text: msg("schedule.error.completedSeedingFailed", { reason }),
       refresh: true,
     };
   }
@@ -2809,8 +2813,8 @@ export function classifyActError(
   }
   // W5 T12b (X-BD-8, RB5-E6): a cut the field cannot supply, refused at Generate before Start or at an on_complete completion, says so
   // in the reader's language, naming the largest cut that works. Amber: the stage stands, the format or the field is what to mend. A
-  // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED (completion.ts, not yet passing the
-  // code through) and is not localized by this branch.
+  // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED, carrying the code as `cause`
+  // (B4 fix wave), and is said by the wrap's branch above.
   if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
     return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
   }

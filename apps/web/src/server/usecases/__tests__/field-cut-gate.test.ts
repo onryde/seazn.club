@@ -229,7 +229,11 @@ describe.skipIf(!HAS_DB)("X-BD-8 on_complete path: refused by name where the eng
     await decideAll(r.auth, r.stageIds[0]!);
     // Complete wraps a proposal failure as "completed, but the next stage's seeding could not be prepared" (the stage stands); the
     // proposal itself, asked directly, says why by name.
-    await refusal(completeStage(r.auth, r.stageIds[0]!));
+    // B4 fix wave (12b m1): the wrap carries the cause by name and its numbers, so the desk can say the cut's own sentence.
+    // differential: today the wrap's extra is {stageId, nextStageId} only, and the desk shows the server's English.
+    const wrapped = await refusal(completeStage(r.auth, r.stageIds[0]!));
+    expect(wrapped.code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
+    expect(wrapped.extra).toMatchObject({ cause: "RR_CUT_EXCEEDS_FIELD", qualified: 7, max: 6, stageId: r.stageIds[0], nextStageId: r.stageIds[1] });
     const err = await refusal(computeSeedProposal(r.auth, r.stageIds[1]!));
     expect(err.code).toBe("RR_CUT_EXCEEDS_FIELD");
     expect(err.extra).toMatchObject({ qualified: 7, max: 6, reason: "bestnth_unsuppliable" });

@@ -8088,6 +8088,7 @@ export type DictionaryKey =
   | "roundrobin.refusal.RR_LATE_ENTRY_UNKNOWN_POOL"
   | "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE"
   | "roundrobin.refusal.RR_RANK_OVERRIDE_POOL"
+  | "roundrobin.refusal.RR_RANK_OVERRIDE_UNDRAWN_POOLS"
   | "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP"
   | "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH"
   | "roundrobin.refusal.RR_SUBSTITUTE_PARTNER_REFUSED"
