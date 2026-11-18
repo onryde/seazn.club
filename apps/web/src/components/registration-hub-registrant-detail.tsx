@@ -176,7 +176,7 @@ export function RegistrationHubRegistrantDetail({
             paymentState === "disputeLost" ? (
               // The chip's own sentence for what a lost chargeback did, said in the panel (a hover title alone is invisible on a phone).
               <span data-registration-hub-registrant-dispute-lost className="flex flex-col items-end gap-0.5 text-right">
-                <span>{t(dict, REGISTRANT_PAYMENT_STATE_KEY[paymentState])}</span>
+                <span className="first-letter:uppercase">{t(dict, REGISTRANT_PAYMENT_STATE_KEY[paymentState])}</span>
                 <span className="text-xs font-normal text-slate-500">{t(dict, "reg.chip.disputeLostTitle")}</span>
               </span>
             ) : (
@@ -366,7 +366,7 @@ export function RegistrationHubRegistrantDetail({
               href={`/api/v1/registrations/${row.id}/evidence`}
               download
               title={t(dict, "reg.action.evidenceTitle")}
-              className="btn btn-ghost text-xs font-medium text-rose-700 max-md:min-h-11"
+              className="btn btn-ghost text-xs"
             >
               {t(dict, "reg.action.evidence")}
             </a>
