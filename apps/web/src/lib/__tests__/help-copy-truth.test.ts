@@ -1367,6 +1367,47 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     );
   });
 
+  it("reads a token fee ladder: the rate is live by construction, so the pairing of label and cell is what is checked", () => {
+    // Registration help renders each cell from the plan table (`{{plan:registration.fee_percent:<plan>}}`), so there is
+    // no typed percent to compare. The rate cannot go stale; what can still go wrong is a label on the wrong plan's
+    // cell, or a row that vanishes.
+    const live = { community: 8, event_pass: 5, event_pass_l: 5, pro: 2, enterprise: 1 };
+    const tok = (plan: string) => `{{plan:registration.fee_percent:${plan}}}`;
+    const table = [
+      "| Plan | Platform fee |",
+      "| --- | --- |",
+      `| Community | ${tok("community")}% |`,
+      `| Event Pass | ${tok("event_pass")}% |`,
+      `| Pro | ${tok("pro")}% |`,
+      `| Enterprise | ${tok("enterprise")}% |`,
+    ].join("\n");
+    const rows = feeLadderRows(table);
+    // anti-vacuity: four rows read, each a token row with the plan key the token names (underscore intact)
+    expect(rows.map((r) => [r.plan, r.tokenPlan, r.percent])).toEqual([
+      ["Community", "community", null],
+      ["Event Pass", "event_pass", null],
+      ["Pro", "pro", null],
+      ["Enterprise", "enterprise", null],
+    ]);
+    expect(feeLadderFaults(rows, live)).toEqual([]);
+    expect(feeLadderTables(table), "found by shape").toHaveLength(1);
+
+    // A label on another plan's cell is a fault, even though every rate is live.
+    expect(
+      feeLadderFaults(feeLadderRows(table.replace(`| Pro | ${tok("pro")}% |`, `| Pro | ${tok("community")}% |`)), live),
+    ).toEqual(['fee ladder: "Pro" reads the community cell, but its plan key is pro']);
+    // A dropped row is still a fault: it would read as "that plan has no platform fee".
+    expect(
+      feeLadderFaults(feeLadderRows(table.replace(`| Event Pass | ${tok("event_pass")}% |\n`, "")), live),
+    ).toEqual(["fee ladder: no row for Event Pass"]);
+    // A token for another feature is not a fee cell: the row is not read, so it counts as missing.
+    expect(
+      feeLadderFaults(feeLadderRows(table.replace(tok("pro"), "{{plan:entrants.per_division.max:pro}}")), live),
+    ).toEqual(["fee ladder: no row for Pro"]);
+    // Either rung of the pass answers for the Event Pass label.
+    expect(feeLadderFaults(feeLadderRows(table.replace(tok("event_pass"), tok("event_pass_l"))), live)).toEqual([]);
+  });
+
   // ── THE WIDENED SWEEP, W3 ─────────────────────────────────────────────────
 
   it("finds a fee ladder by SHAPE, wherever in an article it sits", () => {

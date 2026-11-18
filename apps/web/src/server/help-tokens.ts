@@ -28,6 +28,11 @@ export function hasHelpTokens(markdown: string): boolean {
   return markdown.includes(TOKEN_OPEN);
 }
 
+/** Every well-formed plan token in the Markdown, in order (a repeated token is listed each time). */
+export function helpTokensIn(markdown: string): { token: string; feature: string; plan: string }[] {
+  return [...markdown.matchAll(new RegExp(TOKEN_SOURCE, "g"))].map((m) => ({ token: m[0], feature: m[1]!, plan: m[2]! }));
+}
+
 export function resolveHelpTokens(markdown: string, matrix: MatrixData): string {
   const out = markdown.replace(new RegExp(TOKEN_SOURCE, "g"), (token, feature: string, plan: string) => {
     const cell = matrix[feature]?.[plan];

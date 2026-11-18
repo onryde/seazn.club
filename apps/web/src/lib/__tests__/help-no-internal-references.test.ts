@@ -251,7 +251,6 @@ type Known = Record<string, Record<string, LeakRule[]>>;
 const KNOWN: Known = {
   divisions: { "divisions/groups-to-knockout": ["developer-word"] },
   "getting-started": { "getting-started/generate-fixtures": ["developer-word"] },
-  registration: { "registration/card-payments": ["spec-mark"] },
   scheduling: {
     "scheduling/ai-officials": ["developer-word"],
     "scheduling/ai-scheduling": ["developer-word"],

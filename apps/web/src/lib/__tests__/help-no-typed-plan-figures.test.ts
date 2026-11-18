@@ -87,8 +87,6 @@ const KNOWN: Record<string, string> = {
   "billing/groups": `${PRICE} ($14.99, $6.99, $128.99, $63.99, $384.95, $644.95) + ${FEE} + an illustrative 60%-off coupon`,
   "billing/plans": `${PRICE} ($11.99, $14.99, $6.99) + ${FEE} (the fee ladder table and four inline fees)`,
   "getting-started/create-your-organisation": FEE,
-  "registration/card-payments": `${FEE} (the fee ladder table)`,
-  "registration/open-registration": FEE,
   "sharing/sponsors": "flat 5% sponsorship fee, the same on every plan (not a per-plan figure); the billing task decides whether it becomes a token",
 };
 
@@ -176,11 +174,6 @@ describe("strayBraces: hand-written cases", () => {
  * Each entry must still suppress at least one real hit, or it is a stale excuse.
  */
 const STRAY_ALLOW: { page: string; text: string; reason: string }[] = [
-  {
-    page: "registration/card-payments",
-    text: "{{reference}}",
-    reason: "the offline-payment instructions placeholder the organiser types; the article explains it as inline code",
-  },
   {
     page: "registration/open-registration",
     text: "{{reference}}",
