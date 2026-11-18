@@ -415,6 +415,27 @@ describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): 
     }
   });
 
+  // (null, null) pin, check-in capacity plan 2 Task 2 (V529): the pre-mint job's UNADOPTED room - both stamps null - on a board that
+  // is now PAIRED. The loader's `samePair` reads null against the pairing as "not this pairing's", so the side is `none` and the
+  // board's camera report counts no row: nobody has arrived, and a room a claim has not adopted is not a meeting of this pairing.
+  // PINS TODAY'S READING; plan 3 (Tasks 1 and 3) owns what the panel does with an unadopted room.
+  it("an UNADOPTED room on a paired, started board is no meeting of it: its side reads `none` and the camera report counts no row; the adopted sibling is open; two unadopted rows read null", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    await openRound(r);
+    const [mixed, bare] = r.boards;
+    for (const b of [mixed!, bare!]) await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await meeting(mixed!.fixtureId, r.orgId);
+    await meeting(bare!.fixtureId, r.orgId);
+    await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${mixed!.fixtureId} and side = 'away'`;
+    await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${bare!.fixtureId}`;
+    const view = (await loadArbiterRound(r.owner, r.divisionId))!;
+    const m = view.boards.find((x) => x.fixtureId === mixed!.fixtureId)!;
+    const n = view.boards.find((x) => x.fixtureId === bare!.fixtureId)!;
+    expect([m.sides.home.state, m.sides.away.state], "adopted side open, unadopted side none").toEqual(["open", "none"]);
+    expect([n.sides.home.state, n.sides.away.state], "no row of this pairing at all").toEqual(["none", "none"]);
+    expect(n.cameraReport, "no row counts: nothing is on file to report").toBeNull();
+  });
+
   it("an unstarted Required board and a camera-off board have no report whatever their rows say (the empty case first)", async () => {
     const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
     await openRound(r);
@@ -758,6 +779,24 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     const before = calls.length;
     expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video }))).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
     expect(calls.length, "refused before any request").toBe(before);
+  });
+
+  // (null, null) pin, check-in capacity plan 2 Task 2 (V529): an arbiter is never admitted into a pre-minted room nobody has
+  // adopted. The join's `samePair` reads the unadopted stamp against the paired board as "not started", so it is refused with
+  // zero vendor requests and writes nothing; the adopted sibling joins. PINS TODAY'S READING; plan 3 Task 1 replaces this rule
+  // with the presence-based one and owns its tests.
+  it("an UNADOPTED room is not a started meeting: the join is a 409 VIDEO_MEETING_NOT_STARTED with zero vendor requests and no row; the adopted sibling joins (the positive pair)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const board = r.boards[0]!;
+    await bridge(board.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await meeting(board.fixtureId, r.orgId);
+    await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${board.fixtureId} and side = 'away'`;
+    const { video, calls } = fakeVideo();
+    expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video }))).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
+    expect(calls, "zero vendor requests - nothing minted into an empty room").toEqual([]);
+    expect(await arbiterRows(board.fixtureId)).toEqual([]);
+    expect((await joinAsArbiter(r.owner, board.fixtureId, "home", { video })).side, "the positive pair: the adopted side").toBe("home");
   });
 
   it("D16: a side whose meeting has ENDED keeps VIDEO_MEETING_ENDED - the other side's, still live, is joinable - and nothing is created", async () => {

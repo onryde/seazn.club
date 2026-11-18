@@ -2221,6 +2221,26 @@ describe.runIf(HAS_DB)("job 3 — tear the meeting down at the result, or at the
       expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at !== null]), "stamped, not deleted").toEqual([[m, true]]);
     });
 
+    it("an UNADOPTED room (both stamps null: the pre-mint job's) is never stale, on a paired board or an unpaired one: before the deadline it is left alone; past it the window rule ends and stamps it, and its row is KEPT (a retire would delete it)", async () => {
+      let checked = 0;
+      for (const paired of [true, false]) {
+        const b = await openedBoard({ checkedIn: [] });
+        const m = await meetingFor(b);
+        // The room as the pre-mint job leaves it: made while the board had no pairing, stamped with neither entrant.
+        await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${b.fixtureId}`;
+        if (!paired) await sql`update fixtures set home_entrant_id = null, away_entrant_id = null where id = ${b.fixtureId}`;
+        const { ended, end } = recordingEnd();
+        const early = await sweep(b, { now: b.at(5), endMeeting: end });
+        expect([ended, early.meetingsEnded], `paired ${paired}: nothing ended before the deadline`).toEqual([[], 0]);
+        expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at]), `paired ${paired}: left alone, unended`).toEqual([[m, null]]);
+        const late = await sweep(b, { now: b.at(45), endMeeting: end });
+        expect([ended, late.meetingsEnded], `paired ${paired}: past the deadline the window rule ends it, once`).toEqual([[m], 1]);
+        expect((await rowsOf(b.fixtureId)).map((r) => [r.meeting_id, r.ended_at !== null]), `paired ${paired}: stamped and KEPT, so not the retire`).toEqual([[m, true]]);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: the paired and the unpaired board").toBe(2);
+    });
+
     it("a room made for the board's CURRENT pair is not stale: before the deadline the sweep leaves it alone", async () => {
       const b = await openedBoard({ checkedIn: [] });
       const m = await meetingFor(b);

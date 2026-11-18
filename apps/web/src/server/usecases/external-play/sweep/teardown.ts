@@ -40,7 +40,11 @@ type TeardownCandidate = BridgeFacts & {
   anchor: BoardAnchor | null;
   /** Made for another pairing than the fixture's CURRENT one, with no game behind it: the retire's own judgement (gameEvidenceOn).
    *  Only on a board that HAS a pairing: an unpaired board's rooms are left to the window rules below (ended at the deadline,
-   *  stamped), as before - an organiser who unpairs and re-pairs the same players a minute later keeps their rooms. */
+   *  stamped), as before - an organiser who unpairs and re-pairs the same players a minute later keeps their rooms.
+   *  Never an UNADOPTED room (both stamps null: the pre-mint job's room for a board with no pairing yet, adopted by the first
+   *  claim): it is made for whichever pairing comes first, so it is not another pairing's. `retireStaleMeeting` never selects it,
+   *  so a candidate marked retirable here would reach the retire branch, retire nothing and never be judged by the window rule
+   *  below - a room nobody joined would stay open past its deadline. It is judged by `meetingIsDone` like any other. */
   retirable: boolean;
 };
 
@@ -50,6 +54,7 @@ export async function teardownCandidates(pass: Pass): Promise<TeardownCandidate[
            ep.status as "bridgeStatus", ep.challenge_id as "challengeId", ep.create_sent_at as "createSentAt",
            ep.mint_claimed_at as "mintClaimedAt", o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            (f.home_entrant_id is not null and f.away_entrant_id is not null
+            and m.home_entrant_id is not null
             and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
             and not coalesce(${gameEvidenceOn(pass.now)}, false)) as "retirable"
       from fixture_video_meetings m
