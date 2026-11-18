@@ -1,7 +1,7 @@
 // Split out of the former e2e/mobile.spec.ts (2026-11-13, verbatim move): organiser console chrome: the overflow control, settings org card, competition desk (division row, tool row), division header Open menu, decider consoles, Directory tab strip, dual-role header, page smokes, publish gate sheet, lineup editor, z3 schedule actions.
 // Runs ONLY in the seven width projects (mobile-320/360/se/14/430, tablet-768/834 — MOBILE_SPECS in playwright.config.ts).
 
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
   apiJson,
@@ -1432,6 +1432,9 @@ test("X-CU-8 / X-CU-11 the waiting strip and the Group field fit every width; th
 
   await strip.getByTestId("table-waiting-place").click();
   await expect(page.getByTestId("schedule-notice")).toContainText(`${who} joined Group`, { timeout: 20_000 });
+  // B5 fix wave G2 (batch review I2): the line that tells the organiser what to tell the player is said at the top of the panel; on a
+  // phone the page was opened down at the strip, so it is brought into view under the sticky header - measured, not its text.
+  await expectOutcomeInView(page, page.getByTestId("schedule-notice"), width, "the place's notice");
   await expect(page.getByTestId("table-waiting")).toHaveCount(0, { timeout: 20_000 });
   const placed = await apiJson<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null; stage_id: string }[]>(request, `/api/v1/divisions/${t.divisionId}/fixtures`);
   expect((placed.data ?? []).filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId).length, "placed: four catch-up lines").toBe(4);
@@ -1444,4 +1447,81 @@ test("X-CU-8 / X-CU-11 the waiting strip and the Group field fit every width; th
   expect(box!.height, `${width}: the Group field at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
   expect(box!.x + box!.width, `${width}: the Group field inside the viewport`).toBeLessThanOrEqual(width + 0.5);
   await expectNoHorizontalScroll(page);
+});
+
+/** B5 fix wave G2 (batch review I2; Task 17c's contract): below `md` an outcome line said at the top of the panel is brought into view
+ *  under the sticky header. Smooth scroll: poll until it has landed - its top at or below the header's bottom edge, its bottom inside the
+ *  viewport - then hit-test its centre (`elementFromPoint`, not paint). From `md` up nothing scrolls (owner, 17c), so the line is only
+ *  required on the page. Returns whether the in-view proof ran, so a caller can count it. */
+async function expectOutcomeInView(page: Page, line: Locator, width: number, what: string): Promise<boolean> {
+  await expect(line, `${what} is on the page`).toBeVisible();
+  if (width >= 768) return false;
+  await expect
+    .poll(
+      async () =>
+        line.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const headerBottom = document.querySelector("header")!.getBoundingClientRect().bottom;
+          return r.top >= headerBottom - 1 && r.bottom <= window.innerHeight;
+        }),
+      { message: `${what} is in view under the sticky header at ${width}`, timeout: 5_000 },
+    )
+    .toBe(true);
+  const hit = await line.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(r.height / 2, 12));
+    return at === el || el.contains(at);
+  });
+  expect(hit, `a hit test on ${what} lands on it at ${width}`).toBe(true);
+  return true;
+}
+
+// B5 fix wave G2 (batch review I2): the strip's Rebuild exit at every width project. Nothing in the stage has started, so the strip
+// offers "Rebuild fixtures"; the confirm fits; the redraw's line ("... is in: the stage was drawn again ...") is said at the top of the
+// panel and, on a phone, brought into view - before this fix it was drawn at y=-332 on a 320 screen and the strip just vanished. Then a
+// STALE press (a line started since the strip was drawn): Rebuild's own refusal is said under the row, in view, and the player waits.
+test("B5 G2 the waiting strip's Rebuild: its outcome comes into view on a phone; a stale press is refused in place", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/table-late-entry-kit");
+  let inView = 0;
+
+  const t = await kit.seedStartedTable(request, { label: `Redraw ${width}`, n: 8, pools: 2, play: false });
+  const who = `Riverside Rovers Community Football Club ${TAG}`;
+  await kit.registerLateArrival(request, t, who);
+  await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("table-waiting");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await strip.getByTestId("table-waiting-rebuild").click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("It deletes 12 fixtures.");
+  await expectNoHorizontalScroll(page);
+  await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
+  const notice = page.getByTestId("schedule-notice");
+  await expect(notice).toContainText(`${who} is in: the stage was drawn again with them in it.`, { timeout: 20_000 });
+  if (await expectOutcomeInView(page, notice, width, "the Rebuild's notice")) inView++;
+  await expect(page.getByTestId("table-waiting"), "drawn in: the strip goes").toHaveCount(0, { timeout: 20_000 });
+  await expectNoHorizontalScroll(page);
+
+  const stale = await kit.seedStartedTable(request, { label: `Stale ${width}`, n: 5, play: false });
+  const late = `Stale Riverside Rovers Community Club ${TAG}`;
+  await kit.registerLateArrival(request, stale, late);
+  await page.goto(await divisionPath(request, stale.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+  await expect(page.getByTestId("table-waiting-rebuild")).toBeVisible({ timeout: 20_000 });
+  // A scorer starts round 1 after the strip was drawn: the press is stale.
+  const first = (await kit.tableLines(request, stale.divisionId, stale.stageId)).find((f) => f.round_no === 1)!;
+  const ev = await apiJson(request, `/api/v1/fixtures/${first.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+  await page.getByTestId("table-waiting-rebuild").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Rebuild", exact: true }).click();
+  const refusal = page.getByTestId("table-waiting-outcome");
+  await expect(refusal).toContainText(late, { timeout: 20_000 });
+  if (await expectOutcomeInView(page, refusal, width, "the stale Rebuild's refusal")) inView++;
+  await expect(page.getByTestId("table-waiting-row"), "she still waits").toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+  // Anti-vacuity: below `md` both in-view proofs ran; from `md` up neither is owed.
+  expect(inView, `in-view proofs at ${width}`).toBe(width < 768 ? 2 : 0);
 });

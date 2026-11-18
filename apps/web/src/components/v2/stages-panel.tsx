@@ -763,8 +763,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // the lines announce themselves (role="status" / "alert").
   const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches;
   const [outcomeScroll, setOutcomeScroll] = useState(0);
-  const closeRailSheet = (stageId: string) => {
+  // B5 fix wave G2 (batch review I2): the same scroll for every outcome said OUTSIDE `act` / `swissStageWrite` — the waiting strips'
+  // place, Rebuild and handed-over refusal, and the card's own Rebuild — whose line also lands at the top of the page.
+  const bumpOutcomeScroll = () => {
     if (isPhone()) setOutcomeScroll((n) => n + 1);
+  };
+  const closeRailSheet = (stageId: string) => {
+    bumpOutcomeScroll();
     setOpenRailFor((cur) => (cur === stageId ? null : cur));
   };
   useEffect(() => {
@@ -1121,6 +1126,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       showRebuildRefusal(err);
     } finally {
       setBusy(null);
+      bumpOutcomeScroll();
     }
   }
 
@@ -1973,12 +1979,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       setWarning(null);
                       setGameExists(false);
                       showRebuildRefusal(err);
+                      bumpOutcomeScroll();
                     }}
                     registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
                     onPlaced={(said) => {
                       setError(null);
                       setNotice(said.done.length > 0 ? said.done.join(" ") : null);
                       setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                      bumpOutcomeScroll();
                     }}
                   />
                 )}
@@ -1993,6 +2001,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       setError(null);
                       setNotice(said.done.length > 0 ? said.done.join(" ") : null);
                       setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                      bumpOutcomeScroll();
                     }}
                   />
                 )}

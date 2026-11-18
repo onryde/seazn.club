@@ -365,6 +365,77 @@ describe("W5 T17c fix 2 a settle at a phone width scrolls the outcome line into 
   });
 });
 
+// B5 fix wave G2 (batch review I2): the waiting strips say their outcome in the PANEL's lines too (the strip vanishes once the player
+// is placed), at the top of the page — so a phone settle from either strip, and the card's own Rebuild (the knockout strip's Rebuild
+// button runs it), scrolls the first outcome line under the header exactly as `act` does; from `md` up nothing scrolls. Driven
+// through the real callbacks the panel hands each strip; window / document stubbed (vitest is node). The in-view proof (hit test)
+// is the e2e's (`e2e/mobile/organiser-console.spec.ts`).
+describe("B5 G2 a waiting strip's outcome scrolls into view on a phone", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  async function mountStrips(phone: boolean, answer: () => Promise<unknown>) {
+    const line = { style: {} as Record<string, string>, scrollIntoView: vi.fn() };
+    vi.stubGlobal("window", { matchMedia: (q: string) => ({ matches: q.includes("767.98") ? phone : false }), addEventListener: () => {}, removeEventListener: () => {} });
+    vi.stubGlobal("document", {
+      querySelector: (sel: string) => (sel === "[data-outcome-line]" ? line : sel === "header" ? { getBoundingClientRect: () => ({ bottom: 58 }) } : null),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    apiV1Mock.mockReset();
+    apiV1Mock.mockImplementation(answer);
+    const waiter = { entrantId: "e9", stageId: "s1", name: "Late Ana", paid: false };
+    const island = renderIsland(StagesPanel, {
+      ...baseProps,
+      stages: [stage("league"), { ...stage("league"), id: "s2", seq: 2, kind: "knockout", name: "Final" }],
+      fixtures: leagueFixtures,
+      tableWaiting: [waiter],
+      knockoutWaiting: [{ ...waiter, stageId: "s2" }],
+    } as never);
+    await flush();
+    const propsByName = (name: string) => {
+      const el = island.tree().find((e) => typeof e.type === "function" && (e.type as { name?: string }).name === name);
+      expect(el, `rig: the ${name} is mounted`).toBeTruthy();
+      return propsOf(el!);
+    };
+    return { line, propsByName };
+  }
+  const said = { done: ["Late Ana joined Group A."], todo: [] };
+  const settles: [string, (p: (n: string) => Record<string, unknown>) => unknown][] = [
+    ["table strip: placed", (p) => (p("TableWaitingStrip").onPlaced as (s: typeof said) => void)(said)],
+    ["table strip: Rebuild refused (handed to the panel)", (p) => (p("TableWaitingStrip").onRebuildRefused as (e: unknown) => void)(refused("ONLINE_GAME_EXISTS", "game"))],
+    ["knockout strip: placed", (p) => (p("KnockoutWaitingStrip").onPlaced as (s: typeof said) => void)(said)],
+    ["knockout strip: Rebuild (the card's rebuildStage)", (p) => (p("KnockoutWaitingStrip").onRebuild as () => void)()],
+  ];
+
+  it("phone: every settle from either strip scrolls the outcome line once, under the header", async () => {
+    let checked = 0;
+    for (const [label, settle] of settles) {
+      const m = await mountStrips(true, async () => ({ created: 4, existing: 0, removed: 4, slots: { kept: 0, freed: 0, unscheduled: 0 } }));
+      settle(m.propsByName);
+      await flush();
+      await flush();
+      expect(m.line.scrollIntoView, `${label}: scrolled once`).toHaveBeenCalledTimes(1);
+      expect(m.line.style.scrollMarginTop, `${label}: just under the header`).toBe("66px");
+      checked++;
+      vi.unstubAllGlobals();
+    }
+    expect(checked).toBe(settles.length);
+  });
+
+  it("md and up: no settle from either strip scrolls", async () => {
+    let checked = 0;
+    for (const [label, settle] of settles) {
+      const m = await mountStrips(false, async () => ({ created: 4, existing: 0, removed: 4, slots: { kept: 0, freed: 0, unscheduled: 0 } }));
+      settle(m.propsByName);
+      await flush();
+      await flush();
+      expect(m.line.scrollIntoView, `${label}: desktop never scrolls`).not.toHaveBeenCalled();
+      checked++;
+      vi.unstubAllGlobals();
+    }
+    expect(checked).toBe(settles.length);
+  });
+});
+
 // Fix round 2 (m2): the sheet's Add match opens its form inside the card, behind the scrim.
 describe("W5 T17c fix 2 Add match leaves the sheet and brings its form into view (phone only)", () => {
   afterEach(() => vi.unstubAllGlobals());
