@@ -476,7 +476,7 @@ describe("RegistrationHubRegistrantActions - promote into a full division", () =
     expect(confirmMock.fn).toHaveBeenCalledTimes(1);
     expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
       title: t(uiEn, "reg.promote.overCapacity.title"),
-      body: t(uiEn, "reg.promote.overCapacity.body", { taken: 2, capacity: 2 }),
+      body: t(uiEn, "reg.promote.overCapacity.body.other", { taken: 2, capacity: 2 }),
       confirmLabel: t(uiEn, "reg.promote.overCapacity.label"),
     });
     expect(promoteCalls().map((c) => c.json)).toEqual([
@@ -494,6 +494,36 @@ describe("RegistrationHubRegistrantActions - promote into a full division", () =
     const body = (confirmMock.fn.mock.calls[0]![0] as { body: string }).body;
     expect(body).toContain("8 of 8 places are taken");
     expect(body).not.toContain("{taken}");
+  });
+
+  // Fix round 2 M-3: the count in the sentence is a NUMBER of places, so the sentence follows it ("1 of 1 places are taken" was wrong).
+  it("a ONE-place division reads singular, never '1 of 1 places are taken'; two or more read plural", async () => {
+    const said: string[] = [];
+    for (const capacity of [1, 2]) {
+      confirmMock.fn.mockClear();
+      net.next.set("promote", Promise.reject(new ApiV1Error("over capacity", 409, PROMOTE_OVER_CAPACITY_CODE, { capacity, taken: capacity })));
+      const island = mount({ status: "waitlisted" });
+      await clickPromote(island);
+      said.push((confirmMock.fn.mock.calls[0]![0] as { body: string }).body);
+    }
+    expect(said[0], "capacity 1 uses the .one sentence").toBe(t(uiEn, "reg.promote.overCapacity.body.one"));
+    expect(said[0]).not.toMatch(/places are/);
+    expect(said[1], "capacity 2 uses the .other sentence").toBe(t(uiEn, "reg.promote.overCapacity.body.other", { taken: 2, capacity: 2 }));
+    expect(said[1]).toContain("2 of 2 places are taken");
+  });
+
+  it("a plan limit of ONE reads '1 entrant', not '1 entrants'; 64 reads plural", async () => {
+    const said: string[] = [];
+    for (const limit of [1, 64]) {
+      net.next.set("promote", Promise.reject(new ApiV1Error("english", 422, PROMOTE_PLAN_LIMIT_CODE, { limit, taken: limit })));
+      const island = mount({ status: "waitlisted" });
+      await clickPromote(island);
+      said.push(island.text());
+    }
+    expect(said[0]).toContain(t(uiEn, "reg.promote.planLimit.one", { limit: 1 }));
+    expect(said[0]).toContain("allows 1 entrant per division");
+    expect(said[0]).not.toContain("1 entrants");
+    expect(said[1]).toContain(t(uiEn, "reg.promote.planLimit.other", { limit: 64 }));
   });
 
   it("while the dialog is OPEN nothing has been promoted: the Promote button is still there, not 'Promoting...', and no success is shown (M2)", async () => {
@@ -551,24 +581,36 @@ describe("RegistrationHubRegistrantActions - promote into a full division", () =
     await clickPromote(island);
     expect(confirmMock.fn).not.toHaveBeenCalled();
     expect(promoteCalls()).toHaveLength(1);
-    expect(island.text()).toContain(t(uiEn, "reg.promote.planLimit", { limit: 64 }));
+    expect(island.text()).toContain(t(uiEn, "reg.promote.planLimit.other", { limit: 64 }));
     expect(island.text()).not.toContain("english");
     expect(findAction(island, "promote")).toBeTruthy();
   });
 
-  it("every locale carries the four new strings, translated (not the English copy), with the limit placeholder kept", () => {
-    const keys = ["reg.promote.overCapacity.title", "reg.promote.overCapacity.body", "reg.promote.overCapacity.label", "reg.promote.planLimit"] as const;
+  it("every locale carries the promote strings, translated (not the English copy), with each placeholder kept and both plural forms present", () => {
+    const keys = [
+      "reg.promote.overCapacity.title", "reg.promote.overCapacity.body.one", "reg.promote.overCapacity.body.other",
+      "reg.promote.overCapacity.label", "reg.promote.planLimit.one", "reg.promote.planLimit.other",
+    ] as const;
     let checked = 0;
     for (const dict of [uiFr, uiEs, uiNl]) {
+      const d = dict as Record<string, string>;
       for (const k of keys) {
-        const v = (dict as Record<string, string>)[k];
-        expect(v, k).toBeTruthy();
-        expect(v, `${k} must not be the English copy`).not.toBe((uiEn as Record<string, string>)[k]);
+        expect(d[k], k).toBeTruthy();
+        expect(d[k], `${k} must not be the English copy`).not.toBe((uiEn as Record<string, string>)[k]);
         checked += 1;
       }
-      expect((dict as Record<string, string>)["reg.promote.planLimit"]).toContain("{limit}");
+      expect(d["reg.promote.planLimit.one"]).toContain("{limit}");
+      expect(d["reg.promote.planLimit.other"]).toContain("{limit}");
+      expect(d["reg.promote.overCapacity.body.other"]).toContain("{taken}");
+      expect(d["reg.promote.overCapacity.body.other"]).toContain("{capacity}");
+      expect(d["reg.promote.overCapacity.body.one"], "the singular is its own sentence, not the plural one").not.toBe(d["reg.promote.overCapacity.body.other"]);
+      expect(d["reg.promote.planLimit.one"]).not.toBe(d["reg.promote.planLimit.other"]);
     }
-    expect(checked).toBe(12);
+    expect(checked).toBe(18);
+    // The old single keys are gone: nothing may still read them (a key the island no longer reads is a key that goes stale).
+    for (const dict of [uiEn, uiFr, uiEs, uiNl]) {
+      expect(Object.keys(dict).filter((k) => k === "reg.promote.planLimit" || k === "reg.promote.overCapacity.body")).toEqual([]);
+    }
   });
 });
 

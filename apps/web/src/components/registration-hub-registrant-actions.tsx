@@ -98,7 +98,7 @@ import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
@@ -169,6 +169,8 @@ export function RegistrationHubRegistrantActions({
   approvedAt,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
+  // The two promote refusals say a NUMBER of places / entrants, so their sentence follows the count (`.one` / `.other`, Intl.PluralRules).
+  const msgPlural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [optimisticStatus, setOptimisticStatus] = useState<Status>(status);
@@ -256,7 +258,7 @@ export function RegistrationHubRegistrantActions({
     if (!(err instanceof ApiV1Error)) return errorText(err);
     // The plan's per-division entrant limit is met: said in the organiser's language, with the limit the server read.
     if (err.code === PROMOTE_PLAN_LIMIT_CODE && typeof err.extra.limit === "number") {
-      return msg("reg.promote.planLimit", { limit: err.extra.limit });
+      return msgPlural("reg.promote.planLimit", err.extra.limit, { limit: err.extra.limit });
     }
     const said =
       registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??
@@ -390,7 +392,7 @@ export function RegistrationHubRegistrantActions({
         setBusy(null);
         const ok = await confirmDialog({
           title: msg("reg.promote.overCapacity.title"),
-          body: msg("reg.promote.overCapacity.body", { taken, capacity }),
+          body: msgPlural("reg.promote.overCapacity.body", capacity, { taken, capacity }),
           confirmLabel: msg("reg.promote.overCapacity.label"),
           tone: "danger",
         });
