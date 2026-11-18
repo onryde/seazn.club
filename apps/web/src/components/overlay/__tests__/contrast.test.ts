@@ -806,7 +806,7 @@ describe("slate (§4a) reads on every board, and its values are the sheet's", ()
     ).toBeGreaterThanOrEqual(4.5);
     expect(
       contrastRatio(blendOver(p.ink, p.board, SLATE_TOKENS.brandInkAlpha), p.board),
-      `${sport} slate brand @ ${SLATE_TOKENS.brandInkAlpha}`,
+      `${sport} corner badge @ ${SLATE_TOKENS.brandInkAlpha}`,
     ).toBeGreaterThanOrEqual(4.5);
   });
 });

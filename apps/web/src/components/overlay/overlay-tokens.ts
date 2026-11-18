@@ -87,7 +87,7 @@ export const SLATE_TOKENS = {
   headlineInk: "ink" as "ink" | `#${string}`,
   /** §4a `line: Geist 27/500 ink 70 %`. */
   lineInkAlpha: 0.7,
-  /** §4a `brand: "seazn" Barlow 30/600 … ink 75 %`. */
+  /** §4a `brand:` — the corner badge's "Powered by" and timer, ink 75 % on a solid board plate. */
   brandInkAlpha: 0.75,
   /** §4a signal-lost: one 15-px dot beside the line — the live dot's own hex. */
   indicator: "#ef4444",

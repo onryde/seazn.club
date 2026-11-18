@@ -634,6 +634,36 @@ describe.each(["hockey", "icehockey"])("%s: the clock follows its clock events, 
     expect(read(c, 5000)).toBe(mmss(0));
   });
 
+  it("an anchor in a LATER period than the fold's phase (a voided whistle) is no clock, not 00:00", () => {
+    // Reaching this through a real fold means voiding a period advance under clock events the kernel then refuses, so
+    // the state is written by hand: the fold stands in the first period, the newest clock event names the second.
+    const cfgState = { cfg, phase: p1 };
+    const stranded: FoldedFixture = {
+      fixtureId: "fx-hand",
+      lastSeq: 1,
+      state: cfgState,
+      summary: { headline: "x" } as FoldedFixture["summary"],
+      outcome: null,
+      active: [{ ...makeEnvelope(0, { type: `${key}.clock`, payload: { at: { period: p2, elapsed: 30 }, running: true } } as never), recordedAt: T(0) }],
+    };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: stranded, venueTz: "UTC" }).clock).toBeUndefined();
+    // The positive pair: the same hand-made shape with the anchor in the EARLIER period stands at 0, paused.
+    const earlier: FoldedFixture = {
+      ...stranded,
+      state: { cfg, phase: p2 },
+      active: [{ ...makeEnvelope(0, { type: `${key}.clock`, payload: { at: { period: p1, elapsed: 30 }, running: true } } as never), recordedAt: T(0) }],
+    };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: earlier, venueTz: "UTC" }).clock).toMatchObject({ phase: p2, anchorSeconds: 0, running: false });
+    // Overtime comes after every regulation period, whatever its number.
+    const overtime: FoldedFixture = { ...earlier, state: { cfg, phase: "OT" } };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: overtime, venueTz: "UTC" }).clock).toMatchObject({ phase: "OT", anchorSeconds: 0, running: false });
+    const fromOvertime: FoldedFixture = {
+      ...stranded,
+      active: [{ ...makeEnvelope(0, { type: `${key}.clock`, payload: { at: { period: "OT", elapsed: 30 }, running: true } } as never), recordedAt: T(0) }],
+    };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: fromOvertime, venueTz: "UTC" }).clock).toBeUndefined();
+  });
+
   it("carries no football match time", () => {
     expect(project([START, clock(0, true, 0)])!.matchTime).toBeUndefined();
   });

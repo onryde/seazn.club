@@ -89,6 +89,14 @@ function clockTypeOf(active: FoldedFixture["active"]): string | undefined {
  *  `OT1..OTk` — period/kernel.ts:631-639) or a bare half. A break, a shootout and the end are none of these. */
 const PLAY_PERIOD = /^(?:[QPH]\d+|OT\d*)$/;
 
+/** Where a period-kernel play period falls in the match, for ORDER only: regulation periods by their number, every
+ *  overtime after all of them. `null` for a label that is no play period. */
+function periodRank(label: string): number | null {
+  const m = /^(?:[QPH](\d+)|OT(\d*))$/.exec(label);
+  if (m === null) return null;
+  return m[1] !== undefined ? Number(m[1]) : 1_000_000 + Number(m[2] || 0);
+}
+
 /** The fields match time reads, copied off the parsed cfg so the wire carries those and nothing else. */
 function matchTimeOf(cfg: unknown): MatchTimeCfg {
   const c = matchTimeCfgOf(cfg);
@@ -116,8 +124,9 @@ function matchTimeOf(cfg: unknown): MatchTimeCfg {
  *  - The anchor in the current period: its reading, running or paused.
  *  - The anchor in another period: this period has had no clock event yet, and a period marker stops the clock in the
  *    fold, so the period stands at its own start, paused (§7.2: "0, stopped") — `45:00` before the second half's
- *    Start, as on the console. Football, which declares its period ORDER, shows no clock for an anchor in a LATER
- *    period than the fold's phase (a voided whistle) rather than a wrong one.
+ *    Start, as on the console — when the anchor's period is EARLIER. An anchor in a LATER period than the fold's
+ *    phase (a voided whistle) is no clock rather than a wrong one: football by its declared period order, the
+ *    period kernel by its labels (`periodRank`).
  */
 function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
   if (typeof state !== "object" || state === null) return undefined;
@@ -143,6 +152,11 @@ function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveDa
   const base = { phase: s.phase, anchorAtWallMs: anchor.recordedAtMs, ...length };
   if (anchor.period === s.phase) return { ...base, anchorSeconds: anchor.elapsed, running: anchor.running };
   if (!PLAY_PERIOD.test(s.phase)) return undefined;
+  // Only an anchor in an EARLIER period leaves this one standing at its start. One in a later period (a voided
+  // whistle), or in a phase that is no play period, is no clock rather than a wrong one — football's rule above.
+  const now = periodRank(s.phase);
+  const then = periodRank(anchor.period);
+  if (now === null || then === null || then > now) return undefined;
   return { ...base, anchorSeconds: 0, running: false };
 }
 
