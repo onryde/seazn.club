@@ -193,7 +193,7 @@ describe("privacy — what the YouTube section says about the other halves of th
     // An assumption is a guard. If a DELETE route or a deleting Cancel is added, the page UNDERSTATES what happens (not a false promise,
     // but stale copy): this fails beside the sentence so the copy is revisited with the code.
     const panel = src("../../../components/v2/youtube-connect-panel.tsx");
-    expect(panel, "the picker's cancel handler").toContain("const cancel = () => router.replace(STREAMING_PAGE_HREF);");
+    expect(panel, "the picker's cancel handler").toContain("const cancel = () => router.replace(streamingHref);");
     const pendingRoute = src("../../../app/api/v1/orgs/[id]/youtube-connections/pending/[pendingId]/route.ts");
     expect(pendingRoute, "the pending route is read-only").toContain("export async function GET(");
     expect(pendingRoute).not.toMatch(/export (async )?function (DELETE|POST|PUT|PATCH)\b/);

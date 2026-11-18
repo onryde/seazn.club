@@ -7,6 +7,7 @@
 // v11.1 follow-up: roster management (add / invite / bulk-invite) moved to
 // the org-wide Directory → Officials tab (officials-directory-panel.tsx) —
 // this panel now shows a compact read-only roster strip that links there.
+import { useDirectoryHref } from "@/components/use-org-paths";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
@@ -122,6 +123,7 @@ export function OfficialsPanel({
   reportsByFixture?: Record<string, FixtureReportLite[]>;
   viewerPlan: ViewerPlan;
 }) {
+  const directoryOfficialsHref = useDirectoryHref("officials");
   const msg = useMsg();
   const locale = useLocale();
   const router = useRouter();
@@ -259,7 +261,7 @@ export function OfficialsPanel({
         )}
         {canEdit && (
           <Link
-            href="/directory?tab=officials"
+            href={directoryOfficialsHref}
             prefetch={false}
             className="inline-block text-xs font-medium text-purple-600 hover:underline"
           >

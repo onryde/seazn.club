@@ -56,7 +56,7 @@ test("destructive action uses ConfirmDialog — a native confirm() fails the tes
   await dialog.getByRole("button", { name: "Delete club" }).click();
 
   // Confirming lands back on the directory, with the club gone from the list.
-  await page.waitForURL(/\/directory\?tab=clubs/);
+  await page.waitForURL(/\/o\/[^/]+\/directory\?tab=clubs/);
   await expect(page.getByRole("link", { name: new RegExp(`Doomed Club ${TAG}`) })).toHaveCount(0);
 });
 

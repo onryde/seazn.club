@@ -123,3 +123,10 @@ export async function grantInUse(channelIds: readonly string[], googleSub: strin
      limit 1`;
   return rows.length > 0;
 }
+
+/** The slug of the org a connect started from, so its landing can return to that org's Streaming page (owner, 2026-11-18: the
+ *  address decides the org). `null` when the org is gone. */
+export async function orgSlugOf(orgId: string): Promise<string | null> {
+  const [row] = await sql<{ slug: string }[]>`select slug from organizations where id = ${orgId}`;
+  return row?.slug ?? null;
+}

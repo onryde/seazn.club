@@ -321,7 +321,7 @@ async function connectChannel(
     await page.getByTestId("youtube-consent").check();
     await page.getByTestId("youtube-consent-minors").check();
     await expect(submit).toBeEnabled();
-    await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
+    await Promise.all([page.waitForURL(/\/o\/[^/]+\/streaming\?youtube=/), submit.click()]);
     expect(fired, "the channel offer ran once for this connect").toBe(1);
   } finally {
     await page.unroute("**/api/youtube/connect", handler);
@@ -481,7 +481,7 @@ for (const width of [1280, 320] as const) {
     expect(consentRead, "the consent card was read before the box was ticked").toBe(1);
 
     // Two channels -> the picker (not a row, not the connected banner).
-    await expect(page).toHaveURL(/\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
+    await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
     const picker = page.getByTestId("youtube-picker");
     await expect(picker).toBeVisible({ timeout: NAV_MS });
     const offered = picker.getByTestId("youtube-picker-channel");

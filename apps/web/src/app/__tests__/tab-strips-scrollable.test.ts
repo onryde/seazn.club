@@ -15,7 +15,7 @@ const ROOT = join(process.cwd(), "src/app");
 const PAGES_WITH_TAB_STRIPS = [
   "o/[orgSlug]/c/[compSlug]/d/[divSlug]/schedule/page.tsx",
   "o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-  "directory/page.tsx",
+  "o/[orgSlug]/directory/page.tsx",
 ];
 
 describe("console tab strips survive a narrow viewport", () => {

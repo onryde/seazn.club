@@ -14,7 +14,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/entitlements", () => ({ hasFeature: m.hasFeature, orgPlanKey: async () => "pro" }));
-vi.mock("@/server/page-auth", () => ({ requirePageAuth: m.requirePageAuth }));
+vi.mock("@/server/page-auth", () => ({ requireOrgPage: m.requirePageAuth }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
@@ -39,14 +39,14 @@ vi.mock("@/components/ui/scroll-active-tab-into-view", () => ({ ScrollActiveTabI
 import DirectoryPage from "../page";
 
 const render = async (tab?: string) => {
-  const { prelude } = await prerender(await DirectoryPage({ searchParams: Promise.resolve(tab ? { tab } : {}) }));
+  const { prelude } = await prerender(await DirectoryPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve(tab ? { tab } : {}) }));
   return new Response(prelude).text();
 };
 /** The four tab links the Directory keeps, in order — the owner's list, not read back from the page. */
-const TAB_LINKS = ["players", "clubs", "officials", "venues"].map((k) => `href="/directory?tab=${k}"`);
+const TAB_LINKS = ["players", "clubs", "officials", "venues"].map((k) => `href="/o/riverside/directory?tab=${k}"`);
 
 beforeEach(() => {
-  m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: "org-1", userId: "u-1", role: "owner", via: "session", keyId: null }, canEdit: true });
+  m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: "org-1", userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockClear();
   m.expireTargetHolders.mockClear();
@@ -89,5 +89,24 @@ describe("Directory — four tabs, no Streaming (the Streaming page is top-nav)"
       checked++;
     }
     expect(checked).toBe(4);
+  });
+
+  // Owner, 2026-11-18: the address decides the org; the page names it; a non-member is refused.
+  it("asks requireOrgPage for the URL's slug and keeps the query for a rename redirect", async () => {
+    await render("clubs");
+    expect(m.requirePageAuth).toHaveBeenCalledWith("riverside", { tail: "/directory", search: "?tab=clubs" });
+  });
+
+  it("names the org in the page at every width", async () => {
+    expect(await render()).toMatch(/data-testid="directory-org"[^>]*>Riverside CC</);
+  });
+
+  it("a non-member is refused: the page throws the 404 and no tab is rendered", async () => {
+    m.requirePageAuth.mockRejectedValue({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+    await expect(render()).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
+  });
+
+  it("renders no nav of its own: the /o layout's nav (given the path's org) is the only one, so a stale cookie cannot show another org", async () => {
+    expect(await render()).not.toContain('data-testid="nav"');
   });
 });

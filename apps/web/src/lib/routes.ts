@@ -43,6 +43,12 @@ export const routes = {
    *  (lib/sponsors-hub.ts, which owns the tab list and the redirect from the old Settings URL). */
   orgSponsors: (org: Slug, tab?: string) =>
     tab ? `/o/${org}/sponsors?tab=${tab}` : `/o/${org}/sponsors`,
+  /** The org's Streaming page: the address names the org (owner, 2026-11-18), the cookie never does. `search` is the page's
+   *  query from its `?` (`searchOf`), e.g. the YouTube connect landing. */
+  orgStreaming: (org: Slug, search = "") => `/o/${org}/streaming${search}`,
+  /** The org's Directory, optionally on one of its tabs. */
+  orgDirectory: (org: Slug, tab?: string) =>
+    tab ? `/o/${org}/directory?tab=${tab}` : `/o/${org}/directory`,
   billing: (org: Slug) => `/o/${org}/settings/billing`,
   /** Settings → Credits, its own Settings tab (moved off the billing page). The bare URL opens the STREAMING
    *  (match-credit) side — the default since 2026-11-11 (owner: streaming credits come first). A link whose context

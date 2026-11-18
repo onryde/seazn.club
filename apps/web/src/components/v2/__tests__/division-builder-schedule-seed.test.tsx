@@ -256,7 +256,7 @@ describe("DivisionBuilder — venue list gate", () => {
     // unrelated checkboxes of their own. court-multi-picker.test.tsx proves
     // the empty state renders NO checkbox in isolation.
     const html = render(true);
-    expect(html).toContain('href="/directory?tab=venues"');
+    expect(html).toContain('href="/o/org/directory?tab=venues"');
     expect(html).toContain(msg("courtPicker.emptyTitle"));
   });
 

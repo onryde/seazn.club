@@ -124,7 +124,7 @@ const newUser = async (): Promise<string> =>
   (await sql<{ id: string }[]>`insert into users (email, display_name) values (${`yt7-${randomUUID()}@example.test`}, 'Connect Tester') returning id`)[0]!.id;
 const channelId = () => `UC${randomUUID().replace(/-/g, "").slice(0, 22)}`;
 
-interface Rig { orgId: string; userId: string }
+interface Rig { orgId: string; userId: string; slug: string }
 async function grantFeature(orgId: string, key: string, value: boolean): Promise<void> {
   await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${orgId}, ${key}, ${value}, 'youtube connect routes')
             on conflict (org_id, feature_key) do update set bool_value = ${value}`;
@@ -132,12 +132,16 @@ async function grantFeature(orgId: string, key: string, value: boolean): Promise
 }
 /** An org with `userId` a member of it under `role`. It carries the plan's own streaming entitlements (V426: the stream panel and
  *  the relay are on for every plan), which is what the Streaming page — the page that posts the start — requires. */
+/** The slug of the org the latest `rig()` made: the address every landing that knows its org must return to. */
+let rigSlug = "";
 async function rig(role: "owner" | "admin" | "viewer" = "owner"): Promise<Rig> {
   const { auth } = await seedOrg();
   const userId = await newUser();
   await sql`insert into org_members (org_id, user_id, role) values (${auth.orgId}, ${userId}, ${role})`;
   session.user = { id: userId };
-  return { orgId: auth.orgId, userId };
+  const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
+  rigSlug = org!.slug;
+  return { orgId: auth.orgId, userId, slug: org!.slug };
 }
 
 /** Over-quota seats (doc 10 §2.4): the org holds more members than the plan's `members.max`, so its OLDEST admin seat is read-only. The cap
@@ -233,7 +237,11 @@ function landed(res: Response) {
   return { status: res.status, path: u.pathname, tab: u.searchParams.get("tab"), youtube: u.searchParams.get("youtube"), pending: u.searchParams.get("pending") };
 }
 // The owner's page (2026-10-27): Streaming is its own top-nav page, `/streaming`, with no `tab` parameter. A literal, not the constant under test.
-const LANDS = (youtube: string, pending: string | null = null) => ({ status: 303, path: "/streaming", tab: null, youtube, pending });
+// Owner, 2026-11-18: the address decides the org, so a landing that knows its org (the start's refusals, every callback exit once the
+// pending grant is claimed) returns to `/o/{slug}/streaming` - the org that STARTED the connect, never the cookie's. A landing that
+// cannot know it (a foreign origin, a callback with no valid state) stays the legacy `/streaming`, which redirects by cookie.
+const LANDS = (youtube: string, pending: string | null = null, slug: string = rigSlug) => ({ status: 303, path: `/o/${slug}/streaming`, tab: null, youtube, pending });
+const LANDS_NO_ORG = (youtube: string, pending: string | null = null) => ({ status: 303, path: "/streaming", tab: null, youtube, pending });
 
 const callsOf = (method: string) => fake.calls.filter((c) => c.method === method).length;
 /** The refresh token the fake minted for the grant (read from the spy on the port, since the route never returns it). */
@@ -379,7 +387,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     let checked = 0;
     for (const origin of ["https://evil.example", "http://localhost:3999", "null", "https://localhost"]) {
       const res = await START(startReq(form(r), { origin }));
-      expect(landed(res), origin).toEqual(LANDS("forbidden"));
+      expect(landed(res), origin).toEqual(LANDS_NO_ORG("forbidden"));
       expect(res.headers.get("content-type") ?? "", `${origin}: not a JSON body`).not.toMatch(/json/);
       checked++;
     }
@@ -395,7 +403,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
   it("the Origin is judged against the origin the flow RETURNS to: with YOUTUBE_REDIRECT_URI pinned, its origin is the only one accepted", async () => {
     vi.stubEnv("YOUTUBE_REDIRECT_URI", "http://app.example.test:3000/api/youtube/connect/callback");
     const r = await rig();
-    expect(landed(await START(startReq(form(r), { origin: "http://localhost" }))), "the request's own host is not the pinned one").toEqual(LANDS("forbidden"));
+    expect(landed(await START(startReq(form(r), { origin: "http://localhost" }))), "the request's own host is not the pinned one").toEqual(LANDS_NO_ORG("forbidden"));
     const pinned = await START(startReq(form(r), { origin: "http://app.example.test:3000" }));
     expect([pinned.status, new URL(pinned.headers.get("location")!).pathname]).toEqual([303, "/api/youtube/connect/fake-authorize"]);
   });
@@ -712,28 +720,28 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — the landing", ()
     // a) the query carries a different state than the cookie
     const forged = new URL(real);
     forged.searchParams.set("state", "attacker-chosen-state");
-    expect(landed(await CALLBACK(callbackReq(forged.toString())))).toEqual(LANDS("expired"));
+    expect(landed(await CALLBACK(callbackReq(forged.toString())))).toEqual(LANDS_NO_ORG("expired"));
     // b) no state cookie at all (cleared, or another browser)
     jar.values.clear();
     jar.values.set(VERIFIER_COOKIE, f.verifier);
-    expect(landed(await CALLBACK(callbackReq(url)))).toEqual(LANDS("expired"));
+    expect(landed(await CALLBACK(callbackReq(url)))).toEqual(LANDS_NO_ORG("expired"));
     // c) no verifier
     jar.values.clear();
     jar.values.set(STATE_COOKIE, f.state);
-    expect(landed(await CALLBACK(callbackReq(url)))).toEqual(LANDS("expired"));
+    expect(landed(await CALLBACK(callbackReq(url)))).toEqual(LANDS_NO_ORG("expired"));
     // d) no state in the query
     jar.values.set(VERIFIER_COOKIE, f.verifier);
     jar.values.set(STATE_COOKIE, f.state);
     const noState = new URL(real);
     noState.searchParams.delete("state");
-    expect(landed(await CALLBACK(callbackReq(noState.toString())))).toEqual(LANDS("expired"));
+    expect(landed(await CALLBACK(callbackReq(noState.toString())))).toEqual(LANDS_NO_ORG("expired"));
 
     // e) the query carries a REAL pending state of this same user, but the cookie holds the state of a later flow (a second tab):
     //    the cookie is what binds the browser to the flow, so the callback is expired and the real row is not spent.
     const other = await begin(r);   // overwrites the cookies with the second flow's
     expect(other.state, "PREMISE: a second, different flow").not.toBe(f.state);
     expect(jar.values.get(STATE_COOKIE), "PREMISE: the cookie now holds the second flow's state").toBe(other.state);
-    expect(landed(await CALLBACK(callbackReq(url))), "query = first flow's real state, cookie = second flow's").toEqual(LANDS("expired"));
+    expect(landed(await CALLBACK(callbackReq(url))), "query = first flow's real state, cookie = second flow's").toEqual(LANDS_NO_ORG("expired"));
 
     expect(callsOf("exchangeCode"), "no code was ever redeemed").toBe(0);
     expect(await connectionCount(r.orgId)).toBe(0);
@@ -803,7 +811,7 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — the landing", ()
     const r = await rig();
     const f = await begin(r);
     await sql`update youtube_connect_pending set expires_at = now() - interval '1 second' where org_id = ${r.orgId}`;
-    expect(landed((await finish(f)).res)).toEqual(LANDS("expired"));
+    expect(landed((await finish(f)).res)).toEqual(LANDS_NO_ORG("expired"));
     expect(callsOf("exchangeCode")).toBe(0);
     expect(await connectionCount(r.orgId)).toBe(0);
     // Positive pair: a row that has NOT passed its time connects.
@@ -1096,7 +1104,7 @@ describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses 
         const revokesBefore = callsOf("revoke");
         const { res } = await finish(f);
         const label = `${refusalName} / held by ${holderName}`;
-        expect(landed(res), label).toEqual(LANDS(lands));
+        expect(landed(res), label).toEqual(LANDS(lands, null, r.slug));
         const revoked = callsOf("revoke") - revokesBefore;
         if (heldToken === null) {
           expect(revoked, `${label}: nothing holds it, so it is revoked`).toBe(1);
@@ -1138,7 +1146,7 @@ describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses 
         fake.failNext("listMyChannels", "youtube_unavailable");
         const revokesBefore = callsOf("revoke");
         const { res } = await finish(f);
-        expect(landed(res), label).toEqual(LANDS(lands));
+        expect(landed(res), label).toEqual(LANDS(lands, null, r.slug));
         expect(callsOf("revoke") - revokesBefore, `${label}: a grant whose channels are unknown is not revoked`).toBe(0);
         expect(await isDead(await minted(exchange)), `${label}: the grant is still alive`).toBe(false);
         if (holder) await expect(fake.accessToken(holder.refreshToken), `${label}: the holder's token still works`).resolves.toEqual(expect.any(String));

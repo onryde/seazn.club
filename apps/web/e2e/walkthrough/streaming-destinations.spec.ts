@@ -918,8 +918,8 @@ for (const width of [320, 768, 1280] as const) {
     await shot(page.locator('[data-role="fixture-stream-body"]'), `10-${width}-picker.png`);
     const [tab] = await Promise.all([page.context().waitForEvent("page"), link.click()]);
     await tab.waitForLoadState();
-    await expect(tab).toHaveURL(/\/streaming$/);
-    await expect(tab.getByTestId("nav-streaming"), "the top-nav carries the Streaming item, pointing at this page").toHaveAttribute("href", "/streaming");
+    await expect(tab).toHaveURL(/\/o\/[^/]+\/streaming$/);
+    await expect(tab.getByTestId("nav-streaming"), "the top-nav carries the Streaming item, pointing at this page").toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
     await expect(tab.locator(`[data-testid="stream-dest-row"][data-target-id="${yt.id}"]`)).toBeVisible({ timeout: NAV_MS });
     await tab.close();
   });
@@ -1006,7 +1006,7 @@ for (const width of [320, 1280] as const) {
     await expect(picker(body), "premise: nothing told this tab yet").toHaveAttribute("data-value", b!.id);
     await goLive(body).click();
     await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it: the empty state").toBeVisible({ timeout: SAVE_MS });
-    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/streaming");
+    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
     await expect(body.getByTestId("stream-create-error"), "no 'pick another' with nothing to pick").toHaveCount(0);
     await expect(goLive(body)).toBeDisabled();
     expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);

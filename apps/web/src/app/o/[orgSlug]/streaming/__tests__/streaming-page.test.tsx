@@ -22,7 +22,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/entitlements", () => ({ hasFeature: m.hasFeature, orgPlanKey: async () => "pro" }));
-vi.mock("@/server/page-auth", () => ({ requirePageAuth: m.requirePageAuth }));
+vi.mock("@/server/page-auth", () => ({ requireOrgPage: m.requirePageAuth }));
 vi.mock("@/lib/sentry", () => ({ captureError: m.captureError }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
@@ -63,7 +63,7 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
 const ORG = "org-1";
 type Params = { youtube?: string | string[]; pending?: string | string[]; disconnected?: string | string[] };
-const page = (params: Params = {}) => StreamingPage({ searchParams: Promise.resolve(params) });
+const page = (params: Params = {}) => StreamingPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve(params) });
 const render = async (params: Params = {}) => {
   const { prelude } = await prerender(await page(params));
   return new Response(prelude).text();
@@ -74,7 +74,7 @@ const DISCONNECT_ONLY = 'data-testid="disconnect-only-panel"';
 const NOT_FOUND = { digest: "NEXT_HTTP_ERROR_FALLBACK;404" };
 
 beforeEach(() => {
-  m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, canEdit: true });
+  m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
   m.hasLiveConnection.mockReset().mockResolvedValue(false);
@@ -88,7 +88,7 @@ afterEach(() => setRelayDriversForTest(null));
 describe("Streaming page — offered exactly when the fixture panel offers Go live (M-5)", () => {
   it("OFFERED (both keys, a running relay): renders the page chrome and the destinations — after ticking every holder's expiry, org-wide (M-3)", async () => {
     const html = await render();
-    expect(html).toContain('data-testid="nav"');
+    expect(html, "the /o layout owns the nav; the page renders none (a second, cookie-led one showed another org)").not.toContain('data-testid="nav"');
     expect(html, "the page's own title").toContain("<h1");
     expect(html).toContain(PANEL);
     expect(m.hasFeature.mock.calls.map((c) => [c[0], c[1], c[2]]), "the panel's two keys, org-wide (no competition)").toEqual([
@@ -152,7 +152,7 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
   });
 
   it("a viewer (not an editor) is offered the page too — every member sees the list; only the actions are an editor's (the panel takes canEdit)", async () => {
-    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: false });
     const html = await render();
     expect(html).toContain(PANEL);
     expect(html, "canEdit reaches the panel as false").toContain('data-can-edit="false"');
@@ -248,7 +248,7 @@ describe("Streaming page — the disconnect-only page for an org that is not off
   });
 
   it("a viewer is a 404 even WITH a connection (only an owner or admin can disconnect), and the connection is not even looked up for them", async () => {
-    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: false });
     m.hasLiveConnection.mockResolvedValue(true);
     let checked = 0;
     for (const [why, apply] of reasons) {
@@ -276,7 +276,7 @@ describe("Streaming page — the disconnect-only page for an org that is not off
       await expect(page(), `${why}: no param`).rejects.toMatchObject(NOT_FOUND);
       await expect(page({ disconnected: "0" }), `${why}: another value`).rejects.toMatchObject(NOT_FOUND);
       await expect(page({ disconnected: ["1", "1"] }), `${why}: a list`).rejects.toMatchObject(NOT_FOUND);
-      m.requirePageAuth.mockResolvedValueOnce({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+      m.requirePageAuth.mockResolvedValueOnce({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: false });
       await expect(page({ disconnected: "1" }), `${why}: a viewer`).rejects.toMatchObject(NOT_FOUND);
       checked++;
     }
@@ -303,5 +303,24 @@ describe("Streaming page — the disconnect-only page for an org that is not off
     expect(m.hasLiveConnection).not.toHaveBeenCalled();
     expect(m.expireTargetHolders).toHaveBeenCalledTimes(1);
     expect((m.listStreamTargets.mock.calls as unknown[][])[0]!.slice(1)).toEqual([ORG]);
+  });
+
+  // Owner, 2026-11-18: the ADDRESS decides the org (a cookie never does), and the page says which org it is showing at every width.
+  it("the address decides the org: the page asks requireOrgPage for the URL's slug (with its query, for a renamed org) and lists THAT org's destinations only", async () => {
+    await render({ youtube: "connected" });
+    expect(m.requirePageAuth).toHaveBeenCalledWith("riverside", { tail: "/streaming", search: "?youtube=connected" });
+    expect((m.listStreamTargets.mock.calls as unknown[][])[0]!.slice(1)).toEqual([ORG]);
+  });
+
+  it("names the org in the page itself, not only in the nav chip that is hidden on a phone", async () => {
+    const html = await render();
+    expect(html).toMatch(/data-testid="streaming-org"[^>]*>Riverside CC</);
+  });
+
+  it("a non-member is refused as every other /o page refuses one: the page throws the 404 and reads no destination", async () => {
+    m.requirePageAuth.mockRejectedValue(NOT_FOUND);
+    await expect(render()).rejects.toMatchObject(NOT_FOUND);
+    expect(m.listStreamTargets).not.toHaveBeenCalled();
+    expect(m.expireTargetHolders).not.toHaveBeenCalled();
   });
 });

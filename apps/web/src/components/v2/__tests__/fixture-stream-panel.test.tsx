@@ -72,7 +72,7 @@ import { platformName } from "@/components/v2/stream-platform-mark";
 import { YoutubeIcon } from "@/components/v2/youtube-icon";
 import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
 import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
-import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeUrl } from "@/lib/youtube";
+import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeUrl } from "@/lib/youtube";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
@@ -2213,7 +2213,7 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
       const link = byTestId(body({ view: null, balance: 2, targets, selectedTargetId: null }), "stream-manage-destinations");
       expect(link, targets.status).toBeDefined();
       expect(link!.type).toBe("a");
-      expect(attr(link!, "href")).toBe("/streaming");
+      expect(attr(link!, "href")).toBe("/o/org/streaming");
       expect(attr(link!, "target")).toBe("_blank");
       expect(attr(link!, "rel")).toBe("noopener");
       expect(textOf(link!)).toBe(m("stream.dest.manage"));
@@ -6118,8 +6118,8 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
 
   it("Reconnect is a link to the Streaming page — /streaming, never the Directory tab that no longer exists", () => {
     const link = byTestId(refused("youtube_reconnect_needed"), "stream-youtube-reconnect")!;
-    expect(attr(link, "href")).toBe("/streaming");
-    expect(attr(link, "href")).toBe(STREAMING_PAGE_HREF);
+    expect(attr(link, "href")).toBe("/o/org/streaming");
+    expect(attr(link, "href")).toBe("/o/org/streaming");
     expect(String(attr(link, "href"))).not.toContain("directory");
     expect(link.type, "a link, not a button that navigates by script").toBe("a");
     expect(textOf(link).trim()).toBe(m("stream.youtube.refused.reconnect"));

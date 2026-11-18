@@ -257,10 +257,16 @@ export const YOUTUBE_GRACE_MINUTES = 5;
  *  the old `/directory?tab=streaming`). The ONE href for the nav item, the fixture panel's "Manage destinations" links and the
  *  connect flow's landing. Constants only: no import, so the OpenAPI loader can read this file bare. */
 export const STREAMING_PAGE_HREF = "/streaming";
+/** The Streaming page under the org's own path (owner, 2026-11-18): the address decides the org. With no slug (a caller that cannot
+ *  know one) it is the legacy `/streaming`, which redirects to the cookie's org. `search` is from its `?`. */
+export function streamingHref(orgSlug?: string | null, search = ""): string {
+  return orgSlug ? `/o/${encodeURIComponent(orgSlug)}/streaming${search}` : `${STREAMING_PAGE_HREF}${search}`;
+}
 /** Where the restricted Streaming page (an org that lost Go live but kept a YouTube connection) sends ITSELF once its last channel has
  *  been disconnected: the page re-renders - so its own nav stops offering a link to a page that would now 404 - and, because of the
  *  query, an editor who has just emptied it stays on it (empty, with the news of what they did) instead of landing on the 404. */
 export const STREAMING_DISCONNECTED_HREF = `${STREAMING_PAGE_HREF}?disconnected=1`;
+export const streamingDisconnectedHref = (orgSlug?: string | null): string => streamingHref(orgSlug, "?disconnected=1");
 
 // Every exit of the OAuth callback (and the start's own refusals that are not a bad request) is a 303 to the Streaming page
 // carrying one outcome, as `?youtube=<code>`. The page maps a code to a sentence; a value that is not one of these shows
@@ -292,10 +298,10 @@ export const YOUTUBE_LANDING_CODES = [
 ] as const;
 export type YoutubeLandingCode = (typeof YOUTUBE_LANDING_CODES)[number];
 
-/** Where the connect flow lands: `/streaming?youtube=<code>`, plus `&pending=<id>` for a `pick`. The ONE builder for the start
+/** Where the connect flow lands: `/o/{slug}/streaming?youtube=<code>` (the legacy `/streaming?...` when the org is not known), plus `&pending=<id>` for a `pick`. The ONE builder for the start
  *  route, the callback and the page that reads the parameters, so they cannot drift. */
-export function youtubeLanding(code: YoutubeLandingCode, pendingId?: string): string {
-  const base = `${YOUTUBE_LANDING_PATH}?${YOUTUBE_LANDING_PARAM}=${code}`;
+export function youtubeLanding(code: YoutubeLandingCode, pendingId?: string, orgSlug?: string | null): string {
+  const base = streamingHref(orgSlug, `?${YOUTUBE_LANDING_PARAM}=${code}`);
   return pendingId === undefined ? base : `${base}&${YOUTUBE_LANDING_PENDING_PARAM}=${encodeURIComponent(pendingId)}`;
 }
 

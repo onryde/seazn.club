@@ -703,7 +703,7 @@ test("T11 refusal: switch on, an automatic phone, the match in play and NO desti
   expect(row?.r, "the server stored the refusal it served").toBe("no_destination");
   const manage = strip.getByTestId("stream-auto-remedy-manage");
   await expect(manage).toHaveText(en("stream.dest.manage"));
-  await expect(manage).toHaveAttribute("href", "/streaming");
+  await expect(manage).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
   await page.setViewportSize({ width: 320, height: 800 });
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 1280, height: 900 });

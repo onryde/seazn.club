@@ -8,7 +8,7 @@ import { breadcrumbLd, serializeJsonLd } from "../../components/seo/json-ld";
 
 // Real dictionary titles that already carry the brand (the root template would double them).
 const BRANDED = [
-  "Seazn Club — Run multi-sport community tournaments",
+  "Seazn Club — Run multi-sport tournaments",
   "Scheduling — Seazn Club",
   "Tournament formats — round robin, knockout | Seazn Club",
 ];
@@ -21,7 +21,7 @@ describe("pageTitle / ogTitle", () => {
     expect(pageTitle("Pricing")).toBe("Pricing");
   });
   it.each([
-    [BRANDED[0]!, "Run multi-sport community tournaments"],
+    [BRANDED[0]!, "Run multi-sport tournaments"],
     [BRANDED[1]!, "Scheduling"],
     [BRANDED[2]!, "Tournament formats — round robin, knockout"],
     ["Pricing", "Pricing"],

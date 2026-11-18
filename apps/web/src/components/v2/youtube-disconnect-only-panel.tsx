@@ -13,13 +13,15 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { STREAMING_DISCONNECTED_HREF } from "@/lib/youtube";
+import { streamingHref } from "@/lib/youtube";
+import { useOrgSlug } from "@/components/use-org-paths";
 import type { StreamTarget } from "@/server/api-v1/schemas";
 import { YoutubeChannelRow, YoutubeDisconnectedNotice, type DisconnectNews } from "./youtube-connect-panel";
 
 export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; targets: StreamTarget[] }) {
   const msg = useMsg();
   const router = useRouter();
+  const orgSlug = useOrgSlug();
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
   const [disconnected, setDisconnected] = useState<DisconnectNews | null>(null);
   const channels = targets.filter((t) => t.youtube !== null && !gone.has(t.id));
@@ -33,8 +35,8 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
   // arrives empty (we are already at the emptied address, or the org never had a channel).
   const emptied = channels.length === 0 && gone.size > 0;
   useEffect(() => {
-    if (emptied) router.replace(STREAMING_DISCONNECTED_HREF);
-  }, [emptied, router]);
+    if (emptied) router.replace(streamingHref(orgSlug, "?disconnected=1"));
+  }, [emptied, router, orgSlug]);
 
   return (
     <div data-testid="stream-disconnect-only" className="space-y-4">
