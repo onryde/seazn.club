@@ -104,7 +104,7 @@ export async function heldMeeting(db: AnySql, meetingId: string): Promise<{ fixt
 /** The participant a custom id names in a meeting, through the meeting row's (fixture_id, side): a player's row where `person_id::text =
  *  customParticipantId` (preset 'player'); else an arbiter's row where `user_id::text = split_part(customParticipantId, ':', 1)` (preset
  *  'arbiter', removed_at null): an arbiter's subject is the user id, a colon and a nonce (arbiter.ts mintArbiter, kept by plan 3), so the
- *  prefix is the match; when that user has more than one live arbiter row in the meeting (one per open tab until plan 3's V529 makes the
+ *  prefix is the match; when that user has more than one live arbiter row in the meeting (one per open tab until plan 3's V530 makes the
  *  pair unique) the newest wins: `order by created_at desc limit 1` (V451 line 280). null when neither. */
 export async function resolveParticipant(db: AnySql, a: { meetingId: string; customParticipantId: string }): Promise<string | null> {
   const [r] = await db<{ participant_id: string }[]>`

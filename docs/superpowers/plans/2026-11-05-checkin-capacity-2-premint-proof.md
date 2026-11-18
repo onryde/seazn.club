@@ -38,7 +38,7 @@
 - A capped budget always composes with what the caller injected: `cappedBudget(cap, rtk.budget ?? platformSpend(rtk))`, so a test that injects `rtk.budget` still drives the deferral.
 - Flags: `EXTERNAL_PLAY_PREMINT=1` enables the job's work (the route still answers; a disabled pass reports `skipped: 1`), `EXTERNAL_PLAY_PRESENCE_PROOF=1` enables the one-read path (unset: today's 3-call read, presence untouched). `EXTERNAL_PLAY_WINDOW_DEFER=0` turns OFF the open-window deferral of the sweep and the pre-mint (Task 8). Unset or any other value defers. It is set only on the e2e server, whose specs share one platform-wide window state (Task 8 says why), and it is an operator's rollback lever. All three are read from `process.env` at call time, so a test flips them per case.
 - A new cron row needs: the route under `/api/cron/`, the row in `JOBS`, numeric `failed` and `skipped` declared in code in a module the route imports, and the drift test's `checked` count raised by the number of `failureCounts` added; a row on the fast trigger also enters `apps/cron-worker/test/schedule.test.ts`'s typed `FAST_ROWS` and `EVERY_FIRING_ROWS` lists (table order) and gets its own row-pin case, as `stream-tick`, `external-play` and `email-outbox` have.
-- Everything else from plan 1's Global Constraints (sealed tables, numbering, scoped runs, four dictionaries, commits). This plan's migration is V528 (main's highest is V526 on 2026-11-17, origin/main 59c72dd361; plan 1 takes V527, plan 3 V529).
+- Everything else from plan 1's Global Constraints (sealed tables, numbering, scoped runs, four dictionaries, commits). This plan's migration is V529 (main's highest is V526 on 2026-11-17, origin/main 59c72dd361; plan 1 takes V527, plan 3 V530).
 - Exact files the tasks below name: the line's guard `apps/web/src/server/external-play/__tests__/seat-line-one-reader.test.ts`; the camera-report guard is rule 2 of `apps/web/src/server/external-play/__tests__/video-per-player-source-guard.test.ts` over `CAMERA_REPORT_COLUMNS` in `_video-source-scan.ts` (today's two sites: `camera-report.ts` and `room.ts`; the allow-list itself is `CAMERA_REPORT_FILES`, line 80 of the guard test); rule 1's both-sides allow-list is `BOTH_SIDES` (line 46 of the same test); the line's cost suite `apps/web/src/server/usecases/__tests__/external-play-line-cost.test.ts` with its helper `_external-play-line.ts`; the seeds `_external-play-seed.ts` in the same directory; the load harness `apps/web/e2e/load/chess-30-boards.load.ts`.
 
 ## Review Focus
@@ -58,7 +58,7 @@
 | File | Responsibility |
 |---|---|
 | `apps/web/src/server/usecases/external-play/sweep.ts` → `apps/web/src/server/usecases/external-play/sweep/` (Task 0, its own PR) | A verbatim split behind an identical barrel; no behaviour change. |
-| `db/migration/deltas/V528__premint_and_line_price.sql` (create) | Nullable stamps on meetings (if NOT NULL today), `fixture_seat_line.reservation` and `recheck_cost`, and on `fixture_video_participants` the columns `presence_fallback_from`, `camera_live_first_at` and `token_issued_at`. |
+| `db/migration/deltas/V529__premint_and_line_price.sql` (create) | Nullable stamps on meetings (if NOT NULL today), `fixture_seat_line.reservation` and `recheck_cost`, and on `fixture_video_participants` the columns `presence_fallback_from`, `camera_live_first_at` and `token_issued_at`. |
 | `apps/web/src/server/external-play/video/realtimekit.ts` (modify) | Unadopted rooms in `ensureMeeting`/`meetingOnFile`/`retireStaleMeeting`; `adoptRooms`; `peerReportCamera` (1 call, carries the report's `left_at`); `platformSpend` and `cappedBudget`; `SeatCamera` carries the peer. |
 | `apps/web/src/server/usecases/external-play/open-round.ts` (modify) | The re-open (only) spares unended rooms made for the current pairing and unended unadopted rooms; the re-arm retires as today. |
 | `apps/web/src/server/usecases/external-play/premint.ts` (create) | The pre-mint pass: candidates, rooms (rooms only: no adoption, no participant, owner ruling 2026-11-17 (2)), the cap, the report. |
@@ -140,15 +140,17 @@ The siblings import from `pass.ts` or in one direction only (`run.ts` → the jo
 ### Task 1: Migration
 
 **Files:**
-- Create: `db/migration/deltas/V528__premint_and_line_price.sql`
+- Create: `db/migration/deltas/V529__premint_and_line_price.sql`
 - Modify: `apps/web/src/server/usecases/__tests__/online-chess-video-schema.test.ts` (its R2-2 not-null case, Step 3)
 
 - [ ] **Step 1: Read the table definitions** — `fixture_video_meetings` is created in `db/migration/deltas/V451__online_chess_board_and_camera.sql` (line 249; `home_entrant_id uuid not null`, `away_entrant_id uuid not null`, the comment "Never null: a board with no pairing gets no meeting" which this design retires) and `fixture_seat_line` in `V461__checkin_batches_and_seat_line.sql`.
 
-- [ ] **Step 2: Write the migration** (`db/migration/deltas/V528__premint_and_line_price.sql`)
+- [ ] **Step 2: Write the migration** (`db/migration/deltas/V529__premint_and_line_price.sql`)
 
 ```sql
--- V528 — pre-minted rooms and the line's stamped price (check-in capacity design 2026-11-05 §6.1, §6.3, §6.4). Renumber at merge if main has moved past.
+-- V529 — pre-minted rooms and the line's stamped price (check-in capacity design 2026-11-05 §6.1, §6.3, §6.4).
+-- MERGE GATE: Flyway runs with outOfOrder=false (db/flyway.toml sets none; false is the default), so V528 (the stage
+-- lots-draw index fix PR) must merge before this file reaches ANY database; a V528 arriving after V529 is applied is refused.
 -- V451 made the stamps NOT NULL ("a board with no pairing gets no meeting"); an unadopted room is exactly that board's room, both null.
 alter table fixture_video_meetings alter column home_entrant_id drop not null;
 alter table fixture_video_meetings alter column away_entrant_id drop not null;
@@ -167,10 +169,15 @@ alter table fixture_video_participants add column presence_fallback_from timesta
 -- CAMERA_REPORT_STALE_MS); never re-stamped by a same-state heartbeat on a fresh `live` (`refreshed`, which re-stamps
 -- camera_reported_at every 30 s); cleared when it writes `off`. The fallback clock reads it. A row already `live` at deploy
 -- keeps null until its next report, which stamps it (the writer coalesces); the reader treats live-with-null as a run starting now.
--- No "live implies stamped" constraint: the app version running while this migration applies writes `live` without it.
 alter table fixture_video_participants add column camera_live_first_at timestamptz null;
+-- The stamp is set only while camera_reported is 'live'. `is not distinct from`, not `=`: with camera_reported null, `= 'live'`
+-- is NULL, and a NULL check PASSES (three-valued logic), so `=` would admit a stamp beside no report at all (controller ruling
+-- 2026-11-18, amending the plan's DDL). The other direction bites too: a build older than plan 2 Task 6 (a rollback after
+-- Task 6 has stamped rows) that writes `off` over a stamped row is refused (23514); Task 6's writer clears the stamp in the
+-- same statement as every non-live write. No "live implies stamped" constraint: the app version running while this
+-- migration applies writes `live` without it.
 alter table fixture_video_participants add constraint fixture_video_participants_camera_live_first_check
-  check (camera_live_first_at is null or camera_reported = 'live');
+  check (camera_live_first_at is null or camera_reported is not distinct from 'live');
 -- When the seat last handed this participant a token (a mint's own, or refreshParticipantToken), written by preflight.ts.
 -- The fallback clock never starts before it: no peer can join before its page holds a token, and a reload's page gets a new
 -- one (review fix 2026-11-17, finding 6). Null: never handed, so nobody can have joined and the fallback never fires.
@@ -179,11 +186,11 @@ alter table fixture_video_participants add column token_issued_at timestamptz nu
 
 - [ ] **Step 3: Apply** (`npm run db:apply`) and run the sealed catalog test (`apps/web/src/server/usecases/__tests__/online-chess-video-schema.test.ts`) and `apps/web/src/server/__tests__/rls-coverage.test.ts`. No new table, so `rls-coverage` stays green. The catalog test does NOT stay green, for two reasons:
   - **The R2-2 case.** "R2-2: a meeting names the pairing it was made for — an insert without either entrant is refused" (lines 80-97) expects `23502` on the missing column. After this migration one null stamp is refused by `fixture_video_meetings_stamp_pair_check` (`23514`). Update that case to expect the check constraint by name (one null alone, each way round, still refused, count 2) and add its positive pair: both stamps null is accepted. Add a case for `fixture_video_participants_camera_live_first_check`: `camera_live_first_at` set with `camera_reported` null or `off` is refused (`23514`, count 2), and set with `live` is accepted.
-  - **The V459 replay** (found by plan 3's reviser, 2026-11-17). `describe("the delta's guard")` (lines ~671-800) runs `V459__video_meeting_per_player.sql` against a scratch schema holding the V451/V454/V457 shape (`_v459-old-shape.ts`). Then "with ONLY ended meetings it applies … the three tables end up exactly as the migrated database has them" (~771-793) compares `shapeOf` (columns, constraints, indexes) of `fixture_video_meetings`, `fixture_video_participants` and `fixture_video_guard_faults` in scratch with the LIVE tables. V528 changes the live shape of two of them (the dropped NOT NULLs, two checks, three columns), so the comparison goes red. Fix it by replaying the later deltas too, never by loosening the comparison:
-    - After `tx.unsafe(delta())`, the case replays every delta numbered above V459 whose statements touch the three tables, in version order. It reads `db/migration/deltas/`, keeps the files `V(\d+)__*.sql` with a number > 459, and splits each on `;` at a line end (V528 has no `do` block). It keeps a statement only when it is an `alter table` / `create [unique] index … on` naming one of `TABLES` (`\b`-bounded), and runs the kept statements in the scratch schema.
-    - Statements on any other table (V528's two `fixture_seat_line` lines) are skipped and are NOT run. Running them would take an access-exclusive lock on a LIVE table and fail on the existing columns, and the case "no strong lock on a LIVE table" (~795) must stay green.
-    - Anti-vacuity, pinned per file in a typed map: `{ V528: { kept: 7, skipped: 2 } }`. The 7 are the two `drop not null`s, the stamp check, `presence_fallback_from`, `camera_live_first_at`, its check, and `token_issued_at`. A delta above V459 that touches the three tables and is not in the map fails the case by name. So plan 3's V529, if it touches `fixture_video_participants`, adds its own entry in its own task.
-    - Mutation, once: leave V528 out of the replay; the comparison must fail on `fixture_video_meetings`. Restore.
+  - **The V459 replay** (found by plan 3's reviser, 2026-11-17). `describe("the delta's guard")` (lines ~671-800) runs `V459__video_meeting_per_player.sql` against a scratch schema holding the V451/V454/V457 shape (`_v459-old-shape.ts`). Then "with ONLY ended meetings it applies … the three tables end up exactly as the migrated database has them" (~771-793) compares `shapeOf` (columns, constraints, indexes) of `fixture_video_meetings`, `fixture_video_participants` and `fixture_video_guard_faults` in scratch with the LIVE tables. V529 changes the live shape of two of them (the dropped NOT NULLs, two checks, three columns), so the comparison goes red. Fix it by replaying the later deltas too, never by loosening the comparison:
+    - After `tx.unsafe(delta())`, the case replays every delta numbered above V459 whose statements touch the three tables, in version order. It reads `db/migration/deltas/`, keeps the files `V(\d+)__*.sql` with a number > 459, and splits each on `;` at a line end (V529 has no `do` block). It keeps a statement only when it is an `alter table` / `create [unique] index … on` naming one of `TABLES` (`\b`-bounded), and runs the kept statements in the scratch schema.
+    - Statements on any other table (V529's two `fixture_seat_line` lines) are skipped and are NOT run. Running them would take an access-exclusive lock on a LIVE table and fail on the existing columns, and the case "no strong lock on a LIVE table" (~795) must stay green.
+    - Anti-vacuity, pinned per file in a typed map: `{ V529: { kept: 7, skipped: 2 } }`. The 7 are the two `drop not null`s, the stamp check, `presence_fallback_from`, `camera_live_first_at`, its check, and `token_issued_at`. A delta above V459 that touches the three tables and is not in the map fails the case by name. So plan 3's V530, if it touches `fixture_video_participants`, adds its own entry in its own task.
+    - Mutation, once: leave V529 out of the replay; the comparison must fail on `fixture_video_meetings`. Restore.
 
 - [ ] **Step 4: Commit** — `feat(db): unadopted room stamps, stay price, presence fallback clock, first-live and token stamps`.
 
@@ -428,7 +435,7 @@ Never retried (the next firing is the retry; the lock answers an overlap with `s
 export async function reportedCamera(db: AnySql, a: { fixtureId: string; side: Side; participantId: string; now: Date }): Promise<{ state: "live" | "off" | "unknown"; at: Date | null; firstLiveAt: Date | null }>;
 // `at` is camera_reported_at (the LATEST receipt, re-stamped by every heartbeat); `firstLiveAt` is camera_live_first_at
 // (the first receipt of the current live run), null unless the stored state is live. A FRESH live with a null firstLiveAt
-// (a seat already live at the V528 deploy, until its next report) is returned as it is; the seat treats it as a run
+// (a seat already live at the V529 deploy, until its next report) is returned as it is; the seat treats it as a run
 // starting at `now` (finding 12's guard, tested below).
 
 // camera-report.ts reportOwnCamera, the writer's one UPDATE (today lines 86-88) also sets (old-row values on the right):
@@ -459,7 +466,7 @@ export async function stayMintOf(db: AnySql, a: { fixtureId: string; side: Side;
 // issuePlayerToken, ~678-681) calls ONE helper after the token is in hand:
 //   update fixture_video_participants set token_issued_at = ${now} where fixture_id = … and participant_id = …
 // The pre-mint makes no participant (owner ruling 2026-11-17 (2)), so every player participant row is written by a claim that hands
-// its token and stamps it. A null token_issued_at is only a row from before V528.
+// its token and stamps it. A null token_issued_at is only a row from before V529.
 ```
 
 `judgeSeat`, with `EXTERNAL_PLAY_PRESENCE_PROOF=1`:
@@ -490,7 +497,7 @@ With the flag unset the function body is today's (plus the token stamp, which no
 describe.skipIf(!DB)("the one-read proof", () => {
   it("a joined player with the camera on is seated after ONE vendor call (the peer report) and no session reads", async () => { /* fixture route counts since the claim: GET peer-report 1, GET active-session 0, GET sessions/:id/participants 0 */ });
   it("no presence yet, browser silent: camera_required with ZERO vendor calls", async () => {});
-  it("a participant row whose token_issued_at is null (a row from before V528, seeded by a one-column update; the job makes no participants), browser reporting live for 30 s: camera_starting / camera_required with ZERO calls and no fallback; the claim's answer carries a token (a refresh) and stamps token_issued_at", async () => {});
+  it("a participant row whose token_issued_at is null (a row from before V529, seeded by a one-column update; the job makes no participants), browser reporting live for 30 s: camera_starting / camera_required with ZERO calls and no fallback; the claim's answer carries a token (a refresh) and stamps token_issued_at", async () => {});
   it("presence younger than 1.5 s and no live report: camera_starting with zero calls; 1.5 s later the read is made", async () => { /* deps.now */ });
   it("a joined_at in the future (the vendor's clock ahead) with received_at = our now: camera_starting, no read, until 1.5 s have passed on OUR clock", async () => {});
   it("camera off at the vendor: camera_required / camera_lost from one call; blocked: camera_blocked", async () => {});
@@ -499,7 +506,7 @@ describe.skipIf(!DB)("the one-read proof", () => {
   it("presence arriving clears the fallback clock: a later silent stretch starts the 10 s again", async () => {});
   it("the fallback clock starts at the FIRST live report, not the latest heartbeat: token at T0-1s, live at T0, live heartbeat at T0+30s, first claim at T0+31s falls back (3 calls); with the clock read from camera_reported_at it would answer camera_starting", async () => {});
   it("RELOAD with webhooks UP (finding 6): live camera seated through presence for 20 s, then the page reloads (old peer's participantLeft delivered, the old tab's live report still fresh, new page's first claim before its join): no fallback, counter 0; after the new page joins, ONE peer-report read seats it", async () => { /* calls since the reload: token 1 + peer-report 1 + seat token 1; active-session 0 */ });
-  it("a fresh live report with a NULL camera_live_first_at (a pre-V528 live seat, seeded by a one-column update): the clock starts at now: camera_starting, zero calls, fallback only 10 s later", async () => {});
+  it("a fresh live report with a NULL camera_live_first_at (a pre-V529 live seat, seeded by a one-column update): the clock starts at now: camera_starting, zero calls, fallback only 10 s later", async () => {});
   it("R4: a peer that LEFT with its participantLeft LOST (webhook row still open): a claim past SEAT_RECHECK_TRUST_MS reads the report, sees left_at, takes the departed-peer fallback, and the player is NOT seated (camera_lost); counter +1, kind departed_peer", async () => { /* seat via webhook presence; fx.setWebhooksDown(true); fx.leave(row); claim */ });
   it("R4 + the reload: the departed peer's player came back on a new peer whose join webhook was ALSO lost: the departed-peer fallback finds the new peer, records it (source 'read'), and seats from that read", async () => {});
   it("plan 1 finding 3, the fallback-then-leave sequence: a fallback read seats the player (read row), then the peer leaves with its leave webhook lost; the next claim is NOT seated, inside the read row's 10 s trust (departed-peer fallback) AND after it (no presence; the fallback finds no peer) — count 2", async () => {});
@@ -802,7 +809,7 @@ These were the four "Open for owner" items. Each is closed as the owner ruled, a
 
 1. **The pre-mint row against a Worker that runs a firing's rows one at a time.** The ruling: ACCEPTED as placed, after `stream-tick` and before `external-play`, including its cost. `apps/cron-worker/src/run.ts` line 59 runs due rows in sequence (`JOB_TIMEOUT_MS` 60 s per job, `RUN_DEADLINE_MS` 12 min per firing), so while a premint pass has work the sweep (every 5 minutes) and the email outbox (every minute) wait up to one premint pass, 45 s. `data.skipped` stays in the row's `failureCounts` (drift +2, 14 → 16). Task 5 is unchanged except that its pointer now names this ruling.
 2. **The fallback clock and the camera report's refresh.** The ruling: record the FIRST live report separately, in a field set once per live run of a seat's stay and never re-stamped by the 30 s heartbeat, and have the fallback clock read it. Today `camera-report.ts` (lines 59-88) re-stamps `camera_reported_at` on `written` and `refreshed` alike. Changes:
-   - V528 (Task 1) adds `fixture_video_participants.camera_live_first_at timestamptz null`, with `fixture_video_participants_camera_live_first_check` (set only while `camera_reported = 'live'`), and the catalog test gets a refused/accepted case for it.
+   - V529 (Task 1) adds `fixture_video_participants.camera_live_first_at timestamptz null`, with `fixture_video_participants_camera_live_first_check` (set only while `camera_reported = 'live'`), and the catalog test gets a refused/accepted case for it.
    - The writer's one UPDATE sets it on a `live` write over a stored state that is not `live`, keeps it on `live` over `live` (including `refreshed`), and clears it on `off`. `ignored` writes nothing, as today.
    - `reportedCamera` returns `firstLiveAt`, and `judgeSeat` step 2 starts the clock at `coalesce(presence_fallback_from, report.firstLiveAt)`.
    - The column joins `CAMERA_REPORT_COLUMNS` in `_video-source-scan.ts`. The guard's regex is `\b`-bounded, so without that it would not be guarded. The allow-list `CAMERA_REPORT_FILES` gains nothing new, because the writer and the leaf reader are already its members after Task 6.
@@ -843,13 +850,13 @@ Applied from `.superpowers/sdd/2026-11-17-checkin-capacity-review/plan-2.md`, fr
 3. `SweepDeps.windowsOpen` / `PremintDeps.windowsOpen` seams, `anyCheckinWindowOpen(…, orgIds?)` scoped for tests, and `EXTERNAL_PLAY_WINDOW_DEFER=0` on the e2e server (pinned in e2e-ci-wiring). The three named suite cases plus every red found by running each sweep importer get `NO_WINDOW`, listed in the commit. The walkthrough's ~836-846 and ~976-990 are named and stay unchanged under the env.
 4. The prices are re-derived (R1), and the flag-off pre-minted case is in the cost test. The design figure was raised through the coordinator; the design agent's re-derivation now agrees.
 5. `stayMintOf` counts only an unended current-or-unadopted room, with the participant on THAT room; anything else is `"all"`. The re-paired-after-adoption case is measured in Task 7 (9 + 4 / 21 + 4).
-6. Reload: the fallback clock is `greatest(…, token_issued_at)`, a new V528 column stamped on every token handed. The writer also restarts a run whose stored `live` is stale. Tests cover the webhooks-up reload (no fallback, 1 read) and the camera previewed before the first claim.
+6. Reload: the fallback clock is `greatest(…, token_issued_at)`, a new V529 column stamped on every token handed. The writer also restarts a run whose stored `live` is stale. Tests cover the webhooks-up reload (no fallback, 1 read) and the camera previewed before the first claim.
 7. `upsertStay` writes `reservation` AND `recheck_cost` at a stay's first claim and never re-prices inside a stay. `reservedSql` coalesces both. Tests cover a null-`recheck_cost` admitted completing stay and a second claim re-pricing nothing.
 8. Flags wait for plan 3 Task 1 to be merged and deployed (header and Task 11 precondition).
 9. The no-presence fallback is taken under `claimEvidenceRead`, with a racing-claims test (one read) and a mutant.
 10. `ParkedRoom` and `anchorIfClosedNow` move to `sweep/pass.ts`. The `playableWindow` split becomes pass 1 / no-show 2 / teardown 1 / reconcile 1, and Step 7 adds a direction check.
 11. The writer's lock read stays in camera-report.ts; only room.ts and the seat use the leaf. `CAMERA_REPORT_FILES` = camera-report.ts + camera-reported.ts.
-12. The writer coalesces `camera_live_first_at` on a fresh live-over-live, and the reader treats a fresh live with a null stamp as a run starting now. Both are tested and mutated. There is no "live implies stamped" CHECK, because the app version running while V528 applies would violate it.
+12. The writer coalesces `camera_live_first_at` on a fresh live-over-live, and the reader treats a fresh live with a null stamp as a run starting now. Both are tested and mutated. There is no "live implies stamped" CHECK, because the app version running while V529 applies would violate it.
 13. `since = least(joinedAt, receivedAt)`, from plan 1's final `currentPresence`, which returns `source`, `receivedAt` and takes `now` (coordinator item 3). A `read` row is current only for `PRESENCE_READ_TRUST_MS`.
 14. A premint participant candidate requires an unended current-or-unadopted row and carries its `meetingId`. The row is re-read after `adoptRooms`, and a null fixture is `noPlayer`. Tested. (Superseded by owner ruling 2026-11-17 (2): there is no participant candidate.)
 15. **Partly applied.** mint_retry's and reconcile's vendor calls are stated exemptions from the cap and the deferral, with the reason (they create or finish a game). **Not applied: counting their calls in the report.** Neither takes the sweep's deps, and threading the capped deps through `create-game.ts` and `reconcile.ts` changes two more modules' signatures outside this plan. The platform bucket still meters them, and `mintRetries` / `reconciled` show their volume.
@@ -859,7 +866,7 @@ Applied from `.superpowers/sdd/2026-11-17-checkin-capacity-review/plan-2.md`, fr
 19. `Video` gains `peerReportCamera`, and `REAL_VIDEO` / `videoWith` bind it. The seat reads through `video.peerReportCamera`. (After owner ruling 2026-11-17 (2): `videoWith` is dropped with the job's participant step; `REAL_VIDEO` alone binds it, in Task 6.)
 
 **Coordinator cross-plan items**
-- The V528 replay: plan 3's reviser found that V528 breaks `online-chess-video-schema.test.ts`'s V459 replay. That case compares the replica's shape after V459 with the LIVE tables. Task 1 Step 3 now replays every later delta's statements on the three tables in the scratch schema, with a per-file anti-vacuity map (`V528: kept 7, skipped 2`), a by-name failure for an unlisted delta, and a mutant. The `fixture_seat_line` lines are never run there, so the "no strong lock on a LIVE table" case stays green.
+- The V529 replay: plan 3's reviser found that V529 breaks `online-chess-video-schema.test.ts`'s V459 replay. That case compares the replica's shape after V459 with the LIVE tables. Task 1 Step 3 now replays every later delta's statements on the three tables in the scratch schema, with a per-file anti-vacuity map (`V529: kept 7, skipped 2`), a by-name failure for an unlisted delta, and a mutant. The `fixture_seat_line` lines are never run there, so the "no strong lock on a LIVE table" case stays green.
 - Plan 1 Task 10b's retention call is in Task 0's move inventory (`sweep/run.ts`).
 
 **Interface changes other plans should know** (names plan 3 imports are unchanged):
@@ -871,7 +878,7 @@ Applied from `.superpowers/sdd/2026-11-17-checkin-capacity-review/plan-2.md`, fr
 - `retireBoardsMeetings(…, mode)` (private).
 - New constants `LINE_SESSION_PROBE_CALLS`, `LINE_END_ROOM_CALLS` and `lineFirstClaimCalls`. `LINE_RESERVATION_MIN` is now 8 (was 7); `LINE_RESERVATION_MAX` stays 21.
 - `upsertStay` takes `recheckCost`.
-- V528 adds `fixture_video_participants.token_issued_at`.
+- V529 adds `fixture_video_participants.token_issued_at`.
 - `StayMint` is unchanged (`"none" | "room" | "all"`).
 - Plan 2 no longer consumes plan 1's `peersOf`.
 
@@ -883,7 +890,7 @@ Applied from `.superpowers/sdd/2026-11-17-checkin-capacity-review/plan-2.md`, fr
    - Task 4: `PremintStep` removed; `PremintCandidate` loses `step` and `meetingId`; `PremintReport` loses `adopted`, `participantsMade` and `noPlayer`, and `failures[]` loses `step`. The participant-candidate clause and the `step` sort key are removed from the candidate query and its `ORDER BY`. Tests removed: the participant-row candidate case, the earlier-pairing participant case (folded into "a side with ANY room on file yields no row", count 4), the two `noPlayer` cases. Tests added: the rooms-only pass after pairing (0 vendor calls, stamps stay null, the claim adopts), a paired board stamped by the job with no participant. The finding-14 mutant is replaced by one on the `not exists fixture_video_meetings` clause.
    - Task 4 / Task 6: `preflight.ts` no longer exports `type Video`, `videoWith` or `playerParticipant` (they existed only for the job); `Video`'s `peerReportCamera` and `REAL_VIDEO`'s binding move to Task 6's Files. No other plan named them (grep of plans 1, 3 and the Match Day plan: none).
    - Prices (Global Constraints, Task 7): unchanged numbers, renamed roles. `"room"` is the normal round, 8 with the proof flag, 20 without. `"none"` stays as a code kind (the participant already on file from an earlier claim, i.e. a restarted stay; the job never produces it), 8 / 21. `"all"` 9 / 21; a room from an earlier pairing is `"all"` with its +4 outside. `LINE_RESERVATION_MIN` re-checked: still 8, equal to `"room"`'s. `LINE_RESERVATION_MAX` 21, `LINE_CLAIM_COST <= LINE_RESERVATION_MIN` both hold. Task 7's measured row order is now `[room, none, all]`; the `room` stay is driven through the premint pass, the `none` stay through a restarted stay.
-   - Task 6: the null-`token_issued_at` case is now a row from before V528 (the job no longer makes token-less participants); the token-stamp case drops "the pre-mint's mint" (count 5 → 4); `stayMintOf` gains the job's own room as a `room` case (count 6 → 7); the `greatest` mutant and the null-arm mutant are listed separately.
+   - Task 6: the null-`token_issued_at` case is now a row from before V529 (the job no longer makes token-less participants); the token-stamp case drops "the pre-mint's mint" (count 5 → 4); `stayMintOf` gains the job's own room as a `room` case (count 6 → 7); the `greatest` mutant and the null-arm mutant are listed separately.
    - Task 10: one premint pass makes the rooms and the second makes no call; 0 participant adds before the open; the bound reads `LINE_LOAD.stayPrice.proof.room` (still 17), with exactly 2 participant adds since the open.
    - Task 11: Step 2(c) re-pairs a board the job stamped while paired (adoption before the open no longer happens); 2(d) and Step 3 read rooms only.
    - Plan 3's "pre-mint shape" seeds (meeting row + participant row) are now worded as "not arrived" (the participant row a camera-refused claim leaves); the check-in gate itself is unchanged.
@@ -891,3 +898,10 @@ Applied from `.superpowers/sdd/2026-11-17-checkin-capacity-review/plan-2.md`, fr
 
 ### Open for owner (2026-11-17)
 1. **For information:** with the pre-mint deferring while ANY window is open (R3), a day of staggered rounds may leave little pre-minted (Review Focus 7). Task 11 Step 2(d) measures it.
+
+## Revision notes (2026-11-18, Task 1 as built)
+
+- **Renumbered V528 → V529** in every live reference above (the two 2026-11-17 renumbering records keep their text): a separate fix PR on main holds V528 (the stage lots-draw index fix). Plan 3's migration moves to V530.
+- **Merge gate.** Flyway runs with outOfOrder=false, so V528 must merge before V529 reaches any database. The V529 header says so.
+- **The first-live check is `camera_reported is not distinct from 'live'`, not `= 'live'`** (controller ruling 2026-11-18). With `=`, a null `camera_reported` makes the check NULL, which passes (three-valued logic), so a stamp beside no report at all was admitted: the Task 1 catalog case "stamped beside null is refused" failed against the plan's DDL. The strict form also refuses a build older than Task 6 writing `off` over a stamped row (23514): Task 6's writer clears the stamp in the same statement as every non-live write.
+- Task 1 Step 2's SQL block above is now the shipped file, verbatim.

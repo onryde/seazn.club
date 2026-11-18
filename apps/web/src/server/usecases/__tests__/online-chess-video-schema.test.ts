@@ -848,7 +848,10 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       // on any other table is SKIPPED, never run: it would resolve to the LIVE table (the scratch schema holds only these
       // three and the stubs), take an access-exclusive lock on it, and fail on columns already there.
       const DELTAS_DIR = dirname(DELTA);
-      /** A statement whose TARGET is one of the three: `alter table <t>` or `create [unique] index … on <t>`. */
+      /** A statement whose TARGET is one of the three: `alter table <t>` or `create [unique] index … on <t>`. Judged by the
+       *  statement's shape, because those are the only two shapes that move what `shapeOf` reads (columns, constraints,
+       *  indexes). So V460's `create trigger … after delete on fixture_video_meetings` is exempt by design: a trigger is not
+       *  part of the shape, and V460 drops out with zero statements kept. */
       const ON_THE_THREE = new RegExp(
         String.raw`^(?:alter\s+table(?:\s+if\s+exists)?(?:\s+only)?|create\s+(?:unique\s+)?index(?:\s+concurrently)?(?:\s+if\s+not\s+exists)?(?:\s+\w+)?\s+on(?:\s+only)?)\s+(?:${TABLES.join("|")})\b`,
         "i",
@@ -856,7 +859,8 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       /** Anti-vacuity, per file: what each later delta that touches the three runs on the replica (kept) and leaves out
        *  (skipped). Typed from each delta's own text, never counted by the code below. V529: the two `drop not null`s, the
        *  stamp-pair check, presence_fallback_from, camera_live_first_at and its check, token_issued_at (7); its two
-       *  fixture_seat_line columns (2). A new delta touching the three adds its own entry. */
+       *  fixture_seat_line columns (2). A new delta touching the three adds its own entry, and the keys stay in ASCENDING
+       *  version order: they are compared, as a list, with the deltas in the order they replay. */
       const REPLAYED: Record<string, { kept: number; skipped: number }> = { V529: { kept: 7, skipped: 2 } };
       /** Every delta numbered above 459 with at least one statement on the three, in version order, split into statements
        *  on `;` at a line end (comments stripped first: a comment's own `;` is not an end). */
