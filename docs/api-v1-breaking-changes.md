@@ -27,10 +27,11 @@ refusals carry a machine-readable `code` in the v1 error envelope (`error.code`)
 | The plan's per-division entrant limit is reached (add-on bonus included), confirmed or not | 200, seated over the limit | `422 PROMOTE_PLAN_LIMIT`, `error.limit` and `error.taken` set; nothing written. Never lifted by `confirm_over_capacity` |
 | `confirm_over_capacity` present and not a boolean | ignored | `400` |
 | `confirm` or `waive` with no body at all | 200 | unchanged: the body is optional on both (`promote`'s was already) |
+| `confirm` or `waive` with a body that is not valid JSON | ignored (read as no body: 200) | `400 "Request body must be valid JSON"`. An EMPTY body is still fine; only malformed text is refused |
 | Room available, or a solo sign-up | 200 | unchanged |
 
 `confirm_over_capacity` is a new optional boolean on all three bodies (`PromoteRegistration` and the new `ConfirmRegistration`
-schema in `openapi/v1.json`). Only the division's own capacity can be confirmed past; a caller that retried a refused `confirm`
+schema in `openapi/v1.json`; the `confirm` and `waive` request bodies are documented `required: false`, as the routes accept none). Only the division's own capacity can be confirmed past; a caller that retried a refused `confirm`
 or `waive` unchanged now gets the same 409, and must resend with the field once its user has agreed. Oldest-first promotion
 (`promote` with no `registration_id`) judges the entry it is about to promote, so a queue of solo sign-ups on a full division
 still promotes unrefused.
