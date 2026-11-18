@@ -52,6 +52,8 @@
 // the leaf api-only-ui.ts, never from browser-driver.ts.
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, isKnobRow, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type KnobRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
+import { NoFieldSize, fieldSizeFor } from "./field-size.ts";
+import { routeTo } from "./routing.ts";
 import { onTemplate, routeViaTemplate, templateField, templateFor, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
@@ -158,6 +160,9 @@ const noPathReason = (a: AtomicScenario): string => (a.knownNoPath !== null
   ? `no organiser path, known at design time (design §4): ${a.title}`
   : `the HTTP route exists and no screen sends it (design §4, ruling 30): ${a.title}`);
 
+/** Where a scenario a catalog card cannot seat is routed: W5 owns the card-built group_group_ko rows (X-BD-3), and the odd-field F1 is judged over HTTP. */
+const CARD_FIELD_ROUTE = routeTo("W5", "no organiser path: the catalog card seeds its own field, so a scenario that needs a different one (F1's odd field) cannot be built from a screen; the refusal F1 owes (RB5-E4/E6) is judged at L3");
+
 /** L2: the committed runs in `cells`, in file order, each exactly as committed. */
 export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: ReadonlySet<string>): LayerCase[] {
   const out: LayerCase[] = [];
@@ -181,6 +186,18 @@ export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: Readon
       // driven through that card, as the grid's L1 case is; planned plain, the browser driver refused it (DriverMisuse, 3 football
       // cells). The case keeps its L2 id: the committed run's identity is the atom's, not the template's.
       const routed = routeViaTemplate({ ...identity, scenario: script, canary: false });
+      // Matrix truth run 44411389618: F1 seeds an ODD field, and a catalog card seeds its own (super-groups' 16), so the case could not be
+      // built (NoFieldSize, a harness fault on group_group_ko|football F1). The harness's own field rule says whether the card can seat the
+      // scenario; where it cannot, no screen reaches it - 🚫, never driven - and the refusal F1 owes is the L3 case's (refused).
+      if (routed.template !== undefined) {
+        try {
+          fieldSizeFor(routed.row, routed.scenario, routed.template);
+        } catch (e) {
+          if (!(e instanceof NoFieldSize)) throw e;
+          out.push({ ...base, spec: null, identity, noPath: { wave: CARD_FIELD_ROUTE.wave, reason: `${CARD_FIELD_ROUTE.why} (${e.message})` }, notRun: null });
+          continue;
+        }
+      }
       out.push({ ...base, spec: { ...routed, caseId: identity.caseId }, noPath: null, notRun: null });
       continue;
     }

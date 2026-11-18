@@ -50,6 +50,15 @@ The run above was cut before three fixes, so a re-dispatch replaces it. The swap
 6. **Re-check the `pr-sample.test.ts` "7 lacked by w4 / reseated []" pins** against the new baseline: they count what this baseline lacks and the planner seats, and the swap moves both.
 7. Drop the tennis and `group_group_ko|football` L1/L2 entries from the "not complete" explanation above once the new run is complete (`Run complete: yes`).
 
+## Second run (44411389618, on `ba1794f1a1`): classified, NOT swapped in
+
+L1: 8 red, all red in the W4 baseline too (3 `swiss*|boardgame` builder-posted-as-harness, 5 `mexicano` stalled rounds), 0 faults; the 17 tennis moves
+red -> works, so the tennis adapter fix is proved live. L3: 62 red unchanged, 0 faults. L2: 1 fault, `group_group_ko|football|F1@430` NoFieldSize
+(the card seeds 16, F1 needs an odd field): the run-1 R4a / M1 reds are works now. **The 11 `group_group_ko` F1 cells were still red** (`supply 4, want 7`):
+the harness summed min(n, pool) over the pools, but a rank wave is all or nothing in the engine (`rowAtRank`), so 7 into 2, 2, 2, 1 supplies 4.
+Both are fixed in the harness (`f1-odd-field.ts`, `layers.ts`) and need a THIRD run to prove, so this directory still holds run 1 and the swap list
+above is done against run 3.
+
 ## Coverage that moved off the matrix (RB5-E4, the pool of one)
 
 After T12b the cut gate answers first on the one row that reaches it (`group_group_ko` with F1's 7 entrants: a top 2 of each of 4 pools is 8, the

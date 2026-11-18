@@ -95,8 +95,9 @@ export function poolOfOneExpected(row: Parameters<typeof stagesForRow>[0], entra
 
 /** W5 T12b (RB5-E6, X-BD-8): the cut a row's first stage owes its second that `entrants` cannot supply, from the posted bodies, or null when the
  *  field supplies it. The cut is the progression's takes: a topNPerGroup n is n from each pool, a rankRange its width. The field supplies
- *  what its pots hold: the seeded snake leaves floor(entrants / pools) or one more in a pool, and a pool gives at most the pool it has, so
- *  7 into 4 pools (2, 2, 2, 1) supplies 7 against a top 2 of each (8). Typed from the rulebook, never read from the product's own gate. */
+ *  what its waves can fill: the seeded snake leaves floor(entrants / pools) or one more in a pool, and a rank wave needs EVERY pool to hold
+ *  that rank (the engine's `rowAtRank`, all or nothing), so 7 into 4 pools (2, 2, 2, 1) supplies 4 (the first wave) against a top 2 of
+ *  each (8). Pinned against the engine's own `resolveProgression`, never read from the product's gate. */
 export function cutBeyondFieldExpected(row: Parameters<typeof stagesForRow>[0], entrants: number): { qualified: number; max: number } | null {
   const [first, next] = stagesForRow(row);
   const progression = next?.progression as { sources?: readonly { take?: readonly { kind: string; n?: number; from?: number; to?: number }[] }[] } | null | undefined;
@@ -110,7 +111,10 @@ export function cutBeyondFieldExpected(row: Parameters<typeof stagesForRow>[0], 
     for (const take of source.take ?? []) {
       if (take.kind === "topNPerGroup" && typeof take.n === "number") {
         qualified += take.n * pools;
-        max += sizes.reduce((sum, size) => sum + Math.min(take.n!, size), 0);
+        // A wave of ranks (every pool's rank r) is all or nothing: the engine's `rowAtRank` refuses the whole rule when ONE pool lacks the rank
+        // ("pool B takes rank 4, but only 3 entrants are available"), so only the ranks the SMALLEST pool holds are supplied. Run 44411389618
+        // read a supply of 4, not 7, for a top 2 of 4 pools of 2, 2, 2, 1; the pinned oracle is `resolveProgression` itself (f1-pool-of-one.test.ts).
+        max += pools * Math.min(take.n, Math.min(...sizes));
       } else if (take.kind === "rankRange" && typeof take.from === "number" && typeof take.to === "number") {
         qualified += take.to - take.from + 1;
         max += Math.min(take.to - take.from + 1, entrants);

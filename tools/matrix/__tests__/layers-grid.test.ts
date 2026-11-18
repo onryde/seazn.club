@@ -61,6 +61,9 @@ const TEMPLATE_CELLS = (() => {
 })();
 /** Whether the run's atom has a harness script (the scenario catalogue's own declaration). */
 const hasScript = (r: L2Run): boolean => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
+/** F1 seeds an ODD field and a catalog card seeds its own, so an F1 run on a card-reached cell cannot be built from a screen (matrix truth
+ *  run 44411389618: NoFieldSize on group_group_ko|football F1): it is 🚫, W5's. Named from the premise (F1's field is odd), not from the plan. */
+const cardCannotSeat = (r: L2Run): boolean => r.scenario === "F1" && TEMPLATE_CELLS.has(cellId(r.row, r.sport));
 const driven = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec !== null);
 const planned = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec === null);
 const cellOf = (c: LayerCase): string => { const i = identityOf(c); return cellId(i.row, i.sport); };
@@ -257,9 +260,9 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
   it("drives exactly the runs whose atom has a harness script; every other run is 🚫 (a wave owes the path) or ░ with its atom named", () => {
     // A run on a no-organiser-path cell (C9 review I5, option 2) is 🚫 whatever its atom: no screen reaches the cell.
     const onNoPath = (r: L2Run): boolean => isNoOrganiserPathCell(cellId(r.row, r.sport));
-    const wantDriven = RAW.filter((r) => !onNoPath(r) && hasScript(r));
+    const wantDriven = RAW.filter((r) => !onNoPath(r) && hasScript(r) && !cardCannotSeat(r));
     const wantSettled = RAW.filter((r) => !onNoPath(r) && !hasScript(r) && settledOf(r) !== null);
-    const wantNoPath = RAW.filter((r) => onNoPath(r) || (!hasScript(r) && settledOf(r) === null && owningWave(r) !== null));
+    const wantNoPath = RAW.filter((r) => onNoPath(r) || (!onNoPath(r) && hasScript(r) && cardCannotSeat(r)) || (!hasScript(r) && settledOf(r) === null && owningWave(r) !== null));
     const wantNotRun = RAW.filter((r) => !onNoPath(r) && !hasScript(r) && settledOf(r) === null && owningWave(r) === null);
     const d = driven(cases);
     const noPath = cases.filter((c) => c.spec === null && c.noPath !== null);
@@ -285,7 +288,7 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     expect(noPath.filter((c) => c.run!.scenario === "Q4a" && !onNoPath(c.run!)).length).toBe(0);
     expect(notRun.filter((c) => c.run!.scenario === "Q4a").length).toBe(q4aRuns);
     for (const c of d) expect(c.spec!.scenario, layerCaseId(c)).toBe(HARNESS_SCENARIO[c.run!.scenario]);
-    for (const c of noPath) expect(c.noPath!.wave, layerCaseId(c)).toBe(onNoPath(c.run!) ? noPathWaveOf(cellId(c.run!.row, c.run!.sport)) : owningWave(c.run!));
+    for (const c of noPath) expect(c.noPath!.wave, layerCaseId(c)).toBe(onNoPath(c.run!) ? noPathWaveOf(cellId(c.run!.row, c.run!.sport)) : cardCannotSeat(c.run!) ? "W5" : owningWave(c.run!));
     expect(noPath.filter((c) => !onNoPath(c.run!) && ["Q4b", "D4a", "D4b"].includes(c.run!.scenario))).toEqual([]); // a settled atom is never 🚫 off the no-path cells
     // Both sides of the no-path rule were reached: runs on the cells, and runs elsewhere that stay as they were.
     expect(RAW.filter(onNoPath).length).toBeGreaterThan(0);
@@ -304,7 +307,7 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     // row keeps its index - but the counts here MOVED, and the widths with them: every committed width is now the plain rotation
     // (pairs.ts's lap shift applied only while the rows were a multiple of 7), so these totals were re-pinned, not carried.
     // W4 app PR B, Task 15: Q4a's 12 runs off the no-path cells are ░ (an atom with an organiser path and no HARNESS_SCENARIO script).
-    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 48, noPath: 206, notRun: 1216, settled: 43, all: 1513 });
+    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 47, noPath: 207, notRun: 1216, settled: 43, all: 1513 });
     expect(settled.filter((c) => c.settled!.state === "refused").length).toBe(27);
     expect(settled.filter((c) => c.settled!.state === "later").length).toBe(16);
     console.log(`L2 grid: ${d.length} driven, ${noPath.length} no_path, ${notRun.length} not_run, ${settled.length} settled of ${cases.length}`);
@@ -351,8 +354,15 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     expect(onCard + elsewhere).toBe(d.length);
     // The witness the premise names: football's three group_group_ko scripts are on super-groups.
     const football = d.filter((c) => c.run!.row === "group_group_ko" && c.run!.sport === "football");
-    expect(football.map((c) => c.run!.scenario).sort()).toEqual(["F1", "M1", "R4a"]);
+    expect(football.map((c) => c.run!.scenario).sort()).toEqual(["M1", "R4a"]);
     for (const c of football) expect(c.spec!.template).toBe("super-groups");
+    // ...and its F1, which the card cannot seat (an odd field on a card's own 16), is 🚫 W5 with the field rule's reason, never driven.
+    const f1 = cases.filter((c) => c.run!.row === "group_group_ko" && c.run!.sport === "football" && c.run!.scenario === "F1");
+    expect(f1).toHaveLength(1);
+    expect(f1[0]!.spec).toBeNull();
+    expect(f1[0]!.noPath).toMatchObject({ wave: "W5" });
+    expect(f1[0]!.noPath!.reason).toMatch(/NoFieldSize|field-size: no field for group_group_ko × F1/);
+    expect(RAW.filter((r) => cardCannotSeat(r) && hasScript(r)).map((r) => `${r.row}|${r.sport}`), "anti-vacuity: the one scripted run the card cannot seat").toEqual(["group_group_ko|football"]);
   });
 
   it("declares exactly the sports its driven cases need (a planned run posts nothing), and takes no --width (each run sets its own)", () => {
@@ -405,7 +415,7 @@ describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare -
   it("--layer L2 --scope grid is the 1,513 runs; --layer L2 is still the slice's cells only", () => {
     const grid = livePlan("--layer L2 --scope grid");
     expect(grid.driven.size + grid.planned.size).toBe(RAW.length);
-    expect(grid.driven.size).toBe(RAW.filter((r) => hasScript(r) && !isNoOrganiserPathCell(cellId(r.row, r.sport))).length);
+    expect(grid.driven.size).toBe(RAW.filter((r) => hasScript(r) && !isNoOrganiserPathCell(cellId(r.row, r.sport)) && !cardCannotSeat(r)).length);
     const sliceCells = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
     const slice = livePlan("--layer L2");
     expect(slice.driven.size + slice.planned.size).toBe(RAW.filter((r) => sliceCells.has(cellId(r.row, r.sport))).length);

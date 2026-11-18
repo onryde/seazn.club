@@ -179,6 +179,7 @@ describe("T5-g: group_only and group_group_ko have no row-level no-organiser-pat
     expect(cells).toBe(2 * SPORT_KEYS.length);
     let runs = 0;
     let nopath = 0;
+    let cardFieldRuns = 0;
     for (const c of cases) {
       const id = identityOf(c);
       if (id.row !== "group_only" && id.row !== "group_group_ko") continue;
@@ -186,12 +187,16 @@ describe("T5-g: group_only and group_group_ko have no row-level no-organiser-pat
       if (c.spec !== null || c.noPath === null) continue;
       nopath++;
       // an atom-level 🚫 (design section 4: a screen for the scenario is owed, not for the row)
-      expect(c.noPath.reason, `${id.row}|${id.sport}|${id.scenario}`).toMatch(/^(no organiser path, known at design time|the HTTP route exists and no screen sends it) /);
+      // ...or the one scenario a card cannot seat: F1's odd field on super-groups' own 16 (truth run 44411389618), W5's, judged over HTTP.
+      const cardField = /^no organiser path: the catalog card seeds its own field, /.test(c.noPath.reason);
+      if (cardField) { cardFieldRuns++; expect(`${id.row}|${id.sport}|${id.scenario}`).toBe("group_group_ko|football|F1"); }
+      else expect(c.noPath.reason, `${id.row}|${id.sport}|${id.scenario}`).toMatch(/^(no organiser path, known at design time|the HTTP route exists and no screen sends it) /);
       expect(c.noPath.reason, `${id.row}|${id.sport}|${id.scenario}`).not.toMatch(/no organiser control builds/);
     }
     // not vacuous: the rows have runs at L2, and the atom-level 🚫 arm was reached (so the reason check ran)
     expect(runs).toBeGreaterThan(0);
     expect(nopath).toBeGreaterThan(0);
+    expect(cardFieldRuns, "the card-field arm was reached, once").toBe(1);
   });
 });
 

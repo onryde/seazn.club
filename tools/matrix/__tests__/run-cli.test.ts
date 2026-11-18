@@ -2400,7 +2400,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,513 runs at their own widths — 48 driven, 206 🚫, 1,216 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,513 runs at their own widths — 47 driven, 207 🚫, 1,216 ░, 27 ⛔, 16 ⏳ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2413,13 +2413,14 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     // Match Day C9 review I5 put every run on the ten no-organiser-path cells on 🚫; W4 T16 + T24 took the refused standalone cells'
     // runs off and the settled atoms Q4b, D4b (⛔) and D4a (⏳) off 🚫; W4 app PR B Task 15 moved Q4a's 12 runs to ░. W5 T16 (ruling
     // 287) deletes the three-leg template's row: its 76 runs were all 🚫, so driven 48, ⛔ 27 and ⏳ 16 stay and 🚫 282 -> 206
-    // (1,589 -> 1,513 runs; layers-grid.test.ts).
-    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(48);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(206);
+    // (1,589 -> 1,513 runs; layers-grid.test.ts). Truth run 44411389618: group_group_ko|football F1 (an odd field a card's own 16 cannot seat)
+    // moved from driven to 🚫: 48 -> 47 driven, 206 -> 207 🚫.
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(47);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(207);
     expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1216);
     expect(r.cases.filter((c) => c.state === "refused" && c.planned === true)).toHaveLength(27);
     expect(r.cases.filter((c) => c.state === "later" && c.planned === true)).toHaveLength(16);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(206 + 1216 + 27 + 16);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(207 + 1216 + 27 + 16);
     expect(r.cases.filter((c) => c.state === "refused").every((c) => ["Q4b", "D4b"].includes(c.scenario))).toBe(true);
     expect(r.cases.filter((c) => c.state === "later").every((c) => c.scenario === "D4a")).toBe(true);
     expect(r.cases.filter((c) => isNoOrganiserPathCell(`${c.row}|${c.sport}`)).every((c) => c.state === "no_path")).toBe(true);

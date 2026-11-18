@@ -516,7 +516,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     expect(new Set(l1).size).toBeGreaterThan(1);
     // W4 T16 on top: the 22 refused standalone cells leave the L2 grid with 5 driven runs of their own (L2 53 -> 48;
     // layers-grid.test.ts). L1's driven count is untouched: those API-only cells were 🚫 there, never driven.
-    expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(48);
+    expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(47); // 48 until the card-built group_group_ko|football F1 became 🚫 (truth run 44411389618)
   });
 
   it("the full scope's shards of each layer merge into the layer's plan: right count, right order, identity clean against the planner (the judge's own check)", { timeout: 300_000 }, async () => {

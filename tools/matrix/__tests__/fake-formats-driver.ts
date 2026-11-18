@@ -87,7 +87,7 @@ export interface FakeMultiStageOptions {
   /** W5 T12b (RB5-E6, X-BD-8): Start refuses a first stage whose cut into the next stage is larger than the field, BEFORE any pool is drawn -
    *  422 RR_CUT_EXCEEDS_FIELD, "{qualified} can't qualify from this field: it can supply at most {max}." (the product's refuseFormatTooSmall
    *  runs ahead of the group draw, so it answers first where both would refuse). The cut is the sum of the first progression's takes: a
-   *  topNPerGroup n over the pooled stage is n per pool, a rankRange is its width. `wrongMessage` is a deliberately WRONG product's text. Off by default. */
+   *  topNPerGroup n over the pooled stage is n per pool, a rankRange is its width; the SUPPLY is the engine's all-or-nothing rank wave (the smallest pool's ranks, in every pool). `wrongMessage` is a deliberately WRONG product's text. Off by default. */
   readonly enforceCutBeyondField?: boolean | { readonly wrongMessage: string };
 }
 
@@ -286,9 +286,19 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
           }
         }
         const field = this.entrants.length;
-        if (qualified > field) {
+        // What the field supplies (the product's gate, the engine's rowAtRank): a rank wave is all or nothing, so a top n of `pools`
+        // pools gives pools x min(n, the smallest pool); a rank range is its width up to the field.
+        const smallest = Math.floor(field / pools);
+        let supplied = 0;
+        for (const source of progression?.sources ?? []) {
+          for (const take of source.take) {
+            if (take.kind === "topNPerGroup") supplied += pools * Math.min(take.n, smallest);
+            else if (take.kind === "rankRange") supplied += Math.min(take.to - take.from + 1, field);
+          }
+        }
+        if (qualified > supplied) {
           throw new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD",
-            typeof cutRule === "object" ? cutRule.wrongMessage : `${qualified} can't qualify from this field: it can supply at most ${field}.`);
+            typeof cutRule === "object" ? cutRule.wrongMessage : `${qualified} can't qualify from this field: it can supply at most ${supplied}.`);
         }
       }
       const enforce = this.opts.enforcePoolSize;

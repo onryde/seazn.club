@@ -4,6 +4,8 @@
 // case is judged on the refusal and renders refused - the draw it never made cannot be a defect.
 // Expected values are typed from the rulebook (each group needs at least 2; floor(7/3)=2, so 3 pools work), never from the code under test.
 import { describe, expect, it } from "vitest";
+import { EngineError } from "@seazn/engine/core";
+import { resolveProgression, type ProgressionSpec, type StandingsRow } from "@seazn/engine/competition";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { decideState } from "../lib/results.ts";
@@ -96,9 +98,9 @@ describe("F1 on group_group_ko: the refusal is the expected outcome (⛔), judge
 // pool of one's STAGE_NOT_READY. The rulebook owes each refusal by name and orders neither, so F1 judges whichever it gets on that refusal's own
 // numbers. Before this, all 11 group_group_ko F1 cases were red in CI ("Start answered 422 RR_CUT_EXCEEDS_FIELD, want 422 STAGE_NOT_READY").
 describe("cutBeyondFieldExpected: which rows' first stage cuts more than 7 entrants supply (from the posted bodies)", () => {
-  it("group_group_ko's top 2 of each of 4 pools is 8, and 7 entrants in pools of 2, 2, 2, 1 supply 7; every other row's cut fits 7", () => {
+  it("group_group_ko's top 2 of each of 4 pools is 8, and 7 entrants in pools of 2, 2, 2, 1 supply 4 (a rank wave is all or nothing); every other row's cut fits 7", () => {
     // differential: today (the run's reds) nothing here said so, and the cut's refusal read as a defect.
-    expect(cutBeyondFieldExpected("group_group_ko", 7)).toEqual({ qualified: 8, max: 7 });
+    expect(cutBeyondFieldExpected("group_group_ko", 7)).toEqual({ qualified: 8, max: 4 });
     expect(cutBeyondFieldExpected("group_group_ko", 8), "8 fill 4 pools of 2: the top 2 of each is 8").toBeNull();
     let judged = 0;
     const refused: string[] = [];
@@ -115,7 +117,7 @@ describe("cutBeyondFieldExpected: which rows' first stage cuts more than 7 entra
 });
 
 describe("F1 on group_group_ko when the product's Start refuses the cut first (the real order): ⛔, judged on the cut's own numbers", () => {
-  it("every sport: refused, the cut named 8 against a supply of 7, every assertion passes and the fixture invariants are not judged", async () => {
+  it("every sport: refused, the cut named 8 against a supply of 4, every assertion passes and the fixture invariants are not judged", async () => {
     let judged = 0;
     for (const sport of SPORT_KEYS) {
       const { checks, state } = await runF1("group_group_ko", { enforceCutBeyondField: true, enforcePoolSize: true }, sport);
@@ -123,7 +125,7 @@ describe("F1 on group_group_ko when the product's Start refuses the cut first (t
       expect(checks.map((c) => c.id), `${sport}: judged on the refusal alone`).toEqual(["f1-pool-of-one-refused"]);
       expect(checks[0]!.checked, `${sport}: items judged`).toBeGreaterThan(0);
       expect(state.state, `${sport}: ${state.reason}`).toBe("refused");
-      expect(state.reason, sport).toMatch(/cut of 8.*supplies 7/);
+      expect(state.reason, sport).toMatch(/cut of 8.*supplies 4/);
       judged++;
     }
     expect(judged).toBe(SPORT_KEYS.length);
@@ -132,7 +134,7 @@ describe("F1 on group_group_ko when the product's Start refuses the cut first (t
 
   it("a cut refusal that names the wrong cut or the wrong supply is red, naming what it said", async () => {
     let judged = 0;
-    for (const wrongMessage of ["9 can't qualify from this field: it can supply at most 7.", "8 can't qualify from this field: it can supply at most 6.", "the cut is too big"]) {
+    for (const wrongMessage of ["9 can't qualify from this field: it can supply at most 4.", "8 can't qualify from this field: it can supply at most 7.", "the cut is too big"]) {
       const { checks, state } = await runF1("group_group_ko", { enforceCutBeyondField: { wrongMessage } });
       expect(failed(checks).join(";"), wrongMessage).toMatch(/f1-pool-of-one-refused.*the refusal names a (cut|supply) of/);
       expect(state.state, wrongMessage).toBe("red");
@@ -156,9 +158,9 @@ describe("F1 on group_group_ko when the product's Start refuses the cut first (t
 });
 
 describe("cutItems: a cut refusal the field does not owe is a failed item, never a pass (the guard behind 'cannot happen')", () => {
-  const refusal = new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD", "8 can't qualify from this field: it can supply at most 7.");
+  const refusal = new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD", "8 can't qualify from this field: it can supply at most 4.");
   it("owed: every item passes on the right numbers; not owed: the first item fails", () => {
-    expect(cutItems(refusal, { qualified: 8, max: 7 }).map((i) => i.ok)).toEqual([true, true, true, true]);
+    expect(cutItems(refusal, { qualified: 8, max: 4 }).map((i) => i.ok)).toEqual([true, true, true, true]);
     expect(cutItems(refusal, null).map((i) => i.ok)[0], "the gate over-refused a field that supplies the cut").toBe(false);
   });
 });
@@ -167,8 +169,8 @@ describe("cutItems: a cut refusal the field does not owe is a failed item, never
 // predicate left every test green, because each fixture the suite refused with already carried 422. So each is now refused with the right
 // text and a status or code that is wrong, and the same refusal at 422 beside it, so a pass cannot come from the fixture alone.
 describe("a refusal's status and code are judged as well as its text (the survivors of the cut and pool items)", () => {
-  const cutMessage = "8 can't qualify from this field: it can supply at most 7.";
-  const owedCut = { qualified: 8, max: 7 };
+  const cutMessage = "8 can't qualify from this field: it can supply at most 4.";
+  const owedCut = { qualified: 8, max: 4 };
   const poolExtra = { reason: "group_too_few_entrants", groups: 4, entrants: 7, required: 8, suggested: 3 };
   const owedPool = { groups: 4, required: 8, suggested: 3 };
 
@@ -196,5 +198,48 @@ describe("a refusal's status and code are judged as well as its text (the surviv
       checked++;
     }
     expect(checked).toBe(5);
+  });
+});
+
+// Run 44411389618 (the second W5 truth run): all 11 group_group_ko F1 cells were still red, "the refusal names a supply of 4, want 7". The
+// expectation summed min(n, pool) over the pools (7); the product, and the engine behind it, fill a rank WAVE all or nothing. The ORACLE
+// here is the engine's own `resolveProgression` over the tables the snake leaves, so no expected number comes from the gate or from the
+// function under test: the supply is the most waves the engine can resolve, times the pools.
+describe("cutBeyondFieldExpected's supply is the engine's: a rank wave is all or nothing (resolveProgression as the oracle)", () => {
+  const row = (entrantId: string, rank: number): StandingsRow => ({ entrantId, played: 3, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank });
+  const stages = stagesForRow("group_group_ko");
+
+  /** The slots the engine can fill with a top `n` of `pools` pools holding `sizes` entrants: pools x the most ranks it resolves. */
+  function engineSupply(sizes: readonly number[], n: number): number {
+    const base = stages[1]!.progression as unknown as ProgressionSpec;
+    let waves = 0;
+    for (let w = 1; w <= n; w++) {
+      const spec = { ...base, sources: base.sources.map((s) => ({ ...s, take: [{ kind: "topNPerGroup", n: w }] })) } as unknown as ProgressionSpec;
+      const poolKeys = sizes.map((_, i) => "ABCDEFGH"[i]!);
+      const pools = sizes.map((size, p) => ({ pool: poolKeys[p]!, rows: Array.from({ length: size }, (_, i) => row(`e${p}-${i + 1}`, i + 1)) }));
+      try {
+        resolveProgression(spec, [{ poolKeys }], [{ pools }], stages[1]!.kind);
+        waves = w;
+      } catch (e) {
+        if (!EngineError.is(e)) throw e;
+        break;
+      }
+    }
+    return waves * sizes.length;
+  }
+
+  it("for every field from 4 to 16 over 4 pools the harness's supply equals what the engine resolves (and 7 of 4 is 4, not 7)", () => {
+    let checked = 0;
+    for (let field = 4; field <= 16; field++) {
+      const sizes = Array.from({ length: 4 }, (_, i) => Math.floor(field / 4) + (i < field % 4 ? 1 : 0));
+      const engine = engineSupply(sizes, 2);
+      const owed = cutBeyondFieldExpected("group_group_ko", field);
+      // qualified is 8 (a top 2 of 4 pools); owed is null exactly when the engine supplies all of it.
+      expect(owed === null ? 8 : owed.max, `field ${field}`).toBe(engine);
+      checked++;
+    }
+    expect(checked).toBe(13);
+    expect(engineSupply([2, 2, 2, 1], 2), "the engine's own answer for 7 into 4 pools").toBe(4);
+    expect(cutBeyondFieldExpected("group_group_ko", 7)!.max).toBe(4);
   });
 });
