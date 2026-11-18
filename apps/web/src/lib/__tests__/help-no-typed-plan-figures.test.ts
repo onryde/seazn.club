@@ -13,9 +13,25 @@
 // Anti-vacuity: articles are scanned (> 0), the detector's own cases hit and
 // clean, and the KNOWN backlog must be hit by at least one real line.
 //
-// Scope, on purpose: a figure on a line that names no plan ("3 AI credits a
-// month", "up to 10 divisions") is not caught here; this guards the plan-price
-// and platform-fee figures a pricing change moves.
+// WHAT THE DETECTOR DOES NOT CATCH (it is a line scan, not a reader):
+//  - figures written in words ("five percent", "twelve dollars");
+//  - amounts spelled "12 dollars" or "USD 12" (only %, $, £, € are recognised);
+//  - a table row whose plan name sits only in the HEADER row (the line scanned
+//    names no plan), e.g. "| Platform | 5% |" under a "Community" column header;
+//  - plan limits and caps on a line that names no plan ("3 AI credits a month",
+//    "up to 10 divisions").
+// It can also FALSE-HIT: the plan words are matched case-insensitively for
+// "platform fee" only, but "Pro" is matched as written, so a capitalised "Pro"
+// that is not the plan (a heading, "Pro-rata 50%") hits. Lowercase "pro" never
+// matches, so "pro-rata 50%" in running text is missed, not flagged; if it
+// ever is flagged, add the page to KNOWN with that reason rather than loosen
+// the rule. This guards the plan-price and platform-fee figures a pricing
+// change moves, not every number in help.
+//
+// The second describe block is a different guard on the same seam: a `{{` in
+// help that is not a valid plan token ships as raw text (and its page is
+// prerendered, because only a well-formed token is detected), and front-matter
+// title/description are never resolved at all.
 import { describe, expect, it } from "vitest";
 import { allHelpArticles } from "@/server/help-content";
 
@@ -91,7 +107,11 @@ describe("help articles type no plan figures", () => {
     );
 
     expect(articles.size, "anti-vacuity: articles scanned").toBeGreaterThan(0);
-    expect(hitsByPage.size, "anti-vacuity: the KNOWN backlog is hit by real lines").toBeGreaterThan(0);
+    // Hits are required only while KNOWN is non-empty: the end state (every page converted to
+    // tokens) has zero typed figures, and the detector's own hit/clean cases above prove it can fire.
+    if (Object.keys(KNOWN).length > 0) {
+      expect(hitsByPage.size, "anti-vacuity: the KNOWN backlog is hit by real lines").toBeGreaterThan(0);
+    }
 
     const problems: string[] = [];
     for (const [page, hits] of hitsByPage) {
@@ -104,6 +124,96 @@ describe("help articles type no plan figures", () => {
       else if (!hitsByPage.has(page)) problems.push(`STALE EXCUSE  ${page} no longer types a plan figure (remove it from KNOWN)`);
       expect(KNOWN[page]!.length, `reason for ${page}`).toBeGreaterThan(10);
     }
+    expect(problems, `\n${problems.join("\n")}\n`).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Stray `{{`: only a valid `{{plan:<feature>:<plan>}}` token may contain one.
+// ---------------------------------------------------------------------------
+// The grammar is written out here (from the token spec), not imported from the code under test.
+const VALID_TOKEN = /\{\{plan:[A-Za-z0-9_.-]+:[A-Za-z0-9_]+\}\}/g;
+
+/** Every `{{` left once valid tokens are removed, with a little context. */
+function strayBraces(text: string): string[] {
+  const rest = text.replace(VALID_TOKEN, "");
+  const out: string[] = [];
+  for (let i = rest.indexOf("{{"); i !== -1; i = rest.indexOf("{{", i + 2)) out.push(rest.slice(i, i + 40));
+  return out;
+}
+
+describe("strayBraces: hand-written cases", () => {
+  it("flags malformed tokens and ignores valid ones", () => {
+    const BAD = [
+      "x {{Plan:registration.fee_percent:pro}} y",
+      "x {{ plan:registration.fee_percent:pro}} y",
+      "x {{PLAN:registration.fee_percent:pro}} y",
+      "x {{plan:registration.fee_percent}} y",
+      "x {{plan:}} y",
+      "Fee {{plan:registration.fee_percent:pro}} and {{oops}}",
+    ];
+    const OK = [
+      "",
+      "No braces at all.",
+      "Fee {{plan:registration.fee_percent:pro}}% and {{plan:registration.fee_percent:community}}%.",
+      "A single { brace } is fine.",
+    ];
+    expect(BAD.length, "anti-vacuity: positive cases exist").toBeGreaterThan(0);
+    expect(OK.length, "anti-vacuity: negative cases exist").toBeGreaterThan(0);
+    for (const t of BAD) expect(strayBraces(t), `should flag: ${t}`).not.toEqual([]);
+    for (const t of OK) expect(strayBraces(t), `should not flag: ${t}`).toEqual([]);
+  });
+  it("front matter allows no `{{` at all, even a valid token (it is never resolved)", () => {
+    const frontMatterHit = (text: string) => text.includes("{{");
+    expect(frontMatterHit("Fees of {{plan:registration.fee_percent:pro}}%")).toBe(true);
+    expect(frontMatterHit("{{Plan:x}}")).toBe(true);
+    expect(frontMatterHit("Plain description of the plans.")).toBe(false);
+  });
+});
+
+/**
+ * A literal `{{...}}` that help documents ON PURPOSE (shown as inline code, never a plan token).
+ * Each entry must still suppress at least one real hit, or it is a stale excuse.
+ */
+const STRAY_ALLOW: { page: string; text: string; reason: string }[] = [
+  {
+    page: "registration/card-payments",
+    text: "{{reference}}",
+    reason: "the offline-payment instructions placeholder the organiser types; the article explains it as inline code",
+  },
+  {
+    page: "registration/open-registration",
+    text: "{{reference}}",
+    reason: "the offline-payment instructions placeholder the organiser types; the article explains it as inline code",
+  },
+];
+
+describe("help articles carry no stray `{{` and no `{{` in front matter", () => {
+  it("sweeps every article body, title and description", () => {
+    const articles = allHelpArticles();
+    const problems: string[] = [];
+    const allowUsed = new Map<number, number>();
+    for (const a of articles.values()) {
+      for (const s of strayBraces(a.markdown)) {
+        const i = STRAY_ALLOW.findIndex((e) => e.page === a.slug && s.startsWith(e.text));
+        if (i !== -1) {
+          allowUsed.set(i, (allowUsed.get(i) ?? 0) + 1);
+          continue;
+        }
+        problems.push(`STRAY {{  ${a.slug} body: '${s}'`);
+      }
+      if (a.title.includes("{{")) problems.push(`TOKEN IN FRONT MATTER  ${a.slug} title: '${a.title}'`);
+      if (a.description.includes("{{")) problems.push(`TOKEN IN FRONT MATTER  ${a.slug} description: '${a.description}'`);
+    }
+    STRAY_ALLOW.forEach((e, i) => {
+      if (!allowUsed.get(i)) problems.push(`STALE ALLOW  ${e.page} '${e.text}' suppressed nothing (remove it)`);
+      if (e.reason.length <= 10) problems.push(`ALLOW without a reason  ${e.page}`);
+    });
+    console.log(
+      `help-no-typed-plan-figures: stray-brace sweep articles scanned=${articles.size}, ` +
+        `allowed literals=${[...allowUsed.values()].reduce((n, v) => n + v, 0)}, problems=${problems.length}`,
+    );
+    expect(articles.size, "anti-vacuity: articles scanned").toBeGreaterThan(0);
     expect(problems, `\n${problems.join("\n")}\n`).toEqual([]);
   });
 });
