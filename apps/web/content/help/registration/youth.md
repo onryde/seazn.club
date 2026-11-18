@@ -22,7 +22,7 @@ On the **Registrants** tab, the **Consent pending** filter lists entries where s
 
 Public division pages, and the roster on a player's registration page, show a youth player as first name and initial, such as "Kabir R.", never the full name. Your organiser pages and the CSV export keep the full name. The shortening applies only to what other people can see.
 
-A player can also hide their own name from public pages in their profile, under **My matches & teams**. A name is shortened if either the division or the player asks for it.
+A player can also hide their own name from public pages in their profile, under **My matches & teams**. A name is shortened if either the division or the player asks for it. A player under 16 cannot change this switch. The profile says "An organiser manages this until you're 16."
 
 > **Example**
 > Kabir Rao, aged 8, is entered in **Under 12 Singles** by his mother Anita. The division's public page lists him as "Kabir R.". On your **Registrants** tab his row reads "Kabir Rao", and the CSV export has his full name in `player_name` and Anita's in `player_guardian_name`.

@@ -11,10 +11,10 @@ With card payments, players pay their entry fee by card when they register. The 
 
 You do this once, and only an organisation owner can. Choose **Settings**, then **Connect**. Under **Card payments (Stripe)**, tick the agreement to the Terms of Service, then press **Connect Stripe**. The agreement says your organisation bears the cost of chargebacks on its entry fees. Lost disputes are recovered from your Stripe balance.
 
-Stripe takes over from there. The page shows three steps:
+Stripe takes over from there. The page shows three steps, and says this about each:
 
-1. **Connect**: you are sent to Stripe's secure onboarding. Seazn Club never sees your details.
-2. **Verify (KYC)**: Stripe checks who receives the money. It asks for a legal name, date of birth and bank account. Clubs and companies may be asked for registration documents. This usually takes minutes, and sometimes a day or two. You can leave and resume at any time with **Resume Stripe onboarding**.
+1. **Connect**: you are sent to Stripe's secure onboarding, and Seazn Club never sees your details.
+2. **Verify (KYC)**: Stripe verifies who receives the money, with a legal name, date of birth and bank account. Clubs and companies may be asked for registration documents. The page says this is usually minutes, and can take a day or two if Stripe asks for more. You can leave and resume at any time with **Resume Stripe onboarding**.
 3. **Go live**: when the page shows **Live — charges enabled**, your divisions can take card entry fees.
 
 ![The Connect page with card payments live](/help/registration/connect-live.webp "Card payments are live, with a button to open your Stripe dashboard")
@@ -25,11 +25,11 @@ If a division already charges by card and your account stops being able to take 
 
 ## If Stripe needs more information
 
-Stripe can ask for more details later, even when you are live. The **Connect** page then shows "Stripe needs more information", with a **Finish Stripe verification** button that takes you to what Stripe still needs. Use **Open Stripe dashboard** to see payouts, charge history and bank details. You do not need a separate Stripe login.
+Stripe can ask for more details later, even when you are live. The **Connect** page then shows "Stripe needs more information" and says payouts are paused until onboarding is completed. Use **Finish Stripe verification** to go back to Stripe. **Open Stripe dashboard** opens your Stripe dashboard.
 
 ## When a player pays
 
-A player who registers for a card division is sent to a Stripe checkout page. When the payment goes through, the entry is confirmed and the confirmation email is sent.
+A player who registers for a card division is sent to a Stripe checkout page. When the payment goes through, the entry is confirmed and the confirmation email is sent. On a division with **Manual approval** the entry shows **Paid** instead and waits for you to approve it. See [managing registrants](/help/registration/registrants).
 
 If the player closes checkout without paying, the entry is held for 48 hours. About 24 hours before the hold ends, they get a reminder with a link to pay. If the 48 hours pass, the entry expires and the first person on the [waitlist](/help/registration/waitlist) is offered the place. You can also press **Send payment reminder** on the entry yourself.
 
@@ -44,7 +44,7 @@ Taking card payments needs no upgrade. Every plan can do it, Community included.
 | Pro | {{plan:registration.fee_percent:pro}}% |
 | Enterprise | {{plan:registration.fee_percent:enterprise}}% |
 
-Each payment reaches your Stripe account minus Stripe's own processing fee and this platform fee. Stripe sets its fee, and it is taken on every plan. Stripe pays out to your bank on its own schedule. Payout timing and bank details are in your Stripe dashboard.
+The **Connect** page says payouts land in your bank on Stripe's schedule, minus Stripe's processing fee and the platform fee for your plan. Stripe sets its own fee.
 
 The rate for a competition is the better of what your plan and an [Event Pass](/help/billing/event-pass) give it. It is fixed when the competition takes its first paid entry, and later entries pay that same rate even if your plan changes.
 
@@ -68,14 +68,16 @@ A solo sign-up with no team by its **Place-by date** is also withdrawn and refun
 
 ## Disputes
 
-A cardholder can dispute a payment with their bank. When Stripe tells Seazn Club, the entry's payment shows **Disputed**, and an alert email goes to your organisation's owner. Nothing happens to the entrant. Whether they stay in the competition is your call.
+A cardholder can dispute a payment with their bank. When Stripe tells Seazn Club, the entry's payment shows **Disputed**, and an alert email goes to your organisation's owner. The email asks you to check the entry and gather anything that shows the registration was genuine, such as the confirmation email or check-in records. Nothing happens to the entrant automatically. Whether they stay in the competition is your call.
+
+The **Registrants** tab has no place to upload evidence or reply to a dispute, and the alert email does not say who replies to Stripe.
 
 - **You win the dispute.** The flag clears and the money stays with you.
-- **You lose the dispute.** Stripe repays the cardholder, and the entry records the amount as refunded. The net amount you received for that payment is taken back from your Stripe balance. Seazn Club pays Stripe's dispute fee. You get an email that says exactly what moved.
+- **You lose the dispute.** Stripe repays the cardholder, and the entry records the amount as refunded. The net amount you received for that payment is taken back from your Stripe balance. If your balance cannot cover it, the email says Stripe takes it from your upcoming payouts. Seazn Club covers Stripe's dispute fee. You get an email that says what moved. If the amount could not be taken back automatically, the email says the Seazn Club team will follow up.
 
 ## Common questions
 
-**Where do I change my bank account or see payouts?** In your Stripe dashboard. Use **Open Stripe dashboard** on the **Connect** page. Seazn Club shows the entry-fee side and Stripe shows the banking side.
+**Where do I change my bank account or see payouts?** Use **Open Stripe dashboard** on the **Connect** page. The **Verify (KYC)** step on that page lists a bank account among what Stripe asks for.
 
 **Why can I not choose Card payment at sign-up?** Your Stripe account is not live yet. See the first section of this page.
 

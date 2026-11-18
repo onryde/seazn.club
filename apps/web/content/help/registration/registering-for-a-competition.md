@@ -5,7 +5,7 @@ order: 6
 related: registration/reference-numbers, registration/waitlist, registration/youth, registration/card-payments
 ---
 
-Open a competition's **Register** page and you move through up to five short steps: **Contact**, **Entries**, **Details**, **Consent** and **Review**. If the competition has one division and it takes individual entries, **Entries** is skipped, because there is nothing to choose. Refreshing the page keeps your answers.
+Open a competition's **Register** page and you move through up to five short steps: **Contact**, **Entries**, **Details**, **Consent** and **Review**. If the competition has exactly one open division and it takes individual entries, **Entries** is skipped, because there is nothing to choose. Refreshing the page keeps your answers.
 
 ## Your cart
 
@@ -24,7 +24,7 @@ A division that is full offers **Join waiting list**. Nothing is charged for a w
 
 If someone else started your team's entry, they can send you a personal join link. Opening it shows the entry you are joining and asks **Which one are you?** You pick your place on the team, or choose **I'm someone else**. Confirm your own details and consent, and you take your place.
 
-A join link that has expired, or that was mistyped, says "This join link isn't valid" and asks you to check with whoever sent it.
+A join link says "This join link isn't valid" if it was mistyped, or if the entry it belongs to has been withdrawn, rejected or has expired. A join link does not time out on its own. If you see the message, check with whoever sent it.
 
 If you started the team yourself, your registration page has an **Invite your teammates** panel. Each teammate gets their own link, and **Copy invite link** copies it.
 
@@ -32,7 +32,7 @@ If you started the team yourself, your registration page has an **Invite your te
 
 Every registration needs one thing before it submits. You agree that the organisation and Seazn Club may store and process the details on the form to run the competition. The form links to the Privacy Policy. A second box, for photos and video from the event, is optional and never stops you entering.
 
-By default your name appears on the competition's public pages. The **Consent** step tells you that you can switch to initials from your profile. Sign in and open **My matches & teams**. The **What's public about you** card lets you turn your name and photo off, club by club. A youth division shortens names whatever you choose. See [youth divisions](/help/registration/youth).
+By default your name appears on the competition's public pages. The **Consent** step tells you that you can switch to initials from your profile. Sign in and open **My matches & teams**. The **What's public about you** card lets you turn your name and photo off, club by club. For a player under 16 the switches are locked, and the card says "An organiser manages this until you're 16." A youth division shortens names whatever you choose. See [youth divisions](/help/registration/youth).
 
 If you enter other people, the step tells you that each of them confirms their own details and consent when they join or claim their place.
 
@@ -47,8 +47,11 @@ If you are registering yourself and are under 18, the step instead asks for a pa
 **Review** shows what you are about to submit and what it costs. The button tells you what happens next:
 
 - **Enter the competition** for a free entry.
-- **Enter — {fee}** for a division paid to the organiser. The next page shows how to pay.
-- **Pay {fee} and enter** for a card division. It takes you to a secure Stripe checkout.
+- **Enter — £12.00** for a division paid to the organiser. The next page shows how to pay.
+- **Pay £20.00 and enter** for a card division. It takes you to a secure Stripe checkout.
+- **Join the waiting list** when everything in your cart is on a waiting list.
+
+The amount on each button is the entry fee for your cart, so yours will differ. Entries on a waiting list are left out of it.
 
 Once you press it, the button says what it is doing. It reads **Saving your place…** while your entry is saved, then **Opening secure payment…** for a card entry. Wait for the next page and do not press again. If something goes wrong, the button returns to its usual words with a note on what to do. What you typed is kept.
 

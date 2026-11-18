@@ -9,13 +9,15 @@ Open a division for registration and players can enter it themselves. You get a 
 
 ## Get the link
 
-Open your competition and choose **Registration**. The **Settings** tab lists every division with a status: **Open now**, **Scheduled** or **Closed**. A division that is open or scheduled shows its sign-up link with three buttons:
+Open your competition and choose **Registration**. The **Settings** tab lists every division with a status: **Open now**, **Scheduled** or **Closed**.
+
+![A division row on the Registration page](/help/registration/reg-link.webp "A division row on the Settings tab: its status, entrant type, approval and how many have registered")
+
+A division that is open or scheduled shows its sign-up link under the row, with three buttons:
 
 - **Copy** copies the link.
 - **Open** opens the register page.
 - **QR** shows a QR code with the line "Scan with a phone camera to open this link — print it for the club noticeboard." **Download PNG** saves it.
-
-![A division row on the Registration page with its sign-up link and QR code](/help/registration/reg-link.webp "A division that is open now, with its sign-up link and QR code")
 
 A competition set to **Private** has no sign-up link, and its register page does not open. Change the visibility in the competition's settings.
 
@@ -25,13 +27,13 @@ Choose **Open settings** on a division. The settings come in five sections. Pres
 
 - **Eligibility**: **Category** (Open, Men's, Women's or Mixed), **Minimum age**, **Maximum age**, **Cutoff month** and **Cutoff day**, and a **Note for entrants** that appears on the sign-up form. The cutoff is the date a player's age is counted on; with none set it is 1 January. **Who approves entries?** is **Auto-confirms** or **Manual approval**.
 - **Open & close**: tick **Open for public registration**, choose the **Entrant type** (Individual, Team or Pair), and set **Opens** and **Closes** times if you want a window.
-- **Capacity**: leave it blank for no limit. When the division is full, new entries join the [waitlist](/help/registration/waitlist). The division row shows how many places are taken, for example "2 of 2 registered".
+- **Capacity**: the most entries the division takes. Leave it blank and only your plan's limit applies: {{plan:entrants.per_division.max:community}} entries on Community, {{plan:entrants.per_division.max:event_pass}} on an Event Pass, {{plan:entrants.per_division.max:pro}} on Pro, and no limit on Enterprise. When the division is full, new entries join the [waitlist](/help/registration/waitlist). The division row shows how many places are taken, for example "2 of 4 registered". The sign-up page shows players a count of places only when you set a capacity, or when three or fewer places are left.
 - **Money**: the **Entry fee** and how it is collected. See below.
 - **Sign-up form**: **+ Add question** adds your own questions, such as shirt size or dietary needs. A question can be text, a choice from a list or a tick box, and you can make it required. Players answer on the **Details** step.
 
 Entries that are pending, paid or confirmed all hold a place. A change to the entry fee applies to new sign-ups. An entry already submitted keeps the price it was submitted at.
 
-With **Manual approval**, a new entry waits for you. See [managing registrants](/help/registration/registrants) for **Approve** and **Reject**.
+With **Manual approval**, a new entry waits for you. A fee paid, by card or marked paid by you, does not approve the entry: it shows **Paid** until you press **Approve**. See [managing registrants](/help/registration/registrants) for **Approve** and **Reject**.
 
 ## Take the entry fee
 
@@ -55,6 +57,8 @@ On a team division, tick **Allow solo sign-ups** under **Eligibility**. Players 
 
 - **Solo sign-up fee** under **Money**. Leave it empty to charge the team fee, or set 0 to let solo players in free. On a card division the fee must be 0 or at least 1.00.
 - **Place-by date** under **Eligibility**. A solo sign-up still without a team after this date is withdrawn and refunded. Leave it empty and the division's **Closes** time is used.
+
+A solo sign-up takes no team place, so it never joins the waiting list. It is counted against a pool of its own: the player places left on the teams your capacity allows. When that pool is full, the player sees "This division's solo sign-up pool is full" and the sign-up is refused. With no limit at all the pool is never full.
 
 To place the waiting players, see [managing registrants](/help/registration/registrants).
 

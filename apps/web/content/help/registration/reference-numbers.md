@@ -22,7 +22,7 @@ An entry keeps its number even if an earlier entry in the cart is later removed.
 
 Open `/r/` followed by the reference on the Seazn Club site, for example `/r/SZ-7F3K-Q2ND`. Capital letters do not matter. The page shows a ticket for the whole cart, with one stamp for each entry. A stamp reads Received, Paid, Confirmed, Waitlist, Withdrawn, Expired or Not accepted. The ticket also carries a QR code, a **View the live dashboard** button and a share button. The share button opens a phone's share sheet, or WhatsApp on a computer, with a message and a link to the competition.
 
-![A ticket with two entries, a reference and a QR code](/help/registration/ticket.webp "A player's ticket: one stamp per entry, the reference and a QR code")
+![The top of a ticket with two entries, each with its own stamp](/help/registration/ticket.webp "The top of a player's ticket: one stamp per entry")
 
 The ticket is for looking at. A player cannot withdraw from it. To pay a fee, resend the confirmation, invite teammates or withdraw, they use the registration page. Their confirmation email links to it. See [registering for a competition](/help/registration/registering-for-a-competition).
 
