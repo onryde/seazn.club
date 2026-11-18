@@ -126,12 +126,12 @@ export const TIPS = {
   },
   "registration.platform-fee": {
     title: "The platform fee",
-    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments: 5% on Community, 3% on a competition with an Event Pass, 2% on Pro, 1% on Enterprise. Stripe's own processing fee is separate.",
+    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments — the current rates are on the pricing page. Stripe's own processing fee is separate.",
     helpSlug: "registration/card-payments",
   },
   "registration.ref-number": {
     title: "Reference numbers",
-    body: "Every registration gets a short reference like R-7F3K. Players use it to find, pay for or withdraw their entry — no account needed.",
+    body: "Every registration gets a short reference like SZ-7F3K-Q2JX. Players use it to find, pay for or withdraw their entry — no account needed.",
     helpSlug: "registration/reference-numbers",
   },
   "schedule.locking": {
