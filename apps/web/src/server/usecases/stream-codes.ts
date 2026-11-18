@@ -15,7 +15,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import type { PutStreamSettings, StreamCodeShown, StreamMode, StreamSettings } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
-import { CODE_GRACE_AFTER_FINISH_MINUTES, tunable } from "@/server/relay/config";
+import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, tunable } from "@/server/relay/config";
 import { composedUnavailable } from "@/server/relay/drivers";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
 import { ACTIVE_STATES, type SessionState } from "@/server/relay/domain/session";
@@ -139,6 +139,34 @@ export async function activeCodeOf(tx: Tx, fixtureId: string): Promise<ActiveCod
   const [row] = await tx<ActiveCode[]>`
     select id, code, tok_hash, created_at from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`;
   return row ?? null;
+}
+
+/**
+ * Court stream, Web G (controller's rulings on the owner's "Ok", 2026-11-18): the one SQL answer to "does this match's own
+ * code compete with its court's phone?". The guard exists so two phones never stream one match. An ACTIVE code
+ * (`ended_at is null`) competes UNLESS it has been used and is now idle — free to retire only when ALL hold:
+ *  - it has had a session: at least one session started on THIS code (`code_id`), so a session of a code it replaced does
+ *    not count (an unscanned code, perhaps already printed, is never withdrawn silently: second ruling);
+ *  - no session of the match is open (`ACTIVE_STATES`: requested, provisioning, warming, live, and `ending`, whose stop is
+ *    still in flight);
+ *  - no phone holds it: no current pairing (`ended_at is null`) PRESENT in §6.9's sense — last beat newer than
+ *    max(PHONE_SILENT_FLOOR_SECONDS, answered_poll_seconds + PHONE_SILENT_SLACK_SECONDS), the window `isPresent`
+ *    (relay/domain/pairing.ts) judges Go live by. A pairing that went silent is a phone that has left.
+ * A code that is not competing lets the switch turn on and retire it (`setCourtStream`). `fixtureRef` is the match's id as
+ * SQL — a bound value, or a column of the caller's query (`courtStreamsForDay`). Built on the caller's executor, so a
+ * transaction reads its own rows.
+ */
+export function ownCodeCompetes(q: Tx | typeof sql, fixtureRef: ReturnType<typeof sql>, now: Date): ReturnType<typeof sql> {
+  const floor = tunable("PHONE_SILENT_FLOOR_SECONDS", PHONE_SILENT_FLOOR_SECONDS);
+  return q`exists (
+    select 1 from fixture_stream_codes k
+     where k.fixture_id = ${fixtureRef} and k.ended_at is null
+       and (not exists (select 1 from fixture_stream_sessions s where s.code_id = k.id)
+            or exists (select 1 from fixture_stream_sessions s where s.fixture_id = k.fixture_id and s.state in ${q([...ACTIVE_STATES])})
+            or exists (select 1 from fixture_stream_pairings p
+                        where p.code_id = k.id and p.ended_at is null
+                          and p.last_beat_at > ${now}::timestamptz
+                              - make_interval(secs => greatest(${floor}::int, p.answered_poll_seconds + ${PHONE_SILENT_SLACK_SECONDS}::int)))))`;
 }
 
 /** Court stream (spec §5.2): a match whose Stream switch is on AND whose court has a live link is streamed by that court's

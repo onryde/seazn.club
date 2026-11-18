@@ -301,7 +301,7 @@ export const StreamPhone = z
       .object({
         issuedAt: z.string(),
         state: z.enum(["active", "finishing", "ended"]),
-        endCause: z.enum(["reissued", "expired"]).nullable(),
+        endCause: z.enum(["reissued", "expired", "withdrawn"]).nullable(),
       })
       .strict()
       .nullable(),

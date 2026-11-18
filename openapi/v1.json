@@ -65886,7 +65886,8 @@
                                       "type": "string",
                                       "enum": [
                                         "reissued",
-                                        "expired"
+                                        "expired",
+                                        "withdrawn"
                                       ]
                                     },
                                     {
@@ -67022,7 +67023,7 @@
     },
     "/api/v1/fixtures/{id}/court-stream": {
       "put": {
-        "summary": "The match's Stream switch (court stream; editor session only): `on` hands the match to its court's phone, which streams it when the match starts; off by default, and turning it on spends no credit. 409 has_own_stream_code (the match has an active stream code of its own) or court_not_streaming (its court has no live link now); turning off is never refused. While on (and the court linked) the match mints no stream code of its own: 409 court_streamed on the stream-code routes",
+        "summary": "The match's Stream switch (court stream; editor session only): `on` hands the match to its court's phone, which streams it when the match starts; off by default, and turning it on spends no credit. 409 has_own_stream_code (the match has an active stream code of its own that is unused yet, held by a phone or running a session; a used, now idle one is retired by the switch-on) or court_not_streaming (its court has no live link now); turning off is never refused. While on (and the court linked) the match mints no stream code of its own: 409 court_streamed on the stream-code routes",
         "tags": [
           "fixtures"
         ],

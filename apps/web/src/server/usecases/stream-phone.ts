@@ -196,7 +196,7 @@ export async function streamPhone(auth: AuthCtx, fixtureId: string, deps: { now:
     fx.auto_start_refusal === "not_entitled" && (await frozenCompetitionIds(auth.orgId)).has(fx.competition_id);
 
   // --- the code ---
-  const [codeRow] = await sql<{ id: string; created_at: Date; ended_at: Date | null; end_cause: "reissued" | "expired" | null }[]>`
+  const [codeRow] = await sql<{ id: string; created_at: Date; ended_at: Date | null; end_cause: "reissued" | "expired" | "withdrawn" | null }[]>`
     select id, created_at, ended_at, end_cause from fixture_stream_codes
      where fixture_id = ${fixtureId}
      order by (ended_at is null) desc, created_at desc, id desc limit 1`;
