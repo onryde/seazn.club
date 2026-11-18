@@ -129,12 +129,21 @@ describe("POST /api/cron/external-play-premint: the Worker reads the REAL row's 
 });
 
 describe("POST /api/cron/external-play-premint: the pass's wall-clock budget", () => {
-  it("stops below the Worker's per-job timeout, with room for the one vendor request already in flight", async () => {
+  // posthog-node's default `requestTimeout` (posthog-node 5.40.0, `requestTimeout ?? 10000`): a club's flag ask can hang that long.
+  // It exports no constant, so it is typed here from the library; the vendor's own is the adapter's exported REALTIMEKIT_TIMEOUT_MS.
+  const FLAG_ASK_TIMEOUT_MS = 10_000;
+
+  it("stops below the Worker's per-job timeout with room for the ONE slowest request already in flight (arithmetic on the constants; the behaviour is external-play-premint.test.ts)", async () => {
     const { PREMINT_PASS_BUDGET_MS } = await vi.importActual<typeof import("@/server/usecases/external-play/premint")>("@/server/usecases/external-play/premint");
     const { REALTIMEKIT_TIMEOUT_MS } = await vi.importActual<typeof import("@/server/external-play/video/realtimekit")>("@/server/external-play/video/realtimekit");
     expect(PREMINT_PASS_BUDGET_MS).toBeGreaterThan(0);
     expect(PREMINT_PASS_BUDGET_MS).toBeLessThan(JOB_TIMEOUT_MS);
-    // The pass stops STARTING requests at the budget; one started just before it may still run to the adapter's own timeout.
-    expect(PREMINT_PASS_BUDGET_MS + REALTIMEKIT_TIMEOUT_MS, "budget plus one in-flight vendor request").toBeLessThan(JOB_TIMEOUT_MS);
+    // The pass starts no request and no row (so no flag ask) once the budget is spent (premintBudget for vendor requests, the row
+    // loop's own check for flag asks), so what can run past it is the request already in flight: a vendor request OR a flag ask,
+    // never both, since the row that follows an ask is refused by the same spent budget. This pins that sum only. It does NOT
+    // bound the candidate scan before the loop, the lock transaction, or the work after a request returns.
+    const inFlight = Math.max(REALTIMEKIT_TIMEOUT_MS, FLAG_ASK_TIMEOUT_MS);
+    expect(inFlight, "premise: the slowest in-flight request is read from both constants").toBeGreaterThan(0);
+    expect(PREMINT_PASS_BUDGET_MS + inFlight, "budget plus the one slowest in-flight request").toBeLessThan(JOB_TIMEOUT_MS);
   });
 });

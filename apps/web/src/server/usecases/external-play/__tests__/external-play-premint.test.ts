@@ -686,6 +686,41 @@ describe.skipIf(!DB)("premint pass", () => {
     expect(asked.sort(), "each club asked exactly once, however many rows it has").toEqual([a.orgId, b.orgId].sort());
   });
 
+  it("T5 review M1: the pass's wall-clock budget covers the per-club FLAG ASKS too - clubs the flag keeps off make no vendor call, so a hanging flag service would otherwise cost one full ask per club and overrun the Worker's 60 s (counted, derived from the constant)", async () => {
+    const CLUBS = 6;
+    const rounds = await Promise.all(Array.from({ length: CLUBS }, () => seedRound(1)));
+    await unseat(rounds.flatMap(ids));
+    const orgIds = rounds.map((r) => r.orgId);
+    // Every ask takes a fifth of the budget on the pass's own clock (a hanging flag service answering at its timeout, which is `false`):
+    // the asks start at 0, 1/5, ... of the budget, so the sixth would start AT the budget and must not.
+    const ask = PREMINT_PASS_BUDGET_MS / 5;
+    expect(Number.isInteger(ask), "premise: the budget is a whole number of asks").toBe(true);
+    let t = 0;
+    const asked: string[] = [];
+    const slowNo = async ({ orgId }: { orgId: string }) => {
+      asked.push(orgId);
+      t += ask;
+      return false;
+    };
+    const report = await run(orgIds, { wallClock: () => t, offered: slowNo });
+    expect(asked.length, "the asks that STARTED while the budget was unspent: budget / ask, never the sixth").toBe(PREMINT_PASS_BUDGET_MS / ask);
+    expect(asked.length, "premise: fewer asks than clubs, so the cut is what stopped them").toBeLessThan(CLUBS);
+    expect(report, "every row deferred, none made, none failed").toMatchObject({ scanned: CLUBS * 2, roomsMade: 0, deferred: CLUBS * 2, failed: 0, failures: [] });
+    expect(fx.calls, "and no vendor call").toEqual([]);
+
+    // The pair: the same six clubs with a flag service that answers at once spend no clock, so the budget cuts nothing and every
+    // row is made.
+    t = 0;
+    asked.length = 0;
+    const fastYes = async ({ orgId }: { orgId: string }) => {
+      asked.push(orgId);
+      return true;
+    };
+    const fast = await run(orgIds, { wallClock: () => t, offered: fastYes });
+    expect(asked.length, "all six clubs asked").toBe(CLUBS);
+    expect(fast, "positive pair: nothing deferred, every row made").toMatchObject({ scanned: CLUBS * 2, roomsMade: CLUBS * 2, deferred: 0, failed: 0 });
+  });
+
   it("a vendor 503 on one board is one failure (a code, never a message) and the pass goes on; the failed side has no room and is made by the next pass", async () => {
     const r = await seedRound(3);
     await unseat(ids(r));
@@ -728,6 +763,34 @@ describe.skipIf(!DB)("premint pass", () => {
     expect(fx.calls, "a skipped pass made no vendor call").toEqual([]);
     const next = await premintExternalPlay({ orgIds: [r.orgId], wait: noWait });
     expect(next, "positive pair: the lock was released with the transaction").toMatchObject({ skipped: 0, roomsMade: 2 });
+  });
+
+  it("T5 review M2: a flag-off pass takes NO lock - while another pass holds it the answer is `disabled: 1`, never `skipped: 1` (a failure counter for the Worker); the same held lock with the flag on is `skipped: 1` (positive pair)", async () => {
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    let checked = 0;
+    await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${PREMINT_LOCK}))`;
+      // The lock is held for the whole loop below, by a transaction that is not the pass's.
+      for (const value of [undefined, "", "0", "true"]) {
+        vi.stubEnv("EXTERNAL_PLAY_PREMINT", value);
+        expect(await premintExternalPlay({ orgIds: [r.orgId], wait: noWait }), `flag ${JSON.stringify(value)}`).toEqual({
+          skipped: 0,
+          disabled: 1,
+          scanned: 0,
+          roomsMade: 0,
+          deferred: 0,
+          failed: 0,
+          windowsOpen: 0,
+          failures: [],
+        });
+        checked += 1;
+      }
+      vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
+      expect(await premintExternalPlay({ orgIds: [r.orgId], wait: noWait }), "positive pair: flag on, the lock held").toMatchObject({ skipped: 1, disabled: 0, scanned: 0 });
+    });
+    expect(checked, "anti-vacuity: four off values").toBe(4);
+    expect(fx.calls, "no vendor call from any of them").toEqual([]);
   });
 });
 

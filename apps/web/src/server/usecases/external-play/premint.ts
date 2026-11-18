@@ -14,11 +14,14 @@ import "server-only";
 // branch is unreachable from here. The job leaves no ended room behind: it only creates, and an unadopted room that a later
 // sweep ends is that sweep's (Task 8) to delete, never this job's.
 //
-// The pass is one pass at a time (the sweep's lock shape), is OFF unless EXTERNAL_PLAY_PREMINT is exactly "1" (a flag-off
-// environment reports `disabled`, which is not a failure), and shares the cron Worker's 60 s budget the way the sweep does:
-// PREMINT_PASS_BUDGET_MS stops it STARTING calls, PREMINT_CALL_INTERVAL_MS paces them, and `callCap` bounds them. All three
-// are enforced in ONE place - the budget handed to the adapter - because that is the one place every vendor request passes
-// through, a sibling room's retirement inside `ensureMeeting` included.
+// The pass is OFF unless EXTERNAL_PLAY_PREMINT is exactly "1": a flag-off environment reports `disabled` (not a failure) BEFORE
+// the lock is taken, so a minute with the flag off can never report `skipped` (a failure counter for the cron Worker) because
+// some other pass held the lock. With the flag on it is one pass at a time (the sweep's lock shape), and it shares the cron
+// Worker's 60 s budget the way the sweep does: PREMINT_PASS_BUDGET_MS stops it STARTING work, PREMINT_CALL_INTERVAL_MS paces
+// the vendor calls, and `callCap` bounds them. The vendor calls are enforced in ONE place - the budget handed to the adapter -
+// because that is the one place every vendor request passes through, a sibling room's retirement inside `ensureMeeting`
+// included. The per-club flag asks (PostHog, a remote call that can hang to its own timeout) never pass through it, and a club
+// the flag keeps off makes no vendor request at all, so the row loop checks the same wall-clock budget before every row.
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import {
@@ -39,8 +42,10 @@ import { PLAYABLE_STATUSES, codeOf } from "./sweep/pass";
  *  that is 38 in 45 s, and a hundred boards' 200 rooms take five or six one-a-minute passes on the production
  *  trigger. */
 export const PREMINT_CALL_INTERVAL_MS = 1_000;
-/** The pass stops STARTING a vendor request once this much wall-clock time has gone: the cron Worker abandons a job at 60 s
- *  (apps/cron-worker/src/call.ts JOB_TIMEOUT_MS) and the sweep's own budget (SWEEP_PASS_BUDGET_MS) is the same 45 s. */
+/** The pass stops STARTING work - a vendor request, or a row (so a club's flag ask) - once this much wall-clock time has gone:
+ *  the cron Worker abandons a job at 60 s (apps/cron-worker/src/call.ts JOB_TIMEOUT_MS) and the sweep's own budget
+ *  (SWEEP_PASS_BUDGET_MS) is the same 45 s. A request already in flight when it runs out may still run to its own timeout
+ *  (the adapter's, or the flag ask's), and the scan before the loop is not bounded by it. */
 export const PREMINT_PASS_BUDGET_MS = 45_000;
 /** The CEILING on a pass's vendor requests, not what it reaches: the wait is added to each request's own round trip, so a 45 s
  *  pass starts a request every (interval + round trip), and fewer than this when the vendor is not instant. It is the bound that
@@ -142,6 +147,9 @@ export async function premintCandidates(orgIds?: readonly string[]): Promise<Pre
 }
 
 export async function premintExternalPlay(deps: PremintDeps = {}): Promise<PremintReport> {
+  // The flag first, BEFORE the lock: a flag-off pass does nothing, so it must not contend for the lock (a held lock would make it
+  // report `skipped`, which the Worker counts as a failure) and takes no connection. The one place the flag is read.
+  if (process.env.EXTERNAL_PLAY_PREMINT !== "1") return emptyReport({ disabled: 1 });
   if (deps.serialise === false) return runPass(deps);
   // One pass at a time: a NON-BLOCKING, TRANSACTION-scoped advisory lock (the sweep's shape, sweep/run.ts): the pass runs
   // inside the transaction that holds it, so it is released however the pass ends - commit, a throw, a dropped connection.
@@ -196,17 +204,15 @@ export function premintBudget(a: {
 
 async function runPass(deps: PremintDeps): Promise<PremintReport> {
   const report = emptyReport();
-  if (process.env.EXTERNAL_PLAY_PREMINT !== "1") {
-    report.disabled = 1;
-    return report;
-  }
+  const clock = deps.wallClock ?? Date.now;
+  const startedAt = clock();
   const rtk = deps.rtk ?? {};
   const budget = premintBudget({
     cap: deps.callCap ?? PREMINT_CALLS_PER_PASS,
     inner: rtk.budget ?? platformSpend(rtk),
     wait: deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
-    clock: deps.wallClock ?? Date.now,
-    startedAt: (deps.wallClock ?? Date.now)(),
+    clock,
+    startedAt,
   });
   const vendor: RealtimeKitDeps = { ...rtk, budget };
 
@@ -225,6 +231,14 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
 
   let vendorErrorsInARow = 0;
   for (let i = 0; i < rows.length; i++) {
+    // The pass's wall-clock budget, before the row's flag ask: that ask is a remote call outside `premintBudget`, and a club it
+    // keeps off never reaches a vendor request, so nothing else would stop a slow flag service from costing one ask per club
+    // past the Worker's 60 s. The rest keeps its place; the next pass starts from the top.
+    if (clock() - startedAt >= PREMINT_PASS_BUDGET_MS) {
+      report.deferred += rows.length - i;
+      log.info({ remaining: rows.length - i }, "external-play premint: the pass budget is spent; the rest keeps its place");
+      break;
+    }
     const row = rows[i]!;
     if (!(await offeredTo(row.orgId))) {
       report.deferred += 1;
