@@ -155,9 +155,13 @@ export function bracketWithdrawalStatus(status: string, activeAbandon: boolean):
 /** The closed forfeit reason (engine `FORFEIT_REASONS`; finding 14: the English "entrant withdrew" is refused by the
  *  strict schema) — also the abandon reason of an expunge. */
 const REASON = "withdrew";
-const CASCADE = { writer: "withdrawal_cascade" } as const;
+/** B4 fix wave (C1): every cascade write holds its auto-advance (and the quick match's advance) back. Run per write, the walkover
+ *  on a table's last open line completed the stage BEFORE her departed status was written, so the completion ranked her by her
+ *  results and the on_complete cut seated her in the next stage (RB5-W1, RB5-K1). The cascade asks each stage it wrote to
+ *  once, after her status write (`runWithdrawEntrantCascade`'s end). */
+const CASCADE = { writer: "withdrawal_cascade", autoAdvance: false } as const;
 /** B3 re-review: a Reinstate's reverse writes - the stage is asked to advance once, after the last of them. */
-const REVERSE = { ...CASCADE, autoAdvance: false } as const;
+const REVERSE = CASCADE;
 
 /** Was this line HELD when its entrant withdrew — `walked_over_held` counts what used to wait for a settle: a held
  *  level result, a tie-break still owed (the engine's own `deciderPending` over the stored fold; an `in_play` row
@@ -580,6 +584,8 @@ async function runWithdrawEntrantCascade(
     actor?: CascadeActor;
   }[] = [];
   const settledTables: { id: string; kind: string }[] = [];
+  // B4 fix wave (C1): every stage the cascade wrote to - table and bracket alike - in stage order, asked to advance once at the end.
+  const writtenStages: string[] = [];
   // W5 T11: the destinations whose confirmed proposal this departure staled, to re-propose once she is out of the field.
   let seedRecompute: string[] = [];
 
@@ -765,6 +771,11 @@ async function runWithdrawEntrantCascade(
       }
     }
 
+    // C1: the stages this run settles a line in (its plan) or settles as a table, in stage order - asked once each at the end.
+    const planned = new Set(plan.map((step) => step.fixture.stage_id));
+    for (const stage of stages) {
+      if (planned.has(stage.id) || settledTables.some((t) => t.id === stage.id)) writtenStages.push(stage.id);
+    }
     // X-WD-4: who has already left (`DEPARTED_STATUSES`: withdrawn or disqualified) — an opponent on this list gets no
     // walkover (it would seat a departed entrant).
     const gone = new Set(
@@ -888,10 +899,10 @@ async function runWithdrawEntrantCascade(
   // score write asks whether the stage is now finished; when the leaver's lines were its last open ones it would sit there.
   // Asked once per table stage settled, AFTER the status write: the completion reads the departed status (the cut skips her).
   // RB5-W1: and her row now ranks last — the stored table was folded by the settles while she was still in the field.
-  for (const stage of settledTables) {
-    await refoldStageTable(auth.orgId, stage, "skip");
-    await advanceAfterSettle(auth, stage.id, division.id);
-  }
+  for (const stage of settledTables) await refoldStageTable(auth.orgId, stage, "skip");
+  // B4 fix wave (C1): the cascade's writes held their advance back (`CASCADE`), so every stage it wrote to - a table its walkover
+  // or expunge finished, a bracket its walkover decided - is asked once now, in stage order, with her departed and ranked last.
+  for (const stageId of writtenStages) await advanceAfterSettle(auth, stageId, division.id);
   return out;
 }
 

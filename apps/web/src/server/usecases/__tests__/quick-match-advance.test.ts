@@ -1188,4 +1188,70 @@ describe.skipIf(!HAS_DB)("REC-10 (W5): quick match League + Knockout across the 
     }
     expect(checked, "every sanctioning offered sport was driven").toBe(sanctioning.length);
   }, 180_000);
+
+  // B4 fix wave (C1): the pad's DQ lands on a line that is NOT the league's last open one - her OTHER open line is, and the
+  // cascade walks it over. That walkover used to run the quick match's own advance (and the auto-advance) at once, before her
+  // departed status was written: the league completed with her ranked by her results. Expected values: RB5-W3 (2 of 3 played:
+  // her results stand, the open line walks over), RB5-W1 (ranked last in the completed league), RB5-K1 (out of the cut).
+  // differential: today (c959c9d428) `stage_completed.places` ranks her 3rd (one win, D none), D 4th.
+  it("C1 a pad DQ NOT on the league's last open line: the cascade's walkover of her other line completes the league only after she has left - places rank her last, the final is A v B", async () => {
+    const sanctioning = builtinModules.filter((x) => (x.sanctionEnding?.endLevels.length ?? 0) > 0 && OFFERED_SPORT_KEYS.includes(x.key));
+    expect(sanctioning.length, "anti-vacuity: at least one offered sport can disqualify in a match").toBeGreaterThan(0);
+    const offered = new Map((await listQuickMatchSports()).map((o) => [o.sport_key, o]));
+    let checked = 0;
+    for (const mod of sanctioning) {
+      const key = mod.key;
+      const sport = offered.get(key)!;
+      const point = (side: string) => (key === "badminton" ? { type: "badminton.rally", payload: { wonBy: side } } : { type: "tennis.point", payload: { by: side } });
+      expect(["badminton", "tennis"], `${key}: a sport this test knows how to play point by point`).toContain(key);
+      const tipOf = async (id: string) => (await sql<{ s: number }[]>`select last_seq as s from match_states where fixture_id = ${id}`)[0]?.s ?? 0;
+      const win = async (id: string, side: string) => {
+        await scoreEvent(systemAuth(), id, { expected_seq: 0, type: "core.start", payload: {} } as never);
+        for (let i = 0; i < 400; i++) {
+          const [f] = await sql<{ w: string | null }[]>`select outcome->>'winner' as w from fixtures where id = ${id}`;
+          if (f!.w) {
+            expect(f!.w, `${key}: the steered side won`).toBe(side);
+            return;
+          }
+          const p = point(side);
+          await scoreEvent(systemAuth(), id, { expected_seq: await tipOf(id), type: p.type, payload: p.payload } as never);
+        }
+        throw new Error(`${key}: ${id} was not decided in 400 points`);
+      };
+
+      const m = await lk({ sport_key: key, variant_key: sport.variants[0]!.variant_key, kind: sport.kinds.at(-1)!, sides: ["A", "B", "C", "D"] });
+      const [a, b, c, d] = ["A", "B", "C", "D"].map((n) => m.id.get(n)!) as [string, string, string, string];
+      await win((await between(m, "A", "B"))[0]!.id, a);
+      await win((await between(m, "A", "D"))[0]!.id, a);
+      await win((await between(m, "B", "D"))[0]!.id, b);
+      await win((await between(m, "C", "D"))[0]!.id, c); // C: one win; D: none
+      // C is disqualified on her line v A; her line v B stays open - the league's last.
+      const ac = (await between(m, "A", "C"))[0]!;
+      const cb = (await between(m, "B", "C"))[0]!;
+      const pad = await padOf(m.row, ac.id);
+      const send = async (type: string, payload: unknown) => (await padPost(ac.id, pad.secret, { expected_seq: await tipOf(ac.id), type, payload })).status;
+      expect(await send("core.start", {}), `${key}: start`).toBe(201);
+      const p = point(a);
+      expect(await send(p.type, p.payload), `${key}: a point`).toBe(201);
+      expect(await send(`${key}.sanction`, { by: c, level: mod.sanctionEnding!.endLevels[0] }), `${key}: the ending sanction`).toBe(201);
+      expect(await send("core.forfeit", { by: c, reason: "disqualified" }), `${key}: its ending`).toBe(201);
+
+      expect((await sql<{ status: string }[]>`select status from entrants where id = ${c}`)[0]!.status, `${key}: C is out`).toBe("disqualified");
+      const [cbRow] = await sql<{ status: string; outcome: { winner?: string } | null }[]>`select status, outcome from fixtures where id = ${cb.id}`;
+      expect({ status: cbRow!.status, winner: cbRow!.outcome?.winner }, `${key}: RB5-W3, her other line walked over to B`).toEqual({ status: "forfeited", winner: b });
+      expect(await stageStatus(m.leagueStageId), `${key}: the league completed`).toBe("complete");
+      const completed = await sql<{ payload: { stageId?: string; places?: { entrantId: string; rank: number }[] } }[]>`
+        select payload from division_events where division_id = ${m.out.divisionId} and type = 'stage_completed' order by seq`;
+      const league = completed.filter((r) => r.payload.stageId === m.leagueStageId);
+      expect(league, `${key}: the league completed once`).toHaveLength(1);
+      const places = league[0]!.payload.places ?? [];
+      expect(places.length, `${key}: four places`).toBe(4);
+      // differential: today C is 3rd here and D 4th.
+      expect(places.find((x) => x.entrantId === c)?.rank, `${key}: RB5-W1, the completed league ranks C last`).toBe(4);
+      expect((await tableOf(m)).map((r) => r.entrantId), `${key}: the stored table, C last`).toEqual([a, b, d, c]);
+      expect(await firstRound(m), `${key}: RB5-K1, the final is A v B`).toEqual([pairing(a, b)]);
+      checked++;
+    }
+    expect(checked, "every sanctioning offered sport was driven").toBe(sanctioning.length);
+  }, 180_000);
 });
