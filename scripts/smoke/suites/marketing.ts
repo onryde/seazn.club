@@ -17,8 +17,9 @@ export async function marketingSuite(): Promise<void> {
   check("marketing: home hero sport select", /<select\b[^>]*\bname="sport"/.test(html));
   check("marketing: home hero organiser link to /start", /\bhref="\/[a-z]{2}\/start"/.test(tagOf("hero-event-link")));
   check("marketing: home hero has no funnel form", !html.includes("data-start-funnel"));
-  // The competition flow under the hero (owner 2026-11-16): all seven steps are in the server's markup, before any script.
-  check("marketing: home SSR competition flow", tagOf("competition-flow") !== "" && (html.match(/\bdata-flow-step="/g) ?? []).length === 7);
+  // The competition flow under the hero (owner 2026-11-16): every step is in the server's markup, before any script (eight since live scoring and
+  // streaming became separate steps, 2026-11-18).
+  check("marketing: home SSR competition flow", tagOf("competition-flow") !== "" && (html.match(/\bdata-flow-step="/g) ?? []).length === 8);
 
   // The two doors into /start carry the sport (start wizard plan T5, T7). /play's "register to start a season" link names the
   // sport its chips chose — before any script runs, the server's default — by its key; and /start, opened by such a link,
