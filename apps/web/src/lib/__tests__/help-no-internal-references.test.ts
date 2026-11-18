@@ -311,7 +311,7 @@ describe("help copy carries no internal references", () => {
 
     // Source 2: generated format pages, rendered through the REAL page components.
     let formatsScanned = 0;
-    const overview = htmlToText(renderToStaticMarkup(FormatGalleryPage() as ReactElement));
+    const overview = htmlToText(renderToStaticMarkup((await FormatGalleryPage()) as ReactElement));
     for (const f of FORMAT_FAMILIES) {
       expect(overview, `overview lists ${f.slug}`).toContain(f.title);
     }

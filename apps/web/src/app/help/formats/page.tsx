@@ -3,6 +3,8 @@ import type { Metadata } from "next";
 import { ArrowRight } from "lucide-react";
 import { FORMAT_FAMILIES, FormatDiagram } from "@/config/format-gallery";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
+import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 
 export const revalidate = 3600;
 
@@ -12,7 +14,9 @@ export const metadata: Metadata = {
     "League, knockout, groups, swiss, double elimination, americano, ladder — every tournament format explained with a diagram and a live example.",
 };
 
-export default function FormatGalleryPage() {
+export default async function FormatGalleryPage() {
+  // The badge reads the live plan table; an unreadable table shows no badge rather than a guess.
+  const matrix = await loadPricingMatrix().catch(() => ({}) as Awaited<ReturnType<typeof loadPricingMatrix>>);
   return (
     <HelpShell currentHref="/help/formats">
       <HelpBreadcrumb trail={[{ href: "/help#formats", label: "Formats" }]} />
@@ -34,9 +38,9 @@ export default function FormatGalleryPage() {
               <div>
                 <h2 className="flex items-center gap-1.5 font-semibold text-slate-900">
                   {f.title}
-                  {f.pro ? (
+                  {familyNeedsPaidPlan(f, matrix) ? (
                     <span className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-700">
-                      Pro
+                      Paid plan
                     </span>
                   ) : null}
                   <ArrowRight

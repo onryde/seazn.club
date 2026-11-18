@@ -11,6 +11,13 @@ import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { recommendFormats } from "@/lib/format-recommend";
 import { helpUrl } from "@/lib/help";
 import { stageNeedsAdvancedFormatsGate } from "@/server/usecases/format-gates";
+import { generateAmericano } from "@seazn/engine/scheduling";
+import { SWISS_ROUNDS_BANDS, swissRoundsGuidance } from "@/lib/swiss-rounds";
+import { buildTemplateStages } from "@/lib/format-templates";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 
 describe("format gallery enumeration", () => {
   it("every engine stage kind has an explainer family", () => {
@@ -185,5 +192,69 @@ describe("recommendFormats golden — 16 entrants, 2 courts, 4 hours", () => {
   it("with a full weekend the league leads (most play per entrant)", () => {
     const picks = recommendFormats({ entrants: 8, courts: 2, hours: 12 });
     expect(picks[0]!.slug).toBe("league"); // 28 matches fit 48 slots
+  });
+});
+
+// Plain-false statements the four dictionaries made about three formats (help fix round 1). Each premise comes from the
+// engine's or the app's own declaration, never from a number typed here; the phrase lists below are the denylist half.
+const LOCALES = { en: uiEn, es: uiEs, fr: uiFr, nl: uiNl } as Record<string, Record<string, string>>;
+
+describe("format copy does not promise what the engine does not do", () => {
+  it("americano: the rotation does NOT pair everyone with everyone, so no locale says it does", () => {
+    let checked = 0;
+    for (const players of [8, 12, 16]) {
+      const ids = Array.from({ length: players }, (_, i) => `P${i + 1}`);
+      const rounds = generateAmericano(ids, { mode: "americano", rounds: players - 1, courtCount: players / 4 });
+      const partners = new Set<string>();
+      for (const r of rounds) for (const m of r.matches) for (const t of [m.team1, m.team2]) partners.add([...t].sort().join("-"));
+      expect(partners.size, `${players} players: the premise (not every pair partners)`).toBeLessThan((players * (players - 1)) / 2);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: field sizes checked").toBe(3);
+    const claims: Record<string, RegExp> = {
+      en: /everyone partners everyone|plays with everyone|partners everyone/i,
+      es: /todos son pareja de todos|todos juegan con todos/i,
+      fr: /tout le monde joue avec tout le monde|partenaire de tout le monde/i,
+      nl: /iedereen met iedereen/i,
+    };
+    let texts = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      for (const key of ["format.americano.tagline", "format.americano.bestFor", "format.americano.tradeoff", "format.americano.body.0", "format.americano.body.1"]) {
+        expect(dict[key], `${loc} ${key}`).toBeTruthy();
+        expect(dict[key], `${loc} ${key}`).not.toMatch(claims[loc]!);
+        texts += 1;
+      }
+    }
+    expect(texts, "anti-vacuity: texts scanned").toBe(20);
+  });
+
+  it("knockout + plate: the template takes every first-match loss, so no locale says 'round-1 losers'", () => {
+    const stages = buildTemplateStages("ko_plate", { qualified: 8 } as never);
+    const plate = stages.find((s) => s.name === "Plate");
+    expect(plate?.progression?.sources[0]?.take).toEqual([{ kind: "firstLosses" }]);
+    const claims: Record<string, RegExp> = { en: /round-1 losers/i, es: /perdedores de la ronda 1/i, fr: /perdants du 1er tour/i, nl: /verliezers van ronde 1/i };
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      expect(dict["format.template.ko_plate.help"], loc).toBeTruthy();
+      expect(dict["format.template.ko_plate.help"], loc).not.toMatch(claims[loc]!);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("swiss playoff / swiss knockout: the round count is a suggestion capped at half the field, and says so", () => {
+    // premise: for a small field the suggestion is below the band number, so 'the number of rounds follows the field' is not the rule
+    expect(swissRoundsGuidance(4).recommended).toBeLessThan(SWISS_ROUNDS_BANDS[0]!.rounds);
+    const numbers = SWISS_ROUNDS_BANDS.map((b) => String(b.upTo));
+    const claims: Record<string, RegExp> = { en: /follows the field/i, es: /sigue al cuadro/i, fr: /suit la taille/i, nl: /volgt het veld/i };
+    let checked = 0;
+    for (const [loc, dict] of Object.entries(LOCALES)) {
+      for (const key of ["format.swiss_playoff.body.0", "format.swiss_knockout.body.0"]) {
+        expect(dict[key], `${loc} ${key}`).not.toMatch(claims[loc]!);
+        for (const n of numbers) expect(dict[key], `${loc} ${key} keeps the band figure ${n}`).toContain(n);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(8);
   });
 });

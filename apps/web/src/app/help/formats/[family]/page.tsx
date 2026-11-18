@@ -4,6 +4,8 @@ import { FORMAT_FAMILIES, FormatDiagram, formatFamily } from "@/config/format-ga
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { FormatPreviewView } from "@/components/format-preview-view";
 import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
+import { familyNeedsPaidPlan } from "@/lib/format-plan-badge";
+import { loadPricingMatrix } from "@/lib/pricing-matrix-server";
 
 export const revalidate = 3600;
 
@@ -28,6 +30,8 @@ export default async function FormatExplainerPage({ params }: Props) {
   // The example is the REAL generated draw over a canned 8-entrant set — not
   // an illustration, the actual generator output.
   const phases = previewDivisionFixtures(f.cannedStages, 8);
+  // The badge reads the live plan table; an unreadable table shows no badge rather than a guess.
+  const matrix = await loadPricingMatrix().catch(() => ({}) as Awaited<ReturnType<typeof loadPricingMatrix>>);
 
   return (
     <HelpShell currentHref="/help/formats">
@@ -35,9 +39,9 @@ export default async function FormatExplainerPage({ params }: Props) {
       <HelpBreadcrumb trail={[{ href: "/help/formats", label: "Format gallery" }]} />
       <h1 className="mt-3 flex items-center gap-2 text-3xl font-bold tracking-tight text-slate-900">
         {f.title}
-        {f.pro ? (
+        {familyNeedsPaidPlan(f, matrix) ? (
           <span className="rounded-full bg-purple-100 px-2.5 py-1 text-xs font-semibold uppercase tracking-wide text-purple-700">
-            Pro
+            Paid plan
           </span>
         ) : null}
       </h1>
