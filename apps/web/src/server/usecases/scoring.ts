@@ -1177,8 +1177,21 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     }
     return fixture;
   });
+  // The table's refold, after the commit like every hook below and best-effort the same way: the score already stands, and a
+  // refold that throws (a dropped connection, or before V528 a lots draw of a 72+ entrant tie class that the store could not
+  // index) must not answer that score with a 500 and skip the hooks after it. The stored table then stays as it was until the
+  // stage's next refold (its next result or void, or its completion), so this request does not auto-advance from it.
+  let tableStale = false;
   if (context && TABLE_KINDS.has(context.kind)) {
-    await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+    try {
+      await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+    } catch (err) {
+      tableStale = true;
+      log.error(
+        { err, event: "standings_recompute_failed", fixtureId, stageId: context.stage_id, poolId: context.pool_id },
+        "scoring: the stage's table did not refold after the score (score write unaffected; the stored table is stale until its next refold)",
+      );
+    }
     // D4a (P5 review finding): a decided-fixture correction is a standings
     // mutation exactly like overrideStandings' — LOCKED_FIXTURE_STATUSES
     // doesn't cover "decided", so this fires even on a fixture inside an
@@ -1210,8 +1223,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     }
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
-  // finished, progression fires without a button.
-  if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
+  // finished, progression fires without a button. Not after a refold that failed above (`tableStale`): the organiser's
+  // Complete (which ranks the stage afresh from its fixtures) or the stage's next result picks it up.
+  if (!tableStale && context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
   // Quick match plan 5 (D2, P5, P6): a League + Knockout moves itself on, after a decision and a void alike (a void can take
