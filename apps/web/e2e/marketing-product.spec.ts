@@ -8,7 +8,7 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const RALLY_PAGES = ["/sports/badminton", "/sports/table-tennis", "/sports/volleyball"] as const;
 const GOAL_PAGES = ["/sports/football", "/sports/hockey", "/sports/ice-hockey"] as const;
-const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/product/match-day", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
+const PAGES = ["/product/streaming", "/product/remote-scoring", "/product/format", "/product/scheduling", "/product/sponsoring", "/product/match-day", "/product/registration", "/sports/cricket", ...RALLY_PAGES, ...GOAL_PAGES, "/sports/tennis"] as const;
 /** How many pad keys each sport family's demo offers, by page: every one must be a real tap target. */
 const PAD_KEYS: Record<string, [selector: string, count: number]> = {
   ...Object.fromEntries(RALLY_PAGES.map((p) => [p, ['[data-testid^="rally-point-"]', 2]])),
@@ -18,6 +18,8 @@ const PAD_KEYS: Record<string, [selector: string, count: number]> = {
   "/product/sponsoring": ['[data-testid^="sponsor-tier-"], [data-testid^="sponsor-method-"], [data-testid^="sponsor-rule-"], [data-testid^="sponsor-step-"]', 12],
   // Match Day opens with two free courts to call and one match whose result can go in.
   "/product/match-day": ['[data-testid="md-demo"] [data-act]', 3],
+  // Registration opens with two ways to enter, one unpaid entry that can pay and five paid ones that can withdraw.
+  "/product/registration": ['[data-testid="reg-demo"] [data-act]', 8],
 };
 const WIDTHS = [320, 768, 1280] as const;
 
@@ -190,6 +192,52 @@ test.describe("product pages: the working demo", () => {
     const final = await page.getByTestId("tennis-stream-score").innerText();
     await page.getByTestId("tennis-point-b").click();
     await expect(page.getByTestId("tennis-stream-score")).toHaveText(final);
+  });
+
+  test("registration: an entry paid by card fills the list and moves the money; a full division waits and pays nothing", async ({ page }) => {
+    await visit(page, "/product/registration");
+    const demo = page.getByTestId("reg-demo");
+    const rows = page.getByTestId("reg-list").locator("li");
+    const collected = page.getByTestId("reg-collected");
+    const event = page.getByTestId("reg-event");
+    const before = { rows: await rows.count(), money: await collected.innerText(), left: Number(await demo.getAttribute("data-spots-left")) };
+    expect(before.left).toBeGreaterThan(1);
+
+    // Pay by card: one more row, paid, one place fewer, and more money.
+    await demo.locator('[data-act="card"]').click();
+    await expect(rows).toHaveCount(before.rows + 1);
+    await expect(rows.last()).toHaveAttribute("data-status", "paid");
+    await expect(demo).toHaveAttribute("data-spots-left", String(before.left - 1));
+    await expect(event).toHaveAttribute("data-event", "paid");
+    await expect(collected).not.toHaveText(before.money);
+    const afterCard = await collected.innerText();
+
+    // Close without paying: the place is taken, the money is not.
+    await demo.locator('[data-act="leave"]').click();
+    await expect(rows.last()).toHaveAttribute("data-status", "held");
+    await expect(demo).toHaveAttribute("data-spots-left", String(before.left - 2));
+    await expect(collected).toHaveText(afterCard);
+
+    // Fill the rest, then one more: the phone offers only the waiting list, and joining it costs nothing.
+    for (let left = before.left - 2; left > 0; left--) await demo.locator('[data-act="card"]').click();
+    await expect(demo).toHaveAttribute("data-spots-left", "0");
+    await expect(demo.locator('[data-act="card"]')).toHaveCount(0);
+    const full = await collected.innerText();
+    await demo.locator('[data-act="join"]').click();
+    await expect(rows.last()).toHaveAttribute("data-status", "waitlisted");
+    await expect(demo).toHaveAttribute("data-waiting", "1");
+    await expect(collected).toHaveText(full);
+
+    // A withdrawal refunds and offers the place to the one waiting, who has not paid yet.
+    await rows.first().locator('[data-act="withdraw"]').click();
+    await expect(rows.first()).toHaveAttribute("data-status", "refunded");
+    await expect(rows.last()).toHaveAttribute("data-status", "held");
+    await expect(event).toHaveAttribute("data-event", "promoted");
+    await expect(collected).not.toHaveText(full);
+
+    await page.getByTestId("reg-reset").click();
+    await expect(rows).toHaveCount(before.rows);
+    await expect(collected).toHaveText(before.money);
   });
 
   test("match day: a call moves the desk, the phone and the court's camera together, and a busy team is passed over", async ({ page }) => {
@@ -676,6 +724,7 @@ test.describe("product pages: layout", () => {
       ["/product/scheduling", 7, []],
       ["/product/sponsoring", 6, []],
       ["/product/match-day", 8, []],
+      ["/product/registration", 7, []],
     ] as const) {
       await page.goto(path);
       for (const id of scores) await expect(page.getByTestId(id)).toHaveText("27/2");

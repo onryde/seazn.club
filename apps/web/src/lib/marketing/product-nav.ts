@@ -11,6 +11,7 @@
 export type NavLink = { key: string; href: string; desc?: string; icon?: string };
 
 export const PRODUCT_LINKS = [
+  { key: "nav.product.registration", href: "/product/registration", desc: "nav.desc.registration", icon: "ticket" },
   { key: "nav.product.streaming", href: "/product/streaming", desc: "nav.desc.streaming", icon: "radio" },
   { key: "nav.product.remoteScoring", href: "/product/remote-scoring", desc: "nav.desc.remoteScoring", icon: "smartphone" },
   { key: "nav.formats", href: "/product/format", desc: "nav.desc.formats", icon: "trophy" },

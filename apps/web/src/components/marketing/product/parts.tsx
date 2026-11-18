@@ -111,7 +111,8 @@ export function Road({
 }: {
   title: string;
   lede: string;
-  steps: { heading: string; who: string; body: string; image: ProductImageKey; caption: string }[];
+  /** A step with no `image` shows no picture: the page has no real screen for it yet. */
+  steps: { heading: string; who: string; body: string; image?: ProductImageKey; caption?: string }[];
 }) {
   return (
     <section className="mkp-sec" data-section="road">
@@ -127,10 +128,12 @@ export function Road({
                 <span className="mkp-who">{s.who}</span>
                 <p>{s.body}</p>
               </div>
-              <div className="mkp-media">
-                <Shot image={s.image} alt={s.caption} />
-                <p className="mkp-real">{s.caption}</p>
-              </div>
+              {s.image && s.caption ? (
+                <div className="mkp-media">
+                  <Shot image={s.image} alt={s.caption} />
+                  <p className="mkp-real">{s.caption}</p>
+                </div>
+              ) : null}
             </li>
           ))}
         </ol>
