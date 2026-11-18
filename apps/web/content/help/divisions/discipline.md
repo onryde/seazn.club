@@ -1,39 +1,48 @@
 ---
-title: Player discipline & suspensions
-description: Card thresholds fold into a disciplinary ledger, auto-raise pending suspensions you confirm, and flag banned players everywhere.
+title: Player discipline and suspensions
+description: Set the card thresholds that raise suspensions, review them, and see where banned players are flagged.
 order: 8
+related: scoring/football, scoring/lineups, divisions/settings
 ---
 
-Card-sport divisions (football, hockey, ice hockey) get a **Discipline tab** beside Settings. It turns the cards your scorers record into a running disciplinary ledger, raises **pending** suspensions when a player crosses a threshold, and flags banned players across the console, the score pad, the public page and each player's own home. Discipline is a **Pro** feature, so free organisations see the upgrade prompt on the tab. Recording the cards themselves is not: every plan can record a card, name the player it was shown to and show it on the public page. What Pro adds is the ledger built on top of them — the running counts, the thresholds and the automatic suspensions.
+The **Discipline** tab turns the cards your scorers record into suspensions. You set the thresholds. The app raises a pending suspension when a player crosses one, and you confirm or waive it.
 
-## Rules
+![The Suspension rules card on the Discipline tab, with accumulation and dismissal rules for yellow, second yellow and red cards, and the Save rules button](/help/divisions/discipline-rules.webp "The football defaults: five yellows for one match, ten for two, a second yellow or a red for one")
 
-Two families of rule, each over the card colours your sport actually shows:
+## Which divisions have the tab
 
-- **Accumulation** — a repeating count across the season. The FA default is *5 yellows → 1 match* and *10 yellows → 2 matches*. Each threshold is its own row; a player who reaches the 5th yellow gets a 1-match ban, and again a 2-match ban at the 10th.
-- **Dismissal** — fired the moment a single card is shown. The default is *second yellow → 1 match* and *straight red → 1 match*.
+The tab appears for sports that have cards or penalties: football, hockey, ice hockey, volleyball, badminton, table tennis, tennis and carrom. It does not appear for cricket, chess or an "any other game" division.
 
-Sport defaults are prefilled the first time you open the tab; edit the counts, the ban length or the colours, add or remove rows, then **Save rules**. Turn the whole thing off with the **Enforce suspensions** toggle without losing your rules.
+Discipline is not on the Community plan. On Community the tab asks you to upgrade. Recording a card is separate from this tab. See [scoring football](/help/scoring/football).
 
-Only **person-attributed** cards count — a card recorded against a named player, not an anonymous team card. Attributing a card to a player costs nothing: it is a matter of scoring the card with the player named, which every plan can do.
+## Set the rules
 
-## The review queue
+Open the **Discipline** tab. The **Suspension rules** card has two kinds of rule.
 
-Every raised suspension lands **Pending review** — nothing takes effect until you say so:
+- **Accumulation** counts a card across the season. Each row has a **Card**, a **Count** and **Ban (matches)**. Football starts with yellow card 5 for 1 match, and yellow card 10 for 2 matches.
+- **Dismissal** fires the moment one card is shown. Each row has a **Card** and **Ban (matches)**. Football starts with second yellow for 1 match, and red card for 1 match.
 
-- **Confirm** makes the ban active. Served progress shows as match pips (● ● ○), one per match; a ban is served as the player's team plays out its next fixtures (a forfeit *by* that team counts; abandoned or cancelled matches don't).
-- **Waive** dismisses it with no ban.
-- You can also **Record suspension** manually for any player in the division — handy for a report or an off-field incident.
+Other sports start with their own defaults. Hockey starts with a red card for 1 match. Ice hockey starts with game misconduct and match penalty for 1 match each. The other sports start with no rules.
 
-If the card that triggered a pending suspension is later **voided**, the pending row disappears on its own. Once you've *confirmed* a ban it's yours to keep — a voided trigger then shows a **"trigger card was voided"** hint rather than deleting the ban, so you decide.
+Edit the numbers, use **+ Add accumulation rule** or **+ Add dismissal rule**, or choose **Remove rule**. Then choose **Save rules**. The rules do nothing until you tick **Enforce suspensions in this division**, which starts unticked.
 
-## Where bans show up
+> **Example**
+> A football division keeps the defaults. The first accumulation row reads **Yellow card**, **5**, **1**, so a fifth yellow card asks for a 1-match ban. The card's own text says every raised suspension lands in **Pending review** and that you confirm each one before it bites.
 
-- **Entrants tab** — a red card chip on each team with active bans; tap it to see who and how many matches are left.
-- **Score pad** — a soft, dismissible warning when you record an event for a suspended player. It never blocks scoring — it just reminds you.
-- **Public division page** — a **Suspensions** strip under the standings. Names follow each player's **consent** setting exactly like the stats table, so a player who hasn't consented to a public name shows as initials.
-- **The player's home (`/me`)** — claimed players see their own active bans across every organisation.
+## Review suspensions
 
-## Emails
+The tab lists **Pending review** and **Active bans**. Nothing takes effect until you act on a pending one.
 
-Claimed players get an email when you **confirm** a suspension, and again when it's fully **served**. Players who haven't claimed a profile have no address on file, so they get neither — the console remains the source of truth for them.
+- **Confirm** makes the ban active. A ban shows how many matches are served, for example "1 of 2 matches served".
+- **Waive** dismisses it. You can also waive an active ban.
+- **Record suspension** adds one by hand. It lands as pending until you confirm it.
+
+If the card behind a pending suspension is voided, a "trigger card was voided" hint shows on the suspension.
+
+## Where bans show
+
+- The Entrants tab marks teams that have suspended players.
+- The score pad warns "… is suspended … — recording anyway", so scoring is not blocked.
+- A suspended player cannot be named on a team sheet while the ban is active.
+
+A player with a claimed profile gets an email when you confirm a suspension and when it has been served. A player without an address on file gets neither.

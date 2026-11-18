@@ -1,29 +1,38 @@
 ---
 title: Qualifying out of any stage
-description: Feed the next stage from a bracket, a ladder or an americano — not just a league table. Includes plate competitions for first-round losers.
+description: Feed the next stage from a bracket, as well as from a table. Plates and qualifying rounds work this way.
 order: 5
+related: divisions/groups-to-knockout, divisions/bracket-view, entrants/withdrawals
 ---
 
-A qualification spec used to need a table underneath it. A knockout, a ladder or an americano could finish, but nothing could be seeded *from* it — so a plate for the beaten sides, or a qualifying round feeding a main draw, had to be built by hand.
+The next stage does not have to take its players from a league table. A finished knockout can feed a **plate** for the beaten sides, or a qualifying bracket can feed a main draw.
 
-Any stage can now feed the next one.
+## Two ready-made formats
 
-**From a bracket.** When a knockout completes, its full finishing order is recorded — winner, runner-up, and every eliminated entrant ranked by how far they got. The next stage's `topN` reads that order exactly as it would read a league table.
+Open **Format** on **Division rules** and choose **Show more formats** if they are not listed.
 
-**Losers of a round — the plate.** A plate takes the entrants knocked out early and gives them their own bracket. Set the plate stage's qualification to `losersOfRound: { round: 1, count: 4 }` — the losers of round one, in bracket order, with the number of places you want. The **KO + Plate** template does this for you.
+- **Knockout + Plate** is a main knockout plus a plate. The plate takes every entrant who lost their first match.
+- **Qualifying + Main draw** is a qualifying knockout whose top finishers go into the main draw.
 
-Bracket rounds are labelled, not numbered in sequence: a losers' side and a grand final carry their own round numbers, so name the round you mean rather than counting forwards from one.
+A stage only feeds the next one once it is complete. The plate fills when the main draw has finished, not after its first round.
 
-**From a ladder.** A ladder completes when no challenge is outstanding, and its standing order becomes the finishing order. A ladder whose challenges are still live will not complete — the order isn't settled yet.
+> **Example**
+> Eight players enter a **Knockout + Plate** division. Four lose in round one. When the main draw completes, the plate's seed proposal lists those four as its qualifiers, and you confirm it to build the plate bracket.
 
-**From an americano.** Individuals are ranked on personal points across the rotation, and the top N carry into the next stage as individual entrants.
+## From a bracket
 
-## The two new templates
+When a knockout completes, its finishing order is recorded: the winner, the runner-up, and every other entrant ranked by how far they got. A following stage can take a range of that order. A qualifying knockout whose top two go on to a main draw was confirmed this way.
 
-**KO + Plate** — a main knockout, plus a plate for the first-round losers. Everyone gets a second competition; nobody travels for one match.
+## From a ladder
 
-**Qualifying + Main** — a qualifying knockout whose survivors seed the main draw. Useful when entries outgrow the bracket you want to run.
+A ladder only completes when no challenge is still open. While a challenge is live, asking to complete it returns "not completed".
 
-## Carrying points forward
+## Through the API
 
-Carry-over moves accumulated points from one stage into the next, and only makes sense from a stage that kept a table. A bracket, ladder or americano source records a finishing order rather than points, so carry-over is refused there rather than silently carrying zeroes.
+The ready-made formats use these `take` rules in the next stage's `progression`:
+
+- `{ "kind": "firstLosses" }` takes everyone who lost their first match.
+- `{ "kind": "rankRange", "from": 1, "to": 2 }` takes a range of the finishing order.
+- `{ "kind": "roundLosers", "round": 1, "count": 4 }` takes the losers of one named round. A bracket's rounds are labelled, not simply counted, so name the round you mean.
+
+A stage that takes losers of a round still waits until the source stage is complete before it offers a seed proposal. The API answers 409 until then.
