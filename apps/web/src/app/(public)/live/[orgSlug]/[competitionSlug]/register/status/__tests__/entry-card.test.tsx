@@ -427,7 +427,7 @@ describe("EntryCard — a waiting entry an automatic promotion skipped (walk-fix
     const m = notice(html);
     expect(m, "the notice").not.toBeNull();
     expect(m![1]).toContain(
-      "A place opened on 14 November, but your turn was skipped: games here are played on Lichess, and your Lichess account wasn't linked to play. You keep your place in line. Once your account is linked, the next place that opens can go to you.",
+      "A place opened on 14 November, but your turn was skipped: games here are played on Seazn's board and recorded on Lichess, and your Lichess account wasn't linked to play. You keep your place in line. Once your account is linked, the next place that opens can go to you.",
     );
     expect(m![1]).toContain(`href="${lichessLinkStartHref("org")}"`);
     expect(m![1]).toContain(">Link your Lichess account</a>");

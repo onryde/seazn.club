@@ -413,13 +413,13 @@ describe("registration_promotion_skipped (walk-fix F16)", () => {
     expect(own.subject).toBe("You were skipped on the waiting list — Spring Open");
     const visible = words(own.html);
     expect(visible).toContain(
-      "Hi Dana Captain — a place opened in Open Doubles at Spring Open, but it could not go to you: games in this division are played on Lichess, and your Lichess account isn't linked to play yet. The place went to the next entry in line.",
+      "Hi Dana Captain — a place opened in Open Doubles at Spring Open, but it could not go to you: games in this division are played on Seazn's board and recorded on Lichess, and your Lichess account isn't linked to play yet. The place went to the next entry in line.",
     );
     expect(visible).toContain("Your entry keeps its place on the waiting list. Link your Lichess account, and the next place that opens can go to you.");
     expect(visible).toContain("Link your Lichess account");
     expect(own.text).toContain("Link your Lichess account:\n" + LICHESS);
     // A contact entering someone else (an entry named for another): the entry is named, never "you".
     const other = registrationPromotionSkippedTemplate({ ...base, contactName: PERSON, linkUrl: LICHESS }, dict);
-    expect(words(other.html)).toContain("but it could not go to Riverside Rovers: games in this division are played on Lichess");
+    expect(words(other.html)).toContain("but it could not go to Riverside Rovers: games in this division are played on Seazn's board and recorded on Lichess");
   });
 });
