@@ -10,7 +10,6 @@ export const dynamic = "force-dynamic";
 // page for an org that cannot go live has nothing to show.
 import { notFound } from "next/navigation";
 import { BackLink } from "@/components/back-link";
-import { Nav } from "@/components/nav";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
 import { YoutubeDisconnectOnlyPanel } from "@/components/v2/youtube-disconnect-only-panel";
@@ -56,7 +55,6 @@ export default async function StreamingPage({
     const channels = justEmptied ? [] : await listStreamTargets(auth, auth.orgId, { channelsOnly: true });
     return (
       <DictProvider dict={ui} locale={locale}>
-        <Nav />
         <main className="mx-auto max-w-4xl px-4 py-8">
           <BackLink href="/dashboard" label={t(ui, "common.dashboard")} />
           <div className="mb-6">
@@ -87,13 +85,12 @@ export default async function StreamingPage({
 
   return (
     <DictProvider dict={ui} locale={locale}>
-      <Nav />
       <main className="mx-auto max-w-4xl px-4 py-8">
         <BackLink href="/dashboard" label={t(ui, "common.dashboard")} />
         <div className="mb-6">
           <p className="app-eyebrow mb-1">{t(ui, "streaming.eyebrow")}</p>
           <h1 className="page-title">{t(ui, "streaming.title")}</h1>
-            <p data-testid="streaming-org" className="mt-1 text-sm font-medium text-slate-700">{org.name}</p>
+          <p data-testid="streaming-org" className="mt-1 text-sm font-medium text-slate-700">{org.name}</p>
           <p className="mt-1 max-w-xl text-sm text-slate-500">{t(ui, "streaming.desc")}</p>
         </div>
         <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} landing={landing} />

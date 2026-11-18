@@ -1,6 +1,6 @@
 // The org-path hrefs for Streaming and Directory (owner, 2026-11-18).
 import { describe, expect, it } from "vitest";
-import { orgSlugFromPath } from "@/lib/org-path";
+import { orgSlugFromPath } from "@/lib/org-scope";
 import { routes } from "@/lib/routes";
 import { streamingHref, youtubeLanding } from "@/lib/youtube";
 

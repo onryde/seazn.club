@@ -13,6 +13,9 @@ vi.mock("next/navigation", () => ({
 
 import LegacyStreaming from "../page";
 import LegacyDirectory from "../../directory/page";
+import Clubs from "../../clubs/page";
+import Players from "../../players/page";
+import People from "../../people/page";
 
 const to = async (p: Promise<unknown>): Promise<string> => {
   try {
@@ -47,5 +50,15 @@ describe("legacy /directory", () => {
   });
   it("goes to the bare org path when there is no query", async () => {
     expect(await to(LegacyDirectory({ searchParams: Promise.resolve({}) }))).toBe("/o/riverside/directory");
+  });
+});
+
+describe("/clubs, /players, /people: one hop straight to the org's Directory tab", () => {
+  it.each([
+    ["clubs", Clubs, "/o/riverside/directory?tab=clubs"],
+    ["players", Players, "/o/riverside/directory?tab=players"],
+    ["people", People, "/o/riverside/directory?tab=players"],
+  ])("%s", async (_n, Page, want) => {
+    expect(await to((Page as () => Promise<unknown>)())).toBe(want);
   });
 });

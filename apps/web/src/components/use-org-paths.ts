@@ -4,7 +4,7 @@
 // from the address it is on - never from the seazn_org cookie. Off an org path (a test, a page outside the tree) there is no slug and
 // the link is the legacy `/streaming` / `/directory`, which redirect to the cookie's org.
 import { usePathname } from "next/navigation";
-import { orgSlugFromPath } from "@/lib/org-path";
+import { orgSlugFromPath } from "@/lib/org-scope";
 import { streamingHref } from "@/lib/youtube";
 
 /** The org slug of the page being shown, or null off an org path. */

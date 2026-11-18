@@ -200,7 +200,6 @@ export function CourtStreamSheet({
 }
 
 function QrView({ dict, state, ctx }: { dict: Dict; state: QrState; ctx: MatchDayCtx }) {
-  const streamingHref = useStreamingHref();
   if (state.status === "loading") return <p className="text-sm text-slate-600">{t(dict, "matchDay.code.loading")}</p>;
   if (state.status === "error") {
     return (

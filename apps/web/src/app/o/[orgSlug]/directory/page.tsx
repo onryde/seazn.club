@@ -5,7 +5,6 @@ export const dynamic = "force-dynamic";
 // one "Directory" menu with a tab each.
 import Link from "@/components/ui/console-link";
 import { BackLink } from "@/components/back-link";
-import { Nav } from "@/components/nav";
 import { requireOrgPage, type PageAuth } from "@/server/page-auth";
 import { routes, searchOf } from "@/lib/routes";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
@@ -51,7 +50,6 @@ export default async function DirectoryPage({
 
   return (
     <DictProvider dict={ui} locale={locale}>
-      <Nav />
       <main className="mx-auto max-w-4xl px-4 py-8">
         <BackLink href="/dashboard" label={t(ui, "common.dashboard")} />
         <div className="mb-6">

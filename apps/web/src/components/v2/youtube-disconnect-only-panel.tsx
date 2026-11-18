@@ -36,7 +36,7 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
   const emptied = channels.length === 0 && gone.size > 0;
   useEffect(() => {
     if (emptied) router.replace(streamingHref(orgSlug, "?disconnected=1"));
-  }, [emptied, router]);
+  }, [emptied, router, orgSlug]);
 
   return (
     <div data-testid="stream-disconnect-only" className="space-y-4">

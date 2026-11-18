@@ -105,4 +105,8 @@ describe("Directory — four tabs, no Streaming (the Streaming page is top-nav)"
     m.requirePageAuth.mockRejectedValue({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
     await expect(render()).rejects.toMatchObject({ digest: "NEXT_HTTP_ERROR_FALLBACK;404" });
   });
+
+  it("renders no nav of its own: the /o layout's nav (given the path's org) is the only one, so a stale cookie cannot show another org", async () => {
+    expect(await render()).not.toContain('data-testid="nav"');
+  });
 });

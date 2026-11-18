@@ -88,7 +88,7 @@ afterEach(() => setRelayDriversForTest(null));
 describe("Streaming page — offered exactly when the fixture panel offers Go live (M-5)", () => {
   it("OFFERED (both keys, a running relay): renders the page chrome and the destinations — after ticking every holder's expiry, org-wide (M-3)", async () => {
     const html = await render();
-    expect(html).toContain('data-testid="nav"');
+    expect(html, "the /o layout owns the nav; the page renders none (a second, cookie-led one showed another org)").not.toContain('data-testid="nav"');
     expect(html, "the page's own title").toContain("<h1");
     expect(html).toContain(PANEL);
     expect(m.hasFeature.mock.calls.map((c) => [c[0], c[1], c[2]]), "the panel's two keys, org-wide (no competition)").toEqual([
