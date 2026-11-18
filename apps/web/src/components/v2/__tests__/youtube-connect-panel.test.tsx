@@ -1714,7 +1714,10 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     await click(byTestId(second.tree(), "youtube-disconnect"));
     expect(rowsOf(panel)).toHaveLength(0);
     expect(byTestId(panel.tree(), "stream-disconnect-only-empty"), "the empty line").toBeDefined();
-    expect(nav.refresh).not.toHaveBeenCalled();
+    // The nav is the /o layout's: only a refresh re-renders it, and it must be asked for AFTER the move to the emptied address (a
+    // refresh of the bare address would be the 404).
+    expect(nav.refresh, "one refresh, for the layout's nav").toHaveBeenCalledTimes(1);
+    expect(nav.replace.mock.invocationCallOrder[0]!, "the move comes first").toBeLessThan(nav.refresh.mock.invocationCallOrder[0]!);
   });
 
   it("F3: only a 404 drops the row - a 409 (a match is using it) and a dropped connection keep it and say why", async () => {
@@ -1739,7 +1742,10 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside Juniors", outcome: "revoked" });
     expect(nav.replace).toHaveBeenCalledTimes(1);
     expect(nav.replace, "the one href, from the constants").toHaveBeenCalledWith("/streaming?disconnected=1");
-    expect(nav.refresh, "a re-read of the bare page would be the 404").not.toHaveBeenCalled();
+    // The nav is the /o layout's: only a refresh re-renders it, and it must be asked for AFTER the move to the emptied address (a
+    // refresh of the bare address would be the 404).
+    expect(nav.refresh, "one refresh, for the layout's nav").toHaveBeenCalledTimes(1);
+    expect(nav.replace.mock.invocationCallOrder[0]!, "the move comes first").toBeLessThan(nav.refresh.mock.invocationCallOrder[0]!);
 
     // the other tab already disconnected the last one: the same exit
     nav.replace.mockReset();
@@ -1793,7 +1799,10 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     expect(attr(ofType(panel.tree(), YoutubeDisconnectedNotice)!, "name"), "the latest news").toBe("Riverside Juniors");
     expect(attr(ofType(panel.tree(), YoutubeDisconnectedNotice)!, "outcome"), "and its outcome travels with it").toBe("not_confirmed");
     expect(byTestId(panel.tree(), "stream-disconnect-only-note"), "the note stays").toBeDefined();
-    expect(nav.refresh).not.toHaveBeenCalled();
+    // The nav is the /o layout's: only a refresh re-renders it, and it must be asked for AFTER the move to the emptied address (a
+    // refresh of the bare address would be the 404).
+    expect(nav.refresh, "one refresh, for the layout's nav").toHaveBeenCalledTimes(1);
+    expect(nav.replace.mock.invocationCallOrder[0]!, "the move comes first").toBeLessThan(nav.refresh.mock.invocationCallOrder[0]!);
     // a list that holds only a pasted destination (the server never sends one) is an EMPTY list, not a list of one
     const pastedOnly = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [pasted()] });
     expect(rowsOf(pastedOnly), "no row for a pasted destination").toHaveLength(0);
