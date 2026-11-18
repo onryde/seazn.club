@@ -85,7 +85,7 @@ export function ddlMutants(schema: string, delta: string): DdlMutant[] {
   const T = `${S}.stage_lots_draws`;
   const ORDER_FULL =
     "cardinality(members) >= 2 and cardinality(drawn_order) = cardinality(members) and drawn_order @> members and members @> drawn_order";
-  const LIVE = `create unique index stage_lots_draws_live_key on ${T} (stage_id, coalesce(pool_id, '00000000-0000-0000-0000-000000000000'::uuid), members_key) where superseded_at is null`;
+  const LIVE = `create unique index stage_lots_draws_live_key on ${T} (stage_id, coalesce(pool_id, '00000000-0000-0000-0000-000000000000'::uuid), md5(members_key)) where superseded_at is null`;
   const POLICY = `create policy stage_lots_draws_tenant on ${T} for all to app_user using (org_id = ${S}.current_org_id()) with check (org_id = ${S}.current_org_id())`;
   const orderCheck = (expr: string) =>
     `alter table ${T} drop constraint stage_lots_draws_order_is_members; alter table ${T} add constraint stage_lots_draws_order_is_members check (${expr})`;
@@ -106,12 +106,12 @@ export function ddlMutants(schema: string, delta: string): DdlMutant[] {
     ),
     pin(
       "D3-live-key-without-coalesce",
-      `drop index ${S}.stage_lots_draws_live_key; create unique index stage_lots_draws_live_key on ${T} (stage_id, pool_id, members_key) where superseded_at is null`,
+      `drop index ${S}.stage_lots_draws_live_key; create unique index stage_lots_draws_live_key on ${T} (stage_id, pool_id, md5(members_key)) where superseded_at is null`,
       `drop index ${S}.stage_lots_draws_live_key; ${LIVE}`,
     ),
     pin(
       "D4-live-key-not-partial",
-      `drop index ${S}.stage_lots_draws_live_key; create unique index stage_lots_draws_live_key on ${T} (stage_id, coalesce(pool_id, '00000000-0000-0000-0000-000000000000'::uuid), members_key)`,
+      `drop index ${S}.stage_lots_draws_live_key; create unique index stage_lots_draws_live_key on ${T} (stage_id, coalesce(pool_id, '00000000-0000-0000-0000-000000000000'::uuid), md5(members_key))`,
       `drop index ${S}.stage_lots_draws_live_key; ${LIVE}`,
     ),
     pin(
