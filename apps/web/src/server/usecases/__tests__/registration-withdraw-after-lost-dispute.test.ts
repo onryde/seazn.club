@@ -17,12 +17,12 @@ const stripeMock = vi.hoisted(() => {
   return { refundCreate, stripe: { refunds: { create: refundCreate }, charges: { retrieve: vi.fn() }, transfers: { retrieve: vi.fn(), listReversals: vi.fn(), createReversal: vi.fn() } } };
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
-vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn(async () => ({ ok: true, providerId: "re_x" })) }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn(async () => ({ ok: true, providerId: `re_${Math.random().toString(36).slice(2)}` })) }));
 
 import { sql } from "@/lib/db";
-import { handleRegistrationCheckoutCompleted, handleRegistrationDispute, refundRegistration, withdrawRegistrationOrganiser } from "../registrations";
+import { handleRegistrationCheckoutCompleted, handleRegistrationDispute, listRegistrations, refundRegistration, withdrawRegistrationOrganiser } from "../registrations";
 import { stubOutboxEnv } from "./_invite-mail";
-import { asOwner, fakeSession, loadWithGroup, seedRegistration, stripeRig } from "./_registration-fixtures";
+import { asOwner, fakeSession, loadWithGroup, seedRegistration, seedSecondEntry, stripeRig } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = randomUUID().slice(0, 8);
@@ -98,5 +98,133 @@ describe.skipIf(!HAS_DB)("an entry whose dispute was LOST is never refunded agai
     expect(refunds(), "the never-disputed withdrawal refunded once").toBe(1);
     await withdrawRegistrationOrganiser(open.owner, open.regId);
     expect(await status(open.regId)).toBe("withdrawn");
+  });
+});
+
+// Fix round 2 I-1: the loss is judged on the ENTRY's own charge, not the cart's. A cart can be paid in several Checkout sessions (V387), so
+// a chargeback on one session's charge says nothing about a sibling paid in another. Rule chosen for ONE session paying several entries:
+// a lost dispute claws back the WHOLE charge, so EVERY entry on that charge refuses; an entry on another charge refunds in full.
+describe.skipIf(!HAS_DB)("a lost dispute blocks only the entries paid on the disputed charge (fix round 2 I-1)", () => {
+  const sessionFor = (regIds: string[], tag: string) => {
+    const s = fakeSession(regIds, FEE * regIds.length);
+    (s as unknown as { id: string }).id = `cs_test_l2_${tag}_${regIds[0]!.slice(0, 8)}`;
+    (s as unknown as { payment_intent: string }).payment_intent = `pi_test_l2_${tag}_${regIds[0]!.slice(0, 8)}`;
+    return s;
+  };
+  /** One cart, two entries, paid in TWO sessions (A then B); the cart's own intent ends up B's (last writer wins). */
+  async function twoSessionCart() {
+    const w = await stripeRig({ feeCents: FEE });
+    made.orgIds.push(w.orgId);
+    made.userIds.push(w.ownerId);
+    const a = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: `ts-${randomUUID().slice(0, 8)}@test.local` });
+    const bRow = await seedSecondEntry(a.registration.group_id, w.division.id, FEE, "Second entry");
+    await handleRegistrationCheckoutCompleted(sessionFor([a.registration.id], "A"));
+    await handleRegistrationCheckoutCompleted(sessionFor([bRow.id], "B"));
+    const rowA = await loadWithGroup(a.registration.id);
+    const rowB = await loadWithGroup(bRow.id);
+    expect(rowA.entry_payment_intent_id, "premise: the two entries paid on different charges").not.toBe(rowB.entry_payment_intent_id);
+    expect(rowA.payment_intent_id, "premise: the cart carries the LAST session's intent").toBe(rowB.entry_payment_intent_id);
+    return { owner: asOwner(w.orgId, w.ownerId), w, a: rowA, b: rowB };
+  }
+  const lose = async (intent: string) => {
+    const id = `dp_${RUN}_${++seq}`;
+    await handleRegistrationDispute(disputeOf(id, intent, "needs_response"), "created");
+    await handleRegistrationDispute(disputeOf(id, intent, "lost"), "closed");
+    return id;
+  };
+  const refundedWith = () => stripeMock.refundCreate.mock.calls.map((c) => ({ intent: c[0].payment_intent as string, amount: c[0].amount as number | undefined }));
+
+  it("two sessions, dispute lost on A: A refuses (withdraw sends nothing, manual Refund 422), B refunds in FULL", async () => {
+    const c = await twoSessionCart();
+    await lose(c.a.entry_payment_intent_id!);
+    await withdrawRegistrationOrganiser(c.owner, c.a.id);
+    await expect(refundRegistration(c.owner, c.a.id, undefined)).rejects.toMatchObject({ status: 422 });
+    expect(refunds(), "A's own charge was charged back: nothing is sent for it").toBe(0);
+    await refundRegistration(c.owner, c.b.id, undefined);
+    expect(refundedWith(), "B's intact charge is refunded once, in full, against ITS OWN intent").toEqual([{ intent: c.b.entry_payment_intent_id, amount: FEE }]);
+  });
+
+  it("two sessions, dispute lost on A: withdrawing B auto-refunds B's payment", async () => {
+    const c = await twoSessionCart();
+    await lose(c.a.entry_payment_intent_id!);
+    await withdrawRegistrationOrganiser(c.owner, c.b.id);
+    expect(refundedWith()).toEqual([{ intent: c.b.entry_payment_intent_id, amount: FEE }]);
+  });
+
+  it("the other way round: dispute lost on B (the cart's current intent): B refuses, A (an OLDER charge, no longer on the cart) refunds in full", async () => {
+    const c = await twoSessionCart();
+    await lose(c.b.entry_payment_intent_id!);
+    await withdrawRegistrationOrganiser(c.owner, c.b.id);
+    expect(refunds()).toBe(0);
+    await refundRegistration(c.owner, c.a.id, undefined);
+    expect(refundedWith()).toEqual([{ intent: c.a.entry_payment_intent_id, amount: FEE }]);
+  });
+
+  it("ONE session paying both entries, dispute lost: EVERY entry on that charge refuses (withdraw and manual Refund), nothing sent", async () => {
+    const w = await stripeRig({ feeCents: FEE });
+    made.orgIds.push(w.orgId);
+    made.userIds.push(w.ownerId);
+    const a = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: `os-${randomUUID().slice(0, 8)}@test.local` });
+    const b = await seedSecondEntry(a.registration.group_id, w.division.id, FEE, "Second entry");
+    await handleRegistrationCheckoutCompleted(sessionFor([a.registration.id, b.id], "ONE"));
+    const rowA = await loadWithGroup(a.registration.id);
+    const rowB = await loadWithGroup(b.id);
+    expect(rowA.entry_payment_intent_id, "premise: one shared charge").toBe(rowB.entry_payment_intent_id);
+    expect(rowA.entry_payment_intent_id).toBeTruthy();
+    await lose(rowA.entry_payment_intent_id!);
+    const owner = asOwner(w.orgId, w.ownerId);
+    for (const id of [a.registration.id, b.id]) {
+      await expect(refundRegistration(owner, id, undefined)).rejects.toMatchObject({ status: 422 });
+      await withdrawRegistrationOrganiser(owner, id);
+    }
+    expect(refunds(), "the whole charge was clawed back: no entry on it is refunded again").toBe(0);
+  });
+
+  it("the console's row says the same: dispute_lost_own is true only for the entry on the lost charge (list read model)", async () => {
+    const c = await twoSessionCart();
+    const before = await listRegistrations(c.owner, c.w.division.id, null);
+    expect(before.length, "premise: both entries listed").toBe(2);
+    expect(before.every((r) => r.dispute_lost_own === false), "nothing lost yet").toBe(true);
+    await lose(c.a.entry_payment_intent_id!);
+    const rows = await listRegistrations(c.owner, c.w.division.id, null);
+    expect(rows.find((r) => r.id === c.a.id)!.dispute_lost_own, "A's own charge was lost").toBe(true);
+    expect(rows.find((r) => r.id === c.b.id)!.dispute_lost_own, "B's charge is intact").toBe(false);
+    expect(rows.find((r) => r.id === c.b.id)!.dispute, "the cart-level chip still tells staff the cart had a chargeback").toBe("lost");
+  });
+
+  it("an open (undecided) dispute on A leaves both entries refundable; a WON one too", async () => {
+    const c = await twoSessionCart();
+    const id = `dp_${RUN}_${++seq}`;
+    await handleRegistrationDispute(disputeOf(id, c.a.entry_payment_intent_id!, "needs_response"), "created");
+    const rows = await listRegistrations(c.owner, c.w.division.id, null);
+    expect(rows.map((r) => r.dispute_lost_own)).toEqual([false, false]);
+    await handleRegistrationDispute(disputeOf(id, c.a.entry_payment_intent_id!, "won"), "closed");
+    await refundRegistration(c.owner, c.a.id, undefined);
+    expect(refundedWith()).toEqual([{ intent: c.a.entry_payment_intent_id, amount: FEE }]);
+  });
+});
+
+// Fix round 2 M-5: the lost close's two writes (the cart's write-off and the `dispute_lost` ledger row the refund guard reads) commit
+// together. Probed by making the ledger insert fail for ONE dispute id (a BEFORE INSERT trigger): the write-off must not have landed.
+describe.skipIf(!HAS_DB)("a lost close writes the write-off and its ledger row in ONE transaction (fix round 2 M-5)", () => {
+  it("a ledger row that cannot be written leaves the cart's write-off unwritten, and a retry lands both", async () => {
+    const e = await paidEntry();
+    const id = `dp_${RUN}_atomic_${++seq}`;
+    await handleRegistrationDispute(disputeOf(id, e.intent, "needs_response"), "created");
+    const fn = `regdef_fail_lost_${RUN}`;
+    await sql.unsafe(`create or replace function ${fn}() returns trigger language plpgsql as $f$ begin raise exception 'regdef: ledger refused'; end $f$`);
+    await sql.unsafe(`create trigger ${fn} before insert on competition_events for each row when (new.type = 'registration.dispute_lost' and new.payload->>'dispute_id' = '${id}') execute function ${fn}()`);
+    try {
+      await expect(handleRegistrationDispute(disputeOf(id, e.intent, "lost"), "closed")).rejects.toThrow();
+      const [g] = await sql<{ refunded_cents: number }[]>`select g.refunded_cents from registration_groups g join registrations r on r.group_id = g.id where r.id = ${e.regId}`;
+      expect(g!.refunded_cents, "the write-off rolled back with the failed ledger row").toBe(0);
+    } finally {
+      await sql.unsafe(`drop trigger if exists ${fn} on competition_events`);
+      await sql.unsafe(`drop function if exists ${fn}()`);
+    }
+    await handleRegistrationDispute(disputeOf(id, e.intent, "lost"), "closed");
+    const [g] = await sql<{ refunded_cents: number }[]>`select g.refunded_cents from registration_groups g join registrations r on r.group_id = g.id where r.id = ${e.regId}`;
+    expect(g!.refunded_cents, "the retry lands the write-off").toBe(FEE);
+    await expect(refundRegistration(e.owner, e.regId, undefined)).rejects.toMatchObject({ status: 422 });
   });
 });

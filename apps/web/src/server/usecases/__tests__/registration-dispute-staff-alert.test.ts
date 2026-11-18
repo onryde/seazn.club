@@ -212,6 +212,33 @@ describe.skipIf(!HAS_DB)("entry-fee dispute -> staff alert (fix round 1 I3)", ()
     expect(closed.html).toContain("11.00");
   });
 
+  it("a REPLAYED lost close still alerts staff, with the amount the first run recovered (fix round 2 M-4)", async () => {
+    // The first delivery could not queue the staff alert (it is dropped silently); the redelivery finds the reversal already made
+    // (`already`) and used to skip the alert, so staff were never told. The recovered figure must come from the reversal Stripe holds,
+    // not the 0 of a run that made no reversal.
+    const e = await paidEntry();
+    const id = newDisputeId();
+    await handleRegistrationDispute(disputeOf(id, e.intent, "needs_response"), "created");
+    stripeMock.retrieve.mockResolvedValue({ amount: FEE, application_fee_amount: 100, transfer: { id: "tr_1", amount: FEE, amount_reversed: 0 } });
+    stripeMock.listReversals.mockResolvedValue({ data: [] });
+    stripeMock.createReversal.mockResolvedValue({ id: "trr_1" });
+    gate.failStaff = true;
+    await handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed");
+    expect(stripeMock.createReversal, "premise: the first run made the reversal").toHaveBeenCalledTimes(1);
+    expect((await staffRows(id)).filter((r) => r.ref_id === `${id}:closed`), "premise: the first alert could not be queued").toEqual([]);
+    gate.failStaff = false;
+    stripeMock.listReversals.mockResolvedValue({ data: [{ id: "trr_1", amount: 1100, metadata: { dispute_id: id } }] });
+    await handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed");
+    expect(stripeMock.createReversal, "the replay reverses nothing more").toHaveBeenCalledTimes(1);
+    const closed = (await staffRows(id)).filter((r) => r.ref_id === `${id}:closed`);
+    expect(closed.length, "the replay queued the alert").toBe(1);
+    expect(closed[0]!.text, "the recovered figure is the first run's, not 0").toContain("11.00");
+    expect(closed[0]!.text).not.toMatch(/nothing was recovered/i);
+    // A THIRD delivery changes nothing: the once-key holds the line.
+    await handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed");
+    expect((await staffRows(id)).filter((r) => r.ref_id === `${id}:closed`).length, "still one alert").toBe(1);
+  });
+
   it("closed LOST with NOTHING recovered (no transfer to reverse): says it was not recovered, not that it was", async () => {
     const e = await paidEntry();
     const id = newDisputeId();

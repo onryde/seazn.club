@@ -337,6 +337,8 @@ describe.skipIf(!HAS_DB)("fetchPoolSummary — real Postgres", () => {
         free_agent: true,
         assigned_team_id: null,
         division_started: false,
+        dispute: null,
+        dispute_lost_own: false,
       });
       expect.soft(byId.get(s.divisionId)?.waiting ?? 0, `${s.status}/${s.amountCents}`).toBe(flags.canAssign ? 1 : 0);
       checked++;

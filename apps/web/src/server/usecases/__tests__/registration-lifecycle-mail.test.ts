@@ -45,6 +45,7 @@ import {
   confirmRegistrationWaived,
   groupById,
   handleRegistrationCheckoutCompleted,
+  handleRegistrationDispute,
   markRegistrationPaidOffline,
   notifyPromoted,
   notifySubmitted,
@@ -1673,6 +1674,28 @@ describe.skipIf(!HAS_DB)("rejected: the organiser rejects an entry (real rejectR
     const refundId = (await stripeMock.refundCreate.mock.results[0]!.value as { id: string }).id;
     const receipts = await sql<{ recipient: string }[]>`select recipient from email_outbox where kind = 'refund_issued' and ref_type = 'refund' and ref_id = ${refundId}`;
     expect(receipts.map((r) => r.recipient.toLowerCase()), "the refund receipt is unchanged: one, to the payer").toEqual([to]);
+  });
+
+  it("a card payment LOST to a chargeback: no refund is sent and the mail does not promise one (fix round 2 M-1)", async () => {
+    const w = await manualStripeWorld(1500);
+    const to = address("rej-lost");
+    const reg = await seedRegistration(w.competition.id, w.division.id, w.settings, { displayName: TEAM, contactEmail: to, locale: "nl" });
+    await handleRegistrationCheckoutCompleted(fakeSession(reg.registration.id, 1500));
+    const paid = await loadWithGroup(reg.registration.id);
+    expect(paid.status, "premise: paid and waiting for the organiser").toBe("paid");
+    const dp = (status: string) => ({ id: `dp_${randomUUID().slice(0, 10)}`, payment_intent: paid.entry_payment_intent_id, amount: 1500, currency: "gbp", status }) as never;
+    const lost = dp("lost");
+    await handleRegistrationDispute({ ...(lost as object), status: "needs_response" } as never, "created");
+    await handleRegistrationDispute(lost, "closed");
+
+    await rejectRegistration(w.owner, reg.registration.id);
+    expect(await statusOf(reg.registration.id), "premise: the reject itself landed").toBe("rejected");
+    expect(stripeMock.refundCreate, "no second refund of money the chargeback already returned").not.toHaveBeenCalled();
+    const nl = await getDictionary("nl", "emails");
+    const toContact = await body("registration_rejected", "registration", reg.registration.id, to);
+    expect(toContact.text, "premise: the rejection mail itself was sent").toContain(String(nl["registrationRejected.title"]));
+    expect(toContact.text, "no refund line").not.toContain(formatMoneyExact(1500, w.settings.currency, "nl"));
+    expect(toContact.text).not.toContain(t(nl, "registrationRejected.textRefund", { amount: formatMoneyExact(1500, w.settings.currency, "nl") }));
   });
 
   it("a card payment already PARTLY refunded: the line names what is still being returned (1000), never the entry fee (1500)", async () => {

@@ -378,8 +378,8 @@ export interface RegistrantActionFlags {
  * the cart's `payment_intent_id`, which a sibling's payment sets: polish wave
  * W8, where an unpaid entry offered Refund and it refunded the sibling's
  * money), and "Already fully refunded" when
- * `amount_cents - ownPaymentRefundedCents(row) <= 0`, and (fix round 1 Q) "lost to a chargeback" when the cart's dispute was LOST: Stripe
- * already repaid the cardholder, which the entry's own `refunded_cents` does not record. Deliberately NOT gated on status:
+ * `amount_cents - ownPaymentRefundedCents(row) <= 0`, and (fix round 1 Q) "lost to a chargeback" when THIS entry's own payment was lost (`dispute_lost_own`, fix round 2 I-1; a sibling paid in another session keeps
+ * its Refund): Stripe already repaid the cardholder, which the entry's own `refunded_cents` does not record. Deliberately NOT gated on status:
  * the usecase is not either, and the case that matters most is a WITHDRAWN
  * entry — past `refund_lock_at`, `withdrawCore` refuses to auto-refund and
  * the registrant is told at that moment that "any refund is at the
@@ -409,6 +409,7 @@ export function deriveRegistrantActionFlags(
     | "assigned_team_id"
     | "division_started"
     | "dispute"
+    | "dispute_lost_own"
   >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
@@ -444,7 +445,7 @@ export function deriveRegistrantActionFlags(
     canRemind: row.status === "pending" && feeOwed,
     // The cap `refundRegistration` applies: what is left of THIS payment, never the refund history (a refunded LATE payment is not
     // this payment's; polish wave final fix m2).
-    canRefund: row.dispute !== "lost" && row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
+    canRefund: !row.dispute_lost_own && row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
     // A solo sign-up (an entry with no roster of its own) is the only kind of
     // row that can be placed on a team. `assigned_team_id` is derived from
     // the roster row pointing back at this entry, so these two flags are

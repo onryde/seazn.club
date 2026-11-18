@@ -34,7 +34,7 @@ import "server-only";
 //   pay-page-checkout    the payment page's Pay: reuse-or-expire on the entry's own session, mint for the entry, return to the page
 //   checkout-completion  payment completion: the checkout webhooks, confirmPaidRegistration, reconcile-on-return
 //   refunds              refund money and policy: stripeRefund, receipts, the failure alert, the resolved policy
-//   disputes             chargeback handling (the organiser's mails and the staff alert), where a cart's chargeback stands (open / lost / won; cartDisputeLost gates the refund paths), and the dispute evidence pack
+//   disputes             chargeback handling (the organiser's mails and the staff alert), where a cart's chargeback stands (open / lost / won; entryPaymentLost gates the refund paths, per entry payment), and the dispute evidence pack
 //   withdraw             withdrawal core shared by the public and organiser paths, and the solo placement release
 //   public-status        token- and ref-gated public views: status, cart, public withdraw
 //   group-status         the group (cart) read model behind the /r/[ref] status page

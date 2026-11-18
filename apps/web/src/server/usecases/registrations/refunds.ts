@@ -13,7 +13,7 @@ import { queueStaffAlert } from "../staff-alert";
 import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols } from "./lookups";
-import { cartDisputeLost } from "./disputes";
+import { entryPaymentLost } from "./disputes";
 
 /** Mirror refunds made outside the app (Stripe dashboard) so the console
  *  never shows money we no longer hold. Monotonic — never regresses. */
@@ -215,8 +215,9 @@ export async function refundEntryUnderLock(a: {
       const intent = locked?.entry_payment_intent_id;
       if (!locked || !intent) return null;
       // A LOST chargeback has already returned this money (the dispute handler books it on the CART only, so the entry's own cap below
-      // would still read a full refund): nothing to send, and nothing to alert about (fix round 1 Q).
-      if (await cartDisputeLost(tx, locked.group_id, a.ctx.competition_id)) return null;
+      // would still read a full refund): nothing to send, and nothing to alert about (fix round 1 Q). Judged on THIS entry's own charge
+      // (fix round 2 I-1): a sibling paid in another session keeps its refund.
+      if (await entryPaymentLost(tx, a.ctx.competition_id, intent)) return null;
       const amount = Math.min(a.capCents, locked.amount_cents - ownPaymentRefundedCents(locked));
       if (amount <= 0) return null;
       attempted = { amount, intent, reg: locked };

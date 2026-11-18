@@ -244,6 +244,7 @@ export function RegistrationHubRegistrantActions({
       division_started: false,
       // Evidence is a plain download link rendered by the detail panel beside this island, not a control of this one.
       dispute: null,
+      dispute_lost_own: false,
     },
   );
 

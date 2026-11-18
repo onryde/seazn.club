@@ -20,6 +20,7 @@ import { dispatchNow } from "@/server/email-outbox";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
+import { entryPaymentLost } from "./registrations/disputes";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
 import {
   SPOT_HOLDERS,
@@ -282,8 +283,11 @@ export async function rejectRegistration(
     // cart whose entries paid in separate sessions is a sibling's. Null fails closed: nothing of this entry's to send back. Polish wave P5
     // (carry b): the cap is THIS payment's - a late payment's refund in the history is not this one's. Computed ONCE, here: it is both
     // what the refund below sends back and what the registrant's mail says is coming back.
+    // Fix round 2 M-1: not when THIS entry's payment was lost to a chargeback (the cardholder was already repaid, and the refund below
+    // sends nothing), so the mail never promises money that is not coming (`entryPaymentLost`, registrations/disputes.ts).
+    const paymentLost = await entryPaymentLost(tx, competitionId, reg.entry_payment_intent_id);
     const refundCents =
-      reg.status === "paid" && reg.entry_payment_intent_id ? Math.max(0, reg.amount_cents - ownPaymentRefundedCents(reg)) : 0;
+      reg.status === "paid" && reg.entry_payment_intent_id && !paymentLost ? Math.max(0, reg.amount_cents - ownPaymentRefundedCents(reg)) : 0;
     // Polish wave P5 (P2 carry): tell the registrant, in the transaction that records the rejection; the request makes the first attempt.
     const mailIds = await queueRegistrationRejectedMails(tx, { reg, refundCents });
     return {

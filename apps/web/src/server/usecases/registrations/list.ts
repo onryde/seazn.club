@@ -10,7 +10,7 @@ import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
 import { regGroupCols } from "./lookups";
 import { promotionSkippedAtSql, waitlistPositionSql } from "./waitlist";
-import { disputeOutcomeSql } from "./disputes";
+import { disputeOutcomeSql, entryPaymentLostSql } from "./disputes";
 import { remindersInWindowSql } from "./reminder-window";
 
 // ---------------------------------------------------------------------------
@@ -218,6 +218,10 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
   /** Where this entry's cart chargeback stands (`disputeOutcomeSql`, registrations/disputes.ts): null when it never had one, else
    *  `open`, `lost` (the cardholder was repaid; the entry is marked refunded) or `won`. Not a column: read off the audit ledger. */
   dispute: "open" | "lost" | "won" | null;
+  /** Whether THIS entry's own payment was the one lost to a chargeback (`disputeOutcomeSql` with the entry's intent, fix round 2 I-1).
+   *  `dispute` speaks for the cart; a cart paid in two sessions can lose one charge and keep the other refundable, so Refund keys on
+   *  this. False for an entry with no card payment of its own. */
+  dispute_lost_own: boolean;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -361,7 +365,8 @@ export async function listRegistrations(
         ${remindersInWindowSql(tx, tx`c.id`, tx`r.id::text`)} as reminders_in_window,
         ${waitlistPositionSql(tx, "r")} as waitlist_position,
         ${promotionSkippedAtSql(tx, "r")} as promotion_skipped_at,
-        ${disputeOutcomeSql(tx, "g", tx`c.id`)} as dispute
+        ${disputeOutcomeSql(tx, "g", tx`c.id`)} as dispute,
+        ${entryPaymentLostSql(tx, tx`c.id`, tx`r.payment_intent_id`)} as dispute_lost_own
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id

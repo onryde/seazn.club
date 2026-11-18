@@ -73,8 +73,10 @@ export async function recoverDisputedTransfer(
     // replay a closed event much later — this metadata check is the durable
     // guard against double reversals; the key below covers webhook retries.
     const existing = await stripe.transfers.listReversals(transfer.id, { limit: 100 });
-    if (existing.data.some((r) => r.metadata?.dispute_id === dispute.id)) {
-      return { recoveredCents: 0, already: true };
+    const prior = existing.data.find((r) => r.metadata?.dispute_id === dispute.id);
+    if (prior) {
+      // What the first run pulled back, as Stripe holds it, so a replayed close can still say how much was recovered.
+      return { recoveredCents: prior.amount, already: true };
     }
     // Connected account's net share of the disputed amount (partial disputes
     // exist), capped by whatever is still unreversed on the transfer.

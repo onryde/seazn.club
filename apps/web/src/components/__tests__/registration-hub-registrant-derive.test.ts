@@ -51,6 +51,7 @@ const NOT_A_SOLO_SIGNUP = {
   late_refunded_cents: 0,
   // Never disputed unless a case says so (registration defects item 3: the evidence-pack flag reads it).
   dispute: null as "open" | "lost" | "won" | null,
+  dispute_lost_own: false,
 } as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
@@ -206,6 +207,7 @@ describe("deriveRegistrantActionFlags - canDownloadEvidence (registration defect
     assigned_team_id: null,
     division_started: false,
     dispute: null as "open" | "lost" | "won" | null,
+    dispute_lost_own: false,
   };
 
   it("offered for an entry that has or had a dispute (open, lost, won) and for no other", () => {
@@ -778,10 +780,12 @@ describe("deriveRegistrantActionFlags", () => {
 
     // Fix round 1 Q: a LOST chargeback already returned the money (booked on the cart; the entry's own refunded_cents stays 0), so the
     // server refuses Refund (422) and the control is hidden. Won, open and never-disputed keep it.
-    it("is false once the dispute was LOST, and only then (won, open, never disputed keep Refund)", () => {
+    // Fix round 2 I-1: it is THIS entry's own charge that matters, not the cart's outcome. A cart paid in two sessions can lose one
+    // charge and keep the other refundable, so the row carries `dispute_lost_own` (the entry-scoped read) beside the cart-level `dispute`.
+    it("is false once THIS entry's own payment was lost, and only then; a sibling's loss (cart reads lost, own false) keeps Refund", () => {
       const paid = { ...NOT_A_SOLO_SIGNUP, ...base, status: "confirmed", amount_cents: 2500, refunded_cents: 0, payment_intent_id: "pi_1", entry_payment_intent_id: "pi_1" } as const;
-      const offered = (dispute: "open" | "lost" | "won" | null) => deriveRegistrantActionFlags({ ...paid, dispute }).canRefund;
-      expect([offered(null), offered("won"), offered("open"), offered("lost")]).toEqual([true, true, true, false]);
+      const offered = (dispute: "open" | "lost" | "won" | null, own: boolean) => deriveRegistrantActionFlags({ ...paid, dispute, dispute_lost_own: own }).canRefund;
+      expect([offered(null, false), offered("won", false), offered("open", false), offered("lost", false), offered("lost", true)]).toEqual([true, true, true, true, false]);
     });
 
     it("is false with no payment on file — refundRegistration answers 'No payment to refund'", () => {
