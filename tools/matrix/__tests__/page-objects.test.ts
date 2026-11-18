@@ -1736,7 +1736,7 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
   const answer = (over: Record<string, unknown> = {}) => ({
     competitionId: "comp-1", slug: "box-league-1", visibility: "public", divisions: [{ id: "div-1", stages: [{ id: "st-1", fixtureCount: 0 }] }], templateKey: "box-league", templateVersion: 1, ...over,
   });
-  function galleryPage(o: { degraded?: boolean; nullDegrade?: boolean } = {}) {
+  function galleryPage(o: { degraded?: boolean; nullDegrade?: boolean; kindFixed?: string } = {}) {
     const log: string[] = [];
     let screen = 0;
     let url = "about:blank";
@@ -1749,7 +1749,14 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
       d,
       getByLabel: (t: string, n: { exact: boolean }) => loc(`${d} label:${t}${n.exact ? "" : " (inexact)"}`),
       fill: async (v: string) => act(`fill ${d} = ${v}`),
-      selectOption: async (v: string) => act(`select ${d} = ${v}`),
+      // The sheet's kind select is disabled for a one-kind sport (template-gallery.tsx `kinds.length < 2`): a real Playwright
+      // selectOption on it waits for "enabled" and times out, so the fake refuses it the same way.
+      selectOption: async (v: string) => {
+        if (d === `testid:${TESTID.templateChoiceKind.id}` && o.kindFixed !== undefined) throw Object.assign(new Error(`Timeout: ${d} is not enabled`), { name: "TimeoutError" });
+        act(`select ${d} = ${v}`);
+      },
+      isEnabled: async () => !(d === `testid:${TESTID.templateChoiceKind.id}` && o.kindFixed !== undefined),
+      inputValue: async () => { log.push(`read ${d}`); return d === `testid:${TESTID.templateChoiceKind.id}` ? (o.kindFixed ?? "") : ""; },
       waitFor: async () => undefined,
       first: () => loc(d),
       elementHandles: async () => [{ d, isConnected: true, [`${PRODUCT_PROPS_KEY}b1`]: {}, dispose: async () => undefined }],
@@ -1834,6 +1841,27 @@ describe("createFromTemplateUi: the card, the sheet, the product's answer", () =
     const fixed = galleryPage();
     await createFromTemplateUi(fixed.ctx, "box-league", INPUT);
     expect(fixed.log.filter((l) => l.startsWith("select "))).toEqual([]);
+  });
+
+  it("X-BD-3 a one-kind sport (football, cricket, hockey, icehockey, boardgame): the sheet disables the kind select, so it is read, never selected; a case asking another kind is refused by name", async () => {
+    const choice = { sportKey: "football", variantKey: "full", entrantKind: "team" as const, entrantCount: 16 };
+    const g = galleryPage({ kindFixed: "team" });
+    await createFromTemplateUi(g.ctx, "super-groups", { ...INPUT, choice });
+    const kindId = `testid:${TESTID.templateChoiceKind.id}`;
+    expect(g.log.filter((l) => l.startsWith("select "))).toEqual([
+      `select testid:${TESTID.templateChoiceSport.id} = football`,
+      `select testid:${TESTID.templateChoiceVariant.id} = full`,
+      `select testid:${TESTID.templateChoiceCount.id} = 16`,
+    ]);
+    expect(g.log, "the fixed kind was read instead").toContain(`read ${kindId}`);
+    expect(g.log.some((l) => l.startsWith(`select ${kindId}`))).toBe(false);
+    // The sheet fixes this sport to teams: a case asking for pairs cannot be built here, and says so.
+    const bad = galleryPage({ kindFixed: "team" });
+    await expect(createFromTemplateUi(bad.ctx, "super-groups", { ...INPUT, choice: { ...choice, entrantKind: "pair" } })).rejects.toThrow(/fixes football's entrants to "team".*asks for "pair"/);
+    // And the multi-kind sport still selects its kind (the enabled side of the guard).
+    const multi = galleryPage();
+    await createFromTemplateUi(multi.ctx, "super-groups", { ...INPUT, choice: { sportKey: "badminton", variantKey: "short", entrantKind: "pair", entrantCount: 24 } });
+    expect(multi.log).toContain(`select ${kindId} = pair`);
   });
 
   it("a degraded create stays on /c/new behind the degrade modal: the answer comes back WITHOUT a wait for a landing that never comes, pictured", async () => {

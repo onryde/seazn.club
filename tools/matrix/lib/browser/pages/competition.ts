@@ -98,7 +98,16 @@ export async function createFromTemplateUi(c: PageCtx, key: string, input: Templ
     const ch = input.choice;
     await page.getByTestId(TESTID.templateChoiceSport.id).selectOption(ch.sportKey, { timeout: t });
     await page.getByTestId(TESTID.templateChoiceVariant.id).selectOption(ch.variantKey, { timeout: t });
-    await page.getByTestId(TESTID.templateChoiceKind.id).selectOption(ch.entrantKind, { timeout: t });
+    // The sheet DISABLES this select for a sport that plays one kind (template-gallery.tsx `disabled={kinds.length < 2}`: football,
+    // cricket, hockey, ice hockey, board game): Playwright would wait for it to be enabled and time out. There is nothing to
+    // choose, so read what it shows and refuse a case whose kind is not the one the sport is fixed to.
+    const kind = page.getByTestId(TESTID.templateChoiceKind.id);
+    if (await kind.isEnabled({ timeout: t })) {
+      await kind.selectOption(ch.entrantKind, { timeout: t });
+    } else {
+      const fixed = await kind.inputValue({ timeout: t });
+      if (fixed !== ch.entrantKind) throw new Error(`the sheet fixes ${ch.sportKey}'s entrants to "${fixed}" (its kind select is disabled), but the case asks for "${ch.entrantKind}"`);
+    }
     await page.getByTestId(TESTID.templateChoiceCount.id).selectOption(String(ch.entrantCount), { timeout: t });
   }
   await form.getByLabel(NAME.templateEndsOn.text, { exact: true }).fill(input.endsOn, { timeout: t });

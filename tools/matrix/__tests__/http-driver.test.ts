@@ -91,7 +91,7 @@ describe("HttpDriver — createFromTemplate (W1-driving Task 13)", () => {
     });
   });
 
-  it("X-BD-3 the real POST of an any-sport card, on every sport: the driver's body carries the four choice fields, the product's schema names each, and the product's own resolver takes that body", async () => {
+  it("X-BD-3 bridge: the driver's POST body for an any-sport card, on every sport, carries the four choice fields, the product's schema names each, and the product's own resolver takes that body", async () => {
     const text = schemasText();
     const block = text.slice(text.indexOf("export const CreateFromTemplate"), text.indexOf("export type CreateFromTemplate"));
     for (const field of ["sport_key", "variant_key", "entrant_kind", "entrant_count"]) expect(block, field).toContain(field);

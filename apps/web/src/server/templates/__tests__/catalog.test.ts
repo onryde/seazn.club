@@ -279,10 +279,15 @@ describe("template catalog", () => {
       const take = d.stages[1]!.progression!.sources[0]!.take[0] as { kind: string; n: number };
       expect(take.kind).toBe("topNPerGroup");
       const options = d.entrantCountOptions!;
+      const poolSize = d.stages[0]!.poolSize!;
+      const secondGroups = d.stages[1]!.groups!;
+      expect(poolSize, "the first tier is sized by its pools").toBeGreaterThan(0);
+      expect(secondGroups, "the second tier has a group count").toBeGreaterThan(0);
+      // Each second-tier pool holds (first-tier pools x take) / second-tier groups entrants.
+      const tierTwoPool = (count: number) => ((count / poolSize) * take.n) / secondGroups;
       let checked = 0;
       for (const count of options) {
-        // Each second-tier pool holds count / pool size entrants (the first tier's top 2 of every pool, over 2 groups).
-        const secondTierPool = count / POOL_SIZE;
+        const secondTierPool = tierTwoPool(count);
         expect(secondTierPool, `${count} entrants: a pool of ${secondTierPool} with a take of ${take.n} cuts nobody`).toBeGreaterThan(take.n);
         checked++;
       }
@@ -290,7 +295,7 @@ describe("template catalog", () => {
       expect(checked).toBeGreaterThan(0);
       // The default is offered, and the smallest option is the smallest field that passes (12 -> pools of 3 > 2).
       expect(options).toContain(d.entrantCount);
-      expect(Math.min(...options) / POOL_SIZE).toBeGreaterThan(take.n);
+      expect(tierTwoPool(Math.min(...options))).toBeGreaterThan(take.n);
     });
 
     it("X-BD-3 t20-super8 is byte-identical", () => {
