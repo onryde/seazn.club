@@ -1,6 +1,7 @@
 // Court stream §5.3–§5.5 — which match a court phone's video belongs to. Pure: no I/O, no clock, `now` passed in
 // (domain-purity.test.ts). The use-cases feed it one court's facts at every beat.
-import { autoStopApplies, autoStopDeadline, type PhoneMode } from "./auto-stream";
+import { autoStopApplies, autoStopDeadline, type AutoStartFacts, type PhoneMode } from "./auto-stream";
+import type { DbEndReason } from "./end-reason";
 import { isNotResponding } from "./pairing";
 import type { CodeView } from "./stream-code";
 import type { SessionState } from "./session";
@@ -133,6 +134,33 @@ export function startingOfCurrent(
   if (openState !== "requested" && openState !== "provisioning") return null;
   const m = facts.find((f) => f.fixtureId === focus.current!.fixtureId);
   return m !== undefined && isCandidate(m) ? m.fixtureId : null;
+}
+
+/**
+ * Court follow-up (controller ruling, 2026-11-18): the end reasons of a court session that let the court start its match AGAIN
+ * by itself. Only the phone going away (`phone_lost`: ask 10 before video, W19 after it) — the court's phone is gone, not the
+ * organiser's will. Every other end keeps the match where it was: the organiser's Stop and Stream off latch it (A12,
+ * `not_blocked`, which this never touches), the automatic stop after the result leaves it not in play, a handover's
+ * `auto_stopped` latches it (R4), and the compositor's own end (`relay_ended`) and the wall clock are not a phone gone.
+ */
+export const COURT_RESTART_END_REASONS: readonly DbEndReason[] = ["phone_lost"];
+
+/** Whether the match's NEWEST session ended because its phone went away. `null` is no end reason to read (no session at all,
+ *  an open one, a failed one): nothing to restart. */
+export const courtRestartsAfter = (newestEnd: DbEndReason | null): boolean =>
+  newestEnd !== null && COURT_RESTART_END_REASONS.includes(newestEnd);
+
+/**
+ * The court's automatic-start facts with the ONCE-per-match latches released after a phone gone: `not_yet_started` (the
+ * automatic start has run) and `no_broadcast_ran` (A16: a session received video) — the two that, on a court, would keep a
+ * match whose phone came back from ever starting again. Released ONLY when `courtRestartsAfter` holds; nothing else moves, so
+ * the switch, the phone, the match in play, no open session, the organiser's latch (`not_blocked`) and the retry spacing are
+ * judged as for any start. The restart then goes through the ONE start path, so W23's free restarts count it (the 4th pays,
+ * and with no credit it is the ordinary `no_credit` refusal).
+ */
+export function courtStartFacts(f: AutoStartFacts, newestEnd: DbEndReason | null): AutoStartFacts {
+  if (!courtRestartsAfter(newestEnd)) return f;
+  return { ...f, autoStartedAt: null, anySessionHadIngest: false };
 }
 
 export type CourtPhoneStatus = "unpaired" | "waiting" | "live" | "offline";

@@ -10760,6 +10760,7 @@ export type DictionaryKey =
   | "stream.phone.ended.reason.max_duration"
   | "stream.phone.ended.reason.operator_stopped"
   | "stream.phone.ended.reason.phone_lost"
+  | "stream.phone.ended.reason.relay_ended"
   | "stream.phone.ended.reason.stopped"
   | "stream.phone.ending"
   | "stream.phone.goLive"

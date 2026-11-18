@@ -51,14 +51,16 @@ import { connect } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
-import { postBeat } from "../capture-phone";
+import { endReplacedCourtSession, postBeat } from "../capture-phone";
 import { postCourtStart } from "../capture-court";
 import type { ResolvedCourtCode } from "../court-stream-codes";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { resolveAnyStreamCode } from "../stream-codes";
 import { creditBreakdown, grantCredits, revokeCredits } from "../stream-credits";
-import { maybeCourtAutoStart } from "../stream-auto-court";
-import { startBroadcast, type SessionDeps } from "../stream-sessions";
+import { claimCourtStart, maybeCourtAutoStart } from "../stream-auto-court";
+import { startBroadcast, stopSession, type SessionDeps } from "../stream-sessions";
+import { apply } from "../stream-sessions/apply";
+import { isActive } from "@/server/relay/domain/session";
 import { streamPhone } from "../stream-phone";
 import { override, phoneId } from "./_capture-rig";
 import { at, labelOf, place, seedDay, setStatus, type Day } from "./_match-day-seed";
@@ -552,8 +554,9 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     if (go.state !== "go-live") throw new Error("unreachable");
     now += SEC;
     expect((await beat(P, { sid: go.sid, state: "publishing" })).state).toBe("live");
-    // The video ends by itself (no organiser Stop, so no A12 latch), the match still in play.
-    await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'phone_lost', ended_at = ${clock()} where id = ${go.sid}`;
+    // The video ends by itself (no organiser Stop, so no A12 latch), the match still in play. The compositor's own end (V530
+    // `relay_ended`), not a phone gone: a phone gone is the one end a court starts again (the restart describe below).
+    await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'relay_ended', ended_at = ${clock()} where id = ${go.sid}`;
     now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
     expect((await beat(P)).state).toBe("waiting");
     expect(await sessionsOf(A), "once: the automatic start ran").toHaveLength(1);
@@ -720,5 +723,289 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
     expect(after).toEqual([{ id: before!.id, ended_at: null }]);
     expect(await sessionRow(sidA)).toMatchObject({ state: "live", pairing_id: before!.id });
     expect(await sessionsOf(A)).toHaveLength(1);
+  });
+
+  // Court follow-up (controller ruling, 2026-11-18; device check: a phone that lost the court and paired again mid-match never got
+  // its match back). The rules, typed from the ruling: a court session that ended because its PHONE went away does not latch —
+  // when a phone is paired to the court again and the match is still in play with Stream on, the court starts it again by itself,
+  // through the ONE start path, so W23's free restarts count it and, once they and the credits are gone, it is the ordinary
+  // `no_credit` refusal. The organiser's Stop keeps its latch; Stream off and a result start nothing; and every other end (the
+  // compositor's own, a handover) stays once-per-match. The phone-gone end is the tick's own command (`stop phone_lost`, ask 10 /
+  // W19 — their timing is phone-lost.test.ts's), applied through the real `apply`.
+  describe("a phone gone mid-match, then paired again", () => {
+    /** The phone-lost rules' command, through the real apply: the session ends `phone_lost`, with no organiser latch. */
+    const phoneGone = async (sid: string) => {
+      await apply(sid, (row) => (isActive(row.state) ? { type: "stop", reason: "phone_lost" } : null), deps);
+      expect(await sessionRow(sid), "premise: the session ended because its phone went away").toMatchObject({ state: "completed", end_reason: "phone_lost" });
+    };
+    /** The phone scans the court again (a process death, a re-scan): a new claim, past the retry spacing. */
+    const repair = async () => {
+      now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+      return beat(P, { claim: "new" });
+    };
+    /** The beat after the re-pair: the court's start has run (A2) — the answer it gives. */
+    const after = () => beat(P);
+
+    it("the match starts again by itself: go-live, startedBy automatic, on a NEW court session of A — and goes live free (W23: no second consume)", async () => {
+      const sidA = await aLive();
+      expect(await consumeRows(day.orgId), "premise: A's first video took one credit").toHaveLength(1);
+      await phoneGone(sidA);
+      await repair();
+      const go = await after();
+      expect(go).toMatchObject({ state: "go-live", startedBy: "automatic" });
+      if (go.state !== "go-live") throw new Error("unreachable");
+      expect(go.sid, "a new session, never the ended one").not.toBe(sidA);
+      expect(await sessionRow(go.sid)).toMatchObject({ fixture_id: A, court_link_id: linkId, start_cause: "automatic" });
+      expect((await sessionsOf(A)).map((r) => r.id), "the ended session, then the restart").toEqual([sidA, go.sid]);
+      now += SEC;
+      expect(await beat(P, { sid: go.sid, state: "publishing" })).toMatchObject({ state: "live", sid: go.sid });
+      expect((await consumeRows(day.orgId)).map((r) => r.session_id), "the restart is free inside the reuse window").toEqual([sidA]);
+      expect(await activeOfLink()).toEqual([go.sid]);
+    });
+
+    it("a second call: a beat while the restart is in flight answers starting (5 s) and starts nothing; the beats after it, and a repeat, start nothing more — one new session", async () => {
+      const sidA = await aLive();
+      await phoneGone(sidA);
+      now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+      // The re-pair's answer, with its start still queued (not drained), then a second beat while that start runs.
+      expect(await postBeat(qr.code, qr.tok, body(P, { claim: "new" }), deps, clock())).toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS });
+      expect(tails.queue, "one restart handed to the background").toHaveLength(1);
+      now += POLL_STARTING_SECONDS * SEC;
+      expect(await postBeat(qr.code, qr.tok, body(P), deps, clock()), "in flight: starting, not the paired cadence")
+        .toMatchObject({ state: "waiting", pollSeconds: POLL_STARTING_SECONDS });
+      expect(tails.queue, "the second beat started nothing").toHaveLength(1);
+      expect(await runTails()).toBe(1);
+      const go = await after();
+      if (go.state !== "go-live") throw new Error(`premise: A starts again, got ${go.state}`);
+      expect(await after()).toMatchObject({ state: "go-live", sid: go.sid });
+      now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+      expect(await after()).toMatchObject({ sid: go.sid });
+      expect(await sessionsOf(A), "the ended session and ONE restart").toHaveLength(2);
+    });
+
+    it("the organiser's Stop keeps its latch: a phone paired again starts nothing — even when the session she stopped was already ending phone_lost", async () => {
+      const sidA = await aLive();
+      await stopSession(day.auth, A, sidA, deps);
+      expect((await settingsOf(A))?.auto_start_blocked_at, "premise: the Stop latched A").not.toBeNull();
+      await repair();
+      expect((await after()).state).toBe("waiting");
+      expect(await sessionsOf(A)).toHaveLength(1);
+      // The latch alone: her Stop met a session already ENDING phone_lost (A12 stamps a Stop of any non-terminal session), so the
+      // match's newest end IS a phone gone — and still nothing starts.
+      await sql`update fixture_stream_sessions set end_reason = 'phone_lost' where id = ${sidA}`;
+      await repair();
+      expect((await after()).state).toBe("waiting");
+      expect(await sessionsOf(A), "the latch holds over a phone-gone end").toHaveLength(1);
+    });
+
+    it("Stream turned off after the phone went: nothing starts", async () => {
+      const sidA = await aLive();
+      await phoneGone(sidA);
+      await setCourtStream(day.auth, A, false, clock());
+      await repair();
+      expect((await after()).state).toBe("waiting");
+      expect(await sessionsOf(A)).toHaveLength(1);
+    });
+
+    it("the result saved after the phone went: nothing starts", async () => {
+      const sidA = await aLive();
+      await phoneGone(sidA);
+      await decide(A, 20);
+      await repair();
+      expect((await after()).state).toBe("waiting");
+      expect(await sessionsOf(A)).toHaveLength(1);
+    });
+
+    it("only a phone gone: the compositor's own end (relay_ended) and a handover's auto_stopped stay once-per-match", async () => {
+      let checked = 0;
+      for (const end of ["relay_ended", "auto_stopped"] as const) {
+        const sid = (await sessionsOf(A)).at(-1)?.id ?? await aLive();
+        await sql`update fixture_stream_sessions set state = 'completed', end_reason = ${end}, ended_at = ${clock()} where id = ${sid}`;
+        await repair();
+        expect((await after()).state, end).toBe("waiting");
+        expect(await sessionsOf(A), end).toHaveLength(1);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the claim itself (the compare-and-set): once the automatic start has run, it is taken again only when the match's newest session ended phone_lost", async () => {
+      const sidA = await aLive();
+      let checked = 0;
+      for (const [end, taken] of [["relay_ended", false], ["stopped", false], ["auto_stopped", false], ["phone_lost", true]] as const) {
+        await sql`update fixture_stream_sessions set state = 'completed', end_reason = ${end}, ended_at = ${clock()} where id = ${sidA}`;
+        await sql`update fixture_stream_settings set auto_start_attempted_at = null where fixture_id = ${A}`;
+        expect((await settingsOf(A))?.auto_started_at, `${end}: premise, the automatic start has run`).not.toBeNull();
+        expect(await claimCourtStart(A, clock(), AUTO_START_RETRY_SECONDS), end).toBe(taken);
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+
+    // Controller ruling (2026-11-18, the coordinator's, not the owner's): a NEW pairing claiming a court whose open court session
+    // belongs to an older pairing ends that session phone_lost at once, and the restart above starts the match on the new phone.
+    describe("a new pairing replaces the phone that held the court's session (controller ruling)", () => {
+      /** The phone lost its court pairing (its row ended) while A was live on it; the session still names that pairing. */
+      const losePairing = async () => {
+        await sql`update fixture_stream_pairings p set ended_at = ${clock()}, end_cause = 'replaced'
+                    from fixture_stream_codes c where c.id = p.code_id and c.court_link_id = ${linkId} and p.ended_at is null`;
+      };
+      const replacedEvents = async (sid: string) =>
+        (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sid} and type = 'court_phone_replaced'`)[0]!.n;
+
+      it("re-pair with A live: A ends phone_lost at once (no 15 min wait), and the beats after it start A again on the new pairing — a free restart", async () => {
+        const sidA = await aLive();
+        const [old] = await pairingOf(P);
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        await beat(P, { claim: "new" });
+        expect(await sessionRow(sidA), "ended at the claim, phone_lost").toMatchObject({ state: "completed", end_reason: "phone_lost" });
+        expect(await replacedEvents(sidA)).toBe(1);
+        const go = await after();
+        expect(go).toMatchObject({ state: "go-live", startedBy: "automatic" });
+        if (go.state !== "go-live") throw new Error("unreachable");
+        const row = await sessionRow(go.sid);
+        expect(row).toMatchObject({ fixture_id: A, court_link_id: linkId });
+        expect(row.pairing_id, "on the NEW pairing").not.toBe(old!.id);
+        now += SEC;
+        expect((await beat(P, { sid: go.sid, state: "publishing" })).state).toBe("live");
+        expect((await consumeRows(day.orgId)).map((r) => r.session_id), "the restart is free (W23)").toEqual([sidA]);
+      });
+
+      it("the same pairing re-claiming (new, then resume) ends nothing", async () => {
+        const sidA = await aLive();
+        let checked = 0;
+        for (const claim of ["new", "resume"] as const) {
+          now += SEC;
+          expect(await beat(P, { claim, sid: sidA, state: "publishing" }), claim).toMatchObject({ state: "live", sid: sidA });
+          expect(await sessionRow(sidA), claim).toMatchObject({ state: "live", end_reason: null });
+          checked++;
+        }
+        expect(checked).toBe(2);
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("only a claim: a plain beat from the current pairing ends nothing, even when the session names an older pairing", async () => {
+        const sidA = await aLive();
+        const [cur] = await pairingOf(P);
+        // An older, ended pairing of the same code: the session is pointed at it, P stays current and beats without a claim.
+        const [older] = await sql<{ id: string }[]>`
+          insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds, ended_at, end_cause)
+          select org_id, code_id, slot, ${phoneId("older")}, 'new', claimed_at, last_beat_at, answered_poll_seconds, ${clock()}, 'replaced'
+            from fixture_stream_pairings where id = ${cur!.id} returning id`;
+        await sql`update fixture_stream_sessions set pairing_id = ${older!.id} where id = ${sidA}`;
+        now += SEC;
+        await beat(P);
+        expect(await sessionRow(sidA)).toMatchObject({ state: "live", end_reason: null });
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("re-judged on the locked row: a session that ended between the claim and the stop, or that now names the claiming pairing, is left alone and writes no event", async () => {
+        const sidA = await aLive();
+        const claiming = randomUUID();
+        const arg = { sid: sidA, pairingId: claiming, replacedPairingId: randomUUID(), orgId: day.orgId, issuedBy: day.auth.userId! };
+        // The session already names the claiming pairing (a takeover moved it there) — the locked row's own re-check.
+        const named = (await sessionRow(sidA)).pairing_id!;
+        expect(await endReplacedCourtSession({ ...arg, pairingId: named }, deps), "names the claiming pairing").toBe("left");
+        expect(await sessionRow(sidA)).toMatchObject({ state: "live", end_reason: null });
+        // Ended in between (the tick, a Stop): nothing is stopped and no event is written.
+        await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = ${clock()} where id = ${sidA}`;
+        expect(await endReplacedCourtSession(arg, deps), "ended in between").toBe("left");
+        expect(await sessionRow(sidA)).toMatchObject({ state: "completed", end_reason: "stopped" });
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("a throwing stop is reported, never a failed beat: the re-pair is still answered, and the session is left to W19", async () => {
+        const sidA = await aLive();
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        const broken: SessionDeps = { ...deps, now: () => { throw new Error("injected: the stop's clock"); } };
+        expect(await endReplacedCourtSession({ sid: sidA, pairingId: randomUUID(), replacedPairingId: randomUUID(), orgId: day.orgId, issuedBy: day.auth.userId! }, broken))
+          .toBe("failed");
+        // Through the beat: the stop's own write fails (a trigger on the test database refuses THIS session's phone_lost end), so
+        // the apply throws after the claim committed — the beat still answers, the new pairing stands, and the session runs on.
+        const fn = `refuse_phone_lost_${randomUUID().replaceAll("-", "")}`;
+        await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin
+            if new.id = '${sidA}' and new.end_reason = 'phone_lost' then raise exception 'injected: the stop write'; end if; return new; end $$`);
+        await sql.unsafe(`create trigger ${fn} before update on fixture_stream_sessions for each row execute function ${fn}()`);
+        try {
+          const a = await postBeat(qr.code, qr.tok, body(P, { claim: "new" }), deps, clock());
+          expect(CaptureBeatAnswer.parse(a), "the beat is answered").toEqual(a);
+          tails.queue.length = 0;
+        } finally {
+          await sql.unsafe(`drop trigger ${fn} on fixture_stream_sessions`);
+          await sql.unsafe(`drop function ${fn}()`);
+        }
+        expect(await sessionRow(sidA), "the failed stop wrote nothing").toMatchObject({ state: "live", end_reason: null });
+        expect(await replacedEvents(sidA), "no event without its stop").toBe(0);
+        const [mineNow] = (await pairingOf(P)).filter((p) => p.ended_at === null);
+        expect(mineNow, "the claim committed: a new current pairing").toBeDefined();
+      });
+
+      it("a session already ending is left alone", async () => {
+        const sidA = await aLive();
+        await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = ${clock()} where id = ${sidA}`;
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        await beat(P, { claim: "new" });
+        expect(await sessionRow(sidA)).toMatchObject({ state: "ending", end_reason: "stopped" });
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("another court's session is untouched by a re-pair on this court", async () => {
+        const other = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c1, targetId, day: DAY }, at(0));
+        await place(day, B, 0, day.courts.c1);
+        await setCourtStream(day.auth, B, true, clock());
+        await kickoff(B, 0);
+        const Q = phoneId("court-c1");
+        const beatOther = async (over: Partial<Beat> = {}) => {
+          const a = await postBeat(other.qr!.code, other.qr!.tok, { ...body(Q, over), code: other.qr!.code }, deps, clock());
+          await runTails();
+          return a;
+        };
+        await beatOther({ claim: "new" });
+        await beatOther();
+        const goB = await beatOther();
+        if (goB.state !== "go-live") throw new Error(`premise: B starts on court 1, got ${goB.state}`);
+        now += SEC;
+        expect((await beatOther({ sid: goB.sid, state: "publishing" })).state, "premise: B live on court 1").toBe("live");
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        await beat(P, { claim: "new" });
+        expect(await sessionRow(goB.sid), "court 1's session").toMatchObject({ state: "live", end_reason: null });
+        expect(await replacedEvents(goB.sid)).toBe(0);
+      });
+    });
+
+    it("free restarts run out: each phone-gone restart that reached video counts (passthrough), the 4th pays, and with no credit it is the existing no_credit refusal, stored and retried on the spacing", async () => {
+      await streamOn(A);
+      await sql`update fixture_stream_settings set stream_mode = 'passthrough' where fixture_id = ${A}`;
+      await kickoff(A, 0);
+      let go = await kick();
+      if (go.state !== "go-live") throw new Error(`premise: A starts, got ${go.state}`);
+      let sid = go.sid;
+      now += SEC;
+      expect((await beat(P, { sid, state: "publishing" })).state).toBe("live");
+      expect(await consumeRows(day.orgId), "premise: the first video paid").toHaveLength(1);
+      let restarts = 0;
+      for (let k = 1; k <= 3; k++) {
+        await phoneGone(sid);
+        await repair();
+        go = await after();
+        if (go.state !== "go-live") throw new Error(`restart ${k}: expected go-live, got ${go.state}`);
+        sid = go.sid;
+        now += SEC;
+        expect((await beat(P, { sid, state: "publishing" })).state, `restart ${k} went live`).toBe("live");
+        restarts++;
+      }
+      expect(restarts).toBe(3);
+      expect(await consumeRows(day.orgId), "three free restarts (W23): no consume for any").toHaveLength(1);
+      await phoneGone(sid);
+      await drain();
+      await repair();
+      expect((await after()).state, "the 4th, with no credit: refused").toBe("waiting");
+      expect(await settingsOf(A)).toMatchObject({ auto_start_refusal: "no_credit" });
+      expect(await sessionsOf(A), "no 5th session").toHaveLength(4);
+    });
   });
 });

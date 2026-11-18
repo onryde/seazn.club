@@ -199,6 +199,8 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
   auto_stopped: "stream.phone.ended.reason.auto_stopped",
   phone_lost: "stream.phone.ended.reason.phone_lost",
   max_duration: "stream.phone.ended.reason.max_duration",
+  // V530: the compositor ended the stream by itself — never "Stopped by you".
+  relay_ended: "stream.phone.ended.reason.relay_ended",
 };
 
 /** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. The YouTube refusals (spec §6.2,

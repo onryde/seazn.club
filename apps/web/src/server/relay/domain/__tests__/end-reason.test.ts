@@ -25,8 +25,8 @@ const expectedFor = (kind: "end" | "fail", db: string): string | undefined =>
   NAMED.find((r) => r.kind === kind && r.db === db)?.wire ?? (kind === "fail" ? OTHER_FAIL : undefined);
 
 describe("the declarations this table is checked against", () => {
-  it("the spec's §6.8.4 table parses: five end rows, two named fail rows, the catch-all and R11's neither row", () => {
-    expect(NAMED.filter((r) => r.kind === "end")).toHaveLength(5);
+  it("the spec's §6.8.4 table parses: six end rows (V530 added relay_ended), two named fail rows, the catch-all and R11's neither row", () => {
+    expect(NAMED.filter((r) => r.kind === "end")).toHaveLength(6);
     expect(NAMED.filter((r) => r.kind === "fail")).toHaveLength(2);
     expect(OTHER_FAIL).toBe("failed");
     expect(NEITHER, "§6.8.4's amended neither row").toBeDefined();
@@ -53,6 +53,11 @@ describe("wireEndReason (§6.8.4)", () => {
       mapped++;
     }
     expect(mapped).toBe(DB_END_REASONS.length + StreamFailReason.options.length);
+  });
+
+  it("V530: relay_ended (the compositor ended by itself) → failed, never the organiser's stopped", () => {
+    expect(expectedFor("end", "relay_ended"), "the spec's row").toBe("failed");
+    expect(wireEndReason({ endReason: "relay_ended", failReason: null })).toBe("failed");
   });
 
   it("operator_stopped → stopped (only the phone that stopped it ever names this sid)", () => {

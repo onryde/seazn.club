@@ -305,12 +305,13 @@ describe("decide — legal edges", () => {
       expect(d.effects, label).toEqual(effects);
     }
   });
-  // §5.3: `stop` carries a reason, and endReason widens to the DB's five (T4b DB_END_REASONS). Swept over every stop
+  // §5.3: `stop` carries a reason, and endReason widens to the DB's six (T4b DB_END_REASONS). Swept over every stop
   // reason the command admits (the four DB reasons that are not the wall clock's) × the three stop shapes: passthrough
   // ending, composed with no Machine (completes now), composed with a playing Machine (the runner's ending signal).
   it("§5.3: stop with EACH reason sets endReason to it — passthrough, composed with no Machine, composed through the runner", () => {
     const PLAYING: Runner = { state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE };
-    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
+    // V530: `relay_ended` is the compositor's own end, decided only by its final beat — never a stop's reason.
+    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration" && r !== "relay_ended");
     expect(reasons).toEqual(["stopped", "operator_stopped", "auto_stopped", "phone_lost"]);
     const shapes: [string, Session, SessionState][] = [
       ["passthrough live", S({ state: "live", startedAt: T0 }), "ending"],
@@ -334,7 +335,7 @@ describe("decide — legal edges", () => {
   // composed session mid-create or with its Machine lost too. The cells are DERIVED from RUNNER_TABLE (a cell that
   // signals ending or completed), so a new signalling cell joins the sweep; the pinned list makes that change visible.
   it("§5.3 through the RUNNER: every runner state whose session_stop cell signals the session carries EACH stop reason into endReason — the states derived from RUNNER_TABLE", () => {
-    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration");
+    const reasons = DB_END_REASONS.filter((r): r is StopReason => r !== "max_duration" && r !== "relay_ended");
     const runnerAt = (state: RunnerState): Runner =>
       ({ state, attempt: 1, name: "relay-s1-r1", machineId: state === "creating" ? null : "m1", stopRequestedAt: null, lastExit: null, crashes: CRASHES_NONE });
     const signalling = RUNNER_STATES.filter((rs) => {

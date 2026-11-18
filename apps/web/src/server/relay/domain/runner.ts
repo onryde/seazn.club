@@ -134,7 +134,8 @@ export type RunnerEffect =
 export type RunnerFailReason = "machine_create_failed" | "machine_boot_timeout" | "machine_exit_nonzero" | "machine_oom" | "machine_crash" | "machine_refused";
 /** The reasons a runner signal can carry: a stop's (§5.3) or the wall clock's. */
 export type StopEndReason = "stopped" | "operator_stopped" | "auto_stopped" | "phone_lost";
-export type RunnerEndReason = StopEndReason | "max_duration";
+/** `relay_ended` (V530): the compositor's own unsolicited `ended` (stoppedBeatTrigger) — never a stop's reason. */
+export type RunnerEndReason = StopEndReason | "max_duration" | "relay_ended";
 const stopReasonOf = (t: RunnerTrigger): StopEndReason => (t.type === "session_stop" ? t.reason ?? "stopped" : "stopped");
 export type SessionSignal =
   | { type: "went_live" } | { type: "ending"; endReason: RunnerEndReason }
@@ -155,7 +156,7 @@ export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
  *  the lifecycle, by the reason it gave. null = RECORD ONLY: the beat is in its two stores (last_heartbeat, the sample) and
  *  the lifecycle hears nothing.
  *  - none given (a legacy runner) → `callback_stopped`, exactly as before R2003 (lost → destroyed → the ONE retry).
- *  - `ended` / `deadline` → `callback_stopped` carrying an end reason: the session ENDS (`stopped` / `max_duration`) and
+ *  - `ended` / `deadline` → `callback_stopped` carrying an end reason: the session ENDS (`relay_ended` / `max_duration`) and
  *    is never retried (I2, orchestrator decision on the PR #967 review). A deadline retry would boot a Machine past
  *    RELAY_DEADLINE_AT — the wall clock's own instant, hence max_duration — and an unsolicited `ended` is the
  *    compositor's to make.
@@ -180,7 +181,10 @@ export type BeatExitReason = (typeof BEAT_EXIT_REASONS)[number];
 export function stoppedBeatTrigger(exitReason: BeatExitReason | null | undefined): RunnerTrigger | null {
   switch (exitReason) {
     case undefined: case null: return { type: "callback_stopped" };
-    case "ended": return { type: "callback_stopped", endReason: "stopped" };
+    // V530 (court stream follow-up, 2026-11-18): `relay_ended`, never `stopped` — that is the organiser's Stop, and the panel
+    // read "Stopped by you" for a stop nobody made. A session someone DID stop is already ending with its own reason, which
+    // the completion keeps (session.ts M2); this reason lands only on a session nobody asked to end.
+    case "ended": return { type: "callback_stopped", endReason: "relay_ended" };
     case "deadline": return { type: "callback_stopped", endReason: "max_duration" };
     case "refused": return { type: "callback_stopped", refused: true };
     case "fatal": return { type: "callback_crashed" };

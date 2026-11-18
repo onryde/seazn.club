@@ -1767,6 +1767,29 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(byTestId(waived, "stream-replay")).toBeUndefined();
   });
 
+  // V530 (court stream follow-up, 2026-11-18): the compositor ending the stream by itself read "Stopped by you". Each end cause
+  // reads its own copy — typed here from en/ui.json, never read off END_REASON_KEYS — and only the organiser's Stop is "by you".
+  it("V530: each end cause reads its own chip — the organiser's Stop is still \"Stopped by you\", the compositor's own end \"Stream stopped unexpectedly\"", () => {
+    const COPY: Record<string, string> = {
+      stopped: "Stopped by you",
+      operator_stopped: "Stopped from the phone",
+      auto_stopped: "Stopped automatically after the result",
+      phone_lost: `The phone and its video were gone for ${BODY.phoneLostMinutes} min`,
+      max_duration: "Reached the 3-hour limit",
+      relay_ended: "Stream stopped unexpectedly",
+    };
+    const reasons = Object.keys(END_REASON_KEYS) as (keyof typeof END_REASON_KEYS)[];
+    expect([...reasons].sort(), "every declared end reason has its typed copy here").toEqual(Object.keys(COPY).sort());
+    let checked = 0;
+    for (const endReason of reasons) {
+      const tree = body({ view: session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason }), balance: 1 });
+      expect(textAt(tree, "stream-end-reason"), endReason).toBe(COPY[endReason]);
+      if (endReason !== "stopped") expect(textAt(tree, "stream-end-reason"), `${endReason}: never "by you"`).not.toBe(COPY.stopped);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
   // W19's window is the SERVER's — config.ts PHONE_LOST_LIVE_MINUTES through `tunable`, handed down by the page's
   // loader (stream-panel-context.ts) — and the chip names it; the panel computes nothing. Class 19: every value but 15 is
   // one a "15" typed into the copy (or the panel) cannot render, so a hard-coded window reds here.

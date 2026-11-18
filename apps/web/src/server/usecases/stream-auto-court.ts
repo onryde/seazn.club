@@ -17,6 +17,8 @@ import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 import { AUTO_START_RETRY_SECONDS, PHONE_SILENT_FLOOR_SECONDS, tunable } from "@/server/relay/config";
 import { autoStartVerdict, type AutoStartRefusal, type PhoneMode } from "@/server/relay/domain/auto-stream";
+import { COURT_RESTART_END_REASONS, courtStartFacts } from "@/server/relay/domain/court-stream";
+import type { DbEndReason } from "@/server/relay/domain/end-reason";
 import { isPresent } from "@/server/relay/domain/pairing";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { courtFocusOf, linkOpenAt, type ResolvedCourtCode } from "./court-stream-codes";
@@ -36,7 +38,15 @@ type StartFacts = {
   court_stream: boolean; auto_started_at: Date | null; auto_start_blocked_at: Date | null; auto_start_attempted_at: Date | null;
   auto_start_refusal: string | null;
   fixture_status: string; open_session: boolean; any_ingest: boolean; last_beat_at: Date; answered_poll_seconds: number;
+  /** The end reason of the match's NEWEST session (`newestEnd`); null when it has none or that session has none. */
+  newest_end: DbEndReason | null;
 };
+
+/** Court follow-up (2026-11-18): the end reason of the match's NEWEST session (by `(created_at, id)`, any state) — null while it
+ *  is open (an open session carries no end reason), when it failed, or when the match has none. `courtStartFacts` reads it, and
+ *  the claim re-reads it inside the compare-and-set, so the restart is judged on one fact in both places. */
+const newestEnd = (fixtureId: string) => sql`
+  (select s.end_reason from fixture_stream_sessions s where s.fixture_id = ${fixtureId} order by s.created_at desc, s.id desc limit 1)`;
 
 /** `maybeAutoStart`'s one-statement read for a court: the match's switch row (`court_stream`), its status, whether a session
  *  of the MATCH is open or ever received ingest, and the court pairing's own beat clock — the pairing joined through its
@@ -48,7 +58,8 @@ async function startFactsOf(fixtureId: string, pairingId: string, linkId: string
            f.status as fixture_status,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.state in ${sql([...ACTIVE_STATES])}) as open_session,
            exists (select 1 from fixture_stream_sessions s where s.fixture_id = f.id and s.first_ingest_at is not null) as any_ingest,
-           p.last_beat_at, p.answered_poll_seconds
+           p.last_beat_at, p.answered_poll_seconds,
+           ${newestEnd(fixtureId)} as newest_end
       from fixtures f
       join fixture_stream_pairings p on p.id = ${pairingId}
       join fixture_stream_codes c on c.id = p.code_id and c.court_link_id = ${linkId}
@@ -57,12 +68,15 @@ async function startFactsOf(fixtureId: string, pairingId: string, linkId: string
   return facts ?? null;
 }
 
-/** The claim: `maybeAutoStart`'s compare-and-set with `court_stream` in place of `auto_stream` — once, not blocked, and
- *  outside the retry spacing — so two beats (or a beat and a sweep) cannot both go on. */
-async function claimCourtStart(fixtureId: string, now: Date, retrySeconds: number): Promise<boolean> {
+/** The claim: `maybeAutoStart`'s compare-and-set with `court_stream` in place of `auto_stream` — once (or again after a phone
+ *  gone: the match's newest session ended `phone_lost`, `courtStartFacts`), not blocked, and outside the
+ *  retry spacing — so two beats (or a beat and a sweep) cannot both go on. Exported for its own test: the verdict before it
+ *  guards the same facts, so only a direct call shows the compare-and-set's own clause. */
+export async function claimCourtStart(fixtureId: string, now: Date, retrySeconds: number): Promise<boolean> {
   const cutoff = new Date(now.getTime() - retrySeconds * 1000);
   const claimed = await sql<{ fixture_id: string }[]>`update fixture_stream_settings set auto_start_attempted_at = ${now}
-     where fixture_id = ${fixtureId} and court_stream and auto_started_at is null and auto_start_blocked_at is null
+     where fixture_id = ${fixtureId} and court_stream and auto_start_blocked_at is null
+       and (auto_started_at is null or ${newestEnd(fixtureId)} in ${sql([...COURT_RESTART_END_REASONS])})
        and (auto_start_attempted_at is null or auto_start_attempted_at <= ${cutoff})
     returning fixture_id`;
   return claimed.length > 0;
@@ -127,7 +141,9 @@ export async function claimCourtAutoStart(
   const facts = await startFactsOf(fixtureId, pairingId, link.id);
   if (facts === null) return not({ fired: false, why: "not_due" });
   const retrySeconds = tunable("AUTO_START_RETRY_SECONDS", AUTO_START_RETRY_SECONDS);
-  const verdict = autoStartVerdict({
+  // Court follow-up (controller ruling, 2026-11-18): a match whose court session ended because its phone went away is started
+  // again — the once-per-match latches are released for it, and only for it (`courtStartFacts`).
+  const verdictFacts = courtStartFacts({
     autoStream: facts.court_stream,
     phoneMode,
     phonePresent: isPresent(
@@ -140,10 +156,11 @@ export async function claimCourtAutoStart(
     autoStartBlockedAt: facts.auto_start_blocked_at,
     anySessionHadIngest: facts.any_ingest,
     autoStartAttemptedAt: facts.auto_start_attempted_at,
-  }, now, retrySeconds);
+  }, facts.newest_end);
+  const verdict = autoStartVerdict(verdictFacts, now, retrySeconds);
   if (!verdict.due) {
     const attempted = facts.auto_start_attempted_at === null ? null : new Date(facts.auto_start_attempted_at).getTime();
-    const inFlight = facts.court_stream && facts.auto_started_at === null && facts.auto_start_blocked_at === null
+    const inFlight = facts.court_stream && verdictFacts.autoStartedAt === null && facts.auto_start_blocked_at === null
       && facts.auto_start_refusal === null && !facts.open_session && attempted !== null
       && now.getTime() - attempted < COURT_START_IN_FLIGHT_SECONDS * 1000;
     return not({ fired: false, why: "not_due" }, inFlight ? fixtureId : null);

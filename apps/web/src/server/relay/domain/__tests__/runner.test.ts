@@ -85,7 +85,7 @@ const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap
   // R2003: both flavours of a stopped beat — a plain one, and the final beat that said its run was refused
   : t === "callback_stopped" ? [{ type: "callback_stopped" }, { type: "callback_stopped", refused: true },
       // I2 (PR #967 review): the beat that ENDS the session, with each reason it can carry
-      { type: "callback_stopped", endReason: "stopped" }, { type: "callback_stopped", endReason: "max_duration" }]
+      { type: "callback_stopped", endReason: "relay_ended" }, { type: "callback_stopped", endReason: "max_duration" }]
   : t === "create_failed" ? [
       { type: "create_failed", retryable: true, outcomeUnknown: false },
       { type: "create_failed", retryable: false, outcomeUnknown: false },
@@ -580,10 +580,12 @@ const observe = (w: Sim, at: number, state: (typeof OBSERVED_STATES)[number], ex
 describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each reason asks of the lifecycle", () => {
   // The oracle is the controller's ruling (2026-10-15) and the orchestrator's I2 decision (PR #967 review: an `ended` or
   // `deadline` beat ENDS the session — no retry), typed here — never read off the function under test.
-  type Routed = "callback_stopped" | "ends:stopped" | "ends:max_duration" | "refused" | "crashed" | "restarted" | "record_only";
+  type Routed = "callback_stopped" | "ends:relay_ended" | "ends:max_duration" | "refused" | "crashed" | "restarted" | "record_only";
   const RULED: Record<BeatExitReason | "absent" | "null", Routed> = {
     absent: "callback_stopped", null: "callback_stopped",      // a legacy runner's beat: today's behaviour, unchanged
-    ended: "ends:stopped",                                     // the compositor finished: a normal stop, respected
+    // the compositor finished by itself: respected, but under its OWN reason (V530, court stream follow-up 2026-11-18) —
+    // never `stopped`, the organiser's Stop, which the panel reads as "Stopped by you"
+    ended: "ends:relay_ended",
     deadline: "ends:max_duration",                             // RELAY_DEADLINE_AT is the wall clock's own instant
     // R2003b (owner approval 2026-10-16): a fatal run is a CRASH, counted toward RUNNER_CRASH_CAP — below it the lifecycle
     // still only records it (on-failure ≤ RUNNER_INPLACE_RESTARTS restarts it in place on the SAME attempt).
@@ -634,7 +636,7 @@ describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each
   it("I2: ended / deadline from booting AND playing END the session — the runner is torn down (destroyed + force_destroy, the F17 session-ending shape) and the signal is completed with the reason; the plain stopped beat beside it is today's lost with NO signal", () => {
     let checked = 0;
     for (const from of ["booting", "playing"] as const) {
-      for (const endReason of ["stopped", "max_duration"] as const) {
+      for (const endReason of ["relay_ended", "max_duration"] as const) {
         const ends = stepRunner(inState(from), { type: "callback_stopped", endReason }, T0);
         expect(ends, `${from} ${endReason}`).toEqual({ next: { ...inState(from), state: "destroyed" }, effects: [{ type: "force_destroy" }], signal: { type: "completed", endReason } });
         checked++;
@@ -644,11 +646,11 @@ describe("R2003 — the final beat's exit reason (stoppedBeatTrigger): what each
     expect(stepRunner(inState("stopping"), { type: "callback_stopped", endReason: "max_duration" }, T0)).toMatchObject({ next: { state: "exited" }, signal: null });
     expect(checked).toBe(4);
   });
-  it("I2 through decide: an ended beat COMPLETES a live session `stopped` and a deadline beat a warming one `max_duration` — no retry_runner, no create, and the teardown's later confirmation changes nothing", () => {
+  it("I2 through decide: an ended beat COMPLETES a live session `relay_ended` (V530: never the organiser's `stopped`) and a deadline beat a warming one `max_duration` — no retry_runner, no create, and the teardown's later confirmation changes nothing", () => {
     let checked = 0;
     for (const [label, s, reason, endReason] of [
-      ["playing, live, ended", liveComposed(), "ended", "stopped"],
-      ["booting, warming, ended", liveComposed({ state: "warming", startedAt: null, runner: inState("booting") }), "ended", "stopped"],
+      ["playing, live, ended", liveComposed(), "ended", "relay_ended"],
+      ["booting, warming, ended", liveComposed({ state: "warming", startedAt: null, runner: inState("booting") }), "ended", "relay_ended"],
       ["playing, live, deadline", liveComposed(), "deadline", "max_duration"],
       ["booting, warming, deadline", liveComposed({ state: "warming", startedAt: null, runner: inState("booting") }), "deadline", "max_duration"],
     ] as const) {

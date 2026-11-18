@@ -229,6 +229,8 @@ function courtBeatScope(court: ResolvedCourtCode, code: string, deps: SessionDep
     claimPollSeconds: courtCadence(court, now, POLL_FAR_SECONDS),
     // §5.4: the beat naming the match the court just moved on from is handed to the new, armed session.
     handsOver: true,
+    // Court follow-up (controller ruling, 2026-11-18): a new pairing ends the court session an older pairing left behind.
+    endsReplacedSession: true,
     answerCommon: async (open) => {
       // Read AFTER step 6, so a start the beat made is the answer's subject.
       const view = await courtFocusOf(court.link);

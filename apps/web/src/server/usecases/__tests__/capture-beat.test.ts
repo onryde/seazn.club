@@ -195,6 +195,22 @@ describe.skipIf(!HAS_DB)("postBeat — the claims (§5.5 T1–T8)", () => {
     expect((await beat(r, A, { sid: S, state: "armed" })).state).toBe("replaced");
   });
 
+  // Court follow-up (controller ruling, 2026-11-18): only a COURT code's claim ends a session an older pairing left behind
+  // (stream-auto-court.test.ts). A fixture code's does not: its session runs on to W19, as before.
+  it("a fixture code: a new pairing claiming while the live session still names an ended pairing ends nothing", async () => {
+    const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
+    const A = phoneId("a");
+    await claimNew(r, A);
+    const S = await r.start(A);
+    await goLive(r, A, S);
+    await sql`update fixture_stream_pairings set ended_at = ${r.now()}, end_cause = 'replaced' where id = ${(await pairingOf(r, A)).id}`;
+    r.tick(SEC);
+    await claimNew(r, A);
+    expect(current(await pairings(r)), "PREMISE: a new pairing").toHaveLength(1);
+    expect(await session(S)).toMatchObject({ state: "live", end_reason: null });
+    expect(await eventsOf(S, "court_phone_replaced")).toEqual([]);
+  });
+
   it("T3: a LIVE slot whose phone is beating refuses B's `new` claim — `taken`, NO row written, A still current; event claim_refused", async () => {
     const r = await captureRig({ credits: 1, connectAfterMs: CONNECT_MS });
     const [A, B] = [phoneId("a"), phoneId("b")];
