@@ -14,6 +14,7 @@ import { knockoutRefusal } from "../knockout-refusal";
 import { HttpError } from "@/lib/errors";
 // The draw primitives moved to the engine-db layer (competition.ts reads them; usecases import engine-db, never the reverse).
 import { knockoutDraws, knockoutDrawOrder } from "@/server/engine-db/knockout-draw";
+import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 export { knockoutDraws, knockoutDrawOrder };
 
 // ---------------------------------------------------------------------------
@@ -103,9 +104,13 @@ export async function americanoGen(
   // players = the PERSONS behind the individual entrants
   const entrantIds = entrants.map((e) => e.id);
   if (entrantIds.length === 0) return [];
+  // INDIVIDUALS only: the division's active field also holds the `pair` entrants an earlier round minted
+  // (`pairEntrantsFor`), and counting a pair's members as players put the same person twice in a mexicano's second
+  // round (a [a, a] pair: duplicate `entrant_members` key) and made an americano's regenerate rotate a larger field.
   const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
-    select entrant_id, person_id from entrant_members
-    where entrant_id in ${tx(entrantIds)}`;
+    select em.entrant_id, em.person_id from entrant_members em
+    join entrants e on e.id = em.entrant_id
+    where em.entrant_id in ${tx(entrantIds)} and e.kind = 'individual'`;
   const personOf = new Map(memberRows.map((r) => [r.entrant_id, r.person_id]));
   const players = entrantIds
     .map((id) => personOf.get(id))
@@ -125,10 +130,13 @@ export async function americanoGen(
     planned = generateAmericano(players, { mode, courtCount, rounds });
   } else {
     // mexicano: next round only once every prior fixture decided
-    const existing = await tx<{ round_no: number; status: string }[]>`
-      select round_no, status from fixtures where stage_id = ${stageId}`;
+    // `expunged`: a withdrawal's void of a match naming the departed player (withdrawal.ts). It is settled - nothing is
+    // owed on it - so it must not hold every later round back; any other undecided match still does.
+    const existing = await tx<{ round_no: number; status: string; expunged: boolean }[]>`
+      select f.round_no, f.status, ${hasActiveAbandonSql(tx, "f", { expunge: true })} as expunged
+      from fixtures f where f.stage_id = ${stageId}`;
     const playedRounds = existing.length > 0 ? Math.max(...existing.map((f) => f.round_no)) : 0;
-    if (existing.some((f) => f.status !== "decided")) return []; // wait
+    if (existing.some((f) => f.status !== "decided" && !f.expunged)) return []; // wait
     if (playedRounds >= rounds) return [];
     // per-person points: sum of each player's pair score across decided games
     const scores = await tx<{ person_id: string; pts: number }[]>`

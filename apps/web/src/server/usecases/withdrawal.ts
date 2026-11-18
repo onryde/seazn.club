@@ -14,8 +14,11 @@ import "server-only";
 //     scorer-abandoned line (D-G2 corner 1, its abandon voided first) all
 //     walk over with retirement credit; a TBD opponent gets a dead seat
 //     (X-WD-3, plan D17); both sides gone is a double walkover (X-WD-4).
-//   - americano: remaining games void (expunged); the standings they earned
-//     stand.
+//   - americano (and mexicano): an americano's fixtures name per-round PAIR entrants minted from the individuals
+//     (`pairEntrantsFor`, stages/generators.ts), so the withdrawn player is on a fixture only through the pairs that
+//     hold their person (`americanoPairsHolding`). Their UNPLAYED matches void (expunged); their played results stand
+//     and the personal points they earned stay on the leaderboard. The engine declares no americano policy of its
+//     own; this is the controller's PO call of 2026-11-18, reported as `policy: "expunge"` (the writer is the same).
 // The surgery itself rides the scoring ledger — core.forfeit{reason:
 // "withdrew"} for walkovers, core.void + core.abandon{expunge: true} for
 // expunges (D5) — so standings recompute, undo works and the public cache
@@ -142,6 +145,18 @@ async function recordDoubleWalkover(auth: AuthCtx, fixtureId: string, events: re
 function activeAbandons(events: readonly EventOut[]): EventOut[] {
   const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
   return events.filter((e) => e.type === "core.abandon" && !voided.has(e.id));
+}
+
+/** The `pair` entrants of an americano division whose members include a person the withdrawn individual IS: the
+ *  per-round pairs (`pairEntrantsFor`) that carry them onto a fixture. Read only for a division with an americano
+ *  stage - a real doubles pair in any other stage is the entrant's own and is matched by its own id. */
+async function americanoPairsHolding(auth: AuthCtx, divisionId: string, entrantId: string): Promise<Set<string>> {
+  const rows = await withTenant(auth.orgId, (tx) => tx<{ id: string }[]>`
+    select distinct e.id from entrants e
+    join entrant_members em on em.entrant_id = e.id
+    where e.division_id = ${divisionId} and e.kind = 'pair'
+      and em.person_id in (select person_id from entrant_members where entrant_id = ${entrantId})`);
+  return new Set(rows.map((r) => r.id));
 }
 
 export interface WithdrawCascadeOut {
@@ -349,9 +364,19 @@ export async function withdrawEntrantCascade(
       listDivisionFixtures(auth, division.id),
     ]);
     const sportModule = resolveModule(division.sport_key, division.module_version);
+    // An americano stage's fixtures name pairs, not the individual: the pairs holding their person are theirs too. Only
+    // read for a division that has such a stage; and a `pair` entrant sharing a person with an individual of the same
+    // division exists nowhere else (the one-team rule, `heldMemberships`, refuses it), so no other stage can match.
+    const americanoPairs = stages.some((st) => st.kind === "americano")
+      ? await americanoPairsHolding(auth, division.id, entrantId)
+      : new Set<string>();
     const byStage = new Map<string, FixtureRowLite[]>();
     for (const f of fixtures as unknown as FixtureRowLite[]) {
-      if (f.home_entrant_id !== entrantId && f.away_entrant_id !== entrantId) continue;
+      const direct = f.home_entrant_id === entrantId || f.away_entrant_id === entrantId;
+      const viaPair =
+        (f.home_entrant_id !== null && americanoPairs.has(f.home_entrant_id)) ||
+        (f.away_entrant_id !== null && americanoPairs.has(f.away_entrant_id));
+      if (!direct && !viaPair) continue;
       const list = byStage.get(f.stage_id) ?? [];
       list.push(f);
       byStage.set(f.stage_id, list);
@@ -470,11 +495,15 @@ export async function withdrawEntrantCascade(
           }
         }
       } else {
-        // americano: remaining games void (expunged, D5); earned standings stand.
+        // americano: their unplayed matches void (expunged, D5); played results and the standings they earned stand.
+        let voids = 0;
         for (const f of mine) {
-          if (PENDING.has(f.status)) plan.push({ update: { fixtureId: f.id, status: "void" }, fixture: f });
+          if (PENDING.has(f.status)) {
+            plan.push({ update: { fixtureId: f.id, status: "void" }, fixture: f });
+            voids++;
+          }
         }
-        if (out.policy === "none" && plan.length > 0) out.policy = "walkover";
+        if (out.policy === "none" && voids > 0) out.policy = "expunge";
       }
     }
 

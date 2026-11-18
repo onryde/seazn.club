@@ -39,6 +39,20 @@ still promotes unrefused.
 Pinning tests: `apps/web/src/server/usecases/__tests__/registration-promote-capacity.test.ts` and
 `apps/web/src/app/api/v1/registrations/[id]/__tests__/approval-routes.test.ts`.
 
+## 2026-11-18 — withdrawing an individual from an americano or mexicano now voids their unplayed matches
+
+`POST /api/v1/entrants/{id}/withdraw` (and a `disqualified` `PATCH /api/v1/entrants/{id}`) on an individual in an americano or
+mexicano stage used to report `policy: "none"`, `voided: 0` and leave every match that named them scheduled: an americano's fixtures
+name the per-round pairs minted from the individuals, which the cascade never matched. No schema changes; the values do.
+
+| Case | Before | Now |
+|---|---|---|
+| Withdraw a player with unplayed americano matches | `policy: "none"`, `voided: 0`; their matches stay scheduled | `policy: "expunge"`, `voided: <their unplayed matches>`; those matches are voided, their played results and earned personal points stand |
+| Withdraw a player with nothing left to play | `policy: "none"` | unchanged |
+| A mexicano round after such a withdrawal | the voided match held every later round back | the voided match is settled and the next round pairs the remaining field |
+
+A reinstatement flips the status back and does not restore the voided matches.
+
 ## 2026-11-12 — the public registration writes take a bot-check token
 
 Five public writes are now checked by Cloudflare Turnstile on the hosted service (staging and production):
