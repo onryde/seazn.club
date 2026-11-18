@@ -948,12 +948,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       } else {
         const out = await apiV1<{
           completed: boolean;
+          already_complete?: boolean;
           qualified?: { entrants: string[] };
           next_stage_fixtures?: number;
           division_completed?: boolean;
         }>(`/api/v1/stages/${stageId}/complete`, { method: "POST", json: {} });
         setNotice(
-          !out.completed
+          // W5 T17 (X-BD-4): a second Complete (another tab, a double tap) is not "not ready" - it says it was done already.
+          out.already_complete === true
+            ? msg("schedule.notice.alreadyComplete")
+            : !out.completed
             ? msg("schedule.notice.notReady")
             : out.division_completed
               ? msg("schedule.notice.divisionFinished")

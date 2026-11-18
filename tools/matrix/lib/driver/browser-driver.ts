@@ -1161,9 +1161,9 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   async completeStage(stageId: string): Promise<CompleteOut> {
-    if (this.#completed.has(stageId)) {
-      throw new DriverMisuse(`browser: stage ${stageId} already completed, or its complete ended unknown — /complete is never repeated (design §6.4)`);
-    }
+    // W5 T17 (X-BD-4, CS-1): a repeat /complete is no longer avoided (it threw DriverMisuse here) - the product answers
+    // `already_complete` and writes nothing. It goes over http: the page's turn (`#wants`, `#completeTried`) is once per type, and
+    // a repeat's answer has `completed: false`, so the finalRanks and title the FIRST completion answered are kept below.
     // W1d item 22: the type's first completion is the browser's, as ever, AND so is the LAST stage's: without it a
     // multi-stage case's knockout completed over http and its picture (08-completed) was never taken.
     // A last stage the page already had its turn at is not offered it again: a retry after a refused attempt is

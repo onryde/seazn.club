@@ -1613,6 +1613,9 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w5a_${tag}@resend.dev`,
     // w5RoundRobinASuite's second org (Task 10b: a Swiss and a knockout division of pairs; the first org's competitions are at their caps).
     `delivered+w5a2_${tag}@resend.dev`,
+    // w5RoundRobinASuite's third and fourth orgs (Task 13's rank-override check; Task 17's second-Complete check): the same cap, the same cascade.
+    `delivered+w5a3_${tag}@resend.dev`,
+    `delivered+w5a4_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

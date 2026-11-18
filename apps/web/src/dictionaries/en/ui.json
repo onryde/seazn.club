@@ -2570,6 +2570,7 @@
   "schedule.notice.divisionFinished": "Stage completed — that was the last stage, the division is finished. 🏆",
   "schedule.notice.advanced": "Stage completed — top {n} advance; {gen} fixture(s) generated for the next stage.",
   "schedule.notice.completed": "Stage completed.",
+  "schedule.notice.alreadyComplete": "Stage was already complete: nothing changed.",
   "schedule.notice.stageAdded": "Stage added — {n} fixture(s) generated for the top {topN}.",
   "schedule.notice.stageAddedLater": "Stage added — fixtures will generate when the previous stage completes.",
   "schedule.error.tooFewGroupEntrants": "Can't generate matches yet — {groups} groups need at least {required} entrants in total, 2 per group (have {have}). Use fewer groups or add entrants.",

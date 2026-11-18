@@ -579,6 +579,8 @@ export class FakeLeagueDriver implements OrganiserDriver {
   completeStage(): Promise<CompleteOut> {
     return settle(() => {
       this.log("completeStage");
+      // W5 T17 (X-BD-4): a stage that is already complete answers a no-op that says so, as the product does.
+      if (this.completed) return { completed: false, already_complete: true, events: [] };
       this.completed = this.fixtures.every((f) => f.status !== "scheduled" && f.status !== "in_play");
       return { completed: this.completed, events: [] };
     });
@@ -1099,7 +1101,10 @@ export class FakeKnockoutDriver extends FakeLeagueDriver {
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
       this.log("completeStage");
+      // W5 T17 (X-BD-4): already complete answers the product's no-op.
+      if (this.completed) return { completed: false, already_complete: true, events: [] };
       if (this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
+      this.completed = true;
       const seed = (id: string) => this.entrants.find((e) => e.id === id)?.seed ?? Number.MAX_SAFE_INTEGER;
       const out: { id: string; round: number; wo: boolean }[] = [];
       let champion: string | null = null;

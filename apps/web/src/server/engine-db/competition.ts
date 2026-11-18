@@ -979,6 +979,10 @@ function wireTitleOf(title: { kind: "champion"; champion: string } | { kind: "jo
 export interface CompleteResult {
   completed: boolean;
   events: WireDivisionEvent[];
+  /** W5 T17 (X-BD-4): set ONLY by the call that found the stage already complete (it writes nothing). `completeStage`
+   *  (usecases/stages/completion.ts) decides what a repeat answers; `completed` stays true for it here, which is what every
+   *  existing reader of this function's answer was written against. */
+  already_complete?: true;
 }
 
 /** engine 5.0.0 (`BracketStage.entrants`, `seeds`): the entrants the stage DREW, in the order it was drawn, so the ranks
@@ -1198,7 +1202,7 @@ export async function completeStageIfReady(
     const inputs = await loadStageInputs(tx, stageId);
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
 
-    if (inputs.stage.status === "complete") return { completed: true, events: [] };
+    if (inputs.stage.status === "complete") return { completed: true, events: [], already_complete: true };
 
     const isTable = TABLE_KINDS.has(inputs.kind);
     let events: WireDivisionEvent[] = [];

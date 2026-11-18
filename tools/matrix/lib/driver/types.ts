@@ -99,7 +99,9 @@ export interface StartOut { division_id: string; status: string; started: boolea
 export interface SeedProposalRef { readonly id: string; readonly status: string }
 /** W4 T3: a `stage_completed` event as the wire serves it - `places` (`{entrantId, rank}`, level entrants share a rank) and, for a bracket, `title`. */
 export interface CompleteEventWire { type: string; finalRanks?: string[]; places?: { entrantId: string; rank: number }[]; title?: ObservedTitle }
-export interface CompleteOut { completed: boolean; events: CompleteEventWire[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
+/** `already_complete` (W5 T17, X-BD-4): present, and true, only on a /complete of a stage that was ALREADY complete - a no-op that
+ *  answers `completed: false` and the next stage's existing draft (or null), so a second /complete is safe to send. */
+export interface CompleteOut { completed: boolean; events: CompleteEventWire[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null; already_complete?: boolean }
 /** W3 app-B Task 6: POST /stages/{id}/swiss/finish (usecases/swiss-rounds-admin.ts finishSwissNow, FinishSwissResult) - the
  *  stage's completion answer, which Finish performs itself, plus k (`finished_after`: the round whose standings became final),
  *  the rows past it deleted and how many held a laid-out slot. */

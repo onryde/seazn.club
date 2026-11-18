@@ -56,6 +56,10 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * stores nothing (main: stored, thrown by the engine at the next recompute); the size itself is accepted; on a knockout stage of the same
  * division a pin is refused 422 RR_RANK_OVERRIDE_NOT_TABLE; and withdrawing a pinned entrant takes her pin out of the stage's config.
  *
+ * Task 17 (X-BD-4 <- RB5-S4, CS-1): a league feeding a setup-timing knockout, played out and Completed. A SECOND Complete answers
+ * `{completed: false, already_complete: true}` and names the one draft proposal the first call minted (main: `completed: true`, and the
+ * progression re-run); the proposal's `computed` and the knockout's lines are exactly what they were, and a third call says the same.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -72,7 +76,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 10b: 1 (the same rule in a started Swiss and a started knockout of pairs: a substitute is refused; dropping a partner withdraws the pair and walks her line over).
   // Task 15: 1 (the any-sport super-groups card builds a badminton pairs event: 6 pools of 4, then 2 groups, then a knockout; a fixed card refuses a choice).
   // Task 13: 1 (a rank override is checked against its pool's size, refused on a bracket, and a withdrawal takes the leaver's pin away).
-  const EXPECTED_CHECKS = 17;
+  // Task 17: 1 (a second Complete answers already_complete, leaves the draft proposal and the knockout as they were, and mints nothing).
+  const EXPECTED_CHECKS = 18;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -718,9 +723,10 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Check 16 - Task 13 (X-PO-3, X-PO-4; RB5-P5, RB5-P7): the rank override per pool, refused above the table's size and on a bracket; a
   // withdrawal takes the leaver's pin with her.
   {
-    // A THIRD org: the first one's competitions are at their caps (the module's header), as check 15 found.
+    // Its own org: the first one's competitions are at their caps (the module's header), as check 15 found. B4 merge: `w5a5_`, since
+    // the super-groups check above signs in `w5a3_` - each check keeps an org of its own.
     const third = newSession();
-    await signIn(third, `delivered+w5a3_${tag}@resend.dev`);
+    await signIn(third, `delivered+w5a5_${tag}@resend.dev`);
     const pinComp = v1data<{ id: string } | undefined>(
       await v1(third, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A pin ${tag}`, visibility: "private" }),
     );
@@ -747,6 +753,65 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-PO-3/X-PO-4: a pin above the table's size is refused at write, one on a knockout stage is refused by name, and a withdrawal takes the leaver's pin away" +
         (ok ? "" : ` - ${l.created}, over ${over.status} ${JSON.stringify(over.json).slice(0, 160)}, stored ${JSON.stringify(storedAfterOver?.rank_overrides)}, exact ${exact.status}, both ${both.status} ${JSON.stringify(both.json).slice(0, 160)}, ko ${ko?.id}, onKo ${onKo.status} ${JSON.stringify(onKo.json).slice(0, 160)}, gone ${gone.status}, remaining ${JSON.stringify(remaining)}`),
+      ok,
+    );
+  }
+
+  // Check 17 - Task 17 (X-BD-4 <- RB5-S4, CS-1): a second Complete is a no-op that says so. A FOURTH org (the first's competitions are at their caps).
+  {
+    const fourth = newSession();
+    await signIn(fourth, `delivered+w5a4_${tag}@resend.dev`);
+    const c2 = v1data<{ id: string } | undefined>(
+      await v1(fourth, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A twice ${tag}`, visibility: "private" }),
+    );
+    const dRes = await v1(fourth, `/api/v1/competitions/${c2?.id}/divisions`, "POST", {
+      name: "Twice",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const div = v1data<{ id: string } | undefined>(dRes);
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(fourth, `/api/v1/divisions/${div?.id}/entrants`, "POST",
+        Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Twice${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const seedOf = new Map(field.map((e, i) => [e.id, i + 1]));
+    const stages = v1data<{ id: string; kind: string }[] | undefined>(
+      await v1(fourth, `/api/v1/divisions/${div?.id}/stages`, "POST", [
+        { seq: 1, kind: "league", name: "League", config: { legs: 1 } },
+        { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: {
+          sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing: "setup" } },
+      ]),
+    ) ?? [];
+    const leagueId = stages.find((x) => x.kind === "league")?.id;
+    const koId = stages.find((x) => x.kind === "knockout")?.id;
+    await v1(fourth, `/api/v1/stages/${koId}/generate`, "POST");
+    await v1(fourth, `/api/v1/stages/${leagueId}/generate`, "POST");
+    await v1(fourth, `/api/v1/divisions/${div?.id}/start`, "POST");
+    const lines = async () => (v1data<Fx[] | undefined>(await v1(fourth, `/api/v1/divisions/${div?.id}/fixtures`)) ?? []);
+    const table = (await lines()).filter((f) => f.stage_id === leagueId);
+    const scored: number[] = [];
+    for (const f of table) {
+      const homeWins = (seedOf.get(f.home_entrant_id ?? "") ?? 99) < (seedOf.get(f.away_entrant_id ?? "") ?? 99);
+      scored.push((await v1(fourth, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: 0, type: "generic.result", payload: homeWins ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 } })).status);
+    }
+    type Done = { completed?: boolean; already_complete?: boolean; seed_proposal?: { id: string; status: string } | null } | undefined;
+    const first = v1data<Done>(await v1(fourth, `/api/v1/stages/${leagueId}/complete`, "POST"));
+    const koBefore = JSON.stringify((await lines()).filter((f) => f.stage_id === koId).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id, f.status]));
+    const secondRes = await v1(fourth, `/api/v1/stages/${leagueId}/complete`, "POST");
+    const second = v1data<Done>(secondRes);
+    const third = v1data<Done>(await v1(fourth, `/api/v1/stages/${leagueId}/complete`, "POST"));
+    const koAfter = JSON.stringify((await lines()).filter((f) => f.stage_id === koId).map((f) => [f.id, f.home_entrant_id, f.away_entrant_id, f.status]));
+    const ok =
+      dRes.status === 201 && field.length === 4 && stages.length === 2 && table.length === 6 && scored.every((c) => c === 201) &&
+      first?.completed === true && first.already_complete === undefined && first.seed_proposal?.status === "draft" &&
+      secondRes.status === 200 && second?.completed === false && second.already_complete === true && second.seed_proposal?.id === first.seed_proposal.id &&
+      third?.already_complete === true && third.seed_proposal?.id === first.seed_proposal.id &&
+      koBefore === koAfter && koBefore.length > 2;
+    w5Check(
+      "w5a X-BD-4: a second Complete answers already_complete with the one draft, and the knockout and the proposal stand as they were" +
+        (ok ? "" : ` - div ${dRes.status}, field ${field.length}, scored ${scored.join(",")}, first ${JSON.stringify(first)}, second ${secondRes.status} ${JSON.stringify(second)}, third ${JSON.stringify(third)}, ko same ${koBefore === koAfter}`),
       ok,
     );
   }

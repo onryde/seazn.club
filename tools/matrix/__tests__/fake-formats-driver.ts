@@ -473,9 +473,13 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     return settle(() => {
       const path = `/api/v1/stages/${stageId}/complete`;
       const stage = this.#stage("POST", stageId);
-      // HttpDriver's guard (FP-4): a repeat never reaches the product.
-      if (this.completedStages.has(stageId)) throw new DriverMisuse(`driver: stage ${stageId} already completed — /complete is never repeated (design §6.4)`);
       this.log("completeStage", stageId);
+      // W5 T17 (X-BD-4): a repeat reaches the product and is a no-op that names the next stage's live draft (or null).
+      if (this.completedStages.has(stageId)) {
+        const nextStage = this.stages.find((x) => x.seq === stage.seq + 1);
+        const draft = nextStage === undefined ? undefined : this.proposals.find((q) => q.seq === nextStage.seq && q.status === "draft");
+        return { completed: false, already_complete: true, events: [], seed_proposal: draft === undefined ? null : { id: draft.id, status: draft.status } };
+      }
       const mine = this.fixtures.filter((f) => f.stage_id === stageId);
       if (mine.length === 0 || mine.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
       this.completedStages.add(stageId);
@@ -863,6 +867,7 @@ export class FakeLadderDriver extends FakeLeagueDriver {
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
       this.log("completeStage");
+      if (this.completed) return { completed: false, already_complete: true, events: [] }; // W5 T17 (X-BD-4)
       if (this.fixtures.length === 0 || this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
       this.completed = true;
       return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(this.#raw ?? [])] }] };
@@ -1181,7 +1186,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
       this.log("completeStage");
-      if (this.completed) return { completed: true, events: [] };
+      if (this.completed) return { completed: false, already_complete: true, events: [] }; // W5 T17 (X-BD-4)
       if (this.fixtures.length === 0 || this.fixtures.some((f) => !isTerminal(f.status))) return { completed: false, events: [] };
       this.completed = true;
       return { completed: true, events: [{ type: "stage_completed", finalRanks: this.#ranked() }] };

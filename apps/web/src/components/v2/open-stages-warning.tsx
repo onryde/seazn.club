@@ -53,8 +53,9 @@ export function OpenStagesWarning({
     setBusy(stageId);
     setNotice(null);
     try {
-      const out = await apiV1<{ completed: boolean }>(`/api/v1/stages/${stageId}/complete`, { method: "POST", json: {} });
-      if (out.completed) router.refresh();
+      const out = await apiV1<{ completed: boolean; already_complete?: boolean }>(`/api/v1/stages/${stageId}/complete`, { method: "POST", json: {} });
+      // X-BD-4: a stage that was already complete is done as far as this warning goes - refresh and the row is gone.
+      if (out.completed || out.already_complete === true) router.refresh();
       else setNotice({ stageId, text: msg("schedule.notice.notReady") });
     } catch {
       // The server's own sentence is English; the reader gets theirs, and where to look.

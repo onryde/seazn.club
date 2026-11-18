@@ -31649,7 +31649,7 @@
     },
     "/api/v1/stages/{id}/complete": {
       "post": {
-        "summary": "Guarded stage completion / progression. A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before. A completed stage's `stage_completed` event carries `finalRanks` (entrant ids in rank order), `places` (`{entrantId, rank}`; level entrants share a rank, e.g. 1, 2, 3, 3 for a knockout without a third-place match) and, for a bracket, `title` (`champion`, `joint` or `vacant`, with the finalists of a vacant title)",
+        "summary": "Guarded stage completion / progression. A stage that is ALREADY complete answers `{completed: false, already_complete: true, events: [], seed_proposal}` (W5 T17, X-BD-4): a no-op that computes no proposal, stales none, draws nothing and publishes nothing, so a second Complete is safe to send; `seed_proposal` is the next stage's existing draft or `null`. (An `on_complete` next stage that was never drawn, a draw the schedule freeze refused, is still drawn by the repeat, and that answer is the first one's shape.) A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before. A completed stage's `stage_completed` event carries `finalRanks` (entrant ids in rank order), `places` (`{entrantId, rank}`; level entrants share a rank, e.g. 1, 2, 3, 3 for a knockout without a third-place match) and, for a bracket, `title` (`champion`, `joint` or `vacant`, with the finalists of a vacant title)",
         "tags": [
           "stages"
         ],
@@ -31719,6 +31719,34 @@
                             "entrants"
                           ],
                           "additionalProperties": false
+                        },
+                        "already_complete": {
+                          "type": "boolean"
+                        },
+                        "seed_proposal": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -31745,7 +31773,8 @@
                       "entrants": [
                         "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                       ]
-                    }
+                    },
+                    "already_complete": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

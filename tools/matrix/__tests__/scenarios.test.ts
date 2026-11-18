@@ -372,7 +372,8 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(driver.calls.slice(0, firsts.length)).toEqual(firsts);
     const i = (m: string) => driver.calls.lastIndexOf(m);
     expect(i("patchDivisionConfig")).toBeLessThan(i("completeStage"));
-    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+    // W5 T17 (X-BD-4, CS-1): the stage's completion, then the named second Complete - a repeat the drivers no longer avoid.
+    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(2);
     expect(i("publicStandings")).toBeGreaterThan(i("completeStage"));
     expect(out.observed.stages[0]!.fixtures).toHaveLength(28); // 8 entrants, single RR
     // snapshot observes the ROOT stage, so its field is the division's (W1a carry 1)…
@@ -385,6 +386,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(checks.find((c) => c.id === "life-fold-parity")!.checked).toBe(28);
     expect(checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "pass", checked: 2 });
     expect(checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(checks.find((c) => c.id === "life-complete-twice-noop")).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
   // T12-R1: the probe saves the kinds the product's ACTIVE entrants hold
@@ -450,6 +452,99 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")!.evidence).toEqual(["entrants-only save → 409 DIVISION_FORMAT_LOCKED"]);
     // The format refusal beside it is still the expected one.
     expect(r.checks.find((c) => c.id === "life-format-edit-refused-named")).toMatchObject({ verdict: "pass" });
+  });
+
+  // W5 T17 (X-BD-4, CS-1): the named second Complete. Each negative below is a product (or a driver) that fails it a different way; only
+  // life-complete-twice-noop may go red, and on each the item names what the repeat answered.
+  describe("life-complete-twice-noop: a second Complete is judged, never steered around", () => {
+    const noop = (r: Awaited<ReturnType<typeof runOn>>) => r.checks.find((c) => c.id === "life-complete-twice-noop")!;
+    it("the product's no-op passes, once per completed stage (the empty and the second-call cases first)", async () => {
+      const r = await runOn(new FakeLeagueDriver(), "LIFECYCLE");
+      expect(noop(r)).toMatchObject({ verdict: "pass", checked: 1 });
+    });
+    it("a product that still answers completed:true with no already_complete (today's answer) reds it", async () => {
+      class OldAnswer extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          const first = this.completed;
+          const out = await super.completeStage();
+          return first ? { completed: true, events: [] } : out;
+        }
+      }
+      const r = await runOn(new OldAnswer(), "LIFECYCLE");
+      expect(failed(r.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(r).evidence[0]).toMatch(/^stage 1: repeat \/complete → completed=true already_complete=null/);
+    });
+    it("each half of the no-op answer is judged alone: completed:false without already_complete reds it, and so does already_complete beside completed:true", async () => {
+      let checked = 0;
+      for (const [answer, evidence] of [
+        [{ completed: false, events: [] }, "completed=false already_complete=null"],
+        [{ completed: true, already_complete: true, events: [] }, "completed=true already_complete=true"],
+      ] as const) {
+        class HalfAnswer extends FakeLeagueDriver {
+          override async completeStage(): Promise<CompleteOut> {
+            const first = this.completed;
+            const out = await super.completeStage();
+            return first ? answer : out;
+          }
+        }
+        const r = await runOn(new HalfAnswer(), "LIFECYCLE");
+        expect(failed(r.checks), evidence).toEqual(["life-complete-twice-noop"]);
+        expect(noop(r).evidence[0]).toContain(evidence);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+    it("a product that completes the division again on the repeat reds it (division_completed on the second answer)", async () => {
+      class CompletesAgain extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          const first = this.completed;
+          const out = await super.completeStage();
+          return first ? { ...out, division_completed: true } : out;
+        }
+      }
+      const r = await runOn(new CompletesAgain(), "LIFECYCLE");
+      expect(failed(r.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(r).evidence[0]).toContain("division_completed=true");
+    });
+    it("a product that names a draft the first call never minted reds it", async () => {
+      class OtherDraft extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          const first = this.completed;
+          const out = await super.completeStage();
+          return first ? { ...out, seed_proposal: { id: "not-the-first-proposal", status: "draft" } } : out;
+        }
+      }
+      const r = await runOn(new OtherDraft(), "LIFECYCLE");
+      expect(failed(r.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(r).evidence[0]).toContain("seed_proposal=not-the-first-proposal draft");
+    });
+    it("a repeat the product refuses (a 409) reds it, naming the refusal; a driver that still refuses a repeat reds it too", async () => {
+      class Refuses extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          if (this.completed) throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_COMPLETED_SEEDING_FAILED", "again");
+          return super.completeStage();
+        }
+      }
+      const refused = await runOn(new Refuses(), "LIFECYCLE");
+      expect(failed(refused.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(refused).evidence).toEqual(["stage 1: the repeat /complete was 409 STAGE_COMPLETED_SEEDING_FAILED"]);
+      class Misuse extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          if (this.completed) throw new DriverMisuse("driver: already completed - /complete is never repeated (design 6.4)");
+          return super.completeStage();
+        }
+      }
+      const misused = await runOn(new Misuse(), "LIFECYCLE");
+      expect(failed(misused.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(misused).evidence[0]).toMatch(/^stage 1: the repeat \/complete was DriverMisuse: /);
+    });
+    it("a run whose stage never completed abstains with its reason (nothing to complete twice), and is not a pass", async () => {
+      class NeverCompletes extends FakeLeagueDriver {
+        override completeStage(): Promise<CompleteOut> { return Promise.resolve({ completed: false, events: [] }); }
+      }
+      const r = await runOn(new NeverCompletes(), "LIFECYCLE");
+      expect(noop(r)).toMatchObject({ verdict: "abstain", checked: 0 });
+    });
   });
 
   it("R15: a product outcome that differs from the engine's own fold fails life-fold-parity on every fixture", async () => {
@@ -557,7 +652,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
     // W1-driving T6: every scenario judges the seed advance and (T45-R1) the lineups owed on team fixtures.
-    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-bracket-decider-exercised", "life-reference-bracket-finish", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-bracket-decider-exercised", "life-reference-bracket-finish", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-complete-twice-noop", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "r4-not-challenged-later", "r4-not-seated-later", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "f1-ladder-sweep", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
@@ -2188,8 +2283,10 @@ describe("W3 app-B Task 6: the Swiss loop reads SWISS_NO_LEGAL_PAIRING as a refu
     expect(driver.rowsPastK, "premise: the refusal came with rows past round 1 to remove").toBeGreaterThan(0);
     expect(swiss!.finish).toEqual({ status: 200, code: null, finishedAfter: 1, shellsRemoved: driver.rowsPastK });
     expect(swiss!.exit).toBe("finished_early");
-    // Finish COMPLETED the stage: /complete is not sent again (the fake refuses a repeat), and the answer is the stage's completion.
-    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(1);
+    // Finish COMPLETED the stage, and its answer is the stage's completion (`swiss.complete` below). Two completeStage calls
+    // reach the fake: Finish's own, inside finishSwiss, and the named second Complete (W5 T17, X-BD-4), a repeat sent
+    // like any other once the product answers it as a no-op.
+    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(2);
     expect(driver.commits).toEqual([s1, driver.stageIdAt(2)]);
     expect(swiss!.complete).toMatchObject({ status: 200, code: null, completed: true, seedProposal: { id: driver.proposalIssuedFor(2), status: "draft" } });
     // ...so the knockout is REACHED: seeded from the Swiss, played to a finish and completed.

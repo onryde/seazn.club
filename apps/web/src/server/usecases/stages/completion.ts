@@ -101,7 +101,7 @@ export interface CompleteStageResult extends CompleteResult {
    *  `timing: "setup"` next stage's progression. Propose + confirm, never
    *  fully automatic (owner ruling): unlike `qualified` above, this never
    *  fills anything by itself. */
-  seed_proposal?: { id: string; status: string };
+  seed_proposal?: { id: string; status: string } | null;
 }
 
 /**
@@ -139,12 +139,20 @@ export async function completeStage(
   // says a bracket is complete (every final settled) — so a final not yet settled keeps the soft `{completed: false}`
   // (controller ruling C4), and a bracket with a third-place line, or any other line, still owed a result is refused by
   // name instead of completing around it.
-  const result = await completeStageIfReady(auth.orgId, stageId, {
+  let result = await completeStageIfReady(auth.orgId, stageId, {
     beforeBracketComplete: async (tx) => {
       const owed = await undecidedBracketFixtures(tx, stageId);
       if (owed.length > 0) throw knockoutRefusal("STAGE_HAS_UNDECIDED_FIXTURES", { fixture_ids: owed });
     },
   });
+  if (result.already_complete === true) {
+    // W5 T17 (X-BD-4 <- RB5-S4): a second Complete says so and does nothing more - no proposal computed or staled, no
+    // draw, no division completion, no publish (nothing was written, so there is nothing for a hub to refetch).
+    if (!(await nextStageOwesItsDraw(auth, current))) return alreadyCompleteAnswer(auth, current);
+    // The one thing a repeat still owes (R10h, schedule-slot-writes-cache-keys.test.ts): a draw the division's FREEZE
+    // refused at the first Complete. Falls through to the progression below, which draws it; the answer is what it was.
+    result = { completed: result.completed, events: result.events };
+  }
   if (!result.completed) return result;
 
   // R10g (review-r10f m2): from here the stage is complete (its completion
@@ -164,6 +172,37 @@ export async function completeStage(
       afterScheduleWrite(current.division_id, current.competition_id, "schedule", []);
     }
   }
+}
+
+/** W5 T17: the stage after `current` still has its draw to take - an `on_complete` progression with no fixtures. A first
+ *  Complete that the division's schedule freeze refused the draw leaves exactly this (the completion committed, the
+ *  generation was skipped), and a repeat after the freeze lifts is that draw's retry (R10h). A `setup` progression is never
+ *  owed one: its proposals are the organiser's (Recompute is the explicit door), and its bracket is drawn on day one. */
+async function nextStageOwesItsDraw(auth: AuthCtx, current: { division_id: string; seq: number }): Promise<boolean> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [next] = await tx<{ id: string; progression: { timing?: string } | null }[]>`
+      select id, progression from stages
+      where division_id = ${current.division_id} and seq > ${current.seq}
+      order by seq limit 1`;
+    if (next === undefined || next.progression?.timing !== "on_complete") return false;
+    const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${next.id}`;
+    return n === 0;
+  });
+}
+
+/** W5 T17: the answer of a Complete on a stage that is already complete and owes nothing: `completed: false` (this call
+ *  completed nothing), `already_complete: true`, and the next stage's live DRAFT proposal when it has one (null for a
+ *  confirmed or stale latest row, or none - the draft is the only one an organiser still has to act on). One read. */
+async function alreadyCompleteAnswer(auth: AuthCtx, current: { division_id: string; seq: number }): Promise<CompleteStageResult> {
+  const draft = await withTenant(auth.orgId, async (tx) => {
+    const [next] = await tx<{ id: string }[]>`
+      select id from stages where division_id = ${current.division_id} and seq > ${current.seq} order by seq limit 1`;
+    if (next === undefined) return null;
+    const [latest] = await tx<{ id: string; status: string }[]>`
+      select id, status from stage_seed_proposals where stage_id = ${next.id} order by created_at desc, id desc limit 1`;
+    return latest !== undefined && latest.status === "draft" ? { id: latest.id, status: latest.status } : null;
+  });
+  return { completed: false, already_complete: true, events: [], seed_proposal: draft };
 }
 
 /** What a complete stage does next (see `completeStage`): seed and draw the

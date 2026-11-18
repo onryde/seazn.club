@@ -2570,6 +2570,7 @@
   "schedule.notice.divisionFinished": "Fase completada: era la última fase, la división ha terminado. 🏆",
   "schedule.notice.advanced": "Fase completada: los {n} primeros avanzan; se generaron {gen} enfrentamiento(s) para la siguiente fase.",
   "schedule.notice.completed": "Fase completada.",
+  "schedule.notice.alreadyComplete": "La fase ya estaba completada: no ha cambiado nada.",
   "schedule.notice.stageAdded": "Fase añadida: se generaron {n} enfrentamiento(s) para los {topN} primeros.",
   "schedule.notice.stageAddedLater": "Fase añadida: los enfrentamientos se generarán cuando se complete la fase anterior.",
   "schedule.error.tooFewGroupEntrants": "Aún no se pueden generar los partidos — {groups} grupos necesitan al menos {required} participantes en total, 2 por grupo (hay {have}). Usa menos grupos o añade más participantes.",

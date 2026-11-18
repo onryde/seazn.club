@@ -262,24 +262,36 @@ describe("HttpDriver — postStream (Review Focus 5)", () => {
   });
 });
 
-describe("HttpDriver — completeStage is never repeated after completion (design §6.4)", () => {
-  it("completed:false may be retried; after completed:true a second call is DriverMisuse with no HTTP", async () => {
-    let done = false;
-    const { t, calls } = fake([() => { const r = ok({ completed: done, events: done ? [{ type: "stage_completed", finalRanks: ["a"] }] : [] }); done = true; return r; }]);
+// W5 T17 (X-BD-4, CS-1): a second /complete is sent like any call - the product answers `already_complete` and writes nothing - so the
+// driver no longer refuses it (it did until the product made it a no-op). Finish keeps its own guard (below).
+describe("HttpDriver — completeStage may be repeated (X-BD-4: the product answers a no-op that says so)", () => {
+  it("completed:false may be retried; after completed:true a second call IS SENT and its already_complete answer passes through", async () => {
+    let n = 0;
+    const answers = [
+      { completed: false, events: [] },
+      { completed: true, events: [{ type: "stage_completed", finalRanks: ["a"] }] },
+      { completed: false, already_complete: true, events: [], seed_proposal: null },
+    ];
+    const { t, calls } = fake([() => ok(answers[n++])]);
     const d = drv(t);
     expect((await d.completeStage("s1")).completed).toBe(false);
     expect((await d.completeStage("s1")).completed).toBe(true);
-    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
-    expect(calls.length).toBe(2);
+    // differential: today this third call is DriverMisuse with no HTTP (the avoidance this task removes).
+    expect(await d.completeStage("s1")).toEqual({ completed: false, already_complete: true, events: [], seed_proposal: null });
+    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/complete", "/api/v1/stages/s1/complete", "/api/v1/stages/s1/complete"]);
   });
-  it("parked Task 6 (a): after a 5xx or no answer the outcome is unknown (it may have committed), so a repeat is DriverMisuse with no HTTP", async () => {
+  it("parked Task 6 (a): after a 5xx or no answer the outcome is unknown (it may have committed): a repeat is SENT now (it is a no-op if it did), and answers what the product answers", async () => {
+    let checked = 0;
     for (const fail of [() => err(500, "INTERNAL"), () => err(503, "UNAVAILABLE"), () => { throw new Error("socket hang up"); }]) {
-      const { t, calls } = fake([fail]);
+      let n = 0;
+      const { t, calls } = fake([() => (n++ === 0 ? fail() : ok({ completed: false, already_complete: true, events: [], seed_proposal: null }))]);
       const d = drv(t);
       await expect(d.completeStage("s1")).rejects.toThrow();
-      await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
-      expect(calls.length).toBe(1);
+      expect(await d.completeStage("s1")).toMatchObject({ completed: false, already_complete: true });
+      expect(calls.length).toBe(2);
+      checked++;
     }
+    expect(checked).toBe(3);
   });
   it("parked Task 6 (a): a named 4xx refusal committed nothing and stays retryable", async () => {
     let n = 0;
@@ -289,14 +301,15 @@ describe("HttpDriver — completeStage is never repeated after completion (desig
     expect((await d.completeStage("s1")).completed).toBe(true);
     expect(calls.length).toBe(2);
   });
-  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED came AFTER the completion committed, so a repeat is DriverMisuse with no HTTP", async () => {
-    const { t, calls } = fake([() => err(409, SEEDING_FAILED_AFTER_COMMIT)]);
+  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED came AFTER the completion committed, so a repeat is now SENT and is the no-op", async () => {
+    let n = 0;
+    const { t, calls } = fake([() => (n++ === 0 ? err(409, SEEDING_FAILED_AFTER_COMMIT) : ok({ completed: false, already_complete: true, events: [], seed_proposal: null }))]);
     const d = drv(t);
     const e = await d.completeStage("s1").catch((x: unknown) => x);
     expect(e).toBeInstanceOf(RefusedCall);
     expect((e as RefusedCall).code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
-    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
-    expect(calls.length).toBe(1);
+    expect(await d.completeStage("s1")).toMatchObject({ completed: false, already_complete: true });
+    expect(calls.length).toBe(2);
   });
   it("W1-driving T6: completeStage passes the next stage's seed_proposal through unchanged", async () => {
     const { t } = fake([() => ok({ completed: true, events: [], seed_proposal: { id: "sp-uuid", status: "draft" } })]);
@@ -322,15 +335,15 @@ describe("HttpDriver — finishSwiss (W3 app-B Task 6, X-SW-26)", () => {
     expect(calls.map((c) => [c.method, c.path])).toEqual([["POST", "/api/v1/stages/s1/swiss/finish"]]);
     expect(calls[0]!.body).toEqual({});
   });
-  it("a Finish that completed the stage blocks a later /complete AND a second Finish for it - no HTTP - and only for it", async () => {
-    const { t, calls } = fake([() => ok(finished())]);
+  it("a Finish that completed the stage lets a later /complete through (X-BD-4: it is a no-op) but still blocks a second Finish - no HTTP - and only for it", async () => {
+    const { t, calls } = fake([(c) => (c.path.endsWith("/complete") ? ok({ completed: false, already_complete: true, events: [], seed_proposal: null }) : ok(finished()))]);
     const d = drv(t);
     await d.finishSwiss("s1");
-    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    expect(await d.completeStage("s1")).toMatchObject({ already_complete: true });
     await expect(d.finishSwiss("s1")).rejects.toBeInstanceOf(DriverMisuse);
-    expect(calls.length).toBe(1);
+    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/swiss/finish", "/api/v1/stages/s1/complete"]);
     await d.finishSwiss("s2"); // the guard is per stage
-    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/swiss/finish", "/api/v1/stages/s2/swiss/finish"]);
+    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/swiss/finish", "/api/v1/stages/s1/complete", "/api/v1/stages/s2/swiss/finish"]);
   });
   it("a named 4xx refusal committed nothing: it throws the product's RefusedCall, redacted, and the call stays retryable", async () => {
     let n = 0;
@@ -343,24 +356,25 @@ describe("HttpDriver — finishSwiss (W3 app-B Task 6, X-SW-26)", () => {
     expect((await d.finishSwiss("s1")).finished_after).toBe(3);
     expect(calls.length).toBe(2);
   });
-  it("a 5xx, no answer, or the 409 STAGE_COMPLETED_SEEDING_FAILED may follow a committed completion: a repeat is DriverMisuse with no HTTP", async () => {
+  it("a 5xx, no answer, or the 409 STAGE_COMPLETED_SEEDING_FAILED may follow a committed completion: a second Finish is DriverMisuse with no HTTP (a /complete is sent, X-BD-4)", async () => {
     let checked = 0;
     for (const fail of [() => err(500, "INTERNAL"), () => { throw new Error("socket hang up"); }, () => err(409, SEEDING_FAILED_AFTER_COMMIT)]) {
-      const { t, calls } = fake([fail]);
+      let n = 0;
+      const { t, calls } = fake([() => (n++ === 0 ? fail() : ok({ completed: false, already_complete: true, events: [], seed_proposal: null }))]);
       const d = drv(t);
       await expect(d.finishSwiss("s1")).rejects.toThrow();
       await expect(d.finishSwiss("s1")).rejects.toBeInstanceOf(DriverMisuse);
-      await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
       expect(calls.length).toBe(1);
+      expect(await d.completeStage("s1")).toMatchObject({ already_complete: true });
+      expect(calls.length).toBe(2);
       checked++;
     }
     expect(checked).toBe(3);
   });
   // T6 review m1: the refusal after an unknown ending names the CALL that ended unknown. A Finish that answered 5xx must not
   // read as "its /complete ended unknown" - the one sentence the harness's reader sees would then name a call never made.
-  it("m1: the DriverMisuse after an unknown ending names the call that ended unknown - a Finish 5xx says Finish, a /complete 5xx says /complete", async () => {
+  it("m1: the DriverMisuse after an unknown ending names the call that ended unknown - a /complete 5xx says /complete (X-BD-4: a /complete after a Finish is sent, so only Finish is refused)", async () => {
     const order = [
-      { first: "finishSwiss", then: "completeStage", named: /its Finish ended unknown/, notNamed: /its \/complete ended unknown/ },
       { first: "completeStage", then: "finishSwiss", named: /its \/complete ended unknown/, notNamed: /its Finish ended unknown/ },
     ] as const;
     let checked = 0;
@@ -375,7 +389,13 @@ describe("HttpDriver — finishSwiss (W3 app-B Task 6, X-SW-26)", () => {
       expect(calls.length, "the refused call sent nothing").toBe(1);
       checked++;
     }
-    expect(checked, "anti-vacuity: both orders ran").toBe(order.length);
+    expect(checked, "anti-vacuity: the order ran").toBe(order.length);
+    // The other order, as it was: a Finish that ended unknown no longer stops a /complete - it is sent (and the 5xx it meets is the product's).
+    const { t, calls } = fake([() => err(500, "INTERNAL")]);
+    const d = drv(t);
+    await expect(d.finishSwiss("s1")).rejects.toBeInstanceOf(RefusedCall);
+    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(RefusedCall);
+    expect(calls.map((c) => c.path)).toEqual(["/api/v1/stages/s1/swiss/finish", "/api/v1/stages/s1/complete"]);
   });
   it("completed:false (the answer says the stage is still open) records no completion", async () => {
     const { t, calls } = fake([() => ok(finished({ completed: false, events: [] }))]);
@@ -763,15 +783,19 @@ describe("HttpDriver — a request that never answers (T14 fix round 1, M-5)", (
     }
   });
 
-  it("a /complete that timed out may have committed: it is recorded like one that never answered, and never sent again", async () => {
+  it("a /complete that timed out may have committed: the repeat IS sent (X-BD-4: if it did commit, the product answers a no-op) and Finish stays refused", async () => {
     vi.useFakeTimers();
     const { t, calls } = hanging();
     const d = drv(t);
     const box = settle(d.completeStage("s1"));
     await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
     expect(box.v).toBeInstanceOf(RequestTimedOut);
-    await expect(d.completeStage("s1")).rejects.toBeInstanceOf(DriverMisuse);
+    await expect(d.finishSwiss("s1")).rejects.toBeInstanceOf(DriverMisuse);
     expect(calls).toEqual(["POST /api/v1/stages/s1/complete"]);
+    const again = settle(d.completeStage("s1"));
+    await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+    expect(again.v).toBeInstanceOf(RequestTimedOut);
+    expect(calls).toEqual(["POST /api/v1/stages/s1/complete", "POST /api/v1/stages/s1/complete"]);
   });
 });
 

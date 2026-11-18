@@ -2,11 +2,14 @@
 // a server-side cascade reads its sequence first; /complete is never repeated
 // once it has completed (design §6.4).
 //
-// Why never repeat /complete: on an already-complete stage the product answers
-// `{completed:true, events:[]}` again (engine-db/competition.ts:575) and then
-// re-runs the next-stage progression (usecases/stages/completion.ts completeStage →
-// progressCompletedStage), which computes a NEW draft seed proposal and marks
-// the previous draft stale (usecases/stages/).
+// W5 T17 (X-BD-4, CS-1): /complete MAY now be repeated. It used to be avoided: on an
+// already-complete stage the product answered `{completed:true, events:[]}` and re-ran
+// the next-stage progression (usecases/stages/completion.ts completeStage →
+// progressCompletedStage), computing a NEW draft seed proposal. A second /complete now
+// answers `{completed:false, already_complete:true}` and writes nothing, so a repeat -
+// after a completion, a 5xx or no answer - is sent like any call, and the case judges
+// the answer (scenarios/complete-twice.ts). Finish (swiss/finish) keeps its guard: it is
+// not what X-BD-4 made idempotent.
 import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
 import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
@@ -376,7 +379,9 @@ export class HttpDriver implements OrganiserDriver {
   /** The one place a completion is sent and recorded (completeStage, finishSwiss). */
   async #commitsCompletion<T extends CompleteOut>(stageId: string, path: string, what: string): Promise<T> {
     const first = this.#completed.get(stageId);
-    if (first !== undefined) {
+    // X-BD-4: a /complete is never refused by the driver; only a Finish still is (a Finish after a completion is the
+    // product's SWISS_OVER, and its own guard is not what this wave moved).
+    if (first !== undefined && what !== "/complete") {
       // Names the call that completed the stage or ended unknown (a Finish is not a /complete), and the one now refused.
       throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it (design §6.4)`);
     }

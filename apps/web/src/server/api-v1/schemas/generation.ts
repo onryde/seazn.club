@@ -233,4 +233,10 @@ export const CompleteResult = z.object({
   events: z.array(z.record(z.string(), z.unknown())),
   /** Set when completion resolved the next stage's progression rules. */
   qualified: z.object({ stage_id: Uuid, entrants: z.array(Uuid) }).optional(),
+  /** W5 T17 (X-BD-4): present, and true, only on a Complete of a stage that was ALREADY complete (with `completed: false`:
+   *  this call completed nothing). Such a call is a no-op: no proposal computed or staled, nothing drawn, nothing published. */
+  already_complete: z.boolean().optional(),
+  /** The next stage's draft seed proposal: computed by the completion that has just committed, or - on an
+   *  `already_complete` answer - the existing draft, `null` when the latest proposal is confirmed or stale, or none. */
+  seed_proposal: z.object({ id: Uuid, status: z.string() }).nullable().optional(),
 });

@@ -218,8 +218,11 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(iGen2).toBeGreaterThan(iStart);
     expect(iGen2).toBeLessThan(iFirstPost);
     expect(iGen2).toBeLessThan(iComplete1);
-    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(1);
-    expect(driver.trace.filter((c) => c === `completeStage ${stage2}`)).toHaveLength(1);
+    // The completion and, since X-BD-4 (CS-1), LIFECYCLE's named second Complete: two calls per completed stage, ONE commit each.
+    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(2);
+    expect(driver.trace.filter((c) => c === `completeStage ${stage2}`)).toHaveLength(2);
+    expect(driver.commits, "...and each stage committed once").toEqual([s1, stage2]);
+    expect(checks.find((c) => c.id === "life-complete-twice-noop"), "both stages' repeats judged").toMatchObject({ verdict: "pass", checked: 2 });
     const confirms = driver.trace.filter((c) => c.startsWith(`confirmSeedProposal ${stage2}`));
     expect(confirms).toEqual([`confirmSeedProposal ${stage2} ${driver.proposalIssuedFor(2)}`]);
     expect(driver.trace.some((c) => c.startsWith("recomputeSeedProposal"))).toBe(false);
@@ -257,7 +260,8 @@ describe("playDivision on the fake — the product sequence", () => {
     expect(out.observed.stages[1]!.field.length).toBe(declaredTake(bodies[1]!, 4));
     expect(out.observed.stages[2]!.field.length).toBe(declaredTake(bodies[2]!, 2));
     for (const seq of [2, 3]) expect(driver.trace.filter((c) => c.startsWith(`confirmSeedProposal ${driver.stageIdAt(seq)} `)), `stage ${seq}`).toEqual([`confirmSeedProposal ${driver.stageIdAt(seq)} ${driver.proposalIssuedFor(seq)}`]);
-    for (const seq of [1, 2, 3]) expect(driver.trace.filter((c) => c === `completeStage ${driver.stageIdAt(seq)}`), `stage ${seq}`).toHaveLength(1);
+    for (const seq of [1, 2, 3]) expect(driver.trace.filter((c) => c === `completeStage ${driver.stageIdAt(seq)}`), `stage ${seq}: the completion and the named repeat`).toHaveLength(2);
+    expect(checks.find((c) => c.id === "life-complete-twice-noop"), "every stage's repeat judged").toMatchObject({ verdict: "pass", checked: 3 });
     expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
   });
   it("every multi-stage row the fake draws plays LIFECYCLE through every stage — counted over the catalogue's rows", async () => {
@@ -453,7 +457,8 @@ describe("playDivision on the fake — the product sequence", () => {
     const driver = new FakeMultiStageDriver({ refuseConfirm: "SEEDING_NOTHING_TO_FILL" });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "league_ko" });
     expect(driver.trace.filter((c) => c.startsWith("confirmSeedProposal"))).toEqual([`confirmSeedProposal ${driver.stageIdAt(2)} ${driver.proposalIssuedFor(2)}`]);
-    expect(driver.trace.filter((c) => c.startsWith("completeStage"))).toEqual([`completeStage ${driver.stageIdAt(1)}`]);
+    // Stage 1 completed, so LIFECYCLE sent its named second Complete too (X-BD-4); stage 2 was never reached, so none.
+    expect(driver.trace.filter((c) => c.startsWith("completeStage"))).toEqual([`completeStage ${driver.stageIdAt(1)}`, `completeStage ${driver.stageIdAt(1)}`]);
     expect(out.observed.stages.map((s) => s.exit)).toEqual(["drained", "not_reached"]);
     expect(out.observed.stages[1]!.complete).toBeNull();
     expect(out.notes).toContain("stage 2: not reached (its seed advance was refused 422 SEEDING_NOTHING_TO_FILL)");
@@ -710,6 +715,8 @@ class AdvanceHarness {
   /** The last confirm's observation, and the last /complete's (m-3). */
   lastAdvance: AdvanceObs | null = null;
   lastComplete: CompleteObs | null = null;
+  /** W5 T17 (X-BD-4): the answers of every /complete sent AFTER the stage had completed - the named second Complete. */
+  readonly repeats: CompleteObs[] = [];
   readonly d: FakeMultiStageDriver;
   readonly ctx: ScenarioContext;
   readonly rec: Recorder;
@@ -756,14 +763,13 @@ class AdvanceHarness {
       case "generateLater": await recordGenerate(this.ctx, this.rec, this.stage2.id); return;
       case "playStage1": await playStage(this.ctx, this.rec, this.setup, {}, this.stage1); return;
       case "complete": {
-        try {
-          const c = await finishStage(this.ctx, this.rec, this.stage1.id);
-          this.lastComplete = c;
-          if (c.seedProposal) this.issued.push(c.seedProposal.id);
-        } catch (e) {
-          if (!(e instanceof DriverMisuse)) throw e;
-          this.refusals.push("complete repeated: refused by the driver's guard");
-        }
+        // X-BD-4 (CS-1): a Complete after the stage completed is SENT - the product answers a no-op that says so - and is
+        // kept apart: it is not the stage's completion, and the draft it names is the one already issued.
+        const again = this.lastComplete?.completed === true;
+        const c = await finishStage(this.ctx, this.rec, this.stage1.id);
+        if (again) { this.repeats.push(c); return; }
+        this.lastComplete = c;
+        if (c.seedProposal) this.issued.push(c.seedProposal.id);
         return;
       }
       case "confirmLatest": {
@@ -937,13 +943,22 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
     await h.step("confirmLatest");
     expect(h.confirmedIds()).toEqual([h.issuedIds()[1]]);
   });
-  it("a second /complete never reaches the product: the guard refuses it, the product saw one", async () => {
+  it("X-BD-4: a second /complete reaches the product and is the no-op: it commits nothing, mints no second proposal, and names the draft already issued", async () => {
     const d = new FakeMultiStageDriver();
     const h = await AdvanceHarness.open(d, "league_ko");
     for (const s of ["generateLater", "playStage1", "complete", "complete"] as const) await h.step(s);
+    // differential: today the second Complete is a DriverMisuse the harness catches as "complete repeated: refused by the driver's guard".
+    expect(d.trace.filter((c) => c === `completeStage ${d.stageIdAt(1)}`), "the product saw both").toHaveLength(2);
+    expect(h.completesOf(1), "...and committed one").toBe(1);
+    expect(h.issuedIds(), "no second proposal").toEqual([d.proposalIssuedFor(2)]);
+    expect(h.repeats).toEqual([{ status: 200, code: null, completed: false, finalRanks: null, places: null, title: null, seedProposal: { id: d.proposalIssuedFor(2), status: "draft" } }]);
+    expect(h.lastComplete, "the stage's completion is still the first answer").toMatchObject({ completed: true });
+    expect(h.refusals).toEqual([]);
+    // The sequence: a third, and after the draft is confirmed (the answer names no draft any more).
+    await h.step("confirmLatest");
+    await h.step("complete");
+    expect(h.repeats.at(-1)).toMatchObject({ completed: false, seedProposal: null });
     expect(h.completesOf(1)).toBe(1);
-    expect(d.trace.filter((c) => c === `completeStage ${d.stageIdAt(1)}`)).toHaveLength(1);
-    expect(h.refusals).toEqual(["complete repeated: refused by the driver's guard"]);
   });
   it("FP-1: a /complete before the later stage's TBD rows exist commits the stage, answers 409 STAGE_COMPLETED_SEEDING_FAILED, and a recompute after generating recovers", async () => {
     const d = new FakeMultiStageDriver();
@@ -954,7 +969,9 @@ describe("the advance as a sequence (TEST-STRATEGY rule 10)", () => {
     expect(c).toMatchObject({ status: 409, code: "STAGE_COMPLETED_SEEDING_FAILED", completed: true, seedProposal: null });
     expect(h.rec.notes).toContain("complete committed, but the next stage's seeding failed: 409 STAGE_COMPLETED_SEEDING_FAILED");
     expect(h.completesOf(1)).toBe(1);
-    await expect(finishStage(h.ctx, h.rec, h.stage1.id)).rejects.toBeInstanceOf(DriverMisuse);
+    // X-BD-4: the committed completion is not repeated by avoidance any more - the repeat is sent and is the product's no-op.
+    await expect(finishStage(h.ctx, h.rec, h.stage1.id)).resolves.toMatchObject({ status: 200, code: null, completed: false, seedProposal: null });
+    expect(h.completesOf(1), "the repeat committed nothing").toBe(1);
     await h.step("generateLater");
     expect(h.rec.track(h.stage2.id).generates.at(-1)).toMatchObject({ status: 200, created: 3 });
     await h.step("recompute");

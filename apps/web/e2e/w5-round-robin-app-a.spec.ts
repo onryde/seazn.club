@@ -1050,3 +1050,90 @@ test.describe("X-PO-3 / X-PO-4 a rank override is checked at write", () => {
     expect((await pins())?.map((p) => p.entrant_id), "only the leaver's pin goes").toEqual([ids[1]]);
   });
 });
+
+// W5 app PR A, Task 17 (X-BD-4 <- RB5-S4; CS-1). A second Complete on a stage that is already complete answers `already_complete` and writes
+// nothing: no second proposal, no draw, no division completed twice. Driven through the route the desk's Complete button calls, and on the
+// desk itself with a stale tab (another tab completed the stage first), where main read "Stage is not ready to complete".
+test.describe("X-BD-4 a second Complete is a no-op that says so", () => {
+  async function played(request: APIRequestContext, label: string, withFinals: boolean) {
+    const league = await seedLeague(request, label, 4);
+    let finalsId: string | undefined;
+    if (withFinals) {
+      const ko = await apiJson<{ id: string }>(request, `/api/v1/divisions/${league.divisionId}/stages`, "POST", {
+        seq: 2,
+        kind: "knockout",
+        name: "Finals",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing: "setup" },
+      });
+      expect(ko.status, JSON.stringify(ko.error)).toBe(201);
+      finalsId = ko.data!.id;
+      expect((await generate(request, finalsId)).status, "the day-one bracket").toBe(200);
+    }
+    expect((await generate(request, league.stageId)).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${league.divisionId}/start`, "POST")).status).toBe(200);
+    const rows = (await stageFixtures(request, league.divisionId, league.stageId)) as Pairing[];
+    expect(rows.length, "C(4,2) lines").toBe(6);
+    const seed = new Map(league.ids.map((id, i) => [id, i]));
+    for (const f of rows) {
+      const homeWins = (seed.get(f.home_entrant_id!) ?? 99) < (seed.get(f.away_entrant_id!) ?? 99);
+      const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: 0,
+        type: "generic.result",
+        payload: homeWins ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 },
+      });
+      expect(res.status, JSON.stringify(res.error)).toBe(201);
+    }
+    return { ...league, finalsId };
+  }
+  type Done = { completed: boolean; already_complete?: boolean; division_completed?: boolean; seed_proposal?: { id: string; status: string } | null };
+  const complete = (request: APIRequestContext, stageId: string) => apiJson<Done>(request, `/api/v1/stages/${stageId}/complete`, "POST");
+
+  test("a league feeding a setup knockout: the second and third Complete name the one draft and change nothing", async ({ request }) => {
+    test.setTimeout(120_000);
+    const r = await played(request, "Twice", true);
+    const first = await complete(request, r.stageId);
+    expect(first.status, JSON.stringify(first.error)).toBe(200);
+    expect(first.data).toMatchObject({ completed: true, seed_proposal: { status: "draft" } });
+    expect(first.data!.already_complete, "the first completion is not a repeat").toBeUndefined();
+    const finalsBefore = (await stageFixtures(request, r.divisionId, r.finalsId!)) as Pairing[];
+
+    for (const call of ["second", "third"]) {
+      const again = await complete(request, r.stageId);
+      expect(again.status, `${call}: ${JSON.stringify(again.error)}`).toBe(200);
+      expect(again.data, `${call}: differential - main answered completed: true with no already_complete`).toEqual({
+        completed: false,
+        already_complete: true,
+        events: [],
+        seed_proposal: first.data!.seed_proposal,
+      });
+    }
+    expect(await stageFixtures(request, r.divisionId, r.finalsId!), "the knockout's lines are exactly as they were").toEqual(finalsBefore);
+  });
+
+  test("the last stage: the second Complete does not complete the division again", async ({ request }) => {
+    test.setTimeout(120_000);
+    const r = await played(request, "Last", false);
+    const first = await complete(request, r.stageId);
+    expect(first.data).toMatchObject({ completed: true, division_completed: true });
+    const again = await complete(request, r.stageId);
+    expect(again.data).toEqual({ completed: false, already_complete: true, events: [], seed_proposal: null });
+    expect(again.data!.division_completed, "not completed a second time").toBeUndefined();
+  });
+
+  test("a stale tab: Complete pressed after another tab completed the stage says it was already complete, never 'not ready'", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const r = await played(request, "Stale", false);
+    await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const button = page.getByTestId("stage-complete");
+    await expect(button, "every match is settled: Complete is offered").toBeEnabled({ timeout: 20_000 });
+    expect((await complete(request, r.stageId)).data?.completed, "the other tab completes it first").toBe(true);
+
+    await button.click();
+    const said = uiEn["schedule.notice.alreadyComplete"]!;
+    expect(said, "premise: the dictionary has the sentence").toBeTruthy();
+    await expect(page.getByText(said), "the desk says so in the organiser's words").toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(uiEn["schedule.notice.notReady"]!)).toHaveCount(0);
+  });
+});

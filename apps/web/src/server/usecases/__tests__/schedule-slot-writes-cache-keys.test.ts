@@ -923,6 +923,26 @@ describe.skipIf(!HAS_DB)("a manual stage completion publishes the bracket it dra
     await expectDelThenPushes(rig.divisionId, rig.competitionId, deleted);
   }, 120_000);
 
+  // W5 T17 (X-BD-4): the other side of R10h. A repeat that owes nothing (a setup-timing next stage already has its
+  // proposal; the stage and the hub already show complete) writes nothing, so it publishes nothing.
+  it("a SECOND Complete that owes nothing (a setup-timing next stage, its draft already computed): nothing is written and nothing is sent (X-BD-4)", async () => {
+    const rig = await groupsToKnockoutRig({ timing: "setup" });
+    await decideThroughEngine(rig.auth.orgId, rig.groupFixtures);
+    const first = await completeByRoute(rig.auth, rig.groupId);
+    expect(first.status, JSON.stringify(first.body.error)).toBe(200);
+    expect(first.body.data?.seed_proposal?.status, "rig: the first Complete computed the draft").toBe("draft");
+    await quiesce();
+    const before = await board(rig.divisionId);
+
+    probe.hold = true;
+    const again = await completeByRoute(rig.auth, rig.groupId);
+    expect(again.status, JSON.stringify(again.body.error)).toBe(200);
+    // differential: today the repeat answers completed: true and publishes the hub (R10g's `finally`).
+    expect(again.body.data).toMatchObject({ completed: false, already_complete: true, seed_proposal: first.body.data?.seed_proposal });
+    expect(diff(before, await board(rig.divisionId))).toEqual({ moved: [], deleted: [], created: [] });
+    await expectNothingSent();
+  }, 120_000);
+
   // R10g (review-r10f m2) deliberately REVERSES R10f's "the last stage sends
   // nothing": the division's status changes on the hub.
   it("POST /stages/{id}/complete of the last stage: the division completes, nothing is drawn, and the hub key alone goes in one DEL after commit (R10g)", async () => {

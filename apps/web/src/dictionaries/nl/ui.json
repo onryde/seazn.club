@@ -2570,6 +2570,7 @@
   "schedule.notice.divisionFinished": "Fase afgerond — dat was de laatste fase, de divisie is klaar. 🏆",
   "schedule.notice.advanced": "Fase afgerond — top {n} gaan door; {gen} wedstrijd(en) gegenereerd voor de volgende fase.",
   "schedule.notice.completed": "Fase afgerond.",
+  "schedule.notice.alreadyComplete": "Fase was al afgerond: er is niets gewijzigd.",
   "schedule.notice.stageAdded": "Fase toegevoegd — {n} wedstrijd(en) gegenereerd voor de top {topN}.",
   "schedule.notice.stageAddedLater": "Fase toegevoegd — wedstrijden worden gegenereerd wanneer de vorige fase is afgerond.",
   "schedule.error.tooFewGroupEntrants": "Kan nog geen wedstrijden genereren — {groups} groepen hebben in totaal minstens {required} deelnemers nodig, 2 per groep (nu {have}). Gebruik minder groepen of voeg deelnemers toe.",

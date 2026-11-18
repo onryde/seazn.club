@@ -330,16 +330,20 @@ describe("BrowserDriver — the mixed path", () => {
     expect(driver.callCount).toBe(4);
   });
 
-  it("completeStage twice → DriverMisuse, as HttpDriver: the second never reaches the page or the http side", async () => {
+  // W5 T17 (X-BD-4, CS-1): a second Complete is no longer refused. It is sent over http (the page's button is gone on a complete
+  // stage), never through the page again, and answers what the product answers.
+  it("completeStage twice (X-BD-4): the second is SENT over http, never the page again, and is not a DriverMisuse", async () => {
     const { driver, http, pageCalls } = league();
     await built(driver, spec("league"));
     expect(await driver.completeStage("s1")).toEqual({ completed: true, events: [] });
-    await expect(driver.completeStage("s1")).rejects.toThrow(DriverMisuse);
+    expect(http.calls, "premise: the first went through the page").not.toContain("completeStage");
+    // differential: today this second call is DriverMisuse and reaches neither side.
+    await expect(driver.completeStage("s1")).resolves.toBeDefined();
     expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(1);
-    expect(http.calls).not.toContain("completeStage");
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
   });
 
-  it("completeStage: a named 4xx refusal committed nothing and stays retryable (over http); an unknown ending is never repeated", async () => {
+  it("completeStage: a named 4xx refusal committed nothing and stays retryable (over http); an unknown ending is repeated over http, as a no-op the product answers (X-BD-4)", async () => {
     const refused = league({ pages: { completeStageUi: async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_NOT_READY", "not ready"); } } });
     await built(refused.driver, spec("league"));
     await expect(refused.driver.completeStage("s1")).rejects.toThrow(RefusedCall);
@@ -350,18 +354,19 @@ describe("BrowserDriver — the mixed path", () => {
       const unknown = league({ pages: { completeStageUi: async () => { throw thrown; } } });
       await built(unknown.driver, spec("league"));
       await expect(unknown.driver.completeStage("s1")).rejects.toBe(thrown);
-      await expect(unknown.driver.completeStage("s1"), thrown.message).rejects.toThrow(DriverMisuse);
-      expect(unknown.http.calls).not.toContain("completeStage");
+      await expect(unknown.driver.completeStage("s1"), thrown.message).resolves.toBeDefined();
+      expect(unknown.http.calls, thrown.message).toContain("completeStage");
+      expect(unknown.pageCalls.filter((c) => c === "completeStageUi"), "never through the page again").toHaveLength(1);
     }
   });
 
-  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED followed a COMMITTED completion, so it is never repeated (over the page or http)", async () => {
+  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED followed a COMMITTED completion: the repeat goes over http, once, and is the no-op (X-BD-4)", async () => {
     const committed = league({ pages: { completeStageUi: async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, SEEDING_FAILED_AFTER_COMMIT, "no TBD rows"); } } });
     await built(committed.driver, spec("league"));
     await expect(committed.driver.completeStage("s1")).rejects.toThrow(RefusedCall);
-    await expect(committed.driver.completeStage("s1")).rejects.toThrow(DriverMisuse);
+    await expect(committed.driver.completeStage("s1")).resolves.toBeDefined();
     expect(committed.pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(1);
-    expect(committed.http.calls).not.toContain("completeStage");
+    expect(committed.http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
   });
 
   it("guards: an action on a competition, division, stage, entrant or fixture this driver never built is refused by name before any page is touched, and is not recorded", async () => {
@@ -2064,7 +2069,7 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
     expect(pageCalls.filter((c) => c === "completeStageUi")).toEqual([]);
   });
 
-  it("a last stage the page already had its turn at is not offered it again: a refused attempt retries over http, as for every type, and a repeat after a completion is still refused", async () => {
+  it("a last stage the page already had its turn at is not offered it again: a refused attempt retries over http, as for every type, and a repeat after a completion is sent over http (X-BD-4)", async () => {
     const refusing = { completeStageUi: async (_c: unknown, _w: unknown, id: unknown): Promise<{ completed: boolean; events: never[] }> => {
       if (id === "s2") throw new RefusedCall("POST", "/api/v1/stages/s2/complete", 409, "STAGE_NOT_READY", "not ready");
       return { completed: true, events: [] };
@@ -2076,7 +2081,9 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
     expect(await driver.completeStage("s2")).toMatchObject({ completed: true });
     expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
     expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
-    await expect(driver.completeStage("s2")).rejects.toThrow(DriverMisuse);
+    await expect(driver.completeStage("s2")).resolves.toBeDefined();
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(2);
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
   });
 });
 
