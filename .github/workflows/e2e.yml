@@ -817,6 +817,12 @@ jobs:
       REALTIMEKIT_APP_ID: e2e-rtk-app
       REALTIMEKIT_PLAYER_PRESET: e2e_chess_player
       REALTIMEKIT_ARBITER_PRESET: e2e_chess_arbiter
+      # Check-in capacity plan 2 Task 8 (finding 3): the sweep and the pre-mint job defer their housekeeping while ANY board of the
+      # platform is inside a check-in window, and this server is shared by every spec of the job, while the cron route takes no
+      # `orgIds`. The chess walkthrough's two cron-driven teardowns (a played board's rooms, an aged unpaired round's) would
+      # wait on OTHER specs' open windows, so the e2e server switches the deferral off: exactly "0". The deferral itself is proven by
+      # the DB tests of Task 8 and by the staging gate. Pinned by e2e-ci-wiring.test.ts.
+      EXTERNAL_PLAY_WINDOW_DEFER: "0"
 
     steps:
       - uses: actions/checkout@v5

@@ -2021,6 +2021,26 @@ describe("the online-chess fixture servers' wiring", () => {
     expect(checked, "vars checked").toBe(7);
   });
 
+  // Check-in capacity plan 2 Task 8 (finding 3): the sweep and the pre-mint job DEFER while any board of the platform is inside a
+  // check-in window (owner ruling R3), and the cron route takes no `orgIds`. The e2e server is shared by every spec of the job, so
+  // the chess walkthrough's cron-driven teardowns would wait on other specs' open windows: e2e-parallel switches the deferral off,
+  // with exactly "0" (the only value windowDeferralOn reads as off). Mirrored by ci-local.sh's e2e_env and the local runbook.
+  it("e2e-parallel's job-level env switches the open-window deferral off (EXTERNAL_PLAY_WINDOW_DEFER: \"0\"), and the runbook's server recipe carries it", () => {
+    expect(jobEnv(job("e2e-parallel", "e2e-serial")).get("EXTERNAL_PLAY_WINDOW_DEFER"), "e2e-parallel's job-level env").toBe("0");
+    const runbook = readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8");
+    expect(runbook, "docs/runbooks/e2e-local.md's server recipe").toMatch(/^EXTERNAL_PLAY_WINDOW_DEFER=0 \\$/m);
+    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
+    expect(body, "ci-local.sh's e2e_env").toMatch(/^\s*export EXTERNAL_PLAY_WINDOW_DEFER=0\s*$/m);
+    // The two legs that run no chess walkthrough do not carry it: the deferral stays ON for them, as in production.
+    let checked = 0;
+    for (const [name, next] of [["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
+      expect(jobEnv(job(name, next)).has("EXTERNAL_PLAY_WINDOW_DEFER"), `${name} leaves the deferral on`).toBe(false);
+      checked++;
+    }
+    expect(checked, "jobs checked").toBe(2);
+  });
+
   // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray
   // reconcile — a future mobile test that resigns, say — is refused on the runner instead of sending an
   // unauthenticated export read to lichess.org. Video stays unconfigured there (no credentials ⇒ no call at all), which

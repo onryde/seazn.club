@@ -337,6 +337,9 @@ e2e_env() {
   export REALTIMEKIT_APP_ID=e2e-rtk-app
   export REALTIMEKIT_PLAYER_PRESET=e2e_chess_player
   export REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter
+  # e2e.yml's e2e-parallel switches the sweep/pre-mint open-window deferral off (check-in capacity plan 2 Task 8): the cron
+  # route takes no orgIds, so on a shared server the walkthrough's teardowns would wait on other specs' windows.
+  export EXTERNAL_PLAY_WINDOW_DEFER=0
 }
 
 # ===========================================================================
