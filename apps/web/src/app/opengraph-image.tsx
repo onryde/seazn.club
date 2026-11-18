@@ -79,7 +79,7 @@ export default function Image() {
         </div>
 
         <div style={{ display: "flex", fontSize: 26, color: "rgba(245,240,232,0.66)" }}>
-          Fixtures, live scoring and standings for community clubs — seazn.club
+          Fixtures, live scoring and standings for every club — seazn.club
         </div>
       </div>
     ),
