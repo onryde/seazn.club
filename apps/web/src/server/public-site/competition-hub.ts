@@ -931,6 +931,8 @@ export async function loadCompetitionHub(
         href: `${divHref}/fixtures/${f.id}`,
         header: hubHeader(f, sides, d.sport_key, generatedAt),
         byeSides: hubByeSides(f),
+        // W5 T23 (RB5-W2): a withdrawal's removal, struck on the card as on the public schedule. Absent unless true.
+        ...(f.expunged === true ? { expunged: true } : {}),
         winnerIndex:
           winner === null
             ? null

@@ -190,6 +190,11 @@ export const HubMatch = z.object({
    *  Optional because a hub document cached before the field existed (Redis
    *  15s, ISR 30s) reaches the client without it — absent reads as "no bye". */
   byeSides: z.tuple([z.boolean(), z.boolean()]).optional(),
+  /** W5 T23 (RB5-W2; B5 merge finding, owner "fix now"): a withdrawal under half EXPUNGED this match (`PublicFixture.expunged`): it
+   *  will not be played and any result it had no longer counts. The card says so as the public schedule does (27eddf373f): both
+   *  names struck, no time and no score, "Abandoned" in the status slot — never "Ended". Optional: a document cached before the
+   *  field existed reads as not expunged. */
+  expunged: z.boolean().optional(),
   /** W2b Task 13 (UI-2 option A): a credited result's short tag ("w/o", "ret.", "2× w/o", "Aband. · DLS") and the
    *  full sentence that is its tooltip and accessible name, pre-resolved in the org's locale by `hubForfeit`
    *  (lib/forfeit-tag.ts is the one reader). `kind` is the reader's own (`ForfeitTagKind`). Null for a played result
