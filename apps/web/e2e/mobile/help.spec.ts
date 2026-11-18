@@ -75,6 +75,7 @@ test("help article: search, then the section list (folded below 768), then the a
     expect(yToggle).toBeLessThan(yH1);
     await expect(toggle).toContainText("Registration");
   } else {
+    await expect(toggle, "the toggle is in the page (positive pair)").toBeAttached();
     await expect(toggle, "from 768 there is no fold").toBeHidden();
     await expect(sections).toBeVisible();
     const s = (await sections.boundingBox())!;
@@ -124,7 +125,8 @@ test("search works at this width: results as you type, with the section shown, a
   const box = page.getByRole("searchbox", { name: "Search help" });
   await box.fill("waitlist");
   const results = page.getByRole("list", { name: "Search results" });
-  const hit = results.getByRole("link", { name: /The waitlist/ });
+  // By href, not by name: a link's name is its title AND its description, which another page's could share.
+  const hit = results.locator('a[href="/help/registration/waitlist"]');
   await expect(hit).toBeVisible();
   await expect(hit).toContainText("Registration");
   await hit.click();

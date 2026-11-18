@@ -180,7 +180,7 @@ export function staticHelpSlugs(articles: Iterable<Pick<HelpArticle, "slug" | "m
  * line; a YAML list item (a line starting with `-`) is refused rather than silently dropped, since
  * `related:` is the field an author would be tempted to write as a list.
  */
-function parseFrontmatter(raw: string, where: string): { meta: Record<string, string>; body: string } {
+export function parseHelpFrontmatter(raw: string, where: string): { meta: Record<string, string>; body: string } {
   const m = /^---\n([\s\S]*?)\n---\n?/.exec(raw);
   if (!m) return { meta: {}, body: raw };
   const meta: Record<string, string> = {};
@@ -213,7 +213,7 @@ export function allHelpArticles(): Map<string, HelpArticle> {
     for (const file of readdirSync(join(HELP_ROOT, section.name))) {
       if (!file.endsWith(".md")) continue;
       const raw = readFileSync(join(HELP_ROOT, section.name, file), "utf8");
-      const { meta, body } = parseFrontmatter(raw, `content/help/${section.name}/${file}`);
+      const { meta, body } = parseHelpFrontmatter(raw, `content/help/${section.name}/${file}`);
       const slug = `${section.name}/${file.replace(/\.md$/, "")}`;
       articles.set(slug, {
         slug,

@@ -16,7 +16,9 @@ import type { MatrixData } from "@/lib/pricing-matrix";
 import { helpTocEntries } from "@/lib/help-toc";
 import { markParts, searchHelp, type HelpSearchRow } from "@/lib/help-search";
 import { HelpToc } from "@/components/help/help-toc";
-import { HELP_ROOT, allHelpArticles, helpHeadings, helpSectionList, parseHelpRelated, type HelpArticle } from "@/server/help-content";
+import {
+  HELP_ROOT, allHelpArticles, helpHeadings, helpSectionList, parseHelpFrontmatter, parseHelpRelated, type HelpArticle,
+} from "@/server/help-content";
 import { helpRelatedProblems, resolveHelpRelated } from "@/server/help-related";
 import { helpSearchIndex } from "@/server/help-search-index";
 import { compileCss } from "@/components/v2/__tests__/_compiled-css";
@@ -191,6 +193,23 @@ describe("Related", () => {
     expect(parseHelpRelated("registration/waitlist, registration/youth")).toEqual(["registration/waitlist", "registration/youth"]);
     expect(parseHelpRelated("")).toEqual([]);
     expect(parseHelpRelated("[a/b,c/d]")).toEqual(["a/b", "c/d"]);
+  });
+
+  it("front-matter: `related:` on one line is read; written as a YAML list it is REFUSED, naming the file", () => {
+    const where = "content/help/registration/fixture.md";
+    const oneLine = "---\ntitle: T\nrelated: registration/waitlist, registration/youth\n---\nBody.\n";
+    const { meta, body } = parseHelpFrontmatter(oneLine, where);
+    expect(parseHelpRelated(meta.related ?? "")).toEqual(["registration/waitlist", "registration/youth"]);
+    expect(meta.title).toBe("T");
+    expect(body).toBe("Body.\n");
+
+    const asList = "---\ntitle: T\nrelated:\n  - registration/waitlist\n  - registration/youth\n---\nBody.\n";
+    expect(() => parseHelpFrontmatter(asList, where)).toThrow(where);
+    expect(() => parseHelpFrontmatter(asList, where)).toThrow(/YAML list item/);
+    // an unindented list item is refused the same way
+    expect(() => parseHelpFrontmatter("---\nrelated:\n- registration/waitlist\n---\n", where)).toThrow(where);
+    // a hyphen inside a value is not a list item
+    expect(parseHelpFrontmatter("---\ntitle: Add-ons - buying more\n---\n", where).meta.title).toBe("Add-ons - buying more");
   });
 
   it("resolves articles and redirect sources (to the redirect's target)", () => {

@@ -146,7 +146,9 @@ export function HelpSearch({ variant }: { variant: "hero" | "rail" }) {
       </p>
       {active ? (
         hits.length === 0 ? (
-          <p className="mt-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">{status}</p>
+          <p data-testid="help-search-message" className="mt-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+            {status}
+          </p>
         ) : (
           <ul
             ref={listRef}
