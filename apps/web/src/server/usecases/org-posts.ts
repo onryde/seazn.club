@@ -31,6 +31,8 @@ import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { getDictionary } from "@/lib/i18n";
 import { poolLabel } from "@/lib/pool-label";
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
+import { t } from "@/lib/i18n-runtime";
 import { isLevelTable, pointsText } from "@seazn/engine/competition";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
@@ -635,8 +637,11 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     creditsNobody: creditsNobody(r.outcome),
   }));
 
-  const standings = await topStandings(tx, fx.stage_id);
-  const poolStandings = await topPoolStandings(tx, fx.stage_id, locale);
+  // RB5-W1: a leaver listed in a short table carries the hub chip's word in the org's language
+  const wordFor = await leaverWords(locale);
+  const mark = <R extends { status?: DepartedStatus }>(row: R) => (row.status ? { ...row, departed: wordFor(row.status) } : row);
+  const standings = (await topStandings(tx, fx.stage_id)).map(mark);
+  const poolStandings = (await topPoolStandings(tx, fx.stage_id, locale)).map((p) => ({ ...p, rows: p.rows.map(mark) }));
   const enrichment = await assembleRecapEnrichment(tx, fx, results);
   const enriched = Object.keys(enrichment).length > 0;
 
@@ -1080,7 +1085,7 @@ export async function assembleRecapEnrichment(
 }
 
 /** The just-won entrant's current table position, for the "moves up to Nth"
- *  line (league stages only; best-effort).
+ *  line: a league's or Swiss stage's table, or - for a pooled fixture - its own pool's (W5 T21, `fx.pool_id`); best-effort.
  *
  *  Unplanned fix (found via the P3 review finding 3 investigation, same
  *  root cause as the savepoints added throughout this file): pre-existing
@@ -1124,6 +1129,23 @@ interface StandingRow {
   played: number;
   /** As the public table prints it (`pointsText` under the stage's unit): chess's half-points read "1½" (RB2B-17). */
   points: string;
+  /** RB5-W1: set only for a withdrawn or disqualified entrant (`DEPARTED_STATUS_CHIPS` decides which statuses count). */
+  status?: DepartedStatus;
+}
+
+/** A departed status, or undefined for any status that still competes - `DEPARTED_STATUS_CHIPS` is the one vocabulary. */
+function departedOf(status: string | null | undefined): DepartedStatus | undefined {
+  return status && Object.hasOwn(DEPARTED_STATUS_CHIPS, status) ? (status as DepartedStatus) : undefined;
+}
+
+/**
+ * RB5-W1 (owner fix-now 2026-11-18, "marked on every surface"): a post's standings line for a withdrawn or disqualified entrant carries
+ * the word her table chip prints (`DEPARTED_STATUS_CHIPS` labels, read from the public dictionary of the post's locale) - no new words.
+ * A competing row carries no status and so no word.
+ */
+async function leaverWords(locale: Locale): Promise<(status: DepartedStatus) => string> {
+  const dict = await getDictionary(locale, "public");
+  return (status) => t(dict, DEPARTED_STATUS_CHIPS[status].label);
 }
 
 /** The unit a stage's stored points print in — the public table's own (`tableLayoutFor` over the one loader's rules). */
@@ -1157,19 +1179,23 @@ async function topOfTable(
     (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
   );
   const wanted = sorted.slice(0, top);
-  const names = new Map(
+  const named = new Map(
     (
-      await tx<{ id: string; display_name: string }[]>`
-        select id, display_name from entrants where id = any(${wanted.map((r) => r.entrantId)})`
-    ).map((e) => [e.id, e.display_name]),
+      await tx<{ id: string; display_name: string; status: string }[]>`
+        select id, display_name, status from entrants where id = any(${wanted.map((r) => r.entrantId)})`
+    ).map((e) => [e.id, e]),
   );
-  return wanted.map((r, i) => ({
-    entrantId: r.entrantId,
-    position: r.rank ?? i + 1,
-    name: names.get(r.entrantId) ?? "—",
-    played: r.played,
-    points: pointsText(r.points, unit),
-  }));
+  return wanted.map((r, i) => {
+    const status = departedOf(named.get(r.entrantId)?.status);
+    return {
+      entrantId: r.entrantId,
+      position: r.rank ?? i + 1,
+      name: named.get(r.entrantId)?.display_name ?? "—",
+      played: r.played,
+      points: pointsText(r.points, unit),
+      ...(status ? { status } : {}),
+    };
+  });
 }
 
 /**
@@ -1363,6 +1389,8 @@ export async function assembleDigestStandings(
           ? pooled.map((t) => ({ snap: t, key: t.key }))
           : single ? [{ snap: single }] : [];
         const dict = pooled.length > 0 ? await getDictionary(locale, "public") : null;
+        // RB5-W1: a leaver in a top 3 is marked with her table chip's word
+        const wordFor = await leaverWords(locale);
         // the stage's points unit is one fact for every pool of it
         if (tables.length === 0) return;
         const unit = await pointsUnitOf(sp, stage.stage_id);
@@ -1374,11 +1402,11 @@ export async function assembleDigestStandings(
           );
           const top3 = sorted.slice(0, 3);
           if (top3.length === 0) continue;
-          const names = new Map(
+          const named = new Map(
             (
-              await sp<{ id: string; display_name: string }[]>`
-                select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
-            ).map((e) => [e.id, e.display_name]),
+              await sp<{ id: string; display_name: string; status: string }[]>`
+                select id, display_name, status from entrants where id = any(${top3.map((r) => r.entrantId)})`
+            ).map((e) => [e.id, e]),
           );
           let climberOut: DigestStandingsSection["climber"];
           const climber = biggestClimber(snap.rows, snap.previous_rows);
@@ -1390,11 +1418,15 @@ export async function assembleDigestStandings(
           out.push({
             divisionName: stage.division_name,
             ...(dict && key !== undefined ? { poolLabel: poolLabel(dict, key) } : {}),
-            top3: top3.map((r, i) => ({
-              position: r.rank ?? i + 1,
-              name: names.get(r.entrantId) ?? "—",
-              points: pointsText(r.points, unit),
-            })),
+            top3: top3.map((r, i) => {
+              const row = {
+                position: r.rank ?? i + 1,
+                name: named.get(r.entrantId)?.display_name ?? "—",
+                points: pointsText(r.points, unit),
+              };
+              const status = departedOf(named.get(r.entrantId)?.status);
+              return status ? { ...row, departed: wordFor(status) } : row;
+            }),
             ...(climberOut ? { climber: climberOut } : {}),
           });
         }

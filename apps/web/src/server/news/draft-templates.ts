@@ -113,6 +113,12 @@ const STRINGS: Record<Locale, LocaleStrings> = {
   },
 };
 
+/** RB5-W1 (owner fix-now 2026-11-18, "marked on every surface"): a standings line names a leaver with the word her table chip prints,
+ *  "Ann (Withdrawn)". A competing row has no `departed` and prints its bare name. */
+function markedName(row: { name: string; departed?: string }): string {
+  return row.departed ? `${row.name} (${row.departed})` : row.name;
+}
+
 function ordinalEn(n: number): string {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
@@ -265,8 +271,9 @@ export interface RoundRecapDraftInput {
    *  `creditsNobody`: a double walkover, whose tag stands in the score's place ("A 2× w/o B") — its summary's 0–0 is a
    *  score nobody played (the TV and the hub draw it the same way). Both absent: byte-identical. */
   results: { homeName: string; homeScore: string; awayName: string; awayScore: string; tag?: string | null; creditsNobody?: boolean }[];
-  /** Top of the table (caller slices top-N). */
-  standings: { position: number; name: string; played: number; /** As the public table prints it ("1½"). */ points: string }[];
+  /** Top of the table (caller slices top-N). `departed`: RB5-W1 - a withdrawn or disqualified entrant's mark, the hub chip's own word in
+   *  the post's locale (`DEPARTED_STATUS_CHIPS`), printed after her name. Absent for every competing row: byte-identical. */
+  standings: { position: number; name: string; played: number; /** As the public table prints it ("1½"). */ points: string; departed?: string }[];
   /** W5 T21 (X-SF-2): a stage with several pools prints one standings block per pool, in the stage's pool order, each headed by the
    *  pool's public label in the org's locale. Absent for every other stage: byte-identical. */
   poolStandings?: { label: string; rows: RoundRecapDraftInput["standings"] }[];
@@ -293,14 +300,14 @@ export function roundRecapDraft(input: RoundRecapDraftInput): { title: string; b
     lines.push("");
     lines.push(`**${s.standings}**`);
     for (const row of input.standings) {
-      lines.push(`${row.position}. ${row.name} — ${row.points} ${s.points} (${row.played})`);
+      lines.push(`${row.position}. ${markedName(row)} — ${row.points} ${s.points} (${row.played})`);
     }
   }
   for (const pool of input.poolStandings ?? []) {
     lines.push("");
     lines.push(`**${s.standings} — ${pool.label}**`);
     for (const row of pool.rows) {
-      lines.push(`${row.position}. ${row.name} — ${row.points} ${s.points} (${row.played})`);
+      lines.push(`${row.position}. ${markedName(row)} — ${row.points} ${s.points} (${row.played})`);
     }
   }
 
@@ -346,7 +353,8 @@ export interface DigestStandingsSection {
   poolLabel?: string;
   /** Caller slices top-N (design: top 3). */
   /** `points` as the public table prints it ("1½" — RB2B-17). */
-  top3: { position: number; name: string; points: string }[];
+  /** `departed`: RB5-W1 - a leaver's mark, as `RoundRecapDraftInput.standings` carries it. */
+  top3: { position: number; name: string; points: string; departed?: string }[];
   /** Largest positive rank delta window-over-window (enrichment.ts's
    *  biggestClimber) — absent when nobody climbed, there is no prior
    *  snapshot, or the climb was tied and therefore ambiguous. */
@@ -435,7 +443,7 @@ export function weeklyDigestDraft(input: WeeklyDigestDraftInput): { title: strin
         lines.push(
           msgFor(input.locale, "news.digest.standings.row", {
             position: row.position,
-            name: row.name,
+            name: markedName(row),
             points: row.points,
           }),
         );

@@ -28,6 +28,7 @@ import {
 import { scoreEvent } from "../scoring";
 import { startDivision } from "../schedule";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { patchEntrant } from "../entrants";
 import { playBadminton } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { playToDecided } from "./_quick-match-probe";
 import { BADMINTON, FOOTBALL, rig, type Rig, type SportPick } from "./_w5-t3-rig";
@@ -1038,7 +1039,8 @@ describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never cro
     const head = lines.findIndex((l) => l === `**Standings — ${groupLabel("en", "A")}**`);
     const block = lines.slice(head + 1).filter((l) => /^\d\. /.test(l)).slice(0, 4);
     expect(block, "pool A's block lists four").toHaveLength(4);
-    expect(block[3], "she is the LAST line, position 4").toMatch(new RegExp(`^4\\. ${targetName} — `));
+    // RB5-W1 "marked on every surface" (owner fix-now 2026-11-18): her line carries the hub chip's own word, after her name
+    expect(block[3], "she is the LAST line, position 4, marked").toMatch(new RegExp(`^4\\. ${targetName} \\(${publicDict("en")["table.withdrawn"]}\\) — `));
     expect(block.slice(0, 3).some((l) => l.includes(targetName))).toBe(false);
   });
 
@@ -1076,5 +1078,99 @@ describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never cro
     const recaps = (await listPosts(s.r.auth, s.r.auth.orgId)).filter((p) => p.kind === "round_recap");
     expect(recaps, "the auto-once index keeps the recap at one").toHaveLength(1);
     expect(recaps[0]!.bodyMd.split("**Standings —").length - 1, "and it lists each pool once").toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B5 owner fix-now (b), RB5-W1 "a withdrawn or disqualified entrant stays in the table, ranked last, MARKED on every surface": the
+// recap and the digest list a leaver whenever her table is short enough for her to reach the printed top (a pool of three, a league
+// of three), and printed her bare - a reader took her for a competitor. The mark is the hub chip's own word (`DEPARTED_STATUS_CHIPS`
+// labels), read here from the public dictionary file of the post's locale - never typed, never from the code under test. No new words.
+// differential: today the leaver's line is "3. <name> — ..." with no mark, in every locale.
+// ---------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("RB5-W1 posts mark who left, with the word every table uses", () => {
+  const LOCALES = ["en", "es", "fr", "nl"] as const;
+  const word = (locale: PoolLocale, status: "withdrawn" | "disqualified") => publicDict(locale)[`table.${status}`]!;
+  /** Every `(<chip word>)` mark of either status in either locale's dictionary - a competing line must carry none of them. */
+  const ANY_MARK = LOCALES.flatMap((l) => [`(${word(l, "withdrawn")})`, `(${word(l, "disqualified")})`]);
+
+  /** Every line of `stageId` played (home wins) except `target`'s, who plays (and wins) only her FIRST line in round order. */
+  async function playAllButHerSecond(r: Rig) {
+    const lines = await sql<{ id: string; pool_id: string | null; round_no: number; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, pool_id, round_no, home_entrant_id, away_entrant_id from fixtures where stage_id = ${r.stageId} order by round_no, seq_in_round`;
+    const target = lines[0]!.home_entrant_id;
+    let hers = 0;
+    for (const l of lines) {
+      const isHers = l.home_entrant_id === target || l.away_entrant_id === target;
+      if (isHers && hers++ >= 1) continue;
+      await playBadminton(r.auth, l.id, isHers ? l.home_entrant_id === target : true);
+    }
+    const [{ display_name }] = await sql<{ display_name: string }[]>`select display_name from entrants where id = ${target}`;
+    return { lines, target, targetName: display_name, roundOneLine: lines.find((l) => l.round_no === 1)!.id };
+  }
+
+  /** The round recap of round 1 in `locale`, drafted afresh (the auto-once row of an earlier locale is taken away first). */
+  async function recapIn(r: Rig, fixtureId: string, locale: PoolLocale): Promise<string> {
+    await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
+    await sql`update organizations set default_locale = ${locale} where id = ${r.auth.orgId}`;
+    await sql`delete from org_posts where org_id = ${r.auth.orgId} and kind = 'round_recap'`;
+    await withTenant(r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, fixtureId, true));
+    const recap = (await listPosts(r.auth, r.auth.orgId)).filter((p) => p.kind === "round_recap");
+    expect(recap, `premise: round 1 recapped in ${locale}`).toHaveLength(1);
+    return recap[0]!.bodyMd;
+  }
+
+  it("RB5-W1 a pool of three: the leaver (1 of 2 played, results stand) is listed LAST and marked in the digest and the recap, in all four locales; nobody else is marked", async () => {
+    const r = await rig({ n: 6, kind: "group", pools: 2, sport: BADMINTON });
+    await startDivision(r.auth, r.divisionId);
+    const { target, targetName, roundOneLine } = await playAllButHerSecond(r);
+    await withdrawEntrantCascade(r.auth, target);
+    const [poolA] = await sql<{ id: string }[]>`select pool_id as id from fixtures where stage_id = ${r.stageId} and (home_entrant_id = ${target} or away_entrant_id = ${target}) limit 1`;
+    const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id = ${poolA!.id}`;
+    expect(rows, "premise: RB5-W3, half played - her results stand, she is still in her pool of three").toHaveLength(3);
+    expect(rows.find((x) => x.entrantId === target)!.rank, "premise RB5-W1: ranked last of three").toBe(3);
+
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const mark = `(${word(locale, "withdrawn")})`;
+      // the digest: her pool's top 3 is the whole pool, so she is listed - third, and marked; nobody else is
+      const sections = await withTenant(r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: r.stageId, division_name: "Open" }], locale));
+      const top = sections.flatMap((s) => s.top3);
+      expect(top.filter((x) => x.name === targetName).map((x) => x.position), `${locale}: listed once in the digest, third`).toEqual([3]);
+      expect(top.filter((x) => x.departed !== undefined).map((x) => [x.name, x.departed]), `${locale}: the digest marks her, and only her`).toEqual([
+        [targetName, word(locale, "withdrawn")],
+      ]);
+      // the recap
+      const body = await recapIn(r, roundOneLine, locale);
+      const lines = body.split("\n").filter((l) => /^\d\. /.test(l));
+      const herLine = lines.find((l) => l.includes(targetName));
+      expect(herLine, `${locale}: the recap lists her LAST in her pool, position 3, marked with the chip's word:\n${body}`).toMatch(
+        new RegExp(`^3\\. ${targetName} ${mark.replace(/[()]/g, "\\$&")} — `),
+      );
+      for (const l of lines.filter((x) => !x.includes(targetName))) {
+        expect(ANY_MARK.some((m) => l.includes(m)), `${locale}: a competing line carries no mark: ${l}`).toBe(false);
+      }
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+    expect(word("nl", "withdrawn"), "the dictionary is translated, not an English echo").not.toBe(word("en", "withdrawn"));
+  });
+
+  it("RB5-W1 a league of three: a disqualified entrant is marked Disqualified (not Withdrawn) in the rendered digest; Reinstate takes the mark away", async () => {
+    const r = await rig({ n: 3, kind: "league", sport: BADMINTON });
+    await startDivision(r.auth, r.divisionId);
+    const { target, targetName } = await playAllButHerSecond(r);
+    await withdrawEntrantCascade(r.auth, target, { as: "disqualified" });
+    const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id is null`;
+    expect(rows.find((x) => x.entrantId === target)?.rank, "premise RB5-W1/W3: in the table, ranked last of three").toBe(3);
+    const after = await generateWeeklyDigest(r.auth, r.auth.orgId);
+    expect(after.bodyMd.split(targetName).length - 1, `premise: the digest lists her once:\n${after.bodyMd}`).toBe(1);
+    expect(after.bodyMd, "the league's digest lists her, marked with the DQ chip's word").toContain(`${targetName} (${word("en", "disqualified")})`);
+    expect(after.bodyMd, "never the other status's word").not.toContain(`(${word("en", "withdrawn")})`);
+
+    await patchEntrant(r.auth, target, { status: "confirmed" });
+    const back = await generateWeeklyDigest(r.auth, r.auth.orgId);
+    expect(back.bodyMd, "after Reinstate she is listed").toContain(targetName);
+    for (const m of ANY_MARK) expect(back.bodyMd, `after Reinstate no line carries ${m}`).not.toContain(m);
   });
 });
