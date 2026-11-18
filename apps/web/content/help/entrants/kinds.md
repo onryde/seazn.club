@@ -38,7 +38,7 @@ Open the division, choose the **Entrants** tab and open the **Entrant kinds** bl
 3. For teams, turn **Squad numbers** and **Captain** on or off.
 4. Choose **Save entrant settings**.
 
-**Reset to sport default** puts the block back to what the sport offers. This block is separate from the format, so it stays open after you start the division.
+The block also has **Reset to sport default**. It is separate from the format, so you can still save it after you start the division.
 
 You cannot remove a kind while entrants of that kind are still active, or while registration entries of that kind are still waiting. The block says so. Withdraw or reject them first, then save again.
 
