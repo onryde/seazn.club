@@ -18,7 +18,7 @@ import { CRICKET_BALL_TYPES, isCricketBall } from "@/lib/cricket-wicket-void";
 import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-override";
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
-import { recomputeStandings } from "@/server/engine-db";
+import { recomputeStandings, type SnapshotCause } from "@/server/engine-db";
 import { refreshCompletedBracketPlacement } from "@/server/engine-db/competition";
 import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
@@ -400,7 +400,12 @@ export async function scoreEvent(
       // B3 fix wave (I-3; RB5-W5, ruling 289): a disqualifying forfeit's auto-advance waits for the DQ hook below. Run here, it
       // completed a league whose last open line this was BEFORE the cascade ranked her last, and the cascade then skipped the
       // complete stage (C1) - so whether a disqualified player ranked last depended on `auto_progress`.
-      const filled = await onDecided(auth, fixtureId, { autoAdvance: !isDqForfeit && opts.autoAdvance !== false });
+      // B5 fix wave fix round 2 (m4): a cascade's or a Reinstate's own write (`opts.writer`: the walkovers a withdrawal awards, the
+      // results a Reinstate re-records) is a ROSTER change, so its refold rebases the table's step; a scorer's write is a result.
+      const filled = await onDecided(auth, fixtureId, {
+        autoAdvance: !isDqForfeit && opts.autoAdvance !== false,
+        standingsCause: opts.writer !== undefined ? "roster" : "result",
+      });
       advanceOwed = isDqForfeit;
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       // Best-effort like refreshNews (which swallows its own): the result already stands, so a fold that throws (a dropped
@@ -1064,7 +1069,12 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 // took away. Under the lock, the void has either committed (and this reads
 // its erased or flipped outcome) or not started (and its un-fill will find
 // the name this writes and take it back).
-export async function onDecided(auth: AuthCtx, fixtureId: string, opts: { autoAdvance?: boolean } = {}): Promise<string[]> {
+export async function onDecided(
+  auth: AuthCtx,
+  fixtureId: string,
+  /** `standingsCause` (B5 fix wave fix round 2, m4): why the table refolds - `writeSnapshot`'s cause. Default "result": a decided match. */
+  opts: { autoAdvance?: boolean; standingsCause?: SnapshotCause } = {},
+): Promise<string[]> {
   const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
     // Loop R I-2 / R2 N-1: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's
@@ -1243,8 +1253,10 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, opts: { autoAd
   // the stage's next refold: its next result or void, or its completion, which ranks it afresh from its fixtures. When this
   // result finished the stage, auto-advance below IS that completion, so it runs regardless and heals the table here.
   if (context && TABLE_KINDS.has(context.kind)) {
+    // B5 fix wave fix round 2 (m4): the refold a decided write causes - a scorer's result rolls the step "Biggest climber" reads;
+    // a cascade's or a Reinstate's write (`standingsCause: "roster"`) rebases it.
     try {
-      await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+      await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined, { cause: opts.standingsCause ?? "result" });
     } catch (err) {
       log.error(
         { err, event: "standings_recompute_failed", fixtureId, stageId: context.stage_id, poolId: context.pool_id },

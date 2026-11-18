@@ -123,9 +123,6 @@ export interface RankedEntrantRow {
   points: number;
   /** W2d (X-TB-6): every row of a started table with nothing counted is level — its order is the seed list. */
   level?: boolean;
-  /** Matches counted for the row (every stored snapshot row carries it). B5 fix wave G3 (n1): what tells a step a result made
-   *  (someone played one more) from a roster refold (a withdrawal's re-rank, a Reinstate's voided walkovers). */
-  played?: number;
 }
 
 export interface Climber {
@@ -147,12 +144,11 @@ export interface Climber {
  * place, so there is nothing to climb from or to — and since the generate writes a table stage's level table, every
  * first result rolls one into `previous`.
  *
- * B5 fix wave G3 (controller ruling n1, owner standing "apply rec"): a climber is a move a RESULT caused. A withdrawal, a Reinstate,
- * a disqualification or a late entry never makes one — so the step is read only when it is a result's own: the SAME entrants on both
- * sides (an expunge drops a row, a reinstated expunge or a late entrant's first result adds one), nobody's `played` went DOWN (a
- * Reinstate voids the walkovers her withdrawal gave, a void takes a result back), and somebody's went UP (a result counted; a
- * withdrawal's re-rank of the leaver to last, or a pin, moves places with no match played). A row without `played` cannot be read,
- * so the step is not either (null): an unexplained move is skipped, never guessed — the rule above.
+ * B5 fix wave fix round 2 (controller ruling m4, owner standing "apply rec"): a climber is a move a RESULT caused, so `previous`
+ * is the table before the last RESULT's refold (`writeSnapshot`'s cause, engine-db/competition.ts): a roster refold — a withdrawal,
+ * a Reinstate, a disqualification's cascade, a late entrant's placement, an expunge, a pin — rebases `previous` onto the new table,
+ * so its moves are never a step here. The step is then measured over the rows both tables share: a row new in `current` (a pool
+ * member's first counted match, a late entrant's first result) neither climbs nor stops the others from climbing.
  */
 export function biggestClimber(
   current: readonly RankedEntrantRow[],
@@ -160,7 +156,6 @@ export function biggestClimber(
 ): Climber | null {
   if (!previous || previous.length === 0) return null;
   if (isLevelTable(previous) || isLevelTable(current)) return null;
-  if (!stepIsAResult(current, previous)) return null;
   const prevByEntrant = new Map(previous.map((r) => [r.entrantId, r]));
   const candidates: { entrantId: string; from: number; to: number; delta: number; pointsGained: number }[] = [];
   for (const row of current) {
@@ -182,21 +177,6 @@ export function biggestClimber(
   const [first, second] = candidates;
   if (second && second.delta === first!.delta && second.pointsGained === first!.pointsGained) return null;
   return { entrantId: first!.entrantId, from: first!.from, to: first!.to };
-}
-
-/** n1: whether the table's step from `previous` to `current` is a result's (see `biggestClimber`). */
-function stepIsAResult(current: readonly RankedEntrantRow[], previous: readonly RankedEntrantRow[]): boolean {
-  if (current.length !== previous.length) return false;
-  const before = new Map(previous.map((r) => [r.entrantId, r.played]));
-  let rose = false;
-  for (const row of current) {
-    if (!before.has(row.entrantId)) return false;
-    const was = before.get(row.entrantId);
-    if (typeof was !== "number" || typeof row.played !== "number") return false;
-    if (row.played < was) return false;
-    if (row.played > was) rose = true;
-  }
-  return rose;
 }
 
 // ---------------------------------------------------------------------------

@@ -697,22 +697,32 @@ export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<Cros
  * delta before the digest's "biggest climber" line ever reads it. A stage
  * snapshotted for the first time has nothing to roll — `previous_rows` stays
  * null, which the digest treats as "no history yet", not an error.
+ *
+ * B5 fix wave fix round 2 (controller ruling m4, owner standing "apply rec"): WHY the table changed decides what the step is.
+ * A `"result"` refold (a decided match: `onDecided`, scoring.ts) rolls the old rows into `previous_rows` as above — the step a
+ * result made, which "Biggest climber" reads. A `"roster"` refold (a withdrawal, a Reinstate, a disqualification's cascade, a
+ * late entrant's placement, an expunge, a pin, a rules or config refold, a generate, a completion's placement write) REBASES the
+ * step instead: `previous_rows` becomes the new rows, so the move the roster made is never read as anyone's climb, and the next
+ * result's step starts from the table as it now stands. No column: the step itself records the cause (a result's, or empty).
+ * An unchanged table keeps its step whatever the cause (a same-answer rerun must not erase the real delta, as above).
  */
+export type SnapshotCause = "result" | "roster";
 async function writeSnapshot(
   tx: Tx,
   stageId: string,
   poolId: string | null,
   rows: readonly StandingsRow[],
   through: number,
+  cause: SnapshotCause,
 ): Promise<void> {
   await tx`
     insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
     values (${stageId}, ${poolId}, ${tx.json(rows as never)}, ${through})
     on conflict on constraint standings_snapshots_pkey do update set
       previous_rows = case
-        when standings_snapshots.rows is distinct from excluded.rows
-        then standings_snapshots.rows
-        else standings_snapshots.previous_rows
+        when standings_snapshots.rows is not distinct from excluded.rows then standings_snapshots.previous_rows
+        when ${cause}::text = 'result' then standings_snapshots.rows
+        else excluded.rows
       end,
       rows = excluded.rows, computed_through_seq = excluded.computed_through_seq, updated_at = now()
   `;
@@ -767,7 +777,9 @@ export async function recomputeStandings(
   orgId: string,
   stageId: string,
   poolId?: string,
-  opts: { emptyFold?: "write" | "skip" | "drop" } = {},
+  // m4: `cause` is "roster" unless the caller is a decided result's refold (see `writeSnapshot`): a refold that does not say it
+  // is a result never makes a climber.
+  opts: { emptyFold?: "write" | "skip" | "drop"; cause?: SnapshotCause } = {},
 ): Promise<readonly StandingsRow[]> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -781,7 +793,7 @@ export async function recomputeStandings(
     const written: string[] = [];
     for (const pool of tables.pools) {
       if (emptyFold !== "write" && pool.rows.length === 0) continue;
-      await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
+      await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq, opts.cause ?? "roster");
       written.push(pool.pool || "");
     }
     if (emptyFold === "drop") {
@@ -1169,7 +1181,7 @@ export async function refreshCompletedBracketPlacementTx(tx: Tx, stageId: string
     select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
   const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
   if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
-  await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
+  await writeSnapshot(tx, stageId, null, rows, inputs.division.seq, "roster");
   return true;
 }
 
@@ -1237,7 +1249,7 @@ export async function completeStageIfReady(
       const completed = await rankWithStoredLots(tx, inputs);
       events = completed.events.map((e) => toWireEvent(e));
       for (const pool of completed.tables.pools) {
-        await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
+        await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq, "roster");
       }
     } else if (inputs.kind === "ladder") {
       // Jul3/08 §6 — no table/bracket shape of its own: complete once every
@@ -1270,7 +1282,7 @@ export async function completeStageIfReady(
       events = [
         { type: "stage_completed", stageId, finalRanks: [...finalRanks], places: finalRanks.map((entrantId, i) => ({ entrantId, rank: i + 1 })) },
       ];
-      await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
+      await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq, "roster");
     } else if (isBracketKind(inputs.kind)) {
       const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
 
@@ -1342,6 +1354,7 @@ export async function completeStageIfReady(
         null,
         placementTable(completed.finalRanks).rows,
         inputs.division.seq,
+        "roster",
       );
     } else {
       // Unreachable: TABLE_KINDS ∪ {"ladder"} ∪ BRACKET_KINDS covers every

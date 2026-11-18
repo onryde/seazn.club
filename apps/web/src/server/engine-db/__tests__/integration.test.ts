@@ -250,7 +250,9 @@ describe.skipIf(!HAS_DB)("engine-db persistence adapter", () => {
       type: "generic.result",
       payload: { p1Score: 2, p2Score: 1 },
     });
-    const decided = await recomputeStandings(s.orgId, s.stageId);
+    // B5 fix wave fix round 2 (m4): this refold stands in for `onDecided`'s, so it says it is a result's (a refold that does not
+    // is a roster change, which rebases the step instead of rolling it).
+    const decided = await recomputeStandings(s.orgId, s.stageId, undefined, { cause: "result" });
     expect(decided.find((r) => r.entrantId === s.home)?.points).toBe(3);
     const [afterDecided] = await sql<{
       rows: { entrantId: string; points: number }[];

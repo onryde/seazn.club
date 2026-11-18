@@ -10,7 +10,6 @@ import {
   computeStreak,
   digestWindow,
   groupUpcomingByDay,
-  type RankedEntrantRow,
 } from "../enrichment";
 
 describe("digestWindow", () => {
@@ -86,8 +85,7 @@ describe("groupUpcomingByDay", () => {
 });
 
 describe("biggestClimber", () => {
-  // B5 G3 (n1): every stored row carries `played`. Here it rises with points (3 a win), so each step below is a result's step.
-  const row = (entrantId: string, rank: number, points: number, played = Math.ceil(points / 3)) => ({ entrantId, rank, points, played });
+  const row = (entrantId: string, rank: number, points: number) => ({ entrantId, rank, points });
 
   it("picks the largest positive rank delta", () => {
     const previous = [row("a", 3, 4), row("b", 1, 9), row("c", 2, 6)];
@@ -129,9 +127,9 @@ describe("biggestClimber", () => {
   // W2d concern 2 (spec §5.7, anti-goal 3): a LEVEL table (nothing counted yet) has no places — its `rank` is the seed
   // order, never a position. Since the generate writes the level table, the first result rolls it into `previous_rows`;
   // reading its ranks as places named a seed-4 winner "up from 4th to 1st".
-  const level = (entrantId: string, rank: number) => ({ entrantId, rank, points: 0, level: true, played: 0 });
-  const ranked = (rows: readonly { entrantId: string; rank: number; points: number; played: number }[]) =>
-    rows.map((r) => ({ entrantId: r.entrantId, rank: r.rank, points: r.points, played: r.played }));
+  const level = (entrantId: string, rank: number) => ({ entrantId, rank, points: 0, level: true });
+  const ranked = (rows: readonly { entrantId: string; rank: number; points: number }[]) =>
+    rows.map((r) => ({ entrantId: r.entrantId, rank: r.rank, points: r.points }));
   it("W2d: out of a LEVEL previous table nobody climbs — its ranks are the seed order, not places", () => {
     const previous = [level("a", 1), level("b", 2), level("c", 3), level("d", 4)];
     const current = [row("d", 1, 3), row("b", 2, 0), row("c", 3, 0), row("a", 4, 0)];
@@ -140,45 +138,23 @@ describe("biggestClimber", () => {
     expect(biggestClimber(current, ranked(previous))).toEqual({ entrantId: "d", from: 4, to: 1 });
   });
 
-  it("W2d: into a LEVEL current table (a void re-levelled it) nobody climbs either", () => {
-    // Previous played counts held at 0 so the ranked twin of `current` is a result's step (nobody played fewer, c one more).
-    const previous = [row("a", 1, 3, 0), row("b", 2, 0), row("c", 3, 0)];
-    const current = [level("c", 1), level("b", 2), level("a", 3)];
-    expect(biggestClimber(current, previous)).toBeNull();
-    expect(biggestClimber(ranked(current).map((r) => (r.entrantId === "c" ? { ...r, played: 1 } : r)), previous)).toEqual({ entrantId: "c", from: 3, to: 1 });
+  // B5 fix wave fix round 2 (controller ruling m4; the B5 re-review's pure probe): the step is a result's by construction (the
+  // writer rebases it on every roster refold), so a row NEW in the current table - B beat C, C's first counted match in a pool
+  // table that lists only entrants with a result - neither climbs nor hides the climb of the rows both tables share.
+  // differential: at 36eff19653 a row-count rule (`stepIsAResult`) answered null here.
+  it("m4: a newcomer's first result adds a row; the shared rows still name their climber (B 2 -> 1)", () => {
+    const previous = [row("a", 1, 1), row("b", 2, 1)];
+    const current = [row("b", 1, 4), row("a", 2, 1), row("c", 3, 0)];
+    expect(biggestClimber(current, previous)).toEqual({ entrantId: "b", from: 2, to: 1 });
+    // its pair: the newcomer entering ABOVE a shared row pushes it down, which is no climb for anyone
+    expect(biggestClimber([row("c", 1, 3), row("a", 2, 1), row("b", 3, 1)], previous)).toBeNull();
   });
 
-  // B5 fix wave G3 (controller ruling n1): only a RESULT makes a climber. Each roster step below is the shape the stored table
-  // takes (B5 batch probe: "P1 (4 → 1)" right after a Reinstate; "P5 (4 → 2)" after another player's expunge); its positive pair is
-  // the same rank move with one more match played.
-  describe("n1 a climber is a move a result made", () => {
-    const before = [row("a", 1, 6, 2), row("b", 2, 3, 2), row("c", 3, 3, 2), row("d", 4, 6, 2)];
-    const steps: [string, RankedEntrantRow[], boolean][] = [
-      ["a result: d won (played 2 -> 3) and climbs 4 -> 1", [row("d", 1, 9, 3), row("a", 2, 6, 2), row("b", 3, 3, 3), row("c", 4, 3, 2)], true],
-      ["a Reinstate: a walkover voided (a played 2 -> 1), d 4 -> 1", [row("d", 1, 6, 2), row("a", 2, 6, 1), row("b", 3, 3, 2), row("c", 4, 3, 2)], false],
-      ["a re-rank with no match played (a pin; a withdrawal putting its leaver last is the same shape): d 4 -> 1", [row("d", 1, 6, 2), row("a", 2, 6, 2), row("b", 3, 3, 2), row("c", 4, 3, 2)], false],
-      ["an expunge: a row is gone", [row("d", 1, 6, 2), row("a", 2, 6, 2), row("b", 3, 3, 2)], false],
-      ["a late entrant's first result: a row is new", [row("d", 1, 9, 3), row("a", 2, 6, 2), row("b", 3, 3, 2), row("c", 4, 3, 2), row("e", 5, 0, 1)], false],
-      ["a row with no played count cannot be read", [{ entrantId: "d", rank: 1, points: 9 }, row("a", 2, 6, 2), row("b", 3, 3, 3), row("c", 4, 3, 2)], false],
-    ];
-    it.each(steps)("%s", (_label, current, climbs) => {
-      const out = biggestClimber(current, before);
-      if (climbs) expect(out).not.toBeNull();
-      else expect(out).toBeNull();
-    });
-    it("anti-vacuity: every roster step moves d alone up the most, so only the rule keeps it from being a climb", () => {
-      let checked = 0;
-      for (const [label, current, climbs] of steps) {
-        if (climbs) continue;
-        const prev = new Map(before.map((r) => [r.entrantId, r.rank!]));
-        const deltas = current.filter((r) => r.rank !== undefined && prev.has(r.entrantId)).map((r) => [r.entrantId, prev.get(r.entrantId)! - r.rank!] as const);
-        const best = Math.max(...deltas.map(([, d]) => d));
-        expect(deltas.filter(([, d]) => d === best).map(([id]) => id), `${label}: d alone climbs furthest`).toEqual(["d"]);
-        expect(best, `${label}: d climbs`).toBeGreaterThan(0);
-        checked++;
-      }
-      expect(checked).toBe(steps.length - 1);
-    });
+  it("W2d: into a LEVEL current table (a void re-levelled it) nobody climbs either", () => {
+    const previous = [row("a", 1, 3), row("b", 2, 0), row("c", 3, 0)];
+    const current = [level("c", 1), level("b", 2), level("a", 3)];
+    expect(biggestClimber(current, previous)).toBeNull();
+    expect(biggestClimber(ranked(current), previous)).toEqual({ entrantId: "c", from: 3, to: 1 });
   });
 });
 
