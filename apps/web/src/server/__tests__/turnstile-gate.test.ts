@@ -355,6 +355,8 @@ const EXEMPT: Record<string, string> = {
   "consent/route.ts POST": "cookie-consent receipt: writes one row, sends no mail; per-IP CONSENT_LIMIT; a challenge would block the consent banner itself",
   "v1/public/registrations/[id]/checkout/route.ts POST":
     "pay: needs the registrant's own token for an existing registration, per-IP CHECKOUT_LIMIT; revisit if Checkout Session spend becomes a target",
+  "webhooks/realtimekit/route.ts POST":
+    "Cloudflare RealtimeKit's webhook: the vendor's RSA-SHA256 `rtk-signature` over the raw request bytes is the credential, verified in server/external-play/video/webhook.ts before any write (the verifier sits two hops from the handler, past what the one-hop reader follows); a vendor cannot solve a browser challenge; a bad or missing signature is a 401 that writes nothing",
   "v1/match-day-code/approvals/[kind]/[stageId]/route.ts POST":
     "the Seazn Club app's call, bearing a Match Day code (md_, 256 bits, one day, withdrawable): the code is the credential and a phone cannot solve a browser challenge; per-code MD_REVIEW_LIMIT / MD_APPROVE_LIMIT and per-IP MD_FAIL_LIMIT on failed lookups",
   "v1/match-day-code/fixtures/[id]/call/route.ts POST":
