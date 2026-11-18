@@ -305,7 +305,7 @@ describe("decide — legal edges", () => {
       expect(d.effects, label).toEqual(effects);
     }
   });
-  // §5.3: `stop` carries a reason, and endReason widens to the DB's five (T4b DB_END_REASONS). Swept over every stop
+  // §5.3: `stop` carries a reason, and endReason widens to the DB's six (T4b DB_END_REASONS). Swept over every stop
   // reason the command admits (the four DB reasons that are not the wall clock's) × the three stop shapes: passthrough
   // ending, composed with no Machine (completes now), composed with a playing Machine (the runner's ending signal).
   it("§5.3: stop with EACH reason sets endReason to it — passthrough, composed with no Machine, composed through the runner", () => {

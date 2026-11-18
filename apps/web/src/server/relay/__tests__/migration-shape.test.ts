@@ -771,7 +771,7 @@ describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", (
 
 // ---- V430 (capture QR v2 PR-1 T3, spec §8.1 amended by §17.1/§17.3) -------------------------
 // The stable stream code, its pairings, the per-fixture settings and the phone-beat history; the
-// session columns the code and pairing hang off; the drop and the rename (R3); end_reason's five
+// session columns the code and pairing hang off; the drop and the rename (R3); end_reason's six
 // and events.source's 'phone'. Every refusal has its accepted twin; every enum is read from the
 // parsed fold (_stream-migration.ts lastCheckList), never typed.
 
@@ -950,25 +950,27 @@ describe.skipIf(!HAS_DB)("V430__capture_stream_codes.sql — the constraints are
     expect(checks.map((c) => c.conname)).toEqual(["fixture_stream_sessions_credentials_served_count_check"]);
   });
 
-  it("end_reason admits EXACTLY the fold's five — every one lands on an ending session, anything else is refused — and the live constraint lists the same five", async () => {
-    const five = lastCheckList("fixture_stream_sessions", "end_reason");
-    expect(five, "read from the parsed delta, never typed").toHaveLength(5);
+  it("end_reason admits EXACTLY the fold's six (V530 adds relay_ended) — every one lands on an ending session and reads back as itself, anything else is refused — and the live constraint lists the same six", async () => {
+    const six = lastCheckList("fixture_stream_sessions", "end_reason");
+    expect(six, "read from the parsed delta, never typed").toHaveLength(6);
+    expect(six, "V530's compositor-exit reason is in the fold").toContain("relay_ended");
     const r = await rig();
-    let admitted = 0;
-    for (const reason of five) {
+    const landed: string[] = [];
+    for (const reason of six) {
       const sid = await insertSession(r, "ending");
       await sql`update fixture_stream_sessions set end_reason = ${reason} where id = ${sid}`;
+      const [row] = await sql<{ end_reason: string }[]>`select end_reason from fixture_stream_sessions where id = ${sid}`;
+      landed.push(row!.end_reason);
       await sql`update fixture_stream_sessions set state = 'completed' where id = ${sid}`;   // frees the one-active slot
-      admitted++;
     }
-    expect(admitted).toBe(5);
+    expect(landed, "each reason lands as itself, relay_ended included").toEqual(six);
     const sid = await insertSession(r, "ending");
     await expect(sql`update fixture_stream_sessions set end_reason = 'crashed' where id = ${sid}`).rejects.toMatchObject({ code: "23514", constraint_name: "fixture_stream_sessions_end_reason_check" });
     await sql`update fixture_stream_sessions set state = 'completed' where id = ${sid}`;   // leave no open row behind
     const [def] = await sql<{ def: string }[]>`
       select pg_get_constraintdef(oid) as def from pg_constraint
        where conrelid = 'fixture_stream_sessions'::regclass and conname = 'fixture_stream_sessions_end_reason_check'`;
-    expect([...def!.def.matchAll(/'([^']+)'::text/g)].map((m) => m[1]!).sort()).toEqual([...five].sort());
+    expect([...def!.def.matchAll(/'([^']+)'::text/g)].map((m) => m[1]!).sort()).toEqual([...six].sort());
   });
 
   it("the end-reason value check keeps Postgres's DEFAULT name for V410's inline check — fixture_stream_sessions_end_reason_check, read from pg_constraint (A4) — and the named state check is unchanged", async () => {
