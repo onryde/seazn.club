@@ -20,8 +20,8 @@ export default function FormatGalleryPage() {
         Pick the right shape for your day
       </h1>
       <p className="mt-3 max-w-2xl text-slate-600">
-        Every format the engine speaks, explained the same way: what it is, who
-        it suits, the trade-off — with a diagram and a real generated example.
+        Every format, explained the same way: what it is, who it suits and the
+        trade-off, with a diagram and an example drawn for eight entrants.
       </p>
 
       <ul className="mt-8 space-y-4">
