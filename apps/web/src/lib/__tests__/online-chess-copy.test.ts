@@ -80,7 +80,7 @@ const PLAYED_ON_LICHESS: Record<Locale, RegExp> = {
   fr: /\b(?:se jouent?|jou[ée]s?)\s+(?:en ligne\s+)?sur Lichess\b/i,
   nl: /\b(?:op Lichess gespeeld|gespeeld op Lichess)\b/i,
 };
-/** Claims the product does not make, in any language it is spelt in. */
+/** Claims the product does not make. ENGLISH-ONLY: es/fr/nl are not swept for these phrases (the played-on-Lichess sweep above is per-locale). */
 const NEVER_CLAIMED = /seazn hosted chess|hosted chess|timing integrity|move[- ]timing|timing analysis|analy[sz]es? (?:the )?(?:move )?timing/i;
 
 /** The wording this change replaces: each pattern must fire on it, or the sweep below proves nothing. */

@@ -1,6 +1,6 @@
 // The organiser-side refusal for a player with no linked Lichess account ("<name> needs a linked Lichess account to
 // enter this online division. Ask them to link one…") must say WHERE the player links (owner 2026-11-18): the card on
-// their own /me page, or Settings → Account → Lichess. "Ask them to link one" with no place sends an organiser looking.
+// their own /me page, (owner/controller: /me only; Settings sits under a club a club-less player cannot reach). "Ask them to link one" with no place sends an organiser looking.
 //
 // The place is spelt from the labels of the screens it names — the Settings menu entry, the Account tab and the Lichess
 // card's title — read from the SAME locale's dictionary, so a rename of any of them moves this test with it instead of
@@ -20,10 +20,6 @@ const DICTS = Object.fromEntries(LOCALES.map((l) => [l, ui(l)])) as Record<Local
 const isLinkRequired = (key: string) => /\.lichess\.linkRequired\./.test(key);
 const KEYS = Object.keys(DICTS.en).filter(isLinkRequired).sort();
 
-/** Where a player links, as the app labels it in a locale. */
-const settingsPath = (loc: Locale) =>
-  [DICTS[loc]["org.home.menu.settings"], DICTS[loc]["settings.nav.account"], DICTS[loc]["settings.account.lichess.title"]].join(" → ");
-
 describe("the 'needs a linked Lichess account' refusals say where to link", () => {
   it("anti-vacuity: the sweep finds all seven (add, import and registrants-hub), in the same set in every locale", () => {
     expect(KEYS).toEqual([
@@ -38,20 +34,12 @@ describe("the 'needs a linked Lichess account' refusals say where to link", () =
     for (const loc of LOCALES) expect(Object.keys(DICTS[loc]).filter(isLinkRequired).sort(), loc).toEqual(KEYS);
   });
 
-  it("the place is spelt from the app's own labels, and they are real words (not an empty join)", () => {
-    for (const loc of LOCALES) {
-      const parts = settingsPath(loc).split(" → ");
-      expect(parts, loc).toHaveLength(3);
-      for (const p of parts) expect(p.trim().length, `${loc}: label ${JSON.stringify(p)}`).toBeGreaterThan(2);
-    }
-  });
-
-  it("every refusal, every locale: names the Settings path AND the /me page, and keeps its {players} slot", () => {
+  it("every refusal, every locale: names the /me page, and keeps its {players} slot", () => {
     let checked = 0;
     for (const loc of LOCALES) {
       for (const key of KEYS) {
         const text = DICTS[loc][key]!;
-        expect(text, `${loc} ${key}: the Settings path`).toContain(settingsPath(loc));
+        expect(text, `${loc} ${key}: no Settings path (a club-less player cannot reach it)`).not.toContain(" → ");
         expect(text, `${loc} ${key}: the /me page`).toContain("/me");
         // The slot: the named forms carry the players' names once; the unnamed form carries none.
         expect(text.split("{players}").length - 1, `${loc} ${key}: {players} slot`).toBe(key.endsWith(".unnamed") ? 0 : 1);
