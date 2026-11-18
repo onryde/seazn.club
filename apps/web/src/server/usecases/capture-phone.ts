@@ -432,9 +432,39 @@ type Decided = {
   callerCurrent: boolean;            // after the claim, BEFORE this beat's own `ended` (§6.3.3 row 2)
   mine: PairingRow | null;           // the caller's pairing, when it is current
   stop: string | null;               // the sid this beat stops (T21, T23), applied after the commit
-  replaced: string | null;           // a court session left on an older pairing by this claim, ended phone_lost after the commit
+  /** A court session left on an older pairing by this claim, ended phone_lost after the commit (`endReplacedCourtSession`). */
+  replaced: { sid: string; pairingId: string; replacedPairingId: string } | null;
   tickSid: string | null;            // the open session this beat ticks (§6.11): its phone's beat naming it
 };
+
+/**
+ * Court follow-up (controller ruling, 2026-11-18): the court session an older pairing left behind ends `phone_lost`. Applied once
+ * the claim that decided it has committed (`apply` takes its own transaction), and re-judged on the LOCKED row: a session that
+ * ended or began ending in between, or that now names the claiming pairing, is left as it is and nothing is written. The
+ * `court_phone_replaced` event is written in the stop's own transaction, so it exists exactly when the stop does. A throw is
+ * reported and never fails the beat, whose claim has already committed (the session then runs on to W19).
+ */
+export async function endReplacedCourtSession(
+  a: { sid: string; pairingId: string; replacedPairingId: string; orgId: string; issuedBy: string }, deps: SessionDeps,
+): Promise<"ended" | "left" | "failed"> {
+  let ended = false;
+  try {
+    await apply(a.sid, async (s, tx) => {
+      if (!isActive(s.state) || s.state === "ending") return null;
+      const [r] = await tx<{ pairing_id: string | null }[]>`select pairing_id from fixture_stream_sessions where id = ${a.sid}`;
+      if (r?.pairing_id === a.pairingId) return null;
+      await recordEvent(tx, { sessionId: a.sid, orgId: a.orgId, source: "phone", kind: "event", type: "court_phone_replaced", actorUserId: null,
+        occurredAt: deps.now(), payload: { pairingId: a.pairingId, replacedPairingId: a.replacedPairingId } });
+      ended = true;
+      return { type: "stop", reason: "phone_lost" };
+    }, deps, { userId: a.issuedBy, source: "phone" });
+    return ended ? "ended" : "left";
+  } catch (err) {
+    log.error({ err: String(err), sid: a.sid, orgId: a.orgId }, "capture court beat: ending the replaced pairing's session failed — the beat is answered");
+    captureError(err, { orgId: a.orgId, route: "capture.beat.replaced_session", extra: { sid: a.sid } });
+    return "failed";
+  }
+}
 
 /** A session a beat names (`sid` or `stopped`), read only inside the beat's scope. */
 export type NamedRow = {
@@ -679,12 +709,10 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     // Court follow-up (controller ruling, 2026-11-18): decided under the code lock with the claim that made it. Only a claim, only
     // a court's scope (its open session is its link's, so the claiming pairing is on the same court), never the claiming
     // pairing's own session, never one already `ending`, and never a session of no pairing (a pairing must have been replaced).
-    let replaced: string | null = null;
+    let replaced: Decided["replaced"] = null;
     if (scope.endsReplacedSession === true && body.claim !== null && mine !== null && open !== null
       && open.pairing_id !== null && open.pairing_id !== mine.id && open.state !== "ending") {
-      await lockOpen();
-      await event(open.id, "court_phone_replaced", { pairingId: mine.id, replacedPairingId: open.pairing_id });
-      replaced = open.id;
+      replaced = { sid: open.id, pairingId: mine.id, replacedPairingId: open.pairing_id };
     }
     // 5's subject: §6.11 "every beat from the session's phone" — the phone HOLDING the broadcast, naming its sid.
     const tickSid = held && body.sid === open!.id ? open!.id : null;
@@ -695,17 +723,7 @@ export async function runBeat(scope: BeatScope, body: Beat, deps: SessionDeps, n
     await apply(decided.stop, (s) => (isActive(s.state) ? { type: "stop", reason: "operator_stopped" } : null), deps,
       { userId: scope.issuedBy, source: "phone" });
   }
-  if (decided.replaced !== null) {
-    // Applied once the claim commits (apply takes its own locks), re-judged on the LOCKED row: a session that ended, or began
-    // ending, in between is left as it is.
-    const pairedTo = decided.mine!.id;
-    const sid = decided.replaced;
-    await apply(sid, async (s, tx) => {
-      if (!isActive(s.state) || s.state === "ending") return null;
-      const [r] = await tx<{ pairing_id: string | null }[]>`select pairing_id from fixture_stream_sessions where id = ${sid}`;
-      return r?.pairing_id !== pairedTo ? { type: "stop", reason: "phone_lost" } : null;
-    }, deps, { userId: scope.issuedBy, source: "phone" });
-  }
+  if (decided.replaced !== null) await endReplacedCourtSession({ ...decided.replaced, orgId: scope.orgId, issuedBy: scope.issuedBy }, deps);
   if (decided.tickSid !== null) {
     try {
       await tickSession(decided.tickSid, deps, "beat");

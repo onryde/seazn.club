@@ -51,7 +51,7 @@ import { connect } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { CaptureRefusalError } from "@/server/api-v1/capture-http";
-import { postBeat } from "../capture-phone";
+import { endReplacedCourtSession, postBeat } from "../capture-phone";
 import { postCourtStart } from "../capture-court";
 import type { ResolvedCourtCode } from "../court-stream-codes";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
@@ -898,6 +898,48 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
         await beat(P);
         expect(await sessionRow(sidA)).toMatchObject({ state: "live", end_reason: null });
         expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("re-judged on the locked row: a session that ended between the claim and the stop, or that now names the claiming pairing, is left alone and writes no event", async () => {
+        const sidA = await aLive();
+        const claiming = randomUUID();
+        const arg = { sid: sidA, pairingId: claiming, replacedPairingId: randomUUID(), orgId: day.orgId, issuedBy: day.auth.userId! };
+        // The session already names the claiming pairing (a takeover moved it there) — the locked row's own re-check.
+        const named = (await sessionRow(sidA)).pairing_id!;
+        expect(await endReplacedCourtSession({ ...arg, pairingId: named }, deps), "names the claiming pairing").toBe("left");
+        expect(await sessionRow(sidA)).toMatchObject({ state: "live", end_reason: null });
+        // Ended in between (the tick, a Stop): nothing is stopped and no event is written.
+        await sql`update fixture_stream_sessions set state = 'completed', end_reason = 'stopped', ended_at = ${clock()} where id = ${sidA}`;
+        expect(await endReplacedCourtSession(arg, deps), "ended in between").toBe("left");
+        expect(await sessionRow(sidA)).toMatchObject({ state: "completed", end_reason: "stopped" });
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("a throwing stop is reported, never a failed beat: the re-pair is still answered, and the session is left to W19", async () => {
+        const sidA = await aLive();
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        const broken: SessionDeps = { ...deps, now: () => { throw new Error("injected: the stop's clock"); } };
+        expect(await endReplacedCourtSession({ sid: sidA, pairingId: randomUUID(), replacedPairingId: randomUUID(), orgId: day.orgId, issuedBy: day.auth.userId! }, broken))
+          .toBe("failed");
+        // Through the beat: the stop's own write fails (a trigger on the test database refuses THIS session's phone_lost end), so
+        // the apply throws after the claim committed — the beat still answers, the new pairing stands, and the session runs on.
+        const fn = `refuse_phone_lost_${randomUUID().replaceAll("-", "")}`;
+        await sql.unsafe(`create function ${fn}() returns trigger language plpgsql as $$ begin
+            if new.id = '${sidA}' and new.end_reason = 'phone_lost' then raise exception 'injected: the stop write'; end if; return new; end $$`);
+        await sql.unsafe(`create trigger ${fn} before update on fixture_stream_sessions for each row execute function ${fn}()`);
+        try {
+          const a = await postBeat(qr.code, qr.tok, body(P, { claim: "new" }), deps, clock());
+          expect(CaptureBeatAnswer.parse(a), "the beat is answered").toEqual(a);
+          tails.queue.length = 0;
+        } finally {
+          await sql.unsafe(`drop trigger ${fn} on fixture_stream_sessions`);
+          await sql.unsafe(`drop function ${fn}()`);
+        }
+        expect(await sessionRow(sidA), "the failed stop wrote nothing").toMatchObject({ state: "live", end_reason: null });
+        expect(await replacedEvents(sidA), "no event without its stop").toBe(0);
+        const [mineNow] = (await pairingOf(P)).filter((p) => p.ended_at === null);
+        expect(mineNow, "the claim committed: a new current pairing").toBeDefined();
       });
 
       it("a session already ending is left alone", async () => {

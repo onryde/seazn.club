@@ -10,7 +10,11 @@
 -- V430's five copied exactly with 'relay_ended' added. fixture_stream_sessions_end_reason_state (end_reason only in
 -- ending/completed) is unchanged. No row is rewritten: a past self-exit stored `stopped` stays as it was (no backfill, owner
 -- 2026-11-16).
+--
+-- Added NOT VALID and validated in its own statement: the add takes only a brief lock (no scan under ACCESS EXCLUSIVE), and the
+-- VALIDATE scans existing rows under SHARE UPDATE EXCLUSIVE, which lets reads and writes go on.
 alter table fixture_stream_sessions
   drop constraint fixture_stream_sessions_end_reason_check,
   add constraint fixture_stream_sessions_end_reason_check
-    check (end_reason in ('stopped','operator_stopped','auto_stopped','phone_lost','max_duration','relay_ended'));
+    check (end_reason in ('stopped','operator_stopped','auto_stopped','phone_lost','max_duration','relay_ended')) not valid;
+alter table fixture_stream_sessions validate constraint fixture_stream_sessions_end_reason_check;
