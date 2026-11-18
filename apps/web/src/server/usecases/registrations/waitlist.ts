@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS, awaitingTeamAssignment } from "@/lib/registration-status";
+import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
 import { resolveVenueTz } from "@/lib/tz";
 import { entryReferenceOf } from "@/lib/ref-code";
 import { registrationPromotedEmail } from "@/lib/email";
@@ -20,6 +21,7 @@ import { divisionNameOf, regGroupCols, loadSettings } from "./lookups";
 import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { queueRegistrationPromotionSkippedMail } from "./lifecycle-mail";
+import { promotionVerdict } from "./places-left";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
  *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
@@ -77,6 +79,51 @@ export async function returnToWaitlist(tx: Tx, reg: { id: string; group_id: stri
  *  that a slot is genuinely free). */
 export function freesTeamSlot(row: { status: string; free_agent: boolean }): boolean {
   return (SPOT_HOLDERS as readonly string[]).includes(row.status) && !row.free_agent;
+}
+
+/** Whether `divisionId` has a team entry waiting - the oldest-first promotion's own "is there anyone to promote" question, asked
+ *  before the room check so a full division with an empty queue still answers "nobody", not "over capacity". */
+export async function hasWaitingTeamEntry(tx: Tx, divisionId: string): Promise<boolean> {
+  const [row] = await tx<{ one: number }[]>`
+    select 1 as one from registrations where division_id = ${divisionId} and status = 'waitlisted' limit 1`;
+  return !!row;
+}
+
+/** The room check an ORGANISER's manual promotion owes (registration defects, item 1), run inside the promoting transaction.
+ *  `promoteOldestWaitlisted` trusts its caller that a place is free, which holds for the automatic promotions (a withdrawal,
+ *  rejection or expiry just made the place) and not for an organiser pressing Promote on a full division.
+ *  - past the PLAN's per-division limit (`planLimit`, the limit submit honours: `getLimit` with its add-on bonus; null = unlimited):
+ *    always refused, 422 `PROMOTE_PLAN_LIMIT`;
+ *  - at or past the division's OWN capacity: refused 409 `PROMOTE_OVER_CAPACITY` unless `confirmOverCapacity`.
+ *  The count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same `registration_settings`
+ *  row lock submit takes, so two promotions - or a promotion and a sign-up - cannot both pass on the last place. */
+export async function assertOrganiserPromotionHasRoom(
+  tx: Tx,
+  divisionId: string,
+  opts: { planLimit: number | null; confirmOverCapacity: boolean },
+): Promise<void> {
+  const [settings] = await tx<{ capacity: number | null }[]>`
+    select capacity from registration_settings where division_id = ${divisionId} for update`;
+  const [{ n: active }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from registrations
+    where division_id = ${divisionId} and status in ${tx([...SPOT_HOLDERS])} and free_agent = false`;
+  const verdict = promotionVerdict({ capacity: settings?.capacity ?? null, planLimit: opts.planLimit, active });
+  if (verdict.kind === "plan_limit") {
+    throw new HttpError(
+      422,
+      `Your plan allows ${verdict.limit} entrants per division and this division already has ${verdict.active}. Raise the plan to promote more.`,
+      PROMOTE_PLAN_LIMIT_CODE,
+      { limit: verdict.limit, taken: verdict.active },
+    );
+  }
+  if (verdict.kind === "over_capacity" && !opts.confirmOverCapacity) {
+    throw new HttpError(
+      409,
+      `This takes the division over its capacity (${verdict.active} of ${verdict.capacity} places are taken). Confirm to promote anyway.`,
+      PROMOTE_OVER_CAPACITY_CODE,
+      { capacity: verdict.capacity, taken: verdict.active },
+    );
+  }
 }
 
 /**

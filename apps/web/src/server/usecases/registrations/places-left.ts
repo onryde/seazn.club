@@ -20,3 +20,21 @@ export function placesLeft({ capacity, planLimit, active }: PlacesLeftInput): nu
   const hardCap = Math.min(capacity ?? Number.POSITIVE_INFINITY, planLimit ?? Number.POSITIVE_INFINITY);
   return Number.isFinite(hardCap) ? Math.max(0, hardCap - active) : null;
 }
+
+export type PromotionVerdict =
+  | { kind: "ok" }
+  /** The division's OWN capacity is met (or passed): an organiser may promote anyway, after confirming. */
+  | { kind: "over_capacity"; capacity: number; active: number }
+  /** The PLAN's per-division entrant limit is met (or passed): never promotable, confirmed or not. */
+  | { kind: "plan_limit"; limit: number; active: number };
+
+/** Whether an ORGANISER's manual promotion off the waitlist may seat one more team entry (registration defects, item 1). A promotion
+ *  adds one place, so it passes the plan's limit when `active >= planLimit` and the division's capacity when `active >= capacity`.
+ *  The plan is judged first: it is the limit sign-up itself honours (`placesLeft`, submit's `hardCap`), and no confirmation lifts it.
+ *  `active` is the count `placesLeft` takes - team entries holding a place, never a solo sign-up. Automatic promotion (a withdrawal,
+ *  rejection or expiry freeing a place) does not ask: it fills a place that was just made. */
+export function promotionVerdict({ capacity, planLimit, active }: PlacesLeftInput): PromotionVerdict {
+  if (planLimit !== null && active >= planLimit) return { kind: "plan_limit", limit: planLimit, active };
+  if (capacity !== null && active >= capacity) return { kind: "over_capacity", capacity, active };
+  return { kind: "ok" };
+}

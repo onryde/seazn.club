@@ -101,6 +101,7 @@ import { useMsg } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
+import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
 import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
@@ -249,6 +250,10 @@ export function RegistrationHubRegistrantActions({
    *  doors refuse an entry whose kind the division no longer takes (FU1); that too is said off its code (fix round 1 m2). */
   function failureText(err: unknown): string {
     if (!(err instanceof ApiV1Error)) return errorText(err);
+    // The plan's per-division entrant limit is met: said in the organiser's language, with the limit the server read.
+    if (err.code === PROMOTE_PLAN_LIMIT_CODE && typeof err.extra.limit === "number") {
+      return msg("reg.promote.planLimit", { limit: err.extra.limit });
+    }
     const said =
       registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??
       lichessRegistrantRefusalText(err, (key) => msg(key as MessageKey));
@@ -365,10 +370,29 @@ export function RegistrationHubRegistrantActions({
       // whichever entry promoteFromWaitlist's default (oldest-waitlisted)
       // would otherwise pick — the button is "promote this entry", not
       // "promote whoever's next".
-      await apiV1(`/api/v1/registrations/${registrationId}/promote`, {
-        method: "POST",
-        json: { registration_id: registrationId },
-      });
+      const send = (confirmOverCapacity: boolean) =>
+        apiV1(`/api/v1/registrations/${registrationId}/promote`, {
+          method: "POST",
+          json: { registration_id: registrationId, ...(confirmOverCapacity ? { confirm_over_capacity: true } : {}) },
+        });
+      try {
+        await send(false);
+      } catch (err) {
+        // The division is at or over its OWN capacity: the server refuses until the organiser says so. Ask, and resend with the
+        // confirmation. (The PLAN's limit is never asked about - it refuses either way, and is said in `failureText`.)
+        if (!(err instanceof ApiV1Error && err.code === PROMOTE_OVER_CAPACITY_CODE)) throw err;
+        const ok = await confirmDialog({
+          title: msg("reg.promote.overCapacity.title"),
+          body: msg("reg.promote.overCapacity.body"),
+          confirmLabel: msg("reg.promote.overCapacity.label"),
+          tone: "danger",
+        });
+        if (!ok) {
+          setPromotedOptimistically(false);
+          return;
+        }
+        await send(true);
+      }
       setFeedback({ tone: "success", text: msg("reg.hub.registrants.detail.actions.promoted") });
       router.refresh();
     } catch (err) {

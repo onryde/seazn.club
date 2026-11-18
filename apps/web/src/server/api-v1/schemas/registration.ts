@@ -241,9 +241,14 @@ export const RegistrationListEntry = Registration.extend({
  *  `registration_id`, when given, overrides which waitlisted entry gets
  *  promoted instead of the oldest (`PromoteFromWaitlistOpts.registrationId`,
  *  registration-approval.ts) — it need not equal the URL `id`. Omitted →
- *  oldest-first, `promoteFromWaitlist`'s default. */
+ *  oldest-first, `promoteFromWaitlist`'s default.
+ *
+ *  `confirm_over_capacity`: the organiser has confirmed taking the division past its OWN capacity. Without it a promotion into a
+ *  division at or over capacity is refused 409 `PROMOTE_OVER_CAPACITY`. It never lifts the PLAN's per-division entrant limit, which
+ *  refuses 422 `PROMOTE_PLAN_LIMIT` either way. */
 export const PromoteRegistration = z.object({
   registration_id: Uuid.optional(),
+  confirm_over_capacity: z.boolean().optional(),
 });
 export type PromoteRegistration = z.infer<typeof PromoteRegistration>;
 

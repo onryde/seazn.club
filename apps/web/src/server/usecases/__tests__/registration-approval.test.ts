@@ -702,6 +702,10 @@ describe.skipIf(!HAS_DB)("withdrawRegistration", () => {
 // promoteFromWaitlist
 // ---------------------------------------------------------------------------
 
+// These cases promote OFF A FULL DIVISION (capacity 1 held by another entry - how an entry is waitlisted at all) to test what a
+// promotion WRITES (fee snapshot, pay window, cart-level method, inline confirm), so each carries the organiser's confirmation
+// (`confirmOverCapacity`). The room check itself - refusal without it, the plan limit, the sequence - is
+// registration-promote-capacity.test.ts.
 describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
   it("oldest-first by default; an explicit id overrides the pick and is itself idempotent", async () => {
     const { orgId, orgSlug, ownerId } = await seedOrg("pro");
@@ -730,6 +734,7 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
     // Explicit-id override picks the NEWER one, skipping the oldest-first pick.
     const promotedNewer = await promoteFromWaitlist(owner, division.id, {
       registrationId: newer.entries[0]!.registration_id,
+      confirmOverCapacity: true,
     });
     expect(promotedNewer!.id).toBe(newer.entries[0]!.registration_id);
     const [olderStillWaiting] = await sql<{ status: string }[]>`
@@ -745,7 +750,7 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
     expect(await auditCount("registration.promoted", newer.entries[0]!.registration_id)).toBe(1);
 
     // Oldest-first (no explicit id) now promotes the one entry still waiting.
-    const promotedOldest = await promoteFromWaitlist(owner, division.id);
+    const promotedOldest = await promoteFromWaitlist(owner, division.id, { confirmOverCapacity: true });
     expect(promotedOldest!.id).toBe(older.entries[0]!.registration_id);
 
     // Nothing left waitlisted: oldest-first is a safe no-op, not an error.
@@ -774,6 +779,7 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
 
     const promoted = await promoteFromWaitlist(owner, division.id, {
       registrationId: waiting.entries[0]!.registration_id,
+      confirmOverCapacity: true,
     });
     expect(promoted!.status).toBe("pending");
     expect(promoted!.amount_cents).toBe(1500); // fee snapshot applied on promotion
@@ -811,6 +817,7 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
 
     const promoted = await promoteFromWaitlist(owner, division.id, {
       registrationId: waiting.entries[0]!.registration_id,
+      confirmOverCapacity: true,
     });
     expect(promoted!.status).toBe("confirmed");
     expect(promoted!.entrant_id).not.toBeNull();
@@ -863,7 +870,7 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
     expect(before!.payment_method).toBe("stripe");
     expect(before!.expires_at).not.toBeNull();
 
-    await promoteFromWaitlist(owner, divB.id, { registrationId: entryB.registration_id });
+    await promoteFromWaitlist(owner, divB.id, { registrationId: entryB.registration_id, confirmOverCapacity: true });
 
     const [after] = await sql<{ payment_method: string | null; expires_at: Date | null }[]>`
       select payment_method, expires_at from registration_groups where id = ${cart.group_id}`;
@@ -932,7 +939,7 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist", () => {
     await sql`update organizations set stripe_charges_enabled = true where id = ${orgId}`;
     await sql`update registration_settings set fee_cents = 1000, payment_method = 'stripe' where division_id = ${divB.id}`;
 
-    const promoted = await promoteFromWaitlist(owner, divB.id, { registrationId: entryB.registration_id });
+    const promoted = await promoteFromWaitlist(owner, divB.id, { registrationId: entryB.registration_id, confirmOverCapacity: true });
     expect(promoted!.status).toBe("pending");
     expect(promoted!.amount_cents).toBe(1000);
 

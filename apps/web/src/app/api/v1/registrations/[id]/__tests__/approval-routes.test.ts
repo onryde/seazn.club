@@ -25,6 +25,7 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
+import { PROMOTE_OVER_CAPACITY_CODE } from "@/lib/registration-promote";
 import {
   asOwner,
   makeUser,
@@ -59,7 +60,7 @@ function postReq(path: string, body?: unknown): Request {
 interface Envelope {
   ok: boolean;
   data?: Record<string, unknown> | null;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; [k: string]: unknown };
 }
 
 async function read(res: Response): Promise<{ status: number; body: Envelope }> {
@@ -371,5 +372,54 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/promote — the documented def
     const { status: httpStatus, body } = await read(await promoteRoute(broken, ctx(registration.id)));
     expect(httpStatus).toBe(400);
     expect(body.error?.message).toMatch(/valid JSON/i);
+  });
+});
+
+// Registration defects item 1: the HTTP face of the organiser's room check. The refusal rides the v1 error envelope with its code (the
+// console says it in the organiser's language off the code), and `confirm_over_capacity` is the body field that lifts it.
+describe.skipIf(!HAS_DB)("POST /registrations/:id/promote - capacity confirmation (registration defects item 1)", () => {
+  async function fullDivisionWithWaiting() {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    await putRegistrationSettings(owner, division.id, { ...MANUAL_SETTINGS_INPUT, capacity: 1 });
+    await seedRegistration(competition.id, division.id, SETTINGS, { displayName: "Holds the place", status: "confirmed" });
+    const { registration } = await seedRegistration(competition.id, division.id, SETTINGS, { displayName: "Waiting", status: "waitlisted" });
+    return registration;
+  }
+
+  it("a full division: 409 with the PROMOTE_OVER_CAPACITY code and the numbers, and the entry stays waitlisted", async () => {
+    const waiting = await fullDivisionWithWaiting();
+    const { status: httpStatus, body } = await read(
+      await promoteRoute(postReq(`/registrations/${waiting.id}/promote`, { registration_id: waiting.id }), ctx(waiting.id)),
+    );
+    expect(httpStatus).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatchObject({ code: PROMOTE_OVER_CAPACITY_CODE, capacity: 1, taken: 1 });
+    expect(await status(waiting.id)).toBe("waitlisted");
+  });
+
+  it("the same request with confirm_over_capacity: true promotes", async () => {
+    const waiting = await fullDivisionWithWaiting();
+    const { status: httpStatus, body } = await read(
+      await promoteRoute(
+        postReq(`/registrations/${waiting.id}/promote`, { registration_id: waiting.id, confirm_over_capacity: true }),
+        ctx(waiting.id),
+      ),
+    );
+    expect(httpStatus).toBe(200);
+    expect(body.data).toMatchObject({ id: waiting.id });
+    expect(await status(waiting.id)).toBe("pending");
+  });
+
+  it("a non-boolean confirm_over_capacity is a 400, never read as truthy", async () => {
+    const waiting = await fullDivisionWithWaiting();
+    const { status: httpStatus } = await read(
+      await promoteRoute(
+        postReq(`/registrations/${waiting.id}/promote`, { registration_id: waiting.id, confirm_over_capacity: "yes" }),
+        ctx(waiting.id),
+      ),
+    );
+    expect(httpStatus).toBe(400);
+    expect(await status(waiting.id)).toBe("waitlisted");
   });
 });

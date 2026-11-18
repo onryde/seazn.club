@@ -22,6 +22,7 @@ import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS } from "@/lib/registration-reminder";
+import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -443,6 +444,77 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     const call = net.calls.find((c) => c.url === "/api/v1/registrations/reg-77/promote");
     expect(call).toBeTruthy();
     expect(call!.json).toEqual({ registration_id: "reg-77" });
+  });
+});
+
+// Registration defects item 1: the server refuses a promotion into a full division (409 PROMOTE_OVER_CAPACITY) until the organiser
+// confirms, and refuses one past the plan's per-division limit (422 PROMOTE_PLAN_LIMIT) outright. The island asks, then resends.
+describe("RegistrationHubRegistrantActions - promote into a full division", () => {
+  const overCapacity = () => new ApiV1Error("over capacity", 409, PROMOTE_OVER_CAPACITY_CODE, { capacity: 2, taken: 2 });
+  const promoteCalls = () => net.calls.filter((c) => c.url.endsWith("/promote"));
+  const clickPromote = (island: ReturnType<typeof mount>) => (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+
+  it("a promotion that fits asks nothing: no dialog, one request, no confirm flag", async () => {
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(promoteCalls()).toHaveLength(1);
+    expect(promoteCalls()[0]!.json).toEqual({ registration_id: "reg-1" });
+  });
+
+  it("a 409 PROMOTE_OVER_CAPACITY opens the confirm with the new copy, and a yes resends WITH confirm_over_capacity", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
+      title: t(uiEn, "reg.promote.overCapacity.title"),
+      body: t(uiEn, "reg.promote.overCapacity.body"),
+      confirmLabel: t(uiEn, "reg.promote.overCapacity.label"),
+    });
+    expect(promoteCalls().map((c) => c.json)).toEqual([
+      { registration_id: "reg-1" },
+      { registration_id: "reg-1", confirm_over_capacity: true },
+    ]);
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a NO resends nothing, shows no success, and the Promote button is back", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    confirmMock.fn.mockImplementation(async () => false);
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(promoteCalls()).toHaveLength(1);
+    expect(nav.refresh).not.toHaveBeenCalled();
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(findAction(island, "promote")).toBeTruthy();
+  });
+
+  it("a 422 PROMOTE_PLAN_LIMIT never asks: it says the plan's limit, read off the error, and the button is back", async () => {
+    net.next.set("promote", Promise.reject(new ApiV1Error("english", 422, PROMOTE_PLAN_LIMIT_CODE, { limit: 64, taken: 64 })));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(promoteCalls()).toHaveLength(1);
+    expect(island.text()).toContain(t(uiEn, "reg.promote.planLimit", { limit: 64 }));
+    expect(island.text()).not.toContain("english");
+    expect(findAction(island, "promote")).toBeTruthy();
+  });
+
+  it("every locale carries the four new strings, translated (not the English copy), with the limit placeholder kept", () => {
+    const keys = ["reg.promote.overCapacity.title", "reg.promote.overCapacity.body", "reg.promote.overCapacity.label", "reg.promote.planLimit"] as const;
+    let checked = 0;
+    for (const dict of [uiFr, uiEs, uiNl]) {
+      for (const k of keys) {
+        const v = (dict as Record<string, string>)[k];
+        expect(v, k).toBeTruthy();
+        expect(v, `${k} must not be the English copy`).not.toBe((uiEn as Record<string, string>)[k]);
+        checked += 1;
+      }
+      expect((dict as Record<string, string>)["reg.promote.planLimit"]).toContain("{limit}");
+    }
+    expect(checked).toBe(12);
   });
 });
 

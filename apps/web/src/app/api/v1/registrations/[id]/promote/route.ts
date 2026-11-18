@@ -23,6 +23,11 @@ type Ctx = { params: Promise<{ id: string }> };
  * created_at), id`, so a lapsed promotion or an organiser's move waits at the
  * back - the same order every surface counts a place in line by).
  * Returns null when the default path finds nothing waitlisted.
+ *
+ * A promotion into a division at or over its capacity is refused 409
+ * `PROMOTE_OVER_CAPACITY` unless the body carries `confirm_over_capacity:
+ * true`; one past the plan's per-division entrant limit is refused 422
+ * `PROMOTE_PLAN_LIMIT` whatever the body says.
  */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
@@ -57,6 +62,7 @@ export async function POST(req: Request, { params }: Ctx) {
     const input = PromoteRegistration.parse(parsedBody);
     const promoted = await promoteFromWaitlist(auth, row.division_id, {
       registrationId: input.registration_id,
+      confirmOverCapacity: input.confirm_over_capacity === true,
     });
     if (!promoted) return null;
     return organiserRegistration(promoted, auth);

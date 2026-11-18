@@ -12,6 +12,7 @@ import "server-only";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { getLimit } from "@/lib/entitlements";
 import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { log } from "@/server/logger";
 import { deferred } from "@/lib/deferred";
@@ -34,6 +35,8 @@ import {
   promoteOldestWaitlisted,
   promoteWaitlistedRow,
   promotionSeats,
+  assertOrganiserPromotionHasRoom,
+  hasWaitingTeamEntry,
   openRegistrationSeatGateFor,
   releaseSoloSignUpPlacement,
   withdrawRegistrationOrganiser,
@@ -363,6 +366,9 @@ export interface PromoteFromWaitlistOpts {
   /** Explicit-id override — promote THIS registration instead of the oldest
    *  waitlisted one. Must be `waitlisted` and belong to `divisionId`. */
   registrationId?: string;
+  /** The organiser has confirmed taking the division past its OWN capacity (the console's "Promote anyway"). Without it a promotion
+   *  into a division at or over capacity is refused 409 `PROMOTE_OVER_CAPACITY`. It never lifts the PLAN's per-division limit. */
+  confirmOverCapacity?: boolean;
 }
 
 /**
@@ -372,10 +378,14 @@ export interface PromoteFromWaitlistOpts {
  * (registrations/waitlist.ts) — the routed wave-4 fix that scopes the cart-level
  * `payment_method`/`expires_at` write so it cannot clobber a sibling entry
  * still `pending` in the same cart (see the block comment on
- * `promoteWaitlistedRow`). No capacity re-check here, matching
- * `promoteOldestWaitlisted`'s existing contract elsewhere (sweep, withdraw):
- * promotion is a deliberate act by whoever calls it, not itself
- * capacity-gated. Idempotent for the explicit-id path: a row that ALREADY
+ * `promoteWaitlistedRow`). `promoteOldestWaitlisted` itself re-checks no
+ * capacity (its other callers, the sweep and withdraw, fill a place just made).
+ * THIS door is the organiser pressing Promote, which has no such guarantee: it
+ * checks the room first (`assertOrganiserPromotionHasRoom`) - refused past the PLAN's
+ * per-division limit always, past the division's own capacity unless
+ * `opts.confirmOverCapacity`. A solo sign-up takes no team place and is not
+ * checked; an already-seated entry's replay is a no-op and is not either.
+ * Idempotent for the explicit-id path: a row that ALREADY
  * holds (or held and moved past) a spot — `SPOT_HOLDERS` — is a no-op return
  * of its current state, not an error; only a genuinely dead entry
  * (withdrawn/expired/rejected) refuses. Returns `null` for the oldest-first
@@ -396,6 +406,12 @@ export async function promoteFromWaitlist(
   const seatGate: RegistrationSeatGate | undefined = promotionSeats(await loadSettings(sql, divisionId))
     ? await openRegistrationSeatGate({ divisionId, registrationId: opts.registrationId, auth })
     : undefined;
+  // The plan's per-division entrant limit, asked out here like submit does (before its transaction): the limit sign-up honours,
+  // `getLimit` with the add-on bonus; null = unlimited.
+  const [division] = await sql<{ competition_id: string }[]>`select competition_id from divisions where id = ${divisionId}`;
+  if (!division) throw new HttpError(404, "division not found");
+  const planLimit = await getLimit(auth.orgId, "entrants.per_division.max", division.competition_id);
+  const room = { planLimit, confirmOverCapacity: opts.confirmOverCapacity === true };
   const result = await withTenant(auth.orgId, async (tx) => {
     const competitionId = await divisionCompetitionId(tx, divisionId);
     assertNotFrozen(frozen, competitionId);
@@ -404,8 +420,8 @@ export async function promoteFromWaitlist(
     let promoted: RegistrationWithGroupRow | null;
     let alreadySettled = false;
     if (opts.registrationId) {
-      const [target] = await tx<{ id: string; division_id: string; status: string; group_id: string }[]>`
-        select id, division_id, status, group_id from registrations
+      const [target] = await tx<{ id: string; division_id: string; status: string; group_id: string; free_agent: boolean }[]>`
+        select id, division_id, status, group_id, free_agent from registrations
         where id = ${opts.registrationId} for update`;
       if (!target || target.division_id !== divisionId) {
         throw new HttpError(404, "registration not found");
@@ -416,9 +432,13 @@ export async function promoteFromWaitlist(
       } else if (target.status !== "waitlisted") {
         throw new HttpError(422, `Cannot promote a ${target.status} registration`);
       } else {
+        // A solo sign-up never takes a TEAM place (RS012), so there is no place to check for it.
+        if (!target.free_agent) await assertOrganiserPromotionHasRoom(tx, divisionId, room);
         promoted = await promoteWaitlistedRow(tx, target.id, target.group_id, settings, seatGate);
       }
     } else {
+      // An empty queue on a full division is "nobody to promote" (null), not a refusal.
+      if (await hasWaitingTeamEntry(tx, divisionId)) await assertOrganiserPromotionHasRoom(tx, divisionId, room);
       promoted = await promoteOldestWaitlisted(tx, divisionId, settings, undefined, seatGate);
     }
 
