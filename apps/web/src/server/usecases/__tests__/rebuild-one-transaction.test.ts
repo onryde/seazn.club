@@ -23,15 +23,17 @@ import { isByeLine } from "@/lib/bye-line";
 import { roundRoleFor } from "@/lib/round-role-label";
 import { holdsSlot } from "@/lib/rebuild-slots";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { generateRoundRobin } from "@seazn/engine/scheduling";
 import { appendEvent } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { setDivisionLocks } from "../history";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, overrideStandings, rebuildStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
 import { createCourt, createVenue } from "../venues";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { createStagesWithLegacy } from "./_legacy-standalone-stage";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -654,5 +656,310 @@ describe.skipIf(!HAS_DB)("X-RB-1 stepladder and page playoff Rebuild carry by br
     }
     expect(checked, "anti-vacuity: every rebuilt line").toBe(4);
     expect(out.slots).toEqual({ kept: 4, freed: 0, unscheduled: 0 });
+  });
+});
+
+// W5 app-A Task 18 (RB-1; ruling 288's storage cleanup, G7; RB5-G1 under ruling 285). Rebuild holds on every round-robin row: a
+// league of one, two and three legs, a pooled group of two legs, the catch-up lines and byes a late entry wrote, the rank pins,
+// the withdrawal's expunged lines. The rulebook's answer for each row: what Rebuild rewrites it rewrites in ONE transaction; what
+// it holds (a played stage, an appended ledger row) it holds by refusing BEFORE any delete. single-sport: generic — Rebuild's
+// carry, its result guard and its storage rewrites read no sport column (the sport sweeps live in the late-entry and
+// rank-override suites this file's rows come from).
+const RR_KEY = /(?:^|-)rr-r\d+-c\d+-L(\d+)$/; // a pool prefixes its key (`rrExtKey`)
+const legOf = (r: Pick<Row, "ext_key">) => Number(RR_KEY.exec(r.ext_key ?? "")?.[1]);
+
+async function configOf(stageId: string): Promise<Record<string, unknown>> {
+  const [row] = await sql<{ config: Record<string, unknown> }[]>`select config from stages where id = ${stageId}`;
+  return row!.config;
+}
+async function eventCount(divisionId: string, type?: string): Promise<number> {
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from division_events where division_id = ${divisionId} and (${type ?? null}::text is null or type = ${type ?? null})`;
+  return n;
+}
+async function scoreEventCount(stageId: string): Promise<number> {
+  const [{ n }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from score_events e join fixtures f on f.id = e.fixture_id where f.stage_id = ${stageId}`;
+  return n;
+}
+/** Everything a refused Rebuild must leave byte-identical: every fixture row, the stage's config, the ledger and the score events. */
+async function stageSnapshot(stageId: string, divisionId: string) {
+  return {
+    fixtures: await sql`select * from fixtures where stage_id = ${stageId} order by pool_id nulls first, round_no, seq_in_round, id`,
+    config: await configOf(stageId),
+    ledger: await eventCount(divisionId),
+    scoreEvents: await scoreEventCount(stageId),
+  };
+}
+const SEEDED_BYES = (rows: { round_no: number; entrant_id: string }[], name: Map<string, string>) =>
+  rows.map((b) => `r${b.round_no}:${name.get(b.entrant_id) ?? b.entrant_id}`);
+
+describe.skipIf(!HAS_DB)("RB-1 Rebuild keeps times and courts on a league of one, two and three legs (RB5-G1: legs 1-8 stay)", () => {
+  it("RB-1 a league Rebuild keeps every line's slot by position and draws every leg again, for legs 1, 2 and 3", async () => {
+    let checked = 0;
+    for (const legs of [1, 2, 3]) {
+      const { auth } = await seedOrg();
+      const { divisionId, entrants } = await seedDivision(auth, GENERIC, 4);
+      const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: { legs }, progression: null });
+      await generateStageFixtures(auth, stage!.id);
+      const { venueId, courts } = await twoCourts(auth);
+      const before = await rowsOf(stage!.id);
+      // Four play six pairs a leg (the pair count, not the code's schedule): legs of them.
+      expect(before, `legs ${legs}: premise`).toHaveLength(6 * legs);
+      const written = await layOut(before, venueId, courts);
+
+      await patchEntrant(auth, entrants[0]!, { status: "withdrawn" });
+      const [late] = await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+      const out = await rebuildStageFixtures(auth, stage!.id);
+
+      const after = await rowsOf(stage!.id);
+      expect(after.map(position), `legs ${legs}: every position survives`).toEqual(before.map(position));
+      for (const r of after) {
+        expect(slotOf(r), `legs ${legs} ${position(r)}`).toEqual(written.get(position(r)));
+        checked++;
+      }
+      // Every leg is drawn again: each of legs 1..legs holds the six pairs, and nobody plays twice in a leg.
+      for (let leg = 1; leg <= legs; leg++) {
+        const inLeg = after.filter((r) => legOf(r) === leg);
+        expect(inLeg, `legs ${legs}: leg ${leg} holds six pairs`).toHaveLength(6);
+        expect(new Set(inLeg.map((r) => [r.home_entrant_id, r.away_entrant_id].sort().join("|"))).size, `legs ${legs}: leg ${leg} pairs are distinct`).toBe(6);
+      }
+      expect(after.every((r) => RR_KEY.test(r.ext_key ?? "")), `legs ${legs}: the generator's keys only`).toBe(true);
+      const seated = new Set(after.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]));
+      expect([seated.has(entrants[0]!), seated.has(late!.id)], `legs ${legs}: the leaver is out, the newcomer in`).toEqual([false, true]);
+      expect(out.slots).toEqual({ kept: 6 * legs, freed: 0, unscheduled: 0 });
+    }
+    expect(checked, "anti-vacuity: 6 + 12 + 18 lines checked").toBe(36);
+  });
+
+  it("RB-1 a pooled group of two legs keeps each pool's slots in that pool, and both legs of both pools are drawn again", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 6);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "group", name: "G", config: { pools: { count: 2 }, legs: 2 }, progression: null });
+    await generateStageFixtures(auth, stage!.id); // two pools of three, two legs: three pairs a leg a pool
+    const { venueId, courts } = await twoCourts(auth);
+    const before = await rowsOf(stage!.id);
+    expect(before, "premise: 2 pools x 3 pairs x 2 legs").toHaveLength(12);
+    expect(new Set(before.map((r) => r.pool_id)).size).toBe(2);
+    const written = await layOut(before, venueId, courts);
+
+    await patchEntrant(auth, entrants[5]!, { status: "withdrawn" });
+    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E7", seed: 7, members: [] }]);
+    const out = await rebuildStageFixtures(auth, stage!.id);
+
+    const after = await rowsOf(stage!.id);
+    expect(after.map(position).sort()).toEqual(before.map(position).sort());
+    let checked = 0;
+    for (const r of after) {
+      expect(slotOf(r), position(r)).toEqual(written.get(position(r)));
+      checked++;
+    }
+    expect(checked).toBe(12);
+    for (const pool of new Set(after.map((r) => r.pool_id))) {
+      for (const leg of [1, 2]) {
+        expect(after.filter((r) => r.pool_id === pool && legOf(r) === leg), `pool ${pool} leg ${leg}`).toHaveLength(3);
+      }
+    }
+    expect(out.slots).toEqual({ kept: 12, freed: 0, unscheduled: 0 });
+  });
+});
+
+describe.skipIf(!HAS_DB)("RB-1 Rebuild after a result refuses and holds every round-robin row", () => {
+  async function playOne(auth: AuthCtx, stageId: string): Promise<void> {
+    const first = (await rowsOf(stageId))[0]!;
+    await appendEvent(auth.orgId, first.id, 0, { type: "core.start", payload: {} });
+    await appendEvent(auth.orgId, first.id, 1, { type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+  }
+
+  it("RB-1 a league of three legs and a pooled group with a result: Rebuild refuses STAGE_HAS_RESULTS and nothing moves (rows, slots, round_byes, pins, ledger)", async () => {
+    let checked = 0;
+    for (const spec of [
+      { kind: "league" as const, config: { legs: 3 }, n: 5 },
+      { kind: "group" as const, config: { pools: { count: 2 }, legs: 2 }, n: 7 },
+    ]) {
+      const { auth } = await seedOrg();
+      const { divisionId, entrants } = await seedDivision(auth, GENERIC, spec.n);
+      const [stage] = await createStages(auth, divisionId, { seq: 1, kind: spec.kind, name: "T", config: spec.config, progression: null });
+      await generateStageFixtures(auth, stage!.id);
+      const { venueId, courts } = await twoCourts(auth);
+      await layOut(await rowsOf(stage!.id), venueId, courts);
+      // A pin and the stage's byes (odd fields: a league of five, a pool of three) are the rows a Rebuild would have rewritten.
+      await overrideStandings(auth, stage!.id, { rows: [{ entrant_id: entrants[0]!, rank: 1, reason: "placement game" }] });
+      await playOne(auth, stage!.id);
+      const config = await configOf(stage!.id);
+      expect((config.round_byes as unknown[] | undefined)?.length ?? 0, `${spec.kind}: premise, the stage records byes`).toBeGreaterThan(0);
+      expect((config.rank_overrides as unknown[] | undefined)?.length, `${spec.kind}: premise, a pin is stored`).toBe(1);
+      const snapshot = await stageSnapshot(stage!.id, divisionId);
+      expect(snapshot.scoreEvents, `${spec.kind}: premise, a result is recorded`).toBeGreaterThan(0);
+      // The field changes too, so a Rebuild that ran would redraw: the refusal is what holds the board.
+      await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "Late", seed: 99, members: [] }]);
+
+      await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS" });
+
+      expect(await stageSnapshot(stage!.id, divisionId), `${spec.kind}: the stage is byte-identical`).toEqual(snapshot);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("RB-1 a regenerate that throws rolls back the delete of a stage that records byes and pins: the old board, its config and its ledger stand", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 6);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "group", name: "G", config: { pools: { count: 2 } }, progression: null });
+    await generateStageFixtures(auth, stage!.id); // two pools of three: each sits one player out a round
+    await overrideStandings(auth, stage!.id, { rows: [{ entrant_id: entrants[0]!, rank: 1, reason: "placement game" }] });
+    const { venueId, courts } = await twoCourts(auth);
+    await layOut(await rowsOf(stage!.id), venueId, courts);
+    const before = await stageSnapshot(stage!.id, divisionId);
+    expect((before.config.round_byes as unknown[]).length, "premise: the byes are recorded").toBeGreaterThan(0);
+    // Four leave: two entrants snake into two pools of one, which pairs nothing - the regenerate refuses AFTER its delete.
+    for (const i of [2, 3, 4, 5]) await patchEntrant(auth, entrants[i]!, { status: "withdrawn" });
+    const afterWithdrawals = await stageSnapshot(stage!.id, divisionId);
+
+    await expect(rebuildStageFixtures(auth, stage!.id)).rejects.toMatchObject({ code: "STAGE_NOT_READY", data: { reason: "group_too_few_entrants" } });
+
+    // The departures dropped no pin of the two who stay (her pin, P1's, is not a leaver's); the rollback restored the lines.
+    expect(await stageSnapshot(stage!.id, divisionId)).toEqual(afterWithdrawals);
+    expect(afterWithdrawals.fixtures.map((f) => f.id), "the same fixture ids as before").toEqual(before.fixtures.map((f) => f.id));
+  });
+});
+
+// The rows a late entry and a withdrawal wrote, and the pins (storage table, ruling 288 G7). The late-entry rig mirrors
+// roundrobin-late-entry.test.ts: a started league, nothing played, so the newcomer is placed by catch-up and Rebuild is still open.
+async function startedLeague(n: number) {
+  const { auth } = await seedOrg("pro");
+  const { divisionId, entrants } = await seedDivision(auth, GENERIC, n);
+  const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: {}, progression: null });
+  await startDivision(auth, divisionId); // Start draws the table
+  const name = new Map(entrants.map((id, i) => [id, `E${i + 1}`]));
+  return { auth, divisionId, entrants, stageId: stage!.id, name };
+}
+const byesStored = async (stageId: string) => ((await configOf(stageId)).round_byes ?? []) as { round_no: number; leg: number; entrant_id: string }[];
+
+describe.skipIf(!HAS_DB)("RB-1 Rebuild rewrites round_byes and drops catch-up lines", () => {
+  it("RB-1 Rebuild rewrites round_byes and drops catch-up lines: a five-field league whose late player took every bye (rr-by-)", async () => {
+    const rig = await startedLeague(5);
+    // Premise, from the engine's own declaration (generateRoundRobin over the seeded field): one bye a round, E5 r1 ... E1 r5.
+    const ids = rig.entrants;
+    const engine = generateRoundRobin({ entrants: ids, seeds: new Map(ids.map((id, i) => [id, i + 1])), config: { legs: 1 } });
+    expect(SEEDED_BYES(await byesStored(rig.stageId), rig.name), "premise: the stored byes are the engine's").toEqual(
+      engine.rounds.map((r) => `r${r.roundNo}:${rig.name.get(r.bye!)}`),
+    );
+    expect(await scoreEventCount(rig.stageId), "premise: nothing played").toBe(0);
+    const [late] = await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "Late", seed: 6, members: [] }]);
+    rig.name.set(late!.id, "Late");
+    const withCatchUp = await rowsOf(rig.stageId);
+    expect(withCatchUp.filter((r) => /rr-by-/.test(r.ext_key ?? "")), "premise: the newcomer took each bye slot").toHaveLength(5);
+    expect(await byesStored(rig.stageId), "premise: every bye was consumed").toEqual([]);
+    const lateEntryRows = await eventCount(rig.divisionId, "roundrobin_late_entry");
+    expect(lateEntryRows, "premise: the add wrote its ledger row").toBe(1);
+    // E1 leaves before any match: the field Rebuild draws is E2..E5 and Late - five again, so the byes are a NEW set.
+    await patchEntrant(rig.auth, rig.entrants[0]!, { status: "withdrawn" });
+    expect(await scoreEventCount(rig.stageId), "premise: the bare withdrawal wrote no result").toBe(0);
+
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+
+    const after = await rowsOf(rig.stageId);
+    expect(after.filter((r) => /rr-cu-|rr-by-/.test(r.ext_key ?? "")), "no catch-up line survives").toEqual([]);
+    expect(after, "ten pairs of five").toHaveLength(10);
+    expect(after.every((r) => RR_KEY.test(r.ext_key ?? "")), "the generator's keys only").toBe(true);
+    const active = [...rig.entrants.slice(1), late!.id];
+    const fresh = generateRoundRobin({ entrants: active, seeds: new Map(active.map((id, i) => [id, i + 2])), config: { legs: 1 } });
+    const want = fresh.rounds.map((r) => `r${r.roundNo}:${rig.name.get(r.bye!)}`);
+    expect(want, "premise: the rewritten set is five byes").toHaveLength(5);
+    expect(SEEDED_BYES(await byesStored(rig.stageId), rig.name), "round_byes is rewritten from the new schedule, not kept").toEqual(want);
+    // The ledger is append-only: the late entry's row stays, and the Rebuild adds its own.
+    expect(await eventCount(rig.divisionId, "roundrobin_late_entry"), "the late-entry row survives").toBe(lateEntryRows);
+    expect(out.removed).toBe(withCatchUp.length);
+  });
+
+  it("RB-1 a six-field league whose late player was appended as catch-up rounds (rr-cu-): Rebuild draws one table of six again, byes stay empty", async () => {
+    const rig = await startedLeague(6);
+    expect(await byesStored(rig.stageId), "premise: an even field sits nobody out").toEqual([]);
+    const [late] = await createEntrants(rig.auth, rig.divisionId, [{ kind: "individual", display_name: "Late", seed: 7, members: [] }]);
+    const withCatchUp = await rowsOf(rig.stageId);
+    expect(withCatchUp.filter((r) => /rr-cu-/.test(r.ext_key ?? "")), "premise: six catch-up lines, Late v each").toHaveLength(6);
+    expect(withCatchUp, "premise: 15 + 6").toHaveLength(21);
+    // A seventh at Rebuild: nobody left, so the draw is seven.
+    const out = await rebuildStageFixtures(rig.auth, rig.stageId);
+    const after = await rowsOf(rig.stageId);
+    expect(after.filter((r) => /rr-cu-|rr-by-/.test(r.ext_key ?? ""))).toEqual([]);
+    expect(after, "twenty-one pairs of seven").toHaveLength(21);
+    const seated = new Set(after.flatMap((r) => [r.home_entrant_id, r.away_entrant_id]));
+    expect(seated.has(late!.id)).toBe(true);
+    expect(await byesStored(rig.stageId), "seven sit one out a round: seven byes, none stale").toHaveLength(7);
+    expect(out.removed).toBe(21);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RB-1 Rebuild and the withdrawal's rows (B3): the expunged lines and the ledger are a played stage's, so Rebuild refuses", () => {
+  it("RB-1 after a started league's player withdraws, Rebuild refuses STAGE_HAS_RESULTS and keeps her expunged lines, the leaver's byes and the ledger", async () => {
+    const rig = await startedLeague(5);
+    const leaver = rig.entrants[2]!;
+    const before = await stageSnapshot(rig.stageId, rig.divisionId);
+    expect(before.scoreEvents, "premise: nothing played yet").toBe(0);
+
+    await withdrawEntrantCascade(rig.auth, leaver);
+
+    const afterWithdrawal = await stageSnapshot(rig.stageId, rig.divisionId);
+    expect(afterWithdrawal.scoreEvents, "premise: the withdrawal expunged her lines as events (abandon), which a Rebuild must not delete").toBeGreaterThan(0);
+    expect(afterWithdrawal.ledger, "premise: the withdrawal appended its ledger rows").toBeGreaterThan(before.ledger);
+    expect((await byesStored(rig.stageId)).some((b) => b.entrant_id === leaver), "premise: her bye entry is left, readers skip it").toBe(true);
+
+    await expect(rebuildStageFixtures(rig.auth, rig.stageId)).rejects.toMatchObject({ status: 409, code: "STAGE_HAS_RESULTS" });
+
+    expect(await stageSnapshot(rig.stageId, rig.divisionId), "refused before any delete: lines, config, ledger, events identical").toEqual(afterWithdrawal);
+  });
+});
+
+describe.skipIf(!HAS_DB)("RB-1 Rebuild and the rank pins (RB5-P5, G7): a pool whose membership changed loses its pins, an unchanged pool keeps them", () => {
+  const pinOf = (entrant_id: string, rank: number) => ({ entrant_id, rank, reason: "placement game" });
+
+  it("RB-1 a group Rebuild after nine become ten clears pool B's pin and keeps pool A's, in the same transaction as the redraw", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 9);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "group", name: "G", config: { pools: { count: 2 } }, progression: null });
+    await generateStageFixtures(auth, stage!.id);
+    // Doc 05 section 1's snake of nine, typed by hand: 1->A 2->B | 3->B 4->A | 5->A 6->B | 7->B 8->A | 9->A.
+    const poolIds = new Map((await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${stage!.id}`).map((p) => [p.key, p.id]));
+    await overrideStandings(auth, stage!.id, { rows: [pinOf(entrants[3]!, 1), pinOf(entrants[2]!, 1)] }); // A: E4, B: E3
+    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E10", seed: 10, members: [] }]); // 10 -> B
+
+    await rebuildStageFixtures(auth, stage!.id);
+
+    const stored = ((await configOf(stage!.id)).rank_overrides ?? []) as { entrant_id: string; rank: number; pool_id?: string }[];
+    expect(stored, "B's pin goes with B's redraw, A's stays").toEqual([{ entrant_id: entrants[3]!, rank: 1, pool_id: poolIds.get("A")! }]);
+  });
+
+  it("RB-1 a Rebuild that moves nobody keeps every pin (the positive pair: a pin is dropped by a changed pool, not by a Rebuild)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 8);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "group", name: "G", config: { pools: { count: 2 } }, progression: null });
+    await generateStageFixtures(auth, stage!.id);
+    const poolIds = new Map((await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${stage!.id}`).map((p) => [p.key, p.id]));
+    await overrideStandings(auth, stage!.id, { rows: [pinOf(entrants[0]!, 1), pinOf(entrants[1]!, 1)] }); // A: E1, B: E2
+    const before = ((await configOf(stage!.id)).rank_overrides ?? []) as unknown[];
+    expect(before, "premise: two pins stored, one per pool").toEqual([
+      { entrant_id: entrants[0]!, rank: 1, pool_id: poolIds.get("A")! },
+      { entrant_id: entrants[1]!, rank: 1, pool_id: poolIds.get("B")! },
+    ]);
+
+    await rebuildStageFixtures(auth, stage!.id);
+
+    expect((await configOf(stage!.id)).rank_overrides).toEqual(before);
+  });
+
+  it("RB-1 a league's pin goes when its one table's membership changes (a league is one pool)", async () => {
+    const { auth } = await seedOrg();
+    const { divisionId, entrants } = await seedDivision(auth, GENERIC, 4);
+    const [stage] = await createStages(auth, divisionId, { seq: 1, kind: "league", name: "L", config: {}, progression: null });
+    await generateStageFixtures(auth, stage!.id);
+    await overrideStandings(auth, stage!.id, { rows: [pinOf(entrants[0]!, 1)] });
+    expect(((await configOf(stage!.id)).rank_overrides as unknown[]).length, "premise: stored").toBe(1);
+    await createEntrants(auth, divisionId, [{ kind: "individual", display_name: "E5", seed: 5, members: [] }]);
+
+    await rebuildStageFixtures(auth, stage!.id);
+
+    expect((await configOf(stage!.id)).rank_overrides).toEqual([]);
   });
 });

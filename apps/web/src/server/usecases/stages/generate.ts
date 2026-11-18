@@ -32,6 +32,7 @@ import { sealedStageSetupCounts } from "./roster-drift";
 import { generateProgressionSetupFixtures } from "./setup-fixtures";
 import { generateStageFixturesTx, regenerateStageInTx } from "./generate-tx";
 import { seedNextStage } from "./carry-over";
+import { dropPinsOfChangedPools, readPoolMembers, readStagePins } from "../rank-override";
 
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
  *  New fixtures change the hub (their kick-offs and courts), so the hub key
@@ -304,7 +305,13 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       );
     }
     await refuseFormatTooSmall(tx, stage.division_id);
+    // W5 T18 (RB-1; X-PO-3, RB5-P5, G7): Rebuild draws the pools again, and a pin names a place in one pool's table, so every pool whose
+    // membership changed loses its pins (a pool that came out the same keeps them): the same rule as a Generate that redraws
+    // (`reconcileRoundRobinGenerate`). The seating is read under the division lock the regenerate takes, so it is the one it deletes.
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    const seatedBefore = (await readStagePins(tx, stageId)).length > 0 ? await readPoolMembers(tx, stageId) : null;
     const regen = await regenerateStageInTx(tx, auth, stageId, stage);
+    if (seatedBefore !== null) await dropPinsOfChangedPools(tx, stageId, seatedBefore);
     // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
     // desk flagged are in the new bracket, and the flag goes with them.
     await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
