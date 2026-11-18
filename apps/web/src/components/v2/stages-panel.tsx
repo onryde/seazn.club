@@ -638,6 +638,16 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
+/** Bring `el` into view just under the sticky site header (its bottom edge + 8px), smooth unless the reader prefers reduced motion.
+ *  Phone widths only call this: from `md` up nothing scrolls. */
+function scrollUnderHeader(el: HTMLElement) {
+  const header = document.querySelector("header");
+  const under = header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+  el.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+}
+
 export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
@@ -732,33 +742,32 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // the action SETTLES - landed, a no-op or refused - never on the tap, and only if it is THIS stage's sheet that is open (a
   // late answer must not close a sheet the organiser has since opened on another stage). Closing runs the rail's effect
   // cleanup, which hands focus back to the trigger that opened it. At `md` and up there is no sheet and this changes nothing.
-  // Fix round 1 (controller, same day): closing the sheet uncovers the line but leaves the page scrolled down at the card, with
-  // the line - at the top of the page - above the sticky header. So a settle that closed a PHONE sheet also bumps `outcomeScroll`,
-  // and the effect below brings the first outcome line into view under the header. `openRailRef` is the live value (the async
-  // `act` closure holds a stale `openRailFor`). Focus is NOT moved to the line: it returns to the trigger that opened the sheet
-  // (the rail's existing a11y contract), and the lines carry their own announcement where they have one (`role="status"`).
-  const openRailRef = useRef<string | null>(null);
-  useEffect(() => {
-    openRailRef.current = openRailFor;
-  }, [openRailFor]);
+  // Fix round 1+2 (controller, same day): closing the sheet uncovers the line but leaves the page scrolled down at the card, with
+  // the line - at the top of the page - above the sticky header. So EVERY settle of `act` / `swissStageWrite` at a phone width
+  // bumps `outcomeScroll`, whether or not the sheet was still open (Finish and the Rounds chip close it themselves before their
+  // confirm / dialog, and their success notice needs the same scroll), and the effect below brings the first outcome line
+  // ([data-outcome-line]: notice, cautions, red line, paywall gate, online-game notice) into view under the header. At `md` and up
+  // nothing scrolls. Focus is NOT moved to the line: it returns to the trigger that opened the sheet (the rail's contract), and
+  // the lines announce themselves (role="status" / "alert").
+  const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches;
   const [outcomeScroll, setOutcomeScroll] = useState(0);
   const closeRailSheet = (stageId: string) => {
-    if (openRailRef.current === stageId && typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) {
-      setOutcomeScroll((n) => n + 1);
-    }
+    if (isPhone()) setOutcomeScroll((n) => n + 1);
     setOpenRailFor((cur) => (cur === stageId ? null : cur));
   };
   useEffect(() => {
-    if (outcomeScroll === 0 || typeof document === "undefined") return;
+    if (outcomeScroll === 0) return;
     const line = document.querySelector<HTMLElement>("[data-outcome-line]");
-    if (!line) return;
-    // The sticky site header's bottom edge (+ a breath): the line lands just under it, never behind it.
-    const header = document.querySelector("header");
-    const under = header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
-    line.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
-    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    line.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+    if (line) scrollUnderHeader(line);
   }, [outcomeScroll]);
+  // m2 (fix round 2): the sheet's Add match opens its form inside the card, behind the scrim - on a phone it closes the sheet and
+  // brings the form into view the same way.
+  const [addMatchScroll, setAddMatchScroll] = useState(0);
+  useEffect(() => {
+    if (addMatchScroll === 0) return;
+    const form = document.querySelector<HTMLElement>('[data-testid="stage-add-match-form"]');
+    if (form) scrollUnderHeader(form);
+  }, [addMatchScroll]);
   // Board slots for the fixture "When" / add-match "When" fields (quarter-
   // hour-time-select design). This panel doesn't otherwise hold the
   // division's schedule config, so it's fetched once here; a failed fetch or
@@ -1189,7 +1198,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     <div className="space-y-6">
       {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
       {notice && (
-        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" data-outcome-line data-testid="schedule-notice">
+        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status" data-outcome-line data-testid="schedule-notice">
           {notice}
           {undoable && (
             <button
@@ -1203,12 +1212,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           )}
         </p>
       )}
-      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
+      {paywallFeature && (
+        <div data-outcome-line>
+          <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />
+        </div>
+      )}
       {/* Precondition-not-met (amber, actionable) — never the green success
           banner: "Générer les matchs" did nothing because the entrants can't
           fill the configured groups yet, not because it was already done. */}
       {warning && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-outcome-line data-testid="schedule-warning">
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status" data-outcome-line data-testid="schedule-warning">
           {warning}
         </p>
       )}
@@ -1246,9 +1259,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           )}
         </div>
       )}
-      {gameExists && <OnlineGameExistsNotice arbiterHref={arbiterHref} />}
+      {gameExists && (
+        <div data-outcome-line>
+          <OnlineGameExistsNotice arbiterHref={arbiterHref} />
+        </div>
+      )}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-outcome-line data-testid="schedule-error">
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" role="alert" data-outcome-line data-testid="schedule-error">
           {error}
         </p>
       )}
@@ -1714,7 +1731,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               })();
             }}
             addingTo={addingTo}
-            onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
+            onToggleAddMatch={(stageId) => {
+              const opening = addingTo !== stageId;
+              setAddingTo(opening ? stageId : null);
+              if (opening && isPhone()) {
+                setOpenRailFor((cur) => (cur === stageId ? null : cur));
+                setAddMatchScroll((n) => n + 1);
+              }
+            }}
             open={openRailFor === stage.id}
             onToggleOpen={(stageId) => setOpenRailFor(openRailFor === stageId ? null : stageId)}
             adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
@@ -3107,7 +3131,7 @@ function AddMatchForm({
   }
 
   return (
-    <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
+    <div data-testid="stage-add-match-form" className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
       <div className="flex flex-wrap items-end gap-3">
         <label className="label flex flex-col gap-1 text-xs">
           {msg("stage.addMatch.home")}

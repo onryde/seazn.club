@@ -1,8 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
-import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { StageRail } from "@/components/v2/desk/stage-rail";
+import { UpgradeGate } from "@/components/upgrade-gate";
+import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 import enDict from "@/dictionaries/en/ui.json";
 import { ApiV1Error } from "@/lib/client-v1";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
@@ -112,6 +115,7 @@ async function mountOpen(kind: "league" | "swiss", answer: (path: string, init?:
   };
 }
 
+const walkChildren = (el: ReactElement): ReactElement[] => walk((propsOf(el) as { children?: unknown }).children as never);
 const refused = (code: string, message = "refused", status = 409, extra: Record<string, unknown> = {}) => new ApiV1Error(message, status, code, extra);
 
 type Case = {
@@ -119,8 +123,8 @@ type Case = {
   action: "generate" | "complete" | "unpair" | "delete";
   answer: () => Promise<unknown>;
   landed: boolean;
-  /** which panel-level line carries the outcome, and a sentence that must be in it */
-  line: { testid: string | null; text: string };
+  /** which panel-level line carries the outcome: a sentence that must be in it, or (for the two components) the component */
+  line: { testid: string | null; text: string; component?: unknown };
 };
 
 const CASES: Case[] = [
@@ -172,6 +176,24 @@ const CASES: Case[] = [
     landed: false,
     line: { testid: "schedule-error", text: "Failed to fetch" },
   },
+  {
+    label: "refusal: a paywall (PAYMENT_REQUIRED, the upgrade gate)",
+    action: "generate",
+    answer: async () => {
+      throw refused("PAYMENT_REQUIRED", "pay", 402, { feature_key: "x" });
+    },
+    landed: false,
+    line: { testid: null, text: "", component: UpgradeGate },
+  },
+  {
+    label: "refusal: Unpair over an online game (the online-game notice)",
+    action: "unpair",
+    answer: async () => {
+      throw refused("ONLINE_GAME_EXISTS", "game", 409);
+    },
+    landed: false,
+    line: { testid: null, text: "", component: OnlineGameExistsNotice },
+  },
 ];
 
 describe("W5 T17c the phone Stage tools sheet closes when a stage action settles, so the outcome line shows", () => {
@@ -188,7 +210,17 @@ describe("W5 T17c the phone Stage tools sheet closes when a stage action settles
       // a sentence found in the walked tree is, by construction, outside the sheet. The guard keeps that premise honest.
       expect(propsOf(tree.find((el) => el.type === StageRail)!).children, "premise: the rail is a leaf here").toBeUndefined();
       const outside = textOf(tree);
-      expect(outside, `${c.label}: the outcome is said on the page`).toContain(c.line.text);
+      if (c.line.component === undefined) expect(outside, `${c.label}: the outcome is said on the page`).toContain(c.line.text);
+      // Fix round 2 (I1): EVERY outcome line is tagged for the phone scroll - the paywall gate and the online-game notice too -
+      // and the component is INSIDE the tagged wrapper, not beside it.
+      const tagged = tree.filter((el) => propsOf(el)["data-outcome-line"] !== undefined);
+      expect(tagged.length, `${c.label}: an outcome line is tagged data-outcome-line`).toBeGreaterThan(0);
+      if (c.line.component !== undefined) {
+        expect(
+          tagged.some((w) => (walkChildren(w) as ReactElement[]).some((el) => el.type === c.line.component)),
+          `${c.label}: the component sits inside a tagged wrapper`,
+        ).toBe(true);
+      }
       if (c.line.testid !== null) expect(byTestId(tree, c.line.testid), `${c.label}: in its own channel`).toHaveLength(1);
       checked++;
     }
@@ -253,5 +285,111 @@ describe("W5 T17c the phone Stage tools sheet closes when a stage action settles
     await (propsOf(rails()[0]!).onAct as Act)("s1", "complete");
     await flush();
     expect(propsOf(rails()[1]!).open, "s2's sheet is not s1's to close").toBe(true);
+  });
+});
+
+// Fix round 2 (m1): the lines announce themselves. Markup, anchored on `="` (an omitted attribute never reads `role="..."`).
+describe("W5 T17c fix 2 the outcome lines carry their roles", () => {
+  it("the red line is role=alert; the green notice and the amber caution are role=status", async () => {
+    let checked = 0;
+    for (const [testid, role, answer] of [
+      ["schedule-error", "alert", async () => { throw refused("INTERNAL", "boom", 500); }],
+      ["schedule-notice", "status", async () => ({ completed: true })],
+      ["schedule-warning", "alert-not", async () => { throw refused("STAGE_COMPLETED_SEEDING_FAILED", "no seats", 409); }],
+    ] as const) {
+      const m = await mountOpen("league", answer as () => Promise<unknown>);
+      await m.act("s1", testid === "schedule-warning" ? "generate" : "complete");
+      await flush();
+      const [line] = byTestId(m.island.tree(), testid);
+      expect(line, `${testid}: the line is on the page`).toBeTruthy();
+      const html = renderToStaticMarkup(line!);
+      if (role === "alert-not") expect(html, "the amber caution is a status, not an alert").toContain('role="status"');
+      else expect(html, `${testid} role`).toContain(`role="${role}"`);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+// Fix round 2 (I2): the scroll fires on EVERY phone-width settle, sheet open or not (Finish and the Rounds chip close the sheet
+// themselves before their dialog), and never from `md` up. window / document are stubbed: vitest is node.
+describe("W5 T17c fix 2 a settle at a phone width scrolls the outcome line into view, sheet open or not", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  function stub(phone: boolean) {
+    const scrolled: string[] = [];
+    const line = { style: {} as Record<string, string>, scrollIntoView: vi.fn((o: unknown) => scrolled.push(JSON.stringify(o))) };
+    const form = { style: {} as Record<string, string>, scrollIntoView: vi.fn() };
+    vi.stubGlobal("window", {
+      matchMedia: (q: string) => ({ matches: q.includes("767.98") ? phone : false }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    vi.stubGlobal("document", {
+      querySelector: (sel: string) => (sel === "[data-outcome-line]" ? line : sel === '[data-testid="stage-add-match-form"]' ? form : sel === "header" ? { getBoundingClientRect: () => ({ bottom: 58 }) } : null),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    return { line, form, scrolled };
+  }
+  const settles = [
+    ["act, sheet open", true, "act"],
+    ["act, sheet already closed", false, "act"],
+    ["swissStageWrite (Add a round), sheet already closed (Finish / Rounds chip close it first)", false, "swiss"],
+  ] as const;
+
+  it("phone: every settle scrolls once, under the sticky header (margin = header bottom + 8)", async () => {
+    let checked = 0;
+    for (const [label, openSheet, kind] of settles) {
+      const env = stub(true);
+      const m = await mountOpen(kind === "swiss" ? "swiss" : "league", async () => (kind === "swiss" ? { rounds: 4 } : { completed: true }));
+      if (!openSheet) (propsOf(m.railOf()).onToggleOpen as (id: string) => void)("s1"); // close it again, as Finish does
+      expect(m.sheetOpen(), `${label}: rig`).toBe(openSheet);
+      if (kind === "swiss") await (propsOf(m.railOf()).swissRounds as { onAddRound: (id: string, f: "more") => Promise<unknown> }).onAddRound("s1", "more");
+      else await (propsOf(m.railOf()).onAct as Act)("s1", "complete"); // the CURRENT handler (its closure sees the sheet as it is now)
+      await flush();
+      expect(env.line.scrollIntoView, `${label}: scrolled`).toHaveBeenCalledTimes(1);
+      expect(env.line.style.scrollMarginTop, `${label}: just under the header`).toBe("66px");
+      expect(env.scrolled[0], `${label}: block start, smooth`).toContain('"block":"start"');
+      checked++;
+      vi.unstubAllGlobals();
+    }
+    expect(checked).toBe(settles.length);
+  });
+
+  it("md and up: nothing ever scrolls", async () => {
+    const env = stub(false);
+    const m = await mountOpen("league", async () => ({ completed: true }));
+    await m.act("s1", "complete");
+    await flush();
+    expect(env.line.scrollIntoView, "desktop: no scroll").not.toHaveBeenCalled();
+  });
+});
+
+// Fix round 2 (m2): the sheet's Add match opens its form inside the card, behind the scrim.
+describe("W5 T17c fix 2 Add match leaves the sheet and brings its form into view (phone only)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([
+    ["phone", true],
+    ["md and up", false],
+  ])("%s", async (_label, phone) => {
+    const scrolled: string[] = [];
+    const form = { style: {} as Record<string, string>, scrollIntoView: vi.fn((o: unknown) => scrolled.push(JSON.stringify(o))) };
+    vi.stubGlobal("window", { matchMedia: (q: string) => ({ matches: q.includes("767.98") ? phone : false }), addEventListener: () => {}, removeEventListener: () => {} });
+    vi.stubGlobal("document", {
+      querySelector: (sel: string) => (sel === '[data-testid="stage-add-match-form"]' ? form : sel === "header" ? { getBoundingClientRect: () => ({ bottom: 58 }) } : null),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
+    const m = await mountOpen("league", async () => ({}));
+    (propsOf(m.railOf()).onToggleAddMatch as (id: string) => void)("s1");
+    await flush();
+    expect(propsOf(m.railOf()).addingTo, "the form is open").toBe("s1");
+    expect(m.sheetOpen(), phone ? "phone: the sheet closed behind the form" : "md: no sheet to close (the rig opened it; it is left as it was)").toBe(!phone);
+    if (phone) {
+      expect(form.scrollIntoView, "phone: the form is brought into view").toHaveBeenCalledTimes(1);
+      expect(form.style.scrollMarginTop).toBe("66px");
+    } else {
+      expect(form.scrollIntoView, "md: nothing scrolls").not.toHaveBeenCalled();
+    }
   });
 });

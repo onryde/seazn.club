@@ -1,7 +1,7 @@
 // Split out of the former e2e/mobile.spec.ts (2026-11-13, verbatim move): stage / division rules panels: the Swiss pairing split button and the W2c-W2d format, points, tie-break, match-rules and lock-line panels.
 // Runs ONLY in the seven width projects (mobile-320/360/se/14/430, tablet-768/834 — MOBILE_SPECS in playwright.config.ts).
 
-import { test, expect, type Locator } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import {
   TAG,
@@ -987,6 +987,28 @@ test("W2c division lock lines at every width: each line is on screen and readabl
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });
 
+/** Smooth scroll: poll until it has landed - the line's top at or below the sticky header's bottom edge, its bottom inside the viewport -
+ *  then hit-test its centre (`elementFromPoint`, not paint). Shared by the phone sheet's success and refusal witnesses. */
+async function expectInViewUnderHeader(page: Page, line: Locator, what: string): Promise<void> {
+  await expect
+    .poll(
+      async () =>
+        line.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const headerBottom = document.querySelector("header")!.getBoundingClientRect().bottom;
+          return r.top >= headerBottom - 1 && r.bottom <= window.innerHeight;
+        }),
+      { message: `${what} is in view under the sticky header after the sheet closes`, timeout: 5_000 },
+    )
+    .toBe(true);
+  const hit = await line.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return at === el || el.contains(at);
+  });
+  expect(hit, `a hit test at ${what}'s centre lands on it, not on a scrim`).toBe(true);
+}
+
 // W5 Task 17c (owner 2026-11-18): below `md` a stage action is pressed inside the Stage tools sheet, and the line it raises is said at
 // the TOP of the page, under the sheet's scrim. The sheet closes when the action settles so the line shows. Driven on the desk with a
 // stale tab (another tab completes the stage first, so Complete answers `already_complete`): the notice must be visible, the sheet and
@@ -1050,19 +1072,7 @@ test("stage tools sheet: a settled action closes it, so the outcome notice is vi
   }
   if (folded) {
     // Below md the close brings the notice into view by itself (no scrollIntoViewIfNeeded here: that would hide a missing scroll).
-    // Smooth scroll: poll until it has landed - top at or below the sticky header's bottom edge, and inside the viewport.
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(() => {
-            const el = document.querySelector<HTMLElement>('[data-testid="schedule-notice"]')!;
-            const r = el.getBoundingClientRect();
-            const headerBottom = document.querySelector("header")!.getBoundingClientRect().bottom;
-            return r.top >= headerBottom - 1 && r.bottom <= window.innerHeight;
-          }),
-        { message: "the notice is in view under the sticky header after the sheet closes", timeout: 5_000 },
-      )
-      .toBe(true);
+    await expectInViewUnderHeader(page, notice, "the notice");
   } else {
     await notice.scrollIntoViewIfNeeded();
   }
@@ -1071,6 +1081,60 @@ test("stage tools sheet: a settled action closes it, so the outcome notice is vi
     const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
     return at === el || el.contains(at);
   });
-  expect(hit, "a hit test at the notice lands on the notice, not on a scrim").toBe(true);
+  expect(hit, "a hit test at the notice's centre lands on the notice, not on a scrim").toBe(true);
+  await expectNoHorizontalScroll(page);
+});
+
+// W5 Task 17c fix 2: the REFUSAL witness. A stage waiting on its source (`on_complete`) refuses an early Generate with an amber line at
+// the top of the page; pressed from the Finals card's sheet, scrolled down at the card, the sheet closes and the line is brought into
+// view under the sticky header with nothing over it. A real refusal off the real server (STAGE_NOT_READY), no route mock.
+test("stage tools sheet: a refused action (Generate before its source stage completes) is brought into view too", async ({ page, request }) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Mobile sheet refusal ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Sheet refusal",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  expect((await addEntrantsViaApi(request, divisionId, ["Ref A", "Ref B", "Ref C", "Ref D"])).status).toBe(201);
+  const league = await createStageAndGenerate(request, divisionId);
+  expect(league.fixtureIds.length, "C(4,2) lines: a tall page to scroll down").toBe(6);
+  const finals = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
+    seq: 2,
+    kind: "knockout",
+    name: "Cup Finals",
+    config: {},
+    progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "on_complete" },
+  });
+  expect(finals.status, "the on_complete finals stage").toBe(201);
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const card = page.locator(`[data-stage-id="${finals.data!.id}"]`);
+  const generate = card.getByTestId("stage-generate");
+  await expect(generate, "the waiting stage offers Generate").toBeAttached({ timeout: 20_000 });
+  const trigger = card.getByTestId("stage-rail-trigger");
+  const folded = await trigger.isVisible(); // never a width literal (AGENTS.md rule 22)
+  if (folded) {
+    await trigger.scrollIntoViewIfNeeded();
+    await page.evaluate(() => window.scrollBy(0, 300));
+    expect(await page.evaluate(() => window.scrollY), "premise: scrolled down at the card").toBeGreaterThan(100);
+    await trigger.click();
+    await expect(page.getByTestId("stage-rail-backdrop"), "premise: the scrim is up").toHaveCount(1);
+  }
+  await generate.click();
+  const line = page.locator("[data-outcome-line]").first();
+  await expect(line, "the refusal is said on the page").toBeVisible({ timeout: 20_000 });
+  await expect(line, "amber caution, in the reader's words").toHaveAttribute("data-testid", "schedule-warning");
+  await expect(page.getByTestId("stage-rail-backdrop"), "no scrim once the refusal has settled").toHaveCount(0);
+  if (folded) {
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expectInViewUnderHeader(page, line, "the refusal");
+  }
   await expectNoHorizontalScroll(page);
 });
