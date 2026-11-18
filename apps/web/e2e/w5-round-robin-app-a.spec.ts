@@ -1798,13 +1798,17 @@ test.describe("I1 the table waiting strip offers a real Rebuild before any resul
     const lateId = await registerLateArrival(request, t, who);
     const before = await tableLines(request, t.divisionId, t.stageId);
     expect(before.length, "premise: a league of four, six lines").toBe(6);
+    // Fix round 2: setup a Rebuild deletes with the fixtures — a scoring device linked to round 1's first line — is named in the
+    // strip's confirm by the card's own sentence (the panel hands the stage's attachments to the strip).
+    const linked = await apiJson(request, `/api/v1/fixtures/${before[0]!.id}/device-links`, "POST", { label: `Redraw ${TAG}` });
+    expect(linked.status, JSON.stringify(linked.error)).toBe(201);
 
     await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"));
     await dismissCookieBanner(page);
     const strip = page.getByTestId("table-waiting");
     await expect(strip).toBeVisible({ timeout: 20_000 });
     await expect(strip.getByTestId("table-waiting-rebuild-note")).toHaveText(
-      `No match in this stage has started yet. Rebuild fixtures on the stage card would draw it again with ${who} in it, instead of the catch-up matches.`,
+      `No match in this stage has started yet. Rebuild fixtures would draw it again with ${who} in it, instead of the catch-up matches.`,
     );
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });
@@ -1818,6 +1822,8 @@ test.describe("I1 the table waiting strip offers a real Rebuild before any resul
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("Rebuild this stage's fixtures?");
     await expect(dialog).toContainText("It deletes 6 fixtures.");
+    await expect(dialog).toContainText("It also clears 1 linked scoring device(s) on those fixtures — you'll need to set those up again.");
+    await expect(dialog).toContainText("Printed scorer sheets for this stage will stop working.");
     const tapped = page.waitForResponse((r) => r.url().includes(`/late-entrants/${lateId}/place`) && r.request().method() === "POST");
     await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
     const res = await tapped;

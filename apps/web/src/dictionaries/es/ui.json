@@ -8886,7 +8886,7 @@
   "roundrobin.lateEntry.unscheduled.one": "{count} partido nuevo aún no tiene hora ni pista. Asígnale una hora y una pista.",
   "roundrobin.lateEntry.unscheduled.other": "{count} partidos nuevos aún no tienen hora ni pista. Asigna a cada uno una hora y una pista.",
   "roundrobin.lateEntry.tellOpponents": "Sus rivales no reciben ningún aviso. Infórmales de los partidos nuevos.",
-  "roundrobin.lateEntry.rebuildOffered": "Aún no ha empezado ningún partido de esta fase. Reconstruir enfrentamientos, en la tarjeta de la fase, la sortearía de nuevo con {name} dentro, en lugar de los partidos de recuperación.",
+  "roundrobin.lateEntry.rebuildOffered": "Aún no ha empezado ningún partido de esta fase. Reconstruir enfrentamientos la sortearía de nuevo con {name} dentro, en lugar de los partidos de recuperación.",
   "roundrobin.lateEntry.rebuilt": "{name} ya está dentro: la fase se ha sorteado de nuevo con su participación.",
   "roundrobin.waiting.title": "En espera de entrar en la tabla",
   "roundrobin.waiting.sub": "Inscripción después del inicio. Todavía sin partidos.",

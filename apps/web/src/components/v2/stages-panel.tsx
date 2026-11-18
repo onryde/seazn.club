@@ -161,6 +161,9 @@ import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notic
 import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
 import { KnockoutWaitingStrip } from "@/components/v2/desk/knockout-waiting-strip";
 import { TableWaitingStrip } from "@/components/v2/desk/table-waiting-strip";
+// W5 T23 fix round 2: moved verbatim to a lib module so the waiting strip's Rebuild confirm says the SAME sentence (no copy).
+import { attachmentWarning } from "@/lib/rebuild-attachment-warning";
+export { attachmentWarning };
 import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
 import type { TableLatePools } from "@/server/usecases/table-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
@@ -1115,25 +1118,31 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       setNotice(rebuiltNotice(out, msg, msgPlural));
       router.refresh();
     } catch (err) {
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
-        setPaywallFeature(String(err.extra.feature_key ?? ""));
-      } else {
-        // 409 STAGE_HAS_RESULTS (hard constraint 1): a ghost can be reported
-        // by getStageRosterDrift even when its fixture already has a result
-        // — the signal and the guard are independent (plan, required test
-        // coverage) — so this is a real, reachable outcome, not just a
-        // defence-in-depth 422 the UI never offers a button for.
-        const blocked = rebuildBlockedMessage(err, msg);
-        if (isOnlineGameExists(err)) {
-          setGameExists(true);
-        } else if (blocked) {
-          setWarning(blocked);
-        } else {
-          setError(rebuildErrorText(err, msg, msgPlural));
-        }
-      }
+      showRebuildRefusal(err);
     } finally {
       setBusy(null);
+    }
+  }
+
+  /** A Rebuild's refusal, said as the stage card says it — the card's own Rebuild and the table waiting strip's (W5 T23 fix
+   *  round 2: one classifier, so a refusal such as ONLINE_GAME_EXISTS reads the same from either button). */
+  function showRebuildRefusal(err: unknown) {
+    if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+      setPaywallFeature(String(err.extra.feature_key ?? ""));
+    } else {
+      // 409 STAGE_HAS_RESULTS (hard constraint 1): a ghost can be reported
+      // by getStageRosterDrift even when its fixture already has a result
+      // — the signal and the guard are independent (plan, required test
+      // coverage) — so this is a real, reachable outcome, not just a
+      // defence-in-depth 422 the UI never offers a button for.
+      const blocked = rebuildBlockedMessage(err, msg);
+      if (isOnlineGameExists(err)) {
+        setGameExists(true);
+      } else if (blocked) {
+        setWarning(blocked);
+      } else {
+        setError(rebuildErrorText(err, msg, msgPlural));
+      }
     }
   }
 
@@ -1958,6 +1967,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     defaultPool={tableLatePools?.stageId === stage.id ? tableLatePools.defaultKey : null}
                     rebuildable={tableLatePools?.stageId === stage.id && tableLatePools.rebuildable}
                     fixtureCount={stageFixtures.length}
+                    rebuildAttachments={rosterDrift[stage.id]?.attachments}
+                    onRebuildRefused={(err) => {
+                      setNotice(null);
+                      setWarning(null);
+                      setGameExists(false);
+                      showRebuildRefusal(err);
+                    }}
                     registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
                     onPlaced={(said) => {
                       setError(null);
@@ -2547,43 +2563,6 @@ export function AddStageForm({
  * STAGE_NOT_ROOT this panel's own gating never triggers) falls through to
  * the caller's generic handling, same as generatePreconditionMessage's null.
  */
-/**
- * F3 ultrareview finding 5 — the sentence appended to the rebuild confirm
- * dialog naming the organiser SETUP the rebuild clears along with the
- * fixtures: referee appointments, team sheets, paired scoring devices. All
- * three CASCADE off `delete from fixtures` and none of them blocks the
- * rebuild (a result does; see rebuildStageFixtures' guard) — so without this
- * the dialog said "every fixture is deleted and regenerated" while silently
- * also dropping a Saturday's worth of appointments.
- *
- * Returns "" when there is nothing attached, so the common case adds no
- * boilerplate to click through — only non-zero pieces are listed. Joined
- * with `Intl.ListFormat` on the caller's own locale rather than a hardcoded
- * ", " and " and ": the conjunction and the separator differ per language,
- * and this repo's four dictionaries would otherwise need two more keys that
- * exist only to spell out punctuation. Exported (pure) for the same reason
- * rebuildBlockedMessage is: testable without a jsdom harness.
- */
-export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, locale: string): string {
-  const a = drift?.attachments;
-  if (!a) return "";
-  const parts = [
-    a.officials > 0 ? msg("progression.rosterDrift.alsoOfficials", { count: a.officials }) : null,
-    a.lineups > 0 ? msg("progression.rosterDrift.alsoLineups", { count: a.lineups }) : null,
-    a.deviceLinks > 0 ? msg("progression.rosterDrift.alsoDevices", { count: a.deviceLinks }) : null,
-    // W4 B2 fix round 2 (item 5): the rest of the setup a match can carry before Start, each a cascade of the delete.
-    a.streams > 0 ? msg("progression.rosterDrift.alsoStreams", { count: a.streams }) : null,
-    a.youtubeBroadcasts > 0 ? msg("progression.rosterDrift.alsoBroadcasts", { count: a.youtubeBroadcasts }) : null,
-    a.availability > 0 ? msg("progression.rosterDrift.alsoAvailability", { count: a.availability }) : null,
-    a.calls > 0 ? msg("progression.rosterDrift.alsoCalls", { count: a.calls }) : null,
-  ].filter((p): p is string => p !== null);
-  if (parts.length === 0) return "";
-  const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
-  const cleared = msg("progression.rosterDrift.alsoCleared", { items });
-  // Owner ruling Q4 (2026-09-23): the cascade takes every printed QR on this
-  // stage with it — say so in the one dialog that precedes it.
-  return a.deviceLinks > 0 ? `${cleared} ${msg("progression.rosterDrift.sheetsStop")}` : cleared;
-}
 
 /** POST /stages/{id}/generate's answer, as far as the desk's notice reads it (`GenerateResult`). */
 export type GenerateNoticeWire = {

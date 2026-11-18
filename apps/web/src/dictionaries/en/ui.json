@@ -8886,7 +8886,7 @@
   "roundrobin.lateEntry.unscheduled.one": "{count} new match has no time or court yet. Give it a time and court.",
   "roundrobin.lateEntry.unscheduled.other": "{count} new matches have no time or court yet. Give each one a time and court.",
   "roundrobin.lateEntry.tellOpponents": "Their opponents are not notified. Tell them about the new matches.",
-  "roundrobin.lateEntry.rebuildOffered": "No match in this stage has started yet. Rebuild fixtures on the stage card would draw it again with {name} in it, instead of the catch-up matches.",
+  "roundrobin.lateEntry.rebuildOffered": "No match in this stage has started yet. Rebuild fixtures would draw it again with {name} in it, instead of the catch-up matches.",
   "roundrobin.lateEntry.rebuilt": "{name} is in: the stage was drawn again with them in it.",
   "roundrobin.waiting.title": "Waiting to join the table",
   "roundrobin.waiting.sub": "Joined after Start. No fixtures yet.",

@@ -32,6 +32,7 @@ import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
 import type { TableLatePool } from "@/server/usecases/table-desk";
 import { poolPickerShown, TableLatePoolSelect } from "@/components/v2/table-late-pool-select";
 import type { PlacedSaid } from "./knockout-waiting-strip";
+import { attachmentWarning, type RebuildAttachments } from "@/lib/rebuild-attachment-warning";
 
 export interface TableWaitingStripProps {
   stageId: string;
@@ -46,6 +47,12 @@ export interface TableWaitingStripProps {
   rebuildable?: boolean;
   /** I1: the stage's fixtures as the desk holds them — what the Rebuild confirm says it deletes. */
   fixtureCount?: number;
+  /** Fix round 2: the setup on the stage's fixtures a Rebuild deletes with them (`StageRosterDrift.attachments`) — said in the
+   *  confirm by the stage card's own sentence (`attachmentWarning`). */
+  rebuildAttachments?: RebuildAttachments;
+  /** Fix round 2: a Rebuild refusal other than "a match has started" (which the row says, with what to do instead) — handed to
+   *  the panel, which says it as the stage card's Rebuild does (paywall, ONLINE_GAME_EXISTS, the named refusals). */
+  onRebuildRefused?: (err: unknown) => void;
   /** The Registrations hub filtered to this division — a paid entry's refund lives there. */
   registrationsHref: string;
   /** A tap that placed the player: the sentence(s) it earned, for the panel's notice lines (they outlive this strip). */
@@ -60,6 +67,8 @@ export function TableWaitingStrip({
   defaultPool = null,
   rebuildable = false,
   fixtureCount = 0,
+  rebuildAttachments,
+  onRebuildRefused,
   registrationsHref,
   onPlaced,
 }: TableWaitingStripProps) {
@@ -99,7 +108,12 @@ export function TableWaitingStrip({
     if (rebuild) {
       const ok = await confirmDialog({
         title: msg("progression.rosterDrift.confirmTitle"),
-        body: [msg("progression.rosterDrift.confirmBody"), fixtureCount > 0 ? msgPlural("progression.rosterDrift.confirmCount", fixtureCount) : null]
+        // The card's confirm, in the card's order: what it is, what it deletes, and the setup that goes with it.
+        body: [
+          msg("progression.rosterDrift.confirmBody"),
+          fixtureCount > 0 ? msgPlural("progression.rosterDrift.confirmCount", fixtureCount) : null,
+          attachmentWarning(rebuildAttachments === undefined ? undefined : { attachments: rebuildAttachments }, msg, locale),
+        ]
           .filter(Boolean)
           .join(" "),
         confirmLabel: msg("progression.rosterDrift.confirmLabel"),
@@ -140,7 +154,12 @@ export function TableWaitingStrip({
       onPlaced(said);
       router.refresh();
     } catch (err) {
-      setOutcome(w.entrantId, [refusalOf(err, w.name)]);
+      if (rebuild && onRebuildRefused !== undefined && !(err instanceof ApiV1Error && err.code === "STAGE_HAS_RESULTS")) {
+        // Not "a match has started" (said under the row, below): a refusal of the redraw itself — the card's classifier says it.
+        onRebuildRefused(err);
+      } else {
+        setOutcome(w.entrantId, [refusalOf(err, w.name)]);
+      }
       // A server answer means the desk's last read is stale (the player was placed or withdrawn meanwhile): re-read it.
       if (err instanceof ApiV1Error) router.refresh();
     } finally {

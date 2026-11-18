@@ -282,8 +282,9 @@ const STAGE = "stage-1";
 const WES = { entrantId: "e-wes", stageId: STAGE, name: "Westgate Wanderers Badminton Club Second Team", paid: false };
 const IVY = { entrantId: "e-ivy", stageId: STAGE, name: "Ivy", paid: true };
 const REGISTRATIONS = "/o/club/c/open/registration?tab=registrants&division_id=d1";
-function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waiting?: typeof WES[]; rebuildable?: boolean; fixtureCount?: number } = {}) {
+function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waiting?: typeof WES[]; rebuildable?: boolean; fixtureCount?: number; attachments?: unknown } = {}) {
   const placed: { done: string[]; todo: string[] }[] = [];
+  const refused: unknown[] = [];
   const island = renderIsland(TableWaitingStrip, {
     stageId: STAGE,
     waiting: o.waiting ?? [WES, IVY],
@@ -292,6 +293,8 @@ function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waitin
     defaultPool: o.defaultPool ?? null,
     rebuildable: o.rebuildable ?? false,
     fixtureCount: o.fixtureCount ?? 0,
+    rebuildAttachments: o.attachments,
+    onRebuildRefused: (err: unknown) => refused.push(err),
     registrationsHref: REGISTRATIONS,
     onPlaced: (said: { done: string[]; todo: string[] }) => placed.push(said),
   } as never);
@@ -308,7 +311,7 @@ function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waitin
     await flush();
     await flush();
   };
-  return { island, placed, tap, rebuild };
+  return { island, placed, tap, rebuild, refused };
 }
 const catchUp = (pool: string | undefined) => ({
   format: "group", entrant_id: "e-wes", stage_id: STAGE, source: "organiser", case: "catch_up", pool_key: pool,
@@ -498,7 +501,7 @@ describe("X-CU-8 the roster-drift banner leaves the waiting players to the strip
 
 // ─── Fix round 1 I1 (R24 7A made true): the strip's Rebuild exit, before any match has started ───────────────────────────────
 const REBUILD_NOTE = (name: string) =>
-  `No match in this stage has started yet. Rebuild fixtures on the stage card would draw it again with ${name} in it, instead of the catch-up matches.`;
+  `No match in this stage has started yet. Rebuild fixtures would draw it again with ${name} in it, instead of the catch-up matches.`;
 describe("I1 the waiting strip offers a real Rebuild before any result", () => {
   it("the empty case first: once a match has started (rebuildable false) there is no Rebuild and no sentence pointing at one", () => {
     const s = strip({ waiting: [WES], rebuildable: false, fixtureCount: 10 });
@@ -565,5 +568,54 @@ describe("m3 the Group field tags every pool tied for smallest", () => {
   it("A and B tie at 3 (C has 4): both are tagged; one smallest is tagged alone", () => {
     expect(tags([{ key: "A", size: 3, owes: 3 }, { key: "B", size: 3, owes: 3 }, { key: "C", size: 4, owes: 4 }], "A")).toEqual(["A", "B"]);
     expect(tags(POOLS, "B")).toEqual(["B"]);
+  });
+});
+
+// ─── Fix round 2: the strip's Rebuild confirm says what else it clears, and its refusals are the card's ─────────────────────
+describe("fix round 2 the strip's Rebuild is the card's Rebuild in what it says", () => {
+  const NONE = { officials: 0, lineups: 0, deviceLinks: 0, streams: 0, youtubeBroadcasts: 0, availability: 0, calls: 0 };
+  it("the empty case first: nothing attached adds no sentence; two officials and a scoring device are named, with the sheets line", async () => {
+    let checked = 0;
+    for (const r of [
+      { attachments: undefined, want: null },
+      { attachments: NONE, want: null },
+      {
+        attachments: { ...NONE, officials: 2, deviceLinks: 1 },
+        // the approved English (en ui.json), typed: the card's own sentence
+        want: "It also clears 2 official assignment(s) and 1 linked scoring device(s) on those fixtures — you'll need to set those up again. Printed scorer sheets for this stage will stop working.",
+      },
+    ]) {
+      confirms.asked = [];
+      net.calls = [];
+      const s = strip({ waiting: [WES], rebuildable: true, fixtureCount: 6, attachments: r.attachments });
+      confirms.answer = false;
+      await s.rebuild(0);
+      const body = confirms.asked[0]!.body!;
+      expect(body.startsWith("Every fixture in this stage is deleted and regenerated"), JSON.stringify(r.attachments)).toBe(true);
+      expect(body).toContain("It deletes 6 fixtures.");
+      if (r.want === null) expect(body, "no attachment clause").not.toContain("It also clears");
+      else expect(body.endsWith(r.want), body).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a refusal other than 'a match has started' goes to the card's classifier (ONLINE_GAME_EXISTS), never a generic 'failed' line", async () => {
+    const s = strip({ waiting: [WES], rebuildable: true, fixtureCount: 6 });
+    const err = new ApiV1Error("game", 409, "ONLINE_GAME_EXISTS");
+    net.answers.push(() => {
+      throw err;
+    });
+    await s.rebuild(0);
+    expect(s.refused).toEqual([err]);
+    expect(byTestId(s.island.tree(), "table-waiting-outcome"), "said by the panel, not under the row").toEqual([]);
+    expect(router.refreshCount).toBe(1);
+    // positive pair: the stale-start refusal stays under the row (it names what to do instead), not handed over
+    net.answers.push(() => {
+      throw new ApiV1Error("started", 409, "STAGE_HAS_RESULTS");
+    });
+    await s.rebuild(0);
+    expect(s.refused).toEqual([err]);
+    expect(textOf(byTestId(s.island.tree(), "table-waiting-outcome"))).toContain("A match in this stage has started");
   });
 });

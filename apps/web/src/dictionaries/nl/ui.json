@@ -8886,7 +8886,7 @@
   "roundrobin.lateEntry.unscheduled.one": "{count} nieuwe wedstrijd heeft nog geen tijd of baan. Geef hem een tijd en een baan.",
   "roundrobin.lateEntry.unscheduled.other": "{count} nieuwe wedstrijden hebben nog geen tijd of baan. Geef elk een tijd en een baan.",
   "roundrobin.lateEntry.tellOpponents": "Hun tegenstanders krijgen geen bericht. Laat hen weten dat er nieuwe wedstrijden zijn.",
-  "roundrobin.lateEntry.rebuildOffered": "Er is in deze fase nog geen wedstrijd begonnen. Wedstrijden herbouwen op de fasekaart zou haar opnieuw indelen met {name} erin, in plaats van de inhaalwedstrijden.",
+  "roundrobin.lateEntry.rebuildOffered": "Er is in deze fase nog geen wedstrijd begonnen. Wedstrijden herbouwen zou haar opnieuw indelen met {name} erin, in plaats van de inhaalwedstrijden.",
   "roundrobin.lateEntry.rebuilt": "{name} doet mee: de fase is opnieuw ingedeeld.",
   "roundrobin.waiting.title": "Wacht op een plek in de stand",
   "roundrobin.waiting.sub": "Ingeschreven na de start. Nog geen wedstrijden.",
