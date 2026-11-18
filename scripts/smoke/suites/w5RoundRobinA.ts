@@ -1039,8 +1039,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
     const ok =
       cRes.status === 201 && dRes.status === 201 && made.length === 6 && posted.length === 1 && gen.status === 200 && started.status === 200 &&
       lines.length === 6 && walks.length === 6 && walks.every((w) => w === 201) && best.size === 2 && hubRes.status === 200 &&
-      mine.length === 1 && mine[0]!.pools.length === 2 && JSON.stringify(gotSeeds) === JSON.stringify(wantSeeds) &&
-      mine[0]!.pools.every((p) => p.name !== null && p.name.length > 0) && rows.length === 6 && rows.every((r) => r.champion === false);
+      mine.length === 1 && mine[0].pools.length === 2 && JSON.stringify(gotSeeds) === JSON.stringify(wantSeeds) &&
+      mine[0].pools.every((p) => p.name !== null && p.name.length > 0) && rows.length === 6 && rows.every((r) => r.champion === false);
     w5Check(
       "w5a T14b: a finished two-pool Groups only division publishes each pool's winner in the hub document and flags no row champion" +
         (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, entrants ${made.length}, generate ${gen.status}, start ${started.status}, lines ${lines.length}, walks ${walks.join(",")}, hub ${hubRes.status}, winners ${JSON.stringify(mine).slice(0, 300)}, want seeds ${wantSeeds.join(",")}, rows ${rows.length}`),

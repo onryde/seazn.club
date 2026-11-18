@@ -124,7 +124,7 @@ async function refusedRun(ctx: Parameters<Scenario["run"]>[0], rec: Recorder, fi
     observed: { caseId: ctx.spec.caseId, facts: [], stages: [], withdrawal: null, configEdit: null },
     assertions: [assertion("f1-pool-of-one-refused", items)],
     events: rec.events,
-    notes: [...rec.notes, `Start refused ${field} entrants in ${owed.groups} pools: suggested ${String(extra.suggested ?? "none")}`],
+    notes: [...rec.notes, `Start refused ${field} entrants in ${owed.groups} pools: suggested ${typeof extra.suggested === "number" ? String(extra.suggested) : "none"}`],
   };
 }
 
