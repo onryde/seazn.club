@@ -11,11 +11,14 @@ import {
   LINE_FALLBACK_READ_CALLS,
   LINE_MINT_PARTICIPANT_CALLS,
   LINE_MINT_ROOM_CALLS,
+  LINE_READ_CALLS,
   LINE_RELEASE_GRACE_MS,
   LINE_RESERVATION_MAX,
+  LINE_RESERVATION_MIN,
   LINE_TOKEN_CALLS,
   lineCompletingLevel,
   lineRecheckCost,
+  lineReservation,
 } from "../seat-line";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "../video/budget";
 import {
@@ -56,6 +59,8 @@ import {
   webhookDigest,
   webhookVerdict,
   parseWebhooksKnob,
+  parseProofKnob,
+  stayPriceMax,
   type WebhookDigest,
 } from "../../../../e2e/load/line-load";
 
@@ -66,10 +71,29 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.windowLeadMs).toBe(WINDOW_OPEN_LEAD_MS);
     expect(LINE_LOAD.deadlineAfterMs).toBe(DEADLINE_AFTER_MS);
     expect(LINE_LOAD.lineGraceMs).toBe(LINE_DEADLINE_GRACE_MS);
-    // The load runs with the one-read proof OFF (its flag stays off until the vendor's leave latency is measured): a stay is priced at
-    // the three-call read, which for the boards the run drives (`all`, or `none` with the probe) is the greatest price.
-    expect(LINE_LOAD.reservation).toBe(LINE_RESERVATION_MAX);
-    expect(LINE_LOAD.recheckCost).toBe(lineRecheckCost(LINE_FALLBACK_READ_CALLS));
+    // The stamped price table (check-in capacity plan 2, owner ruling R1), one pin per number against the line's own derivation.
+    // `proof` is the one-read proof on (a read is LINE_READ_CALLS), `fallback` the three-call read (LINE_FALLBACK_READ_CALLS).
+    const READS = { proof: LINE_READ_CALLS, fallback: LINE_FALLBACK_READ_CALLS } as const;
+    let pinned = 0;
+    for (const mode of ["proof", "fallback"] as const) {
+      expect(Object.keys(LINE_LOAD.stayPrice[mode]).sort(), `${mode}: a price for each way a stay's first claim can meet the vendor, no more`).toEqual(["all", "none", "room"]);
+      for (const kind of ["none", "room", "all"] as const) {
+        expect(LINE_LOAD.stayPrice[mode][kind], `LINE_LOAD.stayPrice.${mode}.${kind} is seat-line's lineReservation("${kind}", ${READS[mode]})`).toBe(lineReservation(kind, READS[mode]));
+        pinned += 1;
+      }
+      expect(LINE_LOAD.recheckCost[mode], `LINE_LOAD.recheckCost.${mode} is seat-line's lineRecheckCost(${READS[mode]})`).toBe(lineRecheckCost(READS[mode]));
+      pinned += 1;
+    }
+    expect(pinned, "anti-vacuity: six prices and two re-verify costs pinned").toBe(8);
+    // And the table the owner ruled (plan 2 Global Constraints, R1), typed from the ruling: a change to the line's derivation that moves
+    // a price must be a deliberate edit of BOTH, never one silently following the other.
+    expect(LINE_LOAD.stayPrice, "the ruled prices").toEqual({ proof: { none: 8, room: 8, all: 9 }, fallback: { none: 21, room: 20, all: 21 } });
+    expect(LINE_LOAD.recheckCost, "the ruled re-verify costs").toEqual({ proof: 1, fallback: 3 });
+    // The two extremes the line itself declares: the cheapest stay (flag on, everything on file) and the dearest (an unpriced stay).
+    expect(LINE_LOAD.stayPrice.proof.none).toBe(LINE_RESERVATION_MIN);
+    expect(LINE_LOAD.stayPrice.fallback.all).toBe(LINE_RESERVATION_MAX);
+    expect(stayPriceMax("proof"), "the dearest price a flag-on stay is stamped with").toBe(9);
+    expect(stayPriceMax("fallback"), "the dearest price a flag-off stay is stamped with: today's LINE_RESERVATION_MAX").toBe(LINE_RESERVATION_MAX);
     expect(LINE_LOAD.abandonAfterMs).toBe(LINE_ABANDON_AFTER_MS);
     expect(LINE_LOAD.releaseGraceMs).toBe(LINE_RELEASE_GRACE_MS);
     expect(LINE_LOAD.admitHoldMs).toBe(ADMIT_HOLD_MS);
@@ -205,6 +229,31 @@ describe("realized calls per stay, from the fixture server's own log", () => {
     expect(v.distribution).toEqual({ 6: 2, 21: 1, 22: 1 });
     expect(v.max).toBe(22);
     expect(judgeCosts([], 21, 3).stays, "nothing checked").toBe(0);
+  });
+
+  it("judgeCosts at the flag-on prices SEES an overspend the flag-off bar (21) hides: a stay that spent 10 is over 9, and not over 21 (T7 review)", () => {
+    const costs = [
+      { id: "ok", own: 9, recheck: 1, unreserved: [] },
+      { id: "over", own: 10, recheck: 2, unreserved: [] },
+    ];
+    const on = judgeCosts(costs, stayPriceMax("proof"), LINE_LOAD.recheckCost.proof);
+    expect(on.over.map((c) => c.id), "flag on: 10 > 9").toEqual(["over"]);
+    expect(on.overRecheck.map((c) => c.id), "flag on: a two-call re-verify is over the one-call price").toEqual(["over"]);
+    const off = judgeCosts(costs, stayPriceMax("fallback"), LINE_LOAD.recheckCost.fallback);
+    expect(off.over, "flag off: the same spend is inside 21 - the bar the harness had").toEqual([]);
+    expect(off.overRecheck).toEqual([]);
+  });
+});
+
+describe("parseProofKnob: LOAD_PRESENCE_PROOF is the server's own flag, exactly \"1\" or off", () => {
+  it("1 is the one-read proof's prices, 0 / unset / empty the three-call read's", () => {
+    expect(parseProofKnob("1")).toBe("proof");
+    for (const off of ["0", undefined, ""]) expect(parseProofKnob(off), String(off)).toBe("fallback");
+  });
+  it("anything else throws, naming the variable: the server reads only the exact value 1, so a spelling it would read as OFF must not pick the flag-on bars", () => {
+    const bad = ["true", "2", "on", "yes", " 1", "1 "];
+    expect(bad.length, "anti-vacuity").toBeGreaterThan(0);
+    for (const v of bad) expect(() => parseProofKnob(v), v).toThrow(/LOAD_PRESENCE_PROOF=/);
   });
 });
 

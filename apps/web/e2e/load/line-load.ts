@@ -16,12 +16,17 @@ export const LINE_LOAD = {
   deadlineAfterMs: 600_000,
   /** window.ts LINE_DEADLINE_GRACE_MS: the line's grace past the deadline (the board's cap). */
   lineGraceMs: 300_000,
-  /** seat-line.ts LINE_RESERVATION_MAX: what one stay reserves, and (lineRecheckCost) the re-verify held beside it while it could complete its
-   *  board. The load runs with the one-read proof OFF (its flag stays off until the vendor's leave latency is measured), so a stay is priced at the
-   *  three-call read - the greatest price, 21 - and its re-verify is the three-call read. The stamped price (a `room` stay 20 flag off, 8 and 9 on)
-   *  is measured in external-play-line-cost.test.ts, not here. */
-  reservation: 21,
-  recheckCost: 3,
+  /** seat-line.ts lineReservation(kind, readCalls): what one stay reserves, by what its first claim meets (`none`: room and participant on file,
+   *  `room`: the pre-mint job's room is waiting, `all`: nothing on file) and by the read the seat makes - `proof`, the one-read proof ON
+   *  (EXTERNAL_PLAY_PRESENCE_PROOF=1: a read is LINE_READ_CALLS), `fallback`, the three-call read (LINE_FALLBACK_READ_CALLS). Typed from the
+   *  owner's price table (check-in capacity plan 2, ruling R1) and pinned number by number to lineReservation in line-load.test.ts. */
+  stayPrice: {
+    proof: { none: 8, room: 8, all: 9 },
+    fallback: { none: 21, room: 20, all: 21 },
+  },
+  /** seat-line.ts lineRecheckCost(readCalls): the re-verify held beside a stay's reservation while it could complete its board - one read with
+   *  the proof, the three-call read without it. */
+  recheckCost: { proof: 1, fallback: 3 },
   /** seat-line.ts lineCompletingLevel(LINE_FALLBACK_READ_CALLS): the bucket level at which an idle line lets a completing claim straight through (reads + token + re-verify). */
   completingLevel: 7,
   /** MEASURED, not declared anywhere: the report's `perPlayerCheckIn` of every instant-camera B run (426 check-in calls for 60 players). The pin test
@@ -44,6 +49,22 @@ export const LINE_LOAD = {
   pollMinMs: 2_000,
   pollMs: 3_000,
 } as const;
+
+/** Which of `LINE_LOAD`'s two price sets a run is measured against: the server's read mode (EXTERNAL_PLAY_PRESENCE_PROOF). */
+export type ReadMode = "proof" | "fallback";
+
+/** `LOAD_PRESENCE_PROOF`, the runner's copy of the SERVER's flag (the server under test reads it from ITS env, and only the exact value "1"
+ *  turns the proof on): "1" is the flag-on prices, unset / "" / "0" the flag-off ones. Any other spelling throws - the server would read it as
+ *  OFF, and a run that picked the flag-on bars for a flag-off server would call every stay over its price. */
+export function parseProofKnob(raw: string | undefined): ReadMode {
+  if (raw === undefined || raw === "" || raw === "0") return "fallback";
+  if (raw === "1") return "proof";
+  throw new Error(`LOAD_PRESENCE_PROOF=${raw} is not "0" or "1"`);
+}
+
+/** The dearest price a stay of this read mode is stamped with: what a bar compares a stay's realised spend to (a stay is stamped with the price
+ *  of what its first claim met, never above this). Flag on 9, flag off 21 - a bar written against 21 cannot see a flag-on overspend. */
+export const stayPriceMax = (mode: ReadMode): number => Math.max(...Object.values(LINE_LOAD.stayPrice[mode]));
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────── a board's times
 
@@ -251,7 +272,7 @@ export type LineSample = {
 };
 
 /** The pool (§5.7.3): the bucket's level less every held reservation. */
-export const poolOf = (s: LineSample, reservation: number = LINE_LOAD.reservation, recheck: number = LINE_LOAD.recheckCost): number =>
+export const poolOf = (s: LineSample, reservation: number = stayPriceMax("fallback"), recheck: number = LINE_LOAD.recheckCost.fallback): number =>
   s.tokens - s.inFlight * reservation - s.completing * recheck;
 
 export type DrainReport = {
@@ -262,7 +283,7 @@ export type DrainReport = {
   samplesChecked: number;
 };
 
-export function drainOf(samples: readonly LineSample[], reservation: number = LINE_LOAD.reservation, recheck: number = LINE_LOAD.recheckCost): DrainReport {
+export function drainOf(samples: readonly LineSample[], reservation: number = stayPriceMax("fallback"), recheck: number = LINE_LOAD.recheckCost.fallback): DrainReport {
   const ordered = [...samples].sort((a, b) => a.at - b.at);
   const first = ordered.find((s) => s.waiting > 0 && poolOf(s, reservation, recheck) < reservation);
   if (!first) return { drainedAt: null, maxInFlightDrained: 0, samplesChecked: ordered.length };
@@ -322,8 +343,8 @@ export function slowBound(i: {
   recheckCost?: number;
 }): SlowBound {
   if (!(i.players > 0)) throw new RangeError("slowBound: a run with no players has no bound");
-  const reservation = i.reservation ?? LINE_LOAD.reservation;
-  const recheck = i.recheckCost ?? LINE_LOAD.recheckCost;
+  const reservation = i.reservation ?? stayPriceMax("fallback");
+  const recheck = i.recheckCost ?? LINE_LOAD.recheckCost.fallback;
   const perPlayer = i.callsRun / i.players;
   const s = i.warmupS + i.maxBackoffMs / 1_000;
   const lagOf = (hold: number) => (i.maxInFlightDrained * hold + Math.max(0, hold - perPlayer)) / i.refillPerS;
@@ -396,8 +417,10 @@ export function peakPerSecond(timesMs: readonly number[]): { peak: number; secon
  *   - `completingLevel`: the level an idle line wants before it lets a completing claim by. A run that ends no lower than that level never stood
  *     below it, and the min-gate-level bar (< completingLevel) could not be met.
  *  The run's tail (the check-ins that still run after the last arrival, and the refill that keeps coming during it) is NOT modelled; this margin is
- *  what absorbs it, which is why it is the sum of three whole thresholds rather than a single token. */
-export const DRY_MARGIN_CALLS = LINE_LOAD.reservation + LINE_LOAD.recheckCost + LINE_LOAD.completingLevel;
+ *  what absorbs it, which is why it is the sum of three whole thresholds rather than a single token.
+ *  Made of the FLAG-OFF numbers on purpose: `instantCallsPerPlayer` was measured with the one-read proof off, so B-dry is a flag-off leg (the
+ *  harness refuses `LOAD_PRESENCE_PROOF=1` for it). */
+export const DRY_MARGIN_CALLS = stayPriceMax("fallback") + LINE_LOAD.recheckCost.fallback + LINE_LOAD.completingLevel;
 
 export type DryArrivalInput = { players: number; perPlayerCalls: number; burst: number; refillPerS: number; marginCalls: number };
 
