@@ -1082,6 +1082,7 @@ describe.skipIf(!HAS_DB)("REC-10 (W5): quick match League + Knockout across the 
     expect(await voided.text()).toContain("RESULT_CARRIED_FORWARD");
     const appended = await padPost(bc!.id, pad.secret, { expected_seq: before.lastSeq, type: "boardgame.result", payload: { winner: c, method: "resign" } });
     expect(appended.status).toBe(403);
+    expect(await appended.text(), "the append is refused with the carried-forward code").toContain("RESULT_CARRIED_FORWARD");
     expect(await ledgerTail(bc!.id), "nothing landed").toEqual(before);
     expect(await firstRound(m)).toEqual([pairing(a, b)]);
     expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
@@ -1102,7 +1103,7 @@ describe.skipIf(!HAS_DB)("REC-10 (W5): quick match League + Knockout across the 
     // with the order the hooks land in: the pin is the end state, one confirmed proposal, the old one stale, no draft left behind.
     const settled = await proposalsOf(m);
     expect({ confirmed: settled.confirmed, draft: settled.draft ?? 0, staleOldOne: (settled.stale ?? 0) >= 1 }).toEqual({ confirmed: 1, draft: 0, staleOldOne: true });
-    expect(await seedConfirmedEvents(m), "the knockout was confirmed again").toBeGreaterThanOrEqual(2);
+    expect(await seedConfirmedEvents(m), "confirmed twice: the first fill and the re-seat").toBe(2);
 
     // The final starts: from then the bracket stands, whatever the table says (RB5-K6 after the start).
     const final = await finalLine(m);
@@ -1163,14 +1164,18 @@ describe.skipIf(!HAS_DB)("REC-10 (W5): quick match League + Knockout across the 
       const [acRow] = await sql<{ status: string; outcome: { winner?: string; reason?: string } }[]>`select status, outcome from fixtures where id = ${ac.id}`;
       expect({ status: acRow!.status, winner: acRow!.outcome.winner, reason: acRow!.outcome.reason }, `${key}: the disqualifying match stands, A's by forfeit (RB5-W3: C played 2 of 2)`)
         .toEqual({ status: "forfeited", winner: a, reason: "disqualified" });
-      // Every league line is settled now, so the guest's next look at the home moves the knockout on (its load runs the advance).
+      // Right after the forfeit, BEFORE any page load (a load runs the advance and would hide the defect): the withdrawal has
+      // ranked the disqualified side last in the stored table (RB5-W1) - C has one win and B none, so by results alone she is 2nd -
+      // and the knockout is already seated from the cut without her (RB5-K1: the next eligible, B, takes the seat).
+      expect((await tableOf(m)).map((r) => r.entrantId), `${key}: the stored table ranks the disqualified side last, with no load`).toEqual([a, b, c]);
+      expect(await firstRound(m), `${key}: differential, the final is already A v B and never C, with no load`).toEqual([pairing(a, b)]);
+      expect(await stageStatus(m.leagueStageId), `${key}: the league completed`).toBe("complete");
       const home = await readQuickMatchHome(m.row);
       expect(home?.league, `${key}: three matches, all decided`).toMatchObject({ played: 3, total: 3, done: true });
       expect(await advanceQuickMatch(m.row), key).toEqual({ state: "filled" });
-      // C has one win and B none, so a table-only cut would seat C. A disqualified side leaves the cut: the next eligible, B, is seated.
-      expect(await firstRound(m), `${key}: differential, the final is A v B and never C`).toEqual([pairing(a, b)]);
+      expect(await firstRound(m), `${key}: the load moved nothing`).toEqual([pairing(a, b)]);
       expect(await proposalsOf(m), `${key}: one confirmed proposal`).toMatchObject({ confirmed: 1 });
-      expect(await seedConfirmedEvents(m) >= 1, key).toBe(true);
+      expect(await seedConfirmedEvents(m), `${key}: confirmed once`).toBe(1);
 
       // The final is played and B takes it: the champion is the final's winner, and C is nowhere in the knockout.
       const final = await finalLine(m);

@@ -1312,26 +1312,40 @@ export async function onDecided(auth: AuthCtx, fixtureId: string, opts: { autoAd
   // a finished league back, which drops a pending tie answer). After the commit, never in it, and best-effort like the hooks
   // above: the score already stands. Only the system org's writes ask, and the module is loaded on demand, so an
   // organiser's score pays one comparison and nothing else.
-  if (context && auth.orgId === QUICK_MATCH_SYSTEM_ORG_ID) {
-    try {
-      await (await import("./quick-match-advance")).afterQuickMatchScore(context.division_id);
-    } catch (err) {
-      log.error(
-        { err, event: "quick_match_advance_failed", divisionId: context.division_id },
-        "scoring: the quick match's knockout did not advance (score write unaffected)",
-      );
-    }
-  }
+  // Task 16b fix round 1 (I-1): not for a disqualifying forfeit either - its ask waits for the DQ hook, like the auto-advance above.
+  // Run here, it completed the league BEFORE the cascade ranked her last, and the cascade skips a complete stage (C1).
+  if (context && opts.autoAdvance !== false) await askQuickMatchAdvance(auth, context.division_id);
   // Only ever reached once the transaction above COMMITTED: a rollback throws
   // out of `withTenant`, so the ids of a fill that was undone never leave.
   return advanced;
 }
 
-/** B3 fix wave (I-3): `maybeAutoAdvance` for the stage of `fixtureId`. */
+/** Quick match plan 5 (D2, P6): move a League + Knockout on as far as it can go now. Only the system org's writes ask; best-effort,
+ *  the write that led here already stands. */
+async function askQuickMatchAdvance(auth: AuthCtx, divisionId: string): Promise<void> {
+  if (auth.orgId !== QUICK_MATCH_SYSTEM_ORG_ID) return;
+  try {
+    await (await import("./quick-match-advance")).afterQuickMatchScore(divisionId);
+  } catch (err) {
+    log.error(
+      { err, event: "quick_match_advance_failed", divisionId },
+      "scoring: the quick match's knockout did not advance (score write unaffected)",
+    );
+  }
+}
+
+/** The auto-advance a settle owes a stage, and the quick match's own advance beside it (Task 16b fix round 1): for the writes that
+ *  held both back until a withdrawal's cascade had ranked the leaver (a disqualifying forfeit) and for the cascade's own end. */
+export async function advanceAfterSettle(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
+  await maybeAutoAdvance(auth, stageId, divisionId);
+  await askQuickMatchAdvance(auth, divisionId);
+}
+
+/** B3 fix wave (I-3): `advanceAfterSettle` for the stage of `fixtureId`. */
 async function autoAdvanceFixtureStage(auth: AuthCtx, fixtureId: string): Promise<void> {
   const [line] = await withTenant(auth.orgId, (tx) => tx<{ stage_id: string; division_id: string }[]>`
     select stage_id, division_id from fixtures where id = ${fixtureId}`);
-  if (line) await maybeAutoAdvance(auth, line.stage_id, line.division_id);
+  if (line) await advanceAfterSettle(auth, line.stage_id, line.division_id);
 }
 
 /** Exported for the withdrawal cascade (W5 T8, ruling 105 / M-10): an expunge ends on `core.abandon{expunge: true}`, which

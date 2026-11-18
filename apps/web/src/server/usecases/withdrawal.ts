@@ -73,7 +73,7 @@ import {
 import { getDivision } from "./divisions";
 import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, writeDepartedSeat } from "./stages";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
-import { invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
+import { advanceAfterSettle, invalidatePublicCache, scoreEvent } from "./scoring";
 import { replaceDepartedQualifier } from "./lucky-loser";
 import { afterScheduleWrite } from "./schedule";
 
@@ -883,7 +883,7 @@ async function runWithdrawEntrantCascade(
   // RB5-W1: and her row now ranks last — the stored table was folded by the settles while she was still in the field.
   for (const stage of settledTables) {
     await refoldStageTable(auth.orgId, stage, "skip");
-    await maybeAutoAdvance(auth, stage.id, division.id);
+    await advanceAfterSettle(auth, stage.id, division.id);
   }
   return out;
 }
