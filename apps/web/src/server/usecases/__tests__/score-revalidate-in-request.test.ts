@@ -48,10 +48,16 @@ const probe = vi.hoisted(() => ({
   failScoreTag: false,
   failOnDecided: null as Error | null,
   // R10 M3: `scoreEvent` calls scoring.ts's own `onDecided` binding, which no
-  // module mock reaches. Its standings recompute (engine-db) is the dependency
-  // made to throw instead, so the real `onDecided` throws inside scoreEvent.
-  failStandings: null as Error | null,
-  standingsAttempts: 0,
+  // module mock reaches, so a dependency of it is made to throw instead. Since
+  // the lots-draw fix (2026-11-18) every hook after onDecided's seat-fill
+  // transaction is best-effort (the refold, the seed-proposal staleness,
+  // auto-advance, discipline, news: logged, never thrown), so the post-commit
+  // step that still throws, by ruling, is that fill transaction itself. Its
+  // seating guard (`assertAdvancingSeat`, level-seat.ts) is the dependency made
+  // to throw: the real `onDecided` throws from inside its fill, after the
+  // event committed.
+  failFill: null as Error | null,
+  fillAttempts: 0,
   slowImportLookupMs: 0,
 }));
 
@@ -123,16 +129,16 @@ vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
     },
   };
 });
-vi.mock("@/server/engine-db", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/server/engine-db")>();
+vi.mock("@/server/engine-db/level-seat", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/engine-db/level-seat")>();
   return {
     ...actual,
-    recomputeStandings: async (...args: Parameters<typeof actual.recomputeStandings>) => {
-      if (probe.failStandings) {
-        probe.standingsAttempts += 1;
-        throw probe.failStandings;
+    assertAdvancingSeat: (...args: Parameters<typeof actual.assertAdvancingSeat>) => {
+      if (probe.failFill) {
+        probe.fillAttempts += 1;
+        throw probe.failFill;
       }
-      return actual.recomputeStandings(...args);
+      return actual.assertAdvancingSeat(...args);
     },
   };
 });
@@ -294,8 +300,8 @@ afterEach(() => {
   probe.store = null;
   probe.failScoreTag = false;
   probe.failOnDecided = null;
-  probe.failStandings = null;
-  probe.standingsAttempts = 0;
+  probe.failFill = null;
+  probe.fillAttempts = 0;
   probe.slowImportLookupMs = 0;
   for (const fn of Object.values(logMock)) fn.mockClear();
 });
@@ -544,8 +550,9 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
   // R10 M3. `onDecided` / `refreshDiscipline` / `refreshNews` run after the
   // event has COMMITTED. A throw there used to skip the invalidation and both
   // pushes, so the public pages kept serving a score that already stood: the
-  // shape F3 fixed in event-import.ts.
-  /** A deciding write whose standings recompute throws, run the way the route
+  // shape F3 fixed in event-import.ts. The one of them that still throws is
+  // onDecided's seat-fill transaction (the probe's `failFill` says why).
+  /** A deciding write whose seat-fill transaction throws, run the way the route
    *  handler runs it: a thrown error becomes the response and the handler still
    *  RESOLVES, so Next's flush runs either way. `result` is what the caller got. */
   async function decidingWriteWithAThrowingHook(auth: Parameters<typeof scoreEvent>[0], fixtureId: string) {
@@ -554,8 +561,8 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
       inRequest(() => scoreEvent(auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} })),
     );
     await settleSweeps({ resolve: true });
-    const hookFailure = new Error("simulated standings failure");
-    probe.failStandings = hookFailure;
+    const hookFailure = new Error("simulated seat-fill failure");
+    probe.failFill = hookFailure;
     const cachedAt = await cachedJustBefore();
     const run = await unblocked(
       inRequest(async () => {
@@ -584,7 +591,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
     // The premise: the hook really ran and really threw, and the error reached
     // the caller unchanged.
-    expect(probe.standingsAttempts, "the standings recompute never ran").toBe(1);
+    expect(probe.fillAttempts, "the seat-fill guard never ran").toBe(1);
     expect(result, "the caller did not receive the hook's own error").toBe(hookFailure);
     // The score stands.
     const [{ n }] = await sql<{ n: number }[]>`
@@ -616,7 +623,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
     const { result, hookFailure } = await decidingWriteWithAThrowingHook(auth, fixtureId);
 
-    expect(probe.standingsAttempts).toBe(1);
+    expect(probe.fillAttempts).toBe(1);
     expect(result, "the invalidation failure replaced the hook's error").toBe(hookFailure);
     expect(logMock.error).toHaveBeenCalledWith(
       { err: new Error("simulated invalidation failure"), fixture: fixtureId },
