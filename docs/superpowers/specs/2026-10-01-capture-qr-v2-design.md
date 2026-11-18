@@ -891,12 +891,13 @@ exactly one wire value. A test sweeps the DB enums: the count of mapped reasons 
 | end `auto_stopped` (written by PR-2) | `auto_stopped` | "Stopped automatically after the result" |
 | end `phone_lost` | `phone_lost` | before ingest (ask 10): "The phone stopped answering before the stream started"; after ingest (W19): "The phone and its video were gone for {minutes} min" (the server's W19 window) |
 | end `max_duration` | `max_duration` | as today |
+| end `relay_ended` (V530, court stream follow-up 2026-11-18: the compositor's own `exitReason: ended`, which no one asked for) | `failed` | "Stream stopped unexpectedly" |
 | fail `no_inbound_timeout` | `no_inbound_timeout` | as today |
 | fail `target_rejected` | `target_rejected` | as today |
 | every other fail reason (`no_credits`, `provision_timeout`, `admission_timeout`, `relay_disabled`, the runner's) | `failed` | as today |
 | neither: a `completed` row with no end reason (`session.ts`'s completion) (amended, §17.8) | `failed` | as today |
 
-The V430 check constraint admits all five end reasons at once. A DB that cannot store `auto_stopped` would leave
+The V430 check constraint admits all five end reasons at once (V530 adds the sixth, `relay_ended`). A DB that cannot store `auto_stopped` would leave
 PR-2's writer with no column to write.
 
 ### 6.9 Present, silent, and not responding

@@ -59,9 +59,9 @@ describe("relay wire enums equal their declarations", () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("T6: StreamEndReason is exactly T4b's DB_END_REASONS — five — and the folded CHECK list agrees in both directions", () => {
+  it("T6: StreamEndReason is exactly T4b's DB_END_REASONS — six since V530's relay_ended — and the folded CHECK list agrees in both directions", () => {
     const declared = lastCheckList("fixture_stream_sessions", "end_reason");
-    expect(declared).toHaveLength(5);
+    expect(declared).toHaveLength(6);
     expect(sorted(S.StreamEndReason.options)).toEqual(sorted(DB_END_REASONS));
     expect(sorted(declared)).toEqual(sorted(DB_END_REASONS));
   });
@@ -152,6 +152,9 @@ describe("the stream delta fold — lastCheckList reads both CHECK forms, last d
   // V430 — the named form, under Postgres's default name for V410's inline check.
   const v430EndReasons = list(V430.match(/add constraint fixture_stream_sessions_end_reason_check\s+check \(end_reason in \(([^)]*)\)\)/));
   const v430Sources = list(V430.match(/add constraint fixture_stream_events_source_check\s+check \(source in \(([^)]*)\)\)/));
+  // V530 (court stream follow-up, 2026-11-18) re-declares the end_reason check under the same name, widened by relay_ended.
+  const V530 = deltaText(530);
+  const v530EndReasons = list(V530.match(/add constraint fixture_stream_sessions_end_reason_check\s+check \(end_reason in \(([^)]*)\)\)/));
 
   it("anti-vacuity: the fold read files, V410 and V430 among them BY NAME, and each file's own list parsed non-empty", () => {
     expect(STREAM_DELTA_COUNT).toBeGreaterThan(0);
@@ -162,16 +165,20 @@ describe("the stream delta fold — lastCheckList reads both CHECK forms, last d
     expect([v410EndReasons.length, v430EndReasons.length, v410Sources.length, v430Sources.length].every((n) => n > 0)).toBe(true);
   });
 
-  it("ordering differential: V410 alone folds to V410's two end reasons; V410 then V430 folds to V430's five; the reverse order folds back to V410's", () => {
+  it("ordering differential: V410 alone folds to V410's two end reasons; V410 then V430 folds to V430's five; the reverse order folds back to V410's; the whole fold is V530's six", () => {
     expect(v410EndReasons).toHaveLength(2);
     expect(v430EndReasons).toHaveLength(5);
+    expect(v530EndReasons).toHaveLength(6);
     expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410])).toEqual(v410EndReasons);       // the INLINE form
     expect(lastCheckList("fixture_stream_sessions", "end_reason", [V430])).toEqual(v430EndReasons);       // the NAMED form
     expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410, V430])).toEqual(v430EndReasons);
     expect(lastCheckList("fixture_stream_sessions", "end_reason", [V430, V410])).toEqual(v410EndReasons); // order decides
-    expect(lastCheckList("fixture_stream_sessions", "end_reason")).toEqual(v430EndReasons);               // the whole fold
-    // V430 keeps both of V410's reasons — it widens, never narrows.
+    expect(lastCheckList("fixture_stream_sessions", "end_reason", [V410, V430, V530])).toEqual(v530EndReasons);
+    expect(lastCheckList("fixture_stream_sessions", "end_reason")).toEqual(v530EndReasons);               // the whole fold
+    // V430 keeps both of V410's reasons, and V530 all of V430's — each widens, never narrows.
     for (const r of v410EndReasons) expect(v430EndReasons).toContain(r);
+    for (const r of v430EndReasons) expect(v530EndReasons).toContain(r);
+    expect(v530EndReasons.filter((r) => !v430EndReasons.includes(r))).toEqual(["relay_ended"]);
   });
 
   it("fixture_stream_events.source: the folded list contains 'phone', V410's alone does not, and every V410 source is kept", () => {
@@ -355,7 +362,7 @@ describe("relay request schemas refuse what they must", () => {
       expect(S.StreamSessionCurrent.safeParse({ ...current, state: "completed", endReason }).success, endReason).toBe(true);
       reasons++;
     }
-    expect(reasons).toBe(5);
+    expect(reasons).toBe(6);
     // YouTube live status (owner direction 2026-11-14): REQUIRED, null or one of the stored words or `pasted_key`; nothing else. An absent
     // field is refused (not read as "no word"), and so is a word nobody declared.
     const withoutYoutubeStatus: Record<string, unknown> = { ...current };

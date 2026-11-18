@@ -56325,7 +56325,8 @@
                                     "operator_stopped",
                                     "auto_stopped",
                                     "phone_lost",
-                                    "max_duration"
+                                    "max_duration",
+                                    "relay_ended"
                                   ]
                                 },
                                 {
@@ -57153,7 +57154,8 @@
                                 "operator_stopped",
                                 "auto_stopped",
                                 "phone_lost",
-                                "max_duration"
+                                "max_duration",
+                                "relay_ended"
                               ]
                             },
                             {

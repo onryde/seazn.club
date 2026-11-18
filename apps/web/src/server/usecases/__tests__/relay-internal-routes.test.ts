@@ -33,6 +33,8 @@ import { sql, type Tx } from "@/lib/db";
 import { RelayHeartbeatReply, RelayJobSession, type RelayHeartbeat } from "@/server/api-v1/schemas";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS } from "@/lib/stream-destinations";
+import { END_REASON_KEYS } from "@/lib/stream-session-view";
+import { messages, type MessageKey } from "@/lib/messages";
 import { PHASE_CHANNELS, PROGRAMME_PHASES } from "@/lib/relay-phase";
 import {
   MAX_DURATION_MINUTES, RELAY_EXIT_REFUSED, RELAY_EXIT_RESTART, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS, RUNNER_CRASH_CAP, RUNNER_INPLACE_RESTARTS, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS,
@@ -51,7 +53,7 @@ import { POST as beat } from "@/app/api/internal/relay/sessions/[sid]/heartbeat/
 import { makeCommunityRig, seedOrg, startedDivisionWithFixture } from "./_rig";
 import { grantCredits, orgMoneyLockKey } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
-import { createSession, defaultDeps, heartbeat, sessionFactsForJob, stopSession } from "../stream-sessions";
+import { createSession, currentSession, defaultDeps, heartbeat, sessionFactsForJob, stopSession } from "../stream-sessions";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1072,14 +1074,19 @@ async function playingSession() {
 const stoppedBeat = (reason: BeatExitReason | "absent" | "null") =>
   reason === "absent" ? { state: "stopped" } : { state: "stopped", exitReason: reason === "null" ? null : reason };
 
+/** The English copy a key reads (en/ui.json): the expected texts below are typed from it, never from the view code. */
+const m = (k: MessageKey): string => messages[k] as string;
+
 describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartbeat route", () => {
   // The oracle is the ruling, typed — never read off stoppedBeatTrigger. The empty case (no reason, and null) first.
   // I2 (orchestrator decision, PR #967 review): `ended` and `deadline` END the session — a deadline retry is pointless,
   // and an unsolicited `ended` is the compositor's to make. Only a stopped beat that gives NO reason keeps today's retry.
-  type Routed = "retry" | "ends:stopped" | "ends:max_duration" | "record" | "refused";
+  type Routed = "retry" | "ends:relay_ended" | "ends:max_duration" | "record" | "refused";
   const RULED: Record<BeatExitReason | "absent" | "null", Routed> = {
     absent: "retry", null: "retry",
-    ended: "ends:stopped", deadline: "ends:max_duration",
+    // V530 (court stream follow-up, 2026-11-18): an `ended` nobody asked for is the compositor's own end, `relay_ended` — never
+    // `stopped`, the organiser's Stop (the panel read "Stopped by you"). The STOPPING test below keeps our own stop `stopped`.
+    ended: "ends:relay_ended", deadline: "ends:max_duration",
     fatal: "record", signalled: "record", session_gone: "record",
     // Owed 66: the in-place restart is recorded and moves nothing — least of all the crash count (asserted below); review m1:
     // the one thing it changes is the restart-seen bit (the beat notes the restart before its exit 75 can be read)
@@ -1087,7 +1094,7 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
     refused: "refused",
   };
 
-  it("every reason, from a PLAYING runner and from a BOOTING one: no reason tears the Machine down and boots the ONE retry; ended / deadline END the session (stopped / max_duration, no retry); fatal / signalled / session_gone leave it exactly as it was; refused FAILS it machine_refused with no retry (count reported)", async () => {
+  it("every reason, from a PLAYING runner and from a BOOTING one: no reason tears the Machine down and boots the ONE retry; ended / deadline END the session (relay_ended / max_duration, no retry); fatal / signalled / session_gone leave it exactly as it was; refused FAILS it machine_refused with no retry (count reported)", async () => {
     expect(Object.keys(RULED).sort()).toEqual([...BEAT_EXIT_REASONS, "absent", "null"].sort());
     let checked = 0;
     for (const from of ["playing", "booting"] as const) {
@@ -1100,8 +1107,8 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
         expect(res.status, label).toBe(200);
         const after = await row(s.sessionId);
         expect(await lastHeartbeat(s.sessionId), `${label}: recorded whatever the route`).toMatchObject({ state: "stopped" });
-        if (routed === "ends:stopped" || routed === "ends:max_duration") {
-          const endReason = routed === "ends:stopped" ? "stopped" : "max_duration";
+        if (routed === "ends:relay_ended" || routed === "ends:max_duration") {
+          const endReason = routed === "ends:relay_ended" ? "relay_ended" : "max_duration";
           expect(after, label).toMatchObject({ state: "completed", end_reason: endReason, fail_reason: null, desired_state: "ending", runner_state: "destroyed" });
           expect(s.runner.created, `${label}: never a retry`).toHaveLength(1);
           expect(s.runner.destroyed, `${label}: its Machine is torn down`).toEqual([before.machine_id]);
@@ -1156,6 +1163,26 @@ describe.skipIf(!HAS_DB)("R2003: the final beat's exit reason through the heartb
       while (!["completed", "failed"].includes((await row(s.sessionId)).state) && reads < 4) { await getFacts(s.sessionId, { token: s.jobToken }); reads++; }
       expect(await row(s.sessionId), reason).toMatchObject({ state: "completed", end_reason: "stopped", fail_reason: null });
       expect(s.runner.created, reason).toHaveLength(1);
+      // V530: the organiser's own Stop is still the panel's "Stopped by you" (en/ui.json stream.phone.ended.reason.stopped)
+      const view = await currentSession(s.auth, s.fixtureId, defaultDeps("http://app.test"));
+      expect(view?.endReason, reason).toBe("stopped");
+      expect(m(END_REASON_KEYS[view!.endReason!]), reason).toBe("Stopped by you");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("V530 (court stream follow-up, 2026-11-18): an `ended` final beat nobody asked for completes the session `relay_ended`, and the panel reads \"Stream stopped unexpectedly\" — never \"Stopped by you\"", async () => {
+    let checked = 0;
+    for (const from of ["playing", "booting"] as const) {
+      const s = from === "playing" ? await playingSession() : await session();
+      expect((await postBeat(s.sessionId, stoppedBeat("ended"), { token: s.jobToken })).status, from).toBe(200);
+      expect(await row(s.sessionId), from).toMatchObject({ state: "completed", end_reason: "relay_ended", fail_reason: null });
+      const view = await currentSession(s.auth, s.fixtureId, defaultDeps("http://app.test"));
+      expect(view?.endReason, from).toBe("relay_ended");
+      // en/ui.json, typed: the chip the organiser reads, and the organiser's own Stop's copy it must not be
+      expect(m(END_REASON_KEYS[view!.endReason!]), from).toBe("Stream stopped unexpectedly");
+      expect(m(END_REASON_KEYS[view!.endReason!]), from).not.toBe("Stopped by you");
       checked++;
     }
     expect(checked).toBe(2);

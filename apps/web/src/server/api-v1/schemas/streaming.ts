@@ -59,11 +59,12 @@ export const StreamFailReason = z.enum([
   // R2004 (PR #981 review I3): the destination output could not be added at provisioning — failed closed, never charged.
   "output_failed",
 ]);
-/** How a COMPLETED session ended — the deadline is not a failure. Capture QR v2 (T6, §5.3): the five DB reasons
- *  (domain/end-reason.ts `DB_END_REASONS`, V430's end_reason check) — the organiser's Stop, the phone operator's
- *  Stop (W12), the automatic stop after the result (W7), the phone and its video gone (W19), and the wall clock.
+/** How a COMPLETED session ended — the deadline is not a failure. Capture QR v2 (T6, §5.3): the DB reasons
+ *  (domain/end-reason.ts `DB_END_REASONS`, V430's end_reason check as V530 widened it) — the organiser's Stop, the phone
+ *  operator's Stop (W12), the automatic stop after the result (W7), the phone and its video gone (W19), the wall clock, and
+ *  (V530, court stream follow-up 2026-11-18) the compositor ending the stream by itself, which no one asked for.
  *  stream-contract.test.ts pins this list against both. */
-export const StreamEndReason = z.enum(["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration"]);
+export const StreamEndReason = z.enum(["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration", "relay_ended"]);
 export type StreamEndReason = z.infer<typeof StreamEndReason>;
 export type StreamFailReason = z.infer<typeof StreamFailReason>;
 export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);

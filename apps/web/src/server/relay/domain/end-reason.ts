@@ -7,8 +7,9 @@ import type { CaptureEndReason } from "@/server/api-v1/capture-schemas";
 import type { FailReason } from "./session";
 
 export type WireEndReason = CaptureEndReason;
-/** The V430 `end_reason` check list, in its order (end-reason.test.ts compares it with the migration fold). */
-export const DB_END_REASONS = ["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration"] as const;
+/** The `end_reason` check list the fold leaves (V430's, widened by V530), in its order (end-reason.test.ts compares it
+ *  with the migration fold). */
+export const DB_END_REASONS = ["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration", "relay_ended"] as const;
 export type DbEndReason = (typeof DB_END_REASONS)[number];
 
 export class TerminalWithoutReason extends Error {
@@ -25,6 +26,8 @@ const END_TO_WIRE: Record<DbEndReason, WireEndReason> = {
   auto_stopped: "auto_stopped",
   phone_lost: "phone_lost",
   max_duration: "max_duration",
+  // V530: the compositor ended the stream by itself — no one's stop and no timeout, so G0-f's `failed` (as R11's no-reason row).
+  relay_ended: "failed",
 };
 /** Total over FailReason. The two the phone has copy for are named; every other server-side failure is `failed` (G0-f). */
 const FAIL_TO_WIRE: Record<FailReason, WireEndReason> = {

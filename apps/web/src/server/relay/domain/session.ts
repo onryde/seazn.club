@@ -77,8 +77,9 @@ export interface Session {
 
 /** §5.3: the three ways a broadcast starts (V430's start_cause check). */
 export type StartCause = "organiser" | "operator" | "automatic";
-/** §5.3: a stop's reason — every DB end reason except the wall clock's, which only `expire` decides. */
-export type StopReason = Exclude<DbEndReason, "max_duration">;
+/** §5.3: a stop's reason — every DB end reason except the wall clock's, which only `expire` decides, and the compositor's own
+ *  end (V530 `relay_ended`), which only its final beat decides (runner.ts `stoppedBeatTrigger`): nobody asks for it. */
+export type StopReason = Exclude<DbEndReason, "max_duration" | "relay_ended">;
 
 // ---- admission (§6.3 order, amended by owner ruling 2026-09-29 (F-A5): active_session moves up to directly after the
 // plan gates; E5: storage_exhausted is a refusal, never a state; R2001: composed_unavailable comes first of all)
