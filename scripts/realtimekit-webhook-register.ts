@@ -4,15 +4,22 @@
 //   npm run realtimekit:webhook-register -- --url https://<env host>/api/webhooks/realtimekit --dry-run   # prints the wanted body, calls nothing
 //   npm run realtimekit:webhook-register -- --url https://<env host>/api/webhooks/realtimekit             # registers it
 //   (optional) --name seazn-presence                                                                       # the webhook's name; default seazn-presence
+//   (optional) --force                                                                                     # allow moving an existing webhook to ANOTHER host
 //
 // It needs that environment's CLOUDFLARE_ACCOUNT_ID, REALTIMEKIT_API_TOKEN and REALTIMEKIT_APP_ID (REALTIMEKIT_BASE_URL only for a
 // fixture); a dry run needs none. Idempotent: it lists the app's webhooks, PATCHes the one of that name to the wanted
 // url/events/enabled, or POSTs one when there is none, so a second run changes nothing.
 //
+// ONE APP, TWO ENVIRONMENTS. The webhook is matched by NAME, and staging and production may share one RealtimeKit app: the second
+// environment's run would then re-point the first's webhook at itself, silently. A PATCH that changes the url's HOST is therefore
+// refused (exit 1, both hosts named) unless --force; a path change on the same host is this environment's own and goes through.
+// The OK line prints the vendor base's host, the account and app ids, and the ISO time the vendor answered: that time is T_reg
+// (plan 1 Task 12 step 2), the shadow report's --since.
+//
 // Endpoints (confirmed against Cloudflare's OpenAPI, 2026-11-17): GET and POST /accounts/{account}/realtime/kit/{app}/webhooks,
 // PATCH .../webhooks/{id}, Bearer auth, answers `{ success, data }`. The three events are members of the vendor's event enum.
 //
-// Exit codes: 0 done, 1 the vendor refused or could not be reached, 2 usage or configuration. Output carries statuses, paths
+// Exit codes: 0 done, 1 the vendor refused or could not be reached, or a cross-host PATCH without --force, 2 usage or configuration. Output carries statuses, paths
 // and the webhook's id only: never the token, and never a vendor response body or a transport error (both can quote it).
 //
 // Self-contained on purpose: relative or bare imports only, never `@/` (a root script runs under nodenext and cannot resolve the
@@ -35,23 +42,34 @@ const VENDOR_ID = /^[\w-]{1,64}$/;
 export function registrationPlan(
   existing: readonly VendorWebhook[],
   want: { name: string; url: string },
-): { method: "POST" | "PATCH"; path: string; body: { name: string; url: string; events: string[]; enabled: true } } {
+): { method: "POST" | "PATCH"; path: string; body: { name: string; url: string; events: string[]; enabled: true }; currentUrl?: string } {
   const body = { name: want.name, url: want.url, events: [...PRESENCE_WEBHOOK_EVENTS], enabled: true as const };
   const found = existing.find((w) => w.name === want.name);
   return found
-    ? { method: "PATCH", path: `/webhooks/${encodeURIComponent(found.id)}`, body }
+    ? { method: "PATCH", path: `/webhooks/${encodeURIComponent(found.id)}`, body, currentUrl: typeof found.url === "string" ? found.url : "" }
     : { method: "POST", path: "/webhooks", body };
 }
 
-type Parsed = { url: string; name: string; dryRun: boolean } | { error: string };
+/** A url's host (with any port, lower-cased by URL), or null when it does not parse. */
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+type Parsed = { url: string; name: string; dryRun: boolean; force: boolean } | { error: string };
 
 function parseArgs(argv: readonly string[]): Parsed {
   let url: string | undefined;
   let name = DEFAULT_NAME;
   let dryRun = false;
+  let force = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--dry-run") dryRun = true;
+    else if (a === "--force") force = true;
     else if (a === "--url" || a === "--name") {
       const v = argv[++i];
       if (v === undefined || v.startsWith("--")) return { error: `${a} needs a value.` };
@@ -68,7 +86,7 @@ function parseArgs(argv: readonly string[]): Parsed {
   }
   if (parsed.protocol !== "https:") return { error: "--url must be https: the vendor delivers to a public https endpoint." };
   if (name.trim() === "") return { error: "--name must not be empty." };
-  return { url, name, dryRun };
+  return { url, name, dryRun, force };
 }
 
 function isWebhook(x: unknown): x is VendorWebhook {
@@ -80,12 +98,12 @@ function isWebhook(x: unknown): x is VendorWebhook {
 /** The CLI body, exported for the test. Returns the exit code. */
 export async function run(
   argv: readonly string[],
-  deps: { fetch: typeof fetch; env: NodeJS.ProcessEnv; out?: (line: string) => void },
+  deps: { fetch: typeof fetch; env: NodeJS.ProcessEnv; out?: (line: string) => void; now?: () => Date },
 ): Promise<number> {
   const out = deps.out ?? ((l: string) => console.log(l));
   const args = parseArgs(argv);
   if ("error" in args) {
-    out(`${args.error} Usage: --url <https://…/api/webhooks/realtimekit> [--name ${DEFAULT_NAME}] [--dry-run]`);
+    out(`${args.error} Usage: --url <https://…/api/webhooks/realtimekit> [--name ${DEFAULT_NAME}] [--dry-run] [--force]`);
     return 2;
   }
   const want = { name: args.name, url: args.url };
@@ -137,13 +155,28 @@ export async function run(
     return 1;
   }
   const plan = registrationPlan(data.filter(isWebhook), want);
+  if (plan.method === "PATCH" && !args.force) {
+    const wantHost = hostOf(want.url);
+    const currentHost = hostOf(plan.currentUrl ?? "");
+    if (currentHost !== wantHost) {
+      out(
+        `REFUSED: the existing webhook "${want.name}" delivers to ${currentHost ?? "(an unparseable url)"}, not ${wantHost}. ` +
+          "Another environment may share this RealtimeKit app; nothing was changed. Re-run with --force to move it.",
+      );
+      return 1;
+    }
+  }
   out(`${plan.method} ${plan.path}: ${JSON.stringify(plan.body)}`);
   const done = await call(plan.method, plan.path, plan.body);
   if (!done) return 1;
   const w = (done.json as { data?: unknown } | null)?.data;
   // Printed only when it looks like an id: a vendor body can quote anything (the token, a line break), and an id is all this line is for.
   const id = isWebhook(w) && VENDOR_ID.test(w.id) ? w.id : "(not returned)";
-  out(`OK: ${plan.method} ${plan.path} answered ${done.status}. Webhook "${want.name}" id=${id}.`);
+  const answeredAt = (deps.now ?? (() => new Date()))().toISOString();
+  out(
+    `OK: ${plan.method} ${plan.path} answered ${done.status}. Webhook "${want.name}" id=${id} ` +
+      `host=${hostOf(base) ?? "(unparseable base)"} account=${env.CLOUDFLARE_ACCOUNT_ID} app=${env.REALTIMEKIT_APP_ID} T_reg=${answeredAt}.`,
+  );
   return 0;
 }
 

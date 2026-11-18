@@ -111,7 +111,8 @@ describe("run", () => {
 
   it("updates an existing one (second run): GET then PATCH /webhooks/{id}; --name is honoured", async () => {
     const { fetch, calls } = recordingFetch([
-      { json: { success: true, data: [hook({ name: "custom", id: "wh-7" })] } },
+      // the same host (a path change is this environment's own move; a host change is I3's refusal below)
+      { json: { success: true, data: [hook({ name: "custom", id: "wh-7", url: "https://seazn.example/old/path" })] } },
       { json: { success: true, data: hook({ name: "custom", id: "wh-7", url: URL_OK }) } },
     ]);
     const code = await run(["--url", URL_OK, "--name", "custom"], { fetch, env: ENV, out: () => undefined });
@@ -120,6 +121,57 @@ describe("run", () => {
       ["GET", `${PREFIX}/webhooks`],
       ["PATCH", `${PREFIX}/webhooks/wh-7`],
     ]);
+  });
+
+  // I3 (batch-2 review): the webhook is matched by NAME only, and staging and production may share one RealtimeKit app, so the
+  // second environment's run would silently re-point the first's webhook at itself. A PATCH that moves the url to another host is
+  // refused unless --force.
+  it("refuses (exit 1, no PATCH) to move an existing webhook to ANOTHER host without --force, naming both hosts and --force", async () => {
+    let checked = 0;
+    for (const existingUrl of ["https://stg.seazn.example/api/webhooks/realtimekit", "https://seazn.example:8443/api/webhooks/realtimekit", "not a url"]) {
+      const { fetch, calls } = recordingFetch([{ json: { success: true, data: [hook({ url: existingUrl })] } }, { json: { success: true, data: hook() } }]);
+      const c = capture();
+      expect(await run(["--url", URL_OK], { fetch, env: ENV, out: c.out }), existingUrl).toBe(1);
+      expect(calls.map((x) => x.method), existingUrl).toEqual(["GET"]);
+      const text = c.lines.join("\n");
+      expect(text).toMatch(/REFUSED/);
+      expect(text).toContain("seazn.example");
+      expect(text).toContain("--force");
+      expect(text).not.toContain(TOKEN);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("--force moves it anyway (GET then PATCH, exit 0); the same host on another path needs no --force", async () => {
+    const other = "https://stg.seazn.example/api/webhooks/realtimekit";
+    const forced = recordingFetch([{ json: { success: true, data: [hook({ url: other })] } }, { json: { success: true, data: hook({ url: URL_OK }) } }]);
+    expect(await run(["--url", URL_OK, "--force"], { fetch: forced.fetch, env: ENV, out: () => undefined })).toBe(0);
+    expect(forced.calls.map((x) => [x.method, x.url])).toEqual([["GET", `${PREFIX}/webhooks`], ["PATCH", `${PREFIX}/webhooks/wh-1`]]);
+    expect(forced.calls[1].body).toMatchObject({ url: URL_OK });
+    const samehost = recordingFetch([{ json: { success: true, data: [hook({ url: "https://SEAZN.example/old" })] } }, { json: { success: true, data: hook({ url: URL_OK }) } }]);
+    expect(await run(["--url", URL_OK], { fetch: samehost.fetch, env: ENV, out: () => undefined })).toBe(0);
+    expect(samehost.calls.map((x) => x.method)).toEqual(["GET", "PATCH"]);
+  });
+
+  it("m2: the OK line names the vendor base's host, the account and app ids and the ISO time it answered (T_reg), never the token", async () => {
+    const at = new Date("2026-11-18T09:15:30.123Z");
+    let checked = 0;
+    for (const [env, host] of [[ENV, "api.cloudflare.com"], [{ ...ENV, REALTIMEKIT_BASE_URL: "http://127.0.0.1:9/" }, "127.0.0.1:9"]] as const) {
+      const c = capture();
+      const { fetch } = recordingFetch([{ json: { success: true, data: [] } }, { json: { success: true, data: hook({ id: "wh-new", url: URL_OK }) } }]);
+      expect(await run(["--url", URL_OK], { fetch, env, out: c.out, now: () => at })).toBe(0);
+      const ok = c.lines.find((l) => l.startsWith("OK:"));
+      expect(ok, host).toBeDefined();
+      expect(ok).toContain(`host=${host}`);
+      expect(ok).toContain("account=acct1");
+      expect(ok).toContain("app=app1");
+      expect(ok).toContain("T_reg=2026-11-18T09:15:30.123Z");
+      expect(ok).toContain("id=wh-new");
+      expect(c.lines.join("\n")).not.toContain(TOKEN);
+      checked++;
+    }
+    expect(checked).toBe(2);
   });
 
   it("REALTIMEKIT_BASE_URL redirects the calls (a fixture)", async () => {
