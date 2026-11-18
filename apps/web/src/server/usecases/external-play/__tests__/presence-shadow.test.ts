@@ -138,7 +138,7 @@ const who = (p: Seated) => ({ meetingId: p.meetingId, participantId: p.participa
 describe.skipIf(!DB)("presence shadow report, driven by the fixture vendor and the seat's own reads", () => {
   it("empty case: a scope with no seats verifies nothing (zero is reported, never a pass)", async () => {
     const r = await presenceShadowReport(sql, { since: new Date(Date.now() - 5_000), fixtureIds: [crypto.randomUUID()] });
-    expect(r).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0 });
+    expect(r).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
   });
 
   it("after two players are seated by the seat's own vendor reads, the presence table names both, and the shadow report has nothing missing", async () => {
@@ -366,6 +366,11 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
     expect(fromUsecase.missing.map((m) => `${m.side}`).sort(), "B home (read), B away (late), C home (left before the stamp)").toEqual(["away", "home", "home"]);
     expect(fromUsecase.open, "A home, B home, B away, C away are open; A away and C home are closed").toHaveLength(4);
     expect(fromUsecase.closedByEnded, "A away").toBe(1);
+    // spec §6.8 step 3 (I2), by hand from the rows' own stamps (received_at - joined_at over the WEBHOOK rows; pB-h is a read and the decoy
+    // is out of scope): pA-h 1000, pA-h0 1000, pA-a 1000, pC-h 1000, pC-a 15000, pB-a 16000 -> sorted [1000 x4, 15000, 16000]; nearest
+    // rank: p50 = the 3rd (1000), p95 = the ceil(5.7) = 6th (16000). A linear interpolation would give 15950 for p95, and a mean 5833.
+    expect(fromUsecase.joinLatencyMs, "six webhook rows measured").toEqual({ p50: 1_000, p95: 16_000, n: 6 });
+    expect(fromUsecase.noEcho, "pA-a names no participant; every other scoped row names one, and the decoy's two (which name none) are out of scope").toBe(1);
     // the missing seats carry the seat's own stamp
     for (const m of fromScript.missing) expect(m.seenAt).toEqual(seed.stamp);
   }, 60_000);
@@ -396,7 +401,7 @@ describe.skipIf(!DB)("the script's copy of the report's SQL", () => {
     expect(ours).toEqual(theirs);
     expect(ours.missing.length + ours.open.length, "seed items compared").toBe(4 + 5);
 
-    expect(await shadowReportSql(sql, { ...seed.scope, fixtureIds: [] })).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0 });
+    expect(await shadowReportSql(sql, { ...seed.scope, fixtureIds: [] })).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
     const later = { ...seed.scope, since: new Date(seed.stamp.getTime() + 1_000) };
     expect(await shadowReportSql(sql, later)).toEqual(await presenceShadowReport(sql, later));
     expect((await shadowReportSql(sql, later)).verified).toBe(0);

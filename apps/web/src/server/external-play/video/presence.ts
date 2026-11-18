@@ -305,6 +305,14 @@ export type ShadowReport = {
   /** rows in scope closed only by meeting.ended (left_by 'ended'): each is a participantLeft that never arrived, or a reload's old
    *  peer the vendor never reported leaving. Measured and printed, not gated (spec §3: the vendor's leave-on-reload is unmeasured) */
   closedByEnded: number;
+  /** spec §6.8 step 3: join -> webhook latency, `received_at - joined_at` in ms over the `source='webhook'` rows in scope with a
+   *  joined_at, nearest-rank (`percentile_disc`) p50/p95; null when `n` is 0. CAVEAT: a row's received_at is the FIRST delivery that
+   *  wrote it, so a row whose participantLeft arrived before its joined measures the leave's arrival, and a webhook that upgraded a
+   *  read row keeps the read's (the `covered` caveat above); rows are webhook-written alone until plan 2. Feeds owner ruling R4. */
+  joinLatencyMs: { p50: number | null; p95: number | null; n: number };
+  /** `source='webhook'` rows in scope stored with NO participant: their customParticipantId named nobody on file, i.e. the vendor did
+   *  not echo the id we minted (spec §6.8 step 3's customParticipantId echo). */
+  noEcho: number;
 };
 
 /** Shadow mode's TWO-SIDED comparison over `scope`: player participants whose seat read found the camera on
@@ -344,11 +352,19 @@ export async function presenceShadowReport(db: AnySql, scope: ShadowScope): Prom
        and (${ids}::uuid[] is null or fixture_id = any(${ids}::uuid[]))
      order by received_at, seq`;
 
-  const [ended] = await db<{ n: number }[]>`
-    select count(*)::int as n
+  // One pass over the scope's rows: the end count, and the spec §6.8 step 3 numbers (join latency on OUR receipt clock against the
+  // vendor's joinedAt, nearest-rank percentiles; and how many webhook rows stored no participant, i.e. their customParticipantId did not
+  // echo back to a participant on file).
+  const [agg] = await db<{ ended: number; no_echo: number; lat_n: number; lat_p50: number | null; lat_p95: number | null }[]>`
+    select count(*) filter (where left_by = 'ended')::int as ended,
+           count(*) filter (where source = 'webhook' and participant_id is null)::int as no_echo,
+           count(*) filter (where source = 'webhook' and joined_at is not null)::int as lat_n,
+           (percentile_disc(0.5) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
+             filter (where source = 'webhook' and joined_at is not null))::int as lat_p50,
+           (percentile_disc(0.95) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
+             filter (where source = 'webhook' and joined_at is not null))::int as lat_p95
       from fixture_video_presence
-     where left_by = 'ended'
-       and received_at >= ${scope.since}
+     where received_at >= ${scope.since}
        and (${ids}::uuid[] is null or fixture_id = any(${ids}::uuid[]))`;
 
   return {
@@ -356,7 +372,9 @@ export async function presenceShadowReport(db: AnySql, scope: ShadowScope): Prom
     covered: seats.filter((s) => s.covered).length,
     missing: seats.filter((s) => !s.covered).map((s) => ({ fixtureId: s.fixture_id, side: s.side, participantId: s.participant_id, seenAt: s.seen_at })),
     open: open.map((o) => ({ meetingId: o.meeting_id, peerId: o.peer_id, participantId: o.participant_id, source: o.source, receivedAt: o.received_at })),
-    closedByEnded: ended!.n,
+    closedByEnded: agg!.ended,
+    joinLatencyMs: { p50: agg!.lat_p50, p95: agg!.lat_p95, n: agg!.lat_n },
+    noEcho: agg!.no_echo,
   };
 }
 

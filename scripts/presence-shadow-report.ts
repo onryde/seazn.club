@@ -14,7 +14,9 @@
 // none and carries the seat's person id as its custom id on the seat's side (the readers' rule, presence.ts `currentPresence`). `missing` are
 // the seats no such row covers; `open` the presence rows still open at report time; `closedByEnded` the rows closed only by meeting.ended
 // (a participantLeft that never arrived, or a reload's old peer the vendor never reported leaving): measured and printed, never gated by
-// the exit code. A non-zero `closedByEnded` prints `blocksProofFlag: true` and a note: it blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on
+// the exit code. `joinLatencyMs` ({p50, p95, n}: received_at - joined_at over the scope's webhook rows, nearest-rank) and `noEcho` (webhook
+// rows stored with no participant: our customParticipantId did not echo back) are spec §6.8 step 3's numbers for owner ruling R4; printed,
+// never gated. A non-zero `closedByEnded` prints `blocksProofFlag: true` and a note: it blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on
 // until every counted row is explained and recorded (plan 1 Task 12 step 5), which is a separate decision from this script's exit code.
 //
 // --strict exits 1 when `verified === 0` (an empty run is a failure, never a pass), or `missing` or `open` is non-empty. It is meant for a
@@ -43,6 +45,10 @@ export type ShadowReport = {
   missing: { fixtureId: string; side: Side; participantId: string; seenAt: Date }[];
   open: { meetingId: string; peerId: string; participantId: string | null; source: "webhook" | "read"; receivedAt: Date }[];
   closedByEnded: number;
+  /** join -> webhook latency over the scope's webhook rows (received_at - joined_at, ms, nearest-rank); null percentiles when n is 0 */
+  joinLatencyMs: { p50: number | null; p95: number | null; n: number };
+  /** webhook rows in scope stored with no participant (the vendor did not echo our customParticipantId) */
+  noEcho: number;
 };
 
 /** The report's SQL, a copy of presence.ts `presenceShadowReport` (see the header). */
@@ -75,11 +81,19 @@ export async function shadowReportSql(db: AnySql, scope: ShadowScope): Promise<S
        and (${ids}::uuid[] is null or fixture_id = any(${ids}::uuid[]))
      order by received_at, seq`;
 
-  const [ended] = await db<{ n: number }[]>`
-    select count(*)::int as n
+  // One pass over the scope's rows: the end count, and the spec §6.8 step 3 numbers (join latency on OUR receipt clock against the
+  // vendor's joinedAt, nearest-rank percentiles; and how many webhook rows stored no participant, i.e. their customParticipantId did not
+  // echo back to a participant on file).
+  const [agg] = await db<{ ended: number; no_echo: number; lat_n: number; lat_p50: number | null; lat_p95: number | null }[]>`
+    select count(*) filter (where left_by = 'ended')::int as ended,
+           count(*) filter (where source = 'webhook' and participant_id is null)::int as no_echo,
+           count(*) filter (where source = 'webhook' and joined_at is not null)::int as lat_n,
+           (percentile_disc(0.5) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
+             filter (where source = 'webhook' and joined_at is not null))::int as lat_p50,
+           (percentile_disc(0.95) within group (order by round(extract(epoch from (received_at - joined_at)) * 1000))
+             filter (where source = 'webhook' and joined_at is not null))::int as lat_p95
       from fixture_video_presence
-     where left_by = 'ended'
-       and received_at >= ${scope.since}
+     where received_at >= ${scope.since}
        and (${ids}::uuid[] is null or fixture_id = any(${ids}::uuid[]))`;
 
   return {
@@ -87,7 +101,9 @@ export async function shadowReportSql(db: AnySql, scope: ShadowScope): Promise<S
     covered: seats.filter((s) => s.covered).length,
     missing: seats.filter((s) => !s.covered).map((s) => ({ fixtureId: s.fixture_id, side: s.side, participantId: s.participant_id, seenAt: s.seen_at })),
     open: open.map((o) => ({ meetingId: o.meeting_id, peerId: o.peer_id, participantId: o.participant_id, source: o.source, receivedAt: o.received_at })),
-    closedByEnded: ended.n,
+    closedByEnded: agg.ended,
+    joinLatencyMs: { p50: agg.lat_p50, p95: agg.lat_p95, n: agg.lat_n },
+    noEcho: agg.no_echo,
   };
 }
 

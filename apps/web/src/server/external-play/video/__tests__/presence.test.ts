@@ -1029,12 +1029,18 @@ describe.skipIf(!DB)("presenceShadowReport", () => {
     await presenceRow(b, { participantId: pid, receivedAt: at(-1 * SEC), leftAt: at(5 * SEC), leftBy: "left" });
     await presenceRow(b, { participantId: pid, receivedAt: at(-1 * SEC), leftAt: at(6 * SEC), leftBy: "ended" });
     await presenceRow(b, { participantId: pid, receivedAt: at(-1 * SEC), leftAt: at(7 * SEC), leftBy: "ended", side: "away" });
+    // a left that arrived with no joinedAt (its joined never came): closed by its own leave, and no latency to measure
+    await presenceRow(b, { participantId: pid, receivedAt: at(-1 * SEC), joinedAt: null, leftAt: at(8 * SEC), leftBy: "left" });
     const rep = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [b.fixtureId] });
+    // I2: every row joined at -60 s and was received at -1 s: 59 s each over the FOUR webhook rows with a joinedAt (the read and the
+    // joinedAt-less left are not measured)
+    expect(rep.joinLatencyMs).toEqual({ p50: 59 * SEC, p95: 59 * SEC, n: 4 });
     expect(rep.open.map((o) => o.peerId).sort(), "the two open rows").toEqual([openWebhook, openRead].sort());
     const web = rep.open.find((o) => o.peerId === openWebhook)!;
     expect(web).toMatchObject({ meetingId: b.homeMeeting, participantId: pid, source: "webhook", receivedAt: at(-1 * SEC) });
     expect(rep.open.find((o) => o.peerId === openRead)).toMatchObject({ meetingId: b.awayMeeting, participantId: null, source: "read" });
     expect(rep.closedByEnded, "only the two rows closed by the end").toBe(2);
+    expect(rep.noEcho, "the read row names nobody but is not a webhook: noEcho counts webhook rows only (I2)").toBe(0);
   });
 
   it("scope: a seat and a presence row of a fixture outside fixtureIds are not counted; `since` excludes an older stamp and an older row", async () => {
@@ -1063,9 +1069,9 @@ describe.skipIf(!DB)("presenceShadowReport", () => {
 
   it("empty scope (no seats, no rows): verified 0 - the script's --strict treats verified 0 as a FAILURE (Task 9), never a pass", async () => {
     const none = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [randomUUID()] });
-    expect(none).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0 });
+    expect(none).toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
     const noIds = await presenceShadowReport(sql, { since: SINCE, fixtureIds: [] });
-    expect(noIds, "an explicit empty fixture list is an empty scope, not 'everything'").toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0 });
+    expect(noIds, "an explicit empty fixture list is an empty scope, not 'everything'").toEqual({ verified: 0, covered: 0, missing: [], open: [], closedByEnded: 0, joinLatencyMs: { p50: null, p95: null, n: 0 }, noEcho: 0 });
   });
 });
 
