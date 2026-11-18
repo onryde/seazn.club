@@ -60,6 +60,10 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * `{completed: false, already_complete: true}` and names the one draft proposal the first call minted (main: `completed: true`, and the
  * progression re-run); the proposal's `computed` and the knockout's lines are exactly what they were, and a third call says the same.
  *
+ * Task 12 (X-BD-1, PO-1; RB5-E4): a group stage of 4 pools over 7 entrants refuses its first Generate 422 STAGE_NOT_READY
+ * group_too_few_entrants, and the body names the pool count that works (3: floor(7/3)=2) beside the numbers it always carried; nothing
+ * is written. (Main named no count.) In the second org, which has room in its competition.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -77,7 +81,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 15: 1 (the any-sport super-groups card builds a badminton pairs event: 6 pools of 4, then 2 groups, then a knockout; a fixed card refuses a choice).
   // Task 13: 1 (a rank override is checked against its pool's size, refused on a bracket, and a withdrawal takes the leaver's pin away).
   // Task 17: 1 (a second Complete answers already_complete, leaves the draft proposal and the knockout as they were, and mints nothing).
-  const EXPECTED_CHECKS = 18;
+  // Task 12: 1 (the first Generate of 7 entrants in 4 pools is refused STAGE_NOT_READY naming 3, and writes nothing).
+  const EXPECTED_CHECKS = 19;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -624,6 +629,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
     );
   }
 
+  let pairsCompId: string | undefined; // the second org's competition, reused by check 16
+
   // Check 15 - Task 10b (ruling 292): the partner rule in a started Swiss and a started knockout. A SECOND org: the first one's
   // competitions are at their caps (the module's header). Nothing here reads the first org's data.
   {
@@ -632,6 +639,7 @@ export async function w5RoundRobinASuite(): Promise<void> {
     const c2 = v1data<{ id: string } | undefined>(
       await v1(second, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A pairs ${tag}`, visibility: "private" }),
     );
+    pairsCompId = c2?.id;
     const verdicts: string[] = [];
     for (const kind of ["swiss", "knockout"] as const) {
       const dRes = await v1(second, `/api/v1/competitions/${c2?.id ?? "no-competition"}/divisions`, "POST", {
@@ -812,6 +820,38 @@ export async function w5RoundRobinASuite(): Promise<void> {
     w5Check(
       "w5a X-BD-4: a second Complete answers already_complete with the one draft, and the knockout and the proposal stand as they were" +
         (ok ? "" : ` - div ${dRes.status}, field ${field.length}, scored ${scored.join(",")}, first ${JSON.stringify(first)}, second ${secondRes.status} ${JSON.stringify(second)}, third ${JSON.stringify(third)}, ko same ${koBefore === koAfter}`),
+      ok,
+    );
+  }
+
+  // Check 16 - Task 12 (X-BD-1, PO-1): 7 entrants into 4 pools is refused by name with the count that works. The second org again, in check 15's
+  // competition (it holds two divisions; the cap is four): nothing here reads the first org's data.
+  {
+    const second = newSession();
+    await signIn(second, `delivered+w5a2_${tag}@resend.dev`);
+    const dRes = await v1(second, `/api/v1/competitions/${pairsCompId ?? "no-competition"}/divisions`, "POST", {
+      name: "Seven in four",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const made = v1data<{ id: string }[] | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 7 }, (_, i) => ({ kind: "individual", display_name: `Seven ${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(second, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 4 } } }),
+    )?.id;
+    const gen = await v1(second, `/api/v1/stages/${stageId}/generate`, "POST");
+    const err = (gen.json as { error?: { code?: string; reason?: string; groups?: number; entrants?: number; required?: number; suggested?: number | null } } | undefined)?.error;
+    const written = (v1data<Fx[] | undefined>(await v1(second, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+    const ok =
+      dRes.status === 201 && made.length === 7 && gen.status === 422 && err?.code === "STAGE_NOT_READY" && err.reason === "group_too_few_entrants" &&
+      err.groups === 4 && err.entrants === 7 && err.required === 8 && err.suggested === 3 && written.length === 0;
+    w5Check(
+      "w5a X-BD-1: the first Generate of 7 entrants in 4 pools is refused STAGE_NOT_READY naming 3 pools (floor(7/3)=2), and writes nothing" +
+        (ok ? "" : ` - div ${dRes.status}, entrants ${made.length}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 260)}, written ${written.length}`),
       ok,
     );
   }

@@ -23,6 +23,7 @@ import { formatPickerFields, useFormatKnobs } from "@/components/v2/format-picke
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import {
   formatBoundIssue,
+  formatBoundText,
   formatChoiceFromStages,
   formatKnobsShown,
   formatPickerView,
@@ -204,9 +205,10 @@ export function DivisionFormatDialog({
   async function save() {
     setError(null);
     setPaywall(null);
-    const issue = formatBoundIssue(template, values);
+    // W5 T12 (X-BD-1): the division's own field is judged when it has one (`counted`), as the builder's Next judges its plan.
+    const issue = formatBoundIssue(template, values, counted ? entrants : undefined);
     if (issue !== null) {
-      setError(msg("wizard.err.formatBound", { field: msg(issue.label), min: issue.min, max: issue.max }));
+      setError(formatBoundText(issue, msg));
       return;
     }
     const body = drafts.map((d, i) => ({ ...d, seq: i + 1 }));

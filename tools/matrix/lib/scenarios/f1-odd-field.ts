@@ -22,14 +22,16 @@
 // terminal-finals.ts's table, called with the stage's config (T15-R8 m-4);
 // a field the engine refuses is a named abstain, never a throw (m-3).
 import { EngineError } from "@seazn/engine/core";
+import { RefusedCall, SetupRefused } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
 import type { CompleteObs, ObservedFixture } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { americanoRoundSize } from "./americano-loop.ts";
-import { assertion, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
+import { assertion, type Item, bracketDeciderExercised, builtAsPosted, foldParity, lineupsPut, loopBounded, resultsAsPosted, seatsEntrant, stageCompleted, withCanary } from "./assertions.ts";
 import { Recorder, playDivision, setUpDivision, snapshot } from "./common.ts";
 import { BRACKET_OF } from "./terminal-finals.ts";
+import { stagesForRow } from "../catalogue.ts";
 import type { Scenario } from "./types.ts";
 
 /** The scenario's default field. The call site asks fieldSizeFor, which
@@ -78,13 +80,70 @@ export function bracketFirstRound(kind: string, field: readonly string[], config
   return { boards: fixtures.filter((f) => f.round === first && f.home !== undefined && f.away !== undefined).length };
 }
 
+/** W5 T12 (X-BD-1, ST-G5, R12): the refusal a row's FIRST stage owes `entrants`, from its posted body, or null when the field fits.
+ *  The rule is the product's stated one - each group needs at least 2, so a seeded snake of `entrants` into `groups` pools leaves a pool of
+ *  floor(entrants / groups) - and `suggested` is the largest pool count under the ask that leaves every pool 2 strong. Typed here from the
+ *  rulebook (RB5-E4), never read from the product's own gate, so a drift in either side reds the case. */
+export function poolOfOneExpected(row: Parameters<typeof stagesForRow>[0], entrants: number): { groups: number; required: number; suggested: number | null } | null {
+  const first = stagesForRow(row)[0];
+  const pools = first?.kind === "group" ? (first.config as { pools?: { count?: unknown } } | undefined)?.pools?.count : undefined;
+  if (typeof pools !== "number" || pools < 2 || Math.floor(entrants / pools) >= 2) return null;
+  let suggested: number | null = null;
+  for (let c = pools - 1; c >= 1 && suggested === null; c--) if (Math.floor(entrants / c) >= 2) suggested = c;
+  return { groups: pools, required: pools * 2, suggested };
+}
+
+/** The refusal an F1 case owes, or null (template cases seed their own field and are not this one). */
+function expectedRefusal(spec: { readonly row: Parameters<typeof stagesForRow>[0]; readonly template?: string }): ReturnType<typeof poolOfOneExpected> {
+  return spec.template === undefined ? poolOfOneExpected(spec.row, ENTRANTS) : null;
+}
+
+/** W5 T12 (R12): the case whose first stage the product refuses to draw. Setup runs as ever; Start is the act under test, and its answer is
+ *  judged by name and by number: 422 STAGE_NOT_READY group_too_few_entrants, the pools the stage declares, the field, and the pool count that
+ *  works. A product that DRAWS the field instead (the refusal regressed) fails the first item, so nothing mandates a pass over a defect. */
+async function refusedRun(ctx: Parameters<Scenario["run"]>[0], rec: Recorder, field: number, owed: NonNullable<ReturnType<typeof poolOfOneExpected>>): Promise<Awaited<ReturnType<Scenario["run"]>>> {
+  let refusal: RefusedCall | null = null;
+  try {
+    await setUpDivision(ctx, rec, field);
+  } catch (e) {
+    // A refusal in the SETUP phase is the harness asking wrongly (SetupRefused), never the answer under test.
+    if (!(e instanceof RefusedCall) || e instanceof SetupRefused) throw e;
+    refusal = e;
+  }
+  const extra = refusal?.extra ?? {};
+  const items: Item[] = [
+    { ok: refusal !== null, note: `Start accepted ${field} entrants in ${owed.groups} pools (the product drew a pool of one: ST-G5 is back)` },
+    { ok: refusal?.status === 422 && refusal.code === "STAGE_NOT_READY", note: `Start answered ${refusal?.status ?? "none"} ${refusal?.code ?? "none"}, want 422 STAGE_NOT_READY` },
+    { ok: extra.reason === "group_too_few_entrants", note: `reason ${String(extra.reason)}, want group_too_few_entrants` },
+    { ok: extra.groups === owed.groups, note: `groups ${String(extra.groups)}, want ${owed.groups}` },
+    { ok: extra.entrants === field, note: `entrants ${String(extra.entrants)}, want ${field}` },
+    { ok: extra.required === owed.required, note: `required ${String(extra.required)}, want ${owed.required}` },
+    { ok: extra.suggested === owed.suggested, note: `suggested ${String(extra.suggested)}, want ${String(owed.suggested)} (the largest pool count that leaves every pool 2 strong)` },
+  ];
+  return {
+    observed: { caseId: ctx.spec.caseId, facts: [], stages: [], withdrawal: null, configEdit: null },
+    assertions: [assertion("f1-pool-of-one-refused", items)],
+    events: rec.events,
+    notes: [...rec.notes, `Start refused ${field} entrants in ${owed.groups} pools: suggested ${String(extra.suggested ?? "none")}`],
+  };
+}
+
 export const f1OddField: Scenario = {
   key: "F1",
   entrantCount: ENTRANTS,
   canaryCheck: "f1-round-size",
+  // W5 T12 (R12): a case the product refuses to draw builds no stage, so the fixture invariants have nothing to judge there.
+  evaluatesInvariants: (spec) => expectedRefusal(spec) === null,
+  mandatedRefusal: (spec) => {
+    const e = expectedRefusal(spec);
+    return e === null ? null : `${ENTRANTS} entrants into ${e.groups} pools leave a pool of one; Start refuses by name and offers ${e.suggested ?? "no count"} (C38, RB5-E4)`;
+  },
   async run(ctx) {
     const rec = new Recorder();
-    const setup = await setUpDivision(ctx, rec, fieldSizeFor(ctx.spec.row, "F1", ctx.spec.template));
+    const field = fieldSizeFor(ctx.spec.row, "F1", ctx.spec.template);
+    const owed = ctx.spec.template === undefined ? poolOfOneExpected(ctx.spec.row, field) : null;
+    if (owed !== null) return refusedRun(ctx, rec, field, owed);
+    const setup = await setUpDivision(ctx, rec, field);
     const plays = await playDivision(ctx, rec, setup);
     const observed = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
     const s = observed.stages[0];

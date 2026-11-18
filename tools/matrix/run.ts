@@ -159,7 +159,7 @@ import { decideState, writeResults, type CaseResult, type CheckResult, type L2Re
 import { RUN_ID_MAX, slugRunId } from "./lib/run-id.ts";
 import { CANARY_MARK } from "./lib/scenarios/assertions.ts";
 import { SCENARIOS } from "./lib/scenarios/index.ts";
-import { ScenarioUnsupported, type CaseSpec } from "./lib/scenarios/types.ts";
+import { ScenarioUnsupported, invariantsApply, type CaseSpec } from "./lib/scenarios/types.ts";
 import {
   DataDirMismatch, DataDirUnset, RunIdUsedInDb, caseOrgSlug, chooseTopPublicPlan, createRealMatrixSql, ownerEmail, prepareCaseOrg, requireOwnDataDir,
 } from "./lib/seed-org.ts";
@@ -808,7 +808,7 @@ async function runCase(deps: RunDeps, run: RunCtx, item: DrivenCase, i: number):
     // invariants, and one whose expected state is a refusal says so. A
     // browser case adds its driver's own checks after them (W1c Task 6).
     checks = [
-      ...(scenario.evaluatesInvariants === false ? [] : evaluateInvariants(out.observed)), ...out.assertions,
+      ...(invariantsApply(scenario, spec) ? evaluateInvariants(out.observed) : []), ...out.assertions,
       ...(caseBrowser === null ? [] : caseBrowser.driver.checks()),
     ].map(redactCheck);
     mandated = scenario.mandatedRefusal?.(spec) ?? null;

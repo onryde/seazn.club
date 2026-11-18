@@ -57,6 +57,7 @@ import { isEmptySwissReshape } from "./swiss-reconcile";
 import { swissActiveEntrants, swissGen } from "./swiss-gen";
 import { lockBoardsRefusingOnlineGames } from "./swiss-boards";
 import { stageAttachmentCounts } from "./roster-drift";
+import { poolRemedy, poolSizeIssue } from "@/lib/pool-size-gate";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
 import { dropPinsOfChangedPools, readPoolMembers } from "../rank-override";
 
@@ -277,7 +278,7 @@ async function reconcileRoundRobinGenerate(
             vacated_seats: 0,
             // A group that cannot be snaked again says why nothing was done, so the desk never reads it as "up to date".
             ...(decision.reason !== undefined
-              ? { reason: decision.reason, groups: decision.groups!, entrants: decision.entrants!, required: decision.required! }
+              ? { reason: decision.reason, groups: decision.groups!, entrants: decision.entrants!, required: decision.required!, suggested: decision.suggested! }
               : {}),
           },
     },
@@ -531,12 +532,15 @@ export async function generateStageFixturesTx(
   if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && !hasTable) {
     const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
     const required = Math.max(2, groups * 2);
+    // W5 T12 (X-BD-1, PO-1): the group count that works, from the one rule the builder's Next reads (lib/pool-size-gate.ts). A single
+    // league (or one pool) has no count to offer: its remedy is entrants, so it carries null.
+    const suggested = groups > 1 ? (poolSizeIssue(entrants.length, groups)?.suggested ?? null) : null;
     throw new EngineError(
       "STAGE_NOT_READY",
       groups > 1
-        ? `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required})`
+        ? `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required}); ${poolRemedy(suggested)}`
         : "not enough entrants to generate any matches",
-      { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required },
+      { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required, suggested },
     );
   }
 
@@ -555,10 +559,12 @@ export async function generateStageFixturesTx(
     if (stranded.length > 0) {
       const groups = poolCount(stage.config);
       const required = groups * 2;
+      // W5 T12 (X-BD-1, PO-1): the count that works rides on this throw too, from the same rule as the empty-draw throw above.
+      const suggested = poolSizeIssue(entrants.length, groups)?.suggested ?? null;
       throw new EngineError(
         "STAGE_NOT_READY",
-        `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required}); use fewer groups or add entrants`,
-        { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required, stranded: stranded.map((e) => e.id) },
+        `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required}); ${poolRemedy(suggested)}`,
+        { stageId, reason: "group_too_few_entrants", groups, entrants: entrants.length, required, suggested, stranded: stranded.map((e) => e.id) },
       );
     }
   }

@@ -21281,6 +21281,18 @@
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
                             },
+                            "suggested": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
                             "setups_removed": {
                               "type": "object",
                               "properties": {
@@ -23336,6 +23348,18 @@
                               "type": "integer",
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
+                            },
+                            "suggested": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
                             },
                             "setups_removed": {
                               "type": "object",

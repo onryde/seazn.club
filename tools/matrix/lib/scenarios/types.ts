@@ -102,14 +102,22 @@ export interface Scenario {
   /** The one check a canary run must turn red; null for a scenario with no canary. */
   canaryCheck: string | null;
   /** ⛔: the case's expected state is `refused` (decideState's `mandated`). */
-  mandatedRefusal?: (spec: CaseSpec) => string;
-  /** false: the fixture invariants do not apply (no stage was ever built). Default true. */
-  evaluatesInvariants?: boolean;
+  mandatedRefusal?: (spec: CaseSpec) => string | null;
+  /** false: the fixture invariants do not apply (no stage was ever built). Default true. A function answers per case (W5 T12: F1 on a
+   *  field the product refuses to draw builds no stage, on that row alone). */
+  evaluatesInvariants?: boolean | ((spec: CaseSpec) => boolean);
   /** Which scores a browser case taps on the pad (W1c Task 7; mixed.ts
    *  PadPolicy): "first" per case (ruling 15), or "all" (PADPROOF, D3).
    *  Default "first". run.ts hands it to the case's BrowserDriver. */
   padPolicy?: "first" | "all";
   run(ctx: ScenarioContext): Promise<ScenarioOutput>;
+}
+
+/** Whether a case's fixture invariants are judged: a scenario that builds no stage opts out (`evaluatesInvariants: false`), and one that
+ *  builds none on only some cases (W5 T12) says which. Default yes. */
+export function invariantsApply(scenario: Pick<Scenario, "evaluatesInvariants">, spec: CaseSpec): boolean {
+  const e = scenario.evaluatesInvariants;
+  return typeof e === "function" ? e(spec) : e !== false;
 }
 
 /** A named deferral: the case renders ⏳ with the owning wave, never ░ or ✅. */

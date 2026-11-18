@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { classifyActError, generatePreconditionMessage, matchNamerFor } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 
 // Regression (design/fix-ui/03-console-division.md "Group-stage 'Générer les
 // matchs' gives a misleading success message when it generates nothing"): a
@@ -29,6 +35,28 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(text).toContain("8");
     expect(text).toContain("2");
     expect(text).not.toBe(msg("schedule.notice.nothingNew"));
+  });
+
+  // W5 T12 (X-BD-1, PO-1): the refusal names the pool count that works, in the reader's language - or says to add entrants when none does.
+  it("names the group count that works when the server sends one, in every locale, and says to add entrants when none does", () => {
+    const send = (suggested: number | null) =>
+      new ApiV1Error("not enough entrants", 422, "STAGE_NOT_READY", { reason: "group_too_few_entrants", groups: 4, entrants: 7, required: 8, suggested });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      // RB5-E4: floor(7/3)=2, so 3 groups work; the numbers 4, 8 and 7 stay in the sentence.
+      const named = generatePreconditionMessage(send(3), say)!;
+      expect(named, locale).toMatch(/\b3\b/);
+      expect(named, `${locale}: carries 4, 8 and 7`).toMatch(/\b4\b[\s\S]*\b8\b[\s\S]*\b7\b/);
+      expect(named, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      const none = generatePreconditionMessage(send(null), say)!;
+      expect(none, `${locale}: no count offered when none works`).not.toMatch(/\b3\b/);
+      expect(none, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      expect(none, locale).not.toBe(named);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   // F2a (P7 follow-up): the seeded-path analogue — a `.seeding` group stage

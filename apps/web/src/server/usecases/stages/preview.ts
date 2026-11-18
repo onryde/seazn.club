@@ -172,7 +172,9 @@ export function previewDivisionFixtures(
         seed: i + 1,
         swiss_first_round: null,
       }));
-      gen = generate(stage.kind, stage.config, entrants, poolIds);
+      // A league has no pool rows (its lines carry no pool id), so it is drawn with none: since W5 T3 a one-pool draw writes pool A's id
+      // when it is handed one, and a league handed the map would preview as a single "Group A" instead of its rounds.
+      gen = generate(stage.kind, stage.config, entrants, stage.kind === "group" ? poolIds : new Map());
     } catch {
       return { title: stage.name, note: "Preview isn't available for this format.", sections: [] };
     }

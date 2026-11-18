@@ -250,8 +250,9 @@ async function v1Inner<T>(
         err.code === "STAGE_NOT_READY" &&
         (err.data as { reason?: unknown } | undefined)?.reason === "group_too_few_entrants"
       ) {
-        const d = err.data as { groups: number; entrants: number; required: number };
-        extra = { reason: "group_too_few_entrants", groups: d.groups, entrants: d.entrants, required: d.required };
+        const d = err.data as { groups: number; entrants: number; required: number; suggested?: number | null };
+        // W5 T12 (X-BD-1, PO-1): the pool count that works rides with the numbers (null: none does; absent only from a pre-T12 thrower).
+        extra = { reason: "group_too_few_entrants", groups: d.groups, entrants: d.entrants, required: d.required, suggested: d.suggested ?? null };
       }
       // F2a (P7 follow-up): the SEEDED-path analogue of the block above — a
       // `.seeding` group stage whose placed seeds can't fill its configured

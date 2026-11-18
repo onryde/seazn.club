@@ -79,6 +79,11 @@ export interface FakeMultiStageOptions {
    *  STAGE_COMPLETED_SEEDING_FAILED, as a failed compute does after the
    *  commit (usecases/stages/; fix round 1, m-7). */
   readonly failSeedingOnComplete?: number;
+  /** W5 T12 (C38, X-BD-1): Start refuses a pooled first stage whose field cannot fill its pools, as the product's first group draw does -
+   *  422 STAGE_NOT_READY group_too_few_entrants naming the pool count that works (`suggested`: the largest count under the ask that
+   *  leaves every pool 2 strong). `suggestedOverride` is a deliberately WRONG product's count (a null is "no count works"), for the
+   *  scenario's own guard test. Off by default: every existing fake draw stays as it was. */
+  readonly enforcePoolSize?: boolean | { readonly suggestedOverride: number | null };
 }
 
 type Side = "home" | "away";
@@ -264,6 +269,19 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     return settle(() => {
       this.log("start");
       const first = this.stages[0];
+      const enforce = this.opts.enforcePoolSize;
+      if (enforce !== undefined && enforce !== false && first.kind === "group") {
+        const groups = this.#poolCount(first.body.config);
+        const n = this.entrants.length;
+        if (groups > 1 && Math.floor(n / groups) < 2) {
+          let suggested: number | null = null;
+          for (let c = groups - 1; c >= 1 && suggested === null; c--) if (Math.floor(n / c) >= 2) suggested = c;
+          const sent = typeof enforce === "object" ? enforce.suggestedOverride : suggested;
+          throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus("STAGE_NOT_READY"), "STAGE_NOT_READY",
+            `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${n}, need ${groups * 2})`, null,
+            { reason: "group_too_few_entrants", groups, entrants: n, required: groups * 2, suggested: sent });
+        }
+      }
       this.#tableRows(first, this.entrants.map((e) => ({ id: e.id, seed: e.seed ?? Number.MAX_SAFE_INTEGER })), false);
       first.status = "active";
       this.stage = this.#ref(first);

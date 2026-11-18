@@ -551,6 +551,32 @@ describe("Save: the dry run, then the write (FMT5)", () => {
   });
 });
 
+describe("X-BD-1 the dialog judges the division's own field, as the builder judges its plan", () => {
+  // differential: Save accepted 4 pools for a division of 7 (only the 2..8 bounds were read); the server's first Generate then refused it.
+  it("7 entrants in 4 pools is refused before anything is sent, naming 3; 3 pools (floor(7/3)=2) saves", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("groups_ko", { poolCount: 4 }), entrants: 7 });
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "nothing sent").toHaveLength(0);
+    expect(textOf(byId(h, "division-format-error")!)).toBe(say("wizard.err.poolSize", { field: say("wizard.pools"), pools: 4, required: 8, entrants: 7, suggested: 3 }));
+    type(h, "pools", "3");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls()).toHaveLength(2);
+    expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+
+  it("a division with no field yet (under 2 entrants) is not judged against it: the builder's stand-in plan is no field", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("groups_ko", { poolCount: 4 }), entrants: 0 });
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "the save goes").toHaveLength(2);
+    expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+});
+
 describe("a stored format is kept as it is, never clamped (ported from Settings › Format)", () => {
   it("a stored triple round robin opens picked (it is in the offer only for this division) and a save keeps its 3 legs", async () => {
     apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);

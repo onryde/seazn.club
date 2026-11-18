@@ -534,6 +534,8 @@ describe.skipIf(!HAS_DB)("X-CU-6 RB5-G4/G7: a withdrawal before Start, then Gene
         groups: 4,
         entrants: 7,
         required: 8,
+        // W5 T12 (X-BD-1): floor(7/3)=2, so three pools work.
+        suggested: 3,
       });
       expect(await rowsOf(r.stageId), `${sport.key}: the draw stands`).toEqual(before);
       checked++;

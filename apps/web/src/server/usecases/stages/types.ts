@@ -361,6 +361,8 @@ export interface ReconcileOutcome {
   groups?: number;
   entrants?: number;
   required?: number;
+  /** W5 T12 (X-BD-1): the pool count that works (null: none does). Present with `reason`. */
+  suggested?: number | null;
   /** W5 T2 fix round 3: an in-place patch dropped lines that carried setup (officials, sheets, devices, availability, calls); how
    *  many rows, and the entrants whose fixtures they were. */
   setups_removed?: { count: number; names: string[] };

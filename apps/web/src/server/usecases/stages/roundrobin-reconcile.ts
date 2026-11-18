@@ -33,6 +33,7 @@ import { cancelBoardInvites } from "../external-play/cancel-invites";
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { stageHasStarted } from "../fixture-started-sql";
 import { roundRobinRefusal } from "../roundrobin-refusal";
+import { poolSizeIssue } from "@/lib/pool-size-gate";
 import { poolCount, roundRobinStagePlan, type RoundBye } from "./generators";
 import { appendFixturesGenerated, divisionHasStarted, recordFixturesCleared } from "./helpers";
 import { setupRowsOnFixtures, stageAttachmentCounts } from "./roster-drift";
@@ -46,6 +47,8 @@ export interface PoolsBelowMinimum {
   groups: number;
   entrants: number;
   required: number;
+  /** W5 T12 (X-BD-1): the largest pool count that leaves every pool 2 strong, or null when none does. */
+  suggested: number | null;
 }
 
 /** What the driver did, or (`regenerate`) what the caller must do. `placed`/`vacated` are entrant ids. */
@@ -119,7 +122,8 @@ export async function reconcileRoundRobinLines(
   // already walked the departed's lines over); an arrival into such a field falls through to the redraw's own refusal by name.
   if (stage.kind === "group" && entrants.length < poolCount(stage.config) * 2 && newcomers.length === 0) {
     const groups = poolCount(stage.config);
-    return { kind: "noop", reason: "pools_below_minimum", groups, entrants: entrants.length, required: groups * 2 };
+    // W5 T12 (X-BD-1): the pool count that works, from the one rule the builder and C38's refusal read (null: no count does).
+    return { kind: "noop", reason: "pools_below_minimum", groups, entrants: entrants.length, required: groups * 2, suggested: poolSizeIssue(entrants.length, groups)?.suggested ?? null };
   }
 
   // Task-2 review, ruling 1: a redraw deletes every line, and the delete cascades into the organiser's setup on them (every kind

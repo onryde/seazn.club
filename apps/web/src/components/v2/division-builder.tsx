@@ -59,7 +59,7 @@ import type { DivisionCategoryValue } from "@/components/registration-hub-row-de
 import { divisionEndBounds, divisionStartBounds, endDateIsBackwards, type CompetitionWindow } from "@/lib/date-order";
 // FMT5: the format picker (cards, Show more, plan locks, knobs) is shared with the Division rules card's Format dialog.
 import { formatPickerFields, TILE_ICON_LIVE, TILE_ICON_MOTION, TILE_ICON_PICKED, paywallReasonForStages, useFormatKnobs } from "@/components/v2/format-picker";
-import { formatBoundIssue, formatKnobsShown, formatPickerView, formatStagesFor } from "@/lib/division-builder/format-choice";
+import { formatBoundIssue, formatBoundText, formatKnobsShown, formatPickerView, formatStagesFor } from "@/lib/division-builder/format-choice";
 import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { SportIcon } from "@/components/v2/division-builder/sport-icon";
 import {
@@ -500,8 +500,9 @@ export function DivisionBuilder({
 
   /** The first VISIBLE format knob outside FORMAT_BOUNDS, as a sentence naming it, or null (fix round 1, M1). */
   function formatBoundProblem(): string | null {
-    const issue = formatBoundIssue(template, { qualified, swissRounds, poolCount });
-    return issue === null ? null : msg("wizard.err.formatBound", { field: msg(issue.label), min: issue.min, max: issue.max });
+    // W5 T12 (X-BD-1): the plan's field is judged too, so a pool count it cannot fill is refused here, with the count that works.
+    const issue = formatBoundIssue(template, { qualified, swissRounds, poolCount }, planEntrantCount);
+    return issue === null ? null : formatBoundText(issue, msg);
   }
 
   /** W4 T15 (X-PL-1, X-QM-5): the plan's field cannot play the picked format (a pick the plan shrank under), as the server's own

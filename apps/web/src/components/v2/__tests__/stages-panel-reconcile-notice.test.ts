@@ -128,12 +128,16 @@ describe("the Generate notice after a knockout reconcile (FX-G2)", () => {
   // W5 T2 fix round 3: a group whose field fell below its pools' minimum did NOTHING, and the desk used to say "up to date".
   it("a group below its pools' minimum says so with the numbers and that the draw stands - never 'up to date' (every locale)", () => {
     const below: GenerateNoticeWire["reconcile"] = {
-      kind: "noop", placed: [], vacated: [], vacated_seats: 0, reason: "pools_below_minimum", groups: 4, entrants: 7, required: 8,
+      // W5 T12 (X-BD-1): the server now names the pool count that works (RB5-E4: floor(7/3)=2, so 3).
+      kind: "noop", placed: [], vacated: [], vacated_seats: 0, reason: "pools_below_minimum", groups: 4, entrants: 7, required: 8, suggested: 3,
     };
+    // differential: before T12 the line said "Use fewer groups or add entrants" and named no count.
     expect(text("en", { created: 0, existing: 24, reconcile: below })).toBe(
-      "Can't generate matches yet — 4 groups need at least 8 entrants in total, 2 per group (have 7). Use fewer groups or add entrants. " +
+      "Can't generate matches yet — 4 groups need at least 8 entrants in total, 2 per group (have 7). Set the number of groups to 3, or add entrants. " +
         "The draw stands; use Rebuild fixtures with fewer groups to redraw.",
     );
+    // No count works (suggested null): the line says to add entrants, and offers no count.
+    expect(text("en", { created: 0, existing: 24, reconcile: { ...below, entrants: 1, suggested: null } })).toContain("(have 1). Add entrants. ");
     let checked = 0;
     for (const locale of LOCALES) {
       const said = text(locale, { created: 0, existing: 24, reconcile: below });

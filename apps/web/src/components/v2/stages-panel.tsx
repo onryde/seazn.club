@@ -2572,6 +2572,8 @@ export type GenerateNoticeWire = {
     groups?: number;
     entrants?: number;
     required?: number;
+    /** W5 T12 (X-BD-1): the pool count that works, null when none does. */
+    suggested?: number | null;
     /** W5 T2 fix round 3: an in-place patch took lines that carried setup with it - the rows, and whose fixtures they were. */
     setups_removed?: { count: number; names: string[] };
   };
@@ -2611,7 +2613,7 @@ export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg:
     // snaked again, so nothing was done and the organiser is told why (the same sentence a first Generate's refusal uses).
     if (reconcile.reason !== "pools_below_minimum") return null;
     return [
-      tooFewGroupEntrantsText({ groups: reconcile.groups, entrants: reconcile.entrants, required: reconcile.required }, msg),
+      tooFewGroupEntrantsText({ groups: reconcile.groups, entrants: reconcile.entrants, required: reconcile.required, suggested: reconcile.suggested }, msg),
       msg("schedule.notice.reconcileDrawStands"),
     ].join(" ");
   }

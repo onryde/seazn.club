@@ -9,6 +9,8 @@ import { previewDivisionFixtures, type PreviewStageInput } from "@/server/usecas
 import { STAGE_TEMPLATES, buildTemplateStages, type TemplateKnobs } from "@/lib/format-templates";
 import { estimateMinutes, estimatePlateField, estimateTemplate } from "../format-estimate";
 import { foldFirstLosses } from "./first-loss-fold";
+import { formatBoundIssue, formatBoundText } from "../format-choice";
+import { msg } from "@/lib/messages";
 
 const BYE = "Bye";
 const realMatches = (s: { matches: { home: string; away: string }[] }) =>
@@ -49,6 +51,71 @@ describe("W4 T15 (FX-G14): the estimate and the server agree on a field the form
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// W5 Task 12 (X-BD-1, PO-1): the builder's Next refuses a pool count the field cannot fill with the numbers the server's first Generate
+// does, and offers the count that works. The oracle is the REAL draw (`previewDivisionFixtures` runs the engine's own generator, the
+// one generate-tx.ts calls): an entrant that no fixture names is the one C38 refuses; the expectations are never `poolSizeIssue`'s own.
+describe("X-BD-1 the builder's Next refuses with the same numbers the server does", () => {
+  const TEMPLATE = "groups_ko";
+  /** Entrants the first (group) stage's real draw leaves in no fixture, over `n` entrants in `pools` pools. */
+  const strandedByDraw = (n: number, pools: number): number => {
+    const drafts = buildTemplateStages(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: pools, legs: 1 });
+    const first = previewDivisionFixtures(drafts as unknown as PreviewStageInput[], n)[0]!;
+    const named = new Set<string>();
+    for (const section of first.sections) for (const m of section.matches) for (const side of [m.home, m.away]) if (side !== BYE) named.add(side);
+    return n - named.size;
+  };
+
+  it("every field 2..16 x pools 2..8: the builder refuses exactly when the real draw strands an entrant, and its count is the largest that does not", () => {
+    let checked = 0, refused = 0, named = 0;
+    for (let n = 2; n <= 16; n++) {
+      for (let pools = 2; pools <= 8; pools++) {
+        const issue = formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: pools }, n);
+        const stranded = strandedByDraw(n, pools);
+        checked++;
+        expect(issue !== null, `${n} into ${pools}: refused iff the draw strands someone (${stranded})`).toBe(stranded > 0);
+        if (issue === null) continue;
+        refused++;
+        const p = issue.poolSize!;
+        expect(p, `${n} into ${pools}`).toMatchObject({ entrants: n, pools });
+        if (p.suggested === null) continue;
+        named++;
+        // The count it offers draws cleanly, and no larger count under the ask does.
+        expect(strandedByDraw(n, p.suggested), `${n} into ${pools}: ${p.suggested} pools work`).toBe(0);
+        for (let c = p.suggested + 1; c < pools; c++) expect(strandedByDraw(n, c), `${n} into ${pools}: ${c} pools do not`).toBeGreaterThan(0);
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(15 * 7);
+    expect(refused).toBeGreaterThan(0);
+    expect(named).toBeGreaterThan(0);
+  });
+
+  it("7 into 4 names 3 in the sentence (RB5-E4: floor(7/3)=2), and 7 into 3 passes; the bounds line is unchanged without a field", () => {
+    // differential: the builder judged only the pool count's bounds (2..8), so 4 pools passed for a plan of 7.
+    const issue = formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 4 }, 7)!;
+    expect(issue.poolSize).toEqual({ entrants: 7, pools: 4, size: 1, suggested: 3 });
+    expect(formatBoundText(issue, msg)).toBe("Pools: 4 pools need at least 8 entrants in total, 2 per pool (have 7). Choose 3 pools, or add entrants.");
+    expect(formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 3 }, 7)).toBeNull();
+    expect(formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 4 })).toBeNull();
+    // A count out of bounds keeps the bounds sentence, whatever the field.
+    expect(formatBoundText(formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 9 }, 7)!, msg)).toBe("Pools: choose a whole number from 2 to 8.");
+  });
+
+  it("a field no pool count can fill (2 into 2 pools, suggested 1 is a League, not a pool knob) says to add entrants and names no count", () => {
+    const issue = formatBoundIssue(TEMPLATE, { qualified: 4, swissRounds: 3, poolCount: 2 }, 3)!;
+    expect(issue.poolSize).toEqual({ entrants: 3, pools: 2, size: 1, suggested: 1 });
+    expect(formatBoundText(issue, msg)).toBe("Pools: 2 pools need at least 4 entrants in total, 2 per pool (have 3). Add entrants.");
+  });
+
+  it("a template that shows no pools knob is not judged against the field (the empty case: nothing to refuse)", () => {
+    let checked = 0;
+    for (const template of ["league", "knockout", "swiss"]) {
+      expect(formatBoundIssue(template, { qualified: 4, swissRounds: 3, poolCount: 8 }, 3), template).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
 

@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, seedVenueWithCourts, activeOrgIdFromRequest } from "./helpers";
+import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats, activeOrgIdFromRequest } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
 import { saveRoster, seedPair, seedPlayer, stagePartnerSwap, storedMembers, uiEn } from "./entrant-rename-kit";
@@ -1135,5 +1135,59 @@ test.describe("X-BD-4 a second Complete is a no-op that says so", () => {
     expect(said, "premise: the dictionary has the sentence").toBeTruthy();
     await expect(page.getByText(said), "the desk says so in the organiser's words").toBeVisible({ timeout: 20_000 });
     await expect(page.getByText(uiEn["schedule.notice.notReady"]!)).toHaveCount(0);
+  });
+});
+
+test.describe("X-BD-1 the builder refuses 7 into 4 and offers 3", () => {
+  // differential: the builder judged only the pool count's bounds (2..8), so 4 pools passed Next for a plan of 7 and the server's first
+  // Generate then refused the division (C38). Now Next refuses first, with the server's numbers and the count that works (RB5-E4: floor(7/3)=2).
+  test("a plan of 7 in 4 pools stops Next naming 3; 3 pools (or a plan of 8) lets it go on, at every width", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `X-BD-1 pools ${TAG}`, visibility: "private" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    await page.goto(await competitionPath(request, comp.data!.id, "/d/new"));
+    await dismissCookieBanner(page);
+    await page.getByTestId("division-builder-name").fill(`Pool gate ${TAG}`);
+    await pickBuilderSport(page, "badminton");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
+
+    const card = page.locator('label[data-template="groups_ko"]');
+    if (!(await card.isVisible())) await showAllFormats(page);
+    await card.click();
+    await expect(card.locator('input[type="radio"]')).toBeChecked();
+    const plan = page.getByTestId("division-builder-plan-entrants");
+    const pools = page.locator('input[data-format-bound="pools"]');
+    const error = page.getByTestId("division-builder-error");
+    const sentence = (field: string, k: number, have: number, suggested: number) =>
+      uiEn["wizard.err.poolSize"]!.replace("{field}", field).replace("{pools}", String(k)).replace("{required}", String(2 * k)).replace("{entrants}", String(have)).replace("{suggested}", String(suggested));
+
+    // The empty case first: the opening plan fills the opening pools, so Next goes on and nothing is refused.
+    await expect(error).toHaveCount(0);
+
+    await plan.fill("7");
+    await pools.fill("4");
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByTestId("division-builder-next").click();
+      await expect(page.getByTestId("division-builder"), `${width}: Next did not move`).toHaveAttribute("data-step", "format");
+      await expect(error, `${width}: the refusal names 3`).toHaveText(sentence(uiEn["wizard.pools"]!, 4, 7, 3));
+      await expect(error).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The count it offered works: the refusal goes with the number it named, and Next moves on.
+    await pools.fill("3");
+    await expect(error).toHaveCount(0);
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
+
+    // Back, and 4 pools with a plan of 8 (2 per pool) passes too: the gate is the field, not the pool count.
+    await page.getByTestId("division-builder-step-format").click();
+    await pools.fill("4");
+    await plan.fill("8");
+    await page.getByTestId("division-builder-next").click();
+    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
   });
 });
