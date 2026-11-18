@@ -7,7 +7,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { MINT_TO_READ_MS } from "@/components/public-site/match-room/room-snapshot";
-import { LINE_RECHECK_COST, LINE_RELEASE_GRACE_MS, LINE_RESERVATION } from "@/server/external-play/seat-line";
+import { LINE_FALLBACK_READ_CALLS, LINE_RELEASE_GRACE_MS, LINE_RESERVATION_MAX, lineRecheckCost } from "@/server/external-play/seat-line";
 import { boardAnchor, boardCap } from "@/server/external-play/window";
 import { stayRow } from "./_external-play-line";
 import {
@@ -28,8 +28,9 @@ import {
 } from "./_external-play-line-route";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
-const R = LINE_RECHECK_COST;
+/** A stay priced at the unpriced maximum, its re-verify the full read (`askOf`'s default; a seeded row has no stamp). */
+const L = LINE_RESERVATION_MAX;
+const R = lineRecheckCost(LINE_FALLBACK_READ_CALLS);
 
 afterEach(dropWorlds);
 afterAll(async () => {

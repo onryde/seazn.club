@@ -8,7 +8,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { checkinClosesAt } from "@/components/public-site/match-room/room-snapshot";
 import { LINE_DEADLINE_GRACE_MS, boardAnchor, boardCap, windowFor } from "@/server/external-play/window";
-import { ADMIT_HOLD_MS, LINE_RECHECK_COST, LINE_RESERVATION, answerBusy, gateClaim, judgePhase, settleDeferral } from "@/server/external-play/seat-line";
+import { ADMIT_HOLD_MS, LINE_FALLBACK_READ_CALLS, LINE_RESERVATION_MAX, answerBusy, gateClaim, judgePhase, lineRecheckCost, settleDeferral } from "@/server/external-play/seat-line";
 import { checkInToFixture, stampFixtureCheckIn } from "../me";
 import { createGameIfReady } from "../external-play/create-game";
 import { askOf, putStay, stayRow } from "./_external-play-line";
@@ -35,7 +35,8 @@ import {
 } from "./_external-play-line-route";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
+/** A stay the gate prices at the unpriced maximum: `askOf` asks `all` at the fallback read price, and a seeded row has no stamp. */
+const L = LINE_RESERVATION_MAX;
 const ANCHOR = boardAnchor(OPENED, 0, false);
 const CAP = boardCap(ANCHOR);
 
@@ -378,7 +379,7 @@ describe.skipIf(!DB)("the snapshot carries the instant the viewer's hold really 
   }
   /** The bucket refills and HOME's next claim is ADMITTED: the mint runs and the answer is the real camera_required. */
   async function admit(w: World, b: Board, at: Date) {
-    await fund(w.key, 2 * (L + LINE_RECHECK_COST));
+    await fund(w.key, 2 * (L + lineRecheckCost(LINE_FALLBACK_READ_CALLS)));
     const got = await claimRoom(w, b, "home", at);
     expect(got.seat, "premise: admitted - the mint ran and the camera is asked for").toMatchObject({ seated: false, reason: "camera_required" });
     const stay = await stayRow(b.fixtureId, b.home.personId);

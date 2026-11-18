@@ -9,7 +9,7 @@ import {
   CAMERA_EVIDENCE_BACKOFF_MS,
   cameraEvidenceDelayMs,
 } from "@/components/public-site/match-room/room-snapshot";
-import { LINE_READ_CALLS, LINE_RECHECK_COST, LINE_RESERVATION, LINE_TOKEN_CALLS } from "@/server/external-play/seat-line";
+import { LINE_FALLBACK_READ_CALLS, LINE_RESERVATION_MAX, LINE_TOKEN_CALLS, lineRecheckCost } from "@/server/external-play/seat-line";
 import { STRANDED_CREATE_AFTER_MS } from "../external-play/sweep";
 import { SEAT_RECHECK_TRUST_MS, seatPlayer } from "../external-play/preflight";
 import { holdReservation, putStay, stayRow } from "./_external-play-line";
@@ -33,8 +33,10 @@ import {
 } from "./_external-play-line-route";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
-const R = LINE_RECHECK_COST;
+// These scenes run with the one-read proof OFF (the flag is unset): a stay is priced `all` at the three-call read (the maximum) and its
+// re-verify is the three-call read.
+const L = LINE_RESERVATION_MAX;
+const R = lineRecheckCost(LINE_FALLBACK_READ_CALLS);
 /** The scenario's own parameter (not a product declaration): how long a camera takes to come on after its join. */
 const CAMERA_WARMUP_S = 10;
 
@@ -58,7 +60,7 @@ describe.skipIf(!DB)("two admitted stays warm up concurrently and are served wit
     const T = inWindow(3 * MIN);
     // The line is made active by a stay somebody holds (admitted, with its reservation).
     await holdReservation(w.key, T);
-    // Each is funded for both: the pool after the held stay's reservation holds 2 x LINE_RESERVATION at each admission.
+    // Each is funded for both: the pool after the held stay's reservation holds 2 x L at each admission.
     const stays: { name: "A" | "B"; board: Board; mintAt: Date }[] = [
       { name: "A", board: a, mintAt: new Date(T.getTime() + SEC) },
       { name: "B", board: b, mintAt: new Date(T.getTime() + 2 * SEC) },
@@ -117,7 +119,7 @@ describe.skipIf(!DB)("two admitted stays warm up concurrently and are served wit
 // MUTANT ATTRIBUTION (the capacity build's P4, measured): the spec says dropping the update of the OTHER side's stay (gateClaim's
 // `update fixture_seat_line set completing = true ... otherPersonId`) turns (b) and (c) red. Run, it turns (b) red ALONE: (c)'s bucket is
 // funded for the re-verify whether or not the reservation held it, so (c) cannot see the missing hold. The kill is (b)'s: the pool fell
-// by LINE_RECHECK_COST at the opponent's claim, or it did not.
+// by R at the opponent's claim, or it did not.
 describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", () => {
   /** A held stay makes the line active (its reservation is out), the bucket holds exactly what the candidate needs above it. */
   async function candidate(opts: { other: "open" | "counted" | "none"; shortBy: number }) {
@@ -161,7 +163,7 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
     expect(driven, "cases driven").toBe(3);
   }, 120_000);
 
-  it("(b) the late flip: a stay admitted with completing false flips to true at the OPPONENT's first gated claim, and the pool falls by exactly LINE_RECHECK_COST at that claim (read before and after; it may go negative and a later waiting stay is queued until it recovers)", async () => {
+  it("(b) the late flip: a stay admitted with completing false flips to true at the OPPONENT's first gated claim, and the pool falls by exactly R at that claim (read before and after; it may go negative and a later waiting stay is queued until it recovers)", async () => {
     const w = world();
     const board = await seedBoard();
     const t = inWindow(3 * MIN);
@@ -182,7 +184,7 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
     const after = await reservedFromRows(w.key);
     const poolAfter = (await level(w.key)) - after.reserved;
     expect((await stayRow(board.fixtureId, board.home.personId))?.completing, "HOME's stay is now completing").toBe(true);
-    expect(poolBefore - poolAfter, "the pool fell by exactly LINE_RECHECK_COST at the opponent's claim").toBe(R);
+    expect(poolBefore - poolAfter, "the pool fell by exactly R at the opponent's claim").toBe(R);
     expect(poolAfter, "and is negative").toBeLessThan(0);
     // A later waiting stay is queued until the pool recovers.
     const later = await seedBoard();
@@ -230,7 +232,7 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
     return { w, board, verify: verify as { seated: boolean; calls: number } | null, created, left: await level(w.key) };
   }
 
-  it("(c) the re-verify is funded: HOME seats at its 3rd read and at its 5th, and at the 6th - the last the reservation covers - the opponent's re-verify reads equal LINE_RECHECK_COST, none is deferred and the game is created at once", async () => {
+  it("(c) the re-verify is funded: HOME seats at its 3rd read and at its 5th, and at the 6th - the last the reservation covers - the opponent's re-verify reads equal R, none is deferred and the game is created at once", async () => {
     // The first read count whose whole stay (mint, reads, the seating read and token, and the re-verify) exceeds the reservation.
     const mint = 2;
     const read = 3;
@@ -248,7 +250,7 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
       const r = await seatAtRead(k);
       expect(r.verify, `read ${k}: the create asked for the re-verify`).not.toBeNull();
       expect(r.verify!.seated, `read ${k}: the re-verify is not deferred`).toBe(true);
-      expect(r.verify!.calls, `read ${k}: the opponent's re-verify reads equal LINE_RECHECK_COST`).toBe(R);
+      expect(r.verify!.calls, `read ${k}: the opponent's re-verify reads equal R`).toBe(R);
       expect(r.created, `read ${k}: the game is created at once`).toEqual({ created: true, gameId: `g-${k}` });
       seats.push(k);
     }
@@ -283,11 +285,11 @@ describe.skipIf(!DB)("`completing` is funded where it becomes known (test 37)", 
 // meets a dry bucket at the re-verify. A stay that passed on an IDLE line holds no reservation at all, so before this test's fix the same
 // deferral met a COMPLETING claim whenever the bucket was low when it arrived (the capacity load's spec B, instant cameras: one board in
 // thirty created 268.7 s late by the sweep, twice). A completing claim on an idle line now goes only while the bucket holds the seating
-// claim's own spend (LINE_READ_CALLS reads and the LINE_TOKEN_CALLS token) AND the re-verify behind it - LEVEL below - and is otherwise held
+// claim's own spend (LINE_FALLBACK_READ_CALLS reads and the LINE_TOKEN_CALLS token) AND the re-verify behind it - LEVEL below - and is otherwise held
 // like any stay that meets a dry bucket. A check at the re-verify's price alone (R) was tried first and did NOT fix B: the load held a claim
 // at 3.9 tokens, which passes R, and the claim's own four calls then left the re-verify short; so R is one of the levels driven below.
 describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its seat and its re-verify (test 37 (e))", () => {
-  const LEVEL = LINE_READ_CALLS + LINE_TOKEN_CALLS + R;
+  const LEVEL = LINE_FALLBACK_READ_CALLS + LINE_TOKEN_CALLS + R;
   /** AWAY is seated and counted on an idle line; HOME's mint comes next, with the bucket at `tokens`. */
   async function homeArrives(tokens: number) {
     const w = world();
@@ -313,7 +315,7 @@ describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its seat 
     expect(held, "levels driven").toBe(3);
   }, 120_000);
 
-  it("the sequence: held one token under LEVEL; its re-asks at LEVEL and at LINE_RESERVATION + LINE_RECHECK_COST - 1 are still held (a waiting stay pays the pool test); once the pool holds its reservation it is admitted, seats, and the create's re-verify reads equal LINE_RECHECK_COST, none deferred - no late create", async () => {
+  it("the sequence: held one token under LEVEL; its re-asks at LEVEL and at L + R - 1 are still held (a waiting stay pays the pool test); once the pool holds its reservation it is admitted, seats, and the create's re-verify reads equal R, none deferred - no late create", async () => {
     const { w, board, t, got, spent } = await homeArrives(LEVEL - 1);
     expect(got.seat, "held").toMatchObject({ seated: false, reason: "queued" });
     expect(spent, "a held claim spends nothing at the vendor").toBe(0);
@@ -355,7 +357,7 @@ describe.skipIf(!DB)("a COMPLETING claim on an idle line is funded for its seat 
     expect(seated.seat?.seated, "HOME is seated").toBe(true);
     expect(verify, "the create asked for the opponent's re-verify").not.toBeNull();
     expect(verify!.seated, "the re-verify is not deferred").toBe(true);
-    expect(verify!.calls, "the opponent's re-verify reads equal LINE_RECHECK_COST").toBe(R);
+    expect(verify!.calls, "the opponent's re-verify reads equal R").toBe(R);
     expect(created, "the game is created inside the claim: no late create for the sweep to make").toEqual({ created: true, gameId: "g-idle" });
   }, 120_000);
 

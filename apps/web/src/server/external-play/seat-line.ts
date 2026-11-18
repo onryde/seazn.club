@@ -44,35 +44,89 @@ export { LINE_ABANDON_AFTER_MS };
 /** A stay whose last gate event was a PASS stays for this long after it: at least the longest honest gap between a pass and the
  *  next claim, `max(max(CAMERA_EVIDENCE_BACKOFF_MS), MINT_TO_READ_MS) + LINE_POLL_MS` = 34.5 s (a test derives the floor). */
 export const LINE_RELEASE_GRACE_MS = 35_000;
-/** The calls of a player's minting claim the line funds (the meeting create and the participant add), of one read of a starting
- *  camera (the live session, its participants, the peer report), and of the token handed with a seat. Each is asserted equal to
- *  the fixture server's own count (external-play-line-cost.test.ts). */
-export const LINE_MINT_CALLS = 2;
-export const LINE_READ_CALLS = 3;
+/** What a stay's FIRST claim will meet - the price table's one axis (check-in capacity plan 2, owner ruling R1). `preflight.ts`
+ *  `stayMintOf` decides it from what is on file: `"all"` (no current room: the claim makes the room and the participant), `"room"`
+ *  (the pre-mint job's room is waiting and the claim adds the participant), `"none"` (both exist: an earlier stay made them). */
+export type StayMint = "none" | "room" | "all";
+
+/** The vendor calls the line prices; each is asserted equal to the fixture server's own count (external-play-line-cost.test.ts):
+ *  a room's create, a participant's add (its token comes with it), one read of a starting camera - ONE peer-report call with the
+ *  presence proof (`EXTERNAL_PLAY_PRESENCE_PROOF=1`), the three-call session read without it and as the counted fallback - the token
+ *  handed with a refusal or a seat, the live-session probe that finds nobody, and ending ONE room (kick its session, set it inactive). */
+export const LINE_MINT_ROOM_CALLS = 1;
+export const LINE_MINT_PARTICIPANT_CALLS = 1;
+export const LINE_READ_CALLS = 1;
+export const LINE_FALLBACK_READ_CALLS = 3;
 export const LINE_TOKEN_CALLS = 1;
-/** What a stay can spend inside ADMIT_HOLD_MS, on the room's own schedule (§5.6.8): the mint, CAMERA_EVIDENCE_MAX_POLLS reads of
- *  a camera still starting, and the seating read with the token handed with the seat. DERIVED, never typed. */
-export const LINE_RESERVATION =
-  LINE_MINT_CALLS + LINE_READ_CALLS * CAMERA_EVIDENCE_MAX_POLLS + (LINE_READ_CALLS + LINE_TOKEN_CALLS);
-/* UNCOVERED OVERSPEND (the capacity build's P1; measured by external-play-line-cost.test.ts, "P1"): the reservation above covers the
- * stay's own schedule, not the room's CLIENT re-claims. After a dead camera's verdict (`camera_required`) the check-in screen, with its
- * camera live, claims the seat again SEAT_RETRIES (3) times, SEAT_RETRY_MS (1.5 s) apart (room-shell.tsx). The stay is admitted and live,
- * so the gate lets each one through with no level check, and each costs a read (LINE_READ_CALLS) and a fresh token (LINE_TOKEN_CALLS)
- * = 4 calls: up to 12 calls a dead-camera stay spends beyond LINE_RESERVATION (a verdict at the fifth read costs 18, then 12 more).
- * Reserving them would raise the reservation from 21 to 33 and move every figure the spec derives from it (the drain, the ETA, the
- * B-slow bound), so it is left out on purpose. The bucket still caps what leaves for the vendor: the overspend borrows from the pool the
- * NEXT admission would have used, so the line's ETAs run optimistic by at most 6 s a dead-camera stay in flight. All of it falls inside
- * LINE_RELEASE_GRACE_MS (the re-claims take 4.5 s), after which the silent stay lapses and its reservation is returned. */
-/** The opponent's re-verify (T9's three reads), held beside the reservation of a stay whose seat could complete its board. */
-export const LINE_RECHECK_COST = 3;
+export const LINE_SESSION_PROBE_CALLS = 1;
+export const LINE_END_ROOM_CALLS = 2;
+/** The most ONE claim spends (a re-paired board's minting claim: two stale meetings ended, its own created, the participant
+ *  added). Not a threshold; a declared maximum no price may undercut (asserted, and measured at the fixture server). */
+export const LINE_CLAIM_COST = 6;
+
+/** A read price the line knows how to price: a stay is priced for ONE of the two, by the flag (preflight.ts `seatReadCalls()`). */
+const knownReadCalls = (readCalls: number): number => {
+  if (readCalls !== LINE_READ_CALLS && readCalls !== LINE_FALLBACK_READ_CALLS) {
+    throw new Error(`the line prices a read at ${LINE_READ_CALLS} or ${LINE_FALLBACK_READ_CALLS} calls, not ${readCalls}`);
+  }
+  return readCalls;
+};
+
+/** The calls of a stay's FIRST claim, by what it meets: `"all"` makes the room and adds the participant; `"room"` adds the
+ *  participant (its token comes with it); `"none"` pays the token nothing minted carries and, with the proof flag OFF
+ *  (`readCalls` is the fallback's), today's read that finds no live session. With the flag on the first claim of a stay with
+ *  nobody on file is `absent` and makes no read. */
+export function lineFirstClaimCalls(mint: StayMint, readCalls: number): number {
+  const reads = knownReadCalls(readCalls);
+  switch (mint) {
+    case "all":
+      return LINE_MINT_ROOM_CALLS + LINE_MINT_PARTICIPANT_CALLS;
+    case "room":
+      return LINE_MINT_PARTICIPANT_CALLS;
+    case "none":
+      return LINE_TOKEN_CALLS + (reads === LINE_FALLBACK_READ_CALLS ? LINE_SESSION_PROBE_CALLS : 0);
+    default:
+      throw new Error(`unknown stay mint: ${String(mint)}`);
+  }
+}
+
+/** What a stay can spend inside ADMIT_HOLD_MS, on the room's own schedule (§5.6.8): its first claim, CAMERA_EVIDENCE_MAX_POLLS + 1
+ *  reads (five polls of a camera still starting, then the verdict's read) and the token handed with the verdict. DERIVED, never typed.
+ *  Proof flag on: none 8, room 8, all 9. Off: none 21, room 20, all 21. `readCalls` is REQUIRED (the stamp is the flag's state AT the
+ *  stay's first claim). NOT in the price, by design, and measured beside it (external-play-line-cost.test.ts): retiring an earlier
+ *  pairing's rooms (+2 * LINE_END_ROOM_CALLS a board, the design's decision), a reload inside a stay, the dead-camera client
+ *  re-claims below, and every counted fallback read (+ LINE_FALLBACK_READ_CALLS - LINE_READ_CALLS each, on EVERY press a live page
+ *  that never joins makes 10 s after its last token: the fallback is not once per page). */
+export function lineReservation(mint: StayMint, readCalls: number): number {
+  return lineFirstClaimCalls(mint, readCalls) + readCalls * (CAMERA_EVIDENCE_MAX_POLLS + 1) + LINE_TOKEN_CALLS;
+}
+/** The cheapest stay (a stay with its room and participant on file, the proof flag on) and the dearest - which is also the price of a
+ *  stay the gate has not priced (a row from before the stamp, or one a claim never gated): never under-reserve what nobody priced. */
+export const LINE_RESERVATION_MIN = lineReservation("none", LINE_READ_CALLS);
+export const LINE_RESERVATION_MAX = lineReservation("all", LINE_FALLBACK_READ_CALLS);
+/* UNCOVERED OVERSPEND (the capacity build's P1; measured by external-play-line-cost.test.ts, "P1"): the price above covers the stay's own
+ * schedule, not the room's CLIENT re-claims. After a dead camera's verdict (`camera_required`) the check-in screen, with its camera
+ * live, claims the seat again SEAT_RETRIES (3) times, SEAT_RETRY_MS (1.5 s) apart (room-shell.tsx). The stay is admitted and live, so
+ * the gate lets each one through with no level check, and each costs a read (`readCalls`) and a fresh token (LINE_TOKEN_CALLS): up to
+ * 12 calls a dead-camera stay spends beyond its price without the proof flag (6 with it). Reserving them would raise the price by more than half
+ * and move every figure the spec derives from it (the drain, the ETA, the B-slow bound), so it is left out on purpose. The bucket still
+ * caps what leaves for the vendor: the overspend borrows from the pool the NEXT admission would have used, so the line's ETAs run
+ * optimistic by at most 6 s a dead-camera stay in flight. All of it falls inside LINE_RELEASE_GRACE_MS (the re-claims take 4.5 s), after
+ * which the silent stay lapses and its reservation is returned. The counted fallback's overspend is the same kind of thing and is NOT
+ * once per page: the token restamp after every handout restarts its clock, so a live page that never joins falls back on every press
+ * 10 s after the last one (each a session probe and a token, and up to the full read where a peer is found). Not re-priced either. */
+/** The opponent's re-verify (T9's recheck), held beside the reservation of a stay whose seat could complete its board: ONE read with
+ *  the proof flag, the three-call read without it. */
+export function lineRecheckCost(readCalls: number): number {
+  return readCalls;
+}
 /** What an idle line's COMPLETING claim must find in the bucket before it goes (spec §5.7.3, the idle bullet): the reads of the seating
  *  claim itself and the token handed with the seat, THEN the opponent's re-verify that the seat's create makes. A level of
- *  `LINE_RECHECK_COST` alone is spent by the claim's own reads before the re-verify runs (measured: spec B, instant cameras, still created
- *  one board 268.7 s late with the check at `LINE_RECHECK_COST`). DERIVED, never typed. */
-export const LINE_COMPLETING_LEVEL = LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST;
-/** The most ONE claim spends (a re-paired board's minting claim: two stale meetings ended, its own created, the participant
- *  added). Not a threshold; a declared maximum the reservation must cover (asserted). */
-export const LINE_CLAIM_COST = 6;
+ *  the re-verify's cost alone is spent by the claim's own reads before the re-verify runs (measured: spec B, instant cameras, still
+ *  created one board 268.7 s late with the check at the recheck cost). DERIVED, never typed: 3 with the proof flag, 7 without. */
+export function lineCompletingLevel(readCalls: number): number {
+  return readCalls + LINE_TOKEN_CALLS + lineRecheckCost(readCalls);
+}
 /** The dead-camera bound on an ADMITTED stay, from admission: a camera that never comes on would hold its reservation, and its
  *  protection, to the cap otherwise. The mint-to-read gap, the server's wait for a camera it has seen join, and one back-off step
  *  for the verdict read that follows the deadline. */
@@ -118,11 +172,14 @@ export function lineLiveSql(now: Now, opts: { waiting?: boolean } = {}) {
   return sql`(l.queued_at is not null ${opts.waiting ? sql`and l.admitted_at is null` : sql``} and ${stayOpenSql(now)})`;
 }
 
-/** The reservation a live ADMITTED stay holds (LINE_RESERVATION, plus LINE_RECHECK_COST while it could complete its board), and
- *  null for every other row: sum it for the pool, test `is not null` for "admitted and live". */
+/** The reservation a live ADMITTED stay holds - the price stamped at its first claim, plus the stamped re-verify while it could
+ *  complete its board - and null for every other row: sum it for the pool, test `is not null` for "admitted and live". BOTH stamps are
+ *  coalesced (a row from before the stamp prices at the greatest price and the full read): this fragment doubles as the admitted-live
+ *  test, so a null `recheck_cost` on a completing stay must never make an admitted stay read as not admitted. */
 export function reservedSql(now: Now) {
   return sql`(case when l.admitted_at is not null and ${stayOpenSql(now)}
-                   then ${LINE_RESERVATION}::int + (case when l.completing then ${LINE_RECHECK_COST}::int else 0 end) end)`;
+                   then coalesce(l.reservation, ${LINE_RESERVATION_MAX}::int)
+                        + (case when l.completing then coalesce(l.recheck_cost, ${LINE_FALLBACK_READ_CALLS}::int) else 0 end) end)`;
 }
 
 const at = (d: Date): Now => sql`${d}::timestamptz`;
@@ -156,13 +213,17 @@ export type Stay = {
   left: "silent" | "camera" | null;
 };
 
-/** Stamp the stay's arrival (first call, `arrival`) and its liveness (every call, `now`), in ONE statement. A stay is restarted on
+/** Stamp the stay's arrival (first call, `arrival`) and its liveness (every call, `now`), in ONE statement - and its PRICE
+ *  (`reservation`, `recheck_cost`: what the stay's first claim meets, see `lineReservation`), at the stay's first claim or a restart
+ *  and never again inside a stay: a later claim of the same stay has made its own room and participant and would under-state what the
+ *  stay was admitted for. Each column is stamped on its own `is null` too, so a row from before the stamp is priced by its next claim,
+ *  and the two are always written together (the caller hands both; a test pins both-or-neither). A stay is restarted on
  *  `served_at is not null or ended_at is not null or stayLapsedSql` and on nothing else - never on `queued_at`: a stay the
  *  budget has never held keeps its `first_claim_at` across its claims, which is its order key whenever the budget first holds it
  *  (spec §5.7.2, the re-review's N2). The old row is read in the same statement for `left`. */
 export async function upsertStay(
   db: Db,
-  a: { fixtureId: string; personId: string; budgetKey: string; now: Date; arrival: Date },
+  a: { fixtureId: string; personId: string; budgetKey: string; now: Date; arrival: Date; reservation: number; recheckCost: number },
 ): Promise<Stay> {
   const now = at(a.now);
   const restart = sql`(l.served_at is not null or l.ended_at is not null or ${stayLapsedSql(now)})`;
@@ -184,8 +245,8 @@ export async function upsertStay(
         from fixture_seat_line l
        where l.fixture_id = ${a.fixtureId} and l.person_id = ${a.personId}
     ), up as (
-      insert into fixture_seat_line as l (fixture_id, person_id, budget_key, first_claim_at, last_seen_at, last_gate)
-      values (${a.fixtureId}, ${a.personId}, ${a.budgetKey}, ${a.arrival}, ${a.now}, 'passed')
+      insert into fixture_seat_line as l (fixture_id, person_id, budget_key, first_claim_at, last_seen_at, last_gate, reservation, recheck_cost)
+      values (${a.fixtureId}, ${a.personId}, ${a.budgetKey}, ${a.arrival}, ${a.now}, 'passed', ${a.reservation}, ${a.recheckCost})
       on conflict (fixture_id, person_id) do update set
         budget_key     = excluded.budget_key,
         first_claim_at = case when ${restart} then excluded.first_claim_at else l.first_claim_at end,
@@ -196,7 +257,9 @@ export async function upsertStay(
         admitted_at    = case when ${restart} then null else l.admitted_at end,
         completing     = case when ${restart} then false else l.completing end,
         served_at      = case when ${restart} then null else l.served_at end,
-        ended_at       = case when ${restart} then null else l.ended_at end
+        ended_at       = case when ${restart} then null else l.ended_at end,
+        reservation    = case when ${restart} or l.reservation is null then excluded.reservation else l.reservation end,
+        recheck_cost   = case when ${restart} or l.recheck_cost is null then excluded.recheck_cost else l.recheck_cost end
       returning l.first_claim_at, l.queued_at, l.admitted_at, l.completing
     )
     select up.first_claim_at, up.queued_at, up.admitted_at, up.completing,
@@ -247,9 +310,17 @@ export type GateAsk = {
   /** The instant the claim's window was JUDGED (`seatPlayer`'s `now`, the application's clock). A NEW stay is dated there (see
    *  `arrivalOf`), so a claim judged inside the window never opens a stay dated after the deadline (final review M-1). */
   arrival?: Date;
+  /** What this stay's FIRST claim meets (preflight.ts `stayMintOf`), and what one vendor read of a camera costs NOW (`seatReadCalls()`:
+   *  one call with the proof flag, three without). Both price the stay (`lineReservation`) and are stamped on it at its first claim
+   *  (`upsertStay`); the pool test and the idle completing level read them for THIS claim. */
+  mint: StayMint;
+  readCalls: number;
   /** The test seam of the concurrent-admission test: called inside the gate's transaction between its read and its decision. */
   afterRead?: () => void | Promise<void>;
 };
+
+/** The price a claim stamps on its stay. */
+const priceOf = (a: Pick<GateAsk, "mint" | "readCalls">) => ({ reservation: lineReservation(a.mint, a.readCalls), recheckCost: lineRecheckCost(a.readCalls) });
 
 export type GateAnswer =
   /** The claim may spend. */
@@ -259,14 +330,25 @@ export type GateAnswer =
   /** A stay already ADMITTED, under a busy gate: it keeps its admission and the room asks again. */
   | { kind: "camera_starting" };
 
-type Standing = { tokens: number; reserved: number; waiting: number; ahead: number; admittedLive: number; mineAdmitted: boolean; otherOpen: boolean };
+type Standing = {
+  tokens: number;
+  reserved: number;
+  waiting: number;
+  ahead: number;
+  /** What every WAITING stay ahead of this one is promised, at its worst: its stamped price and its stamped re-verify (a place
+   *  ahead may complete its board). A stay with no stamp (from before it) is priced at the greatest price and the full read. */
+  aheadReserved: number;
+  admittedLive: number;
+  mineAdmitted: boolean;
+  otherOpen: boolean;
+};
 
 /** Everything the decision reads, in one statement under the lock (or, for the busy and deferral answers, without it). */
 async function readStanding(db: Db, a: GateAsk, now: Date, mine: Stay): Promise<Standing> {
   const nowSql = at(now);
   const tokens = await peekRealtimeKitCall(a.budgetKey, { at: a.at, db });
   const [s] = await db<
-    { reserved: number; waiting: number; ahead: number; admitted_live: number; mine_admitted: boolean; other_open: boolean }[]
+    { reserved: number; waiting: number; ahead: number; ahead_reserved: number; admitted_live: number; mine_admitted: boolean; other_open: boolean }[]
   >`
     select
       (select coalesce(sum(${reservedSql(nowSql)}), 0)::int from fixture_seat_line l where l.budget_key = ${a.budgetKey}) as reserved,
@@ -276,6 +358,11 @@ async function readStanding(db: Db, a: GateAsk, now: Date, mine: Stay): Promise<
         where l.budget_key = ${a.budgetKey} and ${lineLiveSql(nowSql, { waiting: true })}
           and (l.first_claim_at, l.fixture_id, l.person_id)
               < (${mine.firstClaimAt}::timestamptz, ${a.fixtureId}::uuid, ${a.personId}::uuid)) as ahead,
+      (select coalesce(sum(coalesce(l.reservation, ${LINE_RESERVATION_MAX}::int) + coalesce(l.recheck_cost, ${LINE_FALLBACK_READ_CALLS}::int)), 0)::int
+         from fixture_seat_line l
+        where l.budget_key = ${a.budgetKey} and ${lineLiveSql(nowSql, { waiting: true })}
+          and (l.first_claim_at, l.fixture_id, l.person_id)
+              < (${mine.firstClaimAt}::timestamptz, ${a.fixtureId}::uuid, ${a.personId}::uuid)) as ahead_reserved,
       (select count(*)::int from fixture_seat_line l
         where l.budget_key = ${a.budgetKey} and ${reservedSql(nowSql)} is not null) as admitted_live,
       coalesce((select ${reservedSql(nowSql)} is not null from fixture_seat_line l
@@ -291,26 +378,30 @@ async function readStanding(db: Db, a: GateAsk, now: Date, mine: Stay): Promise<
     reserved: s!.reserved,
     waiting: s!.waiting,
     ahead: s!.ahead,
+    aheadReserved: s!.ahead_reserved,
     admittedLive: s!.admitted_live,
     mineAdmitted: s!.mine_admitted,
     otherOpen: s!.other_open,
   };
 }
 
-/** What the board's seat would hold if admitted: the reservation, plus the opponent's re-verify while it could complete the board. */
-function reservationIf(completing: boolean): number {
-  return LINE_RESERVATION + (completing ? LINE_RECHECK_COST : 0);
+/** What the board's seat would hold if admitted: the price of the stay this claim is (`mint`, `readCalls`), plus the opponent's
+ *  re-verify while it could complete the board. Read off THIS claim's ask; the stamp on the stay is its FIRST claim's, so a stay that
+ *  made its own room since (an `all` priced 9 whose later claim sees `none`) can need one token less than it was stamped: the pool
+ *  test is at most that one token optimistic, once, and the stamp (what the stay then reserves) is never lowered. */
+function reservationIf(mint: StayMint, completing: boolean, readCalls: number): number {
+  return lineReservation(mint, readCalls) + (completing ? lineRecheckCost(readCalls) : 0);
 }
 
 /** The `line` object of a `queued` answer: position among WAITING stays, the estimate to ADMISSION (a conservative estimate and
  *  NOT a bound, below), the poll cadence and the board's cap.
  *
- *  THE ESTIMATE (spec §5.7.9; final review M-2). The stay at `position` is admitted once the pool has grown to what every place
- *  ahead is promised plus its own `need`. The most a place ahead can be promised is `LINE_RESERVATION + LINE_RECHECK_COST` (a
- *  COMPLETING stay: its seat triggers the opponent's re-verify), and the stay's own place is priced at its own `need` (which is that
- *  larger price when IT is completing). The pool refills at `RTK_BUDGET_REFILL_PER_S`, and admission happens at the stay's next
+ *  THE ESTIMATE (spec §5.7.9; final review M-2; plan 2 Task 7). The stay at `position` is admitted once the pool has grown to what
+ *  every place ahead is promised (`aheadReserved`: each waiting stay ahead at its own STAMPED price plus its stamped re-verify, the
+ *  worst case - a COMPLETING stay's seat triggers the opponent's re-verify) plus its own `need`, which is its own price (and the
+ *  re-verify too when IT is completing). The pool refills at `RTK_BUDGET_REFILL_PER_S`, and admission happens at the stay's next
  *  POLL after the pool allows it (§5.7.3), so one `pollMs` of trail is added. Every term is derived from a declared constant. The
- *  old pricing - every place, the stay's own included, at plain `LINE_RESERVATION`, and no trail - told a completing stay at the
+ *  old pricing - every place, the stay's own included, at one plain reservation, and no trail - told a completing stay at the
  *  front with a pool of 22 that it would wait 0 s while it was held until 24, so the `mayTimeOut` warning (which adds
  *  `LINE_SERVE_TAIL_S` to this number) fired late. The pricing makes that warning fire earlier than the old one did; it does not make
  *  the estimate an upper bound, for a wait the POOL sets or any other. The load measured it (B-honest, where the pool sets the wait):
@@ -320,6 +411,8 @@ function reservationIf(completing: boolean): number {
  *  wait is usually shorter. */
 export function lineWire(a: {
   position: number;
+  /** What the places ahead are promised: the sum of their stamped prices and re-verifies (`Standing.aheadReserved`). */
+  aheadReserved: number;
   pool: number;
   need: number;
   now: Date;
@@ -336,7 +429,7 @@ export function lineWire(a: {
     const untilMs = (Math.max(0, a.need - a.pool) / RTK_BUDGET_REFILL_PER_S) * 1_000;
     pollMs = Math.min(LINE_POLL_MS, Math.max(LINE_POLL_MIN_MS, Math.ceil(untilMs)));
   } else pollMs = a.position <= LINE_NEAR_POSITIONS ? LINE_POLL_MS : LINE_POLL_SLOW_MS;
-  const tokensToAdmit = (a.position - 1) * (LINE_RESERVATION + LINE_RECHECK_COST) + a.need;
+  const tokensToAdmit = a.aheadReserved + a.need;
   const etaS = Math.ceil(Math.max(0, tokensToAdmit - a.pool) / RTK_BUDGET_REFILL_PER_S + pollMs / 1_000);
   return {
     position: a.position,
@@ -374,7 +467,7 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
   // Step 1: arrival and liveness, one statement, OUTSIDE the lock - so a stay's place is its first claim and not the moment it won
   // the lock. `left` is read here: it is set once, on the claim that starts the replacement stay.
   const arrival = arrivalOf(a, now);
-  const first = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now, arrival });
+  const first = await upsertStay(sql, { ...ids, ...priceOf(a), budgetKey: a.budgetKey, now, arrival });
   const lockStarted = performance.now();
   try {
     return await sql.begin(async (tx) => {
@@ -382,10 +475,10 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
       await tx`select pg_advisory_xact_lock(hashtext('rtk-line'), hashtext(${a.budgetKey}))`;
       const lockWaitMs = Math.round(performance.now() - lockStarted);
       // The state under the lock: a second claim of this very stay (another tab) may have admitted it since step 1.
-      const mine = await upsertStay(tx, { ...ids, budgetKey: a.budgetKey, now, arrival });
+      const mine = await upsertStay(tx, { ...ids, ...priceOf(a), budgetKey: a.budgetKey, now, arrival });
       // Step 2. The opponent's arrival is applied FIRST (the re-review 2's I-A): the stay on the board's other side now has an
       // opponent who could be seated, so ITS seat could complete the board - and if it is admitted its reservation rises by
-      // LINE_RECHECK_COST and the pool falls by it from this instant. A PURE write: it reads none of the guarded columns, and
+      // its stamped re-verify and the pool falls by it from this instant. A PURE write: it reads none of the guarded columns, and
       // on a stay that is not admitted `completing` is dead data (reservedSql counts it only for an admitted one, and the
       // gate re-evaluates and rewrites it at that stay's admission and at each of its claims after).
       if (a.otherPersonId !== null) {
@@ -407,28 +500,28 @@ export async function gateClaim(a: GateAsk): Promise<GateAnswer> {
       const hold = async (need: number, why: string): Promise<GateAnswer> => {
         await writeStay(tx, ids, { gate: "held", queuedAt: mine.queuedAt ?? now });
         trace(why);
-        return { kind: "queued", line: lineWire({ position, pool, need, now, anchor: a.anchor, left: first.left }) };
+        return { kind: "queued", line: lineWire({ position, aheadReserved: st.aheadReserved, pool, need, now, anchor: a.anchor, left: first.left }) };
       };
       // Could this claim's seat complete its board? (The other side has an open stay or a counted check-in.) Such a seat triggers the
-      // create and its T9 re-verify of the opponent, LINE_RECHECK_COST reads that are exempt from the line but not from the bucket.
+      // create and its T9 re-verify of the opponent, `lineRecheckCost` reads that are exempt from the line but not from the bucket.
       const completing = st.otherOpen || a.otherCounted;
       // A new arrival joins the tail without spending: a stay is never admitted ahead of an earlier stay that is waiting.
-      if (st.ahead > 0) return hold(reservationIf(completing), "hold_blocked");
+      if (st.ahead > 0) return hold(reservationIf(a.mint, completing, a.readCalls), "hold_blocked");
       // Idle - this stay is not waiting, nobody is, and no admitted stay is live: today's path, nothing written but the upsert.
       // EXCEPT a COMPLETING claim, which goes only while the bucket holds its own seating reads and token AND the opponent's re-verify
-      // (`tokens >= LINE_COMPLETING_LEVEL`): on an idle line nothing is reserved for it, so a bucket that cannot pay the re-verify after
+      // (`tokens >= lineCompletingLevel(readCalls)`): on an idle line nothing is reserved for it, so a bucket that cannot pay the re-verify after
       // the claim's own spend would defer it INSIDE the create, and the board would wait for the sweep (spec §5.7.3, test 37 (e)). Below
       // it the claim is held like any stay that meets a dry bucket (step 4): it becomes a waiting stay, and its next claim pays the pool
       // test with the reservation it would hold.
       if (st.waiting === 0 && st.admittedLive === 0) {
-        if (!completing || st.tokens >= LINE_COMPLETING_LEVEL) {
+        if (!completing || st.tokens >= lineCompletingLevel(a.readCalls)) {
           trace("go_idle");
           return { kind: "go", decision: "idle" } as GateAnswer;
         }
-        return hold(reservationIf(completing), "hold_recheck");
+        return hold(reservationIf(a.mint, completing, a.readCalls), "hold_recheck");
       }
       // Next in order: a candidate. It is admitted only while the pool holds the reservation it WOULD hold.
-      const need = reservationIf(completing);
+      const need = reservationIf(a.mint, completing, a.readCalls);
       if (pool >= need) {
         await writeStay(tx, ids, { gate: "passed", admittedAt: now, completing, releasedAt: now });
         trace("admit");
@@ -454,15 +547,15 @@ export async function answerBusy(a: GateAsk, left: LineWire["left"] = null): Pro
   log.warn({ fixtureId: a.fixtureId, busy: busyCount }, "seat-line: gate lock busy; the claim answered as if the pool were short");
   const now = a.at ?? (await dbNow());
   const ids = { fixtureId: a.fixtureId, personId: a.personId };
-  const mine = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now, arrival: arrivalOf(a, now) });
+  const mine = await upsertStay(sql, { ...ids, ...priceOf(a), budgetKey: a.budgetKey, now, arrival: arrivalOf(a, now) });
   const st = await readStanding(sql, a, now, mine);
   if (st.mineAdmitted) {
     await writeStay(sql, ids, { gate: "passed", queuedAt: mine.queuedAt ?? now });
     return { kind: "camera_starting" };
   }
   await writeStay(sql, ids, { gate: "held", queuedAt: mine.queuedAt ?? now });
-  const need = reservationIf(st.otherOpen || a.otherCounted);
-  return { kind: "queued", line: lineWire({ position: st.ahead + 1, pool: st.tokens - st.reserved, need, now, anchor: a.anchor, left: mine.left ?? left, busy: true }) };
+  const need = reservationIf(a.mint, st.otherOpen || a.otherCounted, a.readCalls);
+  return { kind: "queued", line: lineWire({ position: st.ahead + 1, aheadReserved: st.aheadReserved, pool: st.tokens - st.reserved, need, now, anchor: a.anchor, left: mine.left ?? left, busy: true }) };
 }
 
 /** A deferral MID-CLAIM (exempt traffic took the tokens an admitted stay was funded with, or an idle-line claim met a dry
@@ -471,15 +564,15 @@ export async function answerBusy(a: GateAsk, left: LineWire["left"] = null): Pro
 export async function settleDeferral(a: GateAsk): Promise<GateAnswer> {
   const now = a.at ?? (await dbNow());
   const ids = { fixtureId: a.fixtureId, personId: a.personId };
-  const mine = await upsertStay(sql, { ...ids, budgetKey: a.budgetKey, now, arrival: arrivalOf(a, now) });
+  const mine = await upsertStay(sql, { ...ids, ...priceOf(a), budgetKey: a.budgetKey, now, arrival: arrivalOf(a, now) });
   const st = await readStanding(sql, a, now, mine);
   if (st.mineAdmitted) {
     await writeStay(sql, ids, { gate: "passed", queuedAt: mine.queuedAt ?? now });
     return { kind: "camera_starting" };
   }
   await writeStay(sql, ids, { gate: "held", queuedAt: mine.queuedAt ?? now });
-  const need = reservationIf(st.otherOpen || a.otherCounted);
-  return { kind: "queued", line: lineWire({ position: st.ahead + 1, pool: st.tokens - st.reserved, need, now, anchor: a.anchor, left: mine.left }) };
+  const need = reservationIf(a.mint, st.otherOpen || a.otherCounted, a.readCalls);
+  return { kind: "queued", line: lineWire({ position: st.ahead + 1, aheadReserved: st.aheadReserved, pool: st.tokens - st.reserved, need, now, anchor: a.anchor, left: mine.left }) };
 }
 
 // ─── The end of service (spec §5.7.3 step 5) ──────────────────────────────────────────────────────────────────────────────

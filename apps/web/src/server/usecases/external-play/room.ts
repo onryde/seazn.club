@@ -81,7 +81,17 @@ import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
 import { fenAfter } from "@/server/external-play/fen";
 import { reportedCamera } from "./camera-reported";
-import { cameraTokenForSeat, isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type CameraToken, type PreflightDeps, type SeatResult } from "./preflight";
+import {
+  cameraTokenForSeat,
+  isPlayableFixtureStatus,
+  seatPlayer,
+  seatReadCalls,
+  stayMintOf,
+  storedPlayerParticipant,
+  type CameraToken,
+  type PreflightDeps,
+  type SeatResult,
+} from "./preflight";
 import { currentBudgetKey } from "@/server/external-play/video/realtimekit";
 import { lichessGrantDowngraded } from "../external-accounts";
 import { RECONCILED_WHILE_HELD, reconcile } from "./reconcile";
@@ -674,6 +684,9 @@ async function queueDeferred(r: Resolved, fixtureId: string, seat: SeatResult, d
     anchor,
     at: deps.line?.at,
     arrival: now,
+    // The stay's price, as `passTheLine` hands it (a stay this deferral STARTS is stamped by it; a stay already priced keeps its stamp).
+    mint: await stayMintOf(sql, { fixtureId, side: r.player.side, personId: r.player.personId }),
+    readCalls: seatReadCalls(),
   });
   return answer.kind === "queued"
     ? { seated: false, reason: "queued", participant: null, line: answer.line }

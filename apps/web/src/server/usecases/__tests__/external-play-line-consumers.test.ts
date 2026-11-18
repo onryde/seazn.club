@@ -12,13 +12,14 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { boardAnchor } from "@/server/external-play/window";
-import { ADMIT_HOLD_MS, LINE_ABANDON_AFTER_MS, LINE_RELEASE_GRACE_MS, LINE_RESERVATION, boardPhase, lineActive, ownStayInLine } from "@/server/external-play/seat-line";
+import { ADMIT_HOLD_MS, LINE_ABANDON_AFTER_MS, LINE_RELEASE_GRACE_MS, LINE_RESERVATION_MAX, boardPhase, lineActive, ownStayInLine } from "@/server/external-play/seat-line";
 import type { GateAnswer } from "@/server/external-play/seat-line";
 import { claimAt, holdReservation, holdWaiting, putStay, stayRow } from "./_external-play-line";
 import { DEADLINE, OPENED, SEC, claimRoom, dropWorlds, fund, seedBoard, sweepBoard, world, type Board, type World } from "./_external-play-line-route";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
+/** A stay priced at the unpriced maximum (`askOf`'s default; a seeded row has no stamp). */
+const L = LINE_RESERVATION_MAX;
 const ANCHOR = boardAnchor(OPENED, 0, false);
 /** Past the deadline and inside the cap: the instant every question is asked at. */
 const NOW = new Date(DEADLINE.getTime() + 30 * SEC);

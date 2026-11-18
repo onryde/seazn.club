@@ -8,13 +8,14 @@ import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS } from "../../usecases/exter
 import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
-  LINE_COMPLETING_LEVEL,
-  LINE_MINT_CALLS,
-  LINE_READ_CALLS,
-  LINE_RECHECK_COST,
+  LINE_FALLBACK_READ_CALLS,
+  LINE_MINT_PARTICIPANT_CALLS,
+  LINE_MINT_ROOM_CALLS,
   LINE_RELEASE_GRACE_MS,
-  LINE_RESERVATION,
+  LINE_RESERVATION_MAX,
   LINE_TOKEN_CALLS,
+  lineCompletingLevel,
+  lineRecheckCost,
 } from "../seat-line";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "../video/budget";
 import {
@@ -65,8 +66,10 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.windowLeadMs).toBe(WINDOW_OPEN_LEAD_MS);
     expect(LINE_LOAD.deadlineAfterMs).toBe(DEADLINE_AFTER_MS);
     expect(LINE_LOAD.lineGraceMs).toBe(LINE_DEADLINE_GRACE_MS);
-    expect(LINE_LOAD.reservation).toBe(LINE_RESERVATION);
-    expect(LINE_LOAD.recheckCost).toBe(LINE_RECHECK_COST);
+    // The load runs with the one-read proof OFF (its flag stays off until the vendor's leave latency is measured): a stay is priced at
+    // the three-call read, which for the boards the run drives (`all`, or `none` with the probe) is the greatest price.
+    expect(LINE_LOAD.reservation).toBe(LINE_RESERVATION_MAX);
+    expect(LINE_LOAD.recheckCost).toBe(lineRecheckCost(LINE_FALLBACK_READ_CALLS));
     expect(LINE_LOAD.abandonAfterMs).toBe(LINE_ABANDON_AFTER_MS);
     expect(LINE_LOAD.releaseGraceMs).toBe(LINE_RELEASE_GRACE_MS);
     expect(LINE_LOAD.admitHoldMs).toBe(ADMIT_HOLD_MS);
@@ -75,15 +78,15 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.batchRereadJitterMs).toBe(BATCH_REREAD_JITTER_MS);
     expect(LINE_LOAD.pollMinMs).toBe(LINE_POLL_MIN_MS);
     expect(LINE_LOAD.pollMs).toBe(LINE_POLL_MS);
-    expect(LINE_LOAD.completingLevel, "seat-line.ts LINE_COMPLETING_LEVEL: the level B-dry's min gate level is judged against").toBe(LINE_COMPLETING_LEVEL);
+    expect(LINE_LOAD.completingLevel, "seat-line.ts lineCompletingLevel(LINE_FALLBACK_READ_CALLS): the level B-dry's min gate level is judged against").toBe(lineCompletingLevel(LINE_FALLBACK_READ_CALLS));
   });
 
   it("the MEASURED instant-camera cost per player sits between the model's floor and ceiling, both made from the server's own call counts", () => {
     // 7.1 is the report's `perPlayerCheckIn` of every B run (426 check-in calls for 60 players). The floor is one stay (the mint, one read of the
     // seat, the token handed with it); the ceiling adds the opponent's re-verify, shared by the board's two players. A measurement outside the
     // bracket would mean the harness or the product changed under it, and B-dry's derivation would be dry or wet by accident.
-    const floor = LINE_MINT_CALLS + LINE_READ_CALLS + LINE_TOKEN_CALLS;
-    const ceiling = floor + LINE_RECHECK_COST / 2;
+    const floor = LINE_MINT_ROOM_CALLS + LINE_MINT_PARTICIPANT_CALLS + LINE_FALLBACK_READ_CALLS + LINE_TOKEN_CALLS;
+    const ceiling = floor + lineRecheckCost(LINE_FALLBACK_READ_CALLS) / 2;
     expect(LINE_LOAD.instantCallsPerPlayer).toBeGreaterThanOrEqual(floor);
     expect(LINE_LOAD.instantCallsPerPlayer).toBeLessThanOrEqual(ceiling);
   });
@@ -250,8 +253,8 @@ describe("the pool, the drained phase, the admission pace", () => {
   const sample = (at: number, tokens: number, inFlight: number, completing: number, waiting: number): LineSample => ({ at, tokens, inFlight, completing, waiting });
 
   it("the pool is the level less every held reservation, plus the recheck cost of each completing stay", () => {
-    expect(poolOf(sample(0, 100, 2, 1, 0))).toBe(100 - 2 * LINE_RESERVATION - 1 * LINE_RECHECK_COST);
-    expect(poolOf(sample(0, 10, 1, 0, 0)), "it may go negative").toBe(10 - LINE_RESERVATION);
+    expect(poolOf(sample(0, 100, 2, 1, 0))).toBe(100 - 2 * LINE_RESERVATION_MAX - 1 * lineRecheckCost(LINE_FALLBACK_READ_CALLS));
+    expect(poolOf(sample(0, 10, 1, 0, 0)), "it may go negative").toBe(10 - LINE_RESERVATION_MAX);
   });
 
   it("drained: the first sample with a waiting stay and a pool under one reservation; the in-flight maximum is read from there on, not before", () => {
@@ -266,8 +269,8 @@ describe("the pool, the drained phase, the admission pace", () => {
     expect(drainOf(samples)).toEqual({ drainedAt: 1_500, maxInFlightDrained: 6, samplesChecked: 6 });
     // The pool EQUAL to one reservation still admits (the gate admits iff pool >= reservation): not drained. And the drain sample itself
     // is inside the drained phase, so an in-flight maximum standing AT it counts.
-    const edge = [sample(0, 2 * LINE_RESERVATION + LINE_RESERVATION, 2, 0, 3), sample(500, 2 * LINE_RESERVATION + LINE_RESERVATION - 1, 9, 0, 3), sample(1_000, 100, 1, 0, 3)];
-    expect(poolOf(edge[0]!), "premise: exactly one reservation in the pool").toBe(LINE_RESERVATION);
+    const edge = [sample(0, 2 * LINE_RESERVATION_MAX + LINE_RESERVATION_MAX, 2, 0, 3), sample(500, 2 * LINE_RESERVATION_MAX + LINE_RESERVATION_MAX - 1, 9, 0, 3), sample(1_000, 100, 1, 0, 3)];
+    expect(poolOf(edge[0]!), "premise: exactly one reservation in the pool").toBe(LINE_RESERVATION_MAX);
     expect(drainOf(edge).drainedAt, "pool == reservation is not drained; one token less is").toBe(500);
     expect(drainOf(edge).maxInFlightDrained, "the in-flight maximum standing AT the drain sample counts").toBe(9);
     expect(drainOf([sample(0, 300, 5, 0, 0)])).toEqual({ drainedAt: null, maxInFlightDrained: 0, samplesChecked: 1 });
@@ -429,7 +432,7 @@ describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply 
   const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };
 
   it("the margin is a completing candidate's admission threshold plus the idle level, from the server's declarations", () => {
-    expect(DRY_MARGIN_CALLS).toBe(LINE_RESERVATION + LINE_RECHECK_COST + LINE_COMPLETING_LEVEL);
+    expect(DRY_MARGIN_CALLS).toBe(LINE_RESERVATION_MAX + lineRecheckCost(LINE_FALLBACK_READ_CALLS) + lineCompletingLevel(LINE_FALLBACK_READ_CALLS));
   });
 
   it("at the derived spread the run's demand exceeds the supply by EXACTLY the margin (the definition, checked on the numbers)", () => {

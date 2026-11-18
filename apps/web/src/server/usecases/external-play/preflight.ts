@@ -17,7 +17,17 @@ import "server-only";
 // "The window has not started" is its OWN refusal (`round_not_open`), not
 // `window_closed`: the room says different things about the two.
 import type postgres from "postgres";
-import { answerBusy, boardPhase, gateClaim, lineActive, SeatLineBusy, type GateAsk } from "@/server/external-play/seat-line";
+import {
+  answerBusy,
+  boardPhase,
+  gateClaim,
+  LINE_FALLBACK_READ_CALLS,
+  LINE_READ_CALLS,
+  lineActive,
+  SeatLineBusy,
+  type GateAsk,
+  type StayMint,
+} from "@/server/external-play/seat-line";
 import { takeSeatAsk } from "@/server/external-play/seat-ask-limit";
 import { boardOpenFor } from "@/server/external-play/round-open";
 import { sql } from "@/lib/db";
@@ -349,6 +359,10 @@ async function passTheLine(
     at: deps.line?.at,
     arrival: w.now,
     afterRead: deps.line?.afterRead,
+    // The price of the stay this claim may START (the gate stamps it at the stay's first claim and never re-prices it): what the
+    // claim will meet on file, and what one read of the camera costs under the flag as it is now.
+    mint: await stayMintOf(sql, { fixtureId: a.fixtureId, side: w.player.side, personId: a.personId }),
+    readCalls: seatReadCalls(),
   };
   let answer;
   try {
@@ -576,16 +590,10 @@ export const FIRST_READ_AFTER_JOIN_MS = 1_500;
  *  so a webhook was probably lost - and only then does the seat spend the three-call session read to find out (spec §6.3). */
 export const PRESENCE_FALLBACK_MS = 10_000;
 
-// What one vendor read of a camera costs. Local to this file until Task 7 (the line's stamped price) replaces them with seat-line.ts's
-// LINE_READ_CALLS (re-valued to 1) and LINE_FALLBACK_READ_CALLS; seat-line.ts's LINE_READ_CALLS is still today's 3 and is read by the
-// gate, so it cannot be imported for this yet.
-const PROOF_READ_CALLS = 1;
-const FALLBACK_READ_CALLS = 3;
-
 /** What one vendor read of a camera costs NOW: one call with EXTERNAL_PLAY_PRESENCE_PROOF=1, else today's three. The seat hands it
- *  to the gate (GateAsk.readCalls, Task 7). */
+ *  to the gate (`GateAsk.readCalls`), which prices the stay with it; the numbers are the line's own (seat-line.ts, the one source). */
 export function seatReadCalls(): number {
-  return presenceProofOn() ? PROOF_READ_CALLS : FALLBACK_READ_CALLS;
+  return presenceProofOn() ? LINE_READ_CALLS : LINE_FALLBACK_READ_CALLS;
 }
 
 let fallbackReads = 0;
@@ -937,9 +945,9 @@ export async function storedPlayerParticipant(
  *  "The player's participant" is preset 'player' on the side's row: `removed_at` is not asked, because the table's own check
  *  (`fixture_video_participants_removed_check`) allows it on an arbiter row only, so a player row is never removed.
  *  A row is CURRENT when it is unended and either unadopted (both stamps null: the pre-mint job's room for a board that had no
- *  pairing when it was made, whichever pairing the board has now) or stamped for the fixture's current pairing. Task 7 prices the
- *  stay with this; it is read by `(fixture, side)`, the keys the source guard asks every video-table reference to name. */
-export type StayMint = "none" | "room" | "all";
+ *  pairing when it was made, whichever pairing the board has now) or stamped for the fixture's current pairing. The line prices the
+ *  stay with this (`passTheLine` and `queueDeferred` hand it to the gate); it is read by `(fixture, side)`, the keys the source guard asks every video-table reference to name. */
+export type { StayMint };
 export async function stayMintOf(db: AnySql, a: { fixtureId: string; side: Side; personId: string }): Promise<StayMint> {
   const [row] = await db<{ current: boolean; mine: boolean }[]>`
     select (m.ended_at is null

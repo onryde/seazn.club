@@ -18,7 +18,7 @@ import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
   LINE_RELEASE_GRACE_MS,
-  LINE_RESERVATION,
+  LINE_RESERVATION_MAX,
   ownStayInLine,
 } from "@/server/external-play/seat-line";
 import { configureRealtimeKit } from "./_external-play-rtk-fake";
@@ -41,7 +41,8 @@ import {
 import { boardAnchor } from "@/server/external-play/window";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
+/** A stay priced at the unpriced maximum (`askOf`'s default; a seeded row has no stamp). */
+const L = LINE_RESERVATION_MAX;
 const ANCHOR = boardAnchor(OPENED, 0, false);
 
 const keys: string[] = [];

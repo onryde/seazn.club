@@ -19,6 +19,9 @@ export type StayRow = {
   completing: boolean;
   served_at: Date | null;
   ended_at: Date | null;
+  /** The stamped price (V529): null for a row from before the stamp. */
+  reservation: number | null;
+  recheck_cost: number | null;
 };
 
 /** The stay as stored, or null. A TEST reads the raw row: the product reads it only through seat-line.ts's fragments. */
@@ -40,18 +43,23 @@ export type PutStay = {
   completing?: boolean;
   servedAt?: Date | null;
   endedAt?: Date | null;
+  /** The stamped price. Omitted (null) is a row from before the stamp, which every reader prices at the unpriced maximum. */
+  reservation?: number | null;
+  recheckCost?: number | null;
 };
 
 export async function putStay(a: PutStay): Promise<void> {
   await sql`
     insert into fixture_seat_line (fixture_id, person_id, budget_key, first_claim_at, last_seen_at, last_gate,
-                                   queued_at, admitted_at, completing, served_at, ended_at)
+                                   queued_at, admitted_at, completing, served_at, ended_at, reservation, recheck_cost)
     values (${a.fixtureId}, ${a.personId}, ${a.budgetKey}, ${a.firstClaimAt}, ${a.seenAt ?? a.firstClaimAt}, ${a.gate ?? "held"},
-            ${a.queuedAt ?? null}, ${a.admittedAt ?? null}, ${a.completing ?? false}, ${a.servedAt ?? null}, ${a.endedAt ?? null})
+            ${a.queuedAt ?? null}, ${a.admittedAt ?? null}, ${a.completing ?? false}, ${a.servedAt ?? null}, ${a.endedAt ?? null},
+            ${a.reservation ?? null}, ${a.recheckCost ?? null})
     on conflict (fixture_id, person_id) do update set
       budget_key = excluded.budget_key, first_claim_at = excluded.first_claim_at, last_seen_at = excluded.last_seen_at,
       last_gate = excluded.last_gate, queued_at = excluded.queued_at, admitted_at = excluded.admitted_at,
-      completing = excluded.completing, served_at = excluded.served_at, ended_at = excluded.ended_at`;
+      completing = excluded.completing, served_at = excluded.served_at, ended_at = excluded.ended_at,
+      reservation = excluded.reservation, recheck_cost = excluded.recheck_cost`;
 }
 
 /** The bucket `key` holds exactly `tokens` as of `asOf` (a peek at `asOf` reads `tokens`). */
@@ -90,7 +98,7 @@ export async function clearBucket(key: string): Promise<void> {
 
 // ─── A gate-level scene: one bucket, boards seeded on demand, claims at a stated instant ─────────────────────────────────
 import { boardAnchor } from "@/server/external-play/window";
-import { gateClaim, type GateAnswer, type GateAsk } from "@/server/external-play/seat-line";
+import { LINE_FALLBACK_READ_CALLS, gateClaim, type GateAnswer, type GateAsk } from "@/server/external-play/seat-line";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 export type Board = Awaited<ReturnType<typeof seedOnlineChessFixture>>;
@@ -112,7 +120,9 @@ export const seedBoard = (): Promise<Board> =>
     cameraPolicy: "required",
   });
 
-/** The gate's ask for `side` of `board` at `when` (the other side is the opponent; not counted unless said). */
+/** The gate's ask for `side` of `board` at `when` (the other side is the opponent; not counted unless said). A stay is priced as the
+ *  unpriced maximum (`"all"` at the fallback read price: 21, the price of every stay before the stamp) unless the case says otherwise
+ *  (`mint`, `readCalls`), so a scene's arithmetic is the declaration's. */
 export function askOf(key: string, board: Board, side: Side, when: Date, over: Partial<GateAsk> = {}): GateAsk {
   const other: Side = side === "home" ? "away" : "home";
   return {
@@ -123,6 +133,8 @@ export function askOf(key: string, board: Board, side: Side, when: Date, over: P
     budgetKey: key,
     anchor: SCENE_ANCHOR,
     at: when,
+    mint: "all",
+    readCalls: LINE_FALLBACK_READ_CALLS,
     ...over,
   };
 }
@@ -130,9 +142,14 @@ export function askOf(key: string, board: Board, side: Side, when: Date, over: P
 export const claimAt = (key: string, board: Board, side: Side, when: Date, over: Partial<GateAsk> = {}): Promise<GateAnswer> =>
   gateClaim(askOf(key, board, side, when, over));
 
-/** Somebody else's ADMITTED, live stay on `key` (a reservation of LINE_RESERVATION, plus the surcharge when `completing`): the line
- *  is active and a pool is short by exactly that. `at` is when it was admitted and last heard from. */
-export async function holdReservation(key: string, when: Date, completing = false): Promise<Board> {
+/** Somebody else's ADMITTED, live stay on `key` (a reservation of LINE_RESERVATION_MAX, plus the surcharge when `completing`; or the
+ *  stamped `price`): the line is active and a pool is short by exactly that. `at` is when it was admitted and last heard from. */
+export async function holdReservation(
+  key: string,
+  when: Date,
+  completing = false,
+  price: { reservation: number | null; recheckCost: number | null } = { reservation: null, recheckCost: null },
+): Promise<Board> {
   const b = await seedBoard();
   await putStay({
     fixtureId: b.fixtureId,
@@ -144,6 +161,7 @@ export async function holdReservation(key: string, when: Date, completing = fals
     queuedAt: when,
     admittedAt: when,
     completing,
+    ...price,
   });
   return b;
 }

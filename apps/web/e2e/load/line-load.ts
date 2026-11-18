@@ -16,10 +16,13 @@ export const LINE_LOAD = {
   deadlineAfterMs: 600_000,
   /** window.ts LINE_DEADLINE_GRACE_MS: the line's grace past the deadline (the board's cap). */
   lineGraceMs: 300_000,
-  /** seat-line.ts: what one stay reserves, and the re-verify held beside it while it could complete its board. */
+  /** seat-line.ts LINE_RESERVATION_MAX: what one stay reserves, and (lineRecheckCost) the re-verify held beside it while it could complete its
+   *  board. The load runs with the one-read proof OFF (its flag stays off until the vendor's leave latency is measured), so a stay is priced at the
+   *  three-call read - the greatest price, 21 - and its re-verify is the three-call read. The stamped price (a `room` stay 20 flag off, 8 and 9 on)
+   *  is measured in external-play-line-cost.test.ts, not here. */
   reservation: 21,
   recheckCost: 3,
-  /** seat-line.ts LINE_COMPLETING_LEVEL: the bucket level at which an idle line lets a completing claim straight through (reads + token + re-verify). */
+  /** seat-line.ts lineCompletingLevel(LINE_FALLBACK_READ_CALLS): the bucket level at which an idle line lets a completing claim straight through (reads + token + re-verify). */
   completingLevel: 7,
   /** MEASURED, not declared anywhere: the report's `perPlayerCheckIn` of every instant-camera B run (426 check-in calls for 60 players). The pin test
    *  brackets it between the model's floor and ceiling made from seat-line.ts's own call counts, so a change under it cannot pass silently. */

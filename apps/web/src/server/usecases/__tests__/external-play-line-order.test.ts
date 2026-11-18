@@ -10,7 +10,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { sql } from "@/lib/db";
 import { boardAnchor } from "@/server/external-play/window";
 import { endStay, gateClaim, settleDeferral, type GateAnswer, type GateAsk } from "@/server/external-play/seat-line";
-import { LINE_RESERVATION } from "@/server/external-play/seat-line";
+import { LINE_FALLBACK_READ_CALLS, LINE_RESERVATION_MAX } from "@/server/external-play/seat-line";
 import { admissionInversions, completionReorders, positionRises, type PositionSample, type StayFacts } from "../../../../e2e/load/line-checks";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 import { configureRealtimeKit } from "./_external-play-rtk-fake";
@@ -58,6 +58,10 @@ const ask = (s: Seeded, when: Date, over: Partial<GateAsk> = {}): GateAsk => ({
   budgetKey: key,
   anchor: ANCHOR,
   at: when,
+  // Every stay here is priced at the unpriced maximum (an `all` stay at the fallback's three-call read, 21), the price each seeded
+  // reservation and each arithmetic line below is written against.
+  mint: "all",
+  readCalls: LINE_FALLBACK_READ_CALLS,
   ...over,
 });
 
@@ -129,7 +133,7 @@ describe.skipIf(!DB)("FIFO admission with tokens one at a time, polled out of or
           admittedIds.push(i);
           // The admitted stay is served at the next step's start, spending its reservation from the bucket.
           await endStay({ fixtureId: boards[i]!.fixtureId, personId: boards[i]!.home.personId, how: "served", at: at(t + 500) });
-          tokens = Math.max(0, tokens - LINE_RESERVATION);
+          tokens = Math.max(0, tokens - LINE_RESERVATION_MAX);
         }
       }
     }
@@ -149,9 +153,9 @@ describe.skipIf(!DB)("FIFO admission with tokens one at a time, polled out of or
     await gateClaim(ask(x, at(0)));
     await settleDeferral(ask(x, at(1)));
     await gateClaim(ask(y, at(10)));
-    await setBucket(key, LINE_RESERVATION, at(1_000));
+    await setBucket(key, LINE_RESERVATION_MAX, at(1_000));
     expect((await gateClaim(ask(x, at(1_000)))).kind, "X is admitted").toBe("go");
-    await setBucket(key, 2 * LINE_RESERVATION, at(2_000));
+    await setBucket(key, 2 * LINE_RESERVATION_MAX, at(2_000));
     expect((await gateClaim(ask(y, at(2_000)))).kind, "Y is admitted next").toBe("go");
     await endStay({ fixtureId: y.fixtureId, personId: y.home.personId, how: "served", at: at(3_000) });
     await endStay({ fixtureId: x.fixtureId, personId: x.home.personId, how: "served", at: at(13_000) });

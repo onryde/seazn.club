@@ -174,6 +174,8 @@ export function fakeRealtimeKit(opts: { budget?: CallBudget } = {}) {
 
   return {
     video,
+    /** The in-memory transport itself, for a test that runs another adapter function (the pre-mint pass, `endMeeting`) against the same vendor. */
+    fetch,
     http,
     adapter,
     participants,

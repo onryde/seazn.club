@@ -76,7 +76,7 @@
  * 0 unexcused rises) belong to the legs where the line forms with two or more stays waiting - `B-honest` and `B-slow-*` - because zero
  * pairs is a failure and B has none. `B` owes NO held-stays bar: its demand sits a few tokens from the bucket's supply, so whether a stay is
  * held is run to run (5 of 6 runs) - its held count and lowest gate level are only RECORDED. The DRY bars (a stay held, and the gate saw a
- * bucket level under LINE_COMPLETING_LEVEL) belong to `B-dry`, whose arrival spread is derived so the bucket is short of tokens by construction.
+ * bucket level under the completing level, `lineCompletingLevel`) belong to `B-dry`, whose arrival spread is derived so the bucket is short of tokens by construction.
  * Every strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database:
  *
  *   A           LOAD_SCENARIO=A LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=20 LOAD_OPENED_AGO_S=0
@@ -1560,12 +1560,12 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     if (STRICT && bars.dry) {
       expect(held, `capacity ${SCENARIO}: the dry bucket was met and a stay was held for it (held stays; zero would leave the late-create bar vacuous)`).toBeGreaterThan(0);
       expect(gateLevel?.decisions ?? 0, `capacity ${SCENARIO}: gate decisions that carried a bucket level (zero is a failure: the level bar below would read nothing)`).toBeGreaterThan(0);
-      expect(gateLevel?.min ?? Number.POSITIVE_INFINITY, `capacity ${SCENARIO}: the gate saw the bucket below LINE_COMPLETING_LEVEL (${LINE_LOAD.completingLevel}) at least once`).toBeLessThan(LINE_LOAD.completingLevel);
+      expect(gateLevel?.min ?? Number.POSITIVE_INFINITY, `capacity ${SCENARIO}: the gate saw the bucket below the completing level (${LINE_LOAD.completingLevel}) at least once`).toBeLessThan(LINE_LOAD.completingLevel);
     }
     if (STRICT && bars.cost) {
       expect(costVerdict.stays, "capacity B: stays costed (the 60 players: zero is a failure)").toBe(requiredPlayers);
       expect(overWithoutReason.map((c) => c.id), "capacity B: a stay above its reservation with no unreserved claim to explain it: 0").toEqual([]);
-      expect(overRecheckWithoutReason.map((c) => c.id), "capacity B: a re-verify above LINE_RECHECK_COST with no unreserved claim to explain it: 0").toEqual([]);
+      expect(overRecheckWithoutReason.map((c) => c.id), "capacity B: a re-verify above the stamped re-verify cost (lineRecheckCost) with no unreserved claim to explain it: 0").toEqual([]);
       expect(busyRefusals ?? 0, "capacity B: gate lock busy refusals: expected 0").toBe(0);
     }
     if (STRICT && SCENARIO.startsWith("B-slow") && bound) {

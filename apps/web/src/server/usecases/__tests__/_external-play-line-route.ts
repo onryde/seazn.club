@@ -12,6 +12,8 @@ import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { claimRoomSeat, type RoomClaim, type RoomDeps } from "../external-play/room";
 import { sweepExternalPlay, type SweepDeps, type SweepReport } from "../external-play/sweep";
 import { seatPlayer } from "../external-play/preflight";
+import { reportOwnCamera } from "../external-play/camera-report";
+import { applyPresenceEvent } from "@/server/external-play/video/presence";
 import { CAMERA_ON_EVENTS, configureRealtimeKit, fakeRealtimeKit } from "./_external-play-rtk-fake";
 import { clearBucket, setBucket, stubBucket } from "./_external-play-line";
 import { seedOnlineChessFixture } from "./_external-play-seed";
@@ -108,6 +110,41 @@ const peerOf = (w: World, seat: Seat): Peer => {
 export function joinAt(w: World, seat: Seat, joinedAt: Date, events: ((at: string) => unknown[] | null) | null = null): void {
   w.rtk.joinWith(tokenOf(seat).authToken, events ?? (() => null));
   peerOf(w, seat).joinedAt = joinedAt.toISOString();
+}
+/** WITH THE ONE-READ PROOF (EXTERNAL_PLAY_PRESENCE_PROOF=1): the browser joins as `joinAt` does AND the vendor's join webhook arrives,
+ *  written by the REAL presence producer (`applyPresenceEvent`, the one the webhook receiver calls) for the fake's own peer, received
+ *  at `receivedAt` (default: the vendor's own instant, so the seat's `since` is the vendor's join and a vendor clock running ahead is
+ *  honoured, not clamped by our receipt). */
+export async function joinWithPresence(
+  w: World,
+  b: Board,
+  side: Side,
+  seat: Seat,
+  joinedAt: Date,
+  opts: { events?: ((at: string) => unknown[] | null) | null; receivedAt?: Date } = {},
+): Promise<void> {
+  joinAt(w, seat, joinedAt, opts.events ?? null);
+  const peer = peerOf(w, seat) as Peer & { id: string };
+  const [m] = await sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId} and side = ${side}`;
+  const applied = await applyPresenceEvent(
+    sql,
+    {
+      kind: "joined",
+      event: "meeting.participantJoined",
+      meetingId: m!.meeting_id,
+      sessionId: `sess-${m!.meeting_id}`,
+      peerId: peer.id,
+      customParticipantId: b[side].personId,
+      joinedAt,
+    },
+    opts.receivedAt ?? joinedAt,
+  );
+  expect(applied, "the join webhook was applied to a meeting we hold").toBe("applied");
+}
+/** The player's own page says its camera is LIVE, on `at` (the real writer, `reportOwnCamera`; it makes no vendor call). The seat
+ *  uses it to SCHEDULE a read - it skips the first-read wait - and never to seat anyone. */
+export async function pageReportsLive(b: Board, side: Side, at: Date): Promise<void> {
+  await reportOwnCamera({ kind: "session", userId: b[side].userId }, b.fixtureId, { state: "live", heartbeat: false }, { now: at, publish: async () => {} });
 }
 /** The camera comes on (the peer's report now holds the measured honest events). */
 export function cameraOn(w: World, seat: Seat, at: Date): void {
