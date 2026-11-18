@@ -502,7 +502,7 @@ async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Dat
     return { seated: true };
   }
 
-  let camera: SeatCamera;
+  let camera: SeatCameraRead;
   let cached = false;
   if (await claimEvidenceRead(mine, now)) {
     camera = await video.seatCameraEvidence({ meetingId, participantId: mine.participantId });
@@ -544,6 +544,11 @@ async function judgeSeat(a: SeatAsk, mine: SeatRead, meetingId: string, now: Dat
 
 type SeatRead = { fixtureId: string; participantId: string };
 
+/** A not-yet verdict replayed from the stored columns (`cachedEvidence`): it names no peer, because no read was made. */
+type CachedVerdict = { state: "starting"; since: Date } | { state: "unreadable"; since: Date; error: RealtimeKitError };
+/** What the seat's gate judges: a vendor read (`SeatCamera`, which names the peer and session it read) or a cached verdict. */
+type SeatCameraRead = SeatCamera | CachedVerdict;
+
 /** Claim the right to read this participant's camera at the vendor, in ONE statement so that claims racing each other —
  *  two tabs, T9's freshness check beside a poll, two machines — make one read between them. Allowed when no starting
  *  verdict is outstanding (`seat_reads = 0`: anything definite clears it) or the back-off for the reads so far has
@@ -576,7 +581,7 @@ async function claimEvidenceRead(r: SeatRead, now: Date): Promise<boolean> {
 
 /** What a read found, kept for the claims that come before the next is allowed. Only the two NOT-YET verdicts are kept;
  *  anything definite clears the cache, so a seat — or its loss — is never answered from the past. */
-async function recordEvidence(r: SeatRead, camera: SeatCamera): Promise<void> {
+async function recordEvidence(r: SeatRead, camera: SeatCameraRead): Promise<void> {
   if (camera.state === "starting" || camera.state === "unreadable") {
     // A read that finds a DIFFERENT peer than the last one (the player reloaded, so `since` is a new join) is the first
     // read of that peer: the schedule starts again at its first step (D21-fix, I1). Left to run on, a reload after a
@@ -598,7 +603,7 @@ async function recordEvidence(r: SeatRead, camera: SeatCamera): Promise<void> {
 /** The last read's verdict, for a claim that was not allowed to make its own. Nothing recorded yet means the read that
  *  holds the slot has not finished (a claim racing it, or one a deferral cut short): not yet, judged from this claim's
  *  own clock, so it neither seats nor refuses. */
-async function cachedEvidence(r: SeatRead, now: Date): Promise<SeatCamera> {
+async function cachedEvidence(r: SeatRead, now: Date): Promise<CachedVerdict> {
   const [row] = await sql<{ state: string | null; since: Date | null }[]>`
     select seat_read_state as state, seat_read_since as since from fixture_video_participants
      where fixture_id = ${r.fixtureId} and participant_id = ${r.participantId}`;

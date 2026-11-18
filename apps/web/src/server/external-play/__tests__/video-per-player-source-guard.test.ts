@@ -68,6 +68,14 @@ const BOTH_SIDES: readonly BothSides[] = [
     reason: "a re-pair makes EVERY row of the board stale at once: the select takes both, each room is ended, and each row is then deleted by its own meeting_id",
   },
   {
+    file: "external-play/video/realtimekit.ts",
+    fn: "adoptRooms",
+    table: "fixture_video_meetings",
+    times: 1,
+    reason:
+      "the board has ONE pairing and it is every unadopted room's: both players' rooms are adopted in the one statement (V529's pair check would refuse a two-step write), each row by its own primary key being the fixture's",
+  },
+  {
     file: "usecases/external-play/room-end.ts",
     fn: "endRoomAtResult",
     table: "fixture_video_meetings",
