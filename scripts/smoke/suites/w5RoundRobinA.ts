@@ -99,8 +99,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   type StageOut = { id: string; config: { round_byes?: { round_no: number; leg: number; entrant_id: string }[] } };
 
   /** A generic league of `n` entrants, generated once. */
-  async function league(label: string, n: number, compId: string | undefined = comp?.id) {
-    const divRes = await v1(owner, `/api/v1/competitions/${compId}/divisions`, "POST", {
+  async function league(label: string, n: number, compId: string | undefined = comp?.id, who = owner) {
+    const divRes = await v1(who, `/api/v1/competitions/${compId}/divisions`, "POST", {
         name: label,
         sport_key: "generic",
         variant_key: "score",
@@ -109,19 +109,19 @@ export async function w5RoundRobinASuite(): Promise<void> {
     const divId = v1data<{ id: string } | undefined>(divRes)?.id;
     const addEntrants = async (from: number, to: number) =>
       v1data<{ id: string }[] | undefined>(
-        await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        await v1(who, `/api/v1/divisions/${divId}/entrants`, "POST",
           Array.from({ length: to - from + 1 }, (_, i) => ({ kind: "individual", display_name: `${label}${from + i} ${tag}`, seed: from + i }))),
       ) ?? [];
     const entrants = await addEntrants(1, n);
     const stageId = v1data<{ id: string } | undefined>(
-      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: label }),
+      await v1(who, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: label }),
     )?.id;
-    const generate = () => v1(owner, `/api/v1/stages/${stageId}/generate`, "POST");
+    const generate = () => v1(who, `/api/v1/stages/${stageId}/generate`, "POST");
     await generate();
     const fixtures = async () =>
-      (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
+      (v1data<Fx[] | undefined>(await v1(who, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter((f) => f.stage_id === stageId);
     const stage = async () =>
-      (v1data<StageOut[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/stages`)) ?? []).find((s) => s.id === stageId);
+      (v1data<StageOut[] | undefined>(await v1(who, `/api/v1/divisions/${divId}/stages`)) ?? []).find((s) => s.id === stageId);
     /** The division POST's status and body, for a failure message (an absent division 404s every call after it). */
     const created = `division ${divRes.status} ${JSON.stringify(divRes.json).slice(0, 200)}`;
     return { divId, entrants, stageId, generate, fixtures, stage, addEntrants, created };
@@ -718,20 +718,26 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Check 16 - Task 13 (X-PO-3, X-PO-4; RB5-P5, RB5-P7): the rank override per pool, refused above the table's size and on a bracket; a
   // withdrawal takes the leaver's pin with her.
   {
-    const l = await league("Pin", 4);
+    // A THIRD org: the first one's competitions are at their caps (the module's header), as check 15 found.
+    const third = newSession();
+    await signIn(third, `delivered+w5a3_${tag}@resend.dev`);
+    const pinComp = v1data<{ id: string } | undefined>(
+      await v1(third, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR A pin ${tag}`, visibility: "private" }),
+    );
+    const l = await league("Pin", 4, pinComp?.id ?? "no-pin-competition", third);
     const [first, second] = l.entrants;
     const code = (r: { json?: unknown }) => (r.json as { error?: { code?: string } } | undefined)?.error?.code;
     const pin = (entrant: string | undefined, rank: number) =>
-      v1(owner, `/api/v1/stages/${l.stageId}/standings/override`, "POST", { rows: [{ entrant_id: entrant, rank, reason: "smoke" }] });
+      v1(third, `/api/v1/stages/${l.stageId}/standings/override`, "POST", { rows: [{ entrant_id: entrant, rank, reason: "smoke" }] });
     const over = await pin(first?.id, 5);
     const storedAfterOver = (await l.stage())?.config as { rank_overrides?: unknown[] } | undefined;
     const exact = await pin(first?.id, 4);
-    const both = await v1(owner, `/api/v1/stages/${l.stageId}/standings/override`, "POST", {
+    const both = await v1(third, `/api/v1/stages/${l.stageId}/standings/override`, "POST", {
       rows: [{ entrant_id: first?.id, rank: 4, reason: "smoke" }, { entrant_id: second?.id, rank: 3, reason: "smoke" }],
     });
-    const ko = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/divisions/${l.divId}/stages`, "POST", { seq: 2, kind: "knockout", name: "Finals" }));
-    const onKo = await v1(owner, `/api/v1/stages/${ko?.id}/standings/override`, "POST", { rows: [{ entrant_id: first?.id, rank: 1, reason: "smoke" }] });
-    const gone = await v1(owner, `/api/v1/entrants/${first?.id}/withdraw`, "POST");
+    const ko = v1data<{ id: string } | undefined>(await v1(third, `/api/v1/divisions/${l.divId}/stages`, "POST", { seq: 2, kind: "knockout", name: "Finals" }));
+    const onKo = await v1(third, `/api/v1/stages/${ko?.id}/standings/override`, "POST", { rows: [{ entrant_id: first?.id, rank: 1, reason: "smoke" }] });
+    const gone = await v1(third, `/api/v1/entrants/${first?.id}/withdraw`, "POST");
     const remaining = ((await l.stage())?.config as { rank_overrides?: { entrant_id: string }[] } | undefined)?.rank_overrides;
     const ok =
       over.status === 422 && code(over) === "RR_RANK_OVERRIDE_POOL" && storedAfterOver?.rank_overrides === undefined &&
