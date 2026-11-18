@@ -42,7 +42,7 @@ import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  DriverMisuse, RefusedCall, inSquadOrder,
+  RefusedCall, inSquadOrder,
   type AmericanoViewOut, type ChallengeOut, type CompleteOut, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";

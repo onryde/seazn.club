@@ -12,7 +12,7 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { stagesSource } from "./stages-source.ts";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { DriverMisuse, RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
+import { RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { toObservedOutcome, winnerOf, type CompleteObs, type ObservedRun, type ObservedStage } from "../lib/observed.ts";

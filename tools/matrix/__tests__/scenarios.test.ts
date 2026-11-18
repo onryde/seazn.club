@@ -484,7 +484,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
           override async completeStage(): Promise<CompleteOut> {
             const first = this.completed;
             const out = await super.completeStage();
-            return first ? answer : out;
+            return first ? { ...answer, events: [] } : out;
           }
         }
         const r = await runOn(new HalfAnswer(), "LIFECYCLE");
