@@ -36,7 +36,6 @@ import {
   promoteWaitlistedRow,
   promotionSeats,
   assertOrganiserPromotionHasRoom,
-  hasWaitingTeamEntry,
   openRegistrationSeatGateFor,
   releaseSoloSignUpPlacement,
   withdrawRegistrationOrganiser,
@@ -437,9 +436,11 @@ export async function promoteFromWaitlist(
         promoted = await promoteWaitlistedRow(tx, target.id, target.group_id, settings, seatGate);
       }
     } else {
-      // An empty queue on a full division is "nobody to promote" (null), not a refusal.
-      if (await hasWaitingTeamEntry(tx, divisionId)) await assertOrganiserPromotionHasRoom(tx, divisionId, room);
-      promoted = await promoteOldestWaitlisted(tx, divisionId, settings, undefined, seatGate);
+      // The room is judged for the entry that would actually be promoted (`beforePromote`): an empty queue on a full division is
+      // "nobody to promote" (null), not a refusal, and a solo at the head takes no team place, as on the explicit-id path.
+      promoted = await promoteOldestWaitlisted(tx, divisionId, settings, undefined, seatGate, async (picked) => {
+        if (!picked.free_agent) await assertOrganiserPromotionHasRoom(tx, divisionId, room);
+      });
     }
 
     if (promoted && !alreadySettled) {

@@ -255,6 +255,14 @@ export const PromoteRegistration = z.object({
 });
 export type PromoteRegistration = z.infer<typeof PromoteRegistration>;
 
+/** `POST /registrations/{id}/confirm` and `/waive` body (optional). Both seat a `waitlisted` (or, for confirm, `expired`) entry, so they
+ *  take the same room check as Promote: `confirm_over_capacity` lifts the division's OWN capacity refusal (409 `PROMOTE_OVER_CAPACITY`);
+ *  the plan's per-division entrant limit (422 `PROMOTE_PLAN_LIMIT`) is never lifted. An entry that already holds a place is unaffected. */
+export const ConfirmRegistration = z.object({
+  confirm_over_capacity: z.boolean().optional(),
+});
+export type ConfirmRegistration = z.infer<typeof ConfirmRegistration>;
+
 /** `POST /registrations/{id}/assign` body (RS009) — places the solo sign-up
  *  `id` onto `target_registration_id`, a team entry in the same division.
  *  `assignSoloSignUp` (registration-assign.ts) owns every rule this can

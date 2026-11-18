@@ -90,7 +90,6 @@ export { clearExpiresIfNoLongerNeeded, materialise, joinExistingEntrant } from "
 export {
   freesTeamSlot,
   assertOrganiserPromotionHasRoom,
-  hasWaitingTeamEntry,
   promoteOldestWaitlisted,
   promotionSeats,
   openPromotionSeatGate,

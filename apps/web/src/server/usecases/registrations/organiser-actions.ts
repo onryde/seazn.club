@@ -8,11 +8,11 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "../entitlement-freeze";
 import { audit } from "../audit";
-import type { RegistrationWithGroupRow } from "./types";
+import type { RegistrationWithGroupRow, Tx } from "./types";
 import { loadSettings, divisionCtx, orgReg, orgRegAfter } from "./lookups";
 import { inviteUnclaimedMembers } from "./people";
 import { materialise } from "./materialise";
-import { openRegistrationSeatGateFor, returnToWaitlist } from "./waitlist";
+import { assertOrganiserPromotionHasRoom, openRegistrationSeatGateFor, returnToWaitlist } from "./waitlist";
 import { paymentReminderMessage, payDeadlineOf } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { stripeRefund, queueRefundReceipt, recordRefundFailure, registrationRefundKey } from "./refunds";
@@ -21,10 +21,41 @@ import { queueRegistrationApprovedMails, queueRegistrationPaidMail } from "./lif
 import { remindersInWindowSql } from "./reminder-window";
 import { REMINDER_CAP_PER_DAY, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import { entryPriceCents, ownPaymentRefundedCents } from "@/lib/registration-status";
+import { getLimit } from "@/lib/entitlements";
+
+/** What an organiser's CONFIRM or WAIVE owes the division's room when it seats an entry that held no place (registration defects, fix
+ *  round 1 I1). Promote is not the only way out of the waitlist: confirming or waiving a `waitlisted` entry seats it too, and
+ *  confirming an `expired` one takes a place back. Same rule as Promote (`assertOrganiserPromotionHasRoom`): the division's own capacity
+ *  needs `confirmOverCapacity`, the plan's per-division limit never lifts. */
+export interface RoomOpts {
+  confirmOverCapacity?: boolean;
+}
+
+/** The plan's per-division entrant limit for the division `regId` sits in, asked BEFORE the transaction (the lookup uses the pooled
+ *  `sql` proxy, which a `withTenant` callback must not): null = unlimited, and for a registration that is not found, which `orgReg`
+ *  then 404s inside the transaction. */
+async function planLimitForRegistration(orgId: string, regId: string): Promise<number | null> {
+  const [r] = await sql<{ competition_id: string }[]>`
+    select d.competition_id from registrations r join divisions d on d.id = r.division_id where r.id = ${regId}`;
+  return r ? getLimit(orgId, "entrants.per_division.max", r.competition_id) : null;
+}
+
+/** Inside the seating transaction: the room check for an entry that is NOT already holding a place. A pending / paid entry holds one
+ *  (confirming it takes nothing more), and a solo sign-up never takes a team place (RS012). */
+async function assertRoomForSeating(
+  tx: Tx,
+  reg: { division_id: string; status: string; free_agent: boolean },
+  room: { planLimit: number | null; confirmOverCapacity: boolean },
+): Promise<void> {
+  if ((reg.status === "waitlisted" || reg.status === "expired") && !reg.free_agent) {
+    await assertOrganiserPromotionHasRoom(tx, reg.division_id, room);
+  }
+}
 
 /** Organiser approve (free regs and waitlist overrides). Paid-division regs
- *  must be paid first — confirming an unpaid one would gift the spot. */
-export async function confirmRegistration(auth: AuthCtx, regId: string): Promise<RegistrationWithGroupRow> {
+ *  must be paid first — confirming an unpaid one would gift the spot. A waitlisted (or expired) entry seated here is checked for room
+ *  like Promote is: 409 `PROMOTE_OVER_CAPACITY` unless `opts.confirmOverCapacity`, 422 `PROMOTE_PLAN_LIMIT` always past the plan. */
+export async function confirmRegistration(auth: AuthCtx, regId: string, opts: RoomOpts = {}): Promise<RegistrationWithGroupRow> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
   // callback — see entitlement-freeze.ts. The set is keyed on the ORG, so it
@@ -32,6 +63,7 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
   const frozen = await frozenCompetitionIds(auth.orgId);
   // The seat gate, asked out here for the same reason (online-seat-gate.ts): confirming seats the registrant.
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
+  const room = { planLimit: await planLimitForRegistration(auth.orgId, regId), confirmOverCapacity: opts.confirmOverCapacity === true };
   const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return { row: reg, mailIds: [] as string[] };
@@ -56,6 +88,7 @@ export async function confirmRegistration(auth: AuthCtx, regId: string): Promise
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     assertNotFrozen(frozen, div.competition_id);
+    await assertRoomForSeating(tx, reg, room);
     await materialise(tx, reg, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.confirmed", {
       registration_id: regId,
@@ -159,10 +192,12 @@ export async function markRegistrationPaidOffline(
   return row;
 }
 
-/** Organiser: confirm while waiving the fee (comped entry) — audited. */
+/** Organiser: confirm while waiving the fee (comped entry) — audited. A waitlisted entry waived here is checked for room like Promote
+ *  is (`RoomOpts`). */
 export async function confirmRegistrationWaived(
   auth: AuthCtx,
   regId: string,
+  opts: RoomOpts = {},
 ): Promise<RegistrationWithGroupRow> {
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
@@ -170,6 +205,7 @@ export async function confirmRegistrationWaived(
   // needs no id the transaction has not read yet, and `assertNotFrozen` is pure.
   const frozen = await frozenCompetitionIds(auth.orgId);
   const seatGate = await openRegistrationSeatGateFor(auth, regId);
+  const room = { planLimit: await planLimitForRegistration(auth.orgId, regId), confirmOverCapacity: opts.confirmOverCapacity === true };
   const { row, mailIds } = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return { row: await orgRegAfter(tx, regId), mailIds: [] as string[] };
@@ -187,6 +223,7 @@ export async function confirmRegistrationWaived(
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     assertNotFrozen(frozen, div.competition_id);
+    await assertRoomForSeating(tx, reg, room);
     await materialise(tx, reg, settings?.entrant_kind ?? "individual", seatGate);
     await audit(tx, div.competition_id, auth.orgId, "registration.fee_waived", {
       registration_id: regId,

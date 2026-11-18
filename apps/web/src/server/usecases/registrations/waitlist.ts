@@ -81,14 +81,6 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
   return (SPOT_HOLDERS as readonly string[]).includes(row.status) && !row.free_agent;
 }
 
-/** Whether `divisionId` has a team entry waiting - the oldest-first promotion's own "is there anyone to promote" question, asked
- *  before the room check so a full division with an empty queue still answers "nobody", not "over capacity". */
-export async function hasWaitingTeamEntry(tx: Tx, divisionId: string): Promise<boolean> {
-  const [row] = await tx<{ one: number }[]>`
-    select 1 as one from registrations where division_id = ${divisionId} and status = 'waitlisted' limit 1`;
-  return !!row;
-}
-
 /** The room check an ORGANISER's manual promotion owes (registration defects, item 1), run inside the promoting transaction.
  *  `promoteOldestWaitlisted` trusts its caller that a place is free, which holds for the automatic promotions (a withdrawal,
  *  rejection or expiry just made the place) and not for an organiser pressing Promote on a full division.
@@ -171,6 +163,11 @@ export async function promoteOldestWaitlisted(
   settings: RegistrationSettingsRow | null,
   excludeId?: string,
   seatGate?: RegistrationSeatGate,
+  /** The organiser's manual oldest-first promotion passes its room check here (`assertOrganiserPromotionHasRoom`): it is asked of the
+   *  entry this call is ABOUT to promote, after the seat gate has passed over whoever it refuses, and never when the queue is empty. A
+   *  solo sign-up is the caller's to wave through (it takes no team place). The automatic promotions pass nothing: the place they fill
+   *  was just freed. A refusal throws, so nothing is promoted and the transaction rolls back. */
+  beforePromote?: (picked: { id: string; free_agent: boolean }) => Promise<void>,
 ): Promise<RegistrationWithGroupRow | null> {
   // FU1: where a promotion SEATS the next in line (free, auto approval), it seats them as the settings' kind - and a kind
   // the division no longer takes (Entrant kinds narrowed since they joined) would be refused by `materialise`, failing the
@@ -194,7 +191,10 @@ export async function promoteOldestWaitlisted(
       order by ${waitlistQueueKey(tx, "r")} limit 1
       for update skip locked`;
     if (!picked) return null;
-    if (!seatGate) return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+    if (!seatGate) {
+      await beforePromote?.(picked);
+      return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+    }
     // ONLINE division: the promotion seats the registrant at once (free, auto-approval - `promotionSeats`), and the seat gate may
     // refuse them (no Lichess link that plays). That must neither fail the withdrawal / sweep / organiser act that freed the spot
     // nor leave the head of the queue stuck: offer the spot to the next in line. Hold-and-notify is not an option - an entry
@@ -212,6 +212,7 @@ export async function promoteOldestWaitlisted(
       skipped.push(picked.id);
       continue;
     }
+    await beforePromote?.(picked);
     try {
       return await tx.savepoint((sp) => promoteWaitlistedRow(sp, picked.id, picked.group_id, settings, seatGate));
     } catch (err) {

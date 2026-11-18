@@ -58316,7 +58316,7 @@
     },
     "/api/v1/registrations/{id}/confirm": {
       "post": {
-        "summary": "Approve: materialise the entrant (idempotent)",
+        "summary": "Approve: materialise the entrant (idempotent). Seating a waitlisted or expired entry takes the same room check as Promote: 409 PROMOTE_OVER_CAPACITY unless confirm_over_capacity is true; 422 PROMOTE_PLAN_LIMIT past the plan's per-division entrant limit, always",
         "tags": [
           "registration"
         ],
@@ -58332,6 +58332,25 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_over_capacity": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "confirm_over_capacity": true
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -58702,6 +58721,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -59286,7 +59349,7 @@
     },
     "/api/v1/registrations/{id}/waive": {
       "post": {
-        "summary": "Confirm without payment (fee waived, audited)",
+        "summary": "Confirm without payment (fee waived, audited). Waiving a waitlisted entry takes the same room check as Promote: 409 PROMOTE_OVER_CAPACITY unless confirm_over_capacity is true; 422 PROMOTE_PLAN_LIMIT past the plan's per-division entrant limit, always",
         "tags": [
           "registration"
         ],
@@ -59302,6 +59365,25 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_over_capacity": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "confirm_over_capacity": true
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -59672,6 +59754,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {

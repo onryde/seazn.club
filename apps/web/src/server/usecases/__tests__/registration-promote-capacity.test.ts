@@ -13,21 +13,28 @@ import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { walletIdFor } from "@/lib/credits";
 import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
-import { promoteFromWaitlist, withdrawRegistration } from "../registration-approval";
-import { putRegistrationSettings, type RegistrationRow } from "../registrations";
+import { approveRegistration, promoteFromWaitlist, withdrawRegistration } from "../registration-approval";
+import {
+  confirmRegistration,
+  confirmRegistrationWaived,
+  markRegistrationPaidOffline,
+  putRegistrationSettings,
+  type RegistrationRow,
+} from "../registrations";
 import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const PLAN_KEY = "entrants.per_division.max";
 const FEES = { fee_cents: 0, currency: "gbp", payment_method: "offline" as const };
 
-async function setup(o: { capacity: number | null; planLimit?: number | null }) {
+async function setup(o: { capacity: number | null; planLimit?: number | null; approval?: "manual" | "auto" }) {
   const { orgId, ownerId } = await seedOrg("pro");
   const owner = asOwner(orgId, ownerId);
   const { competition, division } = await rig(owner);
   await putRegistrationSettings(owner, division.id, { ...SETTINGS_BASE, payment_method: "offline", fee_cents: 0, capacity: o.capacity });
-  // Manual approval: a promoted entry lands `pending` and holds a place, with no seat gate or entrant in the way of the count.
-  await sql`update registration_settings set approval = 'manual' where division_id = ${division.id}`;
+  // Manual approval (the default): a promoted entry lands `pending` and holds a place, with no seat gate or entrant in the way of the
+  // count. `approval: "auto"` is the other path (M4): a free promotion then CONFIRMS inline and seats an entrant.
+  await sql`update registration_settings set approval = ${o.approval ?? "manual"} where division_id = ${division.id}`;
   if (o.planLimit !== undefined) {
     // The per-division limit lowered (or lifted) after capacity was saved: the production shape of a plan tighter than capacity.
     await sql`
@@ -269,6 +276,203 @@ describe.skipIf(!HAS_DB)("promoteFromWaitlist - the organiser's room check (regi
     expect((await promoteFromWaitlist(owner, division.id, { registrationId: first.registration.id }))!.status).toBe("pending");
     const second = await seedRegistration(competition.id, division.id, FEES, { status: "waitlisted", displayName: "Bare 2" });
     await expect(promoteFromWaitlist(owner, division.id, { registrationId: second.registration.id })).rejects.toMatchObject({
+      status: 422,
+      code: PROMOTE_PLAN_LIMIT_CODE,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1, I1: the OTHER doors from outside a place-holding status into one. `confirmRegistration` and `confirmRegistrationWaived`
+// (POST /registrations/{id}/confirm and /waive) both accept a `waitlisted` entry and seat it; before the guard they did so on a full
+// division with no check at all (reachable through the API, no console button). Same rule as Promote: the division's own capacity needs
+// the confirmation, the plan limit never lifts.
+// ---------------------------------------------------------------------------------------------------------------------------------
+const DOORS = [
+  ["confirmRegistration", confirmRegistration],
+  ["confirmRegistrationWaived", confirmRegistrationWaived],
+] as const;
+
+describe.skipIf(!HAS_DB)("confirm / waive of a waitlisted entry - the same room check as Promote (fix round 1 I1)", () => {
+  for (const [name, door] of DOORS) {
+    it(`${name}: under capacity seats the entry with no confirmation`, async () => {
+      const t = await setup({ capacity: 3, planLimit: null });
+      await t.fill(2);
+      const waiting = await t.seed("waitlisted", "Waiting");
+      expect((await door(t.owner, waiting)).status).toBe("confirmed");
+      expect(await t.holders()).toBe(3);
+    });
+
+    it(`${name}: at capacity, no confirmation: refused 409 PROMOTE_OVER_CAPACITY and nothing is written`, async () => {
+      const t = await setup({ capacity: 2, planLimit: null });
+      await t.fill(2);
+      const waiting = await t.seed("waitlisted", "Waiting");
+      await expect(door(t.owner, waiting)).rejects.toMatchObject({
+        status: 409,
+        code: PROMOTE_OVER_CAPACITY_CODE,
+        extra: { capacity: 2, taken: 2 },
+      });
+      expect(await t.statusOf(waiting)).toBe("waitlisted");
+      expect(await t.holders()).toBe(2);
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from registrations where id = ${waiting} and entrant_id is not null`;
+      expect(n, "no entrant was seated").toBe(0);
+    });
+
+    it(`${name}: at capacity WITH confirmation seats it (the organiser chose to overfill)`, async () => {
+      const t = await setup({ capacity: 2, planLimit: null });
+      await t.fill(2);
+      const waiting = await t.seed("waitlisted", "Waiting");
+      expect((await door(t.owner, waiting, { confirmOverCapacity: true })).status).toBe("confirmed");
+      expect(await t.holders()).toBe(3);
+    });
+
+    it(`${name}: at the PLAN limit refused 422 PROMOTE_PLAN_LIMIT even with confirmation`, async () => {
+      const t = await setup({ capacity: 10, planLimit: 2 });
+      const limit = (await t.planLimit())!;
+      await t.fill(limit);
+      const waiting = await t.seed("waitlisted", "Waiting");
+      await expect(door(t.owner, waiting, { confirmOverCapacity: true })).rejects.toMatchObject({
+        status: 422,
+        code: PROMOTE_PLAN_LIMIT_CODE,
+        extra: { limit, taken: limit },
+      });
+      expect(await t.statusOf(waiting)).toBe("waitlisted");
+    });
+
+    it(`${name}: a waitlisted SOLO takes no team place, so a full division does not stop it`, async () => {
+      const t = await setup({ capacity: 1, planLimit: null });
+      await t.fill(1);
+      const solo = await t.seed("waitlisted", "Solo", { freeAgent: true });
+      expect((await door(t.owner, solo)).status).toBe("confirmed");
+      expect(await t.holders()).toBe(1);
+    });
+
+    it(`${name}: a PENDING entry already holds its place, so confirming it on a full division needs no confirmation`, async () => {
+      const t = await setup({ capacity: 1, planLimit: null });
+      const pending = await t.seed("pending", "Pending holder");
+      expect(await t.holders(), "premise: the division is full by this very entry").toBe(1);
+      expect((await door(t.owner, pending)).status).toBe("confirmed");
+    });
+
+    it(`${name}: sequence - the second call after a refusal and a confirmed retry is an idempotent no-op`, async () => {
+      const t = await setup({ capacity: 1, planLimit: null });
+      await t.fill(1);
+      const waiting = await t.seed("waitlisted", "Waiting");
+      await expect(door(t.owner, waiting)).rejects.toMatchObject({ status: 409 });
+      await door(t.owner, waiting, { confirmOverCapacity: true });
+      expect((await door(t.owner, waiting)).status, "already confirmed: no second refusal").toBe("confirmed");
+      expect(await t.holders()).toBe(2);
+    });
+  }
+
+  it("confirmRegistration: an EXPIRED entry is not a holder either - confirming it again is a new place, guarded the same way", async () => {
+    const t = await setup({ capacity: 1, planLimit: null });
+    await t.fill(1);
+    const expired = await t.seed("expired", "Late");
+    await expect(confirmRegistration(t.owner, expired)).rejects.toMatchObject({ status: 409, code: PROMOTE_OVER_CAPACITY_CODE });
+    expect(await t.statusOf(expired)).toBe("expired");
+    expect((await confirmRegistration(t.owner, expired, { confirmOverCapacity: true })).status).toBe("confirmed");
+  });
+
+  it("the doors that never reached a waitlisted entry stay shut: approve and mark-paid refuse it", async () => {
+    const t = await setup({ capacity: 1, planLimit: null });
+    await t.fill(1);
+    const waiting = await t.seed("waitlisted", "Waiting");
+    await expect(approveRegistration(t.owner, waiting)).rejects.toMatchObject({ status: 422 });
+    await expect(markRegistrationPaidOffline(t.owner, waiting)).rejects.toMatchObject({ status: 422 });
+    expect(await t.statusOf(waiting)).toBe("waitlisted");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1, M1: the oldest-first path and the explicit-id path agree on a SOLO. A solo sign-up takes no team place, so promoting one
+// is never refused for a full division; the guard judges the entry that would actually be promoted, not "is any team waiting".
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("oldest-first promotion judges the entry it would promote (fix round 1 M1)", () => {
+  it("a SOLO-ONLY queue on a full division: oldest-first promotes it, exactly as the explicit-id path does", async () => {
+    const t = await setup({ capacity: 1, planLimit: null });
+    await t.fill(1);
+    const solo = await t.seed("waitlisted", "Solo", { freeAgent: true });
+    const viaId = await promoteFromWaitlist(t.owner, t.division.id, { registrationId: solo });
+    expect(viaId!.id, "premise: the explicit-id path allows a solo").toBe(solo);
+    // Same shape again for the oldest-first path.
+    const solo2 = await t.seed("waitlisted", "Solo 2", { freeAgent: true });
+    const viaOldest = await promoteFromWaitlist(t.owner, t.division.id);
+    expect(viaOldest!.id).toBe(solo2);
+    expect(await t.holders(), "no team place was taken").toBe(1);
+  });
+
+  it("a queue whose HEAD is a solo and whose second is a team: oldest-first promotes the solo with no confirmation, the team stays waiting", async () => {
+    const t = await setup({ capacity: 1, planLimit: null });
+    await t.fill(1);
+    const solo = await t.seed("waitlisted", "Solo first", { freeAgent: true });
+    const team = await t.seed("waitlisted", "Team second");
+    expect((await promoteFromWaitlist(t.owner, t.division.id))!.id).toBe(solo);
+    expect(await t.statusOf(team)).toBe("waitlisted");
+    // The team is the head now: a full division refuses it.
+    await expect(promoteFromWaitlist(t.owner, t.division.id)).rejects.toMatchObject({ status: 409, code: PROMOTE_OVER_CAPACITY_CODE });
+  });
+
+  it("a queue whose HEAD is a team on a full division: oldest-first still refuses", async () => {
+    const t = await setup({ capacity: 1, planLimit: null });
+    await t.fill(1);
+    const team = await t.seed("waitlisted", "Team first");
+    await t.seed("waitlisted", "Solo second", { freeAgent: true });
+    await expect(promoteFromWaitlist(t.owner, t.division.id)).rejects.toMatchObject({ status: 409 });
+    expect(await t.statusOf(team)).toBe("waitlisted");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Fix round 1, M4: every case above is manual approval (a promotion lands `pending`). The AUTO path confirms a free promotion inline and
+// seats an entrant; the count must hold there too.
+// ---------------------------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("promotion on an AUTO-approval division confirms inline and is counted the same (fix round 1 M4)", () => {
+  it("under capacity: promotes straight to confirmed", async () => {
+    const t = await setup({ capacity: 3, planLimit: null, approval: "auto" });
+    await t.fill(2);
+    const waiting = await t.seed("waitlisted", "Waiting");
+    expect((await promoteFromWaitlist(t.owner, t.division.id, { registrationId: waiting }))!.status).toBe("confirmed");
+    expect(await t.holders()).toBe(3);
+  });
+
+  it("at capacity: refused without confirmation (nothing seated), confirmed with it, and the next one is refused again", async () => {
+    const t = await setup({ capacity: 2, planLimit: null, approval: "auto" });
+    await t.fill(2);
+    const a = await t.seed("waitlisted", "A");
+    await expect(promoteFromWaitlist(t.owner, t.division.id, { registrationId: a })).rejects.toMatchObject({ status: 409 });
+    expect(await t.statusOf(a)).toBe("waitlisted");
+    expect((await promoteFromWaitlist(t.owner, t.division.id, { registrationId: a, confirmOverCapacity: true }))!.status).toBe("confirmed");
+    expect(await t.holders()).toBe(3);
+    const b = await t.seed("waitlisted", "B");
+    await expect(promoteFromWaitlist(t.owner, t.division.id, { registrationId: b })).rejects.toMatchObject({ status: 409, extra: { taken: 3 } });
+  });
+
+  // The OLDEST-FIRST default (no id) on an auto-approval division takes the seat-gate branch of `promoteOldestWaitlisted`, a different
+  // call site of the room check from the manual-approval one above.
+  it("oldest-first at capacity: a team head is refused without confirmation, then promoted (confirmed) with it", async () => {
+    const t = await setup({ capacity: 2, planLimit: null, approval: "auto" });
+    await t.fill(2);
+    const head = await t.seed("waitlisted", "Head");
+    await expect(promoteFromWaitlist(t.owner, t.division.id, {})).rejects.toMatchObject({ status: 409, code: PROMOTE_OVER_CAPACITY_CODE });
+    expect(await t.statusOf(head)).toBe("waitlisted");
+    expect((await promoteFromWaitlist(t.owner, t.division.id, { confirmOverCapacity: true }))!.id).toBe(head);
+    expect(await t.statusOf(head)).toBe("confirmed");
+  });
+
+  it("oldest-first at capacity: a SOLO head takes no place, so it is promoted unrefused", async () => {
+    const t = await setup({ capacity: 2, planLimit: null, approval: "auto" });
+    await t.fill(2);
+    const solo = await t.seed("waitlisted", "Solo", { freeAgent: true });
+    expect((await promoteFromWaitlist(t.owner, t.division.id, {}))!.id).toBe(solo);
+    expect(await t.statusOf(solo)).toBe("confirmed");
+  });
+
+  it("at the plan limit: refused 422 even confirmed", async () => {
+    const t = await setup({ capacity: null, planLimit: 2, approval: "auto" });
+    await t.fill(2);
+    const a = await t.seed("waitlisted", "A");
+    await expect(promoteFromWaitlist(t.owner, t.division.id, { registrationId: a, confirmOverCapacity: true })).rejects.toMatchObject({
       status: 422,
       code: PROMOTE_PLAN_LIMIT_CODE,
     });
