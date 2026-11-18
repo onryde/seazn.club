@@ -151,7 +151,7 @@ import { QUICK_MATCH_SWEEP_LIMIT, sweepQuickMatches, type QuickMatchSweepReport 
 import { hashVisitorKey, mintVisitorKey } from "../quick-match-tokens";
 import { completeStage } from "../stages";
 import { firstRallyFor, playToDecided } from "./_quick-match-probe";
-import { expectAllPresent, expectNoOrphans, idsOf, rowsRecorded, tablesRecorded } from "./_quick-match-orphans";
+import { expectAllPresent, expectNoOrphans, idsOf, rowsRecorded, seedPresenceForMatch, tablesRecorded } from "./_quick-match-orphans";
 import { playCircle } from "./_quick-match-results";
 import { makeUser } from "./_seed";
 
@@ -1015,11 +1015,15 @@ describe.skipIf(!HAS_DB)("the expiry leaves no orphan row in any table (§7.8, E
     };
     const doomed = await played(address(`orphans-${sportKey}`));
     const neighbour = await played(null);
+    // A presence row (V527) names a person with no foreign key: one on each match's fixture, so the delete's purge is proven and a
+    // neighbour's is proven untouched.
+    await seedPresenceForMatch(doomed);
+    await seedPresenceForMatch(neighbour);
 
     const probes = await idsOf(doomed);
     const tables = tablesRecorded(probes);
     // A scored, emailed quick match holds rows in at least these (anti-vacuity on the shape, not only on the count).
-    for (const t of ["competitions", "divisions", "stages", "entrants", "fixtures", "score_events", "match_states", "device_links", "quick_matches", "email_outbox"]) {
+    for (const t of ["competitions", "divisions", "stages", "entrants", "fixtures", "score_events", "match_states", "device_links", "quick_matches", "email_outbox", "fixture_video_presence"]) {
       expect(tables, `the match held rows in ${t} before its delete`).toContain(t);
     }
     const kept = await idsOf(neighbour);

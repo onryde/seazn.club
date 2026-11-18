@@ -80,7 +80,7 @@ import { listQuickMatchSports } from "@/server/usecases/quick-match-sports";
 import { hashVisitorKey, mintVisitorKey } from "@/server/usecases/quick-match-tokens";
 import { playToDecided } from "@/server/usecases/__tests__/_quick-match-probe";
 import { scoreEvent } from "@/server/usecases/scoring";
-import { expectAllPresent, expectNoOrphans, idsOf, tablesRecorded } from "@/server/usecases/__tests__/_quick-match-orphans";
+import { expectAllPresent, expectNoOrphans, idsOf, seedPresenceForMatch, tablesRecorded } from "@/server/usecases/__tests__/_quick-match-orphans";
 import { addressFor, createTypedMatch, deleteMadeMatches, saveStateOf } from "@/server/usecases/__tests__/_quick-match-save-rig";
 import { deleteMyQuickMatch, renameMyQuickMatch, type OwnerAnswer } from "@/components/quick-match/my-list-requests";
 import ImpersonatePage from "@/app/admin/impersonate/page";
@@ -438,9 +438,11 @@ describe.skipIf(!HAS_DB)("DELETE /api/quick-match/<id>: the saver deletes", () =
       await playFirst(qm);
       expect(await saveQuickMatchForUser(me, qm.id)).toBe("saved");
       const neighbour = await createOf(sportKey);
+      await seedPresenceForMatch(qm); // V527: a presence row names a person with no foreign key; the delete must purge it
+      await seedPresenceForMatch(neighbour);
       const probes = await idsOf(qm);
       // A played quick match holds rows in at least these (anti-vacuity on the shape, not only on the count).
-      for (const t of ["competitions", "divisions", "stages", "entrants", "fixtures", "score_events", "match_states", "device_links", "quick_matches"]) {
+      for (const t of ["competitions", "divisions", "stages", "entrants", "fixtures", "score_events", "match_states", "device_links", "quick_matches", "fixture_video_presence"]) {
         expect(tablesRecorded(probes), `the match held rows in ${t} before its delete`).toContain(t);
       }
       const kept = await idsOf(neighbour);

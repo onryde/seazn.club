@@ -73,3 +73,24 @@ create table realtimekit_ended_sessions (
 create index realtimekit_ended_sessions_received_idx on realtimekit_ended_sessions (received_at); -- retention (Task 10b)
 alter table realtimekit_ended_sessions enable row level security;
 alter table realtimekit_ended_sessions force  row level security;
+
+-- A presence row carries a person's id (`custom_participant_id`: a player's person id, an arbiter's user id and a nonce) and has NO
+-- foreign key (above), so no cascade removes it with its board. Without this, a quick match, competition or organisation delete
+-- (and a stage delete, a Rebuild, a reshaped round: every path that deletes a fixture) would leave person ids in a sealed table for
+-- up to 30 days (Task 10b's age prune). The purge is the delete's own: a trigger on `fixtures`, which fires for a cascaded delete as
+-- for a direct one. A meeting row deleted on its own (a re-pair) is NOT a fixture delete, so its rows stay ("never dropped" above).
+-- Security definer with a pinned search_path, the V460 shape: the delete that fires it may run as app_user, which holds no grant on
+-- this sealed table. It deletes only the rows of the fixture being deleted and returns nothing (an AFTER trigger's result is ignored).
+-- (A person or user deleted on its own is not covered: its rows are pseudonymous and the age prune takes them within 30 days.)
+create function purge_fixture_video_presence() returns trigger
+  language plpgsql security definer
+  set search_path = ${flyway:defaultSchema}, pg_temp as $$
+begin
+  delete from fixture_video_presence where fixture_id = old.id;
+  return null;
+end $$;
+
+create trigger fixtures_purge_video_presence
+  after delete on fixtures
+  for each row
+  execute function purge_fixture_video_presence();

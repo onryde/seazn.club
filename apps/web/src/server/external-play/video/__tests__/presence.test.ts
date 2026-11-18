@@ -15,7 +15,9 @@ import { randomUUID } from "node:crypto";
 import fc from "fast-check";
 import type postgres from "postgres";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { deleteCompetition } from "@/server/usecases/competitions";
 import { log } from "@/server/logger";
 import type { RealtimeKitEvent } from "../webhook-event";
 import {
@@ -1144,5 +1146,72 @@ describe.skipIf(!DB)("prunePresence (retention)", () => {
     await inRolledBackTx(async (tx) => {
       expect(await prunePresence(tx, NOW)).toEqual({ deliveries: 0, presence: 0, endedSessions: 0 });
     });
+  });
+});
+
+// ─── presence rows die with their fixture (V527's trigger on `fixtures`) ────────────────────────────────────────────────
+
+// A row carries a person's UUID (custom_participant_id) and has no foreign key, so nothing cascades it: a trigger on `fixtures`
+// purges it in the deleting transaction (security definer, like V460's: the deletes run as app_user, which holds no grant on the
+// sealed table). Every delete path reaches it - a fixture delete, a competition delete, the cascades above them. A meeting-row
+// delete (a re-pair) is NOT a fixture delete: the row must survive it (§6.2, "never dropped").
+describe.skipIf(!DB)("presence rows are purged with their fixture", () => {
+  const owner = (b: { orgId: string; ownerUserId: string }) => ({ orgId: b.orgId, via: "session", userId: b.ownerUserId, role: "owner", keyId: null }) as AuthCtx;
+  /** Both players join their own room, through the REAL writer: two rows, each carrying the board's fixture id. */
+  async function joined(b: Awaited<ReturnType<typeof board>>) {
+    const home = peer();
+    const away = peer();
+    await applyPresenceEvent(sql, joinedEv({ meetingId: b.homeMeeting, peerId: home, custom: b.home.personId, joinedAt: at(0) }), at(SEC));
+    await applyPresenceEvent(sql, joinedEv({ meetingId: b.awayMeeting, peerId: away, custom: b.away.personId, joinedAt: at(0) }), at(SEC));
+    return { home, away };
+  }
+  const rowsOfFixture = async (fixtureId: string) =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_presence where fixture_id = ${fixtureId}`)[0]!.n;
+
+  it("a fixture deleted by the tenant role takes its presence rows with it, and a neighbour board's rows stay", async () => {
+    const doomed = await board();
+    const neighbour = await board();
+    await joined(doomed);
+    await joined(neighbour);
+    expect([await rowsOfFixture(doomed.fixtureId), await rowsOfFixture(neighbour.fixtureId)], "premise: two rows each").toEqual([2, 2]);
+
+    await withTenant(doomed.orgId, async (tx) => {
+      await tx`delete from fixtures where id = ${doomed.fixtureId}`;
+    });
+
+    expect(await rowsOfFixture(doomed.fixtureId), "the deleted board's rows are gone").toBe(0);
+    expect(await rowsOfFixture(neighbour.fixtureId), "the neighbour's rows are untouched").toBe(2);
+  });
+
+  it("a competition deleted through the product's usecase cascades to the same purge", async () => {
+    const doomed = await board();
+    const neighbour = await board();
+    await joined(doomed);
+    await joined(neighbour);
+    expect(await rowsOfFixture(doomed.fixtureId), "premise: two rows").toBe(2);
+
+    await deleteCompetition(owner(doomed), doomed.competitionId);
+
+    expect(await sql`select 1 from fixtures where id = ${doomed.fixtureId}`, "premise: the fixture went with its competition").toHaveLength(0);
+    expect(await rowsOfFixture(doomed.fixtureId), "no presence row of the deleted competition's board is left").toBe(0);
+    expect(await rowsOfFixture(neighbour.fixtureId)).toBe(2);
+    parkedMade.push(doomed.homeMeeting, doomed.awayMeeting); // the cascade parked both rooms (V460)
+  });
+
+  it("a meeting row deleted on its own (a re-pair) is no fixture delete: the presence rows stay", async () => {
+    const b = await board();
+    await joined(b);
+    await sql`delete from fixture_video_meetings where meeting_id = ${b.homeMeeting}`;
+    parkedMade.push(b.homeMeeting);
+    expect(await rowsOfFixture(b.fixtureId), "both rows survive the meeting's delete").toBe(2);
+  });
+
+  it("a fixture with no presence row deletes without a word (the empty case)", async () => {
+    const b = await board();
+    expect(await rowsOfFixture(b.fixtureId), "premise: none").toBe(0);
+    await withTenant(b.orgId, async (tx) => {
+      await tx`delete from fixtures where id = ${b.fixtureId}`;
+    });
+    expect(await sql`select 1 from fixtures where id = ${b.fixtureId}`).toHaveLength(0);
   });
 });
