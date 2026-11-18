@@ -41,7 +41,7 @@ import type { SessionDeps } from "../stream-sessions/deps";
 import { postBeat } from "../capture-phone";
 import { courtStreamsForDay, linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { ensureStreamCode, lockFixtureCode, reissueStreamCode } from "../stream-codes";
-import { wipeStreamCodeTok } from "@/server/relay/secret-columns";
+import { openStreamCodeTok, wipeStreamCodeTok } from "@/server/relay/secret-columns";
 import { streamPhone } from "../stream-phone";
 import { place, seedDay, type Day } from "./_match-day-seed";
 
@@ -75,8 +75,12 @@ const settingsOf = async (fixtureId: string) => {
 };
 const activeCodes = async (fixtureId: string) =>
   (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_codes where fixture_id = ${fixtureId} and ended_at is null`)[0]!.n;
-const codesOf = (fixtureId: string) => sql<{ id: string; ended_at: Date | null; end_cause: string | null; ended_by: string | null; sealed: boolean }[]>`
-  select id, ended_at, end_cause, ended_by, tok_enc is not null as sealed from fixture_stream_codes where fixture_id = ${fixtureId} order by created_at`;
+/** Each code of the match, `sealed` read through the relay's own opener (r3: no stream column is named outside server/relay). */
+const codesOf = async (fixtureId: string) => {
+  const rows = await sql<{ id: string; ended_at: Date | null; end_cause: string | null; ended_by: string | null }[]>`
+    select id, ended_at, end_cause, ended_by from fixture_stream_codes where fixture_id = ${fixtureId} order by created_at`;
+  return Promise.all(rows.map(async (r) => ({ ...r, sealed: (await sql.begin((tx) => openStreamCodeTok(tx, r.id))) !== null })));
+};
 /** §6.9's present window is at most max(60 s, 60 s far cadence + 30 s) = 90 s: ten minutes is silent at any cadence. */
 const SILENT_AGO_MS = 10 * 60_000;
 const NO_DRIVERS = new Proxy({}, { get: () => { throw new Error("no driver is reachable from a beat on an ended code"); } }) as SessionDeps["drivers"];
