@@ -2807,8 +2807,10 @@ export function classifyActError(
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
     return { tone: "warning", text: knockoutRefusalText(err.code, err.extra, msg), refresh: false };
   }
-  // W5 T12b (X-BD-8, RB5-E6): a cut the field cannot supply (Generate before Start, or the completion that tried to seed it) says so in
-  // the reader's language, naming the largest cut that works. Amber: the stage stands, the format or the field is what to mend.
+  // W5 T12b (X-BD-8, RB5-E6): a cut the field cannot supply, refused at Generate before Start or at an on_complete completion, says so
+  // in the reader's language, naming the largest cut that works. Amber: the stage stands, the format or the field is what to mend. A
+  // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED (completion.ts, not yet passing the
+  // code through) and is not localized by this branch.
   if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
     return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
   }

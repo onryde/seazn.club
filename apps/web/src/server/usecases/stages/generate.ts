@@ -169,9 +169,9 @@ async function generateStageFixturesWrite(
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
       // W5 T12b (X-BD-8): a `timing: "setup"` stage is drawn off the shape of the cut it takes, so a cut the roster cannot supply is
-      // refused here by name, before a placeholder line is written. Before Start only: after it a withdrawal is the table's to settle.
+      // refused here by name, before a placeholder line is written (`refuseCutBeyondField` holds only before Start).
       if (progression.timing === "setup") {
-        if (stage.division_status !== "active") await refuseCutBeyondField(tx, stage.division_id);
+        await refuseCutBeyondField(tx, stage.division_id);
         return { seeded: true as const };
       }
       if (Array.isArray(stage.config.qualified)) return null;

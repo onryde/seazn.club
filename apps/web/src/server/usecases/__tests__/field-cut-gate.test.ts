@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
 import type { SourceShape, SourceTables, StandingsRow, TakeRule } from "@seazn/engine/competition";
-import { sql } from "@/lib/db";
+import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { appendEvent } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -16,8 +16,10 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
-import { completeStage, computeSeedProposal, createStages, generateStageFixtures } from "../stages";
+import { completeStage, computeSeedProposal, createStages, generateStageFixtures, rebuildStageFixtures } from "../stages";
+import { withdrawEntrantCascade } from "../withdrawal";
 import { refuseCutBeyondTables } from "../stages/cut-gate";
+import { refuseFormatTooSmall } from "../stages";
 import { cutEligiblePools } from "../stage-seeding";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -144,6 +146,34 @@ describe.skipIf(!HAS_DB)("X-BD-8 setup path: a cut the roster cannot supply is r
     await sql`update divisions set status = 'active' where id = ${r.divisionId}`;
     const out = await generateStageFixtures(r.auth, r.stageIds[1]!);
     expect(out.created).toBeGreaterThan(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("X-BD-8 the gate holds before Start only: Rebuild is refused on a cut over the field, and allowed after a withdrawal once the division runs", () => {
+  // differential (review I2): the cut half sat inside `refuseFormatTooSmall`, which Rebuild asks unconditionally, so after Start a withdrawal
+  // (a Top 6 of 6, now 5 on the roster) made Rebuild refuse "6 can't qualify from this field". After Start the table settles it (B3: departed rows stay).
+  it("X-BD-8 before Start: Rebuild of the root league is refused naming 6 (a Top 8 of 6), and the stage is untouched", async () => {
+    const r = await rig(6, LEAGUE_KO([{ kind: "rankRange", from: 1, to: 8 }]), BADMINTON);
+    await generateStageFixtures(r.auth, r.stageIds[0]!);
+    const before = await fixtureCount(r.stageIds[0]!);
+    expect(before, "premise: the league is drawn").toBeGreaterThan(0);
+    const err = await refusal(rebuildStageFixtures(r.auth, r.stageIds[0]!));
+    expect(err.code).toBe("RR_CUT_EXCEEDS_FIELD");
+    expect(err.extra).toMatchObject({ qualified: 8, max: 6 });
+    expect(await fixtureCount(r.stageIds[0]!)).toBe(before);
+  });
+
+  it("X-BD-8 after Start, with a withdrawal that leaves the roster under the cut: Rebuild is allowed (a Top 6 of 6, one leaves)", async () => {
+    const r = await rig(6, LEAGUE_KO([{ kind: "rankRange", from: 1, to: 6 }]), BADMINTON);
+    expect((await startDivision(r.auth, r.divisionId)).started).toBe(true);
+    await withdrawEntrantCascade(r.auth, r.entrantIds[5]!);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${r.divisionId} and status in ('registered', 'confirmed')`;
+    expect(n, "premise: the roster is now 5, under the cut of 6").toBe(5);
+    // The door every pre-draw call asks: it answers, where it refused this field naming 6 before the fix. (Rebuild itself then refuses for the
+    // withdrawal's own recorded walkover - a different, older rule - so the door is asked directly as well as through Rebuild.)
+    await withTenant(r.auth.orgId, (tx) => refuseFormatTooSmall(tx, r.divisionId));
+    const err = await refusal(rebuildStageFixtures(r.auth, r.stageIds[0]!));
+    expect(err.code, "Rebuild's refusal, if any, is not the cut's").not.toBe("RR_CUT_EXCEEDS_FIELD");
   });
 });
 

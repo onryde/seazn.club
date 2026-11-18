@@ -97,7 +97,8 @@ describe("Step 0 — the product's multi-stage shape, pinned", () => {
     // The 409 a /complete answers when the stage committed and its next stage's seeding failed (:4239-4252).
     expect(stages).toMatch(/throw new HttpError\(\s*409,\s*err instanceof Error \? err\.message : String\(err\),\s*"STAGE_COMPLETED_SEEDING_FAILED"/);
     // Every later setup stage's generate short-circuits to the idempotent setup path (FP-1: it never refuses after the source completes).
-    expect(stages).toMatch(/if \(progression\.timing === "setup"\) return \{ seeded: true as const \};/);
+    // W5 T12b: the branch is a block now - it asks the cut gate first, which holds only before Start - and still returns that path.
+    expect(stages).toMatch(/if \(progression\.timing === "setup"\) \{\s*(?:\/\/[^\n]*\s*)*await refuseCutBeyondField\(tx, stage\.division_id\);\s*return \{ seeded: true as const \};\s*\}/);
     // A departed qualifier is filtered, not closed up (FP-2).
     expect(stages).toMatch(/const computedQualifiers = resolvedQualifiers\.filter\(\(q\) => !departed\.has\(q\.entrantId\)\);/);
   });

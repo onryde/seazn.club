@@ -11,8 +11,13 @@ import { isCutTableKind, stageGraphCutIssue, takeCutIssue, type CutGraphStage } 
 import { roundRobinRefusal } from "../roundrobin-refusal";
 import type { Tx } from "./types";
 
-/** The division's stored stage graph judged against its active roster (the field the generators read: registered and confirmed). */
+/** The division's stored stage graph judged against its active roster (the field the generators read: registered and confirmed).
+ *  BEFORE START ONLY - the one guard of that rule, so every door that asks (Start, Generate, Rebuild, the late-entry rebuild, a setup
+ *  stage's Generate) holds it alike: after Start a withdrawal is the table's to settle (departed rows stay and rank last), so a cut
+ *  equal to the original field is not refused for the one who left. */
 export async function refuseCutBeyondField(tx: Tx, divisionId: string): Promise<void> {
+  const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${divisionId}`;
+  if (division?.status === "active") return;
   const stages = await tx<{ id: string; kind: string; config: Record<string, unknown>; progression: unknown }[]>`
     select id, kind, config, progression from stages where division_id = ${divisionId} order by seq`;
   const [{ n }] = await tx<{ n: number }[]>`
