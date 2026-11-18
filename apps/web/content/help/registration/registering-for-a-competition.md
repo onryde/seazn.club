@@ -1,37 +1,67 @@
 ---
 title: Registering for a competition
-description: The sign-up cart, joining a teammate's entry, your consent choices, and paying online.
+description: The sign-up cart, joining a teammate's entry, your consent choices and what happens after you enter.
 order: 6
+related: registration/reference-numbers, registration/waitlist, registration/youth, registration/card-payments
 ---
 
-Opening a competition's **Register** button walks you through up to five short steps: **Who**, **Entries**, **Details**, **Consent** and **Review**. If the competition has only one division and it takes individual entries, Entries is skipped for you — there's nothing to choose. Your answers are saved as you go, so refreshing or coming back later picks up where you left off.
+Open a competition's **Register** page and you move through up to five short steps: **Contact**, **Entries**, **Details**, **Consent** and **Review**. If the competition has one division and it takes individual entries, **Entries** is skipped, because there is nothing to choose. Refreshing the page keeps your answers.
 
 ## Your cart
 
-Registration is cart-based: add every team or entry you're signing up for a competition — yourself, your partner, a whole squad, even entries in different divisions — and pay for all of them in one go at the end, rather than once per entry. **Add another** on a division you've already entered starts a second entry in it; **Remove** drops one from the cart before you submit.
+You can add every team or entry you are signing up for in one go. That can be yourself, a partner, a whole squad, or entries in different divisions. You pay for all of them together at the end.
 
-A division past its capacity offers the **waitlist** instead — you're not charged for a waitlisted entry until you're actually offered a spot ([how the waitlist works](/help/registration/waitlist)). A team division may also offer **Sign up solo**: enter without a team and the organiser assigns you to one once there's space — nothing else to fill in for that entry until you're placed.
+On **Entries**, each division is a card with its fee. Press **Add an entry** or, on a team division, **Add a team**. **Add another** on the cart starts a second entry in the same division, and **Remove** takes an entry out before you submit.
+
+![The Entries step with a team and a waiting-list entry in the cart](/help/registration/entries-cart.webp "The Entries step: each division is a card, and your cart is on the right")
+
+A division that is full offers **Join waiting list**. Nothing is charged for a waiting-list entry until you are offered a place. See [the waitlist](/help/registration/waitlist). A team division may also offer **Sign up solo**. You enter without a team, and the organiser places you on one.
+
+> **Example**
+> Meera adds a team called Harbour Hawks to **Doubles Teams**, which costs 12.00. She also joins the waiting list for **Open Singles**, which is full. Her cart shows a subtotal of 12.00. The waiting-list entry reads "Waiting list — not charged now".
 
 ## Joining a teammate's entry
 
-If someone else started your team's entry, they can send you a personal **join link** instead of you starting a fresh one. Opening it shows you the entry you're joining and, where the roster has more than one open spot, asks **which one is you** — or lets you add yourself as someone new. Confirm your own details and you're in; the captain sees you check in on their own registration page.
+If someone else started your team's entry, they can send you a personal join link. Opening it shows the entry you are joining and asks **Which one are you?** You pick your place on the team, or choose **I'm someone else**. Confirm your own details and consent, and you take your place.
 
-A join link can go stale — a roster that's already full, or a link that's expired or was mistyped, says so plainly rather than leaving you guessing. If your teammate registered you directly instead, you won't get a join link at all; there's nothing further for you to do.
+A join link that has expired, or that was mistyped, says "This join link isn't valid" and asks you to check with whoever sent it.
+
+If you started the team yourself, your registration page has an **Invite your teammates** panel. Each teammate gets their own link, and **Copy invite link** copies it.
 
 ## Consent and your public name
 
-Every registration needs one thing before it submits: agreeing that the organisation and Seazn Club may store and process what's on the form (name, email, date of birth) to run the competition — the Privacy Policy is linked right there. A second checkbox, for photos or video from the event, is optional and never blocks your entry either way.
+Every registration needs one thing before it submits. You agree that the organisation and Seazn Club may store and process the details on the form to run the competition. The form links to the Privacy Policy. A second box, for photos and video from the event, is optional and never stops you entering.
 
-Registering also means, by default, **your name appears publicly** on the competition's pages — standings, draws, results. You can switch to showing initials instead at any time from your own player home (sign in, then **My matches & teams** — the "What's public about you" card lets you turn your name, and your photo, off public pages per club you're registered with). A youth division shows shortened names regardless of this setting, whichever is stricter always wins ([youth divisions](/help/registration/youth)).
+By default your name appears on the competition's public pages. The **Consent** step tells you that you can switch to initials from your profile. Sign in and open **My matches & teams**. The **What's public about you** card lets you turn your name and photo off, club by club. A youth division shortens names whatever you choose. See [youth divisions](/help/registration/youth).
 
-If you're entering other people — a squad, a couple of teammates — you'll see a note that each of them confirms their own details and consent separately, when they join or claim their spot. If you're the parent or guardian of players under 18 you're entering, one more box on the same step lets you say so: ticked, your consent is recorded for those children (with a date of birth under 18) and they aren't asked to confirm it; anyone else you've named still confirms for themselves. Only an adult can tick it. Registering yourself under 18 adds a guardian-consent step instead: a parent or guardian's name, and their own tick, alongside yours.
+If you enter other people, the step tells you that each of them confirms their own details and consent when they join or claim their place.
+
+If you are a parent or guardian entering players under 18, a further box appears. Tick it and your consent is recorded for those players, so they are not asked to confirm. It appears only for an adult, and only when a player you named has a date of birth under 18.
+
+If you are registering yourself and are under 18, the step instead asks for a parent or guardian's name and their consent. You cannot continue without them.
+
+![The Consent step with the guardian consent block for an under-18 entry](/help/registration/guardian-consent.webp "An under-18 entry asks a parent or guardian for their name and consent")
 
 ## Paying, and what happens after
 
-Review shows exactly what you're about to submit and what it costs, and the button tells you what happens next: **Enter the competition** for a free entry, **Enter — {fee}** for pay-the-organiser divisions (you'll see how to pay on the next page), or **Pay {fee} and enter** for card divisions, which takes you to a secure Stripe checkout.
+**Review** shows what you are about to submit and what it costs. The button tells you what happens next:
 
-Once you press it, the button says what it's doing: **Saving your place…** while your entry is saved, then, for a card entry, **Opening secure payment…** while Stripe's checkout loads. Wait for the next page rather than pressing again; if something goes wrong the button comes back with its usual words and a note on what to do, and nothing you typed is lost.
+- **Enter the competition** for a free entry.
+- **Enter — {fee}** for a division paid to the organiser. The next page shows how to pay.
+- **Pay {fee} and enter** for a card division. It takes you to a secure Stripe checkout.
 
-Once you're through, you land on your **registration page** — the one place to check status, pay any entry that's still due, resend your confirmation email, invite teammates onto a team entry, and withdraw. It's also linked from your confirmation email and from your ticket at [your reference number](/help/registration/reference-numbers), which is the quicker page for a day-of "what's your status" check or for showing your ticket at check-in.
+Once you press it, the button says what it is doing. It reads **Saving your place…** while your entry is saved, then **Opening secure payment…** for a card entry. Wait for the next page and do not press again. If something goes wrong, the button returns to its usual words with a note on what to do. What you typed is kept.
 
-A card entry left unpaid holds your spot for 48 hours (a reminder lands at 24) before it expires and the next person in line gets it — see [how card entry fees flow](/help/registration/card-payments) for the full payment journey, including refunds.
+A card entry left unpaid holds your place for 48 hours. See [how card entry fees flow](/help/registration/card-payments).
+
+## Your registration page
+
+After you submit you land on your **registration page**. It shows each entry's status and your reference. It is also linked from your confirmation email. From it you can:
+
+- pay an entry that is still due, with **Pay now**;
+- read how to pay, when the organiser takes payment directly;
+- **Resend confirmation email**;
+- invite teammates onto a team entry;
+- withdraw an entry with **Cancel this entry**.
+
+Your reference opens a shorter page for a quick status check or for showing at check-in. See [reference numbers](/help/registration/reference-numbers).

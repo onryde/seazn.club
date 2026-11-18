@@ -25,6 +25,7 @@ export const HELP_ARTICLE_SLUGS = [
   "players/match-reports",
   "players/duplicates",
   "registration/open-registration",
+  "registration/registrants",
   "registration/card-payments",
   "registration/reference-numbers",
   "registration/waitlist",
