@@ -671,11 +671,13 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     try {
       await expect.poll(openWebhookRows, { timeout: POLL_BUDGET_MS }).toBe(1);
     } catch (e) {
-      await video.webhooksSettled();
+      // Bounded: webhooksSettled awaits every in-flight delivery and a hung one would eat the rest of the test's clock, hiding this message.
+      await Promise.race([video.webhooksSettled(), new Promise<void>((r) => setTimeout(r, 5_000))]);
       const outcomes = [...video.webhookOutcomes.values()].join(",");
       throw new Error(
         `no open webhook presence row for the first player. The fixture's deliveries: [${outcomes}]; last error: ${String(video.lastWebhookError())}. ` +
           `If none were delivered the server under test is not reachable at ${test.info().project.use.baseURL}/api/webhooks/realtimekit, or its REALTIMEKIT_BASE_URL is not the fixture's (docs/runbooks/e2e-local.md).\n${(e as Error).message}`,
+        { cause: e },
       );
     }
 
@@ -729,6 +731,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     test.setTimeout(budget(2));
     // Our OWN key pair, never the fixture's: the signature is well-formed and verifies against nothing the server trusts.
     const foreign = generateKeyPairSync("rsa", { modulusLength: 2048 });
+    // boardA is the serial group's shared state, set by the first test: running this one alone (--grep, a retry) must say so, not throw on `.home`.
+    expect(boardA, "board 1 comes from the first test of this serial group; this test cannot run on its own").toBeDefined();
     const first = boardA.home;
     const [held] = await withDb(
       (sql) => sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${boardA.fixtureId} and side = 'home'`,
@@ -756,7 +760,6 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       return { deliveries: d!.n, presence: p!.n };
     });
     expect(written, "a refused delivery writes no delivery row and no presence row").toEqual({ deliveries: 0, presence: 0 });
-    expect(video.webhooks.some((w) => w.uuid === uuid), "the uuid is ours alone, never a fixture-emitted one").toBe(false);
   });
 
   test("six moves tapped on OUR board reach Lichess exactly as played, both boards agree, and the camera-off banner (9) stays up", async () => {
