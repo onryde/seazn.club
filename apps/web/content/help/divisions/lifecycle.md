@@ -19,23 +19,27 @@ While the division is a draft, changing the format with fixtures already generat
 
 Once a stage is running, the **Format** button on **Division rules** shows a lock, and the stage card says "Locked: the stage has started".
 
-Who can still join a live division depends on the format:
+Who can still join a live division depends on the format and on how far play has gone:
 
 | Format | Late entrant after Start |
 |---|---|
-| League | Refused: "This tournament has started — the entrant list is locked" |
-| Ladder | Accepted |
+| League, group stages, double elimination | Refused: "This tournament has started — the entrant list is locked." |
+| A stage that takes its places from an earlier stage, such as a knockout after a league | Refused with the same message |
+| Ladder | Accepted. Once the first challenge has been issued, the new entrant is not on the ladder yet: they cannot issue or receive a challenge |
 | Americano | Accepted |
-| Swiss | Accepted |
-| Knockout with a free place | Accepted and seated straight away |
-| Knockout with no free place | Added, but waits outside the bracket |
+| Swiss, as the division's first stage | Accepted while a round is left to join. Refused with "This Swiss is over." once it has finished, and with "The last round has started, so there is no round left to join." in its last round |
+| Knockout, as the division's first stage, with a free place | Accepted and seated straight away |
+| Knockout, as the division's first stage, with no free place and no match played yet | Added, but waits outside the bracket |
+| Knockout, as the division's first stage, with no free place and a match already played | Refused with "Round 1 complete; no slot left." The player is not added |
 
 ![The Fixtures tab after a late entrant was added to a full bracket: the Waiting to join the bracket card with an Add to bracket button, and the Fixtures don't match the roster notice](/help/divisions/late-entrant-card.webp "A late entrant to a full bracket waits on the stage card until you choose Add to bracket")
 
-A knockout has a free place when its bracket has an open bye. In a full knockout, the late entrant shows on the stage card as **Waiting to join the bracket** with the note "Joined after the draw. Not in the bracket yet." The card also says "Fixtures don't match the roster" and offers **Rebuild fixtures**.
+A knockout has a free place when its bracket has an open bye whose holder has not started round two. A seat left by a withdrawn player also counts, if nothing was played on it: the walkover the withdrawal gave is reversed. A player who arrives through registration, or who is reinstated, waits outside the bracket until you choose **Add to bracket**.
+
+When there is no free place and nothing in the stage has started, the late entrant shows on the stage card as **Waiting to join the bracket** with the note "Joined after the draw. Not in the bracket yet." The card also says "Fixtures don't match the roster" and offers **Rebuild fixtures**. **Rebuild fixtures** is offered only while nothing in the stage has started and the schedule is not frozen. If the schedule is frozen, unfreeze it first.
 
 > **Example**
-> A knockout of five players has three byes in round one. Zara arrives after Start. You add her on the Entrants tab and she takes a bye seat in round one. In a knockout of eight, with no open place, the same action leaves Zara waiting on the stage card.
+> A knockout of five players has three byes in round one. Zara arrives after Start. You add her on the Entrants tab and she takes a bye seat in round one. In a knockout of eight, with no open place and nothing played, the same action leaves Zara waiting on the stage card. Once a first-round match has been played, adding her is refused.
 
 Someone who drops out goes through [withdrawal](/help/entrants/withdrawals), which repairs the fixtures instead of pretending they never entered.
 

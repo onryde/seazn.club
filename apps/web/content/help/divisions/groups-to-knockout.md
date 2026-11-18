@@ -37,7 +37,7 @@ The knockout stage carries its qualification in a `progression` field. Each entr
 This takes every group winner, then the single best runner-up.
 
 > **Example**
-> Nine entrants play three groups of three. The progression above sends the three group winners and the best runner-up into a four-place knockout. In a test, the proposal listed the three winners at seeds 1 to 3 and a runner-up at seed 4.
+> Nine entrants play three groups of three. The progression above sends the three group winners and the best runner-up into a four-place knockout. The proposal lists the three winners at seeds 1 to 3 and the best runner-up at seed 4.
 
 If runners-up are level on the table, confirming the proposal is refused until the tie is settled.
 

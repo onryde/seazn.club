@@ -23,7 +23,7 @@ Some sports add sections. A chess division also has **Online play** and **Camera
 A note on the tab says so: the format, the match rules, the points and the tie-breaks are set on the **Fixtures** tab, under **Division rules**. Choose **Open Division rules** to jump there.
 
 - **Format** changes the competition structure. See [a division's life](/help/divisions/lifecycle) for when it locks.
-- **Match rules**, **Points** and **Tie-breaks** on the **Division rules** card apply to every stage. A stage card has its own **Match rules**, **Points** and **Tie-breaks** for that stage alone.
+- **Match rules**, **Points** and **Tie-breaks** on the **Division rules** card are the division's rules. The card says every stage plays them unless the stage's own card sets different ones. A stage card has its own **Match rules**, **Points** and **Tie-breaks** for that stage alone.
 
 Once a stage has started, its card shows "Locked: the stage has started" beside its rules.
 

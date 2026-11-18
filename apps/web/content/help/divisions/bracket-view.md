@@ -32,4 +32,4 @@ League and group stages have no tree. The **Standings** tab shows a **Results gr
 
 ## Print a poster
 
-On the **Fixtures** tab, choose **Documents**, then **Bracket poster**. It downloads a one-page landscape PDF. We checked it for a knockout, a double elimination, a playoff and a stepladder. Branding on the poster follows your plan, as for the other branded documents.
+On the **Fixtures** tab, choose **Documents**, then **Bracket poster**. It downloads a one-page landscape PDF for a knockout, a double elimination, a playoff or a stepladder. Branding on the poster follows your plan, as for the other branded documents.

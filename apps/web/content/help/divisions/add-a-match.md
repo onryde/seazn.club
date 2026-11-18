@@ -18,7 +18,7 @@ The form asks for **Home** and **Away** and an optional **Date & time**. In a gr
 You can add a match while the stage is running. It is a real fixture, so it counts in the table like any generated match. A new match with a result changes the table: the entrants' played count and points go up.
 
 > **Example**
-> A league of four is running and two teams drew a match that was voided. Choose **Add match**, pick the same two teams as Home and Away, and play it. When you score it, both teams' played count goes up by one and the winner's points go up.
+> A league of four is running. Ash and Birch have already played each other, and you want a second game between them to count. Choose **Add match**, pick Ash as Home and Birch as Away, and score it. Both teams' played count goes up by one, and the winner's points go up again. If Ash wins both games, Ash has two wins.
 
 ## Where Add match is refused
 
@@ -26,3 +26,5 @@ You can add a match while the stage is running. It is a real fixture, so it coun
 - **Swiss.** The app refuses with "Swiss rounds are paired by the system. Add friendlies in another stage."
 - **Ladder.** The app refuses with "ladder matches are created with challenges, not ad-hoc fixtures".
 - **Group, different pools.** The app refuses with "both entrants must be in the same pool of this stage".
+- **Completed stage.** The app refuses with "this stage is complete — a completed table doesn't take new matches".
+- **Frozen schedule.** The app refuses with "the division schedule is locked — unlock it to edit". Unfreeze the schedule, then add the match.
