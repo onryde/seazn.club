@@ -81,14 +81,20 @@ type Round = {
   boards: [Board, Board];
 };
 
-/** D16: one side's camera meeting, as a check-in leaves it. The meeting id is not a real vendor id (see the header). */
-async function putRoom(fixtureId: string, orgId: string, side: "home" | "away"): Promise<void> {
+/** D16: one side's camera meeting, as a check-in leaves it: the room AND the player on file in it. A room alone is no arrival (check-in
+ *  capacity plan 2 Task 10: the pre-mint job makes a paired board's rooms before anyone comes, and the join and the panel offer an arbiter
+ *  only a side whose player is on file). The meeting id is not a real vendor id (see the header). */
+async function putRoom(fixtureId: string, orgId: string, side: "home" | "away", personId: string): Promise<void> {
   await withDb(async (sql) => {
     const res = await sql`
       insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
       select f.id, ${side}, ${orgId}, ${`e2e-mtg-${side}-${randomUUID().slice(0, 8)}`}, f.home_entrant_id, f.away_entrant_id
         from fixtures f where f.id = ${fixtureId}`;
     expect(res.count, `room ${side} for ${fixtureId}`).toBe(1);
+    const player = await sql`
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+      values (${fixtureId}, ${side}, ${personId}, 'player', ${`e2e-pp-${side}-${randomUUID().slice(0, 8)}`})`;
+    expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
   });
 }
 
@@ -158,7 +164,7 @@ async function seedRound(
     const base = `/o/${slug!.org}/c/${slug!.comp}/d/${slug!.div}`;
     const boards = rows.map((r) => ({ fixtureId: r.id, home: byEntrant.get(r.home)!, away: byEntrant.get(r.away)! }));
     // Both players of every board have checked in: a room each (the join then reaches the vendor, which is down).
-    for (const b of boards) for (const side of ["home", "away"] as const) await putRoom(b.fixtureId, slug!.org_id, side);
+    for (const b of boards) for (const side of ["home", "away"] as const) await putRoom(b.fixtureId, slug!.org_id, side, b[side].personId);
     return {
       orgId: slug!.org_id,
       divisionId,
@@ -1267,7 +1273,7 @@ test.describe("arbiter panel", () => {
     expect(log.filter((e) => e.startsWith("POST")), "no join for a board nobody has checked in to").toHaveLength(1);
 
     // The player arrives: the poll (a hidden tab coming back refreshes at once) reads the room and the join opens.
-    await putRoom(b2.fixtureId, r.orgId, "home");
+    await putRoom(b2.fixtureId, r.orgId, "home", b2.home.personId);
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await expect.poll(() => log.filter((e) => e.startsWith("POST")).length, { timeout: 30_000 }).toBe(2);
     expect(log.at(-2)).toBe("POST home");

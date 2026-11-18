@@ -94,6 +94,7 @@ import {
 import { LICHESS_FIXTURE_PORT, startLichessFixtureServer, type LichessFixtureServer } from "../lichess-fixture-server";
 import {
   httpWebhookDeliver,
+  REALTIMEKIT_FIXTURE_ENV,
   REALTIMEKIT_FIXTURE_PORT,
   startRealtimeKitFixtureServer,
   type RealtimeKitFixtureServer,
@@ -516,6 +517,14 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   const roomIdsOf = (fixtureId: string): Set<string> => new Set(roundOneRooms.filter((r) => r.fixture_id === fixtureId).map((r) => r.meeting_id));
   /** The fixture's own record of the calls that name one of these meetings, from `from` on (a call with no meeting is nobody's). */
   const callsOnMeetings = (ids: ReadonlySet<string>, from: number) => video.calls.slice(from).filter((c) => c.meetingId !== null && ids.has(c.meetingId));
+  /** The same, minus the ORGANISER's arbiter panel: once a player is on file the panel joins that player's room receive-only (a participant add
+   *  with the arbiter preset) and hands it back when the pane closes (a DELETE). Those calls are real and are not the seat line's: the stay's
+   *  price covers a player's own claims, the arbiter's join has its own gate. The check that the OPEN itself makes no video call at all stays
+   *  unfiltered (`callsOnMeetings`): before a player has come the panel joins nothing. */
+  const playerCallsOnMeetings = (ids: ReadonlySet<string>, from: number) =>
+    callsOnMeetings(ids, from).filter(
+      (c) => c.method !== "DELETE" && (c.body as { preset_name?: string } | null)?.preset_name !== REALTIMEKIT_FIXTURE_ENV.REALTIMEKIT_ARBITER_PRESET,
+    );
 
   /** A player's camera comes on at the vendor (`setLivePublisher`, the ONLY way anyone is present there) in a state the SEAT can judge. With the
    *  one-read proof the seat reads the PEER the presence table names, so the join's webhook must have reached our server (no row, no peer to read:
@@ -757,7 +766,9 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // D12 couples the stamp and the invites - and nothing else. A game is asked for only when both players are seated, and the open itself calls
     // no vendor: the rooms are the job's, a participant only a player's own claim adds.
     expect(lichessCallsFor(everyone).length, "opening a round makes no Lichess call").toBe(0);
-    expect(callsOnMeetings(roomIds, beforeOpen), "opening a round makes no video call for its boards").toEqual([]);
+    // The panel is open on this round (page.goto above) and the rooms are made, but nobody has come: a room is not an arrival, so the panel
+    // joins nothing (the arbiter's join asks for a PLAYER on file) - not even an arbiter participant into an empty room.
+    expect(callsOnMeetings(roomIds, beforeOpen), "opening a round makes no video call for its boards - not the organiser's panel either").toEqual([]);
     expect(await meetingRowsOf(boardIds), "the open neither retired nor replaced the pre-made rooms").toEqual(rooms1);
     for (const p of everyone) expect(video.participantFor(p.personId), `${p.name}: the open minted no participant`).toBeNull();
     roundOneRooms = rooms1;
@@ -830,7 +841,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // refusal is the server's own word, and the READ is the retry's (asserted below).
     // The pre-mint job made this player's room before the open (the round-opening test): the claim finds it, so it makes NO room (it used to
     // make "ONE meeting - theirs") and adds only the player's participant, its token coming with the add.
-    const asked = callsOnMeetings(roomIdsOf(boardA.fixtureId), openMark).map((c) => c.route);
+    const asked = playerCallsOnMeetings(roomIdsOf(boardA.fixtureId), openMark).map((c) => c.route);
     expect(asked.filter((r) => r === "POST /meetings"), "the first player's claim makes no room: the pre-mint job made it").toHaveLength(0);
     expect(asked.filter((r) => r === "POST /meetings/:id/participants"), "the first claim adds the player's participant, and only theirs").toHaveLength(1);
     expect(asked, "a minting claim reads no session").not.toContain("GET /meetings/:id/active-session");
@@ -904,7 +915,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // Through all of it - three states, an outage, a reload - the board made no room of its own since the open: both were the job's. (Its other
     // counts are not asserted here: the tour re-asks on purpose, and the outage's refused add is a call too. Board 2's seating is the clean census.)
     expect(
-      callsOnMeetings(roomIdsOf(boardA.fixtureId), openMark).filter((c) => c.route === "POST /meetings"),
+      playerCallsOnMeetings(roomIdsOf(boardA.fixtureId), openMark).filter((c) => c.route === "POST /meetings"),
       "board 1 made no room since the open",
     ).toHaveLength(0);
   });
@@ -1072,7 +1083,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // A LOCAL pre-check against the fixture: it proves the wiring and the arithmetic, and says nothing about the real vendor (Task 11's gate).
     // Taken here, with both seated and the game made, before the sweep below ends a single room. The expected numbers are the declared price
     // table (LINE_LOAD, pinned to seat-line's own derivation in line-load.test.ts) and a hand count, never read off the code that spends them.
-    const sinceOpen = callsOnMeetings(roomIdsOf(boardB.fixtureId), openMark);
+    const sinceOpen = playerCallsOnMeetings(roomIdsOf(boardB.fixtureId), openMark);
     const by = routesOf(sinceOpen);
     const seen = `board 2's ${sinceOpen.length} calls since the open, by route: ${JSON.stringify(by)}`;
     expect(roomIdsOf(boardB.fixtureId).size, "premise: the job left board 2 a room for each player").toBe(2);
@@ -1208,7 +1219,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     // pre-check against the fixture, like board 2 of round 1's census above; the expected numbers are the price table and a hand count.
     const rooms2 = await meetingRowsOf([b2.fixtureId]);
     expect(rooms2.map((r) => r.side), "round 2's board has a room for each of its two players, made by their claims").toEqual(["away", "home"]);
-    const sinceOpen2 = callsOnMeetings(new Set(rooms2.map((r) => r.meeting_id)), openMark2);
+    const sinceOpen2 = playerCallsOnMeetings(new Set(rooms2.map((r) => r.meeting_id)), openMark2);
     const by2 = routesOf(sinceOpen2);
     const seen2 = `round 2's board: ${sinceOpen2.length} calls since its open, by route: ${JSON.stringify(by2)}`;
     const declared2 = LINE_LOAD.stayPrice.proof.all * 2 + LINE_LOAD.recheckCost.proof;

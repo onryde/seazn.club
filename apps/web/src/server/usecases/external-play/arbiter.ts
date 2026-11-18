@@ -108,10 +108,13 @@ type BoardRow = {
    *  `SamePair` whether it was made for the board's CURRENT pairing (a row an earlier pairing left is no meeting). */
   homeRow: boolean;
   homeSamePair: boolean;
+  /** Whether a PLAYER participant is on file for the side (`playerOnFile`): the player's first claim writes it. */
+  homePlayer: boolean;
   homeEndedAt: Date | null;
   homeEvidenceAt: Date | null;
   awayRow: boolean;
   awaySamePair: boolean;
+  awayPlayer: boolean;
   awayEndedAt: Date | null;
   awayEvidenceAt: Date | null;
   /** I-3: what the settle offers in place of a winner is read from the stage kind, the hold and the line's two feed
@@ -275,6 +278,14 @@ export async function listFlaggedExternalPlay(
   return { boards, ownBoards: rows.length - listed.length };
 }
 
+/** Has this side's PLAYER come? A player participant is on file for the side (alias `f` = the board's fixture row). The player's first
+ *  claim writes it - and, before the pre-mint job, made the room in the same breath, so "a room exists" meant "the player came". Check-in
+ *  capacity plan 2's job makes a paired board's rooms (stamped for its pairing) before anyone arrives, so a room alone is no arrival any
+ *  more: an arbiter is admitted to a side - and the panel offered it - only once its player is on file. An arbiter's own row is no player. */
+function playerOnFile(side: Side) {
+  return sql`exists (select 1 from fixture_video_participants vp where vp.fixture_id = f.id and vp.side = ${side} and vp.preset = 'player')`;
+}
+
 /** The board columns both readers paint from — the round in view and the
  *  division's flagged boards (T16) — so a board reads the same in both.
  *  D16: a board has up to TWO meeting rows (one per player) and is listed ONCE - each side is its own join on
@@ -302,6 +313,7 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            mh.ended_at as "homeEndedAt", mh.camera_evidence_at as "homeEvidenceAt",
            ma.fixture_id is not null as "awayRow",
            (ma.home_entrant_id, ma.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "awaySamePair",
+           ${playerOnFile("home")} as "homePlayer", ${playerOnFile("away")} as "awayPlayer",
            ma.ended_at as "awayEndedAt", ma.camera_evidence_at as "awayEvidenceAt",
            s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture"
       from fixtures f
@@ -329,10 +341,12 @@ function openFlagRows(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Fla
      order by opened_at, id`;
 }
 
-/** One side's meeting as the board list reads it (D16, §5.6.4): none (no row, or one an earlier pairing left), open or
- *  ended - with that row's own end and evidence stamps. */
-function sideMeeting(row: boolean, samePair: boolean, endedAt: Date | null, evidenceAt: Date | null): ArbiterSideMeeting {
+/** One side's meeting as the board list reads it (D16, §5.6.4): none (no row, one an earlier pairing left, or a room no player has
+ *  come to yet - `playerOnFile`), open or ended - with that row's own end and evidence stamps. */
+function sideMeeting(row: boolean, samePair: boolean, arrived: boolean, endedAt: Date | null, evidenceAt: Date | null): ArbiterSideMeeting {
   if (!row || !samePair) return { state: "none", endedAt: null, evidenceAt: null };
+  // A torn-down room stays `ended` whoever came; a live one is open only for a side whose player is on file.
+  if (endedAt === null && !arrived) return { state: "none", endedAt: null, evidenceAt: null };
   return {
     state: endedAt === null ? "open" : "ended",
     endedAt: endedAt?.toISOString() ?? null,
@@ -419,8 +433,8 @@ async function boardWithSides(
   const nameOf = (personId: string | null): string | null =>
     personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
   const meetings = {
-    home: sideMeeting(r.homeRow, r.homeSamePair, r.homeEndedAt, r.homeEvidenceAt),
-    away: sideMeeting(r.awayRow, r.awaySamePair, r.awayEndedAt, r.awayEvidenceAt),
+    home: sideMeeting(r.homeRow, r.homeSamePair, r.homePlayer, r.homeEndedAt, r.homeEvidenceAt),
+    away: sideMeeting(r.awayRow, r.awaySamePair, r.awayPlayer, r.awayEndedAt, r.awayEvidenceAt),
   };
   // §5.6.4: a flag's window is its OWN player's row - the sweep judged each player over their own meeting's end, and the
   // panel must show what job 5 judged. A flag whose player has no row (or no side on this board) is judged on the game's
@@ -754,9 +768,10 @@ export async function joinAsArbiter(
 
   // The player's meeting, as it stands NOW: made for the board's current pairing (a row an earlier pairing left is no
   // meeting for this one), and not ended. Read, never made.
-  const [meeting] = await sql<{ meetingId: string; endedAt: Date | null; samePair: boolean }[]>`
+  const [meeting] = await sql<{ meetingId: string; endedAt: Date | null; samePair: boolean; arrived: boolean }[]>`
     select m.meeting_id as "meetingId", m.ended_at as "endedAt",
-           (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair"
+           (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair",
+           ${playerOnFile(side)} as arrived
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
      where m.fixture_id = ${fixtureId} and m.side = ${side}`;
@@ -764,6 +779,9 @@ export async function joinAsArbiter(
     throw new HttpError(409, "this player has not checked in yet", "VIDEO_MEETING_NOT_STARTED");
   }
   if (meeting.endedAt !== null) throw new HttpError(409, "this player's video meeting has ended", "VIDEO_MEETING_ENDED");
+  // A room is not an arrival (`playerOnFile`): the pre-mint job makes a paired board's rooms before anyone comes, and an arbiter minted into
+  // one would sit in an empty room - a vendor call spent at the moment the round opens, with nothing to watch. Refused before any request.
+  if (!meeting.arrived) throw new HttpError(409, "this player has not checked in yet", "VIDEO_MEETING_NOT_STARTED");
 
   const video = deps.video ?? REAL_ARBITER_VIDEO;
   let token: ParticipantToken;

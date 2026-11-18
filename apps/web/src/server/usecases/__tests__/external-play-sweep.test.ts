@@ -5425,8 +5425,10 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
   async function watched(): Promise<{ b: Board; userId: string; participantId: string; meetingId: string; createdAt: number }> {
     const b = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
     await liveGame(b);
-    // The player's room, which the first arrival opened (an arbiter never makes one - D16).
+    // The player's room, which the first arrival opened (an arbiter never makes one - D16), and the player on file in it: a room alone is no
+    // arrival (check-in capacity plan 2 Task 10), and the join admits only a side whose player has come.
     await ensureMeeting(b.fixtureId, "home", RTK);
+    await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId });
     const [u] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified, locale)
       values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
@@ -5590,6 +5592,7 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
         values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
       await sql`insert into org_members (org_id, user_id, role) values (${b.orgId}, ${u!.id}, 'admin')`;
       const { meetingId } = await ensureMeeting(b.fixtureId, "home", RTK); // the player's room, which the first arrival opened (an arbiter never makes one)
+      await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId }); // and the player on file: a room alone is no arrival
       const out = await joinAsArbiter({ orgId: b.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, b.fixtureId, "home", { video: VIDEO });
       if (demoted) await sql`update org_members set role = 'viewer' where org_id = ${b.orgId} and user_id = ${u!.id}`;
       pair.push({ b, participantId: out.participantId, meetingId });
@@ -6082,6 +6085,7 @@ describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and t
     const b = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
     await liveGame(b);
     await ensureMeeting(b.fixtureId, "home", RTK);
+    await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId }); // a room alone is no arrival
     const [u] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified, locale)
       values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;

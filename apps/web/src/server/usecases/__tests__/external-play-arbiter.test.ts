@@ -100,18 +100,34 @@ async function bridge(
       ${moves.length > 0 ? 10 : null})`;
 }
 
-/** D16: the board's meetings - one per PLAYER. By default both sides have one (the board is under way); `sides` limits it. */
+/** D16: the board's meetings - one per PLAYER. By default both sides have one (the board is under way); `sides` limits it.
+ *  A room is not an arrival (check-in capacity plan 2 Task 10: the pre-mint job makes rooms before anyone comes): by default a side's room
+ *  is the pre-minted kind, with NO player on file. `arrived` puts each listed side's player on file too - what a player's first claim did
+ *  when it also made the room - and is what makes the side open to an arbiter. */
 async function meeting(
   fixtureId: string,
   orgId: string,
-  opts: { ended?: boolean; evidence?: boolean; sides?: ("home" | "away")[] } = {},
+  opts: { ended?: boolean; evidence?: boolean; sides?: ("home" | "away")[]; arrived?: boolean } = {},
 ) {
   for (const side of opts.sides ?? (["home", "away"] as const)) {
     await putVideoMeeting(
       { fixtureId, orgId, side },
       { endedAt: opts.ended || opts.evidence ? new Date() : null, evidenceAt: opts.evidence ? new Date() : null },
     );
+    if (opts.arrived) await putVideoParticipant({ fixtureId, side, personId: await personOfSide(fixtureId, side) });
   }
+}
+
+/** The person who plays a side of a board (the first member of its entrant). */
+async function personOfSide(fixtureId: string, side: "home" | "away"): Promise<string> {
+  const [row] = await sql<{ personId: string }[]>`
+    select em.person_id as "personId"
+      from fixtures f
+      join entrant_members em on em.entrant_id = case when ${side}::text = 'home' then f.home_entrant_id else f.away_entrant_id end
+     where f.id = ${fixtureId}
+     order by em.person_id limit 1`;
+  if (!row) throw new Error(`test: ${side} of ${fixtureId} has no member`);
+  return row.personId;
 }
 
 /** The side a person plays: the entrant of the board they are a member of. */
@@ -325,7 +341,7 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
     await openRound(r);
     const [a, b] = r.boards;
     await bridge(a!.fixtureId, r.orgId, { status: "live", moves: 10 });
-    await meeting(a!.fixtureId, r.orgId);
+    await meeting(a!.fixtureId, r.orgId, { arrived: true });
     await bridge(b!.fixtureId, r.orgId, { status: "live", moves: 10 });
     await meeting(b!.fixtureId, r.orgId, { evidence: true });
     // The third board: no game yet — no report to expect.
@@ -391,6 +407,9 @@ describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): 
             { fixtureId: b.fixtureId, orgId: r.orgId, side },
             { endedAt: row.ended || row.evidence ? new Date() : null, evidenceAt: row.evidence ? new Date() : null },
           );
+          // A started board's players were seated, so each room's player is on file: the table is about the ROWS, not the arrival
+          // (the pre-minted, nobody-came case has its own test).
+          await putVideoParticipant({ fixtureId: b.fixtureId, side, personId: await personOfSide(b.fixtureId, side) });
         }
         if (c.awayStale) {
           await sql`update fixture_video_meetings set away_entrant_id = home_entrant_id where fixture_id = ${b.fixtureId} and side = 'away'`;
@@ -424,8 +443,8 @@ describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): 
     await openRound(r);
     const [mixed, bare] = r.boards;
     for (const b of [mixed!, bare!]) await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
-    await meeting(mixed!.fixtureId, r.orgId);
-    await meeting(bare!.fixtureId, r.orgId);
+    await meeting(mixed!.fixtureId, r.orgId, { arrived: true });
+    await meeting(bare!.fixtureId, r.orgId, { arrived: true });
     await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${mixed!.fixtureId} and side = 'away'`;
     await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${bare!.fixtureId}`;
     const view = (await loadArbiterRound(r.owner, r.divisionId))!;
@@ -434,6 +453,38 @@ describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): 
     expect([m.sides.home.state, m.sides.away.state], "adopted side open, unadopted side none").toEqual(["open", "none"]);
     expect([n.sides.home.state, n.sides.away.state], "no row of this pairing at all").toEqual(["none", "none"]);
     expect(n.cameraReport, "no row counts: nothing is on file to report").toBeNull();
+  });
+
+  // Check-in capacity plan 2 Task 10 (found by the walkthrough's CI run): the pre-mint job makes a PAIRED board's rooms, stamped for the
+  // board's current pairing, before any player has come - so "a room exists for this pairing" no longer means "the player has arrived".
+  // `open` is what the panel joins (arbiter-panel.tsx `joinKey`), and joining mints an arbiter participant at the vendor into a room
+  // nobody is in. A side is `open` only once a PLAYER participant is on file for it (the player's first claim writes it, as it always did
+  // when the claim also made the room). PINS TODAY'S READING; plan 3 Tasks 1 and 3 replace the rule with the presence/check-in one.
+  it("a PRE-MINTED room (a room for this pairing, no player participant on file) is not open: its side reads `none` until a player participant is on file; the arrived sibling is open; an ENDED room keeps `ended`", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    await openRound(r);
+    const [pre, ended] = r.boards;
+    await meeting(pre!.fixtureId, r.orgId);
+    await meeting(ended!.fixtureId, r.orgId, { ended: true });
+    const read = async () => {
+      const view = (await loadArbiterRound(r.owner, r.divisionId))!;
+      const of = (id: string) => view.boards.find((x) => x.fixtureId === id)!;
+      return { pre: of(pre!.fixtureId), ended: of(ended!.fixtureId) };
+    };
+    let v = await read();
+    expect([v.pre.sides.home.state, v.pre.sides.away.state], "the empty case: two rooms, nobody has come").toEqual(["none", "none"]);
+    expect([v.ended.sides.home.state, v.ended.sides.away.state], "a torn-down room is still said ended, arrived or not").toEqual(["ended", "ended"]);
+    await playerParticipant(pre!.fixtureId, pre!.home.personId);
+    v = await read();
+    expect([v.pre.sides.home.state, v.pre.sides.away.state], "home's player has come: home is open, away is still waiting").toEqual(["open", "none"]);
+    await playerParticipant(pre!.fixtureId, pre!.away.personId);
+    v = await read();
+    expect([v.pre.sides.home.state, v.pre.sides.away.state], "both have come").toEqual(["open", "open"]);
+    // An ARBITER participant is no player: it must not open a side by itself.
+    await sql`delete from fixture_video_participants where fixture_id = ${pre!.fixtureId}`;
+    await putVideoParticipant({ fixtureId: pre!.fixtureId, side: "home", personId: null, preset: "arbiter" });
+    v = await read();
+    expect([v.pre.sides.home.state, v.pre.sides.away.state], "an arbiter row is not an arrival").toEqual(["none", "none"]);
   });
 
   it("an unstarted Required board and a camera-off board have no report whatever their rows say (the empty case first)", async () => {
@@ -766,7 +817,7 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     await openRound(r);
     const board = r.boards[0]!;
     await bridge(board.fixtureId, r.orgId, { status: "live", moves: 10 });
-    await meeting(board.fixtureId, r.orgId, { sides: ["home"] });
+    await meeting(board.fixtureId, r.orgId, { sides: ["home"], arrived: true });
     const { video, calls } = fakeVideo();
     expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video }))).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
     expect(calls, "zero vendor requests - nothing created, nothing minted").toEqual([]);
@@ -774,11 +825,36 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     expect((await sql`select 1 from fixture_video_meetings where fixture_id = ${board.fixtureId} and side = 'away'`).length, "and no meeting made").toBe(0);
     expect((await joinAsArbiter(r.owner, board.fixtureId, "home", { video })).side, "the positive pair").toBe("home");
     // A meeting stamped for ANOTHER pairing (the board was re-paired since) is not this pairing's meeting.
-    await meeting(board.fixtureId, r.orgId, { sides: ["away"] });
+    await meeting(board.fixtureId, r.orgId, { sides: ["away"], arrived: true });
     await sql`update fixture_video_meetings set away_entrant_id = home_entrant_id where fixture_id = ${board.fixtureId} and side = 'away'`;
     const before = calls.length;
     expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video }))).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
     expect(calls.length, "refused before any request").toBe(before);
+  });
+
+  // Check-in capacity plan 2 Task 10: a PRE-MINTED room of a PAIRED board (stamped for its pairing, so `samePair` is true) is a room,
+  // not an arrival. The join mints an arbiter participant into whatever room it finds, so it asks for a PLAYER participant on the side
+  // first: refused before any vendor request, writing nothing - the same 409 the side had before the pre-mint job made its room early.
+  it("a PRE-MINTED room nobody has arrived in is not a started meeting: the join is a 409 VIDEO_MEETING_NOT_STARTED, twice, with zero vendor requests and no row; once the player has a participant on file the same join succeeds, and the other side is still refused (the positive pair)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const board = r.boards[0]!;
+    await bridge(board.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await meeting(board.fixtureId, r.orgId);
+    const { video, calls } = fakeVideo();
+    for (const attempt of ["first", "second"]) {
+      expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "home", { video })), `${attempt} attempt, home`).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
+    }
+    expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video })), "away too").toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
+    expect(calls, "zero vendor requests - nothing minted into an empty room").toEqual([]);
+    expect(await arbiterRows(board.fixtureId), "and no arbiter row").toEqual([]);
+    await playerParticipant(board.fixtureId, board.home.personId);
+    const out = await joinAsArbiter(r.owner, board.fixtureId, "home", { video });
+    expect(out.side, "the positive pair: the side whose player came").toBe("home");
+    expect(out.players, "and the player is in it").toHaveLength(1);
+    expect(calls.filter((c) => c.startsWith("add:arbiter")), "one arbiter participant minted, for the arrived side only").toHaveLength(1);
+    expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video })), "away's player has not come").toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
+    expect(calls.filter((c) => c.startsWith("add:arbiter")), "the refused side minted nothing").toHaveLength(1);
   });
 
   // (null, null) pin, check-in capacity plan 2 Task 2 (V529): an arbiter is never admitted into a pre-minted room nobody has
@@ -790,7 +866,7 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     await openRound(r);
     const board = r.boards[0]!;
     await bridge(board.fixtureId, r.orgId, { status: "live", moves: 10 });
-    await meeting(board.fixtureId, r.orgId);
+    await meeting(board.fixtureId, r.orgId, { arrived: true });
     await sql`update fixture_video_meetings set home_entrant_id = null, away_entrant_id = null where fixture_id = ${board.fixtureId} and side = 'away'`;
     const { video, calls } = fakeVideo();
     expect(await codeOf(joinAsArbiter(r.owner, board.fixtureId, "away", { video }))).toEqual([409, "VIDEO_MEETING_NOT_STARTED"]);
@@ -1044,7 +1120,7 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     const over = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
     await openRound(over);
     await bridge(over.boards[0]!.fixtureId, over.orgId, { status: "finished", moves: 12 });
-    await meeting(over.boards[0]!.fixtureId, over.orgId);
+    await meeting(over.boards[0]!.fixtureId, over.orgId, { arrived: true });
     const a = fakeVideo();
     expect(await codeOf(joinAsArbiter(over.owner, over.boards[0]!.fixtureId, "home", { video: a.video }))).toEqual([409, "FIXTURE_NOT_PLAYABLE"]);
     expect(a.calls).toEqual([]);
@@ -1053,7 +1129,7 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     expect((await joinAsArbiter(over.owner, over.boards[0]!.fixtureId, "home", { video: a.video })).authToken, "positive pair: live").toBe("tok-add-1");
     // No open for this round (D12): no match exists yet.
     const shut = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
-    await meeting(shut.boards[0]!.fixtureId, shut.orgId);
+    await meeting(shut.boards[0]!.fixtureId, shut.orgId, { arrived: true });
     const b = fakeVideo();
     expect(await codeOf(joinAsArbiter(shut.owner, shut.boards[0]!.fixtureId, "home", { video: b.video }))).toEqual([409, "ROUND_NOT_OPEN"]);
     expect(b.calls).toEqual([]);
