@@ -937,7 +937,7 @@ const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => {
  *  after a commit. */
 export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
-  hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void> } = {},
+  hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void>; afterAdvance?: (stage: StageRef, advance: AdvanceObs) => Promise<void> } = {},
 ): Promise<StagePlay[]> {
   // W4 B3 (X-PL-2, owner ruling G2): a firstLosses plate has NO day-one lines - its field is open until every first match is decided, so a
   // Generate before then answers an empty list by design. It is generated (and proposed) where the product draws it, below.
@@ -996,6 +996,9 @@ export async function playDivision(
         continue;
       }
     }
+    // W5 T24 (C6a): the SECOND stage's seats are confirmed and nothing of it is played yet - the window a correction in the completed source
+    // lands in (RB5-K6: "before the destination starts: re-propose and re-confirm"). Stage 2 only, the one the first stage feeds.
+    if (i === 1 && advance !== null) await hooks.afterAdvance?.(stage, advance);
     // D12: the round hooks run on stage 1 only; the bracket pick is the scenario's rule for every bracket match, so it
     // goes to each stage (a later stage it does not apply to — a table — never asks it).
     await playStage(ctx, rec, setup, i === 0 ? hooks : hooks.bracketPick === undefined ? {} : { bracketPick: hooks.bracketPick }, stage);

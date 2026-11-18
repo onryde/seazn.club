@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { familyOf } from "../lib/backlog.ts";
 import { LAYERS, type Layer } from "../lib/results.ts";
 import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
 import { SPAWN_MS, spawnBudget } from "./spawn-budget.ts";
@@ -229,7 +230,8 @@ describe("the section agrees with AUDIT-LEDGER.md (the ledger's own renderer)", 
     const got: string[][] = [];
     for (const wave of WAVES) for (const r of tableAfter(waveSection(wave), "id")) got.push([r[0]!, wave, r[1]!, r[2]!]);
     const key = (r: string[]): string => `${r[0]} ${r[1]}`;
-    expect(got.map(key).sort(), "the ids and their waves").toEqual(want.map((r) => key([r[0]!, r[1]!])).sort());
+    // the ledger names a sub-wave (W2d); the section files it under its design row (W2): familyOf, ruling 183
+    expect(got.map(key).sort(), "the ids and their waves").toEqual(want.map((r) => key([r[0]!, familyOf(r[1]!)!])).sort());
     for (const r of want) {
       const g = got.find((x) => x[0] === r[0])!;
       expect([g[2], g[3]], `${r[0]}: severity and title`).toEqual([r[2], r[3]]);
@@ -241,14 +243,14 @@ describe("the section agrees with AUDIT-LEDGER.md (the ledger's own renderer)", 
     const summary = tableAfter(SECTION, "wave");
     const per = (title: string): Map<string, number> => {
       const m = new Map<string, number>();
-      for (const r of ledgerRows(title)) m.set(r[1]!, (m.get(r[1]!) ?? 0) + 1);
+      for (const r of ledgerRows(title)) m.set(familyOf(r[1]!)!, (m.get(familyOf(r[1]!)!) ?? 0) + 1);
       return m;
     };
     // `reproduced` rows are bullets (`- **SC-O1** (W2) …`), not table rows.
     const repro = new Map<string, number>();
     const at = ledgerMd.indexOf("## Reproduced — ");
     const sect = ledgerMd.slice(at + 3, at + 3 + ledgerMd.slice(at + 3).search(/^## /m));
-    for (const m of sect.matchAll(/^- \*\*[A-Z]{2}-[A-Z]+\d+\*\* \((W\d+)\)/gm)) repro.set(m[1]!, (repro.get(m[1]!) ?? 0) + 1);
+    for (const m of sect.matchAll(/^- \*\*[A-Z]{2}-[A-Z]+\d+\*\* \((W\d+)\)/gm)) repro.set(familyOf(m[1]!)!, (repro.get(familyOf(m[1]!)!) ?? 0) + 1);
     const ne = per("not-exercised");
     const vr = per("verified-by-read");
     let checked = 0;

@@ -34,6 +34,20 @@ function designRows(file: string): DesignRow[] {
   return rows;
 }
 
+/** The design's amendment paragraph (below §8's table): its 1-based line, the wave it moved ids FROM and TO, and the ids - all read from its own
+ *  text. W5 app PR A Task 24 (owner ruling 288, programme ruling 183): "ST-G4, ST-G12 and ST-G13 moved from W5 to W2d". */
+function designAmendment(file: string): { line: number; from: string; to: string; ids: Set<string> } {
+  const lines = readFileSync(file, "utf8").split("\n");
+  const at = lines.findIndex((l) => l.startsWith("**W2d amendment"));
+  expect(at, "the design's W2d amendment paragraph").toBeGreaterThan(0);
+  const para: string[] = [];
+  for (let i = at; i < lines.length && lines[i]!.trim() !== ""; i++) para.push(lines[i]!);
+  const text = para.join(" ");
+  const m = /((?:ST|FX|SC|SW|SH)-G\d+(?:,? (?:and )?(?:ST|FX|SC|SW|SH)-G\d+)*) moved from (W\d+[a-z]?) to (W\d+[a-z]?)/.exec(text);
+  expect(m, "the amendment says '<ids> moved from <wave> to <wave>'").not.toBeNull();
+  return { line: at + 1, from: m![2]!, to: m![3]!, ids: new Set(m![1]!.match(/(?:ST|FX|SC|SW|SH)-G\d+/g) ?? []) };
+}
+
 const ID_TOKEN = /\b(SC|ST|FX|SW|SH)-([A-Z]?)(?:(\d+)(?:–[A-Z]?(\d+))?|\*)((?:\/(?:(?:SC|ST|FX|SW|SH)-)?[A-Z]\d+)*)/g;
 
 /** The ids a Carries cell names: plain ids, ranges (`FX-G8–G11`), slash lists (`SC-O1/SC-O2`, `ST-G3/G4/G5`) as exact ids, and the
@@ -120,10 +134,25 @@ describe("design §8's routing (D:446-460), the committed gap-routing.json again
 
   it("each route re-derives from the design: a D:<line> basis is a row that LISTS the id at the route's wave; a scope basis is the row whose wave scope names the word, for an id the design does not list", () => {
     const basis = routing.basis!;
+    const amendment = designAmendment(DESIGN);
     let listed = 0;
     let scoped = 0;
+    let amended = 0;
     for (const [key, wave] of Object.entries(routing.routes)) {
       const b = basis[key]!;
+      const a = /^amend:D:(\d+)$/.exec(b);
+      if (a !== null) {
+        // an id the design's amendment paragraph moved: the basis is THAT paragraph, the route its "to", and the table (or the format's scope) still gives
+        // the "from" - the W1d baseline's own routing, which the amendment says it does not rewrite.
+        expect(Number(a[1]), `${key}: the amendment is design line ${amendment.line}`).toBe(amendment.line);
+        expect(amendment.ids.has(key), `${key} is not an id the amendment names`).toBe(true);
+        expect(wave, `${key}: the amendment moves it to ${amendment.to}`).toBe(amendment.to);
+        const listedRow = owner.get(key);
+        expect(listedRow === undefined || listedRow.wave === amendment.from, `${key}: the table gives ${listedRow?.wave}, the amendment says it moved from ${amendment.from}`).toBe(true);
+        expect(rows.some((r) => r.wave === amendment.from), `the amendment's from-wave ${amendment.from} is a table row`).toBe(true);
+        amended++;
+        continue;
+      }
       const d = /^D:(\d+)$/.exec(b);
       const s = /^scope:D:(\d+):(.+)$/.exec(b);
       expect(d !== null || s !== null, `${key}: ${b}`).toBe(true);
@@ -147,12 +176,17 @@ describe("design §8's routing (D:446-460), the committed gap-routing.json again
         scoped++;
       }
     }
-    // 59 exact ids the design names (SC 22, FX 15, ST 18, SW-M8, SW-M9, SH-G1, SH-G7), its 2 wildcards, 48 unlisted.
-    expect(listed).toBe(61);
-    expect(scoped).toBe(48);
+    // 59 exact ids the design names (SC 22, FX 15, ST 18, SW-M8, SW-M9, SH-G1, SH-G7), its 2 wildcards, 48 unlisted - less the three the amendment
+    // moved (ST-G4 and ST-G13 were named, ST-G12 was unlisted): 61 - 2 listed, 48 - 1 scoped, 3 amended.
+    expect(listed).toBe(59);
+    expect(scoped).toBe(47);
+    expect(amended).toBe(3);
+    expect([...amendment.ids].sort()).toEqual(["ST-G12", "ST-G13", "ST-G4"]);
+    expect(listed + scoped + amended).toBe(Object.keys(routing.routes).length);
   });
 
   it("every one of the 152 rows is routed to the wave the design gives it: listed ids to their row's wave, the other 48 to an exact route of their own", () => {
+    const moved = designAmendment(DESIGN);
     let listed = 0;
     let own = 0;
     for (const id of universe) {
@@ -160,7 +194,7 @@ describe("design §8's routing (D:446-460), the committed gap-routing.json again
       expect(route, `${id} has no route`).not.toBeNull();
       const row = owner.get(id);
       if (row !== undefined) {
-        expect(route, `${id}: design line ${row.line} says ${row.wave}`).toBe(row.wave);
+        expect(route, `${id}: design line ${row.line} says ${row.wave}`).toBe(moved.ids.has(id) ? moved.to : row.wave);
         listed++;
       } else {
         expect(Object.hasOwn(routing.routes, id), `${id} is unlisted, so it owes an exact route citing its format or sport`).toBe(true);

@@ -71,6 +71,10 @@ export interface EntrantRow {
 export interface LateEntryWire {
   format: string; case: string; entrant_id?: string; stage_id?: string;
   fixture_id?: string; opponent_id?: string; withdrawn_id?: string; scheduled?: boolean; reason?: string;
+  /** W5 T24 (api-v1/schemas/entrants.ts TableLateEntryResult - a league or group's answer, `format` "league" | "group"): who placed the newcomer, the pool
+   *  a group newcomer joined, the lines written (`placement` `bye_slot` | `catch_up_round`), how many catch-up rounds were appended. */
+  source?: string; pool_key?: string; appended_rounds?: number;
+  fixtures?: { fixture_id: string; round_no: number; placement: string; scheduled: boolean }[];
 }
 /** W4 T24: Reinstate's answer - the entrant's stored status, and how it rejoined a started knockout (`late_entry`, K13). */
 export interface ReinstateOut { entrant_id: string; status: string; late_entry: LateEntryWire | null }
@@ -139,8 +143,12 @@ export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; rea
  *  StandingsRow) — what the forfeit-credit scenarios isolate a match's credit from. Optional: a fake may omit them.
  *  `rank` (W2e Task 27, D11 b): null on every row of a LEVEL table (`level: true`, no counted result) — the API serves
  *  no position nobody has earned; the product still orders the rows by seed, then id. */
-export interface StandingsRowWire { entrantId: string; rank: number | null; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
+export interface StandingsRowWire { entrantId: string; rank: number | null; /** W5 T22: `active`, else how the entrant left (`withdrawn`, `disqualified`); the pool key the rank is within (null: a league / one pool); a pinned rank. Absent from the fakes' rows. */ status?: string; pool?: string | null; rankLocked?: boolean; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
+/** W5 T24: GET /stages/:id/pools (api-v1/schemas/stages.ts StagePools) - a stage with SEVERAL pools lists them in the product's order; a league, a knockout and a one-pool group list none. */
+export interface StagePoolsOut { stage_id: string; pools: { id: string; key: string; name: string }[] }
+/** W5 T24: POST /stages/:id/standings/override's rows (api-v1/schemas/ai-planning.ts OverrideStandings): a rank pinned for an entrant, with the organiser's reason. */
+export interface RankOverrideRow { entrant_id: string; rank: number; reason: string }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
 /** GET /fixtures/:id/state (usecases/fixtures.ts getFixtureState): the status, the ledger head, the engine's outcome, and — W2e
  *  Task 21 — the stored `summary` (the engine's `summary(state)` the scoreboards print) and `state` (the fold itself), both
@@ -326,6 +334,11 @@ export interface OrganiserDriver {
    *  as `reinstate`: the HTTP driver has them, a layer that does not drive the path (and the fakes) does not. A 409 / 422 refusal throws RefusedCall. */
   declareJointWinners?(fixtureId: string): Promise<JointWinnersOut>;
   undoJointWinners?(fixtureId: string): Promise<JointWinnersUndoOut>;
+  /** W5 T24 (P7, SURF; RB5-P5, RB5-P7): the stage's pools (GET /stages/:id/pools). Optional, as `reinstate`: the HTTP driver has it. */
+  stagePools?(stageId: string): Promise<StagePoolsOut>;
+  /** W5 T24 (P7; RB5-P5, RB5-P7): pins ranks (POST /stages/:id/standings/override). A refusal (RR_RANK_OVERRIDE_POOL, RR_RANK_OVERRIDE_NOT_TABLE,
+   *  RR_RANK_OVERRIDE_UNDRAWN_POOLS) throws RefusedCall. Optional, as `reinstate`. */
+  overrideRanks?(stageId: string, rows: readonly RankOverrideRow[]): Promise<unknown>;
   readonly callCount: number;
 }
 

@@ -19,7 +19,7 @@ import {
   DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type TemplateCreateInput, type GenerateOut, type JointWinnersOut, type JointWinnersUndoOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
+  type PublicStandingsOut, type RankOverrideRow, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StagePoolsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -449,6 +449,14 @@ export class HttpDriver implements OrganiserDriver {
 
   async standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return this.#call(`/api/v1/stages/${stageId}/standings${poolId === null ? "" : `?pool_id=${encodeURIComponent(poolId)}`}`);
+  }
+
+  async stagePools(stageId: string): Promise<StagePoolsOut> {
+    return this.#call(`/api/v1/stages/${stageId}/pools`);
+  }
+
+  async overrideRanks(stageId: string, rows: readonly RankOverrideRow[]): Promise<unknown> {
+    return this.#call(`/api/v1/stages/${stageId}/standings/override`, "POST", { rows });
   }
 
   async publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut> {

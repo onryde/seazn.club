@@ -4085,6 +4085,9 @@ fold.
     regenerating the section and re-pinning `gap-routing.test.ts`'s counts: a rewrite of committed W1d evidence, which
     is the controller's or the owner's call, not a fold's. Done instead: the W5 prompt (`W5-round-robin.md`) and a
     dated note under design §8's table record the move (ruling 183).
+    **Superseded 2026-11-18 (W5 app PR A Task 24, owner ruling 288):** the re-route was done. `gap-routing.json` routes the three to
+    W2d (basis `amend:D:462`, the amendment paragraph), `audit-verdicts.json` carries wave W2d and cites ruling 183, the baseline's
+    `AUDIT-LEDGER.md` and the section below are regenerated (the backlog files a sub-wave under its numbered family, `familyOf`).
 22. **"No owner ruling signs RB2B-7" (the W1d backlog carry on SC-P4).** True at W1d, outlived by ruling 189 (B2) and
     ruling 186 (D10(f), the SC-P4 oracle). The carry now says so, the section is regenerated, and its pin checks the
     signing ruling instead of the absence.
@@ -5470,10 +5473,10 @@ A test runs both commands as printed and requires the result to equal this secti
 
 | wave | name | gaps | ❌ cases | audit ids | reproduced | exercised-not-reproduced | not-exercised | verified-by-read | verified-by-failing-test |
 |---|---|---|---|---|---|---|---|---|---|
-| W2 | sport scoring fidelity | 2 | 77 | 54 | 2 | 0 | 42 | 10 | 0 |
+| W2 | sport scoring fidelity | 2 | 77 | 57 | 2 | 0 | 45 | 10 | 0 |
 | W3 | Swiss | 1 | 3 | 32 | 1 | 0 | 20 | 11 | 0 |
 | W4 | knockout family | 4 | 41 | 9 | 2 | 0 | 6 | 1 | 0 |
-| W5 | round-robin family | 2 | 17 | 19 | 1 | 0 | 13 | 5 | 0 |
+| W5 | round-robin family | 2 | 17 | 16 | 1 | 0 | 10 | 5 | 0 |
 | W6 | double elimination | 0 | 0 | 4 | 0 | 0 | 1 | 3 | 0 |
 | W7 | americano, mexicano, ladder | 3 | 71 | 8 | 1 | 0 | 2 | 5 | 0 |
 | W8 | scorer sheets | 0 | 0 | 20 | 0 | 0 | 19 | 1 | 0 |
@@ -5482,7 +5485,7 @@ A test runs both commands as printed and requires the result to equal this secti
 
 ### W2 — sport scoring fidelity
 
-The ledger holds 54 audit ids for W2: 2 reproduced, 0 exercised-not-reproduced, 42 not-exercised, 10 verified-by-read, 0 verified-by-failing-test.
+The ledger holds 57 audit ids for W2: 2 reproduced, 0 exercised-not-reproduced, 45 not-exercised, 10 verified-by-read, 0 verified-by-failing-test.
 
 🚫 21 planned cases have no organiser path and route to W2 by their own reason (L2 21); the baseline never drove them, so they are in no table below.
 
@@ -5491,7 +5494,7 @@ The ledger holds 54 audit ids for W2: 2 reproduced, 0 exercised-not-reproduced, 
 | SC-O1 | A drawn knockout game is accepted as final. No tiebreak mechanism exists (no armageddon, rapid tiebreak or mini-match), the bracket seats… | 65 | L1, L2, L3 | `league_ko\|boardgame\|blitz\|LIFECYCLE@1280`, `league_ko\|boardgame\|blitz\|R4a@768`, `league_ko\|boardgame\|blitz\|LIFECYCLE`, `groups_ko\|boardgame\|blitz\|LIFECYCLE@1280`, `group_stepladder\|boardgame\|blitz\|LIFECYCLE@1280` |
 | SC-O2 | `supportsDraws` is a deny-list that misses `page_playoff` (a bracket kind) and `ladder`. A draw there passes the KO guard and stalls | 12 | L1, L3 | `group_playoffs\|generic\|score\|LIFECYCLE@1280`, `group_playoffs\|generic\|score\|LIFECYCLE`, `swiss_playoff\|generic\|score\|LIFECYCLE@1280`, `group_playoffs\|generic\|score\|M1`, `group_playoffs\|generic\|score\|R4` |
 
-Audit ids no baseline case drives (`not-exercised`, 42): each is owed a scenario before W2 can close it.
+Audit ids no baseline case drives (`not-exercised`, 45): each is owed a scenario before W2 can close it.
 
 | id | severity | title |
 |---|---|---|
@@ -5529,10 +5532,13 @@ Audit ids no baseline case drives (`not-exercised`, 42): each is owed a scenario
 | SC-O10 | L | Result method and winner are not cross-checked (a decisive "stalemate", or a drawn "checkmate"). Only the pad's two action lists keep them… |
 | SC-O11 | L | The 500 score cap is pad-only; the engine accepts any non-negative int |
 | SC-O12 | L | Team chess (board points such as 2½–1½, match points) is unsupported: entrant kinds are individual only |
+| ST-G4 | M | The cross-pool (bestNth) comparison always uses `points,diff,for,wins`. Cricket NRR, set/point ratio, h2h and lots are ignored. Sports… |
 | ST-G8 | M | A stage PointsRule (bonus points, forfeit points, awarded walkover score, no-result bonus) has no UI. It is reachable only via API/templates… |
 | ST-G9 | M | `applyPointsRule` forces `no_result` to 0 (bonus aside). A cricket tie has `drawn:0` (`ties` metric only), so under any rule it scores 0 and… |
 | ST-G10 | M | The cascade is division-level only (no per-stage). It has no editor UI (console shows it read-only, `o/.../page.tsx:899`). `validateCascade`… |
 | ST-G11 | L | UEFA recursive h2h is unreachable: web never sets `h2hRecursive` (`toTableStage` omits it). `h2h_scope:"overall"` is API-only and its wiring… |
+| ST-G12 | M | The h2h mini-table is built from whatever matches the tied group has played so far, with no "all h2h matches played" guard. It is untested… |
+| ST-G13 | M | When the cascade ends without `lots`, residual ties are ordered by seed, then entrant UUID, and the popover explains it as "seeding".… |
 | ST-G16 | M | OT/SO wins and losses fold into W/L with different points. There is no OTW/OTL (or SOW/SOL) column. |
 | ST-G29 | L | `game_ratio` decides ties but has no derived column (`DERIVED_METRICS` omits it). The set-ratio header is the bare word "Ratio". |
 | ST-G31 | M | Default cascades diverge from federation rules: BWF uses matches won, then h2h for 2-way ties and game/point difference for 3+; ITTF uses… |
@@ -5604,7 +5610,7 @@ Audit ids no baseline case drives (`not-exercised`, 6): each is owed a scenario 
 
 ### W5 — round-robin family
 
-The ledger holds 19 audit ids for W5: 1 reproduced, 0 exercised-not-reproduced, 13 not-exercised, 5 verified-by-read, 0 verified-by-failing-test.
+The ledger holds 16 audit ids for W5: 1 reproduced, 0 exercised-not-reproduced, 10 not-exercised, 5 verified-by-read, 0 verified-by-failing-test.
 
 🚫 33 planned cases have no organiser path and route to W5 by their own reason (L1 20 and L2 13, 33 in all); the baseline never drove them, so they are in no table below.
 
@@ -5613,17 +5619,14 @@ The ledger holds 19 audit ids for W5: 1 reproduced, 0 exercised-not-reproduced, 
 | NEW-W1d-5 | no division-builder control builds group_only or group_group_ko | 5 (+1 also) | L2 | `group_only\|football\|11-a-side\|R4a@768`, `group_group_ko\|football\|11-a-side\|R4a@834`, `group_only\|football\|11-a-side\|M1@834`, `group_group_ko\|football\|11-a-side\|M1@320`, `group_only\|football\|11-a-side\|F1@834` |
 | ST-G5 | A pool's membership is "entrants with a result or award in this pool". A seated member who has not played yet is missing from its pool… | 12 | L2, L3 | `group_group_ko\|football\|11-a-side\|F1@320`, `group_group_ko\|football\|11-a-side\|F1`, `group_group_ko\|cricket\|t20\|F1`, `group_group_ko\|boardgame\|blitz\|F1`, `group_group_ko\|carrom\|club-29\|F1` |
 
-Audit ids no baseline case drives (`not-exercised`, 13): each is owed a scenario before W5 can close it.
+Audit ids no baseline case drives (`not-exercised`, 10): each is owed a scenario before W5 can close it.
 
 | id | severity | title |
 |---|---|---|
 | FX-G5 | M | With the wave-major `rank_order` fold, 3 pools top-2 (q=6 or 8) pairs C1 v C2 in round 1, and 5 pools top-3 pairs A2 v A3. Tests cover only… |
 | FX-G15 | M | Add match (the documented safe workaround for G1) puts each ad-hoc match in round `max+1` unless a round is passed. |
 | FX-G19 | L | Board cards for group fixtures read `R{n}` with no pool, because `BoardFixture` carries no `pool_id`. |
-| ST-G4 | M | The cross-pool (bestNth) comparison always uses `points,diff,for,wins`. Cricket NRR, set/point ratio, h2h and lots are ignored. Sports… |
 | ST-G6 | M | Standings are read with `pool_id is null` only. A pooled division gets no standings section. |
-| ST-G12 | M | The h2h mini-table is built from whatever matches the tied group has played so far, with no "all h2h matches played" guard. It is untested… |
-| ST-G13 | M | When the cascade ends without `lots`, residual ties are ordered by seed, then entrant UUID, and the popover explains it as "seeding".… |
 | ST-G14 | M | `overrideStandings` rejects a duplicate rank across the WHOLE body, so rank 1 cannot be pinned in two pools. Each call replaces all prior… |
 | ST-G15 | M | An expunge (<50% played) skips `finalized` fixtures, so the withdrawn entrant's finalized results still count while its other results are… |
 | ST-G20 | M | Hub tables have no withdrawn/disqualified chip. `buildTableView` takes no statuses. The wiring test scans only `<StandingsTable` call sites. |

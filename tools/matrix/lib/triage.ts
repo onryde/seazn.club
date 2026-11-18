@@ -101,8 +101,9 @@ const GapRoutingSchema = z.strictObject({
   // Where each route comes from, so a reviewer checks it against the design instead of trusting it: `D:<line>` is the design
   // table row (1-based line of the design file) that LISTS the id; `scope:D:<line>:<word>` is the row whose wave scope owns a
   // gap §8 does not list, by the word of its format or sport that row names (§8: "gaps not listed go to the wave owning their
-  // format/sport"). Optional here; the committed file's test holds every route to one.
-  basis: z.record(ROUTE_KEY, z.string().regex(/^(?:D:\d+|scope:D:\d+:\S.*)$/, "D:<line> or scope:D:<line>:<word>")).optional(),
+  // format/sport"). `amend:D:<line>` (W5 app PR A Task 24, ruling 183) is the design's amendment paragraph that MOVED the id to another wave
+  // after the table was written. Optional here; the committed file's test holds every route to one.
+  basis: z.record(ROUTE_KEY, z.string().regex(/^(?:D:\d+|scope:D:\d+:\S.*|amend:D:\d+)$/, "D:<line>, scope:D:<line>:<word> or amend:D:<line>")).optional(),
 }).superRefine((v, ctx) => {
   for (const k of Object.keys(v.basis ?? {})) {
     if (!Object.hasOwn(v.routes, k)) ctx.addIssue({ code: "custom", path: ["basis", k], message: `a basis for ${k}, which has no route` });

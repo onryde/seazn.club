@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  BacklogRefused, DEFAULT_BASELINE, DEFAULT_DESIGN, backingOf, cell, designWaves, exampleCases, examplesOf, loadBacklogInput, parseCarries, parseCuts, renderBacklog,
+  BacklogRefused, DEFAULT_BASELINE, DEFAULT_DESIGN, backingOf, cell, designWaves, exampleCases, examplesOf, familyOf, loadBacklogInput, parseCarries, parseCuts, renderBacklog,
   type BacklogInput, type DesignWave,
 } from "../lib/backlog.ts";
 import { findSecrets } from "../lib/redact.ts";
@@ -279,7 +279,7 @@ describe("the section over the committed baseline: structure and counts, re-coun
     const outcomes = ["reproduced", "exercised-not-reproduced", "not-exercised", "verified-by-read", "verified-by-failing-test"] as const;
     let ids = 0;
     for (const r of summary) {
-      const mine = real.ledger.entries.filter((e) => e.wave === r[0]);
+      const mine = real.ledger.entries.filter((e) => familyOf(e.wave) === r[0]);
       expect(Number(r[4]), `${r[0]}: audit ids`).toBe(mine.length);
       outcomes.forEach((o, i) => {
         expect(Number(r[5 + i]), `${r[0]}: ${o}`).toBe(mine.filter((e) => e.outcome === o).length);
@@ -291,11 +291,19 @@ describe("the section over the committed baseline: structure and counts, re-coun
     expect(ids).toBeGreaterThan(0);
   });
 
+  it("familyOf: a sub-wave is filed under its numbered family; a numbered wave is its own; no wave is none (W5 app PR A Task 24, ruling 183)", () => {
+    expect([familyOf("W2d"), familyOf("W2"), familyOf("W5"), familyOf("W10"), familyOf("W1a"), familyOf(null)]).toEqual(["W2", "W2", "W5", "W10", "W1", null]);
+    // the committed ledger HAS sub-wave ids (ST-G4/12/13 at W2d), so the mapping is exercised, not vacuous; and every one of them lands in a table wave
+    const subs = real.ledger.entries.filter((e) => e.wave !== null && familyOf(e.wave) !== e.wave);
+    expect(subs.map((e) => e.id).sort()).toEqual(["ST-G12", "ST-G13", "ST-G4"]);
+    for (const e of subs) expect(designWaves(real.design).some((w) => w.id === familyOf(e.wave)), `${e.id}: ${e.wave}'s family is a design row`).toBe(true);
+  });
+
   it("the not-exercised tables hold exactly the ledger's not-exercised ids of each wave, once each, with the ledger's own severity and title", () => {
     let checked = 0;
     for (const wave of ["W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10"]) {
       const rows = tableAfter(waveSection(md, wave), "id");
-      const want = real.ledger.entries.filter((e) => e.wave === wave && e.outcome === "not-exercised");
+      const want = real.ledger.entries.filter((e) => familyOf(e.wave) === wave && e.outcome === "not-exercised");
       expect(rows.map((r) => r[0]), `${wave}: ids`).toEqual(want.map((e) => e.id));
       for (const e of want) {
         const r = rows.find((x) => x[0] === e.id)!;

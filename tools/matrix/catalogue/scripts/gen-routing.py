@@ -84,6 +84,15 @@ for k, wave, word in UNLISTED:
     add(k, wave, f"scope:D:{L[wave]}:{word}")
 assert len(routes) == 109, len(routes)
 
+# W5 app PR A Task 24 (owner ruling 288, programme ruling 183): ST-G4, ST-G12 and ST-G13 moved from W5 to W2d, which built them. The design's
+# amendment paragraph (below the table) says so; the route follows it, citing THAT paragraph (`amend:D:<line>`), and gap-routing.test.ts
+# re-derives both halves from its text: the wave the table gave the id (the "from") and the wave the paragraph moved it to (the "to").
+amend = next(i + 1 for i, l in enumerate(design) if l.startswith("**W2d amendment"))
+for k in ("ST-G4", "ST-G12", "ST-G13"):
+    assert routes[k] == "W5", (k, routes[k])
+    routes[k] = "W2d"
+    basis[k] = f"amend:D:{amend}"
+
 def order(k):
     return (["SC", "FX", "ST", "SW", "SH"].index(k[:2]), 0 if k.endswith("*") is False else 1, k)
 keys = sorted(routes, key=lambda k: (["SC", "FX", "ST", "SW", "SH"].index(k[:2]), k.endswith("*"), (k[3:4], int(re.sub(r"\D", "", k[4:]) or 0)) if not k.endswith("*") else ("", 0)))
