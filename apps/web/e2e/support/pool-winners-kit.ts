@@ -13,13 +13,16 @@ export interface FinishedGroupsOnly {
   /** Each pool's winner (its lowest seed), in seed order, with the name the public pages show. */
   winners: { entrantId: string; name: string }[];
   names: string[];
+  /** With `leaveFirstPoolOpen`: the stage id and the fixture ids of the group left unplayed (the caller voids them). */
+  stageId: string;
+  openIds: string[];
 }
 
 export const LONG_NAME_SUFFIX = "Featherstonehaugh-Montgomery Wanderers Reserve";
 
 export async function seedFinishedGroupsOnly(
   request: APIRequestContext,
-  opts: { label: string; pools: number; perPool: number; decide?: boolean; longNames?: boolean },
+  opts: { label: string; pools: number; perPool: number; decide?: boolean; longNames?: boolean; leaveFirstPoolOpen?: boolean },
 ): Promise<FinishedGroupsOnly> {
   const org = await activeOrgSlug(request);
   const comp = await publicCompetition(request, { name: `${opts.label} ${TAG}`, orgId: org.id });
@@ -48,7 +51,10 @@ export async function seedFinishedGroupsOnly(
   expect(lines.length, "every pool's round robin was drawn").toBe(opts.pools * ((opts.perPool * (opts.perPool - 1)) / 2));
   const best = new Map<string, number>();
   for (const f of lines) for (const id of [f.home_entrant_id, f.away_entrant_id]) best.set(f.pool_id ?? "", Math.min(best.get(f.pool_id ?? "") ?? Infinity, seedOf.get(id)!));
-  const toPlay = opts.decide === false ? lines.slice(0, Math.max(0, lines.length - 1)) : lines;
+  const openPool = opts.leaveFirstPoolOpen ? lines[0]!.pool_id : undefined;
+  const openIds = lines.filter((f) => openPool !== undefined && f.pool_id === openPool).map((f) => f.id);
+  const playable = lines.filter((f) => !openIds.includes(f.id));
+  const toPlay = opts.decide === false ? playable.slice(0, Math.max(0, playable.length - 1)) : playable;
   for (const f of toPlay) {
     const loser = seedOf.get(f.home_entrant_id)! < seedOf.get(f.away_entrant_id)! ? f.away_entrant_id : f.home_entrant_id;
     const r = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: loser, reason: "walkover" } });
@@ -59,5 +65,5 @@ export async function seedFinishedGroupsOnly(
     .sort((x, y) => x - y)
     .map((seed) => ({ entrantId: ids[seed - 1]!, name: names[seed - 1]! }));
   expect(winners.length, "one winner per pool").toBe(opts.pools);
-  return { orgSlug: org.slug, compSlug: comp.slug, divSlug: div.slug, divisionId: div.id, winners, names };
+  return { orgSlug: org.slug, compSlug: comp.slug, divSlug: div.slug, divisionId: div.id, winners, names, stageId, openIds };
 }

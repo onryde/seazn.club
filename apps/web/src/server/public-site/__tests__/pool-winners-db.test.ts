@@ -22,7 +22,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants, patchEntrant } from "@/server/usecases/entrants";
 import { startDivision } from "@/server/usecases/schedule";
-import { createStages } from "@/server/usecases/stages";
+import { completeStage, createStages } from "@/server/usecases/stages";
 import { getFixtureState } from "@/server/usecases/fixtures";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { seedOrg } from "@/server/usecases/__tests__/_seed";
@@ -202,10 +202,14 @@ describe.skipIf(!HAS_DB)("W5 T14b pool winners through the real read", () => {
       const w = poolWinnersOf(detail.stages, detail.fixtures, detail.standings, detail.pools)!;
       const entry = w.find((x) => x.poolId === cyclePool)!;
       expect(entry.entrantId, `${sport}: the tied group still names a winner`).not.toBeNull();
+      // anchored on the stored row itself, then on the champion rule beside it
+      expect(entry.entrantId, `${sport}: the rank-1 row read straight from the stored snapshot`).toBe(rankOnes[0]!.entrantId);
       expect(entry.entrantId, `${sport}: the champion rule on that table`).toBe(championOfPool(detail, cyclePool));
       expect(members, `${sport}: a member of the group`).toContain(entry.entrantId);
       // and the other group is untouched: its lowest seed
       const other = w.find((x) => x.poolId !== cyclePool)!;
+      const otherRankOne = detail.standings.find((x) => x.pool_id === other.poolId)!.rows.find((x) => x.rank === 1)!;
+      expect(other.entrantId, `${sport}: the other group's rank-1 row, from the stored snapshot`).toBe(otherRankOne.entrantId);
       expect(other.entrantId).toBe(championOfPool(detail, other.poolId));
       checked++;
     }
@@ -224,4 +228,35 @@ describe.skipIf(!HAS_DB)("W5 T14b pool winners through the real read", () => {
     expect(entry.entrantId, "a pool winner is named whoever the champion rule names for that table").toBe(championOfPool(after, first.poolId));
     expect(entry.entrantId, "and it is still the departed winner").toBe(first.entrantId);
   }, 180_000);
+
+  it("a group whose every fixture was cancelled with no result (no counted result) reads No single winner; the other group still names its winner", async () => {
+    let checked = 0;
+    for (const sport of ["badminton", "football"] as const) {
+      const r = await rig(sport, 2, 3);
+      const pools = await sql<{ id: string }[]>`select id from pools where stage_id = ${r.stageId} order by key`;
+      const [voidPool, playedPool] = [pools[0]!.id, pools[1]!.id];
+      expect(await playAll(r, (p) => p === playedPool), `${sport}: the other group played out`).toBe(3);
+      const lines = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId} and pool_id = ${voidPool}`;
+      expect(lines.length, `${sport}: the voided group's lines`).toBe(3);
+      // voided the way the repo's own suites do (a cancelled line: settled, no outcome); the group's table stays the engine's level table
+      await sql`update fixtures set status = 'cancelled' where id in ${sql(lines.map((f) => f.id))}`;
+      await completeStage(r.auth, r.stageId);
+      const detail = (await getPublicDivision(r.orgSlug, r.compSlug, r.divSlug))!;
+      const snap = detail.standings.find((x) => x.pool_id === voidPool)!;
+      // premise, from the stored table: NO counted result in the voided group. A pooled stage takes a pool's membership from its results
+      // (`entrantsOfPool`), so such a group's stored table has no row that played (in practice no rows at all)
+      expect(snap.rows.filter((x) => x.played > 0).length, `${sport}: nobody played in the voided group`).toBe(0);
+      expect(detail.stages.find((st) => st.id === r.stageId)!.status, `${sport}: the stage was completed`).toBe("complete");
+      const w = poolWinnersOf(detail.stages, detail.fixtures, detail.standings, detail.pools)!;
+      expect(w, `${sport}: the stage is done, so winners are named`).not.toBeNull();
+      expect(w.find((x) => x.poolId === voidPool)!.entrantId, `${sport}: nobody won in the voided group`).toBeNull();
+      const playedRankOne = detail.standings.find((x) => x.pool_id === playedPool)!.rows.find((x) => x.rank === 1)!;
+      expect(w.find((x) => x.poolId === playedPool)!.entrantId, `${sport}: the played group's stored rank 1`).toBe(playedRankOne.entrantId);
+      // the page's own list: one named pool, one "No single winner"
+      const doc = (await loadCompetitionHub(r.orgSlug, r.compSlug))!;
+      expect(doc.poolWinners![0]!.pools.map((p) => p.name === null), `${sport}: the hub carries the same`).toEqual([true, false]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  }, 240_000);
 });

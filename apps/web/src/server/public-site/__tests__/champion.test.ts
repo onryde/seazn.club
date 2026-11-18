@@ -730,13 +730,19 @@ describe("poolWinnersOf — each pool's winner of a finished Groups only divisio
     expect(checked).toBe(2);
   });
 
-  it("a sole rank 1 flagged level is still its pool's winner (the champion rule reads no `level`); two rank-1 rows name the first, as a champion does", () => {
+  it("a pool with NO counted result (the engine's level table) names no winner - nobody won anything there - while the champion rule still reads its rank 1; two rank-1 rows name the first, as a champion does", () => {
     const level = tablesOf(2, (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1, level: true }, { entrantId: "y", rank: 2, level: true }] } : {}));
-    expect(poolWinnersOf([groupStage()], [], level, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["top-1", "x"]);
-    expect(divisionChampion([groupStage()], [], [level[1]!], [poolsOf(2)[1]!])).toBe("x"); // same rule, one table
+    // differential: before the ruling the level pool's first-ranked row was named
+    expect(poolWinnersOf([groupStage()], [], level, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["top-1", null]);
+    expect(divisionChampion([groupStage()], [], [level[1]!], [poolsOf(2)[1]!]), "the champion rule is unchanged").toBe("x");
+    // the positive pair: the same rows without the flag name their rank 1
+    const counted = tablesOf(2, (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1 }, { entrantId: "y", rank: 2 }] } : {}));
+    expect(poolWinnersOf([groupStage()], [], counted, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["top-1", "x"]);
     const shared = tablesOf(2, (i) => (i === 1 ? { rows: [{ entrantId: "a", rank: 1 }, { entrantId: "b", rank: 1 }] } : {}));
     expect(poolWinnersOf([groupStage()], [], shared, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["a", "top-2"]);
     expect(divisionChampion([groupStage()], [], [shared[0]!], [poolsOf(2)[0]!])).toBe("a");
+    // every pool level: nothing to name
+    expect(poolWinnersOf([groupStage()], [], tablesOf(2, () => ({ rows: [{ entrantId: "x", rank: 1, level: true }] })), poolsOf(2))).toBeNull();
   });
 
   it("only a table with NO rank 1 row has no winner (flagged null); the others keep theirs, and with none at all nothing is named", () => {

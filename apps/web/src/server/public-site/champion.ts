@@ -399,9 +399,11 @@ export interface PoolWinner {
  * cascade could not split is ended by the engine itself - a stored lots draw (RB5-G9's `lots` step, `tieBreak.key` "lots") or the
  * seed fallback ("seed") - which leaves a SOLE rank 1 carrying `tieUnbroken` on every tied row; that row is the winner, as it is the
  * champion of a league (the owner's rulings 183 / RB5-U4: the pool's own cascade, stored lots included). So this never second-guesses
- * the flags: one rule for the champion and for each pool's winner. A pool whose table has no rank 1 row at all (empty rows) is the
- * only one listed with `entrantId: null` (the UI says "No single winner"), so a reader never mistakes "Group A: X" for the whole
- * result. A winner who has since departed is named all the same, as a champion is.
+ * the tie flags: one rule for the champion and for each pool's winner. The ONE addition (controller ruling, fix round 2): a pool with no
+ * COUNTED result - the engine's `level` table, where every fixture was voided or abandoned without an outcome - has no winner, whatever
+ * its first-ranked row. Such a pool, and one whose table has no rank 1 row at all, is listed with `entrantId: null` (the UI says
+ * "No single winner"), so a reader never mistakes "Group A: X" for the whole result. A winner who has since departed is named all the
+ * same, as a champion is.
  */
 export function poolWinnersOf(
   stages: readonly ChampionStage[],
@@ -425,7 +427,10 @@ export function poolWinnersOf(
     const snap = mine.find((s) => s.pool_id === pool.id);
     if (!snap) return null; // a configured pool whose table is not written: the set is partial, so it is not final
     const top = rankOneOf(snap.rows);
-    winners.push({ poolId: pool.id, key: pool.key, entrantId: top ? top.entrantId : null });
+    // A pool with NO counted result (every fixture voided or abandoned without an outcome) is the engine's LEVEL table (`level` on every
+    // row, W2d X-TB-6: nobody leads, no row is first): nobody won anything there, so no winner - never its first-ranked row. This is the
+    // one place the pool rule goes beyond the champion's (which keeps reading the rank-1 row; noted for a later task).
+    winners.push({ poolId: pool.id, key: pool.key, entrantId: top && top.level !== true ? top.entrantId : null });
   }
   return winners.some((w) => w.entrantId !== null) ? winners : null;
 }
