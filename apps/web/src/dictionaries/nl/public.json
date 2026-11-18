@@ -732,7 +732,7 @@
   "overlay.chase.revised": "Herzien",
   "overlay.chase.need": "Nog {runs} nodig",
   "overlay.chase.needBalls": "Nog {runs} nodig uit {balls} ballen",
-  "overlay.brand": "seazn",
+  "overlay.poweredBy": "Aangedreven door",
   "overlay.watchLive": "Live kijken",
   "overlay.replay": "Herhaling",
   "overlay.slate.warmingHeadlineVs": "{home} tegen {away}",

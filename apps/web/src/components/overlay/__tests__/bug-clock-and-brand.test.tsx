@@ -82,11 +82,10 @@ describe("I3 — the bug's clock is its OWN type token, not the brand's", () => 
     expect(propsOf(clock).style, "§4's LED colour belongs in the class").toBeUndefined();
   });
 
-  it("the positive/negative pair — no clock means the BRAND cell, still on .ovl-bug-brand", () => {
+  it("the positive/negative pair — no clock means NO trailing cell at all (the brand left the header, 2026-11-17)", () => {
     const tree = walk(OverlayBug({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
     expect(tree.find((el) => classesOf(el).includes("ovl-bug-clock"))).toBeUndefined();
-    const brand = tree.find((el) => classesOf(el) === "ovl-bug-brand ovl-display");
-    expect(brand, "the header still ends in the brand when there is no clock").toBeDefined();
+    expect(tree.some((el) => classesOf(el).includes("ovl-bug-brand"))).toBe(false);
   });
 
   it("globals.css declares .ovl-bug-clock at §4's own values: 33px / 700 / LED, no tracking", () => {
@@ -102,13 +101,11 @@ describe("I3 — the bug's clock is its OWN type token, not the brand's", () => 
     ).not.toContain("letter-spacing");
   });
 
-  it("the brand's own rule is UNCHANGED — the fix is a new token, not a widening", () => {
-    const body = ruleBody(".ovl-bug-brand");
-    // R2007 (D9, `_THEMES.md` §4 amended 2026-10-15): the brand rose to the 30 px floor; it is still the brand's OWN
-    // rule, its weight and tracking unchanged — the clock is still a separate token.
-    expect(body, "_THEMES.md §4 — brand Barlow 30/600 .08em (D9; was 24)").toContain("font-size: 30px");
-    expect(body).toContain("font-weight: 600");
-    expect(body).toContain("letter-spacing: 0.08em");
+  it("the brand's rules are GONE from the stylesheet — a rule with no element is dead CSS", () => {
+    expect(() => ruleBody(".ovl-bug-brand")).toThrow();
+    expect(() => ruleBody(".ovl-brand")).toThrow();
+    // …and the helper is not simply throwing for everything: a rule that exists still reads.
+    expect(ruleBody(".ovl-bug-clock")).toContain("font-size");
   });
 
   it("the bug's clock and the BAR's clock agree that a clock is LED — §3/§4 disagreed before", () => {
@@ -120,34 +117,48 @@ describe("I3 — the bug's clock is its OWN type token, not the brand's", () => 
   });
 });
 
-describe("I5 — `overlay.brand` is RESOLVED, not hardcoded, in the bar and the bug", () => {
-  // A key-existence test passes in both the orphaned and the wired state (the
-  // five `overlay.slate.*` keys shipped that way). What separates them is a
-  // resolver that returns something OTHER than the English word: with `keyMsg`
-  // a hardcoded `seazn` renders `seazn` and this reds.
+describe("owner ruling 2026-11-17 — the scorebug carries NO brand word: the corner badge is the one mark", () => {
+  // The bar and the bug used to end in `msg("overlay.brand")`. The corner badge (`overlay-brand-badge.tsx`, mounted by
+  // the stage on every template) took the brand, so a second mark inside the scorebug would show it twice.
+  // `brand-badge.test.tsx` proves the badge mounts; this proves the old cells did not come back.
+  const models: readonly (readonly [string, OverlayModel])[] = [
+    ["no clock", BASE_MODEL],
+    ["with a clock", { ...BASE_MODEL, header: { context: "overlay.header.live", clock: "12:41" } }],
+  ];
   it.each([
-    ["OverlayBar", OverlayBar, "ovl-brand ovl-display"],
-    ["OverlayBug", OverlayBug, "ovl-bug-brand ovl-display"],
-  ] as const)("%s renders msg(\"overlay.brand\"), not the literal", (_name, Component, cls) => {
-    const tree = walk(Component({ model: BASE_MODEL, tick: [false, false], msg: keyMsg }));
-    const brand = tree.find((el) => classesOf(el) === cls);
-    expect(brand, "the brand cell must mount").toBeDefined();
-    expect(textOf(brand!), "resolved through the dictionary channel").toBe("overlay.brand");
-    expect(textOf(brand!), "a hardcoded literal is exactly what this catches").not.toBe("seazn");
+    ["OverlayBar", OverlayBar],
+    ["OverlayBug", OverlayBug],
+  ] as const)("%s resolves no brand key and mounts no brand cell, with or without a clock", (_name, Component) => {
+    let checked = 0;
+    for (const [label, model] of models) {
+      const asked: string[] = [];
+      const spyMsg: OverlayMsg = (key) => {
+        asked.push(key);
+        return key;
+      };
+      const tree = walk(Component({ model, tick: [false, false], msg: spyMsg }));
+      expect(asked, label).not.toContain("overlay.brand");
+      expect(tree.some((el) => /\bovl-(bug-)?brand\b/.test(classesOf(el))), label).toBe(false);
+      expect(tree.some((el) => textOf(el) === "seazn"), label).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(models.length);
   });
 
-  it.each(["en", "fr", "es", "nl"])(
-    "%s/public.json's own `overlay.brand` is what a real dictionary renders",
-    (locale) => {
-      const dict = JSON.parse(
-        readFileSync(join(DICT, locale, "public.json"), "utf8"),
-      ) as Record<string, string>;
-      const realMsg: OverlayMsg = (key) => dict[key] ?? key;
-      const tree = walk(OverlayBar({ model: BASE_MODEL, tick: [false, false], msg: realMsg }));
-      const brand = tree.find((el) => classesOf(el) === "ovl-brand ovl-display");
-      expect(textOf(brand!), "the brand mark is the same word in every locale").toBe("seazn");
-      // …and the key really is present, so the render above is not `?? key`.
-      expect(typeof dict["overlay.brand"]).toBe("string");
-    },
-  );
+  it.each(["en", "fr", "es", "nl"])("%s: `overlay.brand` is gone from the dictionary — nothing reads it", (locale) => {
+    const dict = JSON.parse(readFileSync(join(DICT, locale, "public.json"), "utf8")) as Record<string, string>;
+    expect(Object.keys(dict).length).toBeGreaterThan(0);
+    expect(dict["overlay.brand"]).toBeUndefined();
+  });
+});
+
+describe("owner report 2026-11-17 — the bar's trailing score cell never wraps", () => {
+  // A tennis bar with a 43-character entrant name put "1 :" over "1": the bar's row is a flex row, every cell shrinks
+  // by default, and the LED cell's text broke at its spaces once the names squeezed it. The trailing cells (the LED
+  // count, and the clock that takes the same slot) keep their own width; the NAMES are what give way.
+  it.each([".ovl-cells-led", ".ovl-clock-cell"])("%s holds its width and stays on one line", (selector) => {
+    const body = ruleBody(selector);
+    expect(body).toContain("flex: none");
+    expect(body).toContain("white-space: nowrap");
+  });
 });

@@ -87,7 +87,7 @@ export const SLATE_TOKENS = {
   headlineInk: "ink" as "ink" | `#${string}`,
   /** §4a `line: Geist 27/500 ink 70 %`. */
   lineInkAlpha: 0.7,
-  /** §4a `brand: "seazn" Barlow 30/600 … ink 75 %`. */
+  /** §4a `brand:` — the corner badge's "Powered by" and timer, ink 75 % on a solid board plate. */
   brandInkAlpha: 0.75,
   /** §4a signal-lost: one 15-px dot beside the line — the live dot's own hex. */
   indicator: "#ef4444",
@@ -321,7 +321,7 @@ export const OVERLAY_ALPHA_ROLES: readonly OverlayAlphaRole[] = [
   { id: "ink70-on-board-2", fg: "ink", bg: "board-2", alpha: 0.7, floor: 4.5, where: "TEXT — §3 live-cell context line Geist 21/500 (the live cell's ground IS board-2); §4 header brand Barlow 24/600" },
   { id: "ink65-on-board", fg: "ink", bg: "board", alpha: 0.65, floor: 4.5, where: "TEXT — §4 row meta Barlow 30/500 (overs)" },
   { id: "ink65-on-board-2", fg: "ink", bg: "board-2", alpha: 0.65, floor: 4.5, where: "TEXT — §4 header context Geist 19.5/500" },
-  { id: "ink75-on-board", fg: "ink", bg: "board", alpha: 0.75, floor: 4.5, where: "TEXT — §4a slate brand 'seazn' Barlow 30/600 on the slate ground" },
+  { id: "ink75-on-board", fg: "ink", bg: "board", alpha: 0.75, floor: 4.5, where: "TEXT — the corner brand badge's 'Powered by' and match timer, 30 px on a solid board plate (owner 2026-11-17; the slate's 'seazn' it once covered is gone)" },
   { id: "ink75-on-board-2", fg: "ink", bg: "board-2", alpha: 0.75, floor: 4.5, where: "TEXT — §3 brand cell 'seazn' Barlow 30/600" },
   { id: "ink85-on-board", fg: "ink", bg: "board", alpha: 0.85, floor: 4.5, where: "TEXT — §4 footer Geist 21/500" },
   { id: "ink92-on-board", fg: "ink", bg: "board", alpha: 0.92, floor: 4.5, where: "TEXT — §3 detail band Geist 24/500 (band ground is board @ 90 %)" },

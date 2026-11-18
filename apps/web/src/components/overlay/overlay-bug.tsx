@@ -49,7 +49,6 @@ function BugCode({ code }: { code: string }) {
 export function OverlayBug({
   model,
   tick,
-  msg,
 }: {
   model: OverlayModel;
   tick: [boolean, boolean];
@@ -85,20 +84,11 @@ export function OverlayBug({
         {!model.decided && model.header.period ? (
           <span className="ovl-bug-context">{model.header.period}</span>
         ) : null}
-        {/* Fix round 5, I3 — §4's header ends in "brand Barlow 24/600 .08em
-            ink 70 % — football family: clock Barlow 33/700 LED instead". The
-            clock used to borrow `.ovl-bug-brand` and override only `color`,
-            so the one number a football viewer reads shipped 27 % small, a
-            weight light, and letter-spaced like a wordmark. Its own class,
-            not a widening of the brand's — the brand cell below is unchanged.
-            I5 — and the brand word itself now comes from the dictionary
-            (`overlay.brand`, declared in all four locales since W1 and read
-            by nothing until now). */}
-        {model.header.clock ? (
-          <span className="ovl-bug-clock ovl-display">{model.header.clock}</span>
-        ) : (
-          <span className="ovl-bug-brand ovl-display">{msg("overlay.brand")}</span>
-        )}
+        {/* Fix round 5, I3 — the football family's clock is its OWN type token (Barlow 33/700 LED), never the
+            brand's. The header's brand word is gone (owner, 2026-11-17): the corner badge
+            (`overlay-brand-badge.tsx`) carries the brand for every template, so a header without a clock ends at
+            its context line. */}
+        {model.header.clock ? <span className="ovl-bug-clock ovl-display">{model.header.clock}</span> : null}
       </div>
       {model.focus?.strip ? (
         <div data-testid="ovl-innings-strip" className="ovl-bug-innings-strip ovl-label">

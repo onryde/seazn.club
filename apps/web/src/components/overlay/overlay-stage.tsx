@@ -26,6 +26,8 @@ import {
   type OverlaySideInput,
 } from "@/lib/overlay-model";
 import { useOverlayClock } from "./use-overlay-clock";
+import { CLOCK_SPORT_KEYS, useMatchElapsed } from "./use-match-elapsed";
+import { OverlayBrandBadge } from "./overlay-brand-badge";
 import { overlayServerOffsetMs } from "@/components/public-site/overlay-server-offset";
 import { t } from "@/lib/i18n-runtime";
 import type { DecidedOutcomeTemplates } from "@/lib/scoring-vocab";
@@ -102,11 +104,9 @@ export interface OverlayStageProps {
 }
 
 /** The card layout's inputs, as the inline custom properties `.ovl-slate-content` reads (R2007 step 9b, decision G2):
- *  the template's declared box and the region `cardRegionFor` leaves beside it, in canvas px. R4 S7: `brand` is the
- *  region the slate's brand mark keeps its corner of — the template's WHOLE card region, even while the scene carousel
- *  moves the card into the strip beside its banner (`region`): a card that fills a narrowed strip reaches the strip's
- *  top-right corner, where the brand would sit on it (gallery check 4, bar × carousel). */
-function cardLayoutVars(box: CanvasBox, region: CanvasBox | null, brand: CanvasBox | null): Record<string, string> {
+ *  the template's declared box and the region `cardRegionFor` leaves beside it, in canvas px. The slate carries no brand mark of its
+ *  own (owner, 2026-11-17): the corner badge is the one mark, so no `--ovl-brand-*` is written. */
+function cardLayoutVars(box: CanvasBox, region: CanvasBox | null): Record<string, string> {
   const px = (n: number) => `${n}px`;
   return {
     "--ovl-safe-x": px(box.x),
@@ -121,9 +121,6 @@ function cardLayoutVars(box: CanvasBox, region: CanvasBox | null, brand: CanvasB
           "--ovl-card-w": px(region.width),
           "--ovl-card-h": px(region.height),
         }),
-    ...(brand === null
-      ? {}
-      : { "--ovl-brand-x": px(brand.x), "--ovl-brand-y": px(brand.y), "--ovl-brand-w": px(brand.width) }),
   };
 }
 
@@ -208,6 +205,15 @@ export function OverlayStage(props: OverlayStageProps) {
   // (`fetchOverlayFixture` samples each answer's `Date` header), whatever this machine's clock says. A preview polls
   // nothing itself: it reads through what this page's overlay polls have measured, or this machine's clock before any.
   const clockLabel = useOverlayClock(data.clock, data.status, presentationNowOffsetMs, overlayServerOffsetMs);
+  // The corner badge's match timer (owner, 2026-11-17): time since the match started, for a sport whose scorebug has
+  // no clock of its own — one timer per picture. A clock sport never gets it, started or not (`CLOCK_SPORT_KEYS`).
+  const matchElapsed = useMatchElapsed(
+    data.matchStartedAtMs,
+    data.status,
+    CLOCK_SPORT_KEYS.has(props.sportKey) || clockLabel !== null,
+    presentationNowOffsetMs,
+    overlayServerOffsetMs,
+  );
 
   // ONE dictionary channel (Task 5e fix round). The projection and the theme
   // read the SAME resolver over the SAME `props.dict` — a theme that resolved
@@ -364,7 +370,7 @@ export function OverlayStage(props: OverlayStageProps) {
   const Theme = template.component;
   const canvasStyle = {
     ...sportThemeStyle(props.sportKey),
-    ...cardLayoutVars(template.sceneCardSafeArea, layoutRegion, cardRegion),
+    ...cardLayoutVars(template.sceneCardSafeArea, layoutRegion),
     transform: `scale(${scale})`,
   } as React.CSSProperties;
 
@@ -491,6 +497,8 @@ export function OverlayStage(props: OverlayStageProps) {
             <OverlayMomentSlab moment={moment} phase={phase} placement={placement} />
           )}
         </div>
+        {/* The corner brand badge, LAST: above every scene backdrop and card, in a corner none of them reaches. */}
+        <OverlayBrandBadge msg={msg} elapsed={matchElapsed} />
       </div>
     </div>
   );

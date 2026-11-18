@@ -732,7 +732,7 @@
   "overlay.chase.revised": "Revised",
   "overlay.chase.need": "Need {runs}",
   "overlay.chase.needBalls": "Need {runs} off {balls}",
-  "overlay.brand": "seazn",
+  "overlay.poweredBy": "Powered by",
   "overlay.watchLive": "Watch live",
   "overlay.replay": "Replay",
   "overlay.slate.warmingHeadlineVs": "{home} vs {away}",

@@ -433,12 +433,9 @@ describe("the scene carousel's mount", () => {
       const vars = (tree: ReactElement[]) => propsOf(byTestId(tree, "ovl-root")[0]!).style as Record<string, string>;
       const withCarousel = vars(render({ sceneOverride: "starting", style, initial: snap({ status: "scheduled", summary: null, lastSeq: null, sponsorPlan: cardsOnly([TITLE]) }) }));
       const without = vars(render({ sceneOverride: "starting", style, initial: snap({ status: "scheduled", summary: null, lastSeq: null }) }));
-      // Fix round 1 (CI check 4): the brand keeps the WHOLE region's top-right corner — never the strip's, where a
-      // card filling the strip would reach it.
-      expect(withCarousel["--ovl-brand-x"], `${style}: brand on the whole region`).toBe(`${region.x}px`);
-      expect(withCarousel["--ovl-brand-y"]).toBe(`${region.y}px`);
-      expect(withCarousel["--ovl-brand-w"]).toBe(`${region.width}px`);
-      expect(without["--ovl-brand-w"], `${style}: no carousel, the same corner`).toBe(`${region.width}px`);
+      // Owner, 2026-11-17: the slate has no brand mark of its own, so the canvas writes no corner for one.
+      expect(Object.keys(withCarousel).filter((k) => k.startsWith("--ovl-brand")), style).toEqual([]);
+      expect(Object.keys(without).filter((k) => k.startsWith("--ovl-brand")), style).toEqual([]);
       expect(withCarousel["--ovl-card-x"], style).toBe(`${beside.x}px`);
       expect(withCarousel["--ovl-card-w"], style).toBe(`${beside.width}px`);
       expect(withCarousel["--ovl-card-h"], style).toBe(`${beside.height}px`);

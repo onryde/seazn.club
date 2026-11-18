@@ -81,15 +81,18 @@ export interface OverlayLiveData extends LiveFixtureData {
     nominalSeconds?: number;
     /** Absent/true = tick; false = hold at anchorSeconds (pad Pause). */
     running?: boolean;
-    /** S2-5 ruling 110 — FOOTBALL ONLY: the cfg match time reads (`matchClock`), and the mark that this clock is the
-     *  shared one: anchored on the newest standing `football.clock` event (never a goal), its `anchorAtWallMs` the
-     *  server's `recorded_at`, read through the overlay's measured server offset and shown in match time (`45:00` at
-     *  the second half's start, `90+2:30` in added time). Absent for every other sport, whose clock reads as before. */
+    /** S2-5 ruling 110 — FOOTBALL ONLY: the cfg match time reads (`matchClock`), so its clock is shown in match time
+     *  (`45:00` at the second half's start, `90+2:30` in added time). Absent for every other sport. EVERY sport's clock
+     *  is anchored on its newest standing `<sport>.clock` event (never a goal), with `anchorAtWallMs` the server's
+     *  `recorded_at`, read through the overlay's measured server offset (owner ruling 2026-11-17). */
     matchTime?: MatchTimeCfg;
   };
   cricket?: {
     innings: { runs: number; wickets: number; legalBalls: number; ballsLimit: number | null }[];
   };
+  /** The corner badge's match timer (owner, 2026-11-17): the server wall time (ms) of the surviving `core.start`.
+   *  Every sport. ABSENT before the match starts, or when the fold is unavailable — the timer then shows nothing. */
+  matchStartedAtMs?: number;
   /** W2 — the last `OVERLAY_RECENT_WINDOW` surviving module events, oldest
    *  first, with the engine's own type strings and a consent-resolved person
    *  where the payload names one (`server/overlay/recent.ts`). The moment slab

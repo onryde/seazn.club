@@ -276,8 +276,8 @@ main band:        height 126   background board   ink
                   meta  Barlow 33/500 ink 70 % width 66        e.g. overs "12.3"
   divider:        1.5 wide, rgba(255,255,255,.14)
   side in play:   inset bottom bar 8 px LED, score colour LED
-  brand cell:     "seazn" Barlow 30/600 letter-spacing .08em ink 75 %,
-                  padding 0 33, background board-2
+  brand cell:     NONE (owner 2026-11-17) — the corner badge carries the brand, see §4a `brand:`
+  trailing cells: the LED count / clock cell is `flex: none; white-space: nowrap` — the names give way, not it
 detail band:      height 60, padding 0 33, gap 33, background board @ 90 %   (D9; was 51)
                   Geist 30/500 ink 92 %; separators 1.5×30 rgba(255,255,255,.2)   (D9; was 24 / 1.5×24)
                   emphasis item Geist 600 ink 100 % (chase line)
@@ -514,7 +514,7 @@ inset:            left 60   top 54
 header:           height 60, padding 0 21, background board-2   (D9; was 48)
                   dot 13.5 (#ef4444) + 1-px --sport-ink hairline (§3's rule)
                   "Live" Geist 30/600, context Geist 30/500 ink 65 %   (D9; was 21 / 19.5)
-                  right: brand Barlow 30/600 .08em ink 70 % (D9; was 24)  — football family: clock Barlow 33/700 LED instead
+                  right: football family: clock Barlow 33/700 LED; nothing otherwise (the brand word left 2026-11-17, see §4a `brand:`)
 row ×2:           height 90, padding 0 24, gap 18
                   code  Barlow 48/600 width 96         ("MK", "NBR", "RDG"; tennis: surname Barlow 42/600 width 144)
                         a code wider than 96 (a pair's four-letter code: WOME 100, WWWW 128) scales DOWN to fit it,
@@ -673,8 +673,12 @@ Full bleed, 1920×1080. No inset, no radius, no shadow: it *is* the frame.
 ground:           --sport-board, opaque, 1920×1080
                   radial highlight color-mix(in srgb, var(--sport-board-2) 60%,
                   transparent) centred at 50 % 40 %, radius 900
-brand:            "seazn" Barlow 30/600 letter-spacing .08em ink 75 %
-                  inset left 72   top 54
+brand:            the CORNER BADGE, "Powered by" Geist 30/500 ink 75 % + the Seazn Club logo (30 high)
+                  (owner 2026-11-17 — it replaced the "seazn" wordmark in the bar, the bug and this slate)
+                  on EVERY template and scene: box 640×44 at x 1184 y 1022 (`BRAND_BADGE_BOX`), right-aligned,
+                  plates = --sport-board, SOLID, radius 8
+                  match timer beside it: Barlow 30/600 ink 75 %, time since the match started;
+                  never for football / hockey / icehockey (their own clock), none before the start or after the result
 headline:         Barlow 96/800 ink 100 %, centred, letter-spacing .02em,
                   upper case as written in the dictionary
 line:             Geist 27/500 ink 70 %, 12 below the headline

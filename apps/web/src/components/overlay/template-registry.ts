@@ -226,6 +226,17 @@ export const CARD_MIN_W = 640;
 export const CARD_MIN_H = 360;
 
 /**
+ * The corner brand badge (owner, 2026-11-17): the Seazn Club logo, "Powered by" and the match timer, bottom-right on
+ * every template and every scene. DECLARED, like every other box here. It lives wholly inside the canvas's bottom inset
+ * (`CARD_INSET.bottom`, y ≥ 1008), which no card region reaches, and is right-aligned on the card frame's own right edge:
+ *   x = 1920 − 96 − 640 = 1184, y = 1080 − 72 + 14 = 1022, 640 × 44 (14 px clear of the cards above, 14 off the floor).
+ * 640 wide: the longest Powered-by line (nl) at the 30 px floor, the logo, and an `h:mm:ss` timer, with room over.
+ * Every scorebug box and sponsor slot ends at 930 or higher, so it shares the corner with nothing
+ * (`brand-badge.test.tsx` holds each claim to the registry).
+ */
+export const BRAND_BADGE_BOX: CanvasBox = { x: 1184, y: 1022, width: 640, height: 44 };
+
+/**
  * The canvas region where scene and match cards are laid out: the largest, by area, of the four inset-canvas strips
  * beside `box` (right, above, left, below; ties in that order), kept `CARD_CLEARANCE_PX` clear of it. `null` when none
  * is at least `CARD_MIN_W × CARD_MIN_H`, in which case no card renders.

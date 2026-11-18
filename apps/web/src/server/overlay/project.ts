@@ -19,44 +19,6 @@ interface RowSnapshot {
   last_seq: number | null;
 }
 
-/**
- * The wall time of the envelope that SET `asOf` — the last one carrying a
- * `GameTime` stamp equal to it.
- *
- * Review 2026-09-09 (I2): this used to be `active[active.length - 1]`, the
- * chronologically last envelope, which is a different event whenever an
- * UNSTAMPED one follows a stamped one. `applyEvent` only writes `asOf` when
- * the event carries an `at` (`football.ts:2522` — `if (at === null) return
- * applied`), so a stamped goal followed by a substitution, an unstamped card
- * or a note left `anchorSeconds` frozen at the goal while `anchorAtWallMs`
- * advanced past it. The presentation formula `anchorSeconds + (now −
- * anchorAtWallMs)` then produced a SMALLER number than the tick before it, and
- * the on-air clock jumped backward by the gap between the two events.
- *
- * Matching on the stamp (not on event type) keeps this shape-based: any sport
- * whose payloads carry the kernel's `GameTime` is covered, and no sport-key
- * branch appears here.
- */
-function anchorWallMs(
-  active: FoldedFixture["active"],
-  asOf: { period?: unknown; elapsed?: unknown },
-): number | undefined {
-  for (let i = active.length - 1; i >= 0; i--) {
-    const payload = active[i]?.payload;
-    if (typeof payload !== "object" || payload === null) continue;
-    const at = (payload as { at?: unknown }).at;
-    if (typeof at !== "object" || at === null) continue;
-    const stamp = at as { period?: unknown; elapsed?: unknown };
-    if (stamp.period !== asOf.period || stamp.elapsed !== asOf.elapsed) continue;
-    const wall = Date.parse(active[i]!.recordedAt);
-    return Number.isFinite(wall) ? wall : undefined;
-  }
-  // No envelope in the active stream accounts for this `asOf`. Rather than
-  // anchor on an arbitrary event (the defect above), emit no clock — the same
-  // "a stale clock on air is worse than no clock" rule the phase guard applies.
-  return undefined;
-}
-
 const minutesAt = (holder: unknown, key: string): number | undefined => {
   if (typeof holder !== "object" || holder === null) return undefined;
   const value = (holder as Record<string, unknown>)[key];
@@ -106,45 +68,34 @@ function nominalSecondsOf(state: unknown, phase: string): number | undefined {
   return minutes === undefined ? undefined : Math.round(minutes * 60);
 }
 
-/** The period family's clock stamp, present only while it is CURRENT. The
- *  guard `asOf.period === phase` is footballPosition's own
- *  (football.ts:730-741): a stamp from a phase the match has left is no
- *  clock, not a wrong one.
- *
- *  `nominalSeconds` is ABSENT rather than guessed when the state declares no
- *  readable cfg — see `nominalSecondsOf`. Absent is not "no clock": the anchor
- *  is still a recorded fact, and the stage holds it rather than ticking past a
- *  bound it does not have. */
-function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
-  if (typeof state !== "object" || state === null) return undefined;
-  const s = state as { phase?: unknown; asOf?: unknown; clockRunning?: unknown };
-  if (typeof s.phase !== "string") return undefined;
-  if (typeof s.asOf !== "object" || s.asOf === null) return undefined;
-  const asOf = s.asOf as { period?: unknown; elapsed?: unknown };
-  if (asOf.period !== s.phase || typeof asOf.elapsed !== "number") return undefined;
-  const wall = anchorWallMs(active, asOf);
-  if (wall === undefined) return undefined;
-  const nominalSeconds = nominalSecondsOf(state, s.phase);
-  // Absent `clockRunning` ⇒ running (pre-2026-09-13 streams). Explicit false holds.
-  const running = s.clockRunning !== false;
-  return {
-    phase: s.phase,
-    anchorSeconds: asOf.elapsed,
-    anchorAtWallMs: wall,
-    running,
-    ...(nominalSeconds === undefined ? {} : { nominalSeconds }),
-  };
-}
-
-/** Football's own event namespace. `FoldedFixture` names no sport, and the stream is the authority: every football
- *  event but the kernel's `core.*` ones is a `football.*` type (the pad builds its clock type the same way,
- *  `${module.key}.clock`). A football stream with no `football.*` event has no stamp to anchor on either way. */
-const FOOTBALL_PREFIX = "football.";
+/** A clock event's type, whatever the sport: the pad builds it as `${module.key}.clock` (`pad-host.tsx` `publishClock`),
+ *  and `FoldedFixture` names no sport, so the stream is the authority. */
+const CLOCK_SUFFIX = ".clock";
 const FOOTBALL_CLOCK = "football.clock";
 /** Every anchor the overlay reads is foreign: a row's `recordedAt` is the server's time. */
 const NOT_OWN: ReadonlySet<string> = new Set();
 
-const isFootball = (active: FoldedFixture["active"]) => active.some((e) => e.type.startsWith(FOOTBALL_PREFIX));
+/** The stream's clock event type — its newest event whose type ends `.clock` — or undefined when nobody has started,
+ *  paused or corrected a clock in this match. */
+function clockTypeOf(active: FoldedFixture["active"]): string | undefined {
+  for (let i = active.length - 1; i >= 0; i--) {
+    const type = active[i]!.type;
+    if (type.endsWith(CLOCK_SUFFIX)) return type;
+  }
+  return undefined;
+}
+
+/** A PLAY period of the period kernel (hockey, ice hockey), by the labels it generates (`Q1..Q4`, `P1..Pn`, `OT`,
+ *  `OT1..OTk` — period/kernel.ts:631-639) or a bare half. A break, a shootout and the end are none of these. */
+const PLAY_PERIOD = /^(?:[QPH]\d+|OT\d*)$/;
+
+/** Where a period-kernel play period falls in the match, for ORDER only: regulation periods by their number, every
+ *  overtime after all of them. `null` for a label that is no play period. */
+function periodRank(label: string): number | null {
+  const m = /^(?:[QPH](\d+)|OT(\d*))$/.exec(label);
+  if (m === null) return null;
+  return m[1] !== undefined ? Number(m[1]) : 1_000_000 + Number(m[2] || 0);
+}
 
 /** The fields match time reads, copied off the parsed cfg so the wire carries those and nothing else. */
 function matchTimeOf(cfg: unknown): MatchTimeCfg {
@@ -158,37 +109,65 @@ function matchTimeOf(cfg: unknown): MatchTimeCfg {
 }
 
 /**
- * S2-5 ruling 110 — FOOTBALL's clock is the shared one the console and the phone read (design §7.2), not `clockOf`'s
- * newest stamp of any kind: anchored on the newest standing `football.clock` event (Start, Pause or Correct, from any
- * screen; a goal or a card never moves it), at that row's `recordedAt` — the server's time, which the stage reads
- * through its measured server offset — and spelled in match time (`matchTime`, §7.4).
+ * THE CLOCK ON AIR — one rule for every sport that has one (S2-5 ruling 110 for football; owner ruling 2026-11-17
+ * extended it to hockey and ice hockey, which until then anchored on the newest stamp of ANY kind, so a goal typed ten
+ * seconds late pulled the clock back ten seconds and a goal entered before a Start set a clock running).
+ *
+ * The anchor is the newest standing `<sport>.clock` event (Start, Pause or Correct, from any screen; a goal or a card
+ * never moves it), at that row's `recordedAt` — the server's time, which the stage reads through its measured server
+ * offset. Football's is spelled in match time (`matchTime`, §7.4); the others as elapsed time in the period.
  *
  *  - No clock event in the match yet: NO clock. A goal stamped before anyone started the clock is not a clock, and
  *    "a stale clock on air is worse than no clock".
- *  - The match in a phase that is no clock period (a break before a shootout, the shootout, the end): no clock, so
- *    the stage holds what it last showed, as it does today.
+ *  - The match in a phase that is no clock period (a break, a shootout, the end): no clock, so the stage holds what
+ *    it last showed.
  *  - The anchor in the current period: its reading, running or paused.
- *  - The anchor in an EARLIER period: this period has had no clock event yet, and a period marker stops the clock in
- *    the fold, so the period stands at its own start, paused (§7.2: "0, stopped") — `45:00` before the second half's
- *    Start, as on the console.
- *  - The anchor in a LATER period than the fold's phase (a voided whistle): no clock rather than a wrong one.
+ *  - The anchor in another period: this period has had no clock event yet, and a period marker stops the clock in the
+ *    fold, so the period stands at its own start, paused (§7.2: "0, stopped") — `45:00` before the second half's
+ *    Start, as on the console — when the anchor's period is EARLIER. An anchor in a LATER period than the fold's
+ *    phase (a voided whistle) is no clock rather than a wrong one: football by its declared period order, the
+ *    period kernel by its labels (`periodRank`).
  */
-function footballClockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
+function clockOf(state: unknown, active: FoldedFixture["active"]): OverlayLiveData["clock"] {
   if (typeof state !== "object" || state === null) return undefined;
   const s = state as { phase?: unknown; cfg?: unknown };
   if (typeof s.phase !== "string") return undefined;
-  const anchor = latestClockAnchor(active, FOOTBALL_CLOCK, NOT_OWN);
+  const clockType = clockTypeOf(active);
+  if (clockType === undefined) return undefined;
+  const anchor = latestClockAnchor(active, clockType, NOT_OWN);
   if (anchor === null) return undefined;
-  const matchTime = matchTimeOf(s.cfg);
-  const periods = clockPeriodsOf(matchTime);
-  const now = periods.indexOf(s.phase);
-  if (now < 0) return undefined;
   const nominalSeconds = nominalSecondsOf(state, s.phase);
-  const base = { phase: s.phase, anchorAtWallMs: anchor.recordedAtMs, matchTime, ...(nominalSeconds === undefined ? {} : { nominalSeconds }) };
+  const length = nominalSeconds === undefined ? {} : { nominalSeconds };
+  if (clockType === FOOTBALL_CLOCK) {
+    const matchTime = matchTimeOf(s.cfg);
+    const periods = clockPeriodsOf(matchTime);
+    const now = periods.indexOf(s.phase);
+    if (now < 0) return undefined;
+    const base = { phase: s.phase, anchorAtWallMs: anchor.recordedAtMs, matchTime, ...length };
+    if (anchor.period === s.phase) return { ...base, anchorSeconds: anchor.elapsed, running: anchor.running };
+    const then = periods.indexOf(anchor.period);
+    if (then < 0 || then > now) return undefined;
+    return { ...base, anchorSeconds: 0, running: false };
+  }
+  const base = { phase: s.phase, anchorAtWallMs: anchor.recordedAtMs, ...length };
   if (anchor.period === s.phase) return { ...base, anchorSeconds: anchor.elapsed, running: anchor.running };
-  const then = periods.indexOf(anchor.period);
-  if (then < 0 || then > now) return undefined;
+  if (!PLAY_PERIOD.test(s.phase)) return undefined;
+  // Only an anchor in an EARLIER period leaves this one standing at its start. One in a later period (a voided
+  // whistle), or in a phase that is no play period, is no clock rather than a wrong one — football's rule above.
+  const now = periodRank(s.phase);
+  const then = periodRank(anchor.period);
+  if (now === null || then === null || then > now) return undefined;
   return { ...base, anchorSeconds: 0, running: false };
+}
+
+/** When the match STARTED: the surviving `core.start`'s `recordedAt` (the server's time) — the event `fixtures.status`
+ *  is derived from, so "started" has one authority. The stream is void-resolved, so a voided start is not here. Absent
+ *  with no start, or with a stamp that does not parse: the corner timer then shows nothing rather than a wrong time. */
+function matchStartedAtMsOf(active: FoldedFixture["active"]): number | undefined {
+  const start = active.find((e) => e.type === "core.start");
+  if (start === undefined) return undefined;
+  const ms = Date.parse(start.recordedAt);
+  return Number.isFinite(ms) ? ms : undefined;
 }
 
 /** Cricket's innings, by shape: an `innings[]` whose entries carry the four
@@ -257,7 +236,9 @@ export function projectOverlayLiveData(input: {
       : {}),
   };
   if (!folded) return out;
-  const clock = isFootball(folded.active) ? footballClockOf(folded.state, folded.active) : clockOf(folded.state, folded.active);
+  const startedAtMs = matchStartedAtMsOf(folded.active);
+  if (startedAtMs !== undefined) out.matchStartedAtMs = startedAtMs;
+  const clock = clockOf(folded.state, folded.active);
   if (clock) out.clock = clock;
   const cricket = cricketOf(folded.state);
   if (cricket) out.cricket = cricket;

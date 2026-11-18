@@ -92,10 +92,10 @@ function folded(
  *  where a real fold cannot reach the state cheaply (an extra-time phase needs
  *  a whole drawn match) or where the point IS a state the engine never
  *  produces (a clock-bearing state with no cfg). The envelope carries the
- *  matching stamp so `anchorWallMs` resolves it exactly as it would a real one. */
+ *  matching CLOCK event, which is what every clock anchors on (owner ruling 2026-11-17 — never a goal's stamp). */
 function handMade(state: { cfg?: unknown; phase: string; asOf: { period: string; elapsed: number } }): FoldedFixture {
   const envelope = {
-    ...makeEnvelope(0, { type: "core.start", payload: { at: state.asOf } } as never),
+    ...makeEnvelope(0, { type: "x.clock", payload: { at: state.asOf, running: true } } as never),
     recordedAt: WALL,
   };
   return {
@@ -175,7 +175,7 @@ describe("projectOverlayLiveData", () => {
 
   // S2-5 ruling 110: football's clock is the SHARED one (design §7.2) — anchored on the newest standing
   // `football.clock` event, never on a goal. The stamped-goal anchor these cases used to pin is the rule ruling 110
-  // replaces, for football only; hockey and ice hockey keep it (the period-kernel cases below are untouched).
+  // replaces. Owner ruling 2026-11-17 extends it to hockey and ice hockey — see the period-kernel block at the end.
   it("football: a Start anchors the clock at its stamp and its own wall time, and carries the cfg match time reads", () => {
     const f = folded("football", [
       ["core.start", {}],
@@ -380,7 +380,7 @@ describe("projectOverlayLiveData", () => {
       const phase = (cfgFor(key) as { periods: { count: number } }).periods.count === 4 ? "Q1" : "P1";
       const f = folded(key, [
         ["core.start", {}],
-        [`${key}.goal`, { by: "H", at: { period: phase, elapsed: 300 } }],
+        [`${key}.clock`, { at: { period: phase, elapsed: 300 }, running: true }],
       ]);
       const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
       expect(out.clock, `${key} produced no clock at all`).toBeDefined();
@@ -535,5 +535,136 @@ describe("projectOverlayLiveData", () => {
     expect(
       projectOverlayLiveData({ row: ROW(1), folded: null, venueTz: "UTC", highlights: null }).highlights,
     ).toBeUndefined();
+  });
+});
+
+// The corner badge's match timer (owner, 2026-11-17): time since the match STARTED, for every sport. The start is the
+// surviving `core.start` — the same event `fixtures.status` is derived from (`fixtureStatusFromFold`) — at the server's
+// `recordedAt`, never the newest event's.
+describe("projectOverlayLiveData — matchStartedAtMs", () => {
+  const START = "2026-09-07T13:10:00.000Z";
+  const LATER = "2026-09-07T13:42:30.000Z";
+
+  it("is the surviving core.start's recordedAt, not a later event's (the two differ here by 32m30s)", () => {
+    const f = folded("football", [
+      ["core.start", {}, START],
+      ["football.clock", { at: { period: "H1", elapsed: 0 }, running: true }, LATER],
+    ]);
+    const out = projectOverlayLiveData({ row: ROW(2), folded: f, venueTz: "UTC" });
+    expect(out.matchStartedAtMs).toBe(Date.parse(START));
+    expect(out.matchStartedAtMs).not.toBe(Date.parse(LATER));
+  });
+
+  it("another sport: badminton carries it too — the timer is not football's", () => {
+    const f = folded("badminton", [["core.start", {}, START]]);
+    expect(projectOverlayLiveData({ row: ROW(1), folded: f, venueTz: "UTC" }).matchStartedAtMs).toBe(Date.parse(START));
+  });
+
+  it("is ABSENT without a fold, and absent when no core.start survives (a voided start is not a start)", () => {
+    expect(projectOverlayLiveData({ row: ROW(0), folded: null, venueTz: "UTC" })).not.toHaveProperty("matchStartedAtMs");
+    const f = folded("badminton", [["core.start", {}, START]]);
+    const noStart = { ...f, active: [] };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: noStart, venueTz: "UTC" })).not.toHaveProperty("matchStartedAtMs");
+  });
+
+  it("an unreadable recordedAt yields no start rather than NaN on the wire", () => {
+    const f = folded("badminton", [["core.start", {}, "not-a-date"]]);
+    expect(projectOverlayLiveData({ row: ROW(1), folded: f, venueTz: "UTC" })).not.toHaveProperty("matchStartedAtMs");
+  });
+});
+
+// Owner ruling 2026-11-17 — hockey and ice hockey follow the SAME clock rule as football (S2-5 ruling 110): the anchor
+// is the newest standing `<sport>.clock` event (Start, Pause or Correct), never a goal's stamp. Before it, a goal typed
+// ten seconds late pulled the on-air clock back ten seconds, and a goal entered before anyone started the clock set
+// one running. Every expected reading below is arithmetic on the stream's own stamps, not a number read off the code.
+describe.each(["hockey", "icehockey"])("%s: the clock follows its clock events, never a goal", (key) => {
+  const cfg = cfgFor(key) as { periods: { count: number; minutes: number } };
+  const [p1, p2] = cfg.periods.count === 4 ? ["Q1", "Q2"] : ["P1", "P2"];
+  const S0 = Date.parse("2026-09-07T14:00:00.000Z");
+  const T = (s: number) => new Date(S0 + s * 1000).toISOString();
+  const clock = (elapsed: number, running: boolean, at: number, period = p1) =>
+    [`${key}.clock`, { at: { period, elapsed }, running }, T(at)] as const;
+  const goal = (elapsed: number, at: number) => [`${key}.goal`, { by: "H", at: { period: p1, elapsed } }, T(at)] as const;
+  const START = ["core.start", {}, T(0)] as const;
+  const project = (stream: readonly (readonly [string, unknown, string?])[]) =>
+    projectOverlayLiveData({ row: ROW(stream.length), folded: folded(key, stream), venueTz: "UTC" }).clock;
+  const mmss = (seconds: number) => `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  const read = (c: NonNullable<ReturnType<typeof project>>, at: number) => clockLabelAt(c, S0 + at * 1000, 0, 0);
+
+  it("a goal typed late does not pull the clock back", () => {
+    // Started at 0. A goal stamped 690 s is recorded at 700 s (ten seconds late). At 730 s the clock reads 730 s — on
+    // the goal's stamp it read 690 + 30 = 720.
+    const c = project([START, clock(0, true, 0), goal(690, 700)])!;
+    expect(c).toMatchObject({ phase: p1, anchorSeconds: 0, anchorAtWallMs: S0, running: true });
+    expect(read(c, 730)).toBe(mmss(730));
+    expect(read(c, 730)).not.toBe(mmss(720));
+  });
+
+  it("a goal entered before anyone started the clock puts NO clock on air", () => {
+    expect(project([START, goal(300, 300)])).toBeUndefined();
+  });
+
+  it("the first clock event after such a goal is the clock", () => {
+    const c = project([START, goal(300, 300), clock(310, true, 320)])!;
+    expect(read(c, 380)).toBe(mmss(310 + 60));
+  });
+
+  it("a Pause holds, and a goal entered while paused leaves it held", () => {
+    const paused = project([START, clock(0, true, 0), clock(200, false, 200)])!;
+    expect(paused).toMatchObject({ anchorSeconds: 200, running: false });
+    expect(read(paused, 900)).toBe(mmss(200));
+    const withGoal = project([START, clock(0, true, 0), clock(200, false, 200), goal(200, 400)])!;
+    expect(withGoal).toMatchObject({ anchorSeconds: 200, running: false });
+    expect(read(withGoal, 900)).toBe(mmss(200));
+  });
+
+  it("a Correct moves the clock, forwards and backwards, and it runs on from there", () => {
+    expect(read(project([START, clock(0, true, 0), clock(500, true, 300)])!, 360)).toBe(mmss(500 + 60));
+    expect(read(project([START, clock(0, true, 0), clock(60, true, 300)])!, 360)).toBe(mmss(60 + 60));
+  });
+
+  it("a resume runs on from the paused reading, not from the time spent paused", () => {
+    const c = project([START, clock(0, true, 0), clock(200, false, 200), clock(200, true, 500)])!;
+    expect(read(c, 560)).toBe(mmss(200 + 60));
+  });
+
+  it("a new period with no clock event of its own stands at 0, paused", () => {
+    const c = project([START, clock(0, true, 0), [`${key}.period.advance`, { to: p2 }, T(900)]])!;
+    expect(c).toMatchObject({ phase: p2, anchorSeconds: 0, running: false, nominalSeconds: cfg.periods.minutes * 60 });
+    expect(read(c, 5000)).toBe(mmss(0));
+  });
+
+  it("an anchor in a LATER period than the fold's phase (a voided whistle) is no clock, not 00:00", () => {
+    // Reaching this through a real fold means voiding a period advance under clock events the kernel then refuses, so
+    // the state is written by hand: the fold stands in the first period, the newest clock event names the second.
+    const cfgState = { cfg, phase: p1 };
+    const stranded: FoldedFixture = {
+      fixtureId: "fx-hand",
+      lastSeq: 1,
+      state: cfgState,
+      summary: { headline: "x" } as FoldedFixture["summary"],
+      outcome: null,
+      active: [{ ...makeEnvelope(0, { type: `${key}.clock`, payload: { at: { period: p2, elapsed: 30 }, running: true } } as never), recordedAt: T(0) }],
+    };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: stranded, venueTz: "UTC" }).clock).toBeUndefined();
+    // The positive pair: the same hand-made shape with the anchor in the EARLIER period stands at 0, paused.
+    const earlier: FoldedFixture = {
+      ...stranded,
+      state: { cfg, phase: p2 },
+      active: [{ ...makeEnvelope(0, { type: `${key}.clock`, payload: { at: { period: p1, elapsed: 30 }, running: true } } as never), recordedAt: T(0) }],
+    };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: earlier, venueTz: "UTC" }).clock).toMatchObject({ phase: p2, anchorSeconds: 0, running: false });
+    // Overtime comes after every regulation period, whatever its number.
+    const overtime: FoldedFixture = { ...earlier, state: { cfg, phase: "OT" } };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: overtime, venueTz: "UTC" }).clock).toMatchObject({ phase: "OT", anchorSeconds: 0, running: false });
+    const fromOvertime: FoldedFixture = {
+      ...stranded,
+      active: [{ ...makeEnvelope(0, { type: `${key}.clock`, payload: { at: { period: "OT", elapsed: 30 }, running: true } } as never), recordedAt: T(0) }],
+    };
+    expect(projectOverlayLiveData({ row: ROW(1), folded: fromOvertime, venueTz: "UTC" }).clock).toBeUndefined();
+  });
+
+  it("carries no football match time", () => {
+    expect(project([START, clock(0, true, 0)])!.matchTime).toBeUndefined();
   });
 });

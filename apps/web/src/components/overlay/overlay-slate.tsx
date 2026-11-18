@@ -129,7 +129,6 @@ export function OverlayMatchCard({
 
   return (
     <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={cardState}>
-      <span className="ovl-slate-brand ovl-display">{msg("overlay.brand")}</span>
       <div
         data-testid="ovl-slate-content"
         className={`ovl-slate-content${fading ? " ovl-slate-fading" : ""}`}
@@ -303,7 +302,6 @@ function SceneMatchCard({
   const reconnecting = variant === "reconnecting";
   return (
     <div className="ovl-slate" data-testid="ovl-slate" data-slate-state={state} data-card={variant}>
-      <span className="ovl-slate-brand ovl-display">{msg("overlay.brand")}</span>
       <div data-testid="ovl-slate-content" className={`ovl-slate-content${fading ? " ovl-slate-fading" : ""}`}>
         <div className="ovl-slate-card" data-testid="ovl-slate-card" data-card={variant}>
           {pill ? (
