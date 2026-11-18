@@ -1,17 +1,21 @@
 // The presence SHADOW REPORT (check-in capacity plan 1, T9): proves that webhook presence agrees with the seat's own vendor reads.
 // It is what the staging gate (plan 1, Task 12 step 5) runs; `closedByEnded` and the strict exit code are read there.
 //
-//   node --experimental-strip-types scripts/presence-shadow-report.ts --since <iso> --fixture <uuid> [--fixture <uuid> ...] [--strict]
+//   node --experimental-strip-types scripts/presence-shadow-report.ts --since <iso-with-Z-or-offset> --fixture <uuid> [--fixture <uuid> ...] [--strict]
 //   node --experimental-strip-types scripts/presence-shadow-report.ts --since-hours 6 --fixture <uuid>     (default 24 h; --since wins)
 //
-// It needs DATABASE_URL (and DB_SCHEMA, default seazn_club; DATABASE_SSL=disable|require). Read-only: it only selects.
+// It needs DATABASE_URL (and DB_SCHEMA, default seazn_club; DATABASE_SSL=disable|require). Read-only: it only selects, in ONE
+// `repeatable read` transaction set `read only` with a 30 s statement timeout, so the three selects see one snapshot and cannot hang a
+// production table. `--since` must carry a timezone (Z or an offset): a bare timestamp would be read as the operator's LOCAL time.
 //
 // WHAT IT COMPARES. Every PLAYER seat in scope whose camera the seat's own read found on (`fixture_video_participants.last_publisher_seen_at
 // >= since`) against the webhook rows: `covered` is a seat for which a `source='webhook'` row was OPEN at the seat's stamp (arrived no later than
 // SHADOW_ARRIVAL_TOLERANCE_MS after it; `left_at` null or after it). A row is the seat's when it names the seat's participant, or names
 // none and carries the seat's person id as its custom id on the seat's side (the readers' rule, presence.ts `currentPresence`). `missing` are
 // the seats no such row covers; `open` the presence rows still open at report time; `closedByEnded` the rows closed only by meeting.ended
-// (a participantLeft that never arrived, or a reload's old peer the vendor never reported leaving): measured and printed, never gated.
+// (a participantLeft that never arrived, or a reload's old peer the vendor never reported leaving): measured and printed, never gated by
+// the exit code. A non-zero `closedByEnded` prints `blocksProofFlag: true` and a note: it blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on
+// until every counted row is explained and recorded (plan 1 Task 12 step 5), which is a separate decision from this script's exit code.
 //
 // --strict exits 1 when `verified === 0` (an empty run is a failure, never a pass), or `missing` or `open` is non-empty. It is meant for a
 // QUIESCENT scope (every meeting in it ended); run mid-round, `open` lists the live peers and the operator reads it rather than gating on it.
@@ -88,7 +92,13 @@ export async function shadowReportSql(db: AnySql, scope: ShadowScope): Promise<S
 }
 
 const USAGE =
-  "Usage: --since <iso> | --since-hours <n> (default 24; --since wins)  [--fixture <uuid> ...]  [--strict]";
+  "Usage: --since <iso, ending in Z or an offset> | --since-hours <n> (default 24; --since wins)  [--fixture <uuid> ...]  [--strict]";
+/** A full ISO timestamp WITH a zone. `new Date("2026-11-17T08:30:00")` is the operator's local time and `new Date("2026-11-17")` is UTC:
+ *  the gate's window must never depend on which machine ran it, so neither is accepted. */
+const ISO_WITH_ZONE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/i;
+/** Printed with `blocksProofFlag: true`; never changes the exit code. */
+const PROOF_FLAG_NOTE =
+  "closedByEnded > 0 blocks turning EXTERNAL_PLAY_PRESENCE_PROOF on until every counted row is explained and recorded beside the baseline (plan 1 Task 12 step 5). Not a failure of this run: the exit code is unchanged.";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DEFAULT_HOURS = 24;
 
@@ -107,6 +117,7 @@ function parseArgs(argv: readonly string[]): Parsed {
       const v = argv[++i];
       if (v === undefined || v.startsWith("--")) return { error: `${a} needs a value.` };
       if (a === "--since") {
+        if (!ISO_WITH_ZONE.test(v)) return { error: "--since needs a full ISO timestamp ending in Z or an offset (such as 2026-11-17T08:30:00Z); a bare timestamp is local time." };
         const d = new Date(v);
         if (Number.isNaN(d.getTime())) return { error: "--since is not a date." };
         since = d;
@@ -128,7 +139,7 @@ function parseArgs(argv: readonly string[]): Parsed {
 /** The CLI body, exported for the test. Prints the report as JSON in ONE `out` call; returns the exit code. */
 export async function run(
   argv: readonly string[],
-  deps: { sql: AnySql; out?: (line: string) => void; now?: () => Date },
+  deps: { sql: postgres.Sql; out?: (line: string) => void; now?: () => Date },
 ): Promise<number> {
   const out = deps.out ?? ((l: string) => console.log(l));
   const args = parseArgs(argv);
@@ -140,7 +151,19 @@ export async function run(
   const since = args.since ?? new Date(now.getTime() - args.hours * 3_600_000);
   // No --fixture is an unscoped run (every fixture), which is what the operator wants mid-investigation; an explicit list is the gate's.
   const fixtureIds = args.fixtureIds.length > 0 ? args.fixtureIds : undefined;
-  const report = await shadowReportSql(deps.sql, { since, fixtureIds });
+  let report: ShadowReport;
+  try {
+    // ONE snapshot, read only, bounded: a failure to connect, a refused read-only write or a timeout all land in the catch below.
+    report = await deps.sql.begin("isolation level repeatable read", async (tx) => {
+      await tx`set transaction read only`;
+      await tx`set local statement_timeout = '30s'`;
+      return shadowReportSql(tx, { since, fixtureIds });
+    });
+  } catch (e) {
+    out(`Could not read presence: ${oneLine(e, [])}`);
+    return 2;
+  }
+  const blocksProofFlag = report.closedByEnded > 0;
 
   const reasons: string[] = [];
   if (report.verified === 0) reasons.push("verified 0: no seat in scope read a camera on, so there is nothing to compare (an empty run is a failure)");
@@ -152,6 +175,8 @@ export async function run(
         since: since.toISOString(),
         fixtureIds: fixtureIds ?? null,
         ...report,
+        blocksProofFlag,
+        ...(blocksProofFlag ? { note: PROOF_FLAG_NOTE } : {}),
         ...(args.strict ? { strict: { pass: reasons.length === 0, reasons } } : {}),
       },
       null,
@@ -161,25 +186,40 @@ export async function run(
   return args.strict && reasons.length > 0 ? 1 : 0;
 }
 
+/** One line, no stack, no secret: the first line of the error's message prefixed by its code, with any `secrets` (the connection URL) blanked. */
+function oneLine(e: unknown, secrets: readonly string[]): string {
+  const err = e as { code?: unknown; message?: unknown; name?: unknown } | null;
+  let msg = String(err?.message ?? e).split("\n")[0].trim();
+  for (const s of secrets) if (s) msg = msg.split(s).join("<DATABASE_URL>");
+  const code = typeof err?.code === "string" ? err.code : typeof err?.name === "string" ? err.name : "";
+  return code && !msg.includes(code) ? `${code}: ${msg}` : msg;
+}
+
 async function main(): Promise<number> {
   const url = process.env.DATABASE_URL;
   if (!url) {
     console.error(`DATABASE_URL is not set. ${USAGE}`);
     return 2;
   }
-  const { default: pg } = await import("postgres");
-  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
-  const sslEnv = process.env.DATABASE_SSL;
-  const sql = pg(url, {
-    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
-    ssl: sslEnv === "disable" ? false : sslEnv === "require" ? "require" : isLocal ? false : "require",
-    prepare: !url.includes(":6543"),
-    max: 1,
-  });
   try {
-    return await run(process.argv.slice(2), { sql });
-  } finally {
-    await sql.end();
+    const { default: pg } = await import("postgres");
+    const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+    const sslEnv = process.env.DATABASE_SSL;
+    const sql = pg(url, {
+      connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+      ssl: sslEnv === "disable" ? false : sslEnv === "require" ? "require" : isLocal ? false : "require",
+      prepare: !url.includes(":6543"),
+      max: 1,
+    });
+    try {
+      return await run(process.argv.slice(2), { sql });
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  } catch (e) {
+    // a malformed DATABASE_URL throws at construction; its message can echo the URL (and its password): never print it
+    console.error(`Could not read presence: ${oneLine(e, [url])}`);
+    return 2;
   }
 }
 
