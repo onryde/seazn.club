@@ -40,10 +40,15 @@ import "server-only";
 // minute and then met again: one request a minute per challenger, bounded.
 //
 // ONE REQUEST AT A TIME, with no spacing: Lichess's API docs, "Only make one
-// request at a time". Etiquette, not a measured bound. Time WAITING in this
-// queue still counts against the caller's claim — a create at the back of a
-// 32-deep round queues behind 31 jobs — so checking the claim's age before
-// the call is the CALLER's job.
+// request at a time". Etiquette, not a measured bound. A create still queues
+// behind the ones ahead of it — one at the back of a 32-deep round waits for
+// 31 jobs — but that wait is spent against NO claim: the fixture claim is
+// taken when the create LEAVES this queue (create-game.ts createAtDequeue,
+// which re-reads the board there), never before it joins, so a claim lives
+// only for the HTTP calls it guards and cannot age out in line. Nor does this
+// module add a wait of its own (see above): the check-in request awaits the
+// create (room.ts claimRoomSeat), so the queue's wait is the player's own
+// request time, and the caller has no claim's age to check before the call.
 //
 // M4: moves are NOT rate-limited. Nothing but creation belongs here.
 //
