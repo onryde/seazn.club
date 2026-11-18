@@ -14,14 +14,14 @@ test.describe("marketing home (design/v3/12)", () => {
   const flow = (page: Page) => page.getByTestId("competition-flow");
   const onStep = (page: Page) => flow(page).locator("[data-flow-step][data-on]");
 
-  test("under the hero: the seven steps in order, then the pricing tickets", async ({ page }) => {
+  test("under the hero: the eight steps in order, then the pricing tickets", async ({ page }) => {
     await page.goto("/en");
     await expect(flow(page)).toBeVisible();
     const ids = await flow(page).locator("[data-flow-step]").evaluateAll((els) => els.map((e) => e.id));
     expect(ids).toEqual(stepIds);
-    expect(ids.length, "steps checked").toBe(7);
+    expect(ids.length, "steps checked").toBe(8);
     await expect(page.getByRole("heading", { name: "Pick your season" })).toBeVisible();
-    // The price of streaming is called out in the live step.
+    // The price of streaming is called out in the stream step.
     await expect(flow(page).getByTestId("flow-stream-offer")).toContainText("price of a coffee");
   });
 
@@ -75,7 +75,7 @@ test.describe("marketing home (design/v3/12)", () => {
     await page.locator(`#${stepIds[3]}`).evaluate((el) => el.scrollIntoView({ block: "start", behavior: "instant" }));
     await expect(onStep(page)).toHaveAttribute("id", stepIds[3]!);
     await expect(bar).toBeInViewport();
-    await expect(bar).toContainText("4 of 7");
+    await expect(bar).toContainText("4 of 8");
     await expect(bar).toContainText(await page.locator(`#${stepIds[3]} h3`).innerText());
     // The contents list is desktop only.
     await expect(flow(page).locator(".mkf-idx")).toBeHidden();

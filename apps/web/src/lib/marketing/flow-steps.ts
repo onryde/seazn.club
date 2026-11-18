@@ -10,6 +10,7 @@ export const FLOW_STEPS = [
   { key: "entries", stage: "open" },
   { key: "schedule", stage: "eve" },
   { key: "live", stage: "day" },
+  { key: "stream", stage: "day" },
   { key: "winner", stage: "end" },
 ] as const;
 export type FlowStepKey = (typeof FLOW_STEPS)[number]["key"];
