@@ -215,13 +215,15 @@ describe("format copy does not promise what the engine does not do", () => {
       en: /everyone partners everyone|plays with everyone|partners everyone/i,
       es: /todos son pareja de todos|todos juegan con todos/i,
       fr: /tout le monde joue avec tout le monde|partenaire de tout le monde/i,
-      nl: /iedereen met iedereen/i,
+      nl: /iedereen (speelt )?met iedereen/i,
     };
+    const overclaim: Record<string, RegExp> = { en: /maximum mixing/i, es: /máxima mezcla/i, fr: /brassage maximal/i, nl: /maximale menging/i };
     let texts = 0;
     for (const [loc, dict] of Object.entries(LOCALES)) {
       for (const key of ["format.americano.tagline", "format.americano.bestFor", "format.americano.tradeoff", "format.americano.body.0", "format.americano.body.1"]) {
         expect(dict[key], `${loc} ${key}`).toBeTruthy();
         expect(dict[key], `${loc} ${key}`).not.toMatch(claims[loc]!);
+        expect(dict[key], `${loc} ${key} (no 'maximum mixing' either)`).not.toMatch(overclaim[loc]!);
         texts += 1;
       }
     }
@@ -247,11 +249,15 @@ describe("format copy does not promise what the engine does not do", () => {
     expect(swissRoundsGuidance(4).recommended).toBeLessThan(SWISS_ROUNDS_BANDS[0]!.rounds);
     const numbers = SWISS_ROUNDS_BANDS.map((b) => String(b.upTo));
     const claims: Record<string, RegExp> = { en: /follows the field/i, es: /sigue al cuadro/i, fr: /suit la taille/i, nl: /volgt het veld/i };
+    const halfCap: Record<string, RegExp> = { en: /never more than half/i, es: /nunca más de la mitad/i, fr: /jamais plus de la moitié/i, nl: /nooit meer dan de helft/i };
+    const canChange: Record<string, RegExp> = { en: /you can change it/i, es: /puedes cambiarlo/i, fr: /vous pouvez le modifier/i, nl: /je kunt het aanpassen/i };
     let checked = 0;
     for (const [loc, dict] of Object.entries(LOCALES)) {
       for (const key of ["format.swiss_playoff.body.0", "format.swiss_knockout.body.0"]) {
         expect(dict[key], `${loc} ${key}`).not.toMatch(claims[loc]!);
         for (const n of numbers) expect(dict[key], `${loc} ${key} keeps the band figure ${n}`).toContain(n);
+        expect(dict[key], `${loc} ${key} says the count is capped at half the field`).toMatch(halfCap[loc]!);
+        expect(dict[key], `${loc} ${key} says the organiser can change it`).toMatch(canChange[loc]!);
         checked += 1;
       }
     }
