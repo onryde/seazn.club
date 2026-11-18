@@ -541,7 +541,7 @@ describe.skipIf(!DB)("the one-read proof", () => {
       expect(presenceFallbackCount() - fallbacks, "one fallback").toBe(1);
     });
 
-    it("presence arriving clears the fallback clock: after a silent stretch, presence, and a later silent stretch, the 10 s starts again", async () => {
+    it("presence arriving clears the fallback clock, and the next silent stretch starts from the browser's NEW live run (a real off -> on through the report writer)", async () => {
       fx.setWebhooksDown(true);
       const T0 = new Date();
       const a = await arrive({ at: at(T0, -SEC) });
@@ -553,21 +553,70 @@ describe.skipIf(!DB)("the one-read proof", () => {
       const peer = fx.currentPeer(a.pid)!;
       const joined = new Date();
       await applyPresenceEvent(sql, joinedEv({ meetingId: a.meetingId, peerId: peer, custom: a.personId, joinedAt: joined }), joined);
-      const seatedAt = at(T0, 8 * SEC);
-      expect(reasonOf(await claim(a, seatedAt))).toBe("seated");
+      expect(reasonOf(await claim(a, at(T0, 8 * SEC)))).toBe("seated");
       expect((await rowOf(a.pid)).presence_fallback_from, "cleared by the presence claim").toBeNull();
 
-      // The peer leaves (the leave webhook lands) and the report's first-live stamp is dropped, so the next silent stretch has no older
-      // instant to start from than its own claim
+      // The peer leaves (the leave webhook lands); the page's camera goes off and comes back on: the REAL writer drops the first-live stamp
+      // on the off and stamps the new run on the live
       await applyPresenceEvent(sql, leftEv({ meetingId: a.meetingId, peerId: peer, custom: a.personId, joinedAt: joined, leftAt: new Date() }), new Date());
-      await sql`update fixture_video_participants set camera_live_first_at = null where participant_id = ${a.pid}`;
+      await report(a, "off", at(T0, 20 * SEC));
+      const reLive = at(T0, 24 * SEC);
+      await report(a, "live", reLive);
+      expect((await rowOf(a.pid)).camera_live_first_at?.getTime(), "premise: the writer stamped the NEW run").toBe(reLive.getTime());
       const fallbacks = presenceFallbackCount();
       const mark = fx.calls.length;
-      const later = at(T0, 25 * SEC); // 25 s after the old clock would have started: it would fall back at once if it had been kept
-      expect(reasonOf(await claim(a, later)), "a new silent stretch starts its own 10 s").toBe("camera_starting");
+      const later = at(T0, 25 * SEC); // 25 s after the old clock started: it would fall back at once if it had been kept
+      expect(reasonOf(await claim(a, later)), "a new silent stretch starts its own 10 s, from the new live run").toBe("camera_starting");
       expect(readsSince(mark)).toEqual(noReads);
       expect(presenceFallbackCount() - fallbacks).toBe(0);
+      expect((await rowOf(a.pid)).presence_fallback_from?.getTime(), "the new clock is the new run's first receipt").toBe(reLive.getTime());
+    });
+
+    it("presence clears the clock even when the report names no first-live receipt to restart from (a live row from before V529, whose stamp is NULL): the next stretch starts at its own claim", async () => {
+      fx.setWebhooksDown(true);
+      const T0 = new Date();
+      const a = await arrive({ at: at(T0, -SEC) });
+      await report(a, "live", T0);
+      expect(reasonOf(await claim(a, at(T0, 5 * SEC)))).toBe("camera_starting");
+      const peer = fx.currentPeer(a.pid)!;
+      const joined = new Date();
+      await applyPresenceEvent(sql, joinedEv({ meetingId: a.meetingId, peerId: peer, custom: a.personId, joinedAt: joined }), joined);
+      expect(reasonOf(await claim(a, at(T0, 8 * SEC)))).toBe("seated");
+      await applyPresenceEvent(sql, leftEv({ meetingId: a.meetingId, peerId: peer, custom: a.personId, joinedAt: joined, leftAt: new Date() }), new Date());
+      // The writer cannot make this shape any more (every live receipt stamps), so it is written by hand: it is what a row live at the V529
+      // deploy looks like until its next report.
+      await sql`update fixture_video_participants set camera_live_first_at = null where participant_id = ${a.pid}`;
+      const later = at(T0, 25 * SEC);
+      const mark = fx.calls.length;
+      expect(reasonOf(await claim(a, later)), "a kept clock would fall back at once").toBe("camera_starting");
+      expect(readsSince(mark)).toEqual(noReads);
       expect((await rowOf(a.pid)).presence_fallback_from?.getTime(), "the new clock").toBe(later.getTime());
+    });
+
+    it("an off -> on BETWEEN two claims restarts the clock: the new run's first receipt is in the clock, a live heartbeat after it moves nothing, and the fallback fires 10 s after the NEW run", async () => {
+      fx.setWebhooksDown(true);
+      const T0 = new Date();
+      const a = await arrive({ at: at(T0, -SEC) });
+      await report(a, "live", T0);
+      expect(reasonOf(await claim(a, at(T0, 5 * SEC)))).toBe("camera_starting");
+      expect((await rowOf(a.pid)).presence_fallback_from?.getTime(), "premise: the first run's clock is stored").toBe(T0.getTime());
+      // No claim sees the camera off: the writer's stamp is the only thing that knows
+      await report(a, "off", at(T0, 6 * SEC));
+      const second = at(T0, 20 * SEC);
+      await report(a, "live", second);
+      const fallbacks = presenceFallbackCount();
+      const mark = fx.calls.length;
+      expect(reasonOf(await claim(a, at(T0, 21 * SEC))), "21 s after the FIRST run, 1 s after the new one").toBe("camera_starting");
+      expect(readsSince(mark), "no call: the stored clock was moved forward to the new run").toEqual(noReads);
+      expect((await rowOf(a.pid)).presence_fallback_from?.getTime()).toBe(second.getTime());
+      // A heartbeat of the new run moves nothing
+      await report(a, "live", at(T0, 25 * SEC), true);
+      expect((await rowOf(a.pid)).camera_live_first_at?.getTime(), "premise: the heartbeat kept the run's first receipt").toBe(second.getTime());
+      expect(reasonOf(await claim(a, at(T0, 29 * SEC))), "9 s after the new run, however fresh the heartbeat").toBe("camera_starting");
+      expect(readsSince(mark)).toEqual(noReads);
+      expect(reasonOf(await claim(a, at(second, PRESENCE_FALLBACK_MS))), "10 s after the new run: the fallback").toBe("seated");
+      expect(readsSince(mark)).toEqual([1, 1, 1]);
+      expect(presenceFallbackCount() - fallbacks).toBe(1);
     });
 
     it("a camera that is not reported live clears the clock and never falls back, however long the page has held a token", async () => {
@@ -584,6 +633,37 @@ describe.skipIf(!DB)("the one-read proof", () => {
       expect(readsSince(mark)).toEqual(noReads);
       expect((await rowOf(a.pid)).presence_fallback_from, "cleared").toBeNull();
       expect(presenceFallbackCount() - fallbacks).toBe(0);
+    });
+  });
+
+  describe("the T9 re-verify on the no-presence branch (webhooks down)", () => {
+    it("create-game's re-verify of a player the FALLBACK seated, once the read row has expired: no presence, the clock long elapsed - it judges as the holder would (one three-call read, counted, seated), and hands no token", async () => {
+      fx.setWebhooksDown(true);
+      const T0 = new Date();
+      const board = await seedBoard();
+      const p1 = await arrive({ board, side: "home", at: at(T0, -SEC) });
+      const p2 = await arrive({ board, side: "away", at: at(T0, -SEC) });
+      await report(p1, "live", T0);
+      await report(p2, "live", at(T0, 12 * SEC));
+      // P1 is seated by the fallback at T0+10 s; P2 seats a little later by its own
+      expect(reasonOf(await claim(p1, at(T0, PRESENCE_FALLBACK_MS))), "premise: P1 seated by the fallback").toBe("seated");
+      const p2Seated = at(T0, 12 * SEC + PRESENCE_FALLBACK_MS);
+      expect(reasonOf(await claim(p2, p2Seated)), "premise: P2 seated by the fallback").toBe("seated");
+
+      // The game is created now: its re-verify asks about P1 with no browser behind it (no held participant)
+      const verifyAt = p2Seated;
+      expect(await currentPresence(sql, { ...who(p1), now: verifyAt }), "premise: P1's read row has expired (no presence)").toBeNull();
+      const stored = await rowOf(p1.pid);
+      expect(verifyAt.getTime() - stored.last_publisher_seen_at!.getTime(), "premise: outside SEAT_RECHECK_TRUST_MS, so the pass is not trusted").toBeGreaterThan(SEAT_RECHECK_TRUST_MS);
+      expect(verifyAt.getTime() - stored.presence_fallback_from!.getTime(), "premise: the clock has long elapsed").toBeGreaterThan(PRESENCE_FALLBACK_MS);
+      const fallbacks = presenceFallbackCount();
+      const mark = fx.calls.length;
+      const verified = await claim(p1, verifyAt, { recheck: true, held: null });
+      expect(reasonOf(verified), "a recheck has no browser: it judges as the holder would, so it reads and is seated").toBe("seated");
+      expect(readsSince(mark), "the three-call read").toEqual([1, 1, 1]);
+      expect(presenceFallbackCount() - fallbacks, "counted").toBe(1);
+      expect(countSince(mark, ROUTE.token), "and no token").toBe(0);
+      expect(tokenOf(verified)).toBeNull();
     });
   });
 
@@ -839,6 +919,57 @@ describe.skipIf(!DB)("a re-open that KEEPS a room resets its participants' per-w
     const next = await claim(home, new Date());
     expect(reasonOf(next), "never `camera_lost`: this window has no earlier pass").toBe("camera_required");
   });
+
+  it("SEQUENCE on the NO-presence branch (webhooks down): the re-open keeps the page's columns (first-live stamp, token stamp, a live report), so the new window's first claim finds the fallback clock already elapsed - it cannot SEAT on them: one counted fallback read judges the camera as it is now, and a second claim reads nothing more", async () => {
+    fx.setWebhooksDown(true);
+    stubOutboxEnv();
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    const b = r.boards[0]!;
+    fixturesMade.push(b.fixtureId);
+    const end = (id: string) => endMeeting(id);
+    mail.fail.add(b.home.email).add(b.away.email);
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true, invited: 0 });
+
+    // Window one: the join webhook is lost, so the fallback seats the player 10 s after the browser's first live report
+    const T0 = new Date();
+    const board: Board = { fixtureId: b.fixtureId, orgId: r.orgId, home: b.home, away: b.away } as unknown as Board;
+    const home = await arrive({ board, side: "home", at: at(T0, -SEC) });
+    await report(home, "live", T0);
+    expect(reasonOf(await claim(home, at(T0, PRESENCE_FALLBACK_MS))), "premise: seated by the fallback in window one").toBe("seated");
+    mail.fail.clear();
+
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true });
+    const [kept] = await sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${home.b.fixtureId} and side = 'home'`;
+    expect(kept?.meeting_id, "premise: the room was KEPT by the re-open").toBe(home.meetingId);
+    const stored = await rowOf(home.pid);
+    expect(
+      { pass: stored.last_publisher_seen_at, reads: stored.seat_reads, clock: stored.presence_fallback_from },
+      "premise: the seat's own per-window state was reset",
+    ).toEqual({ pass: null, reads: 0, clock: null });
+    expect(stored.camera_live_first_at?.getTime(), "premise: the page's first-live stamp from window one is KEPT").toBe(T0.getTime());
+    expect(stored.token_issued_at, "premise: and so is its token stamp").not.toBeNull();
+
+    // Window two: the camera died between the windows. Nothing at the vendor shows it on; the kept stamps say the clock started long ago.
+    fx.setPeerCamera(home.pid, "video_off");
+    const t = at(T0, 30 * SEC);
+    expect(await currentPresence(sql, { ...who(home), now: t }), "premise: window one's read row has expired - no presence").toBeNull();
+    const fallbacks = presenceFallbackCount();
+    const mark = fx.calls.length;
+    const first = await claim(home, t);
+    expect(reasonOf(first), "the kept stamps cannot seat: the vendor's own read says the camera is off, and this window has no earlier pass").toBe("camera_required");
+    expect(readsSince(mark), "ONE three-call read").toEqual([1, 1, 1]);
+    expect(presenceFallbackCount() - fallbacks, "one counted fallback").toBe(1);
+    const second = await claim(home, at(t, SEC));
+    expect(reasonOf(second), "and still not seated").not.toBe("seated");
+    expect([countSince(mark, ROUTE.activeSession), countSince(mark, ROUTE.participants)], "no second session read").toEqual([1, 1]);
+    expect(presenceFallbackCount() - fallbacks, "nothing more counted").toBe(1);
+
+    // Positive pair: the camera comes back on, and the very same kept stamps seat it - from the vendor's read, not from the stamps
+    fx.setPeerCamera(home.pid, "video_on");
+    const back = await claim(home, at(t, 12 * SEC));
+    expect(reasonOf(back), "the vendor's read of the camera now").toBe("seated");
+    expect(presenceFallbackCount() - fallbacks, "one more counted fallback, and no more").toBe(2);
+  });
 });
 
 // ─── stayMintOf ────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -918,6 +1049,15 @@ describe.skipIf(!DB)("stayMintOf", () => {
     expect(await stayMintOf(sql, ask(b, "home")), "the home player's room has nobody of theirs on it").toBe("room");
     expect(await stayMintOf(sql, ask(b, "away"))).toBe("none");
     expect(await stayMintOf(sql, { fixtureId: b.fixtureId, side: "home", personId: b.away.personId }), "the away player's participant is on the AWAY room, not this one").toBe("room");
+  });
+
+  it("it is the PLAYER participant that counts: the same person's ARBITER participant on the side's room does not make the claim a \"none\" (and their player participant, added after it, does)", async () => {
+    const b = await board();
+    await putVideoMeeting({ fixtureId: b.fixtureId, orgId: b.orgId, side: "home" });
+    await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId, preset: "arbiter" });
+    expect(await stayMintOf(sql, ask(b, "home")), "an arbiter row of the same person is not a player's participant: the claim still owes one").toBe("room");
+    await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId, preset: "player" });
+    expect(await stayMintOf(sql, ask(b, "home")), "positive pair: the player's own participant is there now").toBe("none");
   });
 });
 

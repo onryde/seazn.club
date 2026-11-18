@@ -626,8 +626,10 @@ const startingVerdict: Proof = { verdict: { seated: false, reason: "camera_start
  *     cannot be in the room yet either, however long the previous page was live: `camera_starting`, no call (this is what keeps a
  *     reload from being read as a lost webhook; the next claim, from the holder, runs the clock from the new token's stamp);
  *   - else the clock `presence_fallback_from = greatest(coalesce(presence_fallback_from, first-live receipt of the browser's run),
- *     token_issued_at)`, kept in one statement: it starts at the FIRST live report of the current run (never the latest heartbeat)
- *     and never before the token this page was handed. Under PRESENCE_FALLBACK_MS: `camera_starting`, no call. Past it: the no-presence
+ *     first-live receipt, token_issued_at)`, kept in one statement: it starts at the FIRST live report of the current run (never the
+ *     latest heartbeat), never before the token this page was handed, and a camera that went off and came back between two claims
+ *     (a new run, a new first-live receipt) restarts it, so a stored clock older than the run cannot fall back for it.
+ *     Under PRESENCE_FALLBACK_MS: `camera_starting`, no call. Past it: the no-presence
  *     FALLBACK, under the read slot like every read: the session read, recording the peer it finds, the counter and a warning.
  */
 async function proofCamera(
@@ -656,7 +658,8 @@ async function proofCamera(
     if (!holdsToken) return startingVerdict;
     const [clock] = await sql<{ from: Date }[]>`
       update fixture_video_participants
-         set presence_fallback_from = greatest(coalesce(presence_fallback_from, ${report.firstLiveAt ?? now}::timestamptz), token_issued_at)
+         set presence_fallback_from = greatest(
+               coalesce(presence_fallback_from, ${report.firstLiveAt ?? now}::timestamptz), ${report.firstLiveAt}::timestamptz, token_issued_at)
        where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}
        returning presence_fallback_from as "from"`;
     // A fresh `live` with no stamp (a seat already live at the V529 deploy, until its next report) is a run starting now.
