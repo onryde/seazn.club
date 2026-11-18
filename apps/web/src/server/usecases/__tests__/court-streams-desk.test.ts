@@ -3,8 +3,6 @@
 // The rules under test are the brief's, typed here: unpaired with no pairing; waiting after a beat; live with a live session;
 // offline at 3 missed beats (10 s cadence: 30 s); a withdrawn or absent link reads null; the stored refusal shows until a
 // success clears it; a view-only member reads it; the read costs one statement per kind however many courts.
-// Web G (2026-11-18): a match's own_stream_code is true only while its ACTIVE code competes — a phone beat on it within the
-// present window (max(60 s, cadence + 30 s)) or a session of the match is open; an active code nobody holds reads false.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 
@@ -61,12 +59,6 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
   const courtOf = async (name = "Court 2", now = at(0), auth: AuthCtx = day.auth) =>
     (await getMatchDay(auth, day.comp.id, now)).courts.find((c) => c.court_name === name)!;
   /** A court pairing on the link's live code, last beat at `beatMin`, polling every 10 s. */
-  /** Web G: a phone holding a MATCH's own code — a current pairing on it, last beat at `beatMin`, polling every 10 s. */
-  const holdOwn = async (codeId: string, beatMin: number): Promise<void> => {
-    await sql`
-      insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds)
-      values (${day.orgId}, ${codeId}, 0, ${randomUUID()}, 'new', ${at(beatMin)}, ${at(beatMin)}, 10)`;
-  };
   const pair = async (linkId: string, beatMin: number): Promise<void> => {
     const [code] = await sql<{ id: string }[]>`select id from fixture_stream_codes where court_link_id = ${linkId} and ended_at is null`;
     await sql`
@@ -211,12 +203,6 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
     await sql`insert into fixture_stream_settings (fixture_id, org_id, court_stream) values (${f0}, ${day.orgId}, true)`;
     const user = await rigUser();
     const f1Code = await sql.begin((tx) => insertStreamCode(tx, { orgId: day.orgId, fixtureId: f1, code: newCode(), tokHash: '0'.repeat(64), tokEnc: Buffer.from("sealed"), issuedBy: user }));
-    // Web G: an active code nobody holds does not lock the switch; a phone that beat 5 minutes ago (silent at a 10 s cadence:
-    // the 60 s floor) does not either; one that beat at the read's own minute does.
-    expect((await courtOf()).queue[0]!.own_stream_code, "an active code no phone holds and no session runs on").toBe(false);
-    await holdOwn(f1Code.id, -5);
-    expect((await courtOf()).queue[0]!.own_stream_code, "its phone went silent").toBe(false);
-    await sql`update fixture_stream_pairings set last_beat_at = ${at(0)} where code_id = ${f1Code.id}`;
     const court = await courtOf();
     expect([court.current!.court_stream, court.current!.own_stream_code]).toEqual([true, false]);
     expect([court.queue[0]!.court_stream, court.queue[0]!.own_stream_code]).toEqual([false, true]);
@@ -240,8 +226,6 @@ describe.skipIf(!HAS_DB)("court streams (the desk's read)", () => {
     // Its own active code, the other flag; an ended one is not active (as for a queued row).
     const user = await rigUser();
     const f0Code = await sql.begin((tx) => insertStreamCode(tx, { orgId: day.orgId, fixtureId: f0, code: newCode(), tokHash: '0'.repeat(64), tokEnc: Buffer.from("sealed"), issuedBy: user }));
-    expect((await candidate(f0)).fixture.own_stream_code, "Web G: no phone holds it yet").toBe(false);
-    await holdOwn(f0Code.id, 0);
     expect((await candidate(f0)).fixture.own_stream_code).toBe(true);
     await sql.begin((tx) => wipeStreamCodeTok(tx, f0Code.id, "reissued", null));
     await sql`update fixture_stream_settings set court_stream = false where fixture_id = ${f0}`;
