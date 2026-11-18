@@ -136,6 +136,10 @@ type Tx = postgres.TransactionSql | postgres.Sql;
  *    but DELETES the ENDED rows, as a re-open does, through the same delete below. With the pre-mint job a room can be ended before
  *    the first open (the sweep's teardown of a decided board, `endRoomAtResult` at a result) and the decision then undone; an ended
  *    row left on file refuses every claim VIDEO_MEETING_ENDED, and nothing would ever clear it, so the board could never check in.
+ *  - `"reinvite"` (an open into a window that is already RUNNING: a board that was decided at the first open - so it was no part of
+ *    `ids` then and its ended room was never deleted - and has since been undone is invited now): the same as `"first"`. Without it the
+ *    undone board's ENDED row refuses every claim VIDEO_MEETING_ENDED, because a re-invite retires nothing. Its `ids` are the round's
+ *    PLAYABLE boards, whose rooms are ended only by a result that was undone, so the delete takes nothing a live board needs.
  *  - `"reopen"` (the organiser's re-open, a fresh window for a round nobody was invited into): an UNENDED room that is
  *    unadopted (both stamps null: the pre-mint job's room for a board with no pairing yet) or stamped for the fixture's
  *    CURRENT pairing is kept, unmarked - it is a room this window needs, made before anyone checked in, and retiring it would
@@ -153,7 +157,7 @@ async function retireBoardsMeetings(
   tx: Tx,
   fixtureIds: readonly string[],
   now: Date,
-  mode: "first" | "reopen" | "rearm",
+  mode: "first" | "reinvite" | "reopen" | "rearm",
 ): Promise<string[]> {
   if (fixtureIds.length === 0) return [];
   const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
@@ -163,7 +167,7 @@ async function retireBoardsMeetings(
              or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))`
       : tx``;
   const marked =
-    mode === "first"
+    mode === "first" || mode === "reinvite"
       ? []
       : await tx<{ fixture_id: string; ended_at: Date | null }[]>`
           update fixture_video_meetings m
@@ -484,6 +488,9 @@ export async function openRound(
     } else {
       open = existing;
       kind = "reinvited";
+      // The ENDED rows of the round's playable boards go (check-in capacity plan 2 Task 8, the first-open gap): a board decided at
+      // the first open kept its ended room, and its undo lands HERE, a path that used to retire nothing.
+      await retireBoardsMeetings(tx, ids, now, "reinvite");
     }
 
     // Each board's place in its round (spec §3.2.1): its zero-based rank among EVERY fixture row, ordered `(seq_in_round,

@@ -1740,6 +1740,44 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     expect(creates() - createdBefore, "the pre-minted room was used: no further create").toBe(1);
   });
 
+  it("pre-mint -> board DECIDED at the first open -> undo -> RE-INVITE -> claim: the decided board is no part of the first open's boards, so its ENDED rows survive it; the re-invite (which retires nothing) deletes them, and the board can check in", async () => {
+    vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, rounds: 1, pairing: "fold", cameraPolicy: "optional" });
+    const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
+    const [decided, intact] = await swissRound1(s.stageId);
+    expect(decided && intact, "premise: two boards").toBeTruthy();
+    const made = await premintExternalPlay({
+      orgIds: [s.orgId], serialise: false, wait: async () => {}, rtk: rtk.deps, offered: async () => true, windowsOpen: async () => false,
+    });
+    expect(made.roomsMade, "premise: 4 rooms made").toBe(4);
+    // The result is entered BEFORE the round opens, and its rooms end at it (the real ender).
+    await sql`update fixtures set status = 'finalized' where id = ${decided!.fixtureId}`;
+    await new Promise<void>((resolve) => endRoomAtResult(decided!.fixtureId, { defer: (task) => void task().then(() => resolve()), endMeeting: rtk.end }));
+    expect((await meetingsOf(decided!.fixtureId)).map((m) => m.ended_at !== null), "premise: both of its rooms ended at the result").toEqual([true, true]);
+
+    // The FIRST open: the decided board is not playable, so it is not among the open's boards and its ended rows stay.
+    const t0 = new Date();
+    expect(await open(s, 1, t0), "the first open").toMatchObject({ opened: true, invited: 2 });
+    expect((await meetingsOf(decided!.fixtureId)).map((m) => m.ended_at !== null), "premise: the first open left the decided board's ended rows").toEqual([true, true]);
+
+    // The result is undone and the organiser opens again: the round has invited people, so this is a RE-INVITE into the running window.
+    await sql`update fixtures set status = 'scheduled' where id = ${decided!.fixtureId}`;
+    const mark = rtk.http.length;
+    expect(await open(s, 1, new Date(t0.getTime() + MIN)), "the second open").toMatchObject({ opened: true });
+    expect(await auditTypes(s.competitionId), "premise: a re-invite, the window kept").toEqual(["external_play.round_opened", "external_play.round_reinvited"]);
+    expect(await meetingsOf(decided!.fixtureId), "the re-invite deleted the ended rows").toEqual([]);
+    expect(rtk.http.slice(mark).filter((c) => c.startsWith("PATCH") || c.includes("kick-all")), "and ended no room").toEqual([]);
+    expect(await meetingsOf(intact!.fixtureId), "the intact board's pre-minted rooms are untouched").toHaveLength(2);
+
+    // The claim: no VIDEO_MEETING_ENDED - the board makes its room afresh and seats.
+    const seatAt = new Date(t0.getTime() + 2 * MIN);
+    const createdBefore = rtk.http.filter((c) => c === "POST /meetings").length;
+    const got = await seatThrough({ fixtureId: decided!.fixtureId, personId: personOf.get(decided!.home)! }, { now: seatAt, video: rtk.video });
+    expect(got, "the undone board seats").toMatchObject({ seated: true, participant: { participantId: expect.any(String) } });
+    expect(rtk.http.filter((c) => c === "POST /meetings").length - createdBefore, "its room was made at the claim").toBe(1);
+  });
+
   it("the FIRST open's empty case and its neighbours: a round with no room on file ends and deletes nothing (no vendor call); an ENDED row on one board goes while the next board's unended room - current pairing, and unadopted - stays, ended by nobody (counted)", async () => {
     const rtk = fakeRtk();
     const ended: string[] = [];
