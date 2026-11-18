@@ -53,6 +53,7 @@ import { swissAbsentRounds } from "./swiss-absent-rounds";
 import { attachFeedRefs, engineRoundOf, laneDepthOf } from "./bracket-rounds";
 import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
 import { rootBracketOrder } from "./knockout-draw";
+import { locksThatFit } from "@/lib/rank-override";
 
 type Tx = postgres.TransactionSql;
 
@@ -62,7 +63,7 @@ const BRACKET_RESET_KEY = "gf-reset";
 
 // americano folds like a table stage (Jul3/08 §3): its pair fixtures feed the
 // standard standings machinery.
-const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
+export const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
 
 // L3/#414 pass 2 — the bracket-shaped kinds. TABLE_KINDS (4) ∪ {"ladder"} (1)
 // ∪ BRACKET_KINDS (4) = 9 = every StageKind value: completeStageIfReady's
@@ -641,8 +642,10 @@ function toTableStage(
       : {}),
     ...(Array.isArray(inputs.stage.config?.rank_overrides)
       ? {
-          rankLocks: (inputs.stage.config.rank_overrides as { entrant_id: string; rank: number }[]).map(
-            (o) => ({ entrantId: o.entrant_id, rank: o.rank }),
+          // W5 T13 fix round 1 (ST-G14): a pin waits until its pool holds enough results to place it (`locksThatFit`).
+          rankLocks: locksThatFit(
+            (inputs.stage.config.rank_overrides as { entrant_id: string; rank: number }[]).map((o) => ({ entrantId: o.entrant_id, rank: o.rank })),
+            inputs.tableFixtures,
           ),
         }
       : {}),

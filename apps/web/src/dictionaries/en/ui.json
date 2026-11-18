@@ -2931,7 +2931,7 @@
   "roundrobin.refusal.RR_SUBSTITUTE_PARTNER_REFUSED": "A pair can't change partners once play has started. Withdraw the pair and add a new one.",
   "roundrobin.refusal.RR_ADHOC_ROUND_INVALID": "That round doesn't exist yet. Pick an existing round or the next one.",
   "roundrobin.refusal.RR_RANK_OVERRIDE_POOL": "Each rank can be pinned once per pool, and never above the pool's size.",
-  "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE": "Ranks can only be pinned on a league or group table.",
+  "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE": "Ranks can only be pinned on a league, group, Swiss or americano table.",
   "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD": "{qualified} can't qualify from this field: it can supply at most {max}.",
   "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "The table would have to be drawn again, which clears match setup already on its lines (officials, team sheets, scoring devices, streams, player availability or court calls). Use Rebuild fixtures — it lists what it clears first.",
   "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH": "The table would have to be drawn again, which removes the matches you added with Add match. Rebuild fixtures removes them too: note them down first, then use it.",

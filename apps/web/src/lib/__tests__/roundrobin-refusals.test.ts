@@ -24,7 +24,7 @@ const PLAN: Record<string, { status: 409 | 422; en: string }> = {
   RR_SUBSTITUTE_PARTNER_REFUSED: { status: 422, en: "A pair can't change partners once play has started. Withdraw the pair and add a new one." },
   RR_ADHOC_ROUND_INVALID: { status: 422, en: "That round doesn't exist yet. Pick an existing round or the next one." },
   RR_RANK_OVERRIDE_POOL: { status: 422, en: "Each rank can be pinned once per pool, and never above the pool's size." },
-  RR_RANK_OVERRIDE_NOT_TABLE: { status: 422, en: "Ranks can only be pinned on a league or group table." },
+  RR_RANK_OVERRIDE_NOT_TABLE: { status: 422, en: "Ranks can only be pinned on a league, group, Swiss or americano table." },
   RR_CUT_EXCEEDS_FIELD: { status: 422, en: "{qualified} can't qualify from this field: it can supply at most {max}." },
   // Task 2 fix round 1 (controller ruling): the knockout's KO_REDRAW_WOULD_CLEAR_SETUP, for a league or group.
   RR_REGENERATE_WOULD_CLEAR_SETUP: {

@@ -33,6 +33,8 @@ import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-na
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { log } from "@/server/logger";
+import { recomputeStandings } from "@/server/engine-db";
+import { dropPinsOfEntrant } from "./rank-override";
 import { afterScheduleWrite } from "./schedule/after-write";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
@@ -1144,7 +1146,7 @@ export async function writeEntrantPatch(
     patch.members && home
       ? await openRosterSeatGate(auth, { divisionId: home.division_id, personIds: patch.members.map((m) => m.person_id) })
       : undefined;
-  const { out, fieldChanged, departed, refresh } = await withTenant(auth.orgId, async (tx) => {
+  const { out, fieldChanged, departed, pinsDroppedIn, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
     // it never reaches the `update entrants set ...` below.
@@ -1159,7 +1161,11 @@ export async function writeEntrantPatch(
     // like every other Swiss write (the lock order `division:` → rows).
     const reinstating =
       prior !== undefined && DEPARTED_STATUSES.has(prior.status) && fields.status !== undefined && !DEPARTED_STATUSES.has(fields.status);
-    if (reinstating) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior.division_id}))`;
+    // W5 T13 fix round 1 (G7): a departure also drops her rank pins (below), which are a division write - the same lock, taken before the
+    // row's update for the same order (`division:` -> rows).
+    const departing =
+      prior !== undefined && !DEPARTED_STATUSES.has(prior.status) && fields.status !== undefined && DEPARTED_STATUSES.has(fields.status);
+    if (reinstating || departing) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior!.division_id}))`;
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);
@@ -1198,6 +1204,9 @@ export async function writeEntrantPatch(
     if (fieldChanged && DEPARTED_STATUSES.has(row.status)) {
       await tx`update entrants set table_waiting_stage_id = null where id = ${id} and table_waiting_stage_id is not null`;
     }
+    // W5 T13 fix round 1 (X-PO-3, G7): and her rank pins go with her - the bare status flip an organiser's PATCH `withdrawn` is runs no
+    // cascade, and a pin would keep her above the field in an open table. Open leagues and groups only (`dropPinsOfEntrant`).
+    const pinsDroppedIn = fieldChanged && DEPARTED_STATUSES.has(row.status) ? await dropPinsOfEntrant(tx, row.division_id, id) : [];
     // W4 T19 (K13): how a reinstated player rejoins the division's running entry stage — the reply carries it, so the
     // desk can say "waiting to join the bracket" or "their place has been played on" instead of a silent flip.
     let late: LateEntryResult | null = null;
@@ -1284,6 +1293,7 @@ export async function writeEntrantPatch(
       fieldChanged,
       // W5 T11: this write took her OUT of the field (the other direction of `fieldChanged` is a Reinstate).
       departed: fieldChanged && DEPARTED_STATUSES.has(row.status),
+      pinsDroppedIn,
       refresh: await entrantPublicScope(tx, row),
     };
   }, seatGate?.tenant);
@@ -1291,6 +1301,15 @@ export async function writeEntrantPatch(
   // seed, status or badge edit) reached the public pages only when their 30s
   // cache ran out.
   refreshEntrantPublicPages(refresh, { entrantId: id });
+  // W5 T13 fix round 1: a table whose pin went with her reads its pins again (the stored snapshot still holds her pinned place).
+  // Best-effort: the status write has committed, and the next result recomputes it anyway.
+  for (const stageId of pinsDroppedIn) {
+    try {
+      await recomputeStandings(auth.orgId, stageId);
+    } catch (err) {
+      log.warn({ event: "standings_not_recomputed_after_pin_drop", entrantId: id, stageId, err: String(err) }, "standings_not_recomputed_after_pin_drop");
+    }
+  }
   // AFTER the transaction commits: the recompute opens its own transaction
   // and takes the division advisory lock, which would deadlock against the
   // one above. Best-effort — a proposal that cannot be recomputed is left

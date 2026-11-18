@@ -364,6 +364,9 @@ export interface ReconcileOutcome {
   /** W5 T2 fix round 3: an in-place patch dropped lines that carried setup (officials, sheets, devices, availability, calls); how
    *  many rows, and the entrants whose fixtures they were. */
   setups_removed?: { count: number; names: string[] };
+  /** W5 T13 fix round 1 (X-PO-3, G7): a `regenerated` redraw of a league or group moved entrants between pools and dropped this many
+   *  rank pins with them. ABSENT when none were dropped. */
+  pins_cleared?: number;
 }
 
 /** A generate's committed write (R10e): the wire outcome, plus the division

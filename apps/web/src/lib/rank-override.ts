@@ -26,7 +26,8 @@ export interface RankPin {
 }
 
 /** Where the stage's entrants sit, read off its stored lines. `seated` is false for a stage drawn with no lines yet: there is no pool to
- *  check against, and the body is taken as one table (a pin there is re-checked by the draw). */
+ *  check against, and the body is taken as one table. Nothing re-checks such a pin at the draw; the engine reads a lock by its ENTRANT, and
+ *  `locksThatFit` (the read side) holds it back until its pool has the rows to place it. */
 export interface StageSeating {
   seated: boolean;
   /** entrant id -> its pool id (null: the stage has no pools). */
@@ -105,4 +106,36 @@ export function pinsSurvivingRedraw(
     const pool = "pool_id" in pin && pin.pool_id !== undefined ? pin.pool_id : beforePoolOf.get(pin.entrant_id);
     return pool === undefined || !changed.has(pool);
   });
+}
+
+/** The engine's view of a fixture for pool membership: the pool it sits in and whose results it carries (`TableFixture`, structurally). */
+export interface PoolFixtureLike {
+  poolId?: string;
+  result?: readonly [{ entrantId: string }, { entrantId: string }];
+  awardDelta?: { entrantId: string };
+}
+
+/**
+ * ST-G14 read side: the locks the fold may hand the engine. The engine ranks a POOLED stage's pool over the entrants holding a result or
+ * an award in that pool (`entrantsOfPool`), and `applyRankLocks` throws when a lock's rank is above that count - so a pin the write
+ * check accepted (it counts SEATS) would break every later score while a pool has played too little. A lock whose rank exceeds the
+ * results-bearing count of its entrant's pool is held back until the pool has the rows. A stage with one pool (a league) ranks all its
+ * entrants, which the write check already counts, so every lock passes. A lock whose entrant holds a result in no pool is ignored by the
+ * engine and passes.
+ */
+export function locksThatFit<L extends { entrantId: string; rank: number }>(locks: readonly L[], fixtures: readonly PoolFixtureLike[]): L[] {
+  const pools = new Set(fixtures.map((f) => f.poolId ?? ""));
+  if (pools.size <= 1) return [...locks];
+  const members = new Map<string, Set<string>>();
+  for (const f of fixtures) {
+    const pool = f.poolId ?? "";
+    const set = members.get(pool) ?? new Set<string>();
+    if (f.result !== undefined) {
+      set.add(f.result[0].entrantId);
+      set.add(f.result[1].entrantId);
+    }
+    if (f.awardDelta !== undefined) set.add(f.awardDelta.entrantId);
+    members.set(pool, set);
+  }
+  return locks.filter((lock) => [...members.values()].every((set) => !set.has(lock.entrantId) || lock.rank <= set.size));
 }

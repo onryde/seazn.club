@@ -26,6 +26,7 @@ import { isFirstLossProgression, maybeProposePlate } from "../plate-field";
 import { onlyPoolOf } from "../stage-table-snapshot";
 import { RANK_OVERRIDE_TABLE_KINDS, planRankOverride } from "@/lib/rank-override";
 import { readStagePins, readStageSeating } from "../rank-override";
+import { inTheField } from "@/lib/entrant-field";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 
 /**
@@ -436,10 +437,15 @@ export async function overrideStandings(
     // W5 T13 (X-PO-4 <- RB5-P7, ruling 288): a stage with no table has no place to pin an entrant in.
     if (!RANK_OVERRIDE_TABLE_KINDS.has(stage.kind)) throw roundRobinRefusal("RR_RANK_OVERRIDE_NOT_TABLE", { kind: stage.kind });
     const ids = input.rows.map((r) => r.entrant_id);
-    const known = await tx<{ id: string }[]>`
-      select id from entrants where id in ${tx(ids)} and division_id = ${stage.division_id}`;
+    const known = await tx<{ id: string; status: string }[]>`
+      select id, status from entrants where id in ${tx(ids)} and division_id = ${stage.division_id}`;
     if (known.length !== ids.length) {
       throw new HttpError(422, "override references an entrant outside this division");
+    }
+    // W5 T13 fix round 1 (X-PO-3): an OPEN table takes no pin for an entrant who has left it - a departure drops her pins, so one written
+    // after it would sit there ranking her above the field. A finished table stands as it finished (RB5-L8) and keeps what it is given.
+    if (stage.status !== "complete" && known.some((e) => !inTheField(e))) {
+      throw new HttpError(422, "override references an entrant who is no longer in the field");
     }
     // W5 T13 (X-PO-3 <- RB5-P5, ST-G14): the body is checked PER POOL, against the pool's size, here - the engine would throw a rank above
     // it at the next recompute, after the write. A second override replaces only the pools it names.

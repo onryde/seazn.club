@@ -234,12 +234,20 @@ async function reconcileRoundRobinGenerate(
     // membership changed loses its pins, a pool that came out the same keeps them.
     const seatedBefore = await readPoolMembers(tx, stage.id);
     const regen = await regenerateStageInTx(tx, auth, stage.id, stage, { carry: "pair", recordCleared: true });
-    await dropPinsOfChangedPools(tx, stage.id, seatedBefore);
+    const pinsCleared = await dropPinsOfChangedPools(tx, stage.id, seatedBefore);
     return {
       ...regen.generated,
       outcome: {
         ...regen.generated.outcome,
-        reconcile: { kind: "regenerated", placed: decision.placed, vacated: decision.vacated, vacated_seats: decision.vacated.length, slots: regen.slots },
+        reconcile: {
+          kind: "regenerated",
+          placed: decision.placed,
+          vacated: decision.vacated,
+          vacated_seats: decision.vacated.length,
+          slots: regen.slots,
+          // W5 T13 fix round 1: the redraw dropped these rank pins (a pool's membership changed); said, never silent.
+          ...(pinsCleared > 0 ? { pins_cleared: pinsCleared } : {}),
+        },
       },
       changedFixtureIds: regen.removedIds,
     };

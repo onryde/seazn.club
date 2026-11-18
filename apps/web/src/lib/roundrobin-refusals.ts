@@ -102,7 +102,7 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
   },
   RR_RANK_OVERRIDE_NOT_TABLE: {
     status: 422,
-    en: "Ranks can only be pinned on a league or group table.",
+    en: "Ranks can only be pinned on a league, group, Swiss or americano table.",
     key: "roundrobin.refusal.RR_RANK_OVERRIDE_NOT_TABLE",
   },
   // Task 12b states the sentence's final wording with its builder gate; the two numbers are `details.qualified` / `details.max`.

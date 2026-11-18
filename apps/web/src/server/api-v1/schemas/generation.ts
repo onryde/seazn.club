@@ -79,6 +79,8 @@ export const GenerateResult = z.object({
       required: z.number().int().optional(),
       /** W5 T2 fix round 3: an `in_place` patch dropped lines that carried setup; the rows removed and whose fixtures they were. */
       setups_removed: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
+      /** W5 T13 fix round 1: a `regenerated` redraw dropped this many rank pins (their pool's membership changed). Absent when none. */
+      pins_cleared: z.number().int().optional(),
     })
     .optional(),
 });

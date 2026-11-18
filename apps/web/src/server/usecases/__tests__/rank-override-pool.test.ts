@@ -13,6 +13,8 @@ import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
+import { RANK_OVERRIDE_TABLE_KINDS } from "@/lib/rank-override";
+import { TABLE_KINDS } from "@/server/engine-db/competition";
 import { HttpError } from "@/lib/errors";
 import { OverrideStandings } from "@/server/api-v1/schemas";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -351,6 +353,7 @@ describe.skipIf(!HAS_DB)("X-PO-3 (G7): a pre-Start re-snake clears the pins of e
       await r.add("P10", 10); // snake of ten: 10 -> B; pool A keeps its five, pool B grows 4 -> 5 (a parity change: drawn again)
       const out = await generateStageFixtures(r.auth, r.stageId);
       expect(out.reconcile?.kind, `${sport.key}: the premise - a redraw, not a patch`).toBe("regenerated");
+      expect(out.reconcile?.pins_cleared, `${sport.key}: the answer says how many pins the redraw dropped (pool B's one)`).toBe(1);
       const after = await poolMembers(r.stageId);
       expect(after.get("A"), `${sport.key}: pool A did not change`).toEqual(SNAKE_9.A);
       expect(after.get("B"), `${sport.key}: pool B grew`).toEqual([...SNAKE_9.B, "P10"].sort());
@@ -373,6 +376,7 @@ describe.skipIf(!HAS_DB)("X-PO-3 (G7): a pre-Start re-snake clears the pins of e
     await r.add("P9", 1);
     const out = await generateStageFixtures(r.auth, r.stageId);
     expect(out.reconcile?.kind, "everyone moved: drawn again").toBe("regenerated");
+    expect(out.reconcile?.pins_cleared, "three pins went: two stamped, one legacy").toBe(3);
     expect(await storedOverrides(r.stageId)).toEqual([]);
     expect(ids.size).toBe(2);
   });
@@ -384,10 +388,98 @@ describe.skipIf(!HAS_DB)("X-PO-3 (G7): a pre-Start re-snake clears the pins of e
     for (const [i, name] of ["P9", "P10", "P11", "P12"].entries()) await r.add(name, 9 + i);
     const out = await generateStageFixtures(r.auth, r.stageId);
     expect(out.reconcile?.kind, "the premise: patched in place").toBe("in_place");
+    expect(out.reconcile?.pins_cleared, "nothing dropped: the key is absent, not 0").toBeUndefined();
     expect(await storedOverrides(r.stageId)).toEqual([
       { entrant_id: r.id.get("P1")!, rank: 1, pool_id: ids.get("A")! },
       { entrant_id: r.id.get("P2")!, rank: 1, pool_id: ids.get("B")! },
     ]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("X-PO-3 fix round 1: a pin waits for its pool's results; a bare withdrawn flip drops her pin; a left entrant takes no pin", () => {
+  /** pool key -> its lines (home/away names, id), oldest first. */
+  async function linesOf(stageId: string, key: string): Promise<{ id: string; home: string; away: string }[]> {
+    return sql<{ id: string; home: string; away: string }[]>`
+      select f.id, h.display_name as home, a.display_name as away from fixtures f
+        join pools p on p.id = f.pool_id join entrants h on h.id = f.home_entrant_id join entrants a on a.id = f.away_entrant_id
+       where f.stage_id = ${stageId} and p.key = ${key} order by f.round_no, f.seq_in_round`;
+  }
+  const play = async (r: Rig, fixtureId: string, homeWins: boolean) => {
+    await scoreEvent(r.auth, fixtureId, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.auth, fixtureId, { expected_seq: 1, type: "generic.result", payload: { p1Score: homeWins ? 2 : 0, p2Score: homeWins ? 0 : 2 } });
+  };
+
+  // differential: today the pin below is written (rank 3 <= 4 seats), the engine then reads pool A as TWO entrants holding a result and
+  // throws CONFIG_INVALID - from the pin POST's own recompute (after the commit), and from every later score in the pool.
+  it("I-1 a rank-3 pin in a pool of four waits while only two of its entrants hold a result: the pin is written, the next result scores, the pin applies once the pool has the rows", async () => {
+    const r = await rig({ n: 8, kind: "group", pools: 2, sport: GENERIC });
+    const ids = await poolIds(r.stageId);
+    await startDivision(r.auth, r.divisionId);
+    const lines = await linesOf(r.stageId, "A");
+    expect(lines, "the premise: a pool of four plays six lines").toHaveLength(6);
+    const first = lines[0]!;
+    const disjoint = lines.find((l) => ![first.home, first.away].includes(l.home) && ![first.home, first.away].includes(l.away));
+    expect(disjoint, "the premise: a second line with the other two entrants").toBeDefined();
+    await play(r, first.id, true);
+    const pinned = r.id.get(first.away)!; // lost the first line
+    await expect(overrideStandings(r.auth, r.stageId, { rows: [pin(pinned, 3)] }), "the pin POST must not throw after its commit").resolves.toEqual({ overridden: 1 });
+    expect(await storedOverrides(r.stageId), "stored, waiting").toEqual([{ entrant_id: pinned, rank: 3, pool_id: ids.get("A")! }]);
+    let rows = ((await getStandings(r.auth, r.stageId, ids.get("A")!)).rows as { entrantId: string; rankLocked?: boolean }[]);
+    expect(rows, "two entrants hold a result").toHaveLength(2);
+    expect(rows.some((x) => x.rankLocked), "the pin waits: nothing is marked pinned yet").toBe(false);
+    await play(r, disjoint!.id, true); // before the fix: 422 CONFIG_INVALID, the score refused
+    rows = ((await getStandings(r.auth, r.stageId, ids.get("A")!)).rows as { entrantId: string; rankLocked?: boolean }[]);
+    expect(rows, "four entrants hold a result now").toHaveLength(4);
+    expect(rows[2]!.entrantId, "the pin applies: her place is third").toBe(pinned);
+    expect(rows[2]!.rankLocked).toBe(true);
+  });
+
+  // differential: today the bare flip leaves her pin in the config, ranking a withdrawn entrant above the field of an open table
+  it("d a bare PATCH withdrawn drops her pin before Start (both sports), and in an open started table the standings read without her pin", async () => {
+    let checked = 0;
+    for (const sport of SPORTS) {
+      const r = await rig({ n: 4, kind: "league", sport });
+      await overrideStandings(r.auth, r.stageId, { rows: [pin(r.id.get("P1")!, 2), pin(r.id.get("P2")!, 3)] });
+      await patchEntrant(r.auth, r.id.get("P1")!, { status: "withdrawn" });
+      expect(await storedOverrides(r.stageId), `${sport.key}: only the leaver's pin goes`).toEqual([{ entrant_id: r.id.get("P2")!, rank: 3, pool_id: null }]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // Started and fully played but not completed: P3 loses every line (the lower name wins) and is pinned first; her bare withdrawal takes
+    // the pin and the stored table is read again, so the head of the table is the best player, not her.
+    const r = await rig({ n: 3, kind: "league", sport: GENERIC });
+    await startDivision(r.auth, r.divisionId);
+    const lines = await sql<{ id: string; home: string; away: string }[]>`
+      select f.id, h.display_name as home, a.display_name as away from fixtures f
+        join entrants h on h.id = f.home_entrant_id join entrants a on a.id = f.away_entrant_id where f.stage_id = ${r.stageId}`;
+    for (const l of lines) await play(r, l.id, l.home < l.away);
+    await overrideStandings(r.auth, r.stageId, { rows: [pin(r.id.get("P3")!, 1)] });
+    const head = async () => ((await getStandings(r.auth, r.stageId)).rows as { entrantId: string }[])[0]!.entrantId;
+    expect(await head(), "the premise: pinned first").toBe(r.id.get("P3")!);
+    await patchEntrant(r.auth, r.id.get("P3")!, { status: "withdrawn" });
+    expect(await storedOverrides(r.stageId)).toEqual([]);
+    expect(await head(), "her pin no longer ranks her above the field").toBe(r.id.get("P1")!);
+  });
+
+  it("d a finished table keeps its pin through a bare withdrawn flip (RB5-L8), the pair of the case above", async () => {
+    const r = await rig({ n: 3, kind: "league", sport: GENERIC });
+    await startDivision(r.auth, r.divisionId);
+    const lines = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId}`;
+    for (const l of lines) await play(r, l.id, true);
+    await overrideStandings(r.auth, r.stageId, { rows: [pin(r.id.get("P3")!, 1)] });
+    await completeStage(r.auth, r.stageId);
+    await patchEntrant(r.auth, r.id.get("P3")!, { status: "withdrawn" });
+    expect(await storedOverrides(r.stageId)).toEqual([{ entrant_id: r.id.get("P3")!, rank: 1, pool_id: null }]);
+  });
+
+  it("b an open table refuses a pin naming an entrant who has left it, by name, nothing stored; the one still in the field is pinned", async () => {
+    const r = await rig({ n: 4, kind: "league", sport: GENERIC });
+    await withdrawEntrantCascade(r.auth, r.id.get("P1")!);
+    const err = await refusal(overrideStandings(r.auth, r.stageId, { rows: [pin(r.id.get("P1")!, 2), pin(r.id.get("P2")!, 3)] }));
+    expect(err.status).toBe(422);
+    expect(err.message).toMatch(/no longer in the field/);
+    expect(await storedOverrides(r.stageId), "nothing stored").toBeUndefined();
+    expect(await overrideStandings(r.auth, r.stageId, { rows: [pin(r.id.get("P2")!, 3)] })).toEqual({ overridden: 1 });
   });
 });
 
@@ -424,6 +516,12 @@ describe.skipIf(!HAS_DB)("X-PO-4 (RB5-P7, ruling 288): a pin on a stage with no 
     }
     expect(checked, "anti-vacuity: every non-table kind the schema declares").toBe(kinds.filter((k) => NOT_TABLE.includes(k)).length);
     expect(checked).toBeGreaterThan(0);
+  });
+
+  it("X-PO-4 the kinds that take a pin are the fold's own table kinds, and the rulebook's four (a kind added to one is added to both)", () => {
+    expect([...RANK_OVERRIDE_TABLE_KINDS].sort()).toEqual([...TABLE_KINDS].sort());
+    expect([...TABLE_KINDS].sort(), "anti-vacuity: the rulebook's four").toEqual([...TABLE].sort());
+    expect(TABLE_KINDS.size).toBe(4);
   });
 
   it("X-PO-4 the positive pair: a league and a group stage still take an override", async () => {

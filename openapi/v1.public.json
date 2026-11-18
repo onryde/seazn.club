@@ -21301,6 +21301,11 @@
                                 "names"
                               ],
                               "additionalProperties": false
+                            },
+                            "pins_cleared": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             }
                           },
                           "required": [
@@ -23352,6 +23357,11 @@
                                 "names"
                               ],
                               "additionalProperties": false
+                            },
+                            "pins_cleared": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             }
                           },
                           "required": [

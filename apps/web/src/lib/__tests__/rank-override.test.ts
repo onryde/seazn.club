@@ -1,7 +1,7 @@
 // W5 app PR A, Task 13 (X-PO-3 <- RB5-P5, X-PO-4 <- RB5-P7): the pure decisions of the rank override. The database-backed behaviour is
 // `server/usecases/__tests__/rank-override-pool.test.ts`; this pins the rules where no database is needed, the empty cases included.
 import { describe, expect, it } from "vitest";
-import { changedPools, pinsSurvivingRedraw, planRankOverride, reportsRankOverrides, type StageSeating } from "../rank-override";
+import { changedPools, locksThatFit, pinsSurvivingRedraw, planRankOverride, reportsRankOverrides, type PoolFixtureLike, type StageSeating } from "../rank-override";
 
 /** Two pools of three: a1 a2 a3 in "A", b1 b2 b3 in "B". */
 const TWO_POOLS: StageSeating = {
@@ -64,5 +64,41 @@ describe("reportsRankOverrides (RB5-P7)", () => {
     expect(reportsRankOverrides("knockout", true)).toBe(false);
     expect(reportsRankOverrides("league", false)).toBe(false);
     expect(reportsRankOverrides("league", null)).toBe(false);
+  });
+});
+
+// ST-G14 read side. Expected values come from the engine's own rule (stage.js `entrantsOfPool`: a POOLED stage's pool is the entrants
+// holding a result or an award in it; `applyRankLocks` throws on rank > that count), typed here as a worked case, not derived from the helper.
+describe("locksThatFit: a pin waits for its pool's results (I-1)", () => {
+  const played = (pool: string | undefined, a: string, b: string): PoolFixtureLike => ({
+    ...(pool === undefined ? {} : { poolId: pool }),
+    result: [{ entrantId: a }, { entrantId: b }],
+  });
+  const unplayed = (pool: string): PoolFixtureLike => ({ poolId: pool });
+  it("a pool with two entrants holding results places ranks 1-2 only; rank 3 waits, rank 4 waits; the other pool is judged by its own count", () => {
+    const fixtures = [played("A", "a1", "a2"), unplayed("A"), played("B", "b1", "b2"), played("B", "b3", "b4")];
+    const locks = [
+      { entrantId: "a1", rank: 2 },
+      { entrantId: "a1", rank: 3 },
+      { entrantId: "b1", rank: 3 },
+      { entrantId: "b3", rank: 4 },
+    ];
+    expect(locksThatFit(locks, fixtures)).toEqual([
+      { entrantId: "a1", rank: 2 },
+      { entrantId: "b1", rank: 3 },
+      { entrantId: "b3", rank: 4 },
+    ]);
+  });
+  it("the pin applies once the pool has the rows (the same lock, a second result in the pool)", () => {
+    const lock = [{ entrantId: "a1", rank: 3 }];
+    expect(locksThatFit(lock, [played("A", "a1", "a2"), unplayed("A"), played("B", "b1", "b2")])).toEqual([]);
+    expect(locksThatFit(lock, [played("A", "a1", "a2"), played("A", "a3", "a4"), played("B", "b1", "b2")])).toEqual(lock);
+  });
+  it("an award counts as a result; a stage with one pool (a league) and a stage with no fixtures pass every lock through", () => {
+    expect(locksThatFit([{ entrantId: "a1", rank: 2 }], [{ poolId: "A", awardDelta: { entrantId: "a1" } }, { poolId: "A", awardDelta: { entrantId: "a2" } }, played("B", "b1", "b2")])).toHaveLength(1);
+    const lock = [{ entrantId: "x", rank: 9 }];
+    expect(locksThatFit(lock, [played(undefined, "x", "y")])).toEqual(lock);
+    expect(locksThatFit(lock, [])).toEqual(lock);
+    expect(locksThatFit([], [played("A", "a1", "a2"), played("B", "b1", "b2")])).toEqual([]);
   });
 });
