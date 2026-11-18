@@ -56,7 +56,7 @@ describe("worker.scheduled", () => {
   it("the env decides the fast trigger: stg's */5 slot runs the four fast rows; prod's minute trigger runs the stream tick, the pre-mint pass and the outbox every minute and external-play only on a multiple of five", async () => {
     const prodEnv: Env = { ...env, ENV_NAME: "prod", BASE_URL: "https://seazn.club" };
     const HOUR = Date.parse("2026-09-28T08:00:00Z");
-    const FAST = ["/api/cron/stream-tick", "/api/cron/external-play-premint", "/api/cron/external-play", "/api/cron/email-outbox"];
+    const FAST = ["/api/cron/stream-tick", "/api/cron/external-play", "/api/cron/email-outbox", "/api/cron/external-play-premint"];
 
     const stg = stubNetwork(0);
     await worker.scheduled!(controller(FAST_TRIGGER.stg, HOUR + FIVE_MINUTES * 60_000), env);
@@ -74,8 +74,8 @@ describe("worker.scheduled", () => {
     await worker.scheduled!(controller(FAST_TRIGGER.prod, HOUR + (FIVE_MINUTES + 1) * 60_000), prodEnv);
     expect(prodOther.done, "prod, any other minute: the every-firing rows (T15: the stream tick joined the outbox here)").toEqual([
       "/api/cron/stream-tick",
-      "/api/cron/external-play-premint",
       "/api/cron/email-outbox",
+      "/api/cron/external-play-premint",
     ]);
     // The pair: a trigger the env does not use runs nothing.
     vi.unstubAllGlobals();

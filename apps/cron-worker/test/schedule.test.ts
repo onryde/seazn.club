@@ -34,15 +34,16 @@ const EVERY_MINUTE = "* * * * *";
 /** Chess in-page board design §4: "The 5-minute cron stays what it is … but it is NOT optional" — the external-play
  *  sweep (T+20 no-show, mint retry, meeting teardown, reconcile, camera evidence). The email outbox's worker
  *  (owner ruling 2026-10-20) rides the same one fast trigger per env, and so does the pre-mint pass (check-in capacity
- *  plan 2 Task 5, accepted by the owner 2026-11-17: Revision notes, Resolved 1), which sits between the stream tick and the
- *  sweep. Typed from the specs, never read from JOBS. The fast-trigger rows, in table order. */
-const FAST_ROWS = ["stream-tick", "external-play-premint", "external-play", "email-outbox"];
+ *  plan 2 Task 5, accepted by the owner 2026-11-17: Revision notes, Resolved 1), which Task 8 moved to the END of the table so its
+ *  vendor-call-a-second pass never delays the sweep or the outbox. Typed from the specs, never read from JOBS. The fast-trigger
+ *  rows, in table order. */
+const FAST_ROWS = ["stream-tick", "external-play", "email-outbox", "external-play-premint"];
 /** The ONE row that is still a 5-minute job: on prod it hangs off the minute trigger and runs on every fifth minute. The
  *  stream tick left this list on 2026-10-28 (YouTube Connect T15, spec §6.7, D9 as amended by owner Q1 = b): it runs on EVERY
  *  fast firing, so a broadcast whose end is due is ended within a minute on prod. */
 const FIVE_MINUTE_JOBS = ["external-play"];
 /** The rows due at a prod minute that is NOT a multiple of five: the every-firing rows, in table order. */
-const EVERY_FIRING_ROWS = ["stream-tick", "external-play-premint", "email-outbox"];
+const EVERY_FIRING_ROWS = ["stream-tick", "email-outbox", "external-play-premint"];
 /** A well-formed trigger no row names. */
 const UNKNOWN = "*/7 * * * *";
 
@@ -198,11 +199,15 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
     ]);
   });
 
-  it("the premint row sits after stream-tick and before external-play: the Worker runs a firing's rows one after another, in table order", () => {
+  // Check-in capacity plan 2 Task 8, carry item 6: a pass that makes a vendor call a second (up to ~55 s) must never sit in front of
+  // the sweep or the outbox in a firing, so the row is the LAST of the whole table (it had been third of four since Task 5).
+  it("the premint row is the LAST row of the table: the Worker runs a firing's rows one after another, in table order, so every other row runs before it", () => {
     const order = JOBS.map((j) => j.id);
     expect(order.indexOf("external-play-premint"), "in the table").toBeGreaterThanOrEqual(0);
-    expect(order.indexOf("external-play-premint")).toBeGreaterThan(order.indexOf("stream-tick"));
-    expect(order.indexOf("external-play-premint")).toBeLessThan(order.indexOf("external-play"));
+    expect(order.at(-1), "the last row").toBe("external-play-premint");
+    const others = order.filter((id) => id !== "external-play-premint");
+    expect(others.length, "anti-vacuity: rows it follows").toBeGreaterThan(0);
+    for (const id of others) expect(order.indexOf(id), `${id} runs before the pre-mint pass`).toBeLessThan(order.indexOf("external-play-premint"));
   });
 
   it("the email-outbox row is in the table exactly once, on the env's fast trigger, due on EVERY firing, never retried (spec 'The retry worker')", () => {
@@ -466,8 +471,8 @@ describe("JOBS table", () => {
     expect(new Set(JOBS.map((j) => j.path)).size).toBe(JOBS.length);
   });
 
-  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick, external-play-premint, external-play and email-outbox (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
-    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play-premint", "external-play", "email-outbox"]);
+  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick, external-play, email-outbox and external-play-premint (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
+    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play", "email-outbox", "external-play-premint"]);
     expect(JOBS.filter((j) => !j.manual)).toEqual([]);
   });
 

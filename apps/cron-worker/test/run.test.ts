@@ -223,15 +223,15 @@ describe("runDue: the R4 trigger seam", () => {
     ] as const) {
       const h = harness();
       const results = await runDue(MONDAY_0805, trigger, e, h.deps);
-      // The fast rows, in table order: stream-tick (capture QR v2 §6.11; every firing since T15), the pre-mint pass (check-in
-      // capacity plan 2 Task 5; every firing, before the sweep), the external-play sweep (chess in-page §4) and the email
-      // outbox's worker (owner ruling 2026-10-20). Minute 05 is a multiple of FIVE_MINUTES on both envs.
-      expect(results.map((r) => r.job), name).toEqual(["stream-tick", "external-play-premint", "external-play", "email-outbox"]);
+      // The fast rows, in table order: stream-tick (capture QR v2 §6.11; every firing since T15), the external-play sweep (chess
+      // in-page §4), the email outbox's worker (owner ruling 2026-10-20) and, LAST (check-in capacity plan 2 Task 8: its vendor
+      // calls never delay the other three), the pre-mint pass (every firing). Minute 05 is a multiple of FIVE_MINUTES on both envs.
+      expect(results.map((r) => r.job), name).toEqual(["stream-tick", "external-play", "email-outbox", "external-play-premint"]);
       expect(h.posts(), name).toEqual([
         `${origin}/api/cron/stream-tick`,
-        `${origin}/api/cron/external-play-premint`,
         `${origin}/api/cron/external-play`,
         `${origin}/api/cron/email-outbox`,
+        `${origin}/api/cron/external-play-premint`,
       ]);
       expect(h.lines.at(-1), name).toMatchObject({ event: "run", cron: trigger, jobs: 4 });
     }
@@ -253,11 +253,11 @@ describe("runDue: the R4 trigger seam", () => {
     const h = harness();
     const notFive = new Date(Date.parse("2026-09-28T08:00:00Z") + (FIVE_MINUTES + 1) * 60_000);
     const results = await runDue(notFive, FAST_PROD, env(), h.deps);
-    expect(results.map((r) => r.job)).toEqual(["stream-tick", "external-play-premint", "email-outbox"]);
+    expect(results.map((r) => r.job)).toEqual(["stream-tick", "email-outbox", "external-play-premint"]);
     expect(h.posts()).toEqual([
       "https://seazn.club/api/cron/stream-tick",
-      "https://seazn.club/api/cron/external-play-premint",
       "https://seazn.club/api/cron/email-outbox",
+      "https://seazn.club/api/cron/external-play-premint",
     ]);
   });
 
