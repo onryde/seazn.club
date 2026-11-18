@@ -12,6 +12,12 @@
 // An island of its own, as the knockout strip is, so its state (the tap in flight, each row's last answer, each row's pool) is
 // held here and driven by the shared hook harness. One DOM at every width: the row stacks below `sm` and sits side by side from it.
 // `id="table-waiting"`: the Needs-you row's "Open fixtures" lands here (a division has ONE root table, so one strip at most).
+//
+// Fix round 1 I1 (R24 pick 7A, made true): while NOTHING in the stage has started (`rebuildable`, the server's own predicate for
+// `rebuild_offered`), each row also says the 7A sentence and offers "Rebuild fixtures" — the tap with `prefer_rebuild`: Rebuild's
+// own body draws the stage again with the player in it (no catch-up lines). It confirms with the number of fixtures it deletes
+// (the created count is the after-notice's). Once a match has started Rebuild would be refused, so neither the sentence nor the
+// button is drawn — never a dead button; a stale press is refused by the server (STAGE_HAS_RESULTS) with nothing moved.
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -36,13 +42,27 @@ export interface TableWaitingStripProps {
   /** The running group's pools (`readTableLatePools`); absent or one pool ⇒ no Group field. */
   pools?: readonly TableLatePool[];
   defaultPool?: string | null;
+  /** I1: nothing in the stage has started, so Rebuild fixtures would take (`readTableLatePools().rebuildable`). */
+  rebuildable?: boolean;
+  /** I1: the stage's fixtures as the desk holds them — what the Rebuild confirm says it deletes. */
+  fixtureCount?: number;
   /** The Registrations hub filtered to this division — a paid entry's refund lives there. */
   registrationsHref: string;
   /** A tap that placed the player: the sentence(s) it earned, for the panel's notice lines (they outlive this strip). */
   onPlaced: (said: PlacedSaid) => void;
 }
 
-export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool = null, registrationsHref, onPlaced }: TableWaitingStripProps) {
+export function TableWaitingStrip({
+  stageId,
+  waiting,
+  names,
+  pools,
+  defaultPool = null,
+  rebuildable = false,
+  fixtureCount = 0,
+  registrationsHref,
+  onPlaced,
+}: TableWaitingStripProps) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
   const locale = useLocaleOrDefault();
@@ -57,6 +77,8 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
   if (waiting.length === 0) return null;
   const pooled = poolPickerShown(pools);
   const poolOf = (id: string) => picked[id] ?? defaultPool ?? pools?.[0]?.key ?? "";
+  // Fix round 1 m1: only a pool the organiser PICKED is named; at the default the server's `choosePool` decides at the tap.
+  const poolBody = (id: string) => (pooled && picked[id] !== undefined ? { pool_key: picked[id] } : {});
   const setOutcome = (id: string, lines: string[] | null) =>
     setOutcomes((prev) => {
       const next = { ...prev };
@@ -65,18 +87,34 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
       return next;
     });
   const nameMap: Record<string, string> = { ...names, ...Object.fromEntries(waiting.map((w) => [w.entrantId, w.name])) };
-  const refusalOf = (err: unknown): string =>
-    err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code) ? undoRefusalText(err.code, err.extra, msg) : msg("knockout.waiting.failed");
+  const refusalOf = (err: unknown, name: string): string =>
+    err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)
+      ? undoRefusalText(err.code, err.extra, msg)
+      : err instanceof ApiV1Error && err.code === "STAGE_HAS_RESULTS"
+        ? msg("roundrobin.waiting.rebuildRefused", { name })
+        : msg("knockout.waiting.failed");
 
-  async function place(w: KnockoutWaitingEntrant) {
+  async function place(w: KnockoutWaitingEntrant, rebuild = false) {
     if (inFlight.current) return;
+    if (rebuild) {
+      const ok = await confirmDialog({
+        title: msg("progression.rosterDrift.confirmTitle"),
+        body: [msg("progression.rosterDrift.confirmBody"), fixtureCount > 0 ? msgPlural("progression.rosterDrift.confirmCount", fixtureCount) : null]
+          .filter(Boolean)
+          .join(" "),
+        confirmLabel: msg("progression.rosterDrift.confirmLabel"),
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
     inFlight.current = true;
     setBusy(w.entrantId);
     setOutcome(w.entrantId, null);
     try {
       const result = await apiV1<TableLateEntryResult>(`/api/v1/stages/${stageId}/late-entrants/${w.entrantId}/place`, {
         method: "POST",
-        json: pooled ? { pool_key: poolOf(w.entrantId) } : {},
+        // A redraw re-snakes the pools: it names none.
+        json: rebuild ? { prefer_rebuild: true } : poolBody(w.entrantId),
       });
       if (result.case === "refused" || result.case === "waiting") {
         // 200, but nothing was placed: the player still waits, and the row says why.
@@ -102,7 +140,7 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
       onPlaced(said);
       router.refresh();
     } catch (err) {
-      setOutcome(w.entrantId, [refusalOf(err)]);
+      setOutcome(w.entrantId, [refusalOf(err, w.name)]);
       // A server answer means the desk's last read is stale (the player was placed or withdrawn meanwhile): re-read it.
       if (err instanceof ApiV1Error) router.refresh();
     } finally {
@@ -126,7 +164,7 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
       await apiV1(`/api/v1/entrants/${w.entrantId}/withdraw`, { method: "POST", json: {} });
       router.refresh();
     } catch (err) {
-      setOutcome(w.entrantId, [refusalOf(err)]);
+      setOutcome(w.entrantId, [refusalOf(err, w.name)]);
     } finally {
       inFlight.current = false;
       setBusy(null);
@@ -150,6 +188,11 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
                 <div className="min-w-0 sm:self-center">
                   <p className="min-w-0 break-words text-sm font-semibold text-slate-900">{w.name}</p>
                   <p className="min-w-0 text-xs text-amber-900">{msg(w.paid ? "roundrobin.waiting.subPaid" : "roundrobin.waiting.sub")}</p>
+                  {rebuildable && (
+                    <p data-testid="table-waiting-rebuild-note" className="mt-1 min-w-0 break-words text-xs text-amber-900">
+                      {msg("roundrobin.lateEntry.rebuildOffered", { name: w.name })}
+                    </p>
+                  )}
                 </div>
                 <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:shrink-0">
                   {pooled && (
@@ -158,11 +201,11 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
                         id={`table-waiting-pool-${w.entrantId}`}
                         testId="table-waiting-pool"
                         pools={pools!}
-                        defaultKey={defaultPool}
                         value={poolOf(w.entrantId)}
                         onChange={(key) => setPicked((prev) => ({ ...prev, [w.entrantId]: key }))}
                         disabled={busy !== null}
                         label={false}
+                        srLabel={msg("entrants.tableLate.poolFor", { name: w.name })}
                       />
                     </div>
                   )}
@@ -175,6 +218,17 @@ export function TableWaitingStrip({ stageId, waiting, names, pools, defaultPool 
                   >
                     {msg("roundrobin.addToTable")}
                   </button>
+                  {rebuildable && (
+                    <button
+                      type="button"
+                      data-testid="table-waiting-rebuild"
+                      disabled={busy !== null}
+                      onClick={() => place(w, true)}
+                      className="btn btn-ghost min-h-11 px-4 py-1.5 text-sm max-sm:w-full sm:shrink-0"
+                    >
+                      {msg("progression.rosterDrift.rebuildCta")}
+                    </button>
+                  )}
                 </div>
               </div>
               {lines !== undefined && (

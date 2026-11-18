@@ -23738,7 +23738,7 @@
     },
     "/api/v1/stages/{id}/late-entrants/{entrantId}/place": {
       "post": {
-        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). A knockout reads no body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on. W5 T6 (X-CU-8): on a running root LEAGUE or GROUP the same tap places a player waiting there (table_waiting_stage_id): the catch-up lines Add late player writes (case 'catch_up', or 'rebuild_offered' when nothing in the stage has started — the lines are written either way), unscheduled, with an undo barrier; the marker clears. Optional body pool_key: the group pool to join (else the smallest). 409 RR_LATE_ENTRY_ALREADY_PLACED when the player already holds a line of the stage (a second tap); 409 RR_LATE_ENTRY_NOT_WAITING when they do not wait on it; 422 RR_LATE_ENTRY_UNKNOWN_POOL / RR_LATE_ENTRY_STAGE_COMPLETE / RR_LATE_ENTRY_NOTHING_TO_ADD — the player keeps waiting",
+        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). A knockout reads no body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on. W5 T6 (X-CU-8): on a running root LEAGUE or GROUP the same tap places a player waiting there (table_waiting_stage_id): the catch-up lines Add late player writes (case 'catch_up', or 'rebuild_offered' when nothing in the stage has started — the lines are written either way), unscheduled, with an undo barrier; the marker clears. Optional body pool_key: the group pool to join (else the smallest). Optional body prefer_rebuild (fix round 1 I1): when nothing in the stage has started, the stage is drawn again with the player in it (Rebuild's own body; case 'rebuild_offered', reason 'rebuilt', no catch-up line); 409 STAGE_HAS_RESULTS, nothing moved, once a match has started. 409 RR_LATE_ENTRY_ALREADY_PLACED when the player already holds a line of the stage (a second tap); 409 RR_LATE_ENTRY_NOT_WAITING when they do not wait on it; 422 RR_LATE_ENTRY_UNKNOWN_POOL / RR_LATE_ENTRY_STAGE_COMPLETE / RR_LATE_ENTRY_NOTHING_TO_ADD — the player keeps waiting",
         "tags": [
           "stages"
         ],
@@ -23774,12 +23774,16 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 2
+                  },
+                  "prefer_rebuild": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false
               },
               "example": {
-                "pool_key": "ex"
+                "pool_key": "ex",
+                "prefer_rebuild": true
               }
             }
           }
@@ -51437,6 +51441,9 @@
                                     "type": "boolean"
                                   }
                                 ]
+                              },
+                              "expunged": {
+                                "type": "boolean"
                               },
                               "forfeit": {
                                 "anyOf": [

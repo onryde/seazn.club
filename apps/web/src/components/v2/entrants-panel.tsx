@@ -637,7 +637,6 @@ export function EntrantsPanel({
                     id="entrants-late-pool"
                     testId="entrants-late-pool"
                     pools={latePools}
-                    defaultKey={tableLateEntry?.defaultKey ?? null}
                     value={latePoolValue}
                     onChange={setLatePool}
                     disabled={busy}
@@ -654,7 +653,9 @@ export function EntrantsPanel({
                     method: "POST",
                     // W5 T23 (X-CU-11): the Group field rides the one add as `late_entry_pool` (the server refuses a letter that is no
                     // pool of the stage by name). A CSV batch sends none: each of its rows joins the smallest pool at that moment.
-                    json: withOverride(pooledLateEntry && latePoolValue !== "" ? { ...payload, late_entry_pool: latePoolValue } : payload, override),
+                    // Fix round 1 m1: only a pool the organiser PICKED is named; left at the default the server's own `choosePool`
+                    // decides at the add (the field's read may be stale by then — another late player may have joined).
+                    json: withOverride(pooledLateEntry && latePool !== null && latePoolValue === latePool ? { ...payload, late_entry_pool: latePool } : payload, override),
                   },
                 ),
               )

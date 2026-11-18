@@ -21,6 +21,7 @@ import { createEntrants } from "../entrants";
 import { confirmRegistration } from "../registrations";
 import { placeWaitingTableEntrant } from "../roundrobin-late-entry";
 import { startDivision } from "../schedule";
+import { scoreEvent } from "../scoring";
 import { createStages } from "../stages";
 import { listTableWaiting, readTableLatePools } from "../table-desk";
 import { withdrawEntrantCascade } from "../withdrawal";
@@ -126,7 +127,7 @@ describe.skipIf(!HAS_DB)("X-CU-11 readTableLatePools: the Group field's pools an
 
   it("a league has no pools and no default; a finished table offers nothing (null)", async () => {
     const r = await rig({ n: 5 });
-    expect(await readTableLatePools(r.auth, r.divisionId, await r.status())).toEqual({ stageId: r.stageId, kind: "league", pools: [], defaultKey: null });
+    expect(await readTableLatePools(r.auth, r.divisionId, await r.status())).toEqual({ stageId: r.stageId, kind: "league", pools: [], defaultKey: null, rebuildable: true });
     // rig: a finished table (how it finished is the completion path's business, not this read's).
     await sql`update stages set status = 'complete' where id = ${r.stageId}`;
     expect(await readTableLatePools(r.auth, r.divisionId, await r.status())).toBeNull();
@@ -165,5 +166,61 @@ describe.skipIf(!HAS_DB)("X-CU-8 listTableWaiting: the strip lists exactly whom 
       checked++;
     }
     expect(checked).toBe(2);
+  });
+});
+
+// ─── Fix round 1 I1 (R24 7A made true): the strip's Rebuild exit, before any match has started ────────────────────────────────
+// The exit shows only while Rebuild would take (`rebuildable`, the decision's own "nothing started" predicate) and it is the tap
+// with `prefer_rebuild`: Rebuild's own body, the newcomer drawn in, no catch-up line. Once a line has started the read says no, and
+// a stale tap asking to rebuild is refused by Rebuild's own code with NOTHING moved (never silently turned into catch-up lines,
+// which cannot be undone). Expected values: the rulebook (RB5-L7: nothing started -> Rebuild offered; a redraw seats every active
+// entrant once per opponent per leg) and the rows before the tap.
+describe.skipIf(!HAS_DB)("I1 the waiting strip's Rebuild exit (prefer_rebuild on the tap)", () => {
+  const startLine = async (r: Rig) => {
+    const [first] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${r.stageId} order by round_no, id limit 1`;
+    await scoreEvent(r.auth, first!.id, { expected_seq: 0, type: "core.start", payload: {} });
+  };
+  const linesOf = (stageId: string) =>
+    sql<{ ext_key: string | null; home: string | null; away: string | null }[]>`
+      select ext_key, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stageId}`;
+
+  it("rebuildable: yes while nothing has started (league and group), no once a line starts", async () => {
+    let checked = 0;
+    for (const o of [{ n: 5 }, { n: 8, group: 2 }]) {
+      const r = await rig(o);
+      expect((await readTableLatePools(r.auth, r.divisionId, await r.status()))?.rebuildable, JSON.stringify(o)).toBe(true);
+      await startLine(r);
+      expect((await readTableLatePools(r.auth, r.divisionId, await r.status()))?.rebuildable, `${JSON.stringify(o)} started`).toBe(false);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the tap with prefer_rebuild redraws the stage with her in it: no catch-up line, marker and strip cleared, answer 'rebuilt'", async () => {
+    const r = await rig({ n: 5 });
+    const ana = await arrive(r, "Ana Late");
+    const out = await placeWaitingTableEntrant(r.auth, r.stageId, ana, undefined, { preferRebuild: true });
+    expect({ case: out.case, reason: out.reason }).toEqual({ case: "rebuild_offered", reason: "rebuilt" });
+    const lines = await linesOf(r.stageId);
+    expect(lines.filter((l) => /^rr-(cu|by)-/.test(l.ext_key ?? "")), "no catch-up line").toEqual([]);
+    // RB5-L7: a single round robin of six: 15 lines, she plays the five others once.
+    expect(lines.length).toBe(15);
+    expect(lines.filter((l) => l.home === ana || l.away === ana).length).toBe(5);
+    expect(await listTableWaiting(r.auth, r.divisionId)).toEqual([]);
+    expect(await deskCount(r)).toBe(0);
+  });
+
+  it("a stale Rebuild tap after a line started is refused by Rebuild's own code and moves nothing; Place still places", async () => {
+    const r = await rig({ n: 5 });
+    const ana = await arrive(r, "Ana Late");
+    await startLine(r);
+    const before = await linesOf(r.stageId);
+    await expect(placeWaitingTableEntrant(r.auth, r.stageId, ana, undefined, { preferRebuild: true })).rejects.toMatchObject({
+      status: 409,
+      code: "STAGE_HAS_RESULTS",
+    });
+    expect((await linesOf(r.stageId)).length, "nothing written").toBe(before.length);
+    expect((await listTableWaiting(r.auth, r.divisionId)).map((w) => w.entrantId), "she still waits").toEqual([ana]);
+    expect((await placeWaitingTableEntrant(r.auth, r.stageId, ana)).case).toBe("catch_up");
   });
 });

@@ -12,7 +12,8 @@ type Ctx = { params: Promise<{ id: string; entrantId: string }> };
  *  reinstated player's own walkover reversed) and answers a KnockoutLateEntryResult — placed, or `refused` /
  *  `rebuild_offered` (200, the player keeps waiting); 409 KO_LATE_ENTRY_NOT_WAITING, 422 KO_LATE_ENTRY_FED_STAGE.
  *  W5 T6 (X-CU-8): a running root league or group writes the player's catch-up lines and answers a TableLateEntryResult;
- *  optional body `pool_key` names a group's pool; 409 RR_LATE_ENTRY_ALREADY_PLACED / RR_LATE_ENTRY_NOT_WAITING
+ *  optional body `pool_key` names a group's pool, and `prefer_rebuild` (fix round 1 I1) redraws a stage nothing has started in
+ *  with the player in it (409 STAGE_HAS_RESULTS once a match has started); 409 RR_LATE_ENTRY_ALREADY_PLACED / RR_LATE_ENTRY_NOT_WAITING
  *  (usecases/roundrobin-late-entry.ts). */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
@@ -29,6 +30,9 @@ export async function POST(req: Request, { params }: Ctx) {
       }
     }
     const body = PlaceLateEntrantInput.parse(raw);
-    return placeWaitingLateEntrant(auth, id, entrantId, body.pool_key);
+    // Fix round 1 I1: the strip's Rebuild exit (`prefer_rebuild`), passed only when asked so the W4 / W5 T6 calls are unchanged.
+    return body.prefer_rebuild === true
+      ? placeWaitingLateEntrant(auth, id, entrantId, body.pool_key, { preferRebuild: true })
+      : placeWaitingLateEntrant(auth, id, entrantId, body.pool_key);
   });
 }

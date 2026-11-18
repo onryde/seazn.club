@@ -25,7 +25,13 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(""),
 }));
 const router = vi.hoisted(() => ({ refreshCount: 0 }));
-vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => true }));
+const confirms = vi.hoisted(() => ({ asked: [] as { title?: string; body?: string; confirmLabel?: string }[], answer: true }));
+vi.mock("@/components/ui/confirm-provider", () => ({
+  useConfirm: () => async (o: { title?: string; body?: string; confirmLabel?: string }) => {
+    confirms.asked.push(o);
+    return confirms.answer;
+  },
+}));
 vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
 const net = vi.hoisted(() => ({ calls: [] as { url: string; method?: string; json?: unknown }[], answers: [] as (() => unknown)[] }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
@@ -70,6 +76,8 @@ beforeEach(() => {
   net.calls = [];
   net.answers = [];
   router.refreshCount = 0;
+  confirms.asked = [];
+  confirms.answer = true;
 });
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const byTestId = (tree: ReactElement[], id: string) => tree.filter((e) => propsOf(e)["data-testid"] === id);
@@ -132,9 +140,18 @@ describe("X-CU-11 the Entrants tab's add form for a running league or group", ()
     ]);
     expect(html).toContain(">Group</label>");
 
-    // Left alone, the add sends the default — the server's own pick; the pool rides the ONE add body.
+    // Fix round 1 m1: left alone, the add names NO pool — the server's own `choosePool` decides at the moment of the add (the
+    // read the field opened at may be stale by then). Only the organiser's pick rides the ONE add body.
     await tab.add();
-    expect(net.calls.map((c) => [c.url, (c.json as { late_entry_pool?: string }).late_entry_pool])).toEqual([["/api/v1/divisions/div-1/entrants", "B"]]);
+    expect(net.calls.map((c) => c.url)).toEqual(["/api/v1/divisions/div-1/entrants"]);
+    expect(net.calls[0]!.json, "untouched: no pool named").not.toHaveProperty("late_entry_pool");
+  });
+
+  it("m1 picking the default Group B by hand sends B: a choice the organiser made is sent, even when it matches the default", async () => {
+    const tab = entrantsTab({ kind: "group", pools: POOLS, defaultKey: "B" });
+    (propsOf(tab.field()!).onChange as (k: string) => void)("B");
+    await tab.add();
+    expect((net.calls[0]!.json as { late_entry_pool?: string }).late_entry_pool).toBe("B");
   });
 
   it("a second add after picking Group C sends C (the pick is state, not the default)", async () => {
@@ -265,7 +282,7 @@ const STAGE = "stage-1";
 const WES = { entrantId: "e-wes", stageId: STAGE, name: "Westgate Wanderers Badminton Club Second Team", paid: false };
 const IVY = { entrantId: "e-ivy", stageId: STAGE, name: "Ivy", paid: true };
 const REGISTRATIONS = "/o/club/c/open/registration?tab=registrants&division_id=d1";
-function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waiting?: typeof WES[] } = {}) {
+function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waiting?: typeof WES[]; rebuildable?: boolean; fixtureCount?: number } = {}) {
   const placed: { done: string[]; todo: string[] }[] = [];
   const island = renderIsland(TableWaitingStrip, {
     stageId: STAGE,
@@ -273,6 +290,8 @@ function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waitin
     names: { "e-ana": "Ana" },
     pools: o.pools,
     defaultPool: o.defaultPool ?? null,
+    rebuildable: o.rebuildable ?? false,
+    fixtureCount: o.fixtureCount ?? 0,
     registrationsHref: REGISTRATIONS,
     onPlaced: (said: { done: string[]; todo: string[] }) => placed.push(said),
   } as never);
@@ -282,7 +301,14 @@ function strip(o: { pools?: TableLatePool[]; defaultPool?: string | null; waitin
     (propsOf(btn).onClick as () => void)();
     await flush();
   };
-  return { island, placed, tap };
+  const rebuild = async (i = 0) => {
+    const btn = byTestId(island.tree(), "table-waiting-rebuild")[i];
+    if (!btn) throw new Error(`no Rebuild ${i}`);
+    (propsOf(btn).onClick as () => void)();
+    await flush();
+    await flush();
+  };
+  return { island, placed, tap, rebuild };
 }
 const catchUp = (pool: string | undefined) => ({
   format: "group", entrant_id: "e-wes", stage_id: STAGE, source: "organiser", case: "catch_up", pool_key: pool,
@@ -302,7 +328,8 @@ describe("X-CU-8 the table card's waiting strip", () => {
     // The tap: T6's place route, with the row's pool; the answer is said in the panel's lines, and the page re-read.
     net.answers.push(() => catchUp("B"));
     await s.tap(0);
-    expect(net.calls).toEqual([{ url: `/api/v1/stages/${STAGE}/late-entrants/e-wes/place`, method: "POST", json: { pool_key: "B" } }]);
+    // m1 (applied to the strip too): left at the default, the tap names no pool — the server's `choosePool` decides at the tap.
+    expect(net.calls).toEqual([{ url: `/api/v1/stages/${STAGE}/late-entrants/e-wes/place`, method: "POST", json: {} }]);
     expect(s.placed).toEqual([
       {
         done: [`${WES.name} joined Group B.`, `${WES.name} has 3 catch-up matches, in rounds 6, 7, and 8.`],
@@ -323,7 +350,7 @@ describe("X-CU-8 the table card's waiting strip", () => {
     net.answers.push(() => catchUp("B"), () => ({ ...catchUp("A"), entrant_id: "e-ivy" }));
     await s.tap(0);
     await s.tap(1);
-    expect(net.calls.map((c) => c.json)).toEqual([{ pool_key: "B" }, { pool_key: "A" }]);
+    expect(net.calls.map((c) => c.json)).toEqual([{}, { pool_key: "A" }]);
   });
 
   it("a league (no pools) posts no pool; a refused tap says why under the row and leaves the exits", async () => {
@@ -351,6 +378,8 @@ describe("X-CU-8 the table card's waiting strip", () => {
     );
     const controls = [...html.matchAll(/<(button|select|a)\b[^>]*data-testid="([^"]+)"[^>]*>/g)];
     expect(controls.map((m) => m[2])).toEqual(["table-waiting-pool", "table-waiting-place"]);
+    // m3: the row's Group field is named for the player it places, for a screen reader (the row shows the name beside it).
+    expect(html).toContain(`<label for="table-waiting-pool-e-wes" class="sr-only">Group for ${WES.name.replace(/'/g, "&#x27;")}</label>`);
     let checked = 0;
     for (const width of [320, 768, 1280]) {
       for (const m of controls) {
@@ -464,5 +493,77 @@ describe("X-CU-8 the roster-drift banner leaves the waiting players to the strip
     expect(withoutTableWaiting(undefined, [WES])).toBeUndefined();
     const d = { ghosts: [], unplaced: [wes] };
     expect(withoutTableWaiting(d, [])).toBe(d);
+  });
+});
+
+// ─── Fix round 1 I1 (R24 7A made true): the strip's Rebuild exit, before any match has started ───────────────────────────────
+const REBUILD_NOTE = (name: string) =>
+  `No match in this stage has started yet. Rebuild fixtures on the stage card would draw it again with ${name} in it, instead of the catch-up matches.`;
+describe("I1 the waiting strip offers a real Rebuild before any result", () => {
+  it("the empty case first: once a match has started (rebuildable false) there is no Rebuild and no sentence pointing at one", () => {
+    const s = strip({ waiting: [WES], rebuildable: false, fixtureCount: 10 });
+    const tree = s.island.tree();
+    expect(byTestId(tree, "table-waiting-rebuild")).toEqual([]);
+    expect(byTestId(tree, "table-waiting-rebuild-note")).toEqual([]);
+    expect(byTestId(tree, "table-waiting-place"), "positive pair: Place is still there").toHaveLength(1);
+  });
+
+  it("before any match: the 7A sentence and 'Rebuild fixtures' beside 'Add to the table'; the tap confirms with the count, then asks for the redraw", async () => {
+    const s = strip({ waiting: [WES], pools: POOLS, defaultPool: "B", rebuildable: true, fixtureCount: 12 });
+    const tree = s.island.tree();
+    expect(textOf(byTestId(tree, "table-waiting-rebuild-note"))).toBe(REBUILD_NOTE(WES.name));
+    expect(byTestId(tree, "table-waiting-rebuild").map((b) => textOf([b]))).toEqual(["Rebuild fixtures"]);
+
+    net.answers.push(() => ({ format: "group", entrant_id: "e-wes", stage_id: STAGE, source: "organiser", case: "rebuild_offered", reason: "rebuilt" }));
+    await s.rebuild(0);
+    expect(confirms.asked.map((c) => [c.title, c.confirmLabel])).toEqual([["Rebuild this stage's fixtures?", "Rebuild"]]);
+    expect(confirms.asked[0]!.body, "the confirm says what it removes").toContain("It deletes 12 fixtures.");
+    // The redraw re-snakes the pools: no pool is named, only the ask.
+    expect(net.calls).toEqual([{ url: `/api/v1/stages/${STAGE}/late-entrants/e-wes/place`, method: "POST", json: { prefer_rebuild: true } }]);
+    expect(s.placed).toEqual([{ done: [`${WES.name} is in: the stage was drawn again with them in it.`], todo: [] }]);
+    expect(router.refreshCount).toBe(1);
+  });
+
+  it("a declined confirm sends nothing; a stale Rebuild (a match started meanwhile) is refused under the row and the page re-read", async () => {
+    const s = strip({ waiting: [WES], rebuildable: true, fixtureCount: 10 });
+    confirms.answer = false;
+    await s.rebuild(0);
+    expect(net.calls).toEqual([]);
+    confirms.answer = true;
+    net.answers.push(() => {
+      throw new ApiV1Error("started", 409, "STAGE_HAS_RESULTS");
+    });
+    await s.rebuild(0);
+    expect(textOf(byTestId(s.island.tree(), "table-waiting-outcome"))).toContain(
+      `A match in this stage has started, so it can't be drawn again. Add ${WES.name} to the table instead.`,
+    );
+    expect(s.placed).toEqual([]);
+    expect(router.refreshCount).toBe(1);
+  });
+
+  it("control set with the exit: the same three controls in the same order at every width (one DOM)", () => {
+    const html = renderToStaticMarkup(
+      <TableWaitingStrip stageId={STAGE} waiting={[WES]} names={{}} pools={POOLS} defaultPool="B" rebuildable fixtureCount={12} registrationsHref={REGISTRATIONS} onPlaced={() => {}} />,
+    );
+    const controls = [...html.matchAll(/<(button|select|a)\b[^>]*data-testid="([^"]+)"[^>]*>/g)];
+    expect(controls.map((m) => m[2])).toEqual(["table-waiting-pool", "table-waiting-place", "table-waiting-rebuild"]);
+    for (const m of controls) expect(m[0]).not.toMatch(/\b(?:max-)?(?:sm|md|lg):hidden\b|\shidden"/);
+    expect(html).toMatch(/data-testid="table-waiting-rebuild"[^>]*class="[^"]*min-h-11/);
+  });
+});
+
+// ─── Fix round 1 m3: every pool tied for smallest is tagged ─────────────────────────────────────────────────────────────────
+describe("m3 the Group field tags every pool tied for smallest", () => {
+  const tags = (pools: TableLatePool[], defaultKey: string | null) => {
+    const html = renderToStaticMarkup(
+      <DictProvider dict={en as Dict} locale="en">
+        <TableLatePoolSelect id="p" testId="p" pools={pools} value={defaultKey ?? ""} onChange={() => {}} />
+      </DictProvider>,
+    );
+    return [...html.matchAll(/<option[^>]*value="([^"]+)"[^>]*>([^<]*)<\/option>/g)].filter((m) => m[2]!.endsWith(" · smallest")).map((m) => m[1]);
+  };
+  it("A and B tie at 3 (C has 4): both are tagged; one smallest is tagged alone", () => {
+    expect(tags([{ key: "A", size: 3, owes: 3 }, { key: "B", size: 3, owes: 3 }, { key: "C", size: 4, owes: 4 }], "A")).toEqual(["A", "B"]);
+    expect(tags(POOLS, "B")).toEqual(["B"]);
   });
 });

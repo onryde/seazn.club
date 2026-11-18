@@ -57,6 +57,23 @@ describe("POST /stages/{id}/late-entrants/{entrantId}/place", () => {
     expect(placeMock).toHaveBeenCalledWith(AUTH, STAGE_ID, ENTRANT_ID, "B");
   });
 
+  it("I1 the strip's Rebuild exit: prefer_rebuild reaches the usecase as the ask; false or absent is the plain tap", async () => {
+    const rebuilt = { format: "league" as const, entrant_id: ENTRANT_ID, stage_id: STAGE_ID, case: "rebuild_offered" as const, source: "organiser" as const, reason: "rebuilt" };
+    placeMock.mockResolvedValue(rebuilt);
+    const res = await POST(req(JSON.stringify({ prefer_rebuild: true })), ctx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, data: rebuilt });
+    expect(placeMock).toHaveBeenLastCalledWith(AUTH, STAGE_ID, ENTRANT_ID, undefined, { preferRebuild: true });
+    await POST(req(JSON.stringify({ prefer_rebuild: false })), ctx);
+    expect(placeMock).toHaveBeenLastCalledWith(AUTH, STAGE_ID, ENTRANT_ID, undefined);
+    expect(placeMock).toHaveBeenCalledTimes(2);
+    // a stale press: Rebuild's own refusal keeps its status and code through the envelope
+    placeMock.mockRejectedValue(new HttpError(409, "started", "STAGE_HAS_RESULTS"));
+    const refused = await POST(req(JSON.stringify({ prefer_rebuild: true })), ctx);
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ ok: false, error: { code: "STAGE_HAS_RESULTS" } });
+  });
+
   it("X-CU-8 a body that is not JSON, or a pool_key that is no pool name, is a 400 and reaches no usecase", async () => {
     let checked = 0;
     for (const body of ["{not json", JSON.stringify({ pool_key: "" }), JSON.stringify({ pool_key: "ABC" })]) {

@@ -1759,6 +1759,9 @@ test.describe("X-CU-8 the waiting strip on the table card", () => {
     await expect(row).toContainText(who);
     await expect(strip.getByTestId("table-waiting-pool"), "a league has no Group field").toHaveCount(0);
     await expect(page.getByTestId("roster-drift-banner"), "the waiting player is the strip's to place, never Rebuild's").toHaveCount(0);
+    // Fix round 1 I1: a line is in play, so Rebuild would be refused — no exit and no sentence pointing at one.
+    await expect(strip.getByTestId("table-waiting-rebuild")).toHaveCount(0);
+    await expect(strip.getByTestId("table-waiting-rebuild-note")).toHaveCount(0);
     await expect(strip).toBeInViewport();
     for (const w of [1280, 768, 320]) {
       await page.setViewportSize({ width: w, height: 900 });
@@ -1780,6 +1783,54 @@ test.describe("X-CU-8 the waiting strip on the table card", () => {
     await page.getByTestId("md-needs-you-toggle").click();
     await expect(page.locator("[data-attention]").first(), "positive pair: Match Day lists its rows").toBeVisible({ timeout: 20_000 });
     await expect(page.locator('[data-attention="late_players_waiting"]'), "the desk row goes").toHaveCount(0);
+  });
+});
+
+// W5 app-A Task 23 fix round 1 (I1; R24 pick 7A made true): before any match has started, the waiting strip offers "Rebuild
+// fixtures" beside "Add to the table", with the 7A sentence. Pressing it confirms with the number of fixtures it deletes and asks the
+// tap to redraw (`prefer_rebuild`): Rebuild's own body, the newcomer drawn in, no catch-up line. Expected values: the rulebook (a
+// single round robin of five plays ten lines, the newcomer one against each of the four) and the approved English.
+test.describe("I1 the table waiting strip offers a real Rebuild before any result", () => {
+  test("Rebuild fixtures draws the stage again with the waiting player in it; no catch-up line; the strip goes", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const t = await seedStartedTable(request, { label: "Redraw", n: 4, play: false });
+    const who = `Redraw Riverside Rovers Community Club ${TAG}`;
+    const lateId = await registerLateArrival(request, t, who);
+    const before = await tableLines(request, t.divisionId, t.stageId);
+    expect(before.length, "premise: a league of four, six lines").toBe(6);
+
+    await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"));
+    await dismissCookieBanner(page);
+    const strip = page.getByTestId("table-waiting");
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+    await expect(strip.getByTestId("table-waiting-rebuild-note")).toHaveText(
+      `No match in this stage has started yet. Rebuild fixtures on the stage card would draw it again with ${who} in it, instead of the catch-up matches.`,
+    );
+    for (const w of [1280, 768, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      await expect(strip.getByTestId("table-waiting-place")).toBeVisible();
+      await expect(strip.getByTestId("table-waiting-rebuild")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    await strip.getByTestId("table-waiting-rebuild").click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("Rebuild this stage's fixtures?");
+    await expect(dialog).toContainText("It deletes 6 fixtures.");
+    const tapped = page.waitForResponse((r) => r.url().includes(`/late-entrants/${lateId}/place`) && r.request().method() === "POST");
+    await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
+    const res = await tapped;
+    expect(res.request().postDataJSON()).toEqual({ prefer_rebuild: true });
+    expect(res.status()).toBe(200);
+    await expect(page.getByTestId("schedule-notice")).toContainText(`${who} is in: the stage was drawn again with them in it.`, { timeout: 20_000 });
+    await expect(page.getByTestId("table-waiting"), "drawn in: the strip goes").toHaveCount(0, { timeout: 20_000 });
+
+    const after = await tableLines(request, t.divisionId, t.stageId);
+    expect(after.length, "a round robin of five").toBe(10);
+    expect(after.filter((f) => /^rr-(cu|by)-/.test(f.ext_key ?? "")), "no catch-up line").toEqual([]);
+    const mine = after.filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId);
+    expect(mine.map((f) => (f.home_entrant_id === lateId ? f.away_entrant_id : f.home_entrant_id)).sort()).toEqual([...t.ids].sort());
   });
 });
 

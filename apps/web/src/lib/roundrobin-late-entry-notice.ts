@@ -4,8 +4,8 @@
 // The server's answer is `TableLateEntryResult` (api-v1/schemas/entrants.ts, Task 4/5/6), one of four wire cases:
 //   catch_up        the newcomer owes a match against every member and each was written as a line (a bye slot in a round
 //                   nobody started, or an appended catch-up round), UNSCHEDULED (RB5-L13) — said with the rounds it landed in;
-//   rebuild_offered nothing in the stage has started: the catch-up lines were written all the same (the default), and Rebuild
-//                   fixtures would draw the stage again with the newcomer in it — said as the extra owed choice. With
+//   rebuild_offered nothing in the stage has started: the catch-up lines were written all the same (the default) — said as a
+//                   catch-up (the Rebuild choice is offered BEFORE the tap, on the waiting strip; fix round 1 I1). With
 //                   `reason: "rebuilt"` the add asked for the redraw (`prefer_rebuild`) and got it: no catch-up lines;
 //   refused         a named refusal (`reason`: the RR_LATE_ENTRY_* code), said in the refusal's own words;
 //   waiting         an automatic arrival held for the organiser's tap, counted once on one line (the desk row's sentence).
@@ -22,7 +22,6 @@ import { isRoundRobinRefusalCode, roundRobinRefusalKey } from "@/lib/roundrobin-
 export const TABLE_LATE_ENTRY_MESSAGE_KEYS = [
   "roundrobin.lateEntry.joinedPool",
   "roundrobin.lateEntry.tellOpponents",
-  "roundrobin.lateEntry.rebuildOffered",
   "roundrobin.lateEntry.rebuilt",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_UNDOABLE",
   "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE",
@@ -70,9 +69,11 @@ export function tableLateEntryLines(r: TableLateEntryResult, nameOf: (id: string
       return placedLines(r, name, opts, refuse);
     case "rebuild_offered":
       if (r.reason === "rebuilt") return [{ key: "roundrobin.lateEntry.rebuilt", params: { name }, tone: "done" }];
-      // Nothing has started: the catch-up lines are written all the same (Task 5's default), and the redraw is the other way in
-      // — done from the stage card's Rebuild fixtures, which confirms what it clears (R24 pick 7A: words, not a button here).
-      return [...placedLines(r, name, opts, refuse), { key: "roundrobin.lateEntry.rebuildOffered", params: { name }, tone: "todo" }];
+      // Nothing has started: the catch-up lines were written all the same (Task 5's default). Fix round 1 I1: the R24 7A sentence
+      // ("Rebuild fixtures ... would draw it again") is said where its button is — the waiting strip, BEFORE the tap
+      // (`roundrobin.lateEntry.rebuildOffered`, beside "Rebuild fixtures"). After a placement the player is on fixtures, so no
+      // Rebuild is offered on the screen (no strip row, no drift banner): the notice points at none.
+      return placedLines(r, name, opts, refuse);
     case "refused": {
       if (!isRoundRobinRefusalCode(r.reason)) throw refuse(`with ${r.reason === undefined ? "no reason" : `an unknown reason ${r.reason}`}`);
       const key = roundRobinRefusalKey(r.reason);

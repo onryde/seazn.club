@@ -22,10 +22,11 @@ export async function tableLines(request: APIRequestContext, divisionId: string,
   return (all.data ?? []).filter((f) => f.stage_id === stageId);
 }
 
-/** `n` entrants named `${label} P<i>`, one root table (a group of `pools` pools when given, else a league), generated and started. */
+/** `n` entrants named `${label} P<i>`, one root table (a group of `pools` pools when given, else a league), generated and started.
+ *  `play: false` leaves every line unstarted (nothing in the stage has started: Rebuild is still offered). */
 export async function seedStartedTable(
   request: APIRequestContext,
-  o: { label: string; n: number; pools?: number; visibility?: "private" | "public"; names?: string[] },
+  o: { label: string; n: number; pools?: number; visibility?: "private" | "public"; names?: string[]; play?: boolean },
 ): Promise<StartedTable> {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${o.label} ${TAG}`, visibility: o.visibility ?? "public" });
   expect(comp.status, JSON.stringify(comp.error)).toBe(201);
@@ -47,9 +48,11 @@ export async function seedStartedTable(
   expect(gen.status, JSON.stringify(gen.error)).toBe(200);
   const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
   expect(started.status, JSON.stringify(started.error)).toBe(200);
-  const first = (await tableLines(request, divisionId, stageId)).find((f) => f.round_no === 1)!;
-  const ev = await apiJson(request, `/api/v1/fixtures/${first.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
-  expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+  if (o.play !== false) {
+    const first = (await tableLines(request, divisionId, stageId)).find((f) => f.round_no === 1)!;
+    const ev = await apiJson(request, `/api/v1/fixtures/${first.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+  }
   return { competitionId: comp.data!.id, divisionId, stageId, ids: added.data!.map((e) => e.id) };
 }
 

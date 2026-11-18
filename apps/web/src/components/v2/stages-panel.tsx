@@ -1956,6 +1956,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     names={entrantNames}
                     pools={tableLatePools?.stageId === stage.id ? tableLatePools.pools : undefined}
                     defaultPool={tableLatePools?.stageId === stage.id ? tableLatePools.defaultKey : null}
+                    rebuildable={tableLatePools?.stageId === stage.id && tableLatePools.rebuildable}
+                    fixtureCount={stageFixtures.length}
                     registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
                     onPlaced={(said) => {
                       setError(null);

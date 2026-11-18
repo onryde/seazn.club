@@ -450,7 +450,13 @@ export async function admitTableLateEntrant(
  * RR_LATE_ENTRY_NOT_WAITING when they do not wait on this stage (never marked, withdrawn since, swept up by a Rebuild, another
  * division's); the placing core's own refusals roll back and leave them waiting. 404 for an unknown stage.
  */
-export async function placeWaitingTableEntrant(auth: AuthCtx, stageId: string, entrantId: string, poolKey?: string): Promise<TableLateEntryResult> {
+export async function placeWaitingTableEntrant(
+  auth: AuthCtx,
+  stageId: string,
+  entrantId: string,
+  poolKey?: string,
+  opts: { preferRebuild?: boolean } = {},
+): Promise<TableLateEntryResult> {
   const { admission, divisionId, competitionId } = await withTenant(auth.orgId, async (tx) => {
     const [st] = await tx<{ division_id: string; competition_id: string }[]>`
       select s.division_id, d.competition_id from stages s join divisions d on d.id = s.division_id where s.id = ${stageId}`;
@@ -471,7 +477,16 @@ export async function placeWaitingTableEntrant(auth: AuthCtx, stageId: string, e
         : [];
       throw roundRobinRefusal(seat !== undefined ? "RR_LATE_ENTRY_ALREADY_PLACED" : "RR_LATE_ENTRY_NOT_WAITING");
     }
-    const placed = await placeInRootTable(tx, auth, st.division_id, stages, stage, entrantId, "organiser", poolKey === undefined ? {} : { poolKey });
+    const placed = await placeInRootTable(tx, auth, st.division_id, stages, stage, entrantId, "organiser", {
+      ...(poolKey === undefined ? {} : { poolKey }),
+      ...(opts.preferRebuild === true ? { preferRebuild: true } : {}),
+    });
+    // Fix round 1 I1: the strip's Rebuild exit asks for the redraw. If a line started since the strip was drawn, the placing core
+    // wrote catch-up lines instead — which cannot be undone, and are not what was pressed. Refused with Rebuild's own code (the
+    // throw rolls the whole tap back: no line, the player still waits), so the organiser sees the refusal Rebuild itself gives.
+    if (opts.preferRebuild === true && placed !== null && placed.result.reason !== "rebuilt") {
+      throw new HttpError(409, "a match in this stage has started — Rebuild is no longer possible; add the player to the table instead", "STAGE_HAS_RESULTS");
+    }
     // A marker names a drawn table (`markTableWaiting` writes it only then, and Rebuild clears it): an undrawn one here is a
     // marker no writer should have left, answered by name rather than placed against nothing.
     if (placed === null) throw roundRobinRefusal("RR_LATE_ENTRY_NOT_WAITING");
@@ -489,11 +504,12 @@ export async function placeWaitingLateEntrant(
   stageId: string,
   entrantId: string,
   poolKey?: string,
+  opts?: { preferRebuild?: boolean },
 ): Promise<TableLateEntryResult | KnockoutLateEntryResult> {
   const [st] = await withTenant(auth.orgId, (tx) => tx<{ kind: string }[]>`select kind from stages where id = ${stageId}`);
   if (st === undefined) throw new HttpError(404, "stage not found");
   return st.kind === "league" || st.kind === "group"
-    ? placeWaitingTableEntrant(auth, stageId, entrantId, poolKey)
+    ? placeWaitingTableEntrant(auth, stageId, entrantId, poolKey, opts)
     : placeWaitingKnockoutEntrant(auth, stageId, entrantId);
 }
 

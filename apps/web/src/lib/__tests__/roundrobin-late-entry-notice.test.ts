@@ -56,7 +56,9 @@ const CASES: Record<TableLateEntryResult["case"], { r: TableLateEntryResult; wan
     ],
   },
   rebuild_offered: {
-    // Nothing has started: the catch-up lines are written by default, and Rebuild is the other way in.
+    // Nothing has started, and the catch-up lines were written (the default). Fix round 1 I1: the R24 7A sentence ("Rebuild fixtures
+    // ... would draw it again") is said where its button is — on the waiting strip, BEFORE the tap. After a placement no Rebuild is
+    // offered on the screen (the player is on fixtures: no strip row, no drift banner), so the notice no longer points at one.
     r: result({ case: "rebuild_offered", pool_key: "A", fixtures: [fx(2, "bye_slot"), fx(4)] }),
     want: [
       ["done", "Westgate Wanderers joined Group A."],
@@ -64,7 +66,6 @@ const CASES: Record<TableLateEntryResult["case"], { r: TableLateEntryResult; wan
       ["todo", "2 new matches have no time or court yet. Give each one a time and court."],
       TELL,
       NO_UNDO,
-      ["todo", "No match in this stage has started yet. Rebuild fixtures on the stage card would draw it again with Westgate Wanderers in it, instead of the catch-up matches."],
     ],
   },
   refused: {

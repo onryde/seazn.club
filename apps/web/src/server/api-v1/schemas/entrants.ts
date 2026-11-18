@@ -259,6 +259,10 @@ export type LateEntryResult = z.infer<typeof LateEntryResult>;
  *  ignored on a league and on a knockout. */
 export const PlaceLateEntrantInput = z.object({
   pool_key: z.string().min(1).max(2).optional(),
+  /** Fix round 1 I1: a running league or group whose stage has nothing started is drawn again with the player in it (Rebuild's
+   *  own body; answer `rebuild_offered` with reason `rebuilt`); refused 409 STAGE_HAS_RESULTS once a match has started. A knockout
+   *  ignores it. */
+  prefer_rebuild: z.boolean().optional(),
 });
 export type PlaceLateEntrantInput = z.infer<typeof PlaceLateEntrantInput>;
 

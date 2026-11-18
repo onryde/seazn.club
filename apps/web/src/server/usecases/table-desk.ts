@@ -16,6 +16,7 @@ import { tableLateEntryOffered } from "@/lib/open-entry-stages";
 import { isRrExtKey } from "@/lib/roundrobin-reconcile";
 import { choosePool } from "@/lib/roundrobin-late-entry";
 import { DEPARTED_STATUSES } from "./entrants";
+import { stageHasStarted } from "./fixture-started-sql";
 import type { KnockoutWaitingEntrant } from "./knockout-desk";
 import { legsOf, rootTableStages } from "./roundrobin-late-entry";
 
@@ -54,6 +55,9 @@ export interface TableLatePools {
   pools: TableLatePool[];
   /** The pool the server joins when none is named; null when there is no choice (a league, one pool). */
   defaultKey: string | null;
+  /** Fix round 1 I1 (R24 7A): nothing in the stage has started (`stageHasStarted`, the predicate the late-entry decision reads for
+   *  `rebuild_offered`) — so Rebuild fixtures would take, and the waiting strip offers it beside "Add to the table". */
+  rebuildable: boolean;
 }
 
 /**
@@ -90,6 +94,12 @@ export async function readTableLatePools(auth: AuthCtx, divisionId: string, divi
     }
     const keys = [...members.keys()].sort();
     const out = keys.map((key) => ({ key, size: members.get(key)!.length, owes: members.get(key)!.length * legs }));
-    return { stageId: stage.id, kind, pools: kind === "group" ? out : [], defaultKey: kind === "group" && keys.length > 1 ? choosePool(members) : null };
+    return {
+      stageId: stage.id,
+      kind,
+      pools: kind === "group" ? out : [],
+      defaultKey: kind === "group" && keys.length > 1 ? choosePool(members) : null,
+      rebuildable: !(await stageHasStarted(tx, stage.id)),
+    };
   });
 }
