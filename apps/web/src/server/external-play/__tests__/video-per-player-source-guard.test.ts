@@ -76,7 +76,7 @@ const BOTH_SIDES: readonly BothSides[] = [
     table: "fixture_video_meetings",
     times: 1,
     reason:
-      "the board has ONE pairing and it is every unadopted room's: both players' rooms are adopted in the one statement (V529's pair check would refuse a two-step write), each row by its own primary key being the fixture's",
+      "the board has ONE pairing and it is every unadopted room's: both players' rooms are adopted in the one statement (V531's pair check would refuse a two-step write), each row by its own primary key being the fixture's",
   },
   {
     file: "usecases/external-play/room-end.ts",

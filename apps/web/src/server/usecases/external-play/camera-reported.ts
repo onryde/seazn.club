@@ -20,7 +20,7 @@ export type ReportedCamera = {
    *  still names its instant (the seat's stale-live arm reads it); `state` is what says whether it is trusted. */
   at: Date | null;
   /** The first receipt of the CURRENT live run (`camera_live_first_at`); null unless the report is live and fresh. A live report from
-   *  before V529 has no stamp: `state` is `live` and this is null, for the seat to treat as a run starting at `at`. */
+   *  before V531 has no stamp: `state` is `live` and this is null, for the seat to treat as a run starting at `at`. */
   firstLiveAt: Date | null;
 };
 

@@ -599,7 +599,7 @@ export function scanTree(root: string): { files: number; withTables: SourceScan[
 
 // ─── The camera-report guard (§5.6.3) ───────────────────────────────────────────────────────────────────────────────
 
-// `camera_live_first_at` (check-in capacity plan 2 Task 6, V529) is the same report's first-live stamp. The regex below is `\b`-bounded, so
+// `camera_live_first_at` (check-in capacity plan 2 Task 6, V531) is the same report's first-live stamp. The regex below is `\b`-bounded, so
 // the new name is NOT matched through the two older ones (`camera_live_first_at` contains neither): without its own entry the column
 // would be unguarded.
 export const CAMERA_REPORT_COLUMNS = ["camera_reported", "camera_reported_at", "camera_live_first_at"] as const;

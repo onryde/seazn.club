@@ -1,6 +1,7 @@
--- V529 — pre-minted rooms and the line's stamped price (check-in capacity design 2026-11-05 §6.1, §6.3, §6.4).
--- MERGE GATE: Flyway runs with outOfOrder=false (db/flyway.toml sets none; false is the default), so V528 (the stage
--- lots-draw index fix PR) must merge before this file reaches ANY database; a V528 arriving after V529 is applied is refused.
+-- V531 — pre-minted rooms and the line's stamped price (check-in capacity design 2026-11-05 §6.1, §6.3, §6.4).
+-- MERGE GATE: Flyway runs with outOfOrder=false (db/flyway.toml sets none; false is the default), so a delta numbered below
+-- this one that arrives after it is applied is refused. Renumbered V529 → V531 on 2026-11-18: main's V528 (stage lots-draw
+-- index) and V530 (stream end reason, applied on staging) both sit below it. Renumber again at merge if main has moved past.
 -- V451 made the stamps NOT NULL ("a board with no pairing gets no meeting"); an unadopted room is exactly that board's room, both null.
 alter table fixture_video_meetings alter column home_entrant_id drop not null;
 alter table fixture_video_meetings alter column away_entrant_id drop not null;

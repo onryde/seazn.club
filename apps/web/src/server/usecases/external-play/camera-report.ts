@@ -11,9 +11,9 @@ import "server-only";
 // §10): the verdict is the vendor's peer report alone. The source guard pins that the columns are named in two files only - this
 // one, which writes them (and keeps its own lock read: it needs the RAW state under `for update`), and the leaf reader.
 //
-// `camera_live_first_at` (V529) is the FIRST receipt of the current live run: stamped by the first `live` report after anything else
+// `camera_live_first_at` (V531) is the FIRST receipt of the current live run: stamped by the first `live` report after anything else
 // (nothing stored, `off`, or a live report too old to be fresh), kept by every fresh `live` after it, and cleared by EVERY write that
-// is not `live`. It is written in the same UPDATE as the state, so V529's pair check (a stamp only beside a stored `live`) holds after
+// is not `live`. It is written in the same UPDATE as the state, so V531's pair check (a stamp only beside a stored `live`) holds after
 // every statement. A heartbeat the rules IGNORE writes nothing, so it cannot clear the stamp either.
 import { sql } from "@/lib/db";
 import { CAMERA_FAULT_PING_LIMIT, CAMERA_REPORT_LIMIT, rateLimit } from "@/lib/rate-limit";
@@ -90,7 +90,7 @@ export async function reportOwnCamera(
       ping = true;
     }
     // The first-live stamp, judged against the row's OWN stored values (an UPDATE's expressions all see the old row, and the row is
-    // locked above): a live report over a fresh live run keeps the stamp (filling a NULL from before V529 with now), anything else
+    // locked above): a live report over a fresh live run keeps the stamp (filling a NULL from before V531 with now), anything else
     // live starts a run at now, and every non-live state clears it.
     const freshAfter = new Date(now.getTime() - CAMERA_REPORT_STALE_MS);
     await tx`

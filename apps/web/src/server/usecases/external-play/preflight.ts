@@ -670,7 +670,7 @@ async function proofCamera(
                coalesce(presence_fallback_from, ${report.firstLiveAt ?? now}::timestamptz), ${report.firstLiveAt}::timestamptz, token_issued_at)
        where fixture_id = ${mine.fixtureId} and participant_id = ${mine.participantId}
        returning presence_fallback_from as "from"`;
-    // A fresh `live` with no stamp (a seat already live at the V529 deploy, until its next report) is a run starting now.
+    // A fresh `live` with no stamp (a seat already live at the V531 deploy, until its next report) is a run starting now.
     if (clock === undefined) throw meetingReplaced(mine.fixtureId);
     if (now.getTime() - clock.from.getTime() < PRESENCE_FALLBACK_MS) return startingVerdict;
     if (!(await claimEvidenceRead(mine, now))) return { camera: await cachedEvidence(mine, now), cached: true };
@@ -904,7 +904,7 @@ async function issuePlayerToken(a: SeatAsk, side: Side, meetingId: string, video
  *  called on BOTH handout paths (verifyRequiredSeat's answer and issuePlayerToken) after the token is in hand, never before: a claim
  *  that hands none (a recheck, a `camera_starting` to the browser that already holds the token) stamps nothing. The no-presence
  *  fallback's clock never starts before it (a page cannot be in the room before it holds a token), and a row with none (from before
- *  V529) has no page that can have joined. The pre-mint makes no participant, so every player row is written by a claim that hands
+ *  V531) has no page that can have joined. The pre-mint makes no participant, so every player row is written by a claim that hands
  *  its token and stamps it. Written under every flag state: nothing reads it with the flag off. */
 async function stampTokenIssued(r: SeatRead, now: Date): Promise<void> {
   await sql`

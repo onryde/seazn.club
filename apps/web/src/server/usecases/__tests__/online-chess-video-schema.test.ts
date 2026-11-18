@@ -77,9 +77,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     });
   });
 
-  it("R2-2 (amended by V529): a meeting's pairing stamps are both set or both null — one null alone is refused each way round, by name (counted); an unadopted room, both null, is accepted", async () => {
+  it("R2-2 (amended by V531): a meeting's pairing stamps are both set or both null — one null alone is refused each way round, by name (counted); an unadopted room, both null, is accepted", async () => {
     // On the fixture with NO meeting, so the primary key cannot answer first; every write is rolled back, so that
-    // fixture stays meetingless for the cases below that need it. V451 made both stamps NOT NULL; V529 retires that for
+    // fixture stays meetingless for the cases below that need it. V451 made both stamps NOT NULL; V531 retires that for
     // the pre-minted room (check-in capacity design §6.1), which has no pairing until a seat adopts it.
     const [f] = await sql<{ home: string; away: string }[]>`
       select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${meetinglessFixtureId}`;
@@ -313,7 +313,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       expect(d!.completing, "completing starts false").toBe("false");
     });
 
-    it("V529: the stay's stamped price — reservation in 1..64 and recheck_cost in 1..8, each bound and null (a row from before V529) accepted, one past each bound refused by the column's own check (counted)", async () => {
+    it("V531: the stay's stamped price — reservation in 1..64 and recheck_cost in 1..8, each bound and null (a row from before V531) accepted, one past each bound refused by the column's own check (counted)", async () => {
       // Bounds typed from the plan's DDL (plan 2, Task 1), never read from the catalogue.
       const BOUNDS = { reservation: [1, 64], recheck_cost: [1, 8] } as const;
       let checked = 0;
@@ -809,7 +809,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         });
       });
 
-      it("V529: a live run's first-report stamp sits only on a `live` report — beside no report or an `off` one it is refused, by name (counted); beside `live` it is accepted, and so is none", async () => {
+      it("V531: a live run's first-report stamp sits only on a `live` report — beside no report or an `off` one it is refused, by name (counted); beside `live` it is accepted, and so is none", async () => {
         // The states typed from the design (§6.4, owner ruling 2026-11-17: the stamp is cleared when `off` is written),
         // never read from the catalogue. The report's own pair check is satisfied in every row, so the new check alone decides.
         const withFirst = (reported: string | null, first: Date | null) => (tx: typeof sql) => tx`
@@ -857,11 +857,11 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         "i",
       );
       /** Anti-vacuity, per file: what each later delta that touches the three runs on the replica (kept) and leaves out
-       *  (skipped). Typed from each delta's own text, never counted by the code below. V529: the two `drop not null`s, the
+       *  (skipped). Typed from each delta's own text, never counted by the code below. V531: the two `drop not null`s, the
        *  stamp-pair check, presence_fallback_from, camera_live_first_at and its check, token_issued_at (7); its two
        *  fixture_seat_line columns (2). A new delta touching the three adds its own entry, and the keys stay in ASCENDING
        *  version order: they are compared, as a list, with the deltas in the order they replay. */
-      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V529: { kept: 7, skipped: 2 } };
+      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V531: { kept: 7, skipped: 2 } };
       /** Every delta numbered above 459 with at least one statement on the three, in version order, split into statements
        *  on `;` at a line end (comments stripped first: a comment's own `;` is not an end). */
       const laterDeltas = (): { version: string; kept: string[]; skipped: string[] }[] =>

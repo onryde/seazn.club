@@ -19,7 +19,7 @@ export type StayRow = {
   completing: boolean;
   served_at: Date | null;
   ended_at: Date | null;
-  /** The stamped price (V529): null for a row from before the stamp. */
+  /** The stamped price (V531): null for a row from before the stamp. */
   reservation: number | null;
   recheck_cost: number | null;
 };

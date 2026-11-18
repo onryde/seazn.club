@@ -1,7 +1,7 @@
 // Check-in capacity plan 2, Task 2 - the adapter's three additions for the pre-minted round:
 //
 //   1. UNADOPTED rooms. The pre-mint job makes a room for a placeholder board (one with no pairing yet) and stamps it with BOTH
-//      entrant columns null ("made for this board's first pairing, whichever it is"; V529 makes the pair of stamps null
+//      entrant columns null ("made for this board's first pairing, whichever it is"; V531 makes the pair of stamps null
 //      together or set together). The seat's `ensureMeeting` adopts it - one statement, no vendor call - instead of making a
 //      second room; `retireStaleMeeting` never reads it as another pairing's. A paired board's room is stamped with its pairing,
 //      as today.
@@ -241,7 +241,7 @@ describe.skipIf(!DB)("unadopted rooms", () => {
     expect(stored.map((r) => r.participant_id), "the participant is stored on the adopted row (the lock check reads it as the current pairing's)").toEqual([participantId]);
   });
 
-  // (null, null) pin, plan 2 Task 2 (V529): preflight's participant store runs under a `for update` lock on the room's row and
+  // (null, null) pin, plan 2 Task 2 (V531): preflight's participant store runs under a `for update` lock on the room's row and
   // refuses it unless `samePair` (the board's pairing stamped on it). An unadopted row never reaches it through the real seat -
   // `ensureMeeting` adopts first, above - but the check is what stops a participant being stored on a room nobody adopted if
   // it ever did. Reached here by a seat whose `ensureMeeting` skips the adoption.
@@ -516,7 +516,7 @@ describe.skipIf(!DB)("unadopted rooms", () => {
     });
   });
 
-  it("the stamp pair check refuses one null stamp, in either column, on update and on insert (V529: both null or both set)", async () => {
+  it("the stamp pair check refuses one null stamp, in either column, on update and on insert (V531: both null or both set)", async () => {
     const s = await seed();
     await putRoom(s, "home", pairingOf(s));
     await expect(sql`update fixture_video_meetings set home_entrant_id = null where fixture_id = ${s.fixtureId} and side = 'home'`).rejects.toMatchObject({ code: "23514" });

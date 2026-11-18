@@ -275,7 +275,7 @@ describe.skipIf(!process.env.DATABASE_URL)("camera report - the first-live stamp
   type After = "now" | "kept" | "null";
   type Row = {
     label: string;
-    /** `firstAgeMs`: how old the stored stamp is (live only; null = a live row from before V529, no stamp). */
+    /** `firstAgeMs`: how old the stored stamp is (live only; null = a live row from before V531, no stamp). */
     stored: { state: State; ageMs: number; firstAgeMs?: number | null } | null;
     body: { state: State; heartbeat: boolean };
     outcome: CameraReportOutcome;
@@ -301,7 +301,7 @@ describe.skipIf(!process.env.DATABASE_URL)("camera report - the first-live stamp
     { label: "stale live -> off heartbeat is applied as a change and clears it", stored: { state: "live", ageMs: JUST_STALE, firstAgeMs: FIRST_AGE }, body: { state: "off", heartbeat: true }, outcome: "written", after: "null" },
     { label: "fresh off -> live change stamps the new receipt", stored: { state: "off", ageMs: FRESH }, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
     { label: "stale off -> live heartbeat (applied) stamps the new receipt", stored: { state: "off", ageMs: JUST_STALE + 5_000 }, body: { state: "live", heartbeat: true }, outcome: "written", after: "now" },
-    { label: "a fresh live over a NULL stamp (a seat already live at the V529 deploy) FILLS it - never stays null (change)", stored: { state: "live", ageMs: FRESH, firstAgeMs: null }, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
+    { label: "a fresh live over a NULL stamp (a seat already live at the V531 deploy) FILLS it - never stays null (change)", stored: { state: "live", ageMs: FRESH, firstAgeMs: null }, body: { state: "live", heartbeat: false }, outcome: "written", after: "now" },
     { label: "a fresh live over a NULL stamp is filled by a heartbeat too (refreshed)", stored: { state: "live", ageMs: FRESH, firstAgeMs: null }, body: { state: "live", heartbeat: true }, outcome: "refreshed", after: "now" },
     { label: "off -> off keeps it null", stored: { state: "off", ageMs: FRESH }, body: { state: "off", heartbeat: true }, outcome: "refreshed", after: "null" },
     { label: "an IGNORED live heartbeat over a fresh off leaves it null", stored: { state: "off", ageMs: FRESH }, body: { state: "live", heartbeat: true }, outcome: "ignored", after: "null" },
@@ -332,7 +332,7 @@ describe.skipIf(!process.env.DATABASE_URL)("camera report - the first-live stamp
         if (row.after === "now") expect(first?.getTime(), `${label}: the stamp is this report's own instant`).toBe(NOW.getTime());
         else if (row.after === "kept") expect(first?.getTime(), `${label}: the stamp is the one it already had`).toBe(seeded!.getTime());
         else expect(first, `${label}: no stamp`).toBeNull();
-        // The strict V529 pair: a stamp never sits beside anything but a stored `live`.
+        // The strict V531 pair: a stamp never sits beside anything but a stored `live`.
         const [r] = await sql<{ state: string | null }[]>`select camera_reported as state from fixture_video_participants where participant_id = ${part[side]}`;
         if (first !== null) expect(r!.state, `${label}: a stamp only beside live`).toBe("live");
         // It never touches the OTHER player's row.
@@ -428,7 +428,7 @@ describe.skipIf(!process.env.DATABASE_URL)("reportedCamera - the one reader of t
     await reportOwnCamera(me(s, "home"), s.fixtureId, { state: "off", heartbeat: false }, deps(new Date(t0.getTime() + 40_000)));
     const off = await read(s, part.home, "home", new Date(t0.getTime() + 41_000));
     expect({ state: off.state, first: off.firstLiveAt }, "off names no run").toEqual({ state: "off", first: null });
-    // A fresh live from before V529: live, with no stamp - returned as it is, for the seat to treat as a run starting now.
+    // A fresh live from before V531: live, with no stamp - returned as it is, for the seat to treat as a run starting now.
     const pre = await board({ home: { state: "live", ageMs: 1_000 } });
     const old = await read(pre.s, pre.part.home);
     expect({ state: old.state, first: old.firstLiveAt }, "live over a null stamp").toEqual({ state: "live", first: null });

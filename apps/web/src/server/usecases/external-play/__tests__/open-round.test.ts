@@ -1606,7 +1606,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
       select f.id, ${side}, f.org_id, ${meetingId}, f.home_entrant_id, f.away_entrant_id from fixtures f where f.id = ${fixtureId}`;
   /** A room on file with the pair stamp GIVEN: an earlier pairing's, the current one's, or (`null`) an UNADOPTED room - BOTH
-   *  stamps null, as V529's pair check wants. `endedAt` makes it an ENDED room. */
+   *  stamps null, as V531's pair check wants. `endedAt` makes it an ENDED room. */
   const insertRoomStamped = (
     fixtureId: string,
     meetingId: string,

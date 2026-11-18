@@ -434,7 +434,7 @@ describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): 
     }
   });
 
-  // (null, null) pin, check-in capacity plan 2 Task 2 (V529): the pre-mint job's UNADOPTED room - both stamps null - on a board that
+  // (null, null) pin, check-in capacity plan 2 Task 2 (V531): the pre-mint job's UNADOPTED room - both stamps null - on a board that
   // is now PAIRED. The loader's `samePair` reads null against the pairing as "not this pairing's", so the side is `none` and the
   // board's camera report counts no row: nobody has arrived, and a room a claim has not adopted is not a meeting of this pairing.
   // PINS TODAY'S READING; plan 3 (Tasks 1 and 3) owns what the panel does with an unadopted room.
@@ -857,7 +857,7 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
     expect(calls.filter((c) => c.startsWith("add:arbiter")), "the refused side minted nothing").toHaveLength(1);
   });
 
-  // (null, null) pin, check-in capacity plan 2 Task 2 (V529): an arbiter is never admitted into a pre-minted room nobody has
+  // (null, null) pin, check-in capacity plan 2 Task 2 (V531): an arbiter is never admitted into a pre-minted room nobody has
   // adopted. The join's `samePair` reads the unadopted stamp against the paired board as "not started", so it is refused with
   // zero vendor requests and writes nothing; the adopted sibling joins. PINS TODAY'S READING; plan 3 Task 1 replaces this rule
   // with the presence-based one and owns its tests.

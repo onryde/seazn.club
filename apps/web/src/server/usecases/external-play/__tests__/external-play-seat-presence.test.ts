@@ -311,7 +311,7 @@ describe.skipIf(!DB)("the one-read proof", () => {
     expect(presenceFallbackCount() - fallbacks).toBe(0);
   });
 
-  it("a participant whose token_issued_at is null (a row from before V529), the browser reporting live for 30 s: camera_required with ZERO read calls and no fallback; the answer carries a token and stamps it. With the stamp present the same report DOES run the clock", async () => {
+  it("a participant whose token_issued_at is null (a row from before V531), the browser reporting live for 30 s: camera_required with ZERO read calls and no fallback; the answer carries a token and stamps it. With the stamp present the same report DOES run the clock", async () => {
     const a = await arrive({ join: false });
     await sql`update fixture_video_participants set token_issued_at = null where participant_id = ${a.pid}`;
     const T0 = new Date();
@@ -490,7 +490,7 @@ describe.skipIf(!DB)("the one-read proof", () => {
       expect(presenceFallbackCount() - fallbacks).toBe(1);
     });
 
-    it("a fresh live report with a NULL camera_live_first_at (a seat already live at the V529 deploy): the clock starts at now - camera_starting, zero calls - and the fallback only 10 s later", async () => {
+    it("a fresh live report with a NULL camera_live_first_at (a seat already live at the V531 deploy): the clock starts at now - camera_starting, zero calls - and the fallback only 10 s later", async () => {
       fx.setWebhooksDown(true);
       const T0 = new Date();
       const a = await arrive({ at: at(T0, -30 * SEC) });
@@ -572,7 +572,7 @@ describe.skipIf(!DB)("the one-read proof", () => {
       expect((await rowOf(a.pid)).presence_fallback_from?.getTime(), "the new clock is the new run's first receipt").toBe(reLive.getTime());
     });
 
-    it("presence clears the clock even when the report names no first-live receipt to restart from (a live row from before V529, whose stamp is NULL): the next stretch starts at its own claim", async () => {
+    it("presence clears the clock even when the report names no first-live receipt to restart from (a live row from before V531, whose stamp is NULL): the next stretch starts at its own claim", async () => {
       fx.setWebhooksDown(true);
       const T0 = new Date();
       const a = await arrive({ at: at(T0, -SEC) });
@@ -583,7 +583,7 @@ describe.skipIf(!DB)("the one-read proof", () => {
       await applyPresenceEvent(sql, joinedEv({ meetingId: a.meetingId, peerId: peer, custom: a.personId, joinedAt: joined }), joined);
       expect(reasonOf(await claim(a, at(T0, 8 * SEC)))).toBe("seated");
       await applyPresenceEvent(sql, leftEv({ meetingId: a.meetingId, peerId: peer, custom: a.personId, joinedAt: joined, leftAt: new Date() }), new Date());
-      // The writer cannot make this shape any more (every live receipt stamps), so it is written by hand: it is what a row live at the V529
+      // The writer cannot make this shape any more (every live receipt stamps), so it is written by hand: it is what a row live at the V531
       // deploy looks like until its next report.
       await sql`update fixture_video_participants set camera_live_first_at = null where participant_id = ${a.pid}`;
       const later = at(T0, 25 * SEC);

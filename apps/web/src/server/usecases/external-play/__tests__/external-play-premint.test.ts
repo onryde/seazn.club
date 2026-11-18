@@ -132,7 +132,7 @@ const createsFor = (fixtureIds: string[]) => creates().map(titleOf).filter((t) =
 const participantPosts = () => fx.calls.filter((c) => c.route === "POST /meetings/:id/participants");
 
 /** A room on file with the stamp GIVEN - an earlier pairing's, the current one's, or (`null`) an UNADOPTED room: both stamps
- *  null, as V529's pair check wants. `endedAt` makes it an ENDED room. */
+ *  null, as V531's pair check wants. `endedAt` makes it an ENDED room. */
 const insertRoom = (
   fixtureId: string,
   side: "home" | "away",

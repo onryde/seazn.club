@@ -364,7 +364,7 @@ export function gameEvidenceOn(now: Date) {
               or (ep.status = 'pending' and ep.mint_claimed_at >= ${liveMintClaimSince(now)}))`;
 }
 
-/** `unadopted`: BOTH stamps are null - the pre-mint job made the room for a board that had no pairing yet (V529: the two
+/** `unadopted`: BOTH stamps are null - the pre-mint job made the room for a board that had no pairing yet (V531: the two
  *  stamps are null together or set together, so one null alone cannot be on file). An unadopted room is made for the board's
  *  FIRST pairing, whichever it is: it is never another pairing's (never stale), and a claim on a paired board adopts it.
  *  `paired`: the board has both entrants now. A row is "the current pairing's" when `samePair` OR `unadopted`. */
@@ -407,7 +407,7 @@ export const RETIRED_PAIR = "00000000-0000-0000-0000-000000000000";
  *  judges it again; the vendor call and that guard are not one atomic step, which is the residual window). An ended row
  *  needs no vendor call. `end` is the teardown (the sweep passes its own); `ensureMeeting` passes `endMeeting`.
  *  An UNADOPTED row (both stamps null: the pre-mint job's room for a board with no pairing yet) is never stale: it is made
- *  for whichever pairing comes first, so `m.home_entrant_id is not null` keeps it out (and V529's pair check makes the one
+ *  for whichever pairing comes first, so `m.home_entrant_id is not null` keeps it out (and V531's pair check makes the one
  *  column enough). Without that line the stamp comparison below reads null against a paired board as "another pairing" and
  *  ends a room nobody has joined. */
 export async function retireStaleMeeting(
@@ -456,7 +456,7 @@ export async function retireStaleMeeting(
 }
 
 /** Every UNADOPTED room of the board (both stamps null: made by the pre-mint job for a board with no pairing yet) takes the
- *  fixture's CURRENT pairing, in ONE statement: the stamps are written as a pair (V529's check refuses one without the other, so
+ *  fixture's CURRENT pairing, in ONE statement: the stamps are written as a pair (V531's check refuses one without the other, so
  *  a two-step write would not even commit), and both sides' rooms are adopted together - the board has one pairing, so an
  *  adoption never leaves one side stamped beside a sibling still unadopted. That is the ADOPT path only: a claim that CREATES a
  *  room (nothing on file for its own side) stamps just that room, and a sibling still unadopted stays so until its own claim -
@@ -533,7 +533,7 @@ async function claimUnadopted(
  *
  *  `opts.unpaired`: the default is today's rule - a fixture with no complete pairing and no room on file is
  *  VIDEO_MEETING_UNPAIRED (R2-2's empty case: nobody to meet). `"allow"` is the pre-mint job's alone: a fixture with an empty
- *  seat and no room on file gets a room stamped (null, null) - both columns, never one (V529). A paired fixture's room is
+ *  seat and no room on file gets a room stamped (null, null) - both columns, never one (V531). A paired fixture's room is
  *  stamped with its pairing whatever the option says. */
 export async function ensureMeeting(
   fixtureId: string,
