@@ -1,17 +1,19 @@
-// A table refold that fails AFTER the score committed (fix round 1 of the lots-draw fix, review I-3, 2026-11-18).
+// Post-commit hooks that fail AFTER the score committed (lots-draw fix, review I-3 in round 1, I-A and m2 in round 2,
+// 2026-11-18).
 //
-// `onDecided` refolds a table stage's standings (`recomputeStandings`) after `scoreEvent`'s append has committed. Before this
-// fix the call was the one hook there with no catch: a refold that threw (the load run's: a lots draw of a 72+ entrant tie
-// class the store could not index, V528) answered a result that STOOD with a 500, and skipped every hook after it - the
-// seed-proposal staleness, the discipline and news refreshes, auto-advance, and the room's finish on the external-play path.
-// Now: the score is answered as written, a named event (`standings_recompute_failed`, with the fixture and the stage) is
-// logged, and the request does not auto-advance (controller ruling, fix round 1).
+// `onDecided` runs its table hooks after `scoreEvent`'s append has committed: the refold (`recomputeStandings`), the
+// dependent seed proposals' staleness (`markDependentSeedProposalsStale`) and auto-advance's "did the stage just finish?"
+// read. Each used to throw straight out of `scoreEvent`: a result that STOOD answered with a 500 (the load run's refold: a
+// lots draw of a 72+ entrant tie class the store could not index, V528), and every hook after it skipped. Now each is
+// logged by name and the score is answered as written. A failed refold leaves the stored table stale, and auto-advance is
+// what heals it when the stage has just finished: the completion ranks the stage afresh from its fixtures (round 2: the
+// round-1 gate that skipped auto-advance after a failed refold blocked the only automatic repair).
 //
-// The refold is the real one, behind a one-shot failure keyed by stage: armed, the NEXT refold of that stage throws the
-// load run's own error, once; every other refold (the stage's completion included) is the real one. Everything else is the
-// product's own: a generic league of three feeding a two-seat knockout, auto_progress on, every result through `scoreEvent`.
-// Expected values come from the rulebook (a decided fixture counts one played match for each side), never from the code
-// under test.
+// The failures are one-shot and armed per test: the NEXT refold of a stage throws the load run's own error; the next
+// staleness mark throws; or, right after the next staleness mark, the next "fixtures" expunge-abandon fragment (auto-advance's
+// readiness read builds exactly one) throws. Every other call is the real one. Everything else is the product's own: a
+// generic league of three feeding a two-seat knockout, auto_progress on, every result through `scoreEvent`. Expected values
+// come from the rulebook (a decided fixture counts one played match for each side), never from the code under test.
 // Single-sport reason: the change is the post-commit control flow of `onDecided`, which no sport reaches differently.
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +29,48 @@ import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
-const inject = vi.hoisted(() => ({ failNext: new Map<string, number>(), fired: 0 }));
+const inject = vi.hoisted(() => ({
+  failNext: new Map<string, number>(),
+  failStaleMark: 0,
+  trapReadyAfterStaleMark: false,
+  trapReady: false,
+  fired: 0,
+}));
+vi.mock("../stages", async (orig) => {
+  const real = await orig<typeof import("../stages")>();
+  return {
+    ...real,
+    markDependentSeedProposalsStale: vi.fn(async (...args: Parameters<typeof real.markDependentSeedProposalsStale>) => {
+      if (inject.failStaleMark > 0) {
+        inject.failStaleMark--;
+        inject.fired++;
+        throw new Error("Connection terminated unexpectedly");
+      }
+      const out = await real.markDependentSeedProposalsStale(...args);
+      if (inject.trapReadyAfterStaleMark) {
+        inject.trapReadyAfterStaleMark = false;
+        inject.trapReady = true;
+      }
+      return out;
+    }),
+  };
+});
+vi.mock("@/server/engine-db/recorded-abandon", async (orig) => {
+  const real = await orig<typeof import("@/server/engine-db/recorded-abandon")>();
+  return {
+    ...real,
+    // A plain function, NOT vi.fn: a vitest spy calls `.then` on a thenable it returns (to record the settled result), and a
+    // postgres.js fragment is a thenable query, so a spied fragment is sent on its own and the server refuses it.
+    hasActiveAbandonSql: (...args: Parameters<typeof real.hasActiveAbandonSql>) => {
+      if (inject.trapReady && args[1] === "fixtures" && args[2]?.expunge === true) {
+        inject.trapReady = false;
+        inject.fired++;
+        throw new Error("Connection terminated unexpectedly");
+      }
+      return real.hasActiveAbandonSql(...args);
+    },
+  };
+});
 vi.mock("@/server/engine-db", async (orig) => {
   const real = await orig<typeof import("@/server/engine-db")>();
   return {
@@ -58,6 +101,9 @@ afterAll(async () => {
 
 afterEach(() => {
   inject.failNext.clear();
+  inject.failStaleMark = 0;
+  inject.trapReadyAfterStaleMark = false;
+  inject.trapReady = false;
   vi.restoreAllMocks();
 });
 
@@ -109,58 +155,126 @@ async function state(r: Rig, fixtureId: string) {
   return { fixture: f!.status, played: snap?.played ?? 0, autoAdvanced: ev!.n, koSeated: ko!.seated, league: stage!.status };
 }
 
+type Logged = { event?: string; fixtureId?: string; stageId?: string; divisionId?: string };
+const logged = (spy: { mock: { calls: unknown[][] } }, event: string) =>
+  spy.mock.calls.map((c) => c[0] as Logged).filter((o) => o?.event === event);
 const refoldFailures = (spy: { mock: { calls: unknown[][] } }) =>
-  spy.mock.calls
-    .map((c) => c[0] as { event?: string; fixtureId?: string; stageId?: string })
-    .filter((o) => o?.event === "standings_recompute_failed")
-    .map((o) => ({ fixtureId: o.fixtureId, stageId: o.stageId }));
+  logged(spy, "standings_recompute_failed").map((o) => ({ fixtureId: o.fixtureId, stageId: o.stageId }));
 
-describe.skipIf(!HAS_DB)("a table refold that fails after the score committed", () => {
-  it("answers the committed score, logs it by name, does not auto-advance; a void on it the same; the next result refolds and advances", async () => {
+/** Run `act` (which arms a one-shot failure), and pin that the failure fired exactly once inside it. */
+async function firesOnce<T>(act: () => Promise<T>): Promise<T> {
+  const before = inject.fired;
+  const out = await act();
+  expect(inject.fired - before, "premise: the injected failure fired, once").toBe(1);
+  return out;
+}
+const resultOf = async (fixtureId: string) =>
+  (await sql<{ id: string }[]>`select id from score_events where fixture_id = ${fixtureId} and type = 'generic.result' order by seq desc limit 1`)[0]!.id;
+
+describe.skipIf(!HAS_DB)("post-commit hooks that fail after the score committed", () => {
+  it("a failed refold: answered and logged; mid-stage the table stays stale until the next refold, on the last result auto-advance heals it", async () => {
     const r = await rig();
     const [f1, f2, f3] = r.fixtures as [string, string, string];
     const errors = vi.spyOn(log, "error");
     await win(r.auth, f1);
-    await win(r.auth, f2);
-    expect((await state(r, f2)).played, "premise: two results folded, one played match a side (four)").toBe(4);
+    expect((await state(r, f1)).played, "premise: one result folded, one played match a side (two)").toBe(2);
 
-    // 1. the last result of the league, its refold failing: the score is answered as written
-    const fired = inject.fired;
-    const out = await win(r.auth, f3, () => inject.failNext.set(r.leagueId, 1));
-    expect(inject.fired - fired, "premise: the injected failure fired, once").toBe(1);
+    // 1. a result that does NOT finish the stage, its refold failing: answered as written, logged, the stored table stale
+    const out = await firesOnce(() => win(r.auth, f2, () => inject.failNext.set(r.leagueId, 1)));
     expect(out.status, "scoreEvent answers the committed result").toBe("decided");
-    expect(refoldFailures(errors), "the failure is logged by name, with the fixture and the stage").toEqual([{ fixtureId: f3, stageId: r.leagueId }]);
-    expect(await state(r, f3), "the result stands, the stored table is the stale one, nothing advanced").toEqual({
+    expect(refoldFailures(errors), "the failure is logged by name, with the fixture and the stage").toEqual([{ fixtureId: f2, stageId: r.leagueId }]);
+    expect(await state(r, f2), "the result stands, the stored table is the stale one (f1 only), nothing advanced").toEqual({
       fixture: "decided",
-      played: 4,
+      played: 2,
       autoAdvanced: 0,
       koSeated: 0,
       league: "active",
     });
 
     // 2. a void of that result, its refold failing too: answered, logged again, the fixture reopened
-    const [res] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f3} and type = 'generic.result'`;
-    inject.failNext.set(r.leagueId, 1);
-    const voided = await post(r.auth, f3, "core.void", { event_id: res!.id });
+    const res2 = await resultOf(f2);
+    const voided = await firesOnce(() => {
+      inject.failNext.set(r.leagueId, 1);
+      return post(r.auth, f2, "core.void", { event_id: res2 });
+    });
     expect(voided.outcome, "the void is answered: the result is gone").toBeNull();
     expect(refoldFailures(errors), "logged again, for the same fixture").toEqual([
-      { fixtureId: f3, stageId: r.leagueId },
+      { fixtureId: f2, stageId: r.leagueId },
+      { fixtureId: f2, stageId: r.leagueId },
+    ]);
+    const afterVoid = await state(r, f2);
+    expect(afterVoid.fixture, "the fixture is no longer decided").not.toBe("decided");
+    expect([afterVoid.autoAdvanced, afterVoid.koSeated, afterVoid.league], "nothing advanced").toEqual([0, 0, "active"]);
+
+    // 3. the same fixture scored again, its refold the real one: the table catches up (two results, four played)
+    expect((await win(r.auth, f2)).status).toBe("decided");
+    expect((await state(r, f2)).played, "the next refold brings the stored table up to date").toBe(4);
+
+    // 4. the LAST result, its refold failing: answered and logged, and auto-advance (the stage just finished) completes the
+    //    stage, which ranks it afresh from its fixtures: the stored table is healed (three results, six played) and the
+    //    knockout is seated, in this same request
+    const last = await firesOnce(() => win(r.auth, f3, () => inject.failNext.set(r.leagueId, 1)));
+    expect(last.status).toBe("decided");
+    expect(refoldFailures(errors), "the last result's failure is logged too").toEqual([
+      { fixtureId: f2, stageId: r.leagueId },
+      { fixtureId: f2, stageId: r.leagueId },
       { fixtureId: f3, stageId: r.leagueId },
     ]);
-    const afterVoid = await state(r, f3);
-    expect(afterVoid.fixture, "the fixture is no longer decided").not.toBe("decided");
-    expect([afterVoid.autoAdvanced, afterVoid.koSeated], "still nothing advanced").toEqual([0, 0]);
-
-    // 3. the next result, its refold the real one: the table catches up (three results, six played) and the stage advances
-    const again = await win(r.auth, f3);
-    expect(again.status).toBe("decided");
-    expect(refoldFailures(errors), "no further failure logged").toHaveLength(2);
-    expect(await state(r, f3), "the refolded table, and the advance auto_progress asks for").toEqual({
+    expect(await state(r, f3), "healed: the completed table, and the advance auto_progress asks for").toEqual({
       fixture: "decided",
       played: 6,
       autoAdvanced: 1,
       koSeated: 2,
       league: "complete",
     });
+  }, 120_000);
+
+  it("a failed staleness mark of the dependent seed proposals: answered and logged, and the hooks after it still run", async () => {
+    const r = await rig();
+    const [f1, f2, f3] = r.fixtures as [string, string, string];
+    const errors = vi.spyOn(log, "error");
+    await win(r.auth, f1);
+    await win(r.auth, f2);
+    const out = await firesOnce(() => win(r.auth, f3, () => (inject.failStaleMark = 1)));
+    expect(out.status, "scoreEvent answers the committed result").toBe("decided");
+    expect(
+      logged(errors, "seed_proposals_stale_mark_failed").map((o) => ({ fixtureId: o.fixtureId, stageId: o.stageId })),
+      "the failure is logged by name, with the fixture and the stage",
+    ).toEqual([{ fixtureId: f3, stageId: r.leagueId }]);
+    expect(await state(r, f3), "the refold before it stood, and auto-advance after it ran").toEqual({
+      fixture: "decided",
+      played: 6,
+      autoAdvanced: 1,
+      koSeated: 2,
+      league: "complete",
+    });
+  }, 120_000);
+
+  it("a failed auto-advance readiness read: answered and logged, nothing advanced; the next result advances", async () => {
+    const r = await rig();
+    const [f1, f2, f3] = r.fixtures as [string, string, string];
+    const errors = vi.spyOn(log, "error");
+    await win(r.auth, f1);
+    await win(r.auth, f2);
+    const out = await firesOnce(() => win(r.auth, f3, () => (inject.trapReadyAfterStaleMark = true)));
+    expect(out.status, "scoreEvent answers the committed result").toBe("decided");
+    expect(
+      logged(errors, "auto_advance_check_failed").map((o) => ({ stageId: o.stageId, divisionId: o.divisionId })),
+      "the failure is logged by name, with the stage and the division",
+    ).toEqual([{ stageId: r.leagueId, divisionId: r.divisionId }]);
+    expect(await state(r, f3), "the refold stood; the stage did not advance").toEqual({
+      fixture: "decided",
+      played: 6,
+      autoAdvanced: 0,
+      koSeated: 0,
+      league: "active",
+    });
+
+    // the sequence: the result voided and scored again, every hook real, and the stage advances
+    const res3 = await resultOf(f3);
+    expect((await post(r.auth, f3, "core.void", { event_id: res3 })).outcome).toBeNull();
+    expect((await win(r.auth, f3)).status).toBe("decided");
+    expect(logged(errors, "auto_advance_check_failed"), "no further failure logged").toHaveLength(1);
+    expect(await state(r, f3)).toEqual({ fixture: "decided", played: 6, autoAdvanced: 1, koSeated: 2, league: "complete" });
   }, 120_000);
 });

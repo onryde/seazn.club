@@ -1179,14 +1179,13 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   });
   // The table's refold, after the commit like every hook below and best-effort the same way: the score already stands, and a
   // refold that throws (a dropped connection, or before V528 a lots draw of a 72+ entrant tie class that the store could not
-  // index) must not answer that score with a 500 and skip the hooks after it. The stored table then stays as it was until the
-  // stage's next refold (its next result or void, or its completion), so this request does not auto-advance from it.
-  let tableStale = false;
+  // index) must not answer that score with a 500 and skip the hooks after it. The stored table then stays as it was until
+  // the stage's next refold: its next result or void, or its completion, which ranks it afresh from its fixtures. When this
+  // result finished the stage, auto-advance below IS that completion, so it runs regardless and heals the table here.
   if (context && TABLE_KINDS.has(context.kind)) {
     try {
       await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
     } catch (err) {
-      tableStale = true;
       log.error(
         { err, event: "standings_recompute_failed", fixtureId, stageId: context.stage_id, poolId: context.pool_id },
         "scoring: the stage's table did not refold after the score (score write unaffected; the stored table is stale until its next refold)",
@@ -1198,7 +1197,14 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // already-COMPLETE source stage. Same best-effort contract as the
     // overrideStandings call site: never blocks a score write that already
     // committed.
-    await markDependentSeedProposalsStale(auth, context.stage_id);
+    try {
+      await markDependentSeedProposalsStale(auth, context.stage_id);
+    } catch (err) {
+      log.error(
+        { err, event: "seed_proposals_stale_mark_failed", fixtureId, stageId: context.stage_id },
+        "scoring: the stage's dependent seed proposals were not marked stale (score write unaffected)",
+      );
+    }
   }
   // W4 T14 (FX-G16, FX-G18, X-QM-4, RB4-Q5): the same correction inside a COMPLETED knockout, which stored its ranks once at
   // completion. They are rewritten once it is decided again, and the proposals it seeds answer for it, a confirmed one too:
@@ -1223,9 +1229,9 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     }
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
-  // finished, progression fires without a button. Not after a refold that failed above (`tableStale`): the organiser's
-  // Complete (which ranks the stage afresh from its fixtures) or the stage's next result picks it up.
-  if (!tableStale && context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
+  // finished, progression fires without a button. Also after a refold that failed above: the completion never reads the
+  // stored table (it ranks the stage from its fixtures and writes the table afresh), so it is that table's repair.
+  if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
   // Quick match plan 5 (D2, P5, P6): a League + Knockout moves itself on, after a decision and a void alike (a void can take
@@ -1248,6 +1254,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
 }
 
 async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
+  // After the score's commit, like the completion below: a read that throws is logged, never the score's failure.
   const ready = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ auto_progress: boolean }[]>`
       select auto_progress from divisions where id = ${divisionId}`;
@@ -1273,6 +1280,12 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
                                      and gf.outcome->>'winner' = gf.home_entrant_id::text)))::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
+  }).catch((err: unknown) => {
+    log.error(
+      { err, event: "auto_advance_check_failed", stageId, divisionId },
+      "scoring: auto-advance could not read whether the stage finished (score write unaffected; the organiser's Complete or the stage's next result advances it)",
+    );
+    return false;
   });
   if (!ready) return;
   const { completeStage } = await import("./stages");
