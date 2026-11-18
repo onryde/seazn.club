@@ -7,7 +7,8 @@ import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
 import { evaluateInvariants } from "../lib/invariants.ts";
 import { decideState } from "../lib/results.ts";
-import { poolOfOneExpected } from "../lib/scenarios/f1-odd-field.ts";
+import { RefusedCall } from "../lib/driver/types.ts";
+import { cutBeyondFieldExpected, cutItems, poolOfOneExpected } from "../lib/scenarios/f1-odd-field.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { invariantsApply, type CaseSpec, type ScenarioContext } from "../lib/scenarios/types.ts";
 import { resolveSportCfg } from "../lib/sport-cfg.ts";
@@ -87,5 +88,77 @@ describe("F1 on group_group_ko: the refusal is the expected outcome (⛔), judge
     expect(judged).toBe(ROW_KEYS.length - 1);
     const { checks, state } = await runF1("league_ko", { enforcePoolSize: true });
     expect(state, failed(checks).join("; ")).toMatchObject({ state: "works" });
+  });
+});
+
+// W5 T12b (RB5-E6, X-BD-8; matrix truth run 44395599687): the product's Start also refuses a CUT the field cannot supply, and it asks that
+// BEFORE the group draw, so on group_group_ko (a top 2 of each of 4 pools = 8, from a field of 7) the answer is 422 RR_CUT_EXCEEDS_FIELD, not the
+// pool of one's STAGE_NOT_READY. The rulebook owes each refusal by name and orders neither, so F1 judges whichever it gets on that refusal's own
+// numbers. Before this, all 11 group_group_ko F1 cases were red in CI ("Start answered 422 RR_CUT_EXCEEDS_FIELD, want 422 STAGE_NOT_READY").
+describe("cutBeyondFieldExpected: which rows' first stage cuts more than 7 entrants supply (from the posted bodies)", () => {
+  it("group_group_ko's top 2 of each of 4 pools is 8, and 7 entrants in pools of 2, 2, 2, 1 supply 7; every other row's cut fits 7", () => {
+    // differential: today (the run's reds) nothing here said so, and the cut's refusal read as a defect.
+    expect(cutBeyondFieldExpected("group_group_ko", 7)).toEqual({ qualified: 8, max: 7 });
+    expect(cutBeyondFieldExpected("group_group_ko", 8), "8 fill 4 pools of 2: the top 2 of each is 8").toBeNull();
+    let judged = 0;
+    const refused: string[] = [];
+    for (const row of ROW_KEYS) {
+      judged++;
+      if (cutBeyondFieldExpected(row, 7) !== null) refused.push(row);
+    }
+    expect(judged, "anti-vacuity: every row asked").toBe(ROW_KEYS.length);
+    expect(refused, "only the row whose first stage cuts 8").toEqual(["group_group_ko"]);
+    // A rank range: a top 4 of a league of 3 supplies 3 (league_ko, the same rule off a plain table).
+    expect(cutBeyondFieldExpected("league_ko", 3)).toEqual({ qualified: 4, max: 3 });
+    expect(cutBeyondFieldExpected("league_ko", 4)).toBeNull();
+  });
+});
+
+describe("F1 on group_group_ko when the product's Start refuses the cut first (the real order): ⛔, judged on the cut's own numbers", () => {
+  it("every sport: refused, the cut named 8 against a supply of 7, every assertion passes and the fixture invariants are not judged", async () => {
+    let judged = 0;
+    for (const sport of SPORT_KEYS) {
+      const { checks, state } = await runF1("group_group_ko", { enforceCutBeyondField: true, enforcePoolSize: true }, sport);
+      expect(failed(checks), sport).toEqual([]);
+      expect(checks.map((c) => c.id), `${sport}: judged on the refusal alone`).toEqual(["f1-pool-of-one-refused"]);
+      expect(checks[0]!.checked, `${sport}: items judged`).toBeGreaterThan(0);
+      expect(state.state, `${sport}: ${state.reason}`).toBe("refused");
+      expect(state.reason, sport).toMatch(/cut of 8.*supplies 7/);
+      judged++;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(judged).toBeGreaterThan(0);
+  });
+
+  it("a cut refusal that names the wrong cut or the wrong supply is red, naming what it said", async () => {
+    let judged = 0;
+    for (const wrongMessage of ["9 can't qualify from this field: it can supply at most 7.", "8 can't qualify from this field: it can supply at most 6.", "the cut is too big"]) {
+      const { checks, state } = await runF1("group_group_ko", { enforceCutBeyondField: { wrongMessage } });
+      expect(failed(checks).join(";"), wrongMessage).toMatch(/f1-pool-of-one-refused.*the refusal names a (cut|supply) of/);
+      expect(state.state, wrongMessage).toBe("red");
+      judged++;
+    }
+    expect(judged).toBe(3);
+  });
+
+  it("a product that DRAWS the field (neither refusal) is red, naming both it owed", async () => {
+    const { checks, state } = await runF1("group_group_ko", {});
+    expect(failed(checks).join(";")).toMatch(/f1-pool-of-one-refused.*accepted.*pool of one.*RB5-E6/);
+    expect(state.state).toBe("red");
+  });
+
+  it("the rule's other side: a row whose cut the field supplies (league_ko, a top 4 of 7) owes no refusal, is drawn under the same product and works", async () => {
+    const drawn = await runF1("league_ko", { enforceCutBeyondField: true });
+    expect(drawn.state, failed(drawn.checks).join("; ")).toMatchObject({ state: "works" });
+    expect(F1.mandatedRefusal?.(specFor("league_ko")) ?? null).toBeNull();
+    expect(invariantsApply(F1, specFor("league_ko"))).toBe(true);
+  });
+});
+
+describe("cutItems: a cut refusal the field does not owe is a failed item, never a pass (the guard behind 'cannot happen')", () => {
+  const refusal = new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD", "8 can't qualify from this field: it can supply at most 7.");
+  it("owed: every item passes on the right numbers; not owed: the first item fails", () => {
+    expect(cutItems(refusal, { qualified: 8, max: 7 }).map((i) => i.ok)).toEqual([true, true, true, true]);
+    expect(cutItems(refusal, null).map((i) => i.ok)[0], "the gate over-refused a field that supplies the cut").toBe(false);
   });
 });

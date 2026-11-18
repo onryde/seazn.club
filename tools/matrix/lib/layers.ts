@@ -52,7 +52,7 @@
 // the leaf api-only-ui.ts, never from browser-driver.ts.
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, isKnobRow, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type KnobRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
-import { onTemplate, templateField, templateFor, templateRow } from "./templates.ts";
+import { onTemplate, routeViaTemplate, templateField, templateFor, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor, type AtomicScenario, type Settled } from "./scenario-catalogue.ts";
@@ -177,7 +177,11 @@ export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: Readon
     const script = scriptFor(run.scenario);
     if (script !== null) {
       if (run.bound !== null) throw new L2BoundRun(run);
-      out.push({ ...base, spec: { ...identity, scenario: script, canary: false }, noPath: null, notRun: null });
+      // W5 X-BD-3 (matrix truth run 44395599687): a cell a catalog card reaches (super-groups builds group_group_ko on any sport) is
+      // driven through that card, as the grid's L1 case is; planned plain, the browser driver refused it (DriverMisuse, 3 football
+      // cells). The case keeps its L2 id: the committed run's identity is the atom's, not the template's.
+      const routed = routeViaTemplate({ ...identity, scenario: script, canary: false });
+      out.push({ ...base, spec: { ...routed, caseId: identity.caseId }, noPath: null, notRun: null });
       continue;
     }
     // W4 app PR A Task 24: an atom the W4 rulebook settled is recorded as ⛔ or ⏳, never 🚫 (scenario-catalogue.ts SETTLED).

@@ -328,6 +328,33 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     expect(checked).toBeGreaterThanOrEqual(4);
   });
 
+  it("a driven run on a cell a catalog card reaches is driven THROUGH that card and keeps its committed id; a driven run elsewhere carries no template (matrix truth run 44395599687: 3 football group_group_ko runs reached the browser plain and the driver refused them)", () => {
+    // differential: before, every driven run was planned plain, so group_group_ko|football R4a / M1 / F1 threw DriverMisuse in the browser.
+    const d = driven(cases);
+    let onCard = 0;
+    let elsewhere = 0;
+    for (const c of d) {
+      const cell = TEMPLATE_CELLS.get(cellId(c.run!.row, c.run!.sport));
+      if (cell === undefined) {
+        expect(c.spec!.template, layerCaseId(c)).toBeUndefined();
+        elsewhere++;
+        continue;
+      }
+      expect(c.spec!.template, layerCaseId(c)).toBe(cell.key);
+      // The run's identity is the committed atom's: the template never renames it (the judge matches a run by this id).
+      expect(c.spec!.caseId, layerCaseId(c)).toBe(`${c.run!.row}|${c.run!.sport}|${c.run!.preset}|${c.run!.scenario}`);
+      expect(c.spec!.scenario, layerCaseId(c)).toBe(HARNESS_SCENARIO[c.run!.scenario]);
+      onCard++;
+    }
+    expect(onCard, "anti-vacuity: a driven run on a card-reached cell").toBeGreaterThan(0);
+    expect(elsewhere, "anti-vacuity: a driven run off the cards").toBeGreaterThan(0);
+    expect(onCard + elsewhere).toBe(d.length);
+    // The witness the premise names: football's three group_group_ko scripts are on super-groups.
+    const football = d.filter((c) => c.run!.row === "group_group_ko" && c.run!.sport === "football");
+    expect(football.map((c) => c.run!.scenario).sort()).toEqual(["F1", "M1", "R4a"]);
+    for (const c of football) expect(c.spec!.template).toBe("super-groups");
+  });
+
   it("declares exactly the sports its driven cases need (a planned run posts nothing), and takes no --width (each run sets its own)", () => {
     expect(planner.layer).toBe("L2");
     expect(planner.label).toBe("--layer L2 --scope grid");

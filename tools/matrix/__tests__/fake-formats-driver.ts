@@ -84,6 +84,11 @@ export interface FakeMultiStageOptions {
    *  leaves every pool 2 strong, and is itself 2 or more: one pool is a League, so no count works for 3 into 2). `suggestedOverride` is a deliberately WRONG product's count (a null is "no count works"), for the
    *  scenario's own guard test. Off by default: every existing fake draw stays as it was. */
   readonly enforcePoolSize?: boolean | { readonly suggestedOverride: number | null };
+  /** W5 T12b (RB5-E6, X-BD-8): Start refuses a first stage whose cut into the next stage is larger than the field, BEFORE any pool is drawn -
+   *  422 RR_CUT_EXCEEDS_FIELD, "{qualified} can't qualify from this field: it can supply at most {max}." (the product's refuseFormatTooSmall
+   *  runs ahead of the group draw, so it answers first where both would refuse). The cut is the sum of the first progression's takes: a
+   *  topNPerGroup n over the pooled stage is n per pool, a rankRange is its width. `wrongMessage` is a deliberately WRONG product's text. Off by default. */
+  readonly enforceCutBeyondField?: boolean | { readonly wrongMessage: string };
 }
 
 type Side = "home" | "away";
@@ -269,6 +274,23 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     return settle(() => {
       this.log("start");
       const first = this.stages[0];
+      const cutRule = this.opts.enforceCutBeyondField;
+      if (cutRule !== undefined && cutRule !== false) {
+        const progression = this.stages[1]?.body.progression as unknown as ProgressionSpec | null | undefined;
+        const pools = first.kind === "group" ? this.#poolCount(first.body.config) : 1;
+        let qualified = 0;
+        for (const source of progression?.sources ?? []) {
+          for (const take of source.take) {
+            if (take.kind === "topNPerGroup") qualified += take.n * pools;
+            else if (take.kind === "rankRange") qualified += take.to - take.from + 1;
+          }
+        }
+        const field = this.entrants.length;
+        if (qualified > field) {
+          throw new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD",
+            typeof cutRule === "object" ? cutRule.wrongMessage : `${qualified} can't qualify from this field: it can supply at most ${field}.`);
+        }
+      }
       const enforce = this.opts.enforcePoolSize;
       if (enforce !== undefined && enforce !== false && first.kind === "group") {
         const groups = this.#poolCount(first.body.config);
