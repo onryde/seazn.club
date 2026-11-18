@@ -5,7 +5,7 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
-import { recomputeStandings } from "@/server/engine-db";
+import { recomputeStandings, type SnapshotCause } from "@/server/engine-db";
 import { log } from "@/server/logger";
 import { readStageRoundByes, snapshotFixtures } from "../fixture-snapshot";
 import { REAL_TABLE_KINDS, type Tx } from "./types";
@@ -92,10 +92,12 @@ export async function refoldStageTable(
   orgId: string,
   stage: { id: string; kind: string },
   emptyFold: "skip" | "drop",
+  /** B5 fix wave fix round 2/3 (m4, m5): why the table refolds - a roster change unless the caller says a bye was awarded. */
+  cause: SnapshotCause = "roster",
 ): Promise<void> {
   if (!REAL_TABLE_KINDS.has(stage.kind)) return;
   try {
-    await recomputeStandings(orgId, stage.id, undefined, { emptyFold });
+    await recomputeStandings(orgId, stage.id, undefined, { emptyFold, cause });
   } catch (err) {
     log.error({ err, event: "stage_table_refold_failed", stageId: stage.id, emptyFold }, "stage_table_refold_failed");
   }

@@ -236,7 +236,14 @@ export async function afterGenerateCommit(auth: AuthCtx, stageId: string, write:
   // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. `created` counts a Swiss
   // seating too, so Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair:
   // the bye win shows at once, Finn/Gus). The kind gate and the empty-fold rule are `refoldStageTable`'s.
-  if (outcome.created > 0) await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip");
+  // B5 fix wave fix round 3 (m5; controller ruling): a Swiss seating that awards a bye (one side seated, the other none) folds a
+  // point in - a result, which extends the last result's step (`writeSnapshot`'s "bye"). A seating without one changes nothing in
+  // the table (pairing scores nobody), so its refold stays a roster refold: an unchanged table keeps its step either way, and
+  // anything else such a refold moves is not a result's.
+  if (outcome.created > 0) {
+    const seatsABye = write.kind === "swiss" && outcome.fixtures.some((f) => (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+    await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip", seatsABye ? "bye" : "roster");
+  }
   await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
