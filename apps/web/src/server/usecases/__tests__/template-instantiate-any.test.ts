@@ -249,7 +249,9 @@ describe.runIf(HAS_DB)("createFromTemplate — super-groups, the sport-agnostic 
       expect(o, mod.key).toBeDefined();
       expect(o!.entrants!.kinds, mod.key).toEqual([...kindsOf(mod)]);
       expect(o!.entrants!.defaultKind, mod.key).toBe(defaultKindOf(mod));
-      expect(o!.variants.map((v) => v.key).sort(), mod.key).toEqual(Object.keys(mod.variants).sort());
+      // Every variant the engine declares is offered. Not toEqual: the sheet lists the DB's variant rows, and a shared test DB
+      // carries `_seed.ts`'s football `default` row once any suite seeded it first (order-dependent red, B4 merge).
+      expect(o!.variants.map((v) => v.key), mod.key).toEqual(expect.arrayContaining(Object.keys(mod.variants)));
       checked++;
     }
     expect(checked).toBe(builtinModules.length);
