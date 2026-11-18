@@ -1,16 +1,10 @@
 import { NextResponse } from "next/server";
-import { allHelpArticles, helpPlainText } from "@/server/help-content";
+import { helpSearchIndex } from "@/server/help-search-index";
 
-// Search-index feed for the /help FlexSearch box (v3/06 §3): slug, title and
-// plain text per article. Static content → long cache.
+// The help search box's index (server/help-search-index.ts is its one source): fetched by the browser on the
+// box's first focus or keystroke, never shipped inside a help page. Content changes only with a deploy.
 export async function GET() {
-  const docs = [...allHelpArticles().values()].map((a) => ({
-    slug: a.slug,
-    title: a.title,
-    description: a.description,
-    text: helpPlainText(a.markdown),
-  }));
-  return NextResponse.json(docs, {
+  return NextResponse.json(await helpSearchIndex(), {
     headers: { "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400" },
   });
 }

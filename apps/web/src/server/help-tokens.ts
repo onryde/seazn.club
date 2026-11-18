@@ -50,3 +50,12 @@ export function resolveHelpTokens(markdown: string, matrix: MatrixData): string 
   }
   return out;
 }
+
+/**
+ * Text with every plan token removed — for a surface that cannot load the plan table and must not
+ * show a raw `{{plan:…}}` (the search index without a matrix). The figure is dropped, not invented;
+ * a near-miss (`{{plan:fee}}`, a space inside) is dropped the same way.
+ */
+export function stripHelpTokens(text: string): string {
+  return text.replace(/\{\{plan:[^}]*\}\}/g, "").replace(/ {2,}/g, " ").trim();
+}

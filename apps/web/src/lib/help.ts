@@ -107,3 +107,10 @@ export function helpUrl(slug: string | undefined): string | null {
   if (slug.startsWith("formats/")) return `/help/formats/${slug.slice("formats/".length)}`;
   return ARTICLES.has(slug) ? `/help/${slug}` : null;
 }
+
+/** One section of the help section list (server/help-content.ts helpSectionList): its pages, in reading order. */
+export interface HelpSectionEntry {
+  key: string;
+  label: string;
+  pages: { href: string; title: string }[];
+}

@@ -1,10 +1,9 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
-import { ArrowLeft } from "lucide-react";
 import { FORMAT_FAMILIES, FormatDiagram, formatFamily } from "@/config/format-gallery";
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { FormatPreviewView } from "@/components/format-preview-view";
+import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 
 export const revalidate = 3600;
 
@@ -31,13 +30,9 @@ export default async function FormatExplainerPage({ params }: Props) {
   const phases = previewDivisionFixtures(f.cannedStages, 8);
 
   return (
+    <HelpShell currentHref="/help/formats">
     <article>
-      <Link
-        href="/help/formats"
-        className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-purple-700"
-      >
-        <ArrowLeft className="h-3.5 w-3.5" strokeWidth={2} /> Format gallery
-      </Link>
+      <HelpBreadcrumb trail={[{ href: "/help/formats", label: "Format gallery" }]} />
       <h1 className="mt-3 flex items-center gap-2 text-3xl font-bold tracking-tight text-slate-900">
         {f.title}
         {f.pro ? (
@@ -81,5 +76,6 @@ export default async function FormatExplainerPage({ params }: Props) {
       </p>
       <FormatPreviewView phases={phases} />
     </article>
+    </HelpShell>
   );
 }

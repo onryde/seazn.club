@@ -18,7 +18,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixData } from "@/lib/pricing-matrix";
-import { hasHelpTokens, resolveHelpTokens } from "@/server/help-tokens";
+import { hasHelpTokens, resolveHelpTokens, stripHelpTokens } from "@/server/help-tokens";
 import {
   helpPlainText, renderHelpArticleHtml, renderHelpMarkdown, staticHelpSlugs,
   type HelpArticle,
@@ -121,12 +121,21 @@ describe("renderHelpMarkdown / helpPlainText take the matrix as an OPTIONAL argu
     expect(helpPlainText(md, MATRIX)).toContain("Community is 9% .");
   });
 
-  it("helpPlainText leaves tokens as written without a matrix (it is synchronous)", () => {
+  it("helpPlainText leaves tokens as written without a matrix (it is synchronous); it no longer feeds the search index", () => {
     // Unresolved: the token is still there (the plain-text pass strips "_" like any other text),
-    // and no figure was invented.
+    // and no figure was invented. The leak sweeps read this text; the search index does NOT (it was
+    // the /api/help-index body until the template task) — the index strips a token it cannot resolve,
+    // below, and help-template.test.tsx pins that no row carries "{{".
     const text = helpPlainText(md);
     expect(text).toContain("{{plan:registration.fee percent:community}}");
     expect(text).not.toContain("9%");
+  });
+
+  it("stripHelpTokens (the search index without a matrix) drops every token, near-misses too, and invents no figure", () => {
+    expect(stripHelpTokens(md)).toBe("Platform fee on Community is **%**.");
+    expect(stripHelpTokens("Fee {{plan:fee}} and {{plan:registration.fee_percent:pro}}% here")).toBe("Fee and % here");
+    expect(stripHelpTokens("No tokens, {{ not one }}.")).toBe("No tokens, {{ not one }}.");
+    expect(stripHelpTokens("")).toBe("");
   });
 
   it("a token-free article renders identically with and without the matrix", async () => {
@@ -140,7 +149,7 @@ describe("renderHelpMarkdown / helpPlainText take the matrix as an OPTIONAL argu
 // The freshness mechanism, through the real page module.
 // ---------------------------------------------------------------------------
 const article = (slug: string, markdown: string): HelpArticle => ({
-  slug, section: slug.split("/")[0]!, title: "T", description: "d", order: 1, markdown,
+  slug, section: slug.split("/")[0]!, title: "T", description: "d", order: 1, markdown, related: [],
 });
 const TOKEN_ARTICLE = article("billing/fixture-token", "Fee **{{plan:registration.fee_percent:pro}}%** on Pro.\n\n".repeat(3));
 const PLAIN_ARTICLE = article("billing/fixture-plain", "No figures here, just words about plans.\n\n".repeat(3));

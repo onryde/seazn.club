@@ -1,7 +1,5 @@
-import Link from "next/link";
 import type { Metadata } from "next";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
-import { helpNav } from "@/server/help-content";
 
 export const metadata: Metadata = {
   title: { default: "Help centre — Seazn Club", template: "%s — Seazn Club Help" },
@@ -9,58 +7,16 @@ export const metadata: Metadata = {
     "How to run tournaments and leagues on seazn.club — setup, registration, scheduling, scoring, sharing and billing, in plain words.",
 };
 
+// The help tree's frame: the site's nav and footer around a centred column. Each page draws its own
+// insides — the article and format pages through HelpShell (components/help/help-shell.tsx: search,
+// section list, the page), the help home its own search and section cards — because a page knows on
+// the server which page it is, and the section list marks it without reading the URL in the browser.
+// Nothing here reads cookies or the session: every help page stays statically rendered.
 export default function HelpLayout({ children }: { children: React.ReactNode }) {
-  const nav = helpNav();
   return (
     <div className="flex min-h-screen flex-col bg-white">
       <MarketingShell>
-      <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 lg:grid lg:grid-cols-[220px_1fr] lg:gap-10">
-        <aside className="mb-8 lg:mb-0">
-          <Link
-            href="/help"
-            className="mk-eyebrow"
-          >
-            Help centre
-          </Link>
-          <nav aria-label="Help sections" className="mt-4 space-y-5 text-sm">
-            {nav.map((section) => (
-              <div key={section.section}>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  {section.label}
-                </p>
-                <ul className="space-y-1 border-l border-purple-100">
-                  {section.articles.map((a) => (
-                    <li key={a.slug}>
-                      <Link
-                        href={`/help/${a.slug}`}
-                        className="-ml-px block border-l-2 border-transparent py-0.5 pl-3 text-slate-600 transition hover:border-purple-300 hover:text-purple-800"
-                      >
-                        {a.title}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-            <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Formats
-              </p>
-              <ul className="space-y-1 border-l border-purple-100">
-                <li>
-                  <Link
-                    href="/help/formats"
-                    className="-ml-px block border-l-2 border-transparent py-0.5 pl-3 text-slate-600 transition hover:border-purple-300 hover:text-purple-800"
-                  >
-                    Format gallery
-                  </Link>
-                </li>
-              </ul>
-            </div>
-          </nav>
-        </aside>
-        <main className="min-w-0">{children}</main>
-      </div>
+        <div className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">{children}</div>
       </MarketingShell>
     </div>
   );

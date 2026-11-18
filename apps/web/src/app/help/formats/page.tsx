@@ -2,6 +2,7 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { ArrowRight } from "lucide-react";
 import { FORMAT_FAMILIES, FormatDiagram } from "@/config/format-gallery";
+import { HelpBreadcrumb, HelpShell } from "@/components/help/help-shell";
 
 export const revalidate = 3600;
 
@@ -13,10 +14,8 @@ export const metadata: Metadata = {
 
 export default function FormatGalleryPage() {
   return (
-    <div>
-      <p className="mk-eyebrow">
-        Format gallery
-      </p>
+    <HelpShell currentHref="/help/formats">
+      <HelpBreadcrumb trail={[{ href: "/help#formats", label: "Formats" }]} />
       <h1 className="mk-display mt-3 text-4xl font-bold text-purple-950">
         Pick the right shape for your day
       </h1>
@@ -55,6 +54,6 @@ export default function FormatGalleryPage() {
           </li>
         ))}
       </ul>
-    </div>
+    </HelpShell>
   );
 }
