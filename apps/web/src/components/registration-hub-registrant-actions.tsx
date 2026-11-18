@@ -149,6 +149,9 @@ export interface RegistrationHubRegistrantActionsProps {
   /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V513), ISO; null if
    *  never approved that way. Approve is then done and the payment confirms the entry. */
   approvedAt: string | null;
+  /** THIS entry's own payment was lost to a chargeback (`dispute_lost_own`, fix round 2 I-1): Stripe already repaid the cardholder, so
+   *  Refund is not offered (the server refuses it, 422). Per ENTRY, not per cart: a sibling paid in another session keeps its Refund. */
+  paymentLostToDispute: boolean;
 }
 
 function errorText(err: unknown): string {
@@ -167,6 +170,7 @@ export function RegistrationHubRegistrantActions({
   lastRemindedAt,
   remindersInWindow,
   approvedAt,
+  paymentLostToDispute,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
   // The two promote refusals say a NUMBER of places / entrants, so their sentence follows the count (`.one` / `.other`, Intl.PluralRules).
@@ -246,7 +250,7 @@ export function RegistrationHubRegistrantActions({
       division_started: false,
       // Evidence is a plain download link rendered by the detail panel beside this island, not a control of this one.
       dispute: null,
-      dispute_lost_own: false,
+      dispute_lost_own: paymentLostToDispute,
     },
   );
 

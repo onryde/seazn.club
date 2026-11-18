@@ -105,6 +105,7 @@ const PROPS: ActionProps = {
   lastRemindedAt: null,
   remindersInWindow: 0,
   approvedAt: null,
+  paymentLostToDispute: false,
 };
 
 function mount(overrides: Partial<ActionProps> = {}) {
@@ -185,6 +186,14 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
         "refund",
       ),
     ).toBeTruthy();
+  });
+
+  // Fix round 2 I-1: the island is handed a PROP (not the row), so Refund keys on it; without it the control showed on a lost entry.
+  it("hides refund on an entry whose own payment was lost to a chargeback, and only that one", () => {
+    const paid = { status: "confirmed", approval: "auto", amountCents: 2500, paymentIntentId: "pi_1", entryPaymentIntentId: "pi_1" } as const;
+    expect(findAction(mount({ ...paid, paymentLostToDispute: true }), "refund"), "lost: no Refund").toBeUndefined();
+    expect(findAction(mount({ ...paid, paymentLostToDispute: true }), "withdraw"), "the other actions stay (the control set is not empty)").toBeTruthy();
+    expect(findAction(mount({ ...paid, paymentLostToDispute: false }), "refund"), "not lost: Refund offered").toBeTruthy();
   });
 
   it("hides refund once the entry is fully refunded — the server answers 'Already fully refunded'", () => {
