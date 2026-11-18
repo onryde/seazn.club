@@ -842,6 +842,99 @@ describe.skipIf(!HAS_DB)("a court's automatic start and handover", () => {
       expect(checked).toBe(4);
     });
 
+    // Controller ruling (2026-11-18, the coordinator's, not the owner's): a NEW pairing claiming a court whose open court session
+    // belongs to an older pairing ends that session phone_lost at once, and the restart above starts the match on the new phone.
+    describe("a new pairing replaces the phone that held the court's session (controller ruling)", () => {
+      /** The phone lost its court pairing (its row ended) while A was live on it; the session still names that pairing. */
+      const losePairing = async () => {
+        await sql`update fixture_stream_pairings p set ended_at = ${clock()}, end_cause = 'replaced'
+                    from fixture_stream_codes c where c.id = p.code_id and c.court_link_id = ${linkId} and p.ended_at is null`;
+      };
+      const replacedEvents = async (sid: string) =>
+        (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sid} and type = 'court_phone_replaced'`)[0]!.n;
+
+      it("re-pair with A live: A ends phone_lost at once (no 15 min wait), and the beats after it start A again on the new pairing — a free restart", async () => {
+        const sidA = await aLive();
+        const [old] = await pairingOf(P);
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        await beat(P, { claim: "new" });
+        expect(await sessionRow(sidA), "ended at the claim, phone_lost").toMatchObject({ state: "completed", end_reason: "phone_lost" });
+        expect(await replacedEvents(sidA)).toBe(1);
+        const go = await after();
+        expect(go).toMatchObject({ state: "go-live", startedBy: "automatic" });
+        if (go.state !== "go-live") throw new Error("unreachable");
+        const row = await sessionRow(go.sid);
+        expect(row).toMatchObject({ fixture_id: A, court_link_id: linkId });
+        expect(row.pairing_id, "on the NEW pairing").not.toBe(old!.id);
+        now += SEC;
+        expect((await beat(P, { sid: go.sid, state: "publishing" })).state).toBe("live");
+        expect((await consumeRows(day.orgId)).map((r) => r.session_id), "the restart is free (W23)").toEqual([sidA]);
+      });
+
+      it("the same pairing re-claiming (new, then resume) ends nothing", async () => {
+        const sidA = await aLive();
+        let checked = 0;
+        for (const claim of ["new", "resume"] as const) {
+          now += SEC;
+          expect(await beat(P, { claim, sid: sidA, state: "publishing" }), claim).toMatchObject({ state: "live", sid: sidA });
+          expect(await sessionRow(sidA), claim).toMatchObject({ state: "live", end_reason: null });
+          checked++;
+        }
+        expect(checked).toBe(2);
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("only a claim: a plain beat from the current pairing ends nothing, even when the session names an older pairing", async () => {
+        const sidA = await aLive();
+        const [cur] = await pairingOf(P);
+        // An older, ended pairing of the same code: the session is pointed at it, P stays current and beats without a claim.
+        const [older] = await sql<{ id: string }[]>`
+          insert into fixture_stream_pairings (org_id, code_id, slot, phone, claim_kind, claimed_at, last_beat_at, answered_poll_seconds, ended_at, end_cause)
+          select org_id, code_id, slot, ${phoneId("older")}, 'new', claimed_at, last_beat_at, answered_poll_seconds, ${clock()}, 'replaced'
+            from fixture_stream_pairings where id = ${cur!.id} returning id`;
+        await sql`update fixture_stream_sessions set pairing_id = ${older!.id} where id = ${sidA}`;
+        now += SEC;
+        await beat(P);
+        expect(await sessionRow(sidA)).toMatchObject({ state: "live", end_reason: null });
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("a session already ending is left alone", async () => {
+        const sidA = await aLive();
+        await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', ending_at = ${clock()} where id = ${sidA}`;
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        await beat(P, { claim: "new" });
+        expect(await sessionRow(sidA)).toMatchObject({ state: "ending", end_reason: "stopped" });
+        expect(await replacedEvents(sidA)).toBe(0);
+      });
+
+      it("another court's session is untouched by a re-pair on this court", async () => {
+        const other = await linkCourtStream(day.auth, day.comp.id, { courtId: day.courts.c1, targetId, day: DAY }, at(0));
+        await place(day, B, 0, day.courts.c1);
+        await setCourtStream(day.auth, B, true, clock());
+        await kickoff(B, 0);
+        const Q = phoneId("court-c1");
+        const beatOther = async (over: Partial<Beat> = {}) => {
+          const a = await postBeat(other.qr!.code, other.qr!.tok, { ...body(Q, over), code: other.qr!.code }, deps, clock());
+          await runTails();
+          return a;
+        };
+        await beatOther({ claim: "new" });
+        await beatOther();
+        const goB = await beatOther();
+        if (goB.state !== "go-live") throw new Error(`premise: B starts on court 1, got ${goB.state}`);
+        now += SEC;
+        expect((await beatOther({ sid: goB.sid, state: "publishing" })).state, "premise: B live on court 1").toBe("live");
+        await losePairing();
+        now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
+        await beat(P, { claim: "new" });
+        expect(await sessionRow(goB.sid), "court 1's session").toMatchObject({ state: "live", end_reason: null });
+        expect(await replacedEvents(goB.sid)).toBe(0);
+      });
+    });
+
     it("free restarts run out: each phone-gone restart that reached video counts (passthrough), the 4th pays, and with no credit it is the existing no_credit refusal, stored and retried on the spacing", async () => {
       await streamOn(A);
       await sql`update fixture_stream_settings set stream_mode = 'passthrough' where fixture_id = ${A}`;
