@@ -44,7 +44,14 @@ export default async function FormatExplainerPage({ params }: Props) {
       <p className="mt-2 text-lg text-slate-600">{f.tagline}</p>
 
       <div className="mt-6 rounded-2xl border border-purple-100 bg-purple-50/40 p-5">
-        <FormatDiagram slug={f.slug} />
+        {/* The shared diagram is an <svg role="img"> with no name (config/format-gallery.tsx, also used by the
+            console's explainer panel). Here it gets one, from the format's name: the picture is named once, and
+            the unnamed svg inside is hidden from assistive tech. */}
+        <div role="img" aria-label={`Diagram of the ${f.title} format`}>
+          <div aria-hidden>
+            <FormatDiagram slug={f.slug} />
+          </div>
+        </div>
       </div>
 
       <div className="mt-6 space-y-4 text-[15px] leading-relaxed text-slate-700">
@@ -55,13 +62,13 @@ export default async function FormatExplainerPage({ params }: Props) {
 
       <dl className="mt-6 grid gap-3 sm:grid-cols-2">
         <div className="rounded-2xl border border-slate-200 p-4">
-          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
             Best for
           </dt>
           <dd className="mt-1 text-sm text-slate-700">{f.bestFor}</dd>
         </div>
         <div className="rounded-2xl border border-slate-200 p-4">
-          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
             The trade-off
           </dt>
           <dd className="mt-1 text-sm text-slate-700">{f.tradeoff}</dd>

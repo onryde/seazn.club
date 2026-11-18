@@ -60,13 +60,16 @@ export default async function HelpArticlePage({ params }: Props) {
     section: helpSectionLabel(a.section),
   }));
 
-  // From 1100px: reading column (capped near 70 characters) and the "On this page" rail beside it, which
+  // The reading column is capped at 34rem: about 70 characters a line of the 15px body text, never more than
+  // about 80 (measured in a browser: an uncapped column ran 100+ characters at 1024 and about 90 at 1280).
+  // NOT `70ch`: `ch` is the width of Geist's "0", which is wide (70ch = 742px at 16px), so that cap bound nowhere.
+  // From 1100px: reading column and the "On this page" rail beside it, which
   // spans every row so it can stay in view the whole way down. Below that: one column, the rail folded
   // under the lede. Rows are explicit so the order holds whatever the auto-placement would do.
   return (
     <HelpShell currentHref={href}>
       <article className="min-[1100px]:grid min-[1100px]:grid-cols-[minmax(0,1fr)_12rem] min-[1100px]:gap-x-10">
-        <header className="min-w-0 max-w-[70ch] min-[1100px]:col-start-1 min-[1100px]:row-start-1">
+        <header className="min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-1">
           <HelpBreadcrumb trail={[{ href: `/help#${article.section}`, label: sectionLabel }]} />
           <h1 className="mt-3 text-balance text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">{article.title}</h1>
           {article.description ? (
@@ -79,14 +82,14 @@ export default async function HelpArticlePage({ params }: Props) {
             className="mt-6 min-[1100px]:sticky min-[1100px]:top-24 min-[1100px]:col-start-2 min-[1100px]:row-span-3 min-[1100px]:row-start-1 min-[1100px]:mt-1 min-[1100px]:self-start"
           />
         ) : null}
-        <div className="mt-8 min-w-0 max-w-[70ch] min-[1100px]:col-start-1 min-[1100px]:row-start-2">
+        <div className="mt-8 min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-2">
           <CompetitionProse html={html} className="help-prose" />
         </div>
         <HelpRelated
           related={related}
           prev={prev}
           next={next}
-          className="min-w-0 max-w-[70ch] min-[1100px]:col-start-1 min-[1100px]:row-start-3"
+          className="min-w-0 max-w-[34rem] min-[1100px]:col-start-1 min-[1100px]:row-start-3"
         />
       </article>
     </HelpShell>

@@ -48,9 +48,11 @@ test("1280: three columns â€” section list, reading column, On this page rail â€
   await expect(sections.locator('a[aria-current="page"]')).toHaveCount(1);
   await expect(sections.locator('a[aria-current="page"]')).toHaveAttribute("href", LONG);
   await expect(toc(page)).toBeVisible();
-  // Both folds' toggles are for narrower widths only: in the page (the positive pair), but not shown.
+  // Both folds' toggles are for narrower widths only: in the page (the positive pair), but not shown. Located by
+  // CSS, not role: a hidden element is not in the accessibility tree, so a role locator never finds it. Their
+  // accessible names are proven where they show (e2e/mobile/help.spec.ts).
   for (const id of ["help-toc", "help-sections"]) {
-    const toggle = page.getByTestId(id).getByRole("button");
+    const toggle = page.getByTestId(id).locator("button");
     await expect(toggle, `${id} toggle exists`).toBeAttached();
     await expect(toggle, `${id} toggle hidden at 1280`).toBeHidden();
   }
@@ -62,27 +64,40 @@ test("1280: three columns â€” section list, reading column, On this page rail â€
   expect(h1.x + h1.width, "article left of the rail").toBeLessThanOrEqual(rail.x);
 });
 
-test("between md and 1100 (1024 here) the reading column is capped near 70 characters, narrower than the space it sits in", async ({ page }) => {
-  // The cap only binds where the article's column is wider than 70ch: below about 860px the column is narrower than
-  // the cap, and from 1100 the rail takes the width, so 1024 is where removing the cap would show.
-  await visit(page, LONG);
-  await page.setViewportSize({ width: 1024, height: 900 });
-  const m = await page.evaluate(() => {
-    const prose = document.querySelector(".help-prose")!;
-    const column = prose.parentElement!;
-    const main = document.querySelector("main")!;
-    const para = prose.querySelector("p")!;
-    return {
-      cap: parseFloat(getComputedStyle(column).maxWidth),
-      column: column.getBoundingClientRect().width,
-      main: main.getBoundingClientRect().width,
-      para: para.getBoundingClientRect().width,
-    };
+// The reading column (34rem, app/help/[...slug]/page.tsx) holds about 70 characters a line. Measured in the page:
+// the characters on each rendered line of the article's longest paragraph, from the text's own glyph boxes.
+async function longestLine(page: Page): Promise<{ lines: number; maxChars: number }> {
+  return page.evaluate(() => {
+    const paras = [...document.querySelectorAll(".help-prose > p")];
+    const para = paras.sort((a, b) => (b.textContent ?? "").length - (a.textContent ?? "").length)[0]!;
+    const perLine = new Map<number, number>();
+    const range = document.createRange();
+    const walk = document.createTreeWalker(para, NodeFilter.SHOW_TEXT);
+    for (let t = walk.nextNode() as Text | null; t; t = walk.nextNode() as Text | null) {
+      for (let i = 0; i < t.length; i += 1) {
+        range.setStart(t, i);
+        range.setEnd(t, i + 1);
+        const r = range.getClientRects()[0];
+        if (r) perLine.set(Math.round(r.top), (perLine.get(Math.round(r.top)) ?? 0) + 1);
+      }
+    }
+    return { lines: perLine.size, maxChars: Math.max(...perLine.values()) };
   });
-  expect(Number.isFinite(m.cap), "the column has a max-width (70ch)").toBe(true);
-  expect(m.main, "premise: main is wider than the cap, so the cap binds here").toBeGreaterThan(m.cap + 20);
-  expect(m.column, "the column stops at the cap").toBeLessThanOrEqual(m.cap + 1);
-  expect(m.para, "a paragraph is no wider than the cap").toBeLessThanOrEqual(m.cap + 1);
+}
+
+test("the reading column holds about 70 characters a line, never more than 80, at 1024 and 1280", async ({ page }) => {
+  await visit(page, LONG);
+  let checked = 0;
+  for (const width of [1024, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(() => document.fonts.ready);
+    const m = await longestLine(page);
+    expect(m.lines, `${width}: premise, a paragraph of several lines`).toBeGreaterThan(3);
+    expect(m.maxChars, `${width}: characters on the longest line`).toBeLessThanOrEqual(80);
+    expect(m.maxChars, `${width}: still a reading line, not a squeezed one`).toBeGreaterThanOrEqual(55);
+    checked += 1;
+  }
+  expect(checked, "anti-vacuity").toBe(2);
 });
 
 test("1280: clicking an On this page entry lands its heading in view below the nav, marks it, and the rail stays in view", async ({ page }) => {

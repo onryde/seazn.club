@@ -57,16 +57,21 @@ test("help article: search, then the section list (folded below 768), then the a
   const phone = width() < 768;
   await visit(page, LONG);
   const box = page.getByRole("searchbox", { name: "Search help" });
-  const toggle = page.getByTestId("help-sections").getByRole("button");
+  // Folded or hidden things are located by CSS: a role locator only finds what is in the accessibility tree, so it
+  // cannot see a hidden toggle or a folded list. The role + name lookups below run once each is shown, which is
+  // what proves the accessible names.
+  const toggle = page.getByTestId("help-sections").locator("button");
+  const sectionsEl = page.locator('nav[aria-label="Help sections"]');
   const sections = page.getByRole("navigation", { name: "Help sections" });
   const h1 = page.getByRole("heading", { level: 1 });
   await expect(box).toBeVisible();
   await expect(h1).toBeVisible();
-  await expect(sections).toBeAttached();
+  await expect(sectionsEl).toBeAttached();
 
   if (phone) {
     await expect(toggle, "below 768 the section list is behind one toggle").toBeVisible();
-    await expect(sections).toBeHidden();
+    await expect(page.getByRole("button", { name: /^Help sections: Registration/ }), "the toggle's name says what it opens").toBeVisible();
+    await expect(sectionsEl).toBeHidden();
     // Order down the page: search, the fold, the article.
     const yBox = (await box.boundingBox())!.y;
     const yToggle = (await toggle.boundingBox())!.y;
@@ -97,11 +102,13 @@ test("help article: search, then the section list (folded below 768), then the a
 
 test("On this page is folded under the lede below 1100; it opens, and an entry lands its heading in view", async ({ page }) => {
   await visit(page, LONG);
-  const toggle = page.getByTestId("help-toc").getByRole("button");
+  const toggle = page.getByTestId("help-toc").locator("button");
+  const tocEl = page.locator('nav[aria-label="On this page"]');
   const toc = page.getByRole("navigation", { name: "On this page" });
-  await expect(toc).toBeAttached();
+  await expect(tocEl).toBeAttached();
   await expect(toggle, "every width here is below 1100").toBeVisible();
-  await expect(toc).toBeHidden();
+  await expect(page.getByRole("button", { name: /^On this page/ }), "the toggle's name").toBeVisible();
+  await expect(tocEl).toBeHidden();
   // Under the lede, above the body.
   const lede = page.locator("main header p").last();
   expect((await toggle.boundingBox())!.y).toBeGreaterThan((await lede.boundingBox())!.y);
@@ -139,7 +146,7 @@ test("no horizontal scroll, nothing clipped, every sideways scroller reachable, 
     await visit(page, path);
     // Open every fold this width has, so what is inside is measured too.
     for (const id of ["help-sections", "help-toc"]) {
-      const t = page.getByTestId(id).getByRole("button");
+      const t = page.getByTestId(id).locator("button");
       if ((await t.count()) > 0 && (await t.isVisible())) await t.click();
     }
     await expectNoHorizontalScroll(page);
