@@ -6,10 +6,10 @@
 //
 // A disconnected channel leaves the list HERE, from local state, and the page is not refreshed: the server would answer a re-read
 // after the last disconnect with the 404 an org with nothing to disconnect gets, and the person is looking at the confirmation. The
-// LAST one is the exception that proves it: the page's own nav is part of what the server renders, and would go on offering a link to
-// a page that now 404s, so it asks the server for the page again at `STREAMING_DISCONNECTED_HREF` - the one address that renders the
-// emptied page instead of the 404 (the notice and the list are this component's state, which that re-render keeps). A reload of the
-// bare address, or the next navigation, is the 404.
+// LAST one is the exception that proves it: the nav above the page is part of what the server renders, and would go on offering a link
+// to a page that now 404s, so it moves to the emptied address (`?disconnected=1`, the one address that renders the emptied page
+// instead of the 404) and then refreshes, which is what re-renders the layout's nav (the notice and the list are this component's
+// state, which both keep). A reload of the bare address, or the next navigation, is the 404.
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -35,7 +35,12 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
   // arrives empty (we are already at the emptied address, or the org never had a channel).
   const emptied = channels.length === 0 && gone.size > 0;
   useEffect(() => {
-    if (emptied) router.replace(streamingHref(orgSlug, "?disconnected=1"));
+    if (!emptied) return;
+    router.replace(streamingHref(orgSlug, "?disconnected=1"));
+    // The nav is the org LAYOUT's (one nav for every /o page), and a navigation that changes only the query re-renders the page
+    // alone: the layout, and the Streaming link in it, would stay as they were. The refresh re-reads the whole tree. It is queued
+    // behind the navigation (only another navigation discards a pending action), so it re-reads the emptied address, never the 404.
+    router.refresh();
   }, [emptied, router, orgSlug]);
 
   return (
