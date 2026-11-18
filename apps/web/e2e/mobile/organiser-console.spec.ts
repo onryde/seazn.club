@@ -20,6 +20,7 @@ import {
   setFixtureScheduledAtSql,
   setFixtureStatusSql,
   setStageStatusSql,
+  expectInViewUnderHeader,
 } from "../helpers";
 import { HIT_TARGET_FLOOR_PX, dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openConsolePanel } from "../helpers/console-panels";
@@ -1449,30 +1450,11 @@ test("X-CU-8 / X-CU-11 the waiting strip and the Group field fit every width; th
   await expectNoHorizontalScroll(page);
 });
 
-/** B5 fix wave G2 (batch review I2; Task 17c's contract): below `md` an outcome line said at the top of the panel is brought into view
- *  under the sticky header. Smooth scroll: poll until it has landed - its top at or below the header's bottom edge, its bottom inside the
- *  viewport - then hit-test its centre (`elementFromPoint`, not paint). From `md` up nothing scrolls (owner, 17c), so the line is only
- *  required on the page. Returns whether the in-view proof ran, so a caller can count it. */
+/** B5 fix wave G2 + fix round 1 (controller ruling: the organiser SEES the outcome at every width): the line is in view under the
+ *  sticky header and a hit test lands on it - below `md` because the page brings it to the top, from `md` up because an off-screen
+ *  line is brought into view (nearest) and an on-screen one stays. Returns true once the proof ran, so a caller can count it. */
 async function expectOutcomeInView(page: Page, line: Locator, width: number, what: string): Promise<boolean> {
-  await expect(line, `${what} is on the page`).toBeVisible();
-  if (width >= 768) return false;
-  await expect
-    .poll(
-      async () =>
-        line.evaluate((el) => {
-          const r = el.getBoundingClientRect();
-          const headerBottom = document.querySelector("header")!.getBoundingClientRect().bottom;
-          return r.top >= headerBottom - 1 && r.bottom <= window.innerHeight;
-        }),
-      { message: `${what} is in view under the sticky header at ${width}`, timeout: 5_000 },
-    )
-    .toBe(true);
-  const hit = await line.evaluate((el) => {
-    const r = el.getBoundingClientRect();
-    const at = document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(r.height / 2, 12));
-    return at === el || el.contains(at);
-  });
-  expect(hit, `a hit test on ${what} lands on it at ${width}`).toBe(true);
+  await expectInViewUnderHeader(page, line, `${what} at ${width}`);
   return true;
 }
 
@@ -1522,6 +1504,6 @@ test("B5 G2 the waiting strip's Rebuild: its outcome comes into view on a phone;
   if (await expectOutcomeInView(page, refusal, width, "the stale Rebuild's refusal")) inView++;
   await expect(page.getByTestId("table-waiting-row"), "she still waits").toHaveCount(1);
   await expectNoHorizontalScroll(page);
-  // Anti-vacuity: below `md` both in-view proofs ran; from `md` up neither is owed.
-  expect(inView, `in-view proofs at ${width}`).toBe(width < 768 ? 2 : 0);
+  // Anti-vacuity: both in-view proofs ran, at every width (fix round 1).
+  expect(inView, `in-view proofs at ${width}`).toBe(2);
 });

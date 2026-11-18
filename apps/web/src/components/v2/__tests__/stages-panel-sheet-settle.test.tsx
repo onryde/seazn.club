@@ -315,11 +315,16 @@ describe("W5 T17c fix 2 the outcome lines carry their roles", () => {
 // themselves before their dialog), and never from `md` up. window / document are stubbed: vitest is node.
 describe("W5 T17c fix 2 a settle at a phone width scrolls the outcome line into view, sheet open or not", () => {
   afterEach(() => vi.unstubAllGlobals());
-  function stub(phone: boolean) {
+  function stub(phone: boolean, rect: { top: number; bottom: number } = { top: 200, bottom: 230 }) {
     const scrolled: string[] = [];
-    const line = { style: {} as Record<string, string>, scrollIntoView: vi.fn((o: unknown) => scrolled.push(JSON.stringify(o))) };
+    const line = {
+      style: {} as Record<string, string>,
+      getBoundingClientRect: () => rect,
+      scrollIntoView: vi.fn((o: unknown) => scrolled.push(JSON.stringify(o))),
+    };
     const form = { style: {} as Record<string, string>, scrollIntoView: vi.fn() };
     vi.stubGlobal("window", {
+      innerHeight: 800,
       matchMedia: (q: string) => ({ matches: q.includes("767.98") ? phone : false }),
       addEventListener: () => {},
       removeEventListener: () => {},
@@ -356,12 +361,36 @@ describe("W5 T17c fix 2 a settle at a phone width scrolls the outcome line into 
     expect(checked).toBe(settles.length);
   });
 
-  it("md and up: nothing ever scrolls", async () => {
+  // B5 fix wave fix round 1 (controller ruling: the organiser SEES the outcome at every width): from `md` up the line is brought into
+  // view only when it is not fully visible under the header (`block: "nearest"`); a line already in view never moves the page.
+  // Window 800px tall, header bottom 58: [200, 230] is in view; [-286, -256] (1280 measure) above it; [20, 50] under the header;
+  // [790, 820] below the fold.
+  it("md and up: a line already in view never scrolls", async () => {
     const env = stub(false);
     const m = await mountOpen("league", async () => ({ completed: true }));
     await m.act("s1", "complete");
     await flush();
-    expect(env.line.scrollIntoView, "desktop: no scroll").not.toHaveBeenCalled();
+    expect(env.line.scrollIntoView, "desktop, line in view: no scroll").not.toHaveBeenCalled();
+  });
+
+  it("md and up: a line off screen (above, under the header, below) is brought into view once, nearest, under the header", async () => {
+    let checked = 0;
+    for (const [label, rect] of [
+      ["above the viewport", { top: -286, bottom: -256 }],
+      ["under the sticky header", { top: 20, bottom: 50 }],
+      ["below the fold", { top: 790, bottom: 820 }],
+    ] as const) {
+      const env = stub(false, rect);
+      const m = await mountOpen("league", async () => ({ completed: true }));
+      await m.act("s1", "complete");
+      await flush();
+      expect(env.line.scrollIntoView, `${label}: scrolled once`).toHaveBeenCalledTimes(1);
+      expect(env.scrolled[0], `${label}: block nearest`).toContain('"block":"nearest"');
+      expect(env.line.style.scrollMarginTop, `${label}: clears the header`).toBe("66px");
+      checked++;
+      vi.unstubAllGlobals();
+    }
+    expect(checked).toBe(3);
   });
 });
 
@@ -372,9 +401,14 @@ describe("W5 T17c fix 2 a settle at a phone width scrolls the outcome line into 
 // is the e2e's (`e2e/mobile/organiser-console.spec.ts`).
 describe("B5 G2 a waiting strip's outcome scrolls into view on a phone", () => {
   afterEach(() => vi.unstubAllGlobals());
-  async function mountStrips(phone: boolean, answer: () => Promise<unknown>) {
-    const line = { style: {} as Record<string, string>, scrollIntoView: vi.fn() };
-    vi.stubGlobal("window", { matchMedia: (q: string) => ({ matches: q.includes("767.98") ? phone : false }), addEventListener: () => {}, removeEventListener: () => {} });
+  async function mountStrips(phone: boolean, answer: () => Promise<unknown>, rect: { top: number; bottom: number } = { top: 200, bottom: 230 }) {
+    const line = { style: {} as Record<string, string>, getBoundingClientRect: () => rect, scrollIntoView: vi.fn() };
+    vi.stubGlobal("window", {
+      innerHeight: 800,
+      matchMedia: (q: string) => ({ matches: q.includes("767.98") ? phone : false }),
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    });
     vi.stubGlobal("document", {
       querySelector: (sel: string) => (sel === "[data-outcome-line]" ? line : sel === "header" ? { getBoundingClientRect: () => ({ bottom: 58 }) } : null),
       addEventListener: () => {},
@@ -421,14 +455,30 @@ describe("B5 G2 a waiting strip's outcome scrolls into view on a phone", () => {
     expect(checked).toBe(settles.length);
   });
 
-  it("md and up: no settle from either strip scrolls", async () => {
+  it("md and up: a settle whose line is already in view never scrolls", async () => {
     let checked = 0;
     for (const [label, settle] of settles) {
       const m = await mountStrips(false, async () => ({ created: 4, existing: 0, removed: 4, slots: { kept: 0, freed: 0, unscheduled: 0 } }));
       settle(m.propsByName);
       await flush();
       await flush();
-      expect(m.line.scrollIntoView, `${label}: desktop never scrolls`).not.toHaveBeenCalled();
+      expect(m.line.scrollIntoView, `${label}: desktop, line in view: no scroll`).not.toHaveBeenCalled();
+      checked++;
+      vi.unstubAllGlobals();
+    }
+    expect(checked).toBe(settles.length);
+  });
+
+  // Fix round 1: at 1280 the strip's place / Rebuild line measured top -286 / -186 (off screen) — it is brought into view, nearest.
+  it("md and up: a settle whose line is off screen brings it into view once, nearest", async () => {
+    let checked = 0;
+    for (const [label, settle] of settles) {
+      const m = await mountStrips(false, async () => ({ created: 4, existing: 0, removed: 4, slots: { kept: 0, freed: 0, unscheduled: 0 } }), { top: -286, bottom: -256 });
+      settle(m.propsByName);
+      await flush();
+      await flush();
+      expect(m.line.scrollIntoView, `${label}: scrolled once`).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(m.line.scrollIntoView.mock.calls[0]![0]), `${label}: nearest`).toContain('"block":"nearest"');
       checked++;
       vi.unstubAllGlobals();
     }

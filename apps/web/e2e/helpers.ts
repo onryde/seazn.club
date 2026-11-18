@@ -2950,3 +2950,29 @@ export async function openBracket(page: Page, stageId?: string): Promise<Locator
 export async function closeStagePanel(card: Locator, panel: StagePanel): Promise<void> {
   await pressStageTool(card, panel, false);
 }
+
+/** B5 fix wave (Task 17c's contract, and its fix round 1 "the organiser SEES the outcome at every width"): an outcome line is fully in
+ *  view between the sticky site header and the bottom of the window. Smooth scroll: poll until it has landed, then hit-test its centre
+ *  (`elementFromPoint`, never paint) so a line under the header or a scrim fails. */
+export async function expectInViewUnderHeader(page: Page, line: Locator, what: string): Promise<void> {
+  await expect(line, `${what} is on the page`).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        line.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const header = document.querySelector("header");
+          const headerBottom = header ? header.getBoundingClientRect().bottom : 0;
+          return r.top >= headerBottom - 1 && r.bottom <= window.innerHeight;
+        }),
+      { message: `${what} is in view under the sticky header`, timeout: 5_000 },
+    )
+    .toBe(true);
+  const hit = await line.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + Math.min(r.height / 2, 12));
+    return at === el || el.contains(at);
+  });
+  expect(hit, `a hit test on ${what} lands on it`).toBe(true);
+  void page;
+}

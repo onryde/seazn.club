@@ -650,14 +650,31 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-/** Bring `el` into view just under the sticky site header (its bottom edge + 8px), smooth unless the reader prefers reduced motion.
- *  Phone widths only call this: from `md` up nothing scrolls. */
-function scrollUnderHeader(el: HTMLElement) {
+/** The sticky site header's bottom edge, in viewport px (0 with no header). */
+function headerBottom(): number {
   const header = document.querySelector("header");
-  const under = header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+  return header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+}
+
+/** Bring `el` into view just under the sticky site header (its bottom edge + 8px), smooth unless the reader prefers reduced motion.
+ *  Phone widths: the line goes to the top, under the header. */
+function scrollUnderHeader(el: HTMLElement) {
+  const under = headerBottom();
   el.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+}
+
+/** B5 fix wave fix round 1 (controller ruling: the organiser SEES the outcome at every width): from `md` up, bring `el` into view
+ *  only when it is not fully visible between the sticky header and the bottom of the window, and then by the least scroll
+ *  (`block: "nearest"`, clearing the header by 8px). A line already in view never moves the page (T17c's "no needless scroll"). */
+function scrollIntoViewIfHidden(el: HTMLElement) {
+  const under = headerBottom();
+  const r = el.getBoundingClientRect();
+  if (r.top >= under && r.bottom <= window.innerHeight) return;
+  el.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
 }
 
 export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
@@ -759,23 +776,27 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // bumps `outcomeScroll`, whether or not the sheet was still open (Finish and the Rounds chip close it themselves before their
   // confirm / dialog, and their success notice needs the same scroll), and the effect below brings the first outcome line
   // ([data-outcome-line]: notice, cautions, red line, paywall gate, online-game notice) into view under the header. At `md` and up
-  // nothing scrolls. Focus is NOT moved to the line: it returns to the trigger that opened the sheet (the rail's contract), and
+  // (B5 fix wave fix round 1) only a line that is off screen is brought into view, by the least scroll. Focus is NOT moved to the line: it returns to the trigger that opened the sheet (the rail's contract), and
   // the lines announce themselves (role="status" / "alert").
   const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches;
   const [outcomeScroll, setOutcomeScroll] = useState(0);
   // B5 fix wave G2 (batch review I2): the same scroll for every outcome said OUTSIDE `act` / `swissStageWrite` — the waiting strips'
   // place, Rebuild and handed-over refusal, and the card's own Rebuild — whose line also lands at the top of the page.
+  // Fix round 1: every width bumps; the effect decides how far to move (a phone: to the top; `md` up: only an off-screen line).
   const bumpOutcomeScroll = () => {
-    if (isPhone()) setOutcomeScroll((n) => n + 1);
+    setOutcomeScroll((n) => n + 1);
   };
   const closeRailSheet = (stageId: string) => {
     bumpOutcomeScroll();
     setOpenRailFor((cur) => (cur === stageId ? null : cur));
   };
   useEffect(() => {
-    if (outcomeScroll === 0) return;
+    // No document: the node-rendered unit harness (a browser always has one).
+    if (outcomeScroll === 0 || typeof document === "undefined") return;
     const line = document.querySelector<HTMLElement>("[data-outcome-line]");
-    if (line) scrollUnderHeader(line);
+    if (!line) return;
+    if (isPhone()) scrollUnderHeader(line);
+    else scrollIntoViewIfHidden(line);
   }, [outcomeScroll]);
   // m2 (fix round 2): the sheet's Add match opens its form inside the card, behind the scrim - on a phone it closes the sheet and
   // brings the form into view the same way.

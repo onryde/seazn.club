@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats, activeOrgIdFromRequest } from "./helpers";
+import { TAG, apiJson, competitionPath, divisionPath, expectInViewUnderHeader, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats, activeOrgIdFromRequest } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { waitForHydration } from "./directory-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
@@ -1877,3 +1877,69 @@ test.describe("RB5-W2 the hub Matches card shows a leaver's removed lines as rem
     }
   });
 });
+
+// B5 fix wave fix round 1 (controller ruling: the organiser SEES the outcome at every width). At 1280 the waiting strip's place and
+// Rebuild lines are said at the top of the panel while the page sits down at the strip (the `#table-waiting` hash): measured at
+// top -286 / -186 before this fix - off screen, the strip simply vanished. A stage card's own action far down a long division is the
+// same shape (`act`'s notice, "Stage deleted."). Each is now brought into view (nearest) and a hit test lands on it. Desktop only:
+// the phone and tablet widths are `e2e/mobile/organiser-console.spec.ts`'s.
+test.describe("B5 fix round 1 at 1280 an off-screen outcome line comes into view", () => {
+  async function scrolledDown(page: import("@playwright/test").Page, what: string) {
+    await expect.poll(() => page.evaluate(() => window.scrollY), { message: `premise: the page sits scrolled down at ${what}` }).toBeGreaterThan(200);
+  }
+
+  test("the strip's place, the strip's Rebuild, and a stage card's Delete far down the page: each line in view, hit-tested", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    let inView = 0;
+    const who = `Riverside Rovers Community Football Club ${TAG}`;
+
+    // 1. Place: a started group of 8 in 2 pools with results, a late arrival waits; opened at the strip.
+    const t = await seedStartedTable(request, { label: "Desk place 1280", n: 8, pools: 2 });
+    await registerLateArrival(request, t, who);
+    await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+    await dismissCookieBanner(page);
+    await expect(page.getByTestId("table-waiting")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("table-waiting").scrollIntoViewIfNeeded();
+    await scrolledDown(page, "the strip");
+    await page.getByTestId("table-waiting-place").click();
+    const placed = page.getByTestId("schedule-notice");
+    await expect(placed).toContainText(`${who} joined Group`, { timeout: 20_000 });
+    await expectInViewUnderHeader(page, placed, "the place's notice at 1280");
+    inView++;
+
+    // 2. The strip's Rebuild: nothing started, so the strip offers it.
+    const r = await seedStartedTable(request, { label: "Desk redraw 1280", n: 8, pools: 2, play: false });
+    await registerLateArrival(request, r, who);
+    await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+    await expect(page.getByTestId("table-waiting-rebuild")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("table-waiting").scrollIntoViewIfNeeded();
+    await scrolledDown(page, "the strip");
+    await page.getByTestId("table-waiting-rebuild").click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Rebuild", exact: true }).click();
+    const redrawn = page.getByTestId("schedule-notice");
+    await expect(redrawn).toContainText(`${who} is in: the stage was drawn again with them in it.`, { timeout: 20_000 });
+    await expectInViewUnderHeader(page, redrawn, "the Rebuild's notice at 1280");
+    inView++;
+
+    // 3. A stage card's own action (`act`): a second, empty stage under the long group card, deleted from its rail.
+    const d = await seedStartedTable(request, { label: "Desk delete 1280", n: 8, pools: 2 });
+    const ko = await apiJson<{ id: string }>(request, `/api/v1/divisions/${d.divisionId}/stages`, "POST", { seq: 2, kind: "knockout", name: "Finals", config: {} });
+    expect(ko.status, JSON.stringify(ko.error)).toBe(201);
+    await page.goto(await divisionPath(request, d.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+    const card = page.locator(`section[data-stage-id="${ko.data!.id}"]`);
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    const del = card.getByTestId("stage-delete");
+    await del.scrollIntoViewIfNeeded();
+    await scrolledDown(page, "the second stage's card");
+    await del.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Delete stage", exact: true }).click();
+    const deleted = page.getByTestId("schedule-notice");
+    await expect(deleted).toContainText("Stage deleted.", { timeout: 20_000 });
+    await expectInViewUnderHeader(page, deleted, "the stage card's Delete notice at 1280");
+    inView++;
+
+    expect(inView, "anti-vacuity: three in-view proofs").toBe(3);
+    await expectNoHorizontalScroll(page);
+  });
+});
+
