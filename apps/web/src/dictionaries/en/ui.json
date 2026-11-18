@@ -8888,6 +8888,7 @@
   "roundrobin.lateEntry.tellOpponents": "Their opponents are not notified. Tell them about the new matches.",
   "roundrobin.lateEntry.rebuildOffered": "No match in this stage has started yet. Rebuild fixtures would draw it again with {name} in it, instead of the catch-up matches.",
   "roundrobin.lateEntry.rebuilt": "{name} is in: the stage was drawn again with them in it.",
+  "roundrobin.lateEntry.rebuiltMany": "{names} are in: the stage was drawn again with all of them in it.",
   "roundrobin.waiting.title": "Waiting to join the table",
   "roundrobin.waiting.sub": "Joined after Start. No fixtures yet.",
   "roundrobin.waiting.rebuildRefused": "A match in this stage has started, so it can't be drawn again. Add {name} to the table instead.",

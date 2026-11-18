@@ -262,6 +262,48 @@ export interface RebuildOutcome extends GenerateOutcome {
   pins_cleared?: number;
 }
 
+/** What `rebuildStageInTx` wrote: the regenerate's own answer, the pins it dropped, and the late players it drew in. */
+export interface RebuildWrite {
+  generated: GenerateWrite;
+  removedIds: string[];
+  slots: { kept: number; freed: number; unscheduled: number };
+  /** Manual ranks dropped: every pin of a pool whose membership changed (`dropPinsOfChangedPools`). */
+  pinsCleared: number;
+  /** The players who were WAITING on the stage (`table_waiting_stage_id`) and are in the redraw, in listed (seed) order. */
+  waitersDrawnIn: string[];
+}
+
+/**
+ * The ONE Rebuild body (W5 B5 fix wave G1; batch review I1): the stage card's Rebuild (`rebuildStageFixtures`) and the waiting
+ * strip's "Rebuild fixtures" (`prefer_rebuild` on the late-entry tap, `roundrobin-late-entry.ts`) both run exactly this, in the
+ * caller's transaction, so the two doors cannot drift again. The caller has already refused a stage Rebuild does not apply to.
+ *
+ * Order: the format-size refusal; the `division:` lock (re-entrant: a caller that holds it already is unaffected); the seating
+ * read under it (only when the stage holds a pin); the delete-and-regenerate; then the pins of every pool whose membership
+ * changed are dropped (W5 T18 — RB-1, X-PO-3, RB5-P5: a pin names a place in one pool's table, and a pool that came out the
+ * same keeps its pins, the same rule as a Generate that redraws, `reconcileRoundRobinGenerate`); then every waiting marker on
+ * the stage goes — Rebuild draws every active entrant, so nobody waits on it any more (W4 T11 X-LE-10 for a knockout; W5 T6
+ * X-CU-8 and storage table G7 for a league or group).
+ */
+export async function rebuildStageInTx(tx: Tx, auth: AuthCtx, stageId: string, stage: { division_id: string; kind: string }): Promise<RebuildWrite> {
+  await refuseFormatTooSmall(tx, stage.division_id);
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  const seatedBefore = (await readStagePins(tx, stageId)).length > 0 ? await readPoolMembers(tx, stageId) : null;
+  const regen = await regenerateStageInTx(tx, auth, stageId, stage);
+  const pinsCleared = seatedBefore !== null ? await dropPinsOfChangedPools(tx, stageId, seatedBefore) : 0;
+  await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
+  const cleared = await tx<{ id: string }[]>`
+    update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId} returning id`;
+  const waitersDrawnIn =
+    cleared.length === 0
+      ? []
+      : (
+          await tx<{ id: string }[]>`
+            select id from entrants where id = any(${cleared.map((c) => c.id)}::uuid[]) order by seed nulls last, created_at, id`
+        ).map((e) => e.id);
+  return { ...regen, pinsCleared, waitersDrawnIn };
+}
+
 /**
  * Replace a root stage's fixtures wholesale — the fix for the defect the
  * roster-drift signal surfaces: `generateStageFixtures` is additive only
@@ -313,20 +355,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_ROOT",
       );
     }
-    await refuseFormatTooSmall(tx, stage.division_id);
-    // W5 T18 (RB-1; X-PO-3, RB5-P5, G7): Rebuild draws the pools again, and a pin names a place in one pool's table, so every pool whose
-    // membership changed loses its pins (a pool that came out the same keeps them): the same rule as a Generate that redraws
-    // (`reconcileRoundRobinGenerate`). The seating is read under the division lock the regenerate takes, so it is the one it deletes.
-    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
-    const seatedBefore = (await readStagePins(tx, stageId)).length > 0 ? await readPoolMembers(tx, stageId) : null;
-    const regen = await regenerateStageInTx(tx, auth, stageId, stage);
-    const pinsCleared = seatedBefore !== null ? await dropPinsOfChangedPools(tx, stageId, seatedBefore) : 0;
-    // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
-    // desk flagged are in the new bracket, and the flag goes with them.
-    await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
-    // W5 T6 (X-CU-8; storage table G7): the same for a league or group — the late arrivals waiting on it are in the redraw.
-    await tx`update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId}`;
-    return { ...regen, pinsCleared };
+    return rebuildStageInTx(tx, auth, stageId, stage);
   });
 
   // After the commit, and only after it. A refusal anywhere above rolled the

@@ -242,6 +242,12 @@ export const TableLateEntryResult = z.object({
     .optional(),
   appended_rounds: z.number().int().optional(),
   reason: z.string().optional(),
+  /** B5 fix wave G1 (m2), with `reason: "rebuilt"` only: every player the redraw drew in — the one pressed first, then every
+   *  other player who was waiting on the stage (a redraw seats them all), in listed order. */
+  drawn_in: z.array(Uuid).optional(),
+  /** B5 fix wave G1 (I1), with `reason: "rebuilt"` only: how many manual ranks the redraw dropped — every pin of a pool whose
+   *  membership changed, as the stage card's Rebuild reports it (`RebuildOutcome.pins_cleared`). Absent when none was. */
+  pins_cleared: z.number().int().optional(),
 });
 export type TableLateEntryResult = z.infer<typeof TableLateEntryResult>;
 

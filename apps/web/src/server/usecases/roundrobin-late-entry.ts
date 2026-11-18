@@ -45,9 +45,8 @@ import {
   afterGenerateCommit,
   divisionHasStarted,
   lockSwissBoardAppends,
+  rebuildStageInTx,
   refoldStageTable,
-  refuseFormatTooSmall,
-  regenerateStageInTx,
   type GenerateWrite,
 } from "./stages";
 import { readRoundByes } from "./stages/roundrobin-reconcile";
@@ -344,24 +343,36 @@ async function placeInRootTable(
 
   if (decision.case === "rebuild_offered" && opts.preferRebuild === true) {
     if (auth === null) throw new Error("placeInRootTable: a rebuild is an organiser's own write and needs their auth");
-    // RB5-L7: nothing has started, and the organiser asked for the clean path — Rebuild's own body (one transaction, slots carried,
-    // a group re-snaked), with the newcomer already on the roster it draws from.
-    await refuseFormatTooSmall(tx, divisionId);
-    const regen = await regenerateStageInTx(tx, auth, stage.id, { division_id: divisionId, kind: stage.kind });
-    // W5 T6: the redraw seated every active entrant, a waiting arrival included — nobody waits on this stage any more.
-    await clearTableWaitingMarks(tx, stage.id);
-    const mine = await tx<{ id: string; round_no: number }[]>`
-      select id, round_no from fixtures where stage_id = ${stage.id} and ${entrantId} in (home_entrant_id, away_entrant_id) order by round_no`;
-    await appendUndoBarrierRow(
-      tx,
-      divisionId,
-      "roundrobin_late_entry",
-      { source, case: "rebuilt", stage_id: stage.id, entrant_id: entrantId, fixture_ids: mine.map((m) => m.id), pool_key: null, joined_round: 1 },
-      ctx.actorId,
-    );
+    // RB5-L7: nothing has started, and the organiser asked for the clean path — Rebuild's OWN body (`rebuildStageInTx`, the card's
+    // Rebuild runs the same; B5 fix wave G1): one transaction, slots carried, a group re-snaked, the pins of every pool whose
+    // membership changed dropped, and every waiting marker on the stage cleared — with the newcomer already on the roster it draws.
+    const rebuilt = await rebuildStageInTx(tx, auth, stage.id, { division_id: divisionId, kind: stage.kind });
+    // B5 batch m2: the redraw seats EVERY waiting player, not only the one pressed — each is named and gets their own ledger row
+    // (an undo barrier, as every placing write; `joined_round` 1: a redrawn player missed nothing, so no "Joined" marker).
+    const drawnIn = [entrantId, ...rebuilt.waitersDrawnIn.filter((id) => id !== entrantId)];
+    for (const id of drawnIn) {
+      const mine = await tx<{ id: string }[]>`
+        select id from fixtures where stage_id = ${stage.id} and ${id} in (home_entrant_id, away_entrant_id) order by round_no, seq_in_round`;
+      await appendUndoBarrierRow(
+        tx,
+        divisionId,
+        "roundrobin_late_entry",
+        { source, case: "rebuilt", stage_id: stage.id, entrant_id: id, fixture_ids: mine.map((m) => m.id), pool_key: null, joined_round: 1 },
+        ctx.actorId,
+      );
+    }
     return {
-      result: { format: stage.kind === "group" ? "group" : "league", entrant_id: entrantId, stage_id: stage.id, case: "rebuild_offered", source: "organiser", reason: "rebuilt" },
-      rebuild: { generated: regen.generated, removedIds: regen.removedIds },
+      result: {
+        format: stage.kind === "group" ? "group" : "league",
+        entrant_id: entrantId,
+        stage_id: stage.id,
+        case: "rebuild_offered",
+        source: "organiser",
+        reason: "rebuilt",
+        drawn_in: drawnIn,
+        ...(rebuilt.pinsCleared > 0 ? { pins_cleared: rebuilt.pinsCleared } : {}),
+      },
+      rebuild: { generated: rebuilt.generated, removedIds: rebuilt.removedIds },
     };
   }
   return { result: await applyTableLateDecision(tx, stage, entrantId, decision, ctx) };
@@ -372,12 +383,6 @@ async function tableDrawnAndOffered(tx: Tx, divisionId: string, stages: TableEnt
   const [division] = await tx<{ status: string }[]>`select status from divisions where id = ${divisionId}`;
   const [line] = await tx`select 1 from fixtures where stage_id = ${stage.id} limit 1`;
   return tableLateEntryOffered({ stage, division: stages, divisionStatus: division!.status, generated: line !== undefined });
-}
-
-/** Rebuild (and an add that redraws, `prefer_rebuild`) seats every active entrant: no marker on the stage survives it. The
- *  storage table's cleanup path for `table_waiting_stage_id` (G7); `rebuildStageFixtures` runs the same statement. */
-async function clearTableWaitingMarks(tx: Tx, stageId: string): Promise<void> {
-  await tx`update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId}`;
 }
 
 /**

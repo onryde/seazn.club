@@ -20,7 +20,7 @@ import "server-only";
 //   setup-fixtures.ts  TBD-shape fixtures for a `timing: "setup"` progression
 //   generate-tx.ts     in-transaction generate/rebuild core, root-knockout reconcile, cross feeds
 //   carry-over.ts      carry-over into the next stage: bracket losers, placement tables, seedNextStage
-//   generate.ts        public generate/rebuild doors: write, commit + revalidate, Unpublished, rebuild
+//   generate.ts        public generate/rebuild doors: write, commit + revalidate, Unpublished, rebuild (+ its shared body)
 //   seed-proposal.ts   seed proposals: compute, read, confirm
 //   seed-stale.ts      marking seed proposals stale on a source-stage or field change
 //   completion.ts      guarded completion and its progression, standings reads, rank overrides
@@ -116,6 +116,8 @@ export {
   generateStageFixturesUnpublished,
   afterGenerateCommit,
   rebuildStageFixtures,
+  // W5 B5 fix wave G1: the ONE Rebuild body, run by the card's Rebuild and the late-entry strip's prefer_rebuild.
+  rebuildStageInTx,
   // MD-1 Task 5: the Match Day Swiss approval (preview, pair, and the refusal codes it answers).
   MD_STALE_CODE,
   MD_ALREADY_CODE,
@@ -123,7 +125,7 @@ export {
   previewSwissNextRound,
   pairSwissNextRound,
 } from "./generate";
-export type { RebuildOutcome, SwissPreviewPairing, SwissRoundPreview } from "./generate";
+export type { RebuildOutcome, RebuildWrite, SwissPreviewPairing, SwissRoundPreview } from "./generate";
 export { computeSeedProposal, getSeedProposal, confirmSeedProposal } from "./seed-proposal";
 export type { SeedProposalOut, ConfirmSeedProposalOut } from "./seed-proposal";
 export {

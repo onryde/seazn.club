@@ -8094,6 +8094,7 @@ export type DictionaryKey =
   | "roundrobin.lateEntry.joinedPool"
   | "roundrobin.lateEntry.rebuildOffered"
   | "roundrobin.lateEntry.rebuilt"
+  | "roundrobin.lateEntry.rebuiltMany"
   | "roundrobin.lateEntry.tellOpponents"
   | "roundrobin.lateEntry.unscheduled.one"
   | "roundrobin.lateEntry.unscheduled.other"

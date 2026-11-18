@@ -109,6 +109,36 @@ describe("X-CU-7 / X-CU-8 the late-entry notice for a league or group: one row p
     ]);
   });
 
+  // B5 fix wave G1 (batch review I1 + m2): the strip's Rebuild is the card's Rebuild, so it says what the card's notice says about
+  // the manual ranks it dropped (the card's own clause, `progression.rosterDrift.pinsCleared`), and it names EVERY player the
+  // redraw drew in, not only the one pressed. English typed from the catalog rows the card's notice already ships.
+  it("G1 a redraw that dropped pins says so with the card's own clause (one and several)", () => {
+    expect(notice([result({ case: "rebuild_offered", reason: "rebuilt", drawn_in: [WES], pins_cleared: 1 })])).toEqual([
+      ["done", "Westgate Wanderers is in: the stage was drawn again with them in it."],
+      ["done", "1 manual rank was cleared: its group changed."],
+    ]);
+    expect(notice([result({ case: "rebuild_offered", reason: "rebuilt", pins_cleared: 2 })]).map(([, t]) => t)).toContain(
+      "2 manual ranks were cleared: their groups changed.",
+    );
+    // The empty case: no pin dropped, no clause (pins_cleared absent or 0).
+    expect(notice([result({ case: "rebuild_offered", reason: "rebuilt", pins_cleared: 0 })])).toHaveLength(1);
+  });
+
+  it("G1 m2 a redraw that drew in several waiting players names them all; one drawn in is the one-name sentence", () => {
+    expect(notice([result({ case: "rebuild_offered", reason: "rebuilt", drawn_in: [WES, "e-ivy"] })])).toEqual([
+      ["done", "Westgate Wanderers and Ivy are in: the stage was drawn again with all of them in it."],
+    ]);
+    expect(notice([result({ case: "rebuild_offered", reason: "rebuilt", drawn_in: [WES] })])).toEqual([
+      ["done", "Westgate Wanderers is in: the stage was drawn again with them in it."],
+    ]);
+  });
+
+  it("G1 a drawn_in list that does not start with the pressed player is refused (never a sentence about someone else)", () => {
+    expect(() =>
+      tableLateEntryLines(result({ case: "rebuild_offered", reason: "rebuilt", drawn_in: ["e-ivy"] }), (id) => NAMES[id] ?? "?", { locale: "en", pooled: true }),
+    ).toThrow();
+  });
+
   it("two waiting arrivals are counted once, on the table's own line (never the bracket's)", () => {
     const two = [result({ case: "waiting", source: "automatic" }), result({ case: "waiting", source: "automatic", entrant_id: "e-ivy" })];
     expect(notice(two)).toEqual([["todo", "2 late players waiting — add to the table"]]);

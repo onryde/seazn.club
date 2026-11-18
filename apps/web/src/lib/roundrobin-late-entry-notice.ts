@@ -23,6 +23,8 @@ export const TABLE_LATE_ENTRY_MESSAGE_KEYS = [
   "roundrobin.lateEntry.joinedPool",
   "roundrobin.lateEntry.tellOpponents",
   "roundrobin.lateEntry.rebuilt",
+  // B5 fix wave G1 (m2): the redraw drew in several waiting players — all named.
+  "roundrobin.lateEntry.rebuiltMany",
   "roundrobin.refusal.RR_LATE_ENTRY_NOT_UNDOABLE",
   "roundrobin.refusal.RR_LATE_ENTRY_STAGE_COMPLETE",
   "roundrobin.refusal.RR_LATE_ENTRY_NOTHING_TO_ADD",
@@ -38,6 +40,8 @@ export const TABLE_LATE_ENTRY_PLURAL_KEYS = [
   "roundrobin.lateEntry.unscheduled",
   // The desk row's own sentence ("1 late player waiting — add to the table"), for a `waiting` answer.
   "roundrobin.lateWaiting",
+  // B5 fix wave G1 (I1): the strip's Rebuild is the card's, so it names the manual ranks it dropped in the card's own clause.
+  "progression.rosterDrift.pinsCleared",
 ] as const;
 export type TableLateEntryPluralKey = (typeof TABLE_LATE_ENTRY_PLURAL_KEYS)[number];
 
@@ -68,7 +72,7 @@ export function tableLateEntryLines(r: TableLateEntryResult, nameOf: (id: string
     case "catch_up":
       return placedLines(r, name, opts, refuse);
     case "rebuild_offered":
-      if (r.reason === "rebuilt") return [{ key: "roundrobin.lateEntry.rebuilt", params: { name }, tone: "done" }];
+      if (r.reason === "rebuilt") return rebuiltLines(r, nameOf, opts, refuse);
       // Nothing has started: the catch-up lines were written all the same (Task 5's default). Fix round 1 I1: the R24 7A sentence
       // ("Rebuild fixtures ... would draw it again") is said where its button is — the waiting strip, BEFORE the tap
       // (`roundrobin.lateEntry.rebuildOffered`, beside "Rebuild fixtures"). After a placement the player is on fixtures, so no
@@ -83,6 +87,35 @@ export function tableLateEntryLines(r: TableLateEntryResult, nameOf: (id: string
     case "waiting":
       throw refuse("is counted by the caller, never said one by one");
   }
+}
+
+/**
+ * B5 fix wave G1: the strip's Rebuild (`prefer_rebuild`) is the card's Rebuild. It names EVERY player it drew in (`drawn_in`: the
+ * one pressed first, then each other player who was waiting — m2), and the manual ranks it dropped in the card's own clause
+ * (`progression.rosterDrift.pinsCleared`, I1). A `drawn_in` that does not start with the answer's own entrant is refused by name.
+ */
+function rebuiltLines(
+  r: TableLateEntryResult,
+  nameOf: (id: string) => string,
+  opts: TableLateEntryOptions,
+  refuse: (why: string) => Error,
+): TableLateEntryLine[] {
+  const drawn = r.drawn_in ?? [r.entrant_id];
+  if (drawn[0] !== r.entrant_id) throw refuse("with a drawn_in list that does not start with the player pressed");
+  const names = drawn.map(nameOf);
+  const lines: TableLateEntryLine[] = [
+    names.length === 1
+      ? { key: "roundrobin.lateEntry.rebuilt", params: { name: names[0]! }, tone: "done" }
+      : {
+          key: "roundrobin.lateEntry.rebuiltMany",
+          params: { names: new Intl.ListFormat(opts.locale, { style: "long", type: "conjunction" }).format(names) },
+          tone: "done",
+        },
+  ];
+  if (r.pins_cleared !== undefined && r.pins_cleared > 0) {
+    lines.push({ plural: "progression.rosterDrift.pinsCleared", count: r.pins_cleared, params: {}, tone: "done" });
+  }
+  return lines;
 }
 
 function placedLines(
