@@ -83,7 +83,33 @@ export interface DbConnectionOptions {
   schema: string;
   /** Seconds a pooled connection may sit idle before postgres.js closes it. */
   idleTimeout: number;
+  /** How many statements postgres.js may write onto one busy connection before it stops pipelining. */
+  maxPipeline: number;
 }
+
+/**
+ * How deep postgres.js may pipeline statements onto one busy connection: no limit (was its default, 100).
+ *
+ * THE BUG IT CLOSES (load run, 2026-11-18). While every connection is busy, postgres.js writes each new pooled
+ * statement onto the next busy connection, up to `max_pipeline` deep. `sql.begin` marks its connection as reserved
+ * through a callback (`onexecute`) that `Connection.execute` calls only AFTER its `sent.length < max_pipeline` check, so
+ * a BEGIN that is the statement making a pipeline `max_pipeline + 1` deep never reserves its connection. The BEGIN still
+ * reaches the server; when it completes postgres.js raises `UNSAFE_TRANSACTION: Only use sql.begin, sql.reserved or
+ * max: 1` and returns the connection to the pool INSIDE the open transaction. The request that issued the begin fails (a
+ * 500 on a room read), and the connection stays stranded: the next `begin` on it logs "there is already a transaction in
+ * progress", and a pooled write that lands on it is never committed.
+ *
+ * WHY THIS AND NOT A RETRY. Nothing the app can catch reaches the stranded connection, so a retry would run on whatever
+ * connection is next, and the stranded one would keep serving the pool. The only cause is the cap: with none, the check
+ * cannot fail, whatever the depth. `max_pipeline` is used nowhere else in postgres.js 3.4.9 (connection.js `execute`).
+ *
+ * WHAT IT COSTS, AND WAS ACCEPTED. Under overload a new statement is written onto the next busy connection at once
+ * instead of waiting in the pool's queue for the first connection to drain, so one connection stalled on a long
+ * statement (an advisory-lock wait) holds up what was written behind it. Nothing changes below a pipeline 100 deep, which
+ * is every case but the one above. Measured on a burst of 4000 pooled statements (every fourth a transaction) against a
+ * local Postgres: the same ~1.5 s at the default and with no cap. `db-begin-pipeline.test.ts` is the behaviour.
+ */
+export const MAX_PIPELINE = Number.MAX_SAFE_INTEGER;
 
 /**
  * Idle seconds before a pooled connection is closed. Was 20; 60 since
@@ -139,7 +165,7 @@ export function connectionOptions(
   const rawMax = Number(env.DB_POOL_MAX);
   const max = Number.isInteger(rawMax) && rawMax >= 1 && rawMax <= 50 ? rawMax : 5;
   const schema = env.DB_SCHEMA ?? "seazn_club";
-  return { ssl, prepare, max, schema, idleTimeout: IDLE_TIMEOUT_S };
+  return { ssl, prepare, max, schema, idleTimeout: IDLE_TIMEOUT_S, maxPipeline: MAX_PIPELINE };
 }
 
 function getClient(): Sql {
@@ -150,13 +176,16 @@ function getClient(): Sql {
       "DATABASE_URL is not set. Copy .env.example to .env.local and add your Supabase connection string.",
     );
   }
-  const { ssl, prepare, max, schema, idleTimeout } = connectionOptions(url);
+  const { ssl, prepare, max, schema, idleTimeout, maxPipeline } = connectionOptions(url);
 
   const client = postgres(url, {
     ssl,
     prepare,
     max,
     idle_timeout: idleTimeout,
+    // No pipeline cap - see MAX_PIPELINE: at the default a begin() that lands 101 deep strands its connection. A runtime
+    // option of postgres.js 3.4.9 (index.js parseOptions) that its typings do not declare, so it is spread in.
+    ...({ max_pipeline: maxPipeline } satisfies Record<string, number>),
     // Explicit, so a `?fetch_types=false` URL param cannot switch off the
     // array parsers — see IDLE_TIMEOUT_S.
     fetch_types: true,

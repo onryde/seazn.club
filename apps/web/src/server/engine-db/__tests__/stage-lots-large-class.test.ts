@@ -69,7 +69,7 @@ const WRITERS = [
     sport: "generic",
     variant: "score",
     stageConfig: {},
-    win: async (auth: AuthCtx, id: string, _home: string) => {
+    win: async (auth: AuthCtx, id: string) => {
       await post(auth, id, "core.start");
       await post(auth, id, "generic.result", { p1Score: 1, p2Score: 0 });
     },

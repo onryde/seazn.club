@@ -61,4 +61,13 @@ describe("connectionOptions", () => {
       expect(connectionOptions(url, {}).idleTimeout).toBe(60);
     }
   });
+
+  // No pipeline cap, on every URL shape: at postgres.js's default (100) a begin() written 101 deep onto a busy connection
+  // is never reserved and strands the connection in its transaction. db-begin-pipeline.test.ts is the behaviour; a finite
+  // cap only moves the depth at which it happens, so the value is "unreachable", not "bigger than 100".
+  it("pipeline depth is uncapped, on every URL shape", () => {
+    for (const url of urlShapes) {
+      expect(connectionOptions(url, {}).maxPipeline).toBe(Number.MAX_SAFE_INTEGER);
+    }
+  });
 });
