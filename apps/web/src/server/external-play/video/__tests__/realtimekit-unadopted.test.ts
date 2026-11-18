@@ -765,6 +765,26 @@ describe("platformSpend and cappedBudget", () => {
     expect(none.spent()).toBe(0);
   });
 
+  it("cappedBudget's `finish` (PR-2 whole review I1): work the cap let START is never refused by the cap - only by inner - and is counted, so the cap's own spender refuses everything after it", async () => {
+    const asked: string[] = [];
+    let innerSays = true;
+    const { budget, finish, spent } = cappedBudget(2, async (key) => {
+      asked.push(key);
+      return innerSays;
+    });
+    expect([await budget("t1"), await finish("f1"), await finish("f2"), await finish("f3")], "one capped call, then three past the cap: every one granted").toEqual([true, true, true, true]);
+    expect(spent(), "all four reached inner and are counted").toBe(4);
+    expect(await budget("t2"), "the cap's own spender: the finished work spent the cap").toBe(false);
+    expect(asked, "inner was asked for every finish and the first capped call, never the refused one").toEqual(["t1", "f1", "f2", "f3"]);
+    innerSays = false;
+    expect(await finish("f4"), "inner's refusal (the platform's bucket) still stands for started work").toBe(false);
+    expect(spent(), "an attempt inner refused still reached it").toBe(5);
+
+    const bare = cappedBudget(0, null);
+    expect([await bare.finish("k"), await bare.finish("k")], "a cap of 0 refuses no started work: the gate is the caller's").toEqual([true, true]);
+    expect([await bare.budget("k"), bare.spent()]).toEqual([false, 2]);
+  });
+
   it("cappedBudget refuses a cap that is not a non-negative integer (a NaN cap would grant every attempt: `attempts > NaN` is false), and takes 0 and a positive integer", () => {
     const refused = [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY];
     for (const cap of refused) expect(() => cappedBudget(cap, null), `cap ${cap}`).toThrow(RangeError);

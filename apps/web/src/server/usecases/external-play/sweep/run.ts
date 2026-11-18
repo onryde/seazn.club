@@ -1,7 +1,7 @@
 import "server-only";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
-import { cappedBudget, endMeeting, platformSpend, type RealtimeKitDeps } from "@/server/external-play/video/realtimekit";
+import { RealtimeKitDeferred, cappedBudget, endMeeting, platformSpend, type RealtimeKitDeps } from "@/server/external-play/video/realtimekit";
 import { prunePresence } from "@/server/external-play/video/presence";
 import { anyCheckinWindowOpen, windowDeferralOn } from "@/server/external-play/round-open";
 import { createGameIfReady } from "../create-game";
@@ -115,8 +115,19 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
   // ONE capped budget for what is left (teardown, the camera evidence, `arbiter_revoke`, the parked rooms), composed over the caller's
   // budget or the platform's own, so a request the cap refuses never reaches a platform token it would not use. A refusal is a
   // RealtimeKitDeferred, which `each` counts as a deferral for the rest of its job.
-  const capped = cappedBudget(deps.rtkCallCap ?? SWEEP_RTK_CALLS_PER_PASS, rtk.budget ?? platformSpend(rtk));
+  const cap = deps.rtkCallCap ?? SWEEP_RTK_CALLS_PER_PASS;
+  const capped = cappedBudget(cap, rtk.budget ?? platformSpend(rtk));
   const cappedRtk: RealtimeKitDeps = { ...rtk, budget: capped.budget };
+  // The camera evidence is the one capped job whose row has no fixed price (a session list, a participant list per session, a
+  // report per peer: a page that re-joined forty times is forty reports). Refused part-way, a room was read again from the top
+  // every pass, never reached its give-up (a deferral is not an answer), and headed the line for ever (PR-2 whole review I1). So
+  // the cap gates a room's START, and a started room finishes on the platform's bucket only (`finish`): it is counted, so the
+  // rooms and jobs after it find the cap spent, and the next pass reaches them.
+  const finishRtk: RealtimeKitDeps = { ...rtk, budget: capped.finish };
+  const startCameraRoom = (c: Parameters<typeof cameraEvidence>[1]) => {
+    if (capped.spent() >= cap) throw new RealtimeKitDeferred(`the pass's RealtimeKit call cap (${cap}) is spent`);
+    return cameraEvidence(pass, c, finishRtk);
+  };
   // Last, so a game finished or a board forfeited earlier in THIS pass is
   // torn down in it.
   const end = deps.endMeeting ?? ((m) => endMeeting(m, cappedRtk));
@@ -128,7 +139,7 @@ async function runPass(deps: SweepDeps): Promise<SweepReport> {
     report.scanned += camera.length;
     report.deferred += camera.length;
   } else {
-    await each(pass, "camera_evidence", camera, (c) => cameraEvidence(pass, c, cappedRtk));
+    await each(pass, "camera_evidence", camera, startCameraRoom);
   }
   // After the teardown too: a room ended in THIS pass took its watches with it. Only the TTL and the ended-room arms are left to it.
   await each(pass, "arbiter_revoke", await arbiterCandidates(pass), (c) => arbiterRevoke(pass, c, cappedRtk));

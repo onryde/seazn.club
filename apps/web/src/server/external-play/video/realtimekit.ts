@@ -199,19 +199,29 @@ export function platformSpend(deps: RealtimeKitDeps): CallBudget | null {
 
 /** A budget that refuses past `cap` attempts and otherwise asks `inner` (grants when `inner` is null). The (cap+1)th
  *  attempt is refused WITHOUT reaching `inner`, so a job's own ceiling never spends a platform token it will not use.
- *  `spent()` counts the attempts that reached `inner` - granted by it or not - and never a capped one. */
-export function cappedBudget(cap: number, inner: CallBudget | null): { budget: CallBudget; spent(): number } {
+ *  `spent()` counts the attempts that reached `inner` - granted by it or not - and never a capped one.
+ *  `finish` is for work the caller's own gate let START under the cap (`spent() < cap`) and that must not stop part-way (the
+ *  sweep's camera evidence, PR-2 whole review I1): it asks `inner` only - the cap never refuses it - and is counted like any other
+ *  attempt, so once started work has overrun the cap, `budget` refuses everything after it. */
+export function cappedBudget(cap: number, inner: CallBudget | null): { budget: CallBudget; finish: CallBudget; spent(): number } {
   // `attempts > cap` is false for every attempt when `cap` is NaN, and for a negative or fractional cap it caps at the wrong
   // count: a ceiling that fails OPEN spends the platform's tokens, so a cap that is not a count is refused up front.
   if (!Number.isInteger(cap) || cap < 0) throw new RangeError(`cappedBudget needs a cap that is a non-negative integer, got ${cap}`);
   let attempts = 0;
   let reached = 0;
+  const ask = (key: string) => {
+    reached += 1;
+    return inner === null ? Promise.resolve(true) : inner(key);
+  };
   return {
     budget: async (key) => {
       attempts += 1;
       if (attempts > cap) return false;
-      reached += 1;
-      return inner === null ? true : inner(key);
+      return ask(key);
+    },
+    finish: async (key) => {
+      attempts += 1;
+      return ask(key);
     },
     spent: () => reached,
   };

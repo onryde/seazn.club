@@ -148,7 +148,7 @@ export type SweepDeps = {
   windowsOpen?: () => Promise<boolean>;
   /** TEST SEAM - the pass's vendor-call cap for the jobs it applies to (teardown, camera evidence, `arbiter_revoke`, the parked
    *  rooms). Default SWEEP_RTK_CALLS_PER_PASS; a non-negative integer (`cappedBudget` refuses anything else by name). The
-   *  revocation job is never under it. Production passes none. */
+   *  revocation job is never under it; the camera evidence is under it at a room's start only. Production passes none. */
   rtkCallCap?: number;
 };
 
@@ -168,7 +168,10 @@ export const SWEEP_PASS_BUDGET_MS = 45_000;
  *  teardown's). One request a second for the budget the cron Worker leaves the pass: the same arithmetic as the pre-mint job's
  *  PREMINT_CALLS_PER_PASS, a CEILING that holds when nothing else stopped the pass. NOT counted: the revocation job (never capped,
  *  R5), and the reconcile and mint-retry jobs, which create or finish a GAME and build their own adapters (a game held back by the
- *  sweep's own cap is a player waiting). The platform's bucket meters every request regardless of this ceiling. */
+ *  sweep's own cap is a player waiting). The platform's bucket meters every request regardless of this ceiling.
+ *  The camera evidence is capped at a room's START, not per request (PR-2 whole review I1): a room started under the cap is read to
+ *  the end on the platform's bucket, so a pass can pass the ceiling by one room's reads, and everything capped after it then finds
+ *  the cap spent and waits for the next pass. */
 export const SWEEP_RTK_CALLS_PER_PASS = Math.floor(SWEEP_PASS_BUDGET_MS / 1000);
 
 /** D20 (review I1; spec docs/superpowers/specs/2026-10-15-chess-per-board-timers-design.md §6.1 (b)): the settling

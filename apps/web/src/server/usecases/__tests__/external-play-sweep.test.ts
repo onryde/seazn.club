@@ -5351,7 +5351,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect(rtkReads().length, "the reads were made once the window was not open").toBeGreaterThan(0);
   });
 
-  it("T8: the job runs under the pass's capped budget - a cap of 0 refuses its first read, which is a deferral (counted, never a failure) - and the same pass with a cap that fits settles it", async () => {
+  it("T8: the job runs under the pass's capped budget - a cap of 0 refuses its first room's start, which is a deferral (counted, never a failure) - and the same pass with a cap that fits settles it", async () => {
     const m = await playedMatch();
     bothOnThroughout(m);
     rtk.calls = [];
@@ -5362,7 +5362,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     expect([fits.cameraSettled, fits.deferred]).toEqual([ROOMS, 0]);
   });
 
-  it("T8: the camera evidence shares the pass's ONE cap with the teardown before it - a cap that fits the evidence alone settles it, the same cap less the teardown's two calls does not (deferred, not failed)", async () => {
+  it("T8 + I1: the camera evidence shares the pass's ONE cap with the teardown before it, at each room's START - a cap the teardown spent starts no room; one call left starts the first room, which is read to the END, and the second waits; a cap that fits both settles both (deferred, never failed)", async () => {
     // N: what one fresh match's evidence costs the vendor, measured on its own pass (no other job has a vendor call to make).
     const alone = await playedMatch();
     bothOnThroughout(alone);
@@ -5383,15 +5383,74 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       // No `endMeeting` dep: the pass's default end, which draws on the capped budget.
       const r = await sweep([m.b, extra], { now: after(m, CAMERA_EVIDENCE_AFTER_MS), realtimeKit: RTK, rtkCallCap: cap, ...NO_WINDOW });
       const ended = (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_meetings where meeting_id = ${room} and ended_at is not null`)[0]!.n;
-      return { r, ended };
+      return { r, ended, reads: rtkReads().length, settled: await settledSides(m.b.fixtureId) };
     };
     const fits = await shared(TEARDOWN + N);
     expect([fits.ended, fits.r.cameraSettled, fits.r.deferred, fits.r.failures], "cap = teardown + evidence: both done").toEqual([1, ROOMS, 0, []]);
-    const short = await shared(TEARDOWN + N - 1);
-    expect(short.ended, "the teardown ran first and was served").toBe(1);
-    expect(short.r.cameraSettled, "the evidence ran out of the SAME cap before it was done").toBeLessThan(ROOMS);
-    expect(short.r.deferred, "the rest is counted deferred").toBeGreaterThan(0);
-    expect(short.r.failures, "never a failure").toEqual([]);
+    const spent = await shared(TEARDOWN);
+    expect(spent.ended, "the teardown ran first and was served").toBe(1);
+    expect([spent.r.cameraSettled, spent.r.deferred, spent.reads, spent.r.failures], "the cap spent before the job: no room starts, both wait").toEqual([0, ROOMS, 0, []]);
+    const one = await shared(TEARDOWN + 1);
+    expect(one.ended).toBe(1);
+    expect(one.settled, "one call left: the first room in line (away) starts and settles").toEqual(["away"]);
+    expect(one.reads, "read to the END on the platform's bucket: more than the one call the cap had left").toBeGreaterThan(1);
+    expect([one.r.cameraSettled, one.r.deferred, one.r.failures], "the second room waits for the next pass").toEqual([1, 1, []]);
+  });
+
+  // PR-2 whole review I1 (controller ruling): the cap gates a room's START; a started room finishes on the platform bucket only.
+  // Before it, a room whose evidence cost more than the cap was refused part-way every pass - and, a deferral being kept "whatever
+  // the day", never reached the give-up - so it headed the line for ever and starved every room behind it, the TTL watches and the
+  // parked rooms.
+  it("I1: a room whose evidence costs the cap + 1 calls settles in ONE pass; the room behind it settles the next pass, and a TTL-expired arbiter watch the spent cap held back gets its calls then", async () => {
+    const m = await playedMatch();
+    // The away room heads the line (candidates run by ended_at, fixture, side) and its page re-joined over and over: ONE session
+    // whose one participant has a peer per join, each on camera for its own slice of the match, back to back (touching spans are
+    // never "at once"). The evidence reads the session list, the participant list and one report per peer: PEERS + 2 requests,
+    // the cap + 1 - which the first pass below MEASURES rather than trusts.
+    const x = session(m, m.startedAt - 120_000, m.endedAt);
+    connect(m, x, "home", { joined: m.startedAt - 90_000, left: m.endedAt });
+    const PEERS = SWEEP_RTK_CALLS_PER_PASS + 1 - 2;
+    const from = m.startedAt - 90_000;
+    const slice = Math.floor((m.endedAt - from) / PEERS);
+    for (let i = 0; i < PEERS; i++) {
+      connect(m, x, "away", { joined: from + i * slice, left: i === PEERS - 1 ? m.endedAt : from + (i + 1) * slice });
+    }
+    // A watch of another club's LIVE board, past its TTL: `arbiter_revoke`'s TTL arm, under the same cap, AFTER the evidence.
+    const w = await openedBoard({ checkedIn: ["home", "away"], cameraPolicy: "optional" });
+    await liveGame(w);
+    await ensureMeeting(w.fixtureId, "home", RTK);
+    await putVideoParticipant({ fixtureId: w.fixtureId, side: "home", personId: w.home.personId }); // a room alone is no arrival
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${w.orgId}, ${u!.id}, 'admin')`;
+    const watch = await joinAsArbiter({ orgId: w.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, w.fixtureId, "home", {
+      video: { addParticipant: (a) => addParticipant(a, RTK), removeParticipant: (a) => removeParticipant(a, RTK) },
+    });
+    await sql`update fixture_video_participants set created_at = now() - (${ARBITER_PARTICIPANT_TTL_MS + 60_000}::float8 * interval '1 millisecond')
+               where participant_id = ${watch.participantId}`;
+    const removedAt = async () =>
+      (await sql<{ removed_at: Date | null }[]>`select removed_at from fixture_video_participants where participant_id = ${watch.participantId}`)[0]!.removed_at;
+    const removals = () => rtk.calls.filter((c) => c.path.includes(`/participants/${watch.participantId}`) || c.path.endsWith("/active-session/kick"));
+    // The production cap (no `rtkCallCap`); no Lichess read, so the live game stays live and its room up.
+    const deps: SweepDeps = { realtimeKit: RTK, reconcile: async () => null, ...NO_WINDOW };
+
+    rtk.calls = [];
+    const p1 = await sweep([m.b, w], { now: after(m, CAMERA_EVIDENCE_AFTER_MS), ...deps });
+    expect(await settledSides(m.b.fixtureId), "the costly room settled in ONE pass").toEqual(["away"]);
+    expect(rtkReads(), "premise, measured: it cost the cap + 1 reads, and they were every read of the pass").toHaveLength(SWEEP_RTK_CALLS_PER_PASS + 1);
+    expect([p1.cameraSettled, p1.failures], "settled, never a failure").toEqual([1, []]);
+    expect(p1.deferred, "the room behind it and the TTL watch keep their places").toBe(2);
+    expect(removals(), "the cap is spent: no call for the watch").toEqual([]);
+    expect(await removedAt(), "and it is still on file").toBeNull();
+
+    // SEQUENCE: the next pass reaches both.
+    rtk.calls = [];
+    const p2 = await sweep([m.b, w], { now: after(m, CAMERA_EVIDENCE_AFTER_MS + SWEEP_CADENCE_MS), ...deps });
+    expect(await settledSides(m.b.fixtureId), "the room behind it").toEqual(BOTH_SETTLED);
+    expect([p2.cameraSettled, p2.arbitersRemoved, p2.deferred, p2.failures]).toEqual([1, 1, 0, []]);
+    expect(removals().map((c) => c.method), "the TTL arm's kick and DELETE").toEqual(["POST", "DELETE"]);
+    expect(await removedAt(), "the watch is removed").not.toBeNull();
   });
 
   it("T8 R6: the peers are still listed at the vendor - one GET /sessions/:id/participants per participant per session, as before - even when presence rows exist for every participant", async () => {
