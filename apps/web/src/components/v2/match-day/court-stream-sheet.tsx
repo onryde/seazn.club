@@ -24,7 +24,7 @@ import { t } from "@/lib/i18n-runtime";
 import { canWriteCourtStream, lastWorkingMinute, linkFailureKey, youtubeTargets } from "@/lib/match-day/court-stream";
 import type { MatchDayCourt, MatchDayCourtStream } from "@/lib/match-day/types";
 import { renderSeaznQr, type SeaznQr } from "@/lib/seazn-qr";
-import { STREAMING_PAGE_HREF } from "@/lib/youtube";
+import { useStreamingHref } from "@/components/use-org-paths";
 import type { CourtStream, StreamTarget } from "@/server/api-v1/schemas";
 import type { MatchDayCtx } from "./court-focus";
 import { CourtPhoneStatus } from "./court-phone-status";
@@ -44,6 +44,7 @@ export function TargetPicker({
   value: string | null;
   onChange: (id: string) => void;
 }) {
+  const streamingHref = useStreamingHref();
   if (state.status === "loading") return <p className="text-sm text-slate-600">{t(dict, "matchDay.code.loading")}</p>;
   if (state.status === "error") return <p role="alert" className="text-sm text-amber-900">{t(dict, "matchDay.refusal.other")}</p>;
   const targets = youtubeTargets(state.list);
@@ -53,7 +54,7 @@ export function TargetPicker({
         <p className="text-sm text-slate-700">{t(dict, "matchDay.courtStream.youtubeOnly")}</p>
         <a
           data-testid="md-cs-connect-youtube"
-          href={STREAMING_PAGE_HREF}
+          href={streamingHref}
           target="_blank"
           rel="noopener noreferrer"
           className="btn btn-ghost min-h-11 justify-self-start"
@@ -199,6 +200,7 @@ export function CourtStreamSheet({
 }
 
 function QrView({ dict, state, ctx }: { dict: Dict; state: QrState; ctx: MatchDayCtx }) {
+  const streamingHref = useStreamingHref();
   if (state.status === "loading") return <p className="text-sm text-slate-600">{t(dict, "matchDay.code.loading")}</p>;
   if (state.status === "error") {
     return (

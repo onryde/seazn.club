@@ -11,11 +11,13 @@ import { sql } from "@/lib/db";
 import { sealPendingToken } from "@/server/youtube/token-store";
 import { claimPending, dropPending, grantInUse, offerRefusal, reconnectTarget, roleNow, seatFrozen, storeGrant } from "@/server/youtube/connect-flow";
 import { saveConnectionFromGrant } from "@/server/youtube/connections";
+import { orgSlugOf } from "@/server/youtube/connect-flow";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError, type YouTubePort } from "@/server/youtube/port";
 
 /** Every exit is the same: a 303 to the Streaming page carrying one outcome (lib/youtube.ts `youtubeLanding`). */
-const land = (code: YoutubeLandingCode, pendingId?: string) => redirectLocal(youtubeLanding(code, pendingId), 303);
+const land = (code: YoutubeLandingCode, pendingId?: string, orgSlug?: string | null) =>
+  redirectLocal(youtubeLanding(code, pendingId, orgSlug), 303);
 
 /** What went wrong, as a code and nothing else: an error here may be a Google or database error whose text echoes a value, so
  *  only its class (and a YouTube error's own closed code and reason) reaches a log line. */
@@ -72,13 +74,18 @@ async function callback(req: Request): Promise<Response> {
   const pending = await claimPending(state, user.id);
   if (!pending) return land("expired");
 
+  // From here the org that started the connect is known (the pending row's, never the cookie's): every landing returns to ITS
+  // Streaming page. A slug that cannot be read falls back to the legacy `/streaming`, which redirects to the cookie's org.
+  const orgSlug = await orgSlugOf(pending.orgId).catch(() => null);
+  const landIn = (code: YoutubeLandingCode, pendingId?: string) => land(code, pendingId, orgSlug);
+
   if (googleError !== null) {
     await dropPending(pending.id);
-    return land("denied");
+    return landIn("denied");
   }
   if (!code) {
     await dropPending(pending.id);
-    return land("expired");
+    return landIn("expired");
   }
 
   const port = youtubeDriver();
@@ -91,7 +98,7 @@ async function callback(req: Request): Promise<Response> {
     log.warn({ orgId: pending.orgId, ...why }, "youtube connect callback: the code could not be redeemed");
     // Seazn's own configuration (no Google client, a redirect URI Google does not know) is not the club's to retry.
     const ours = err instanceof YouTubeError && (err.reason === "notConfigured" || err.reason === "redirectUriMismatch");
-    return land(ours ? "not_configured" : "expired");
+    return landIn(ours ? "not_configured" : "expired");
   }
   const { refreshToken, scope, googleSub } = grant;
 
@@ -113,7 +120,7 @@ async function callback(req: Request): Promise<Response> {
     } catch (err) {
       log.error({ orgId: pending.orgId, ...failureOf(err) }, "youtube connect callback: the refused grant could not be cleaned up");
     }
-    return land(outcome);
+    return landIn(outcome);
   };
 
   try {
@@ -158,7 +165,7 @@ async function callback(req: Request): Promise<Response> {
       await storeGrant(tx, pending.id, { grantedScope: scope, googleSub, channels });
       await sealPendingToken(tx, pending.id, refreshToken);
     });
-    if (channelId === null) return land("pick", pending.id);
+    if (channelId === null) return landIn("pick", pending.id);
 
     let saved: Awaited<ReturnType<typeof saveConnectionFromGrant>>;
     try {
@@ -168,7 +175,7 @@ async function callback(req: Request): Promise<Response> {
       // connection uses: NOT revoked. Our pending grant, with the token sealed on it, is simply dropped.
       if (err instanceof HttpError && err.code === "YOUTUBE_OTHER_ORG") {
         await dropPending(pending.id);
-        return land("other_org");
+        return landIn("other_org");
       }
       throw err;
     }
@@ -176,7 +183,7 @@ async function callback(req: Request): Promise<Response> {
     // made-for-kids settings and the choices just made went unused, so the page says that (`already_connected`). A Reconnect the
     // person asked for (`pending.connectionId`) is plain `connected`: its settings were never in question, the save is `existing`
     // too, and only the intent tells the two apart.
-    return land(saved.existing && !pending.connectionId ? "already_connected" : "connected");
+    return landIn(saved.existing && !pending.connectionId ? "already_connected" : "connected");
   } catch (err) {
     log.error({ orgId: pending.orgId, ...failureOf(err) }, "youtube connect callback: failed after the grant was made; nothing was connected");
     return await refuse("expired");

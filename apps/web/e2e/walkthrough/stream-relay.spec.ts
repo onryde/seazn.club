@@ -544,7 +544,7 @@ for (const width of WIDTHS) {
     await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
     await expect(body.getByTestId("stream-target"), "no picker over nothing").toHaveCount(0);
     await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
-    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/streaming");
+    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
     await expect(body.getByTestId("stream-chain"), "§3.2: no destination, no path to draw").toHaveCount(0);
     // §3.1 (T9b): Phone is the default tab, and the disabled "With scorebug — Coming soon" control is gone.
     await expect(row.getByTestId("stream-tab-phone")).toHaveAttribute("aria-selected", "true");
@@ -1201,7 +1201,7 @@ for (const width of [320, 1280] as const) {
     await shotAround(page, control, `D3-${width}-button-2-amber.png`);
     await expect(chain, "the phone half never moves for the destination").toHaveAttribute("data-phone", "connected");
     const open = warning.getByTestId("stream-output-open-directory");
-    await expect(open).toHaveAttribute("href", "/streaming");
+    await expect(open).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
     await expect(open).toHaveAttribute("target", "_blank");
     await expect(open).toHaveText(en("stream.output.openDirectory"));
     // D3: a warning, never an ending — the session is live on the server, and Stop is right there.

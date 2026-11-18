@@ -320,7 +320,7 @@ async function connectChannel(page: Page, channels: { id: string; title: string 
   await page.getByTestId("youtube-consent").check();
   await page.getByTestId("youtube-consent-minors").check();
   await expect(submit).toBeEnabled();
-  await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
+  await Promise.all([page.waitForURL(/\/o\/[^/]+\/streaming\?youtube=/), submit.click()]);
   await declineCookies(page);
   expect(fired, "the channel offer ran once for this connect").toBe(1);
 }
@@ -343,7 +343,7 @@ test("Streaming page polish - the Settings button at rest, Connect leaves with t
   const first = channel("Riverside FC");
   const second = channel("Riverside Juniors");
   await connectChannel(page, [first, second], "youtube-connect-empty");
-  await expect(page).toHaveURL(/\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
   await expect(page.getByTestId("youtube-picker")).toBeVisible();
   await expect(page.getByTestId("youtube-connect-empty"), "the picker is open: the empty card's Connect is gone").toHaveCount(0);
   for (const w of WIDTHS) {
@@ -560,10 +560,10 @@ test("Fixture panel - each of the six YouTube refusals replaces Go live with its
 
     if (fix === "reconnect") {
       const link = scope.getByTestId("stream-youtube-reconnect");
-      await expect(link).toHaveAttribute("href", "/streaming");
+      await expect(link).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
       const [popup] = await Promise.all([page.context().waitForEvent("page"), link.click()]);
       await popup.waitForLoadState();
-      expect(new URL(popup.url()).pathname, "Reconnect opens the Streaming page, never the old Directory tab").toBe("/streaming");
+      expect(new URL(popup.url()).pathname, "Reconnect opens the Streaming page, never the old Directory tab").toMatch(/^\/o\/[^/]+\/streaming$/);
       await popup.close();
     }
     if (fix === "retry") {
@@ -928,7 +928,7 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     await expect(page.getByTestId("youtube-channel-row"), "the channel left the list").toHaveCount(0);
     // F5: connecting this channel raised "YouTube channel connected."; it must not sit above "X is disconnected", and a reload must not bring it back
     await expect(page.getByTestId("youtube-landing"), `the stale connect banner is gone at ${w}`).toHaveCount(0);
-    await expect(page, `its query is cleared at ${w}`).toHaveURL(/\/streaming$/);
+    await expect(page, `its query is cleared at ${w}`).toHaveURL(/\/o\/[^/]+\/streaming$/);
     expect(await connectionState(connectionId), `disconnected at ${w}: revoked, token gone, destination archived`).toEqual({ status: "revoked", tokenGone: true, archived: 1 });
     await expectTappable(page.getByTestId("youtube-disconnected-dismiss"), `Dismiss at ${w}`);
     await expectNoPageScroll(page, `the disconnected page at ${w}`);
@@ -1058,7 +1058,7 @@ test("Disconnect stays reachable after the org loses Go live - the restricted St
   await expect(page.getByTestId("stream-disconnect-only-empty")).toHaveText(en("streaming.youtube.disconnectOnly.none"));
   // F7: the last one took the page's own nav with it - the page re-rendered at the emptied URL (not the 404), and what the person was
   // told is still on screen, so the nav no longer offers a link that would 404 and the confirmation was not swapped for a 404.
-  await expect(page, "still on the page, at the emptied address").toHaveURL(/\/streaming\?disconnected=1$/);
+  await expect(page, "still on the page, at the emptied address").toHaveURL(/\/o\/[^/]+\/streaming\?disconnected=1$/);
   await expect(page.getByTestId("nav-streaming"), "the nav dropped the item without a reload").toHaveCount(0);
   await expect(page.getByTestId("youtube-disconnected"), "the news is still there").toContainText(en("streaming.youtube.disconnect.done", { name: b.title }));
   await expect(page.getByTestId("stream-disconnect-only-empty"), "and the empty line").toHaveText(en("streaming.youtube.disconnectOnly.none"));

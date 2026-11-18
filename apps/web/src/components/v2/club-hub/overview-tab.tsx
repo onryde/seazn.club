@@ -3,6 +3,7 @@
 // home_primary/home_secondary/away_primary/away_secondary), contacts CRUD, and a
 // danger zone. patchClub + the contacts routes finally get a UI. The kit stripe
 // in the page header reads the same colours this tab edits.
+import { useDirectoryHref } from "@/components/use-org-paths";
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -78,6 +79,7 @@ export function OverviewTab({
   storageBase: string;
   viewerPlan: ViewerPlan;
 }) {
+  const directoryClubsHref = useDirectoryHref("clubs");
   const msg = useMsg();
   const router = useRouter();
   const confirmDialog = useConfirm();
@@ -426,7 +428,7 @@ export function OverviewTab({
               // A refused delete stays here with its reason on screen; the
               // club still exists. `replace`, not `push`: Back must not
               // restore the deleted club's page from the router cache.
-              if (deleted) router.replace("/directory?tab=clubs");
+              if (deleted) router.replace(directoryClubsHref);
             }}
           >
             {msg("clubs.delete")}

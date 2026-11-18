@@ -50,7 +50,7 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
   };
 });
 
-vi.mock("next/navigation", () => ({ useRouter: () => h.router }));
+vi.mock("next/navigation", () => ({ useRouter: () => h.router, usePathname: () => "/o/riverside/clubs/club-1" }));
 
 vi.mock("@/components/ui/confirm-provider", () => ({
   useConfirm: () => () => Promise.resolve(h.confirmAnswer),
@@ -185,7 +185,7 @@ describe("club hub danger zone — Delete", () => {
     await deleteButton(island)();
 
     expect(deletes()).toHaveLength(1);
-    expect(h.router.replace.mock.calls).toEqual([["/directory?tab=clubs"]]);
+    expect(h.router.replace.mock.calls).toEqual([["/o/riverside/directory?tab=clubs"]]);
     expect(h.router.push).not.toHaveBeenCalled();
   });
 
@@ -212,6 +212,6 @@ describe("club hub danger zone — Delete", () => {
     await deleteButton(island)();
 
     expect(deletes()).toHaveLength(2);
-    expect(h.router.replace.mock.calls).toEqual([["/directory?tab=clubs"]]);
+    expect(h.router.replace.mock.calls).toEqual([["/o/riverside/directory?tab=clubs"]]);
   });
 });

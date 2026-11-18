@@ -23,7 +23,8 @@ import {
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
-import { STREAMING_PAGE_HREF, type YoutubeLanding } from "@/lib/youtube";
+import { useStreamingHref } from "@/components/use-org-paths";
+import { type YoutubeLanding } from "@/lib/youtube";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import {
   YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
@@ -127,6 +128,7 @@ export function StreamDestinationsPanel({
 }) {
   const msg = useMsg();
   const router = useRouter();
+  const streamingHref = useStreamingHref();
   const [addOpen, setAddOpen] = useState(initialAddOpen);
   const [connectOpen, setConnectOpen] = useState(initialConnectOpen);
   const [addError, setAddError] = useState<string | null>(null);
@@ -139,7 +141,7 @@ export function StreamDestinationsPanel({
     setDisconnected(news);
     if (landing && landing.code !== "pick") {
       setLandingCleared(true);
-      router.replace(STREAMING_PAGE_HREF);
+      router.replace(streamingHref);
     }
   };
 

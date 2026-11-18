@@ -19,7 +19,8 @@ import { getDictionary, t } from "@/lib/i18n";
 import { baseUrlFromHeaders } from "@/lib/base-url";
 import { captureError } from "@/lib/sentry";
 import { youtubeLandingFrom } from "@/lib/youtube";
-import { requirePageAuth } from "@/server/page-auth";
+import { searchOf } from "@/lib/routes";
+import { requireOrgPage } from "@/server/page-auth";
 import { streamingPageAccess } from "@/server/stream-panel-context";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
@@ -28,10 +29,19 @@ import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessi
 // Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
 // through the same use-case the API serves, so the list, its key hints and its "in use" badges are the API's projection,
 // never a second query.
-export default async function StreamingPage({ searchParams }: { searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[]; disconnected?: string | string[] }> }) {
-  const { auth, canEdit } = await requirePageAuth();
-  const access = await streamingPageAccess(auth.orgId, canEdit);
+export default async function StreamingPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ orgSlug: string }>;
+  searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[]; disconnected?: string | string[] }>;
+}) {
+  const { orgSlug } = await params;
   const query = await searchParams;
+  // The ADDRESS decides the org (owner, 2026-11-18), never the seazn_org cookie: members only, a non-member 404s, and a renamed
+  // org's old URL goes to the new one with its query (the connect landing's `?youtube=` included).
+  const { auth, canEdit, org } = await requireOrgPage(orgSlug, { tail: "/streaming", search: searchOf(query) });
+  const access = await streamingPageAccess(auth.orgId, canEdit);
   // An editor who has just disconnected the LAST channel of an org that cannot go live is sent here by the restricted page itself
   // (`STREAMING_DISCONNECTED_HREF`): the page re-renders so its nav drops the item, and must not turn into the 404 under the person
   // who is reading the confirmation. It lists nothing - there is nothing - and the query opens nothing else: every other case
@@ -52,6 +62,7 @@ export default async function StreamingPage({ searchParams }: { searchParams: Pr
           <div className="mb-6">
             <p className="app-eyebrow mb-1">{t(ui, "streaming.eyebrow")}</p>
             <h1 className="page-title">{t(ui, "streaming.title")}</h1>
+            <p data-testid="streaming-org" className="mt-1 text-sm font-medium text-slate-700">{org.name}</p>
           </div>
           <YoutubeDisconnectOnlyPanel orgId={auth.orgId} targets={channels} />
         </main>
@@ -82,6 +93,7 @@ export default async function StreamingPage({ searchParams }: { searchParams: Pr
         <div className="mb-6">
           <p className="app-eyebrow mb-1">{t(ui, "streaming.eyebrow")}</p>
           <h1 className="page-title">{t(ui, "streaming.title")}</h1>
+            <p data-testid="streaming-org" className="mt-1 text-sm font-medium text-slate-700">{org.name}</p>
           <p className="mt-1 max-w-xl text-sm text-slate-500">{t(ui, "streaming.desc")}</p>
         </div>
         <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} landing={landing} />

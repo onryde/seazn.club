@@ -14,13 +14,14 @@
 // DELETE; the refusal while a match is using the channel (409 YOUTUBE_IN_USE) is a sentence in the row.
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { useStreamingHref } from "@/components/use-org-paths";
 import Link from "@/components/ui/console-link";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import {
-  GOOGLE_THIRD_PARTY_ACCESS_URL, STREAMING_PAGE_HREF, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
+  GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
 import type { StreamTarget, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
@@ -273,6 +274,7 @@ export type BannerCode = keyof typeof LANDING_KEY;
 export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
   const msg = useMsg();
   const router = useRouter();
+  const streamingHref = useStreamingHref();
   const ok = code === "connected" || code === "already_connected";
   return (
     <div
@@ -282,7 +284,7 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
       className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}
     >
       <p className="min-w-0 flex-1">{msg(LANDING_KEY[code])}</p>
-      <button type="button" data-testid="youtube-landing-dismiss" onClick={() => router.replace(STREAMING_PAGE_HREF)} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
+      <button type="button" data-testid="youtube-landing-dismiss" onClick={() => router.replace(streamingHref)} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
         {msg("streaming.youtube.dismiss")}
       </button>
     </div>
@@ -349,6 +351,7 @@ function pickerRefusalText(msg: Msg, err: unknown): string {
 export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pendingId: string }) {
   const msg = useMsg();
   const router = useRouter();
+  const streamingHref = useStreamingHref();
   const [channels, setChannels] = useState<{ id: string; title: string }[] | null>(null);
   const [choice, setChoice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -370,7 +373,7 @@ export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pend
     };
   }, [orgId, pendingId, msg]);
 
-  const cancel = () => router.replace(STREAMING_PAGE_HREF);
+  const cancel = () => router.replace(streamingHref);
   const connect = async () => {
     if (choice === null || saving.current) return;
     saving.current = true;

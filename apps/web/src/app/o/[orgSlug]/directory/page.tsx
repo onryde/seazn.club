@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 import Link from "@/components/ui/console-link";
 import { BackLink } from "@/components/back-link";
 import { Nav } from "@/components/nav";
-import { requirePageAuth } from "@/server/page-auth";
+import { requireOrgPage, type PageAuth } from "@/server/page-auth";
+import { routes, searchOf } from "@/lib/routes";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listPersons } from "@/server/usecases/persons";
 import { listClubsWithMeta } from "@/server/usecases/clubs";
@@ -30,12 +31,18 @@ const TABS = ["players", "clubs", "officials", "venues"] as const;
 type Tab = (typeof TABS)[number];
 
 export default async function DirectoryPage({
+  params,
   searchParams,
 }: {
+  params: Promise<{ orgSlug: string }>;
   searchParams: Promise<{ tab?: string }>;
 }) {
-  const { tab: rawTab } = await searchParams;
-  await requirePageAuth();
+  const { orgSlug } = await params;
+  const sp = await searchParams;
+  const rawTab = sp.tab;
+  // The ADDRESS decides the org (owner, 2026-11-18), never the seazn_org cookie: members only, a non-member 404s, and a renamed
+  // org's old URL goes to the new one with its query. Every tab reads this one `page`, so none can read another org.
+  const page = await requireOrgPage(orgSlug, { tail: "/directory", search: searchOf(sp) });
   // Streaming is no longer a tab (owner, 2026-10-27): it is the top-nav Streaming page, and `/directory?tab=streaming` is simply an
   // unknown tab — it falls back to the first one. Nothing forwards.
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "players";
@@ -49,6 +56,7 @@ export default async function DirectoryPage({
         <BackLink href="/dashboard" label={t(ui, "common.dashboard")} />
         <div className="mb-6">
           <p className="app-eyebrow mb-1">{t(ui, "directory.eyebrow")}</p>
+          <p data-testid="directory-org" className="mb-1 text-sm font-medium text-slate-700">{page.org.name}</p>
           <h1 className="page-title">{t(ui, "directory.title")}</h1>
           <p className="mt-1 text-sm text-slate-500">
             {t(ui, "directory.desc")}
@@ -60,7 +68,7 @@ export default async function DirectoryPage({
             {TABS.map((tabKey) => (
               <Link
                 key={tabKey}
-                href={`/directory?tab=${tabKey}`}
+                href={routes.orgDirectory(orgSlug, tabKey)}
                 aria-current={tab === tabKey ? "page" : undefined}
                 // m5 (B4 review): each tab is a 44-px tap target (the mockup's `min-h-11`).
                 className={`flex min-h-11 items-center border-b-2 px-4 py-2 text-sm font-medium transition ${
@@ -75,10 +83,10 @@ export default async function DirectoryPage({
           </nav>
         </ScrollActiveTabIntoView>
 
-        {tab === "players" && <PlayersTab ui={ui} />}
-        {tab === "clubs" && <ClubsTab ui={ui} />}
-        {tab === "officials" && <OfficialsTab ui={ui} />}
-        {tab === "venues" && <VenuesTab ui={ui} />}
+        {tab === "players" && <PlayersTab ui={ui} page={page} />}
+        {tab === "clubs" && <ClubsTab ui={ui} page={page} />}
+        {tab === "officials" && <OfficialsTab ui={ui} page={page} />}
+        {tab === "venues" && <VenuesTab ui={ui} page={page} />}
       </main>
     </DictProvider>
   );
@@ -107,8 +115,8 @@ const toDupPerson = (p: {
   user_id: p.user_id,
 });
 
-async function PlayersTab({ ui }: { ui: Dict }) {
-  const { auth, canEdit } = await requirePageAuth();
+async function PlayersTab({ ui, page }: { ui: Dict; page: PageAuth }) {
+  const { auth, canEdit } = page;
   const [{ items }, { items: duplicates }] = await Promise.all([
     listPersons(auth, { cursor: null, limit: 200 }),
     listDuplicateCandidates(auth, {}),
@@ -151,8 +159,8 @@ async function PlayersTab({ ui }: { ui: Dict }) {
   );
 }
 
-async function ClubsTab({ ui }: { ui: Dict }) {
-  const { auth, canEdit } = await requirePageAuth();
+async function ClubsTab({ ui, page }: { ui: Dict; page: PageAuth }) {
+  const { auth, canEdit } = page;
   const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const [clubs, teams] = await Promise.all([listClubsWithMeta(auth), listTeams(auth)]);
   const storageBase = `${process.env.NEXT_PUBLIC_SUPABASE_URL ?? ""}/storage/v1/object/public/assets`;
@@ -186,8 +194,8 @@ async function ClubsTab({ ui }: { ui: Dict }) {
   );
 }
 
-async function OfficialsTab({ ui }: { ui: Dict }) {
-  const { auth, canEdit } = await requirePageAuth();
+async function OfficialsTab({ ui, page }: { ui: Dict; page: PageAuth }) {
+  const { auth, canEdit } = page;
   const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const [officials, rolesMultiAllowed] = await Promise.all([
     listOfficialsForConsole(auth),
@@ -219,8 +227,8 @@ async function OfficialsTab({ ui }: { ui: Dict }) {
 // archived" toggle is a client-side filter, not a refetch — `listVenues`
 // threads the same flag into BOTH the venues and the nested courts query
 // (A5; see venues-panel.tsx's file header).
-async function VenuesTab({ ui }: { ui: Dict }) {
-  const { auth, canEdit } = await requirePageAuth();
+async function VenuesTab({ ui, page }: { ui: Dict; page: PageAuth }) {
+  const { auth, canEdit } = page;
   const venues = await listVenues(auth, { includeArchived: true });
   return (
     <div className="space-y-4">

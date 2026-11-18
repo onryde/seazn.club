@@ -68,11 +68,11 @@ describe("Nav › Streaming item", () => {
     const html = await render();
     const a = streamingLink(html);
     expect(a, "the Streaming link is in the nav").not.toBeNull();
-    expect(a).toContain('href="/streaming"');
+    expect(a).toContain('href="/o/riverside/streaming"');
     expect(a).toContain('aria-label="Streaming"');
     const at = (needle: string) => html.indexOf(needle);
-    expect(at('href="/directory"')).toBeGreaterThan(-1);
-    expect(at('href="/directory"'), "after Directory").toBeLessThan(at('data-testid="nav-streaming"'));
+    expect(at('href="/o/riverside/directory"')).toBeGreaterThan(-1);
+    expect(at('href="/o/riverside/directory"'), "after Directory").toBeLessThan(at('data-testid="nav-streaming"'));
     expect(at('data-testid="nav-streaming"'), "before Sponsors").toBeLessThan(at('data-testid="nav-sponsors"'));
     // The label collapses to the icon below `md`, exactly like Dashboard / Directory / Sponsors - for every bar (the account menu,
     // 2026-11-11, took Player home out of the bar, and with it the dual-role `lg` rung).
@@ -107,7 +107,7 @@ describe("Nav › Streaming item", () => {
       apply();
       const html = await render();
       expect(streamingLink(html), why).toBeNull();
-      expect(html, `${why}: Directory stays`).toContain('href="/directory"');
+      expect(html, `${why}: Directory stays`).toContain('href="/o/riverside/directory"');
       expect(html, `${why}: the account trigger stays`).toContain('data-testid="account-menu-trigger"');
       checked++;
     }
@@ -124,7 +124,7 @@ describe("Nav › Streaming item", () => {
     m.hasFeature.mockRejectedValue(boom);
     const html = await render();
     expect(streamingLink(html)).toBeNull();
-    expect(html, "the rest of the nav rendered").toContain('href="/directory"');
+    expect(html, "the rest of the nav rendered").toContain('href="/o/riverside/directory"');
     expect(m.captureError).toHaveBeenCalledTimes(1);
     expect(m.captureError).toHaveBeenCalledWith(boom, expect.objectContaining({ orgId: ORG.id, route: "nav.streaming_offered" }));
     // The next render, with the read healthy again, offers it: nothing was cached from the failure.
@@ -179,7 +179,7 @@ describe("Nav › Streaming item for an org that can no longer go live (T18: Dis
       apply();
       const a = streamingLink(await render());
       expect(a, why).not.toBeNull();
-      expect(a, why).toContain('href="/streaming"');
+      expect(a, why).toContain('href="/o/riverside/streaming"');
       expect(m.hasLiveConnection, why).toHaveBeenCalledTimes(1);
       expect(m.hasLiveConnection, why).toHaveBeenCalledWith(ORG.id);
       checked++;
@@ -206,7 +206,7 @@ describe("Nav › Streaming item for an org that can no longer go live (T18: Dis
     m.hasLiveConnection.mockResolvedValue(false);
     const html = await render();
     expect(streamingLink(html)).toBeNull();
-    expect(html, "the rest of the nav stays").toContain('href="/directory"');
+    expect(html, "the rest of the nav stays").toContain('href="/o/riverside/directory"');
     m.hasLiveConnection.mockResolvedValue(true);
     expect(streamingLink(await render())).not.toBeNull();
   });
@@ -217,7 +217,7 @@ describe("Nav › Streaming item for an org that can no longer go live (T18: Dis
     m.hasLiveConnection.mockRejectedValue(boom);
     const html = await render();
     expect(streamingLink(html)).toBeNull();
-    expect(html).toContain('href="/directory"');
+    expect(html).toContain('href="/o/riverside/directory"');
     expect(m.captureError).toHaveBeenCalledTimes(1);
     expect(m.captureError).toHaveBeenCalledWith(boom, expect.objectContaining({ orgId: ORG.id, route: "nav.streaming_offered" }));
   });

@@ -6,6 +6,7 @@ import { notFound } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { BackLink } from "@/components/back-link";
 import { Nav } from "@/components/nav";
+import { routes } from "@/lib/routes";
 import { requirePageAuth } from "@/server/page-auth";
 import { orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
@@ -31,7 +32,7 @@ export default async function ClubHubPage({
 }) {
   const [{ id }, { tab: rawTab }] = await Promise.all([params, searchParams]);
   const tab: Tab = (TABS as readonly string[]).includes(rawTab ?? "") ? (rawTab as Tab) : "overview";
-  const { auth, canEdit } = await requirePageAuth();
+  const { auth, canEdit, org } = await requirePageAuth();
   const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
@@ -46,7 +47,7 @@ export default async function ClubHubPage({
     <DictProvider dict={ui} locale={locale}>
       <Nav />
       <main className="mx-auto max-w-4xl px-4 py-8">
-        <BackLink href="/directory?tab=clubs" label={t(ui, "clubs.hub.back")} />
+        <BackLink href={routes.orgDirectory(org.slug, "clubs")} label={t(ui, "clubs.hub.back")} />
 
         {/* Hub header: crest tile + name. The kit stripe below is the one bold
             element; everything else stays quiet. */}

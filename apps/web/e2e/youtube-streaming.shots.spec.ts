@@ -311,7 +311,7 @@ async function connectThroughConsent(page: Page): Promise<void> {
   await expect(submit, "the terms box alone is not a consent").toBeDisabled();
   await page.getByTestId("youtube-consent-minors").check();
   await expect(submit).toBeEnabled();
-  await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
+  await Promise.all([page.waitForURL(/\/o\/[^/]+\/streaming\?youtube=/), submit.click()]);
   await declineCookies(page);
   expect(slot!.fired - before, "the channel offer ran once for this connect (the fake was told which channels this state mints)").toBe(1);
 }
@@ -327,16 +327,18 @@ test("Streaming nav item: present between Directory and Sponsors, and the gantry
   await open(page, "/streaming");
   const link = page.getByTestId("nav-streaming");
   await expect(link, "the Streaming nav item").toBeVisible();
-  await expect(link).toHaveAttribute("href", "/streaming");
+  await expect(link).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
   await expect(link).toHaveAttribute("aria-label", dictOf("console")["nav.streaming"] ?? "");
   // Order: Directory, Streaming, then Sponsors closing the links (Settings went into the account menu, 2026-11-11).
   const order = await page.evaluate(() =>
     Array.from(document.querySelectorAll("header.app-gantry nav a")).map((a) => a.getAttribute("href") ?? ""),
   );
   const at = (needle: string) => order.findIndex((h) => h.startsWith(needle));
-  expect(at("/directory"), "Directory is in the nav").toBeGreaterThan(-1);
-  expect(at("/directory")).toBeLessThan(at("/streaming"));
-  expect(at("/streaming")).toBeLessThan(at(`/o/${orgSlug}/sponsors`));
+  const dir = `/o/${orgSlug}/directory`;
+  const streaming = `/o/${orgSlug}/streaming`;
+  expect(at(dir), "Directory is in the nav").toBeGreaterThan(-1);
+  expect(at(dir)).toBeLessThan(at(streaming));
+  expect(at(streaming)).toBeLessThan(at(`/o/${orgSlug}/sponsors`));
   expect(at(`/o/${orgSlug}/sponsors`), "Sponsors closes the links").toBe(order.length - 1);
   expect(at(`/o/${orgSlug}/settings`), "Settings is not a bar link").toBe(-1);
   // At 1280 Sponsors paints its word; Settings is one tap into the account menu, named and pointing at this org.
@@ -500,7 +502,7 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
   const firstChannel = channel(LONG);
   await offerChannels(page, [firstChannel]);
   await connectThroughConsent(page);
-  await expect(page).toHaveURL(/\/streaming\?youtube=connected$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=connected$/);
   const banner = page.getByTestId("youtube-landing");
   await expect(banner).toHaveAttribute("data-code", "connected");
   await expect(banner).toContainText(en("streaming.youtube.landing.connected"));
@@ -527,7 +529,7 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
   await expectNoSeriousAxe(page, "on /streaming with a connected channel");
   // Dismissing the banner clears the query.
   await page.getByTestId("youtube-landing-dismiss").click();
-  await expect(page).toHaveURL(/\/streaming$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming$/);
   await expect(page.getByTestId("youtube-landing")).toHaveCount(0);
 
   // --- several channels: the picker ------------------------------------------------------------------------------------------
@@ -539,7 +541,7 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
   await open(page, "/streaming");
   await page.getByTestId("youtube-connect").click();
   await connectThroughConsent(page);
-  await expect(page).toHaveURL(/\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
   const picker = page.getByTestId("youtube-picker");
   await expect(picker).toBeVisible();
   await expect(page.getByTestId("youtube-picker-channel")).toHaveCount(2);
@@ -563,7 +565,7 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByTestId("youtube-picker-channel").nth(1).check();
   await page.getByTestId("youtube-picker-connect").click();
-  await expect(page).toHaveURL(/\/streaming\?youtube=connected$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=connected$/);
   await expect(page.getByTestId("youtube-channel-row")).toHaveCount(2);
   await expect(page.getByTestId("youtube-channel-title").filter({ hasText: "Riverside Juniors" })).toHaveCount(1);
 
@@ -572,10 +574,10 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
   await open(page, "/streaming");
   await page.getByTestId("youtube-connect").click();
   await connectThroughConsent(page);
-  await expect(page).toHaveURL(/\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
   await page.getByTestId("youtube-picker-channel").first().check();
   await page.getByTestId("youtube-picker-connect").click();
-  await expect(page).toHaveURL(/\/streaming\?youtube=already_connected$/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/streaming\?youtube=already_connected$/);
   const already = page.getByTestId("youtube-landing");
   await expect(already).toHaveAttribute("data-code", "already_connected");
   await expect(already).toContainText(en("streaming.youtube.alreadyConnected"));

@@ -270,7 +270,7 @@ async function connectChannel(page: Page, title: string): Promise<string> {
     await page.getByTestId("youtube-consent").check();
     await page.getByTestId("youtube-consent-minors").check();
     await expect(submit).toBeEnabled();
-    await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
+    await Promise.all([page.waitForURL(/\/o\/[^/]+\/streaming\?youtube=/), submit.click()]);
     expect(fired, "the channel offer ran once for this connect").toBe(1);
   } finally {
     await page.unroute("**/api/youtube/connect", handler);

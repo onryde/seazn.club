@@ -15,7 +15,7 @@ const m = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/entitlements", () => ({ hasFeature: m.hasFeature, orgPlanKey: async () => "pro" }));
-vi.mock("@/server/page-auth", () => ({ requirePageAuth: m.requirePageAuth }));
+vi.mock("@/server/page-auth", () => ({ requireOrgPage: m.requirePageAuth }));
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
@@ -25,7 +25,7 @@ vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel's own client dependencies, doubled; the panel itself is REAL.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), replace: vi.fn(), push: vi.fn() }),
-  usePathname: () => "/streaming",
+  usePathname: () => "/o/riverside/streaming",
   useSearchParams: () => new URLSearchParams(""),
 }));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => true }));
@@ -40,7 +40,7 @@ type Params = { youtube?: string | string[]; pending?: string | string[] };
 const ORG = "org-1";
 const PENDING = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
 const render = async (params: Params = {}): Promise<string> =>
-  new Response((await prerender(await StreamingPage({ searchParams: Promise.resolve(params) }))).prelude).text();
+  new Response((await prerender(await StreamingPage({ params: Promise.resolve({ orgSlug: "riverside" }), searchParams: Promise.resolve(params) }))).prelude).text();
 /** A sentence as the English catalog renders it, HTML-escaped the way React writes it into markup. */
 const sentence = (k: MessageKey): string =>
   (messages[k] as string).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
@@ -50,7 +50,7 @@ const channelRow = {
 };
 
 beforeEach(() => {
-  m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, canEdit: true });
+  m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
   setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
@@ -114,7 +114,7 @@ describe("Streaming page + real panel — the connect round trip's landing reach
   });
 
   it("a viewer is told the outcome but is never handed the picker or a way to connect", async () => {
-    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, org: { id: "org-1", name: "Riverside CC", slug: "riverside", role: "owner" }, canEdit: false });
     expect(await render({ youtube: "connected" })).toContain('data-code="connected"');
     const pick = await render({ youtube: "pick", pending: PENDING });
     expect(pick).not.toContain('data-testid="youtube-picker"');

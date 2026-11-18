@@ -97,7 +97,8 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
-import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, linkIsOneOfParts, replayRows, type YoutubeRefusalCode } from "@/lib/youtube";
+import { useStreamingHref } from "@/components/use-org-paths";
+import { YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, linkIsOneOfParts, replayRows, type YoutubeRefusalCode } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -657,8 +658,6 @@ export type CodeCard =
  *  "none" told an organiser with five saved destinations to go and add one. */
 export type TargetsState = { status: "loading" } | { status: "error" } | { status: "ok"; list: StreamTarget[] };
 
-/** Where destinations are managed (D1) — the org's Streaming page (lib/youtube.ts, the one href). */
-const MANAGE_DESTINATIONS_HREF = STREAMING_PAGE_HREF;
 const LINK = "font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700";
 
 type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder | null };
@@ -1867,6 +1866,7 @@ function stopError(msg: Msg, state: PhoneTabState) {
 /** §8a option A (Stepper) + §8b option A (Three tiles) — values from the sheet. Pure. */
 export function PhoneTabBody(p: PhoneTabBodyProps) {
   const msg = useMsg();
+  const streamingHref = useStreamingHref();
   const msgPlural = useMsgPlural();
   const locale = useLocaleOrDefault();
   const state = phoneTabState(p.view);
@@ -2284,7 +2284,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
         {refusalFix === "reconnect" && (
           <a
             data-testid="stream-youtube-reconnect"
-            href={STREAMING_PAGE_HREF}
+            href={streamingHref}
             target="_blank"
             rel="noopener"
             className="btn btn-primary mt-3 min-h-12 w-full text-base"
@@ -2397,7 +2397,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               {/* D1: destinations are added, renamed and removed in Directory only — never inline here. */}
               <a
                 data-testid="stream-manage-destinations"
-                href={MANAGE_DESTINATIONS_HREF}
+                href={streamingHref}
                 target="_blank"
                 rel="noopener"
                 className={`${LINK} inline-flex min-h-11 items-center gap-1 text-sm md:min-h-0`}

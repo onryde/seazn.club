@@ -12,7 +12,7 @@ import { ProductTour } from "@/components/product-tour";
 import { hasAnyCompetitions } from "@/server/usecases/competitions";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
-import { STREAMING_PAGE_HREF } from "@/lib/youtube";
+import { streamingHref } from "@/lib/youtube";
 import { captureError } from "@/lib/sentry";
 import { streamingPageAccess } from "@/server/stream-panel-context";
 
@@ -232,7 +232,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 <span className={navLabelClass}>{t(dict, "nav.dashboard")}</span>
               </Link>
               <Link
-                href="/directory"
+                href={activeOrg ? routes.orgDirectory(activeOrg.slug) : "/directory"}
                 aria-label={t(dict, "nav.directory")}
                 className={navLinkClass}
               >
@@ -241,7 +241,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               </Link>
               {streamingOffered && (
                 <Link
-                  href={STREAMING_PAGE_HREF}
+                  href={streamingHref(activeOrg?.slug)}
                   aria-label={t(dict, "nav.streaming")}
                   data-testid="nav-streaming"
                   className={navLinkClass}

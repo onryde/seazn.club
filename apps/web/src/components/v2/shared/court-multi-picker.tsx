@@ -22,6 +22,7 @@
 // whole module graph (1000+ lines, ConfirmProvider, TagChipInput, ...) into
 // the schedule board and division-wizard bundles, which never otherwise load
 // it. The filter itself is three lines; reimplemented inline below instead.
+import { useDirectoryHref } from "@/components/use-org-paths";
 import Link from "next/link";
 import type { Venue as FullVenue, Court as FullCourt } from "@/components/v2/venues-panel";
 
@@ -226,6 +227,7 @@ export function CourtMultiPicker({
   moveDownLabel,
   removeLabelFor,
 }: CourtMultiPickerProps) {
+  const directoryVenuesHref = useDirectoryHref("venues");
   const groups = courtGroups(venues);
   // Venue-qualified, same as the board's columns and the AI pack (review
   // finding #13) — two courts named "Court 1" in different venues are legal
@@ -275,7 +277,7 @@ export function CourtMultiPicker({
         <p className="font-medium text-slate-700">{emptyTitle}</p>
         <p className="mt-1 text-slate-500">{emptyBody}</p>
         <Link
-          href="/directory?tab=venues"
+          href={directoryVenuesHref}
           prefetch={false}
           className="mt-2 inline-block font-medium text-purple-600 hover:underline"
         >

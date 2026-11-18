@@ -116,18 +116,18 @@ describe("Nav > Sponsors item", () => {
     expect(a!.href).toBe("/o/riverside/sponsors");
     expect(a!.aria).toBe("Sponsors");
     const order = navLinks(html).map((l) => l.href);
-    expect(order).toEqual(["/o/riverside", "/directory", "/streaming", "/o/riverside/sponsors"]);
+    expect(order).toEqual(["/o/riverside", "/o/riverside/directory", "/o/riverside/streaming", "/o/riverside/sponsors"]);
   });
 
   it("without Streaming the order is Dashboard, Directory, Sponsors", async () => {
     const order = navLinks(await renderShape({ streaming: false, player: false })).map((l) => l.href);
-    expect(order).toEqual(["/o/riverside", "/directory", "/o/riverside/sponsors"]);
+    expect(order).toEqual(["/o/riverside", "/o/riverside/directory", "/o/riverside/sponsors"]);
   });
 
   it("dual-role: a claimed player's links are the SAME links - Player home is in the account menu, not the bar", async () => {
     const player = navLinks(await renderShape({ streaming: true, player: true })).map((l) => l.href);
     const plain = navLinks(await renderShape({ streaming: true, player: false })).map((l) => l.href);
-    expect(player).toEqual(["/o/riverside", "/directory", "/streaming", "/o/riverside/sponsors"]);
+    expect(player).toEqual(["/o/riverside", "/o/riverside/directory", "/o/riverside/streaming", "/o/riverside/sponsors"]);
     expect(player).toEqual(plain);
   });
 

@@ -6,7 +6,7 @@ import { test, expect } from "@playwright/test";
 test("directory reads 'Players' and exposes inline image pickers", async ({ page }) => {
   // /people is a back-compat redirect onto the Players tab.
   await page.goto("/people");
-  await expect(page).toHaveURL(/\/directory\?tab=players/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/directory\?tab=players/);
   await expect(page.getByRole("link", { name: "Players" })).toBeVisible();
 
   // Add-player form carries a photo picker and a "Add player" button.
@@ -16,7 +16,7 @@ test("directory reads 'Players' and exposes inline image pickers", async ({ page
 
   // /players resolves to the same tab.
   await page.goto("/players");
-  await expect(page).toHaveURL(/\/directory\?tab=players/);
+  await expect(page).toHaveURL(/\/o\/[^/]+\/directory\?tab=players/);
 
   // Clubs tab: the thin "Clubs & Teams" register exposes a search box and an
   // inline create control (badge/contact editing now lives on the club hub).

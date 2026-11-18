@@ -11,7 +11,7 @@ import { YOUTUBE_CONSENT_VERSION, YOUTUBE_PRIVACIES, youtubeLanding } from "@/li
 import { pkceChallenge, pkceVerifier } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
 import { streamingPageOffer } from "@/server/stream-panel-context";
-import { PENDING_LIFETIME_SECONDS, insertPending, offerRefusal, reconnectTarget, seatFrozen, unusableConnectKeys } from "@/server/youtube/connect-flow";
+import { PENDING_LIFETIME_SECONDS, insertPending, orgSlugOf, offerRefusal, reconnectTarget, seatFrozen, unusableConnectKeys } from "@/server/youtube/connect-flow";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError, type YouTubePort } from "@/server/youtube/port";
 
@@ -67,15 +67,18 @@ export async function POST(req: Request) {
     // Membership first: an org the caller is not in is a 404 (no oracle for which orgs exist), a viewer is a 403.
     const role = await getOrgRole(body.orgId, user.id);
     if (!role) throw new HttpError(404, "Not found");
+    // Every landing below returns to THIS org's Streaming page, the one that started the connect (not the cookie's org).
+    const orgSlug = await orgSlugOf(body.orgId);
+    const landing = (code: Parameters<typeof youtubeLanding>[0]) => youtubeLanding(code, undefined, orgSlug);
     if (!(EDITOR_ROLES as readonly string[]).includes(role)) throw new HttpError(403, "Only an owner or admin can connect YouTube");
 
     // An over-quota admin seat is read-only (doc 10 §2.4), here as on the v1 routes: a frozen admin must not connect a channel.
-    if (await seatFrozen(body.orgId, user.id)) return redirectLocal(youtubeLanding("forbidden"), 303);
+    if (await seatFrozen(body.orgId, user.id)) return redirectLocal(landing("forbidden"), 303);
 
     // The Streaming page is offered only to an org entitled to the relay, on a deployment that can start a stream. The page and the
     // nav ask `streamingPageOffered`, which is derived from this very function, so a hand-made POST gets what the page would not offer.
     const refused = offerRefusal(await streamingPageOffer(body.orgId));
-    if (refused) return redirectLocal(youtubeLanding(refused), 303);
+    if (refused) return redirectLocal(landing(refused), 303);
 
     // D7: ONE consent per connection. A reconnect of a connection whose consent is on the CURRENT text needs no new tick (its
     // own record is carried forward); a first connect, or a connection consented to older wording, must tick BOTH boxes (D16). Half a
@@ -91,7 +94,7 @@ export async function POST(req: Request) {
     const unusable = unusableConnectKeys();
     if (unusable.length > 0) {
       log.error({ orgId: body.orgId, unusable }, "youtube connect: a key the callback seals with is unusable; nobody was sent to Google");
-      return redirectLocal(youtubeLanding("not_configured"), 303);
+      return redirectLocal(landing("not_configured"), 303);
     }
 
     // Which YouTube this process talks to is chosen by YOUTUBE_DRIVER, and a misspelt value cannot build a driver. Found HERE, before
@@ -101,7 +104,7 @@ export async function POST(req: Request) {
       driver = youtubeDriver();
     } catch {
       log.error({ orgId: body.orgId }, "youtube connect: YOUTUBE_DRIVER names no driver this process can build; nobody was sent to Google");
-      return redirectLocal(youtubeLanding("not_configured"), 303);
+      return redirectLocal(landing("not_configured"), 303);
     }
 
     const state = randomBytes(32).toString("base64url");
@@ -113,7 +116,7 @@ export async function POST(req: Request) {
       // The live driver refuses, synchronously, when Seazn's own Google client config is missing: a clean landing, not a 500.
       if (err instanceof YouTubeError && err.reason === "notConfigured") {
         log.error({ orgId: body.orgId }, "youtube connect: the Google client is not configured; nobody was sent to Google");
-        return redirectLocal(youtubeLanding("not_configured"), 303);
+        return redirectLocal(landing("not_configured"), 303);
       }
       throw err;
     }
