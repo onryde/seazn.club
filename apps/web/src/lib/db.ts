@@ -152,6 +152,12 @@ function getClient(): Sql {
   }
   const { ssl, prepare, max, schema, idleTimeout } = connectionOptions(url);
 
+  // postgres.js is PATCHED (patches/postgres@3.4.9.patch, pinned to exactly 3.4.9 in every package.json; the reasons are in
+  // pnpm-workspace.yaml). `begin()` reserves its connection from a hook that the unpatched `Connection.execute` skipped
+  // for a BEGIN written as the statement that filled a busy connection's pipeline (`max_pipeline`, left at the library's
+  // 100) or while the socket was over its high-water mark. That begin failed with UNSAFE_TRANSACTION, and its connection
+  // went back to this pool INSIDE the open transaction: pooled autocommit writes that landed on it were never committed.
+  // `__tests__/db-begin-pipeline.test.ts` drives both paths through this client.
   const client = postgres(url, {
     ssl,
     prepare,

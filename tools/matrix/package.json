@@ -8,7 +8,7 @@
     "@seazn/reference": "workspace:*",
     "fast-check": "^3",
     "playwright": "^1.61.1",
-    "postgres": "^3.4.9",
+    "postgres": "3.4.9",
     "typescript": "6.0.3",
     "zod": "^4.4.3"
   }

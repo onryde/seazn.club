@@ -333,18 +333,20 @@ export async function scoreEvent(
 
   // R10 M3: everything from here on runs AFTER the event committed, so the
   // invalidation and the pushes sit in `finally`. A post-commit hook that
-  // throws (`onDecided` and `refreshDiscipline` do not swallow their own
-  // failures) used to skip both, and the public pages kept serving the old
+  // throws used to skip both, and the public pages kept serving the old
   // document for a score that already stood: the shape F3 fixed in
-  // event-import.ts. The hook's error still propagates unchanged: `finally`
-  // rethrows it once the awaited invalidation is done, and the invalidation's
-  // own `.catch` means its failure can never replace it.
+  // event-import.ts. The hooks after the advance's fill are best-effort now
+  // (lots-draw fix, 2026-11-18): onDecided's table and bracket hooks, the
+  // discipline refresh below and refreshNews each log a failure by name and
+  // never fail the score. What can still throw is onDecided's fill
+  // transaction itself, which stays loud by ruling; its error propagates
+  // unchanged: `finally` rethrows it once the awaited invalidation is done,
+  // and the invalidation's own `.catch` means its failure can never replace it.
   // R10h: the fixtures this score named a winner (or loser) INTO, from the
   // advance's own write. The `finally` below reads it as it stands when it
-  // runs, so a throw from a LATER hook (discipline, news) still publishes
-  // them. A throw from inside `onDecided` itself, after its fill committed,
-  // does not — that path leaves the next fixture on its own 30s TTL, which is
-  // what every score did before this change.
+  // runs. A throw from inside `onDecided`'s fill does not reach it — that
+  // path leaves the next fixture on its own 30s TTL, which is what every
+  // score did before this change.
   // Player stats (owner ruling 2026-09-16, option B): a result, or an undo that
   // may have changed one, refolds the division's stat snapshot AFTER the
   // response (`player-stats-refresh.ts`, which explains the timing and the
@@ -373,7 +375,17 @@ export async function scoreEvent(
     if ((result.outcome !== null && result.status !== "needs_decision") || input.type === "core.void") {
       const filled = await onDecided(auth, fixtureId);
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
-      await refreshDiscipline(auth, fixtureId);
+      // Best-effort like refreshNews (which swallows its own): the result already stands, so a fold that throws (a dropped
+      // connection, a rule set it cannot read) is logged by name and never skips the news draft or the idempotency answer.
+      // The fold reads the division's whole ledger, so its next run (the division's next result or void) catches it up.
+      try {
+        await refreshDiscipline(auth, fixtureId);
+      } catch (err) {
+        log.error(
+          { err, event: "discipline_refresh_failed", fixtureId },
+          "scoring: the discipline fold did not run after the score (score write unaffected; the next result's fold catches it up)",
+        );
+      }
       await refreshNews(auth, fixtureId);
     }
 
@@ -1177,15 +1189,34 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     }
     return fixture;
   });
+  // The table's refold, after the commit like every hook below and best-effort the same way: the score already stands, and a
+  // refold that throws (a dropped connection, or before V528 a lots draw of a 72+ entrant tie class that the store could not
+  // index) must not answer that score with a 500 and skip the hooks after it. The stored table then stays as it was until
+  // the stage's next refold: its next result or void, or its completion, which ranks it afresh from its fixtures. When this
+  // result finished the stage, auto-advance below IS that completion, so it runs regardless and heals the table here.
   if (context && TABLE_KINDS.has(context.kind)) {
-    await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+    try {
+      await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+    } catch (err) {
+      log.error(
+        { err, event: "standings_recompute_failed", fixtureId, stageId: context.stage_id, poolId: context.pool_id },
+        "scoring: the stage's table did not refold after the score (score write unaffected; the stored table is stale until its next refold)",
+      );
+    }
     // D4a (P5 review finding): a decided-fixture correction is a standings
     // mutation exactly like overrideStandings' — LOCKED_FIXTURE_STATUSES
     // doesn't cover "decided", so this fires even on a fixture inside an
     // already-COMPLETE source stage. Same best-effort contract as the
     // overrideStandings call site: never blocks a score write that already
     // committed.
-    await markDependentSeedProposalsStale(auth, context.stage_id);
+    try {
+      await markDependentSeedProposalsStale(auth, context.stage_id);
+    } catch (err) {
+      log.error(
+        { err, event: "seed_proposals_stale_mark_failed", fixtureId, stageId: context.stage_id },
+        "scoring: the stage's dependent seed proposals were not marked stale (score write unaffected)",
+      );
+    }
   }
   // W4 T14 (FX-G16, FX-G18, X-QM-4, RB4-Q5): the same correction inside a COMPLETED knockout, which stored its ranks once at
   // completion. They are rewritten once it is decided again, and the proposals it seeds answer for it, a confirmed one too:
@@ -1210,7 +1241,8 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     }
   }
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
-  // finished, progression fires without a button.
+  // finished, progression fires without a button. Also after a refold that failed above: the completion never reads the
+  // stored table (it ranks the stage from its fixtures and writes the table afresh), so it is that table's repair.
   if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
@@ -1234,6 +1266,7 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
 }
 
 async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
+  // After the score's commit, like the completion below: a read that throws is logged, never the score's failure.
   const ready = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ auto_progress: boolean }[]>`
       select auto_progress from divisions where id = ${divisionId}`;
@@ -1259,6 +1292,12 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
                                      and gf.outcome->>'winner' = gf.home_entrant_id::text)))::int as open
       from fixtures where stage_id = ${stageId}`;
     return open === 0;
+  }).catch((err: unknown) => {
+    log.error(
+      { err, event: "auto_advance_check_failed", stageId, divisionId },
+      "scoring: auto-advance could not read whether the stage finished (score write unaffected; the organiser's Complete or the stage's next result advances it)",
+    );
+    return false;
   });
   if (!ready) return;
   const { completeStage } = await import("./stages");

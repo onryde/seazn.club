@@ -16,6 +16,11 @@ overrides:
   fflate@>=0.4.5 <0.4.9: ^0.4.9
   '@ai-sdk/provider-utils@>=4.0.0-beta.10 <4.0.33': ^4.0.54
 
+patchedDependencies:
+  postgres@3.4.9:
+    hash: 066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982
+    path: patches/postgres@3.4.9.patch
+
 importers:
 
   .:
@@ -30,8 +35,8 @@ importers:
         specifier: ^10.3.1
         version: 10.3.1
       postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
+        specifier: 3.4.9
+        version: 3.4.9(patch_hash=066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982)
       stripe:
         specifier: ^22.3.0
         version: 22.3.0(@types/node@26.1.2)
@@ -85,8 +90,8 @@ importers:
         specifier: ^26
         version: 26.6.2
       postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
+        specifier: 3.4.9
+        version: 3.4.9(patch_hash=066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982)
       vitest:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@26.6.2)(@vitest/coverage-v8@4.1.11)(vite@8.1.1(@types/node@26.6.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.0))
@@ -175,8 +180,8 @@ importers:
         specifier: ^8.5.28
         version: 8.5.28
       postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
+        specifier: 3.4.9
+        version: 3.4.9(patch_hash=066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982)
       posthog-js:
         specifier: ^1.399.0
         version: 1.399.0
@@ -375,8 +380,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
+        specifier: 3.4.9
+        version: 3.4.9(patch_hash=066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -396,8 +401,8 @@ importers:
         specifier: ^1.61.1
         version: 1.61.1
       postgres:
-        specifier: ^3.4.9
-        version: 3.4.9
+        specifier: 3.4.9
+        version: 3.4.9(patch_hash=066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982)
       typescript:
         specifier: 6.0.3
         version: 6.0.3
@@ -10844,7 +10849,7 @@ snapshots:
       picocolors: 1.1.1
       source-map-js: 1.2.1
 
-  postgres@3.4.9: {}
+  postgres@3.4.9(patch_hash=066ba0acbdcb657463c5b4dfcad22bde90da24a2c2881505dbe9b6b76f6b6982): {}
 
   posthog-js@1.399.0:
     dependencies:

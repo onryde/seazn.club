@@ -14,6 +14,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json apps/web/
 COPY packages/reference/package.json packages/reference/
 COPY packages/scheduler/package.json packages/scheduler/
+# pnpm-workspace.yaml's `patchedDependencies` (postgres.js) are read BY the
+# install: without the patch files in this layer it stops with ENOENT on
+# patches/<name>@<version>.patch, and the image does not build.
+COPY patches/ patches/
 # node 26 dropped corepack, so pnpm is installed explicitly rather than activated.
 RUN npm i -g pnpm@10.34.5
 # BuildKit cache mount over pnpm's content-addressed store: it persists on the
