@@ -349,12 +349,15 @@ describe("the sample against the real baseline (review C3c)", () => {
 
   it("every case the sample plans for ANY declaration has a baseline twin, so no PR reports a case absent by construction", () => {
     const have = new Set(baseline().cases.map((c) => c.caseId));
-    // W5 T16 (ruling 287): the pairwise cover that seats the cricket `test` cases on rows ran again without the deleted row, so 7 sit on
-    // a row the committed baseline (the W4 truth run, not re-baselined here) did not seat them on. Those 7, and nothing else, are
-    // absent from it - counted, every one a cricket test case, until the lane's next truth run re-baselines.
+    // W5 T16 (ruling 287): the pairwise cover that seats the cricket `test` cases on rows ran again without the deleted row, so 7 sat on
+    // a row the W4 baseline did not seat them on. W5 T25 re-baselined on a run planned without the deleted row: none is absent now.
+    // The W4 run is read by its own directory, so the 7 stay counted as the history this re-baseline closed (every one a cricket test case).
+    const w4 = new Set((JSON.parse(readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w4-final/ci/L3/results.json"), "utf8")) as { cases: { caseId: string }[] }).cases.map((c) => c.caseId));
+    const lackedByW4 = ids(planPrSample("all", offlineBuilderDefault)).filter((id) => !w4.has(id));
+    expect(lackedByW4.length, "the sample cases the W4 baseline lacked").toBe(7);
+    expect(lackedByW4.every((id) => /^[a-z_]+\|cricket\|test\|LIFECYCLE\|/.test(id))).toBe(true);
     const reseated = ids(planPrSample("all", offlineBuilderDefault)).filter((id) => !have.has(id));
-    expect(reseated.length, "cricket test cases seated on a row the baseline does not have them on").toBe(7);
-    expect(reseated.every((id) => /^[a-z_]+\|cricket\|test\|LIFECYCLE\|/.test(id))).toBe(true);
+    expect(reseated, "cricket test cases seated on a row the baseline does not have them on").toEqual([]);
     let checked = 0;
     for (const rows of ["all", ...ROW_KEYS.map((r) => [r])] as const) {
       const missing = ids(planPrSample(rows, offlineBuilderDefault)).filter((id) => !have.has(id));
@@ -379,9 +382,9 @@ describe("baselineL3Path (catalogue/baseline.json names the committed L3 baselin
     return { catalogue: join(repo, "catalogue"), repo };
   };
 
-  it("the real one names the committed baseline's L3 run (PR-B, Task 21; re-baselined to the W2e truth run's CI L3 by Task 35, then to the W3 truth run's by W3 Task 12, then to the W4 truth run's by W4 Task 17), resolved against the repo root, and that file exists", () => {
+  it("the real one names the committed baseline's L3 run (PR-B, Task 21; re-baselined to the W2e truth run's CI L3 by Task 35, then to the W3 truth run's by W3 Task 12, then to the W4 truth run's by W4 Task 17, then to the W5 app A truth run's by W5 Task 25), resolved against the repo root, and that file exists", () => {
     const p = baselineL3Path();
-    expect(p).toBe(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w4-final/ci/L3/results.json"));
+    expect(p).toBe(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w5-app-a/ci/L3/results.json"));
     expect(readFileSync(p, "utf8").length).toBeGreaterThan(1000);
   });
 

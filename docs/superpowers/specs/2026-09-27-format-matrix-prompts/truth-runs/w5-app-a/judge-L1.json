@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "mode": "regression",
+  "exit": 1,
+  "layer": "L1",
+  "runs": [
+    "ci-44395599687-1-l1"
+  ],
+  "plannedNotRun": null,
+  "compared": 195,
+  "skipped": 12,
+  "skippedIds": [
+    "triple_rr|football|11-a-side|LIFECYCLE@1280",
+    "triple_rr|cricket|t20|LIFECYCLE@1280",
+    "triple_rr|boardgame|blitz|LIFECYCLE@1280",
+    "triple_rr|carrom|club-29|LIFECYCLE@1280",
+    "triple_rr|generic|score|LIFECYCLE@1280",
+    "triple_rr|volleyball|beach|LIFECYCLE@1280",
+    "triple_rr|badminton|bwf-3x15|LIFECYCLE@1280",
+    "triple_rr|tabletennis|bo5|LIFECYCLE@1280",
+    "triple_rr|tennis|tour|LIFECYCLE@1280",
+    "triple_rr|icehockey|iihf|LIFECYCLE@1280",
+    "triple_rr|hockey|fih-outdoor|LIFECYCLE@1280",
+    "group_only|badminton|short|LIFECYCLE@1280"
+  ],
+  "unexpectedSkips": [],
+  "sample": false,
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [
+    {
+      "caseId": "league|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: 9703dfd8-b39e-4fea-b89f-18cd7c39942e: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: 9703dfd8-b39e-4fea-b89f-18cd7c39942e: stored decided {\"kind\":\"win\",\"winner\":\"7540bbda-cd62-4a63-936a-a5dcd5e34eb0\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); pad-ledger-as-generated: 9703dfd8-b39e-4fea-b89f-18cd7c39942e event 1 of 3 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":8698,\"ledgerSeenAtMs\":null,\"waitedMs\":31,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":8729,\"ledgerSeenAtMs\":null,\"waitedMs\":1,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "league_ko|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: 2652bd48-f8b9-4ad8-8c5a-39fe041c0813: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: 2652bd48-f8b9-4ad8-8c5a-39fe041c0813: stored decided {\"kind\":\"win\",\"winner\":\"db5ac6b2-5a28-49d0-a39a-c53f13035d72\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); pad-ledger-as-generated: 2652bd48-f8b9-4ad8-8c5a-39fe041c0813 event 1 of 3 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":7108,\"ledgerSeenAtMs\":null,\"waitedMs\":23,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":7131,\"ledgerSeenAtMs\":null,\"waitedMs\":1,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "groups_ko|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: e00cf212-4285-445b-8f87-7068bce589a7: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: e00cf212-4285-445b-8f87-7068bce589a7: stored decided {\"kind\":\"win\",\"winner\":\"c2fe768d-6f26-4ffe-b1fb-d4063e6b0d13\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); pad-ledger-as-generated: e00cf212-4285-445b-8f87-7068bce589a7 event 1 of 3 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":6887,\"ledgerSeenAtMs\":null,\"waitedMs\":31,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":6918,\"ledgerSeenAtMs\":null,\"waitedMs\":1,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "group_stepladder|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: 8174ed6a-8108-4d31-bf87-8911364d5e2f: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: 8174ed6a-8108-4d31-bf87-8911364d5e2f: stored decided {\"kind\":\"win\",\"winner\":\"ff96d9e9-6793-4e0d-bab2-21ada6a12aad\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); pad-ledger-as-generated: 8174ed6a-8108-4d31-bf87-8911364d5e2f event 1 of 3 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":8312,\"ledgerSeenAtMs\":null,\"waitedMs\":32,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":8344,\"ledgerSeenAtMs\":null,\"waitedMs\":1,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "group_playoffs|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: 1a7a03a0-3456-4f6a-b0d8-9cae67045d1b: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: 1a7a03a0-3456-4f6a-b0d8-9cae67045d1b: stored decided {\"kind\":\"win\",\"winner\":\"60874adb-2f67-4823-87e0-9a57339b936d\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); pad-ledger-as-generated: 1a7a03a0-3456-4f6a-b0d8-9cae67045d1b event 1 of 3 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":8361,\"ledgerSeenAtMs\":null,\"waitedMs\":45,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":8406,\"ledgerSeenAtMs\":null,\"waitedMs\":1,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "swiss|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-5825553f-d4e9-41da-8621-245fec726924\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-5825553f-d4e9-41da-8621-245fec726924\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "caseId": "swiss_playoff|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-a505c9db-151d-4c56-9cd6-7b51564dbc0b\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-a505c9db-151d-4c56-9cd6-7b51564dbc0b\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "caseId": "swiss_knockout|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-00eabe43-353a-4410-89f9-f5e703591391\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-00eabe43-353a-4410-89f9-f5e703591391\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "caseId": "knockout|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: c9bbd99b-942c-4d93-8ffc-e061c8a1902a: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: c9bbd99b-942c-4d93-8ffc-e061c8a1902a: stored decided {\"kind\":\"win\",\"winner\":\"c5588a11-9fc1-4873-ae28-a5b581c8f01f\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); life-bracket-decider-exercised: posted 3 settle(s), the product shows 2 settled win(s); pad-ledger-as-generated: c9bbd99b-942c-4d93-8ffc-e061c8a1902a event 1 of 2 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":9038,\"ledgerSeenAtMs\":null,\"waitedMs\":44,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":9082,\"ledgerSeenAtMs\":null,\"waitedMs\":2,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "qualifying_main|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: 94bda876-d30a-4b8c-833f-f90abb77edd8: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: 94bda876-d30a-4b8c-833f-f90abb77edd8: stored decided {\"kind\":\"win\",\"winner\":\"7f02ec5d-351d-4a7c-9eeb-c69055ee38ef\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); life-bracket-decider-exercised: posted 4 settle(s), the product shows 3 settled win(s); pad-ledger-as-generated: 94bda876-d30a-4b8c-833f-f90abb77edd8 event 1 of 2 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":6645,\"ledgerSeenAtMs\":null,\"waitedMs\":41,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":6686,\"ledgerSeenAtMs\":null,\"waitedMs\":0,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "double_elim|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: 035d7ec1-1653-46f6-b864-795dcb8e96f4: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: 035d7ec1-1653-46f6-b864-795dcb8e96f4: stored decided {\"kind\":\"win\",\"winner\":\"1e20071f-3baa-4059-83e2-558fc9458ac3\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); life-bracket-decider-exercised: posted 5 settle(s), the product shows 4 settled win(s); pad-ledger-as-generated: 035d7ec1-1653-46f6-b864-795dcb8e96f4 event 1 of 2 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":7775,\"ledgerSeenAtMs\":null,\"waitedMs\":34,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":7809,\"ledgerSeenAtMs\":null,\"waitedMs\":1,\"budgetMs\":15000}]"
+    },
+    {
+      "caseId": "americano|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-9958c1ca-8020-4970-b937-81e535d91d38\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-9958c1ca-8020-4970-b937-81e535d91d38\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "caseId": "ladder|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-49258fe8-caad-4893-a929-717023bb031a\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-49258fe8-caad-4893-a929-717023bb031a\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "caseId": "knockout_third_place|tennis|tour|LIFECYCLE@1280",
+      "was": "works",
+      "now": "red",
+      "reason": "life-fold-parity: dd7ea1aa-bcb8-40c1-8580-f6fb990cd08b: engine null vs product null — not the outcome the harness asked for; life-results-as-posted: dd7ea1aa-bcb8-40c1-8580-f6fb990cd08b: stored decided {\"kind\":\"win\",\"winner\":\"5e587b2e-f9ba-4996-bc9c-9c28dba21fac\",\"method\":\"regulation\"} over a stream the harness cannot fold (its local fold has no outcome); life-bracket-decider-exercised: posted 3 settle(s), the product shows 2 settled win(s); pad-ledger-as-generated: dd7ea1aa-bcb8-40c1-8580-f6fb990cd08b event 1 of 2 (core.start): missing — 0 of 1 row(s) within 15000ms — last taps: [{\"tap\":1,\"clickedAtMs\":6263,\"ledgerSeenAtMs\":null,\"waitedMs\":20,\"budgetMs\":15000},{\"tap\":2,\"clickedAtMs\":6283,\"ledgerSeenAtMs\":null,\"waitedMs\":0,\"budgetMs\":15000}]"
+    }
+  ],
+  "absent": []
+}

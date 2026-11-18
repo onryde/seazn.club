@@ -12,7 +12,9 @@ export function lockChanges(base: LockFile, head: LockFile): { compared: number;
   for (const [run, entry] of Object.entries(base.runs)) {
     compared++;
     if (!Object.hasOwn(head.runs, run)) changed.push({ run, kind: "removed" });
-    else if (canon(entry) !== canon(head.runs[run])) changed.push({ run, kind: "edited" });
+    // The same object in both is the same value: a caller that shares entries (the real-lock sweep in lock-append-only.test.ts tampers one
+    // entry of ~300) skips their canon. Two locks parsed apart never share, so the CLI compares every entry as before.
+    else if (entry !== head.runs[run] && canon(entry) !== canon(head.runs[run])) changed.push({ run, kind: "edited" });
   }
   const added = Object.keys(head.runs).filter((r) => !Object.hasOwn(base.runs, r));
   return { compared, added, changed };

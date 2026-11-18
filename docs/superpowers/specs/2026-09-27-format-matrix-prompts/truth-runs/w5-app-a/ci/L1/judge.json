@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "mode": "faults",
+  "exit": 1,
+  "layer": "L1",
+  "runs": [
+    "ci-44395599687-1-l1"
+  ],
+  "plannedNotRun": "allow",
+  "compared": 196,
+  "skipped": 0,
+  "skippedIds": [],
+  "unexpectedSkips": [],
+  "faults": [
+    {
+      "run": "ci-44395599687-1-l1",
+      "caseId": "swiss|tennis|tour|LIFECYCLE@1280",
+      "kind": "harness-error",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-5825553f-d4e9-41da-8621-245fec726924\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-5825553f-d4e9-41da-8621-245fec726924\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "run": "ci-44395599687-1-l1",
+      "caseId": "swiss_playoff|tennis|tour|LIFECYCLE@1280",
+      "kind": "harness-error",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-a505c9db-151d-4c56-9cd6-7b51564dbc0b\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-a505c9db-151d-4c56-9cd6-7b51564dbc0b\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "run": "ci-44395599687-1-l1",
+      "caseId": "swiss_knockout|tennis|tour|LIFECYCLE@1280",
+      "kind": "harness-error",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-00eabe43-353a-4410-89f9-f5e703591391\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-00eabe43-353a-4410-89f9-f5e703591391\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "run": "ci-44395599687-1-l1",
+      "caseId": "americano|tennis|tour|LIFECYCLE@1280",
+      "kind": "harness-error",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-9958c1ca-8020-4970-b937-81e535d91d38\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-9958c1ca-8020-4970-b937-81e535d91d38\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "run": "ci-44395599687-1-l1",
+      "caseId": "mexicano|tennis|tour|LIFECYCLE@1280",
+      "kind": "harness-error",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-9428f638-d4ab-4f5e-a785-c42bbf714f34\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-9428f638-d4ab-4f5e-a785-c42bbf714f34\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    },
+    {
+      "run": "ci-44395599687-1-l1",
+      "caseId": "ladder|tennis|tour|LIFECYCLE@1280",
+      "kind": "harness-error",
+      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-49258fe8-caad-4893-a929-717023bb031a\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-49258fe8-caad-4893-a929-717023bb031a\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
+    }
+  ],
+  "differing": [],
+  "missing": [],
+  "regressed": [],
+  "absent": []
+}
