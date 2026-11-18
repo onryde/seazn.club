@@ -3112,7 +3112,6 @@ export type DictionaryKey =
   | "footer.link.subProcessors"
   | "footer.link.terms"
   | "footer.rights"
-  | "footer.securePayments"
   | "footer.tagline"
   | "forfeit.phase.nothingPlayed"
   | "forfeit.phase.play"
