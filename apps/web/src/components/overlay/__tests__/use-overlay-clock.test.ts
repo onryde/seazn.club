@@ -458,38 +458,47 @@ describe("useOverlayClock — football follows the shared clock (S2-5 ruling 110
     expect(heldOffset(-300_000, -299_000)).toBe(-299_000);
   });
 
-  it("a non-football clock never reads the server offset: the same reading as with none", () => {
-    // ANCHOR is the file's own (H1 761 at 1 000 000, a 45-minute half, no matchTime). Five seconds on it reads 12:46,
-    // as the first case of this file reads it; an offset of five minutes must change nothing.
-    const t = stubTick();
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    let latest: string | null = null;
-    renderIsland(
-      (p: { clock: Clock }) => {
-        latest = useOverlayClock(p.clock, "in_play", 0, () => -300_000);
-        return null;
-      },
-      { clock: ANCHOR },
-    );
-    now.mockReturnValue(1_005_000); t.tick();
-    expect(latest).toBe("12:46");
+  // Owner ruling 2026-11-17: EVERY clock's anchor is a server `recorded_at`, so every clock is read on the server's
+  // time — hockey and ice hockey as football. Before it, a viewer machine five minutes fast showed a hockey clock five
+  // minutes ahead.
+  it("a non-football clock on a machine 5 minutes fast reads the same as on a correct machine", () => {
+    // ANCHOR is the file's own (H1 761 at 1 000 000, a 45-minute half, no matchTime): five seconds on it reads 12:46.
+    const readOn = (machineAheadMs: number): string | null => {
+      const t = stubTick();
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000 + machineAheadMs);
+      let latest: string | null = null;
+      renderIsland(
+        (p: { clock: Clock }) => {
+          latest = useOverlayClock(p.clock, "in_play", 0, () => -machineAheadMs);
+          return null;
+        },
+        { clock: ANCHOR },
+      );
+      now.mockReturnValue(1_005_000 + machineAheadMs); t.tick();
+      return latest;
+    };
+    expect(readOn(0)).toBe("12:46");
+    expect(readOn(300_000)).toBe("12:46");
   });
 
-  it("a non-football fixture keeps formatClockCapped's `45+` past the nominal, whatever the offset", () => {
-    const t = stubTick();
-    const now = vi.spyOn(Date, "now").mockReturnValue(2_000_000);
-    let latest: string | null = null;
-    renderIsland(
-      (p: { clock: Clock }) => {
-        latest = useOverlayClock(p.clock, "in_play", 0, () => -300_000);
-        return null;
-      },
-      // 2 690 s at 2 000 000: twenty seconds on is 2 710 s, past the 2 700 s half. Read through the offset it would sit
-      // at the anchor, 44:50; without it, it is in added time.
-      { clock: { ...ANCHOR, anchorSeconds: 2_690, anchorAtWallMs: 2_000_000 } },
-    );
-    now.mockReturnValue(2_020_000); t.tick();
-    expect(latest).toBe("45+");
+  it("a non-football fixture keeps formatClockCapped's `45+` past the nominal, read on the server's time", () => {
+    // 2 690 s anchored at 2 000 000 (server time); twenty server-seconds on is 2 710 s, past the 2 700 s half.
+    const readOn = (machineAheadMs: number): string | null => {
+      const t = stubTick();
+      const now = vi.spyOn(Date, "now").mockReturnValue(2_000_000 + machineAheadMs);
+      let latest: string | null = null;
+      renderIsland(
+        (p: { clock: Clock }) => {
+          latest = useOverlayClock(p.clock, "in_play", 0, () => -machineAheadMs);
+          return null;
+        },
+        { clock: { ...ANCHOR, anchorSeconds: 2_690, anchorAtWallMs: 2_000_000 } },
+      );
+      now.mockReturnValue(2_020_000 + machineAheadMs); t.tick();
+      return latest;
+    };
+    expect(readOn(0)).toBe("45+");
+    expect(readOn(300_000)).toBe("45+");
   });
 });
 

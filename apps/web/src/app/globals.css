@@ -1664,13 +1664,15 @@ html:has(.mkf) { scroll-snap-type: y proximity; }
 .ovl-team-meta { width: 66px; font-size: 33px; font-weight: 500;
                  color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 .ovl-divider { width: 1.5px; background: rgba(255, 255, 255, 0.14); }
-.ovl-clock-cell { display: flex; align-items: center; padding: 0 33px;
+/* `flex: none` + `nowrap` (owner report 2026-11-17): the bar's row shrinks every cell by default, and with a
+   43-character name the trailing cell was squeezed until "1 : 1" broke over two lines. The names give way, not this. */
+.ovl-clock-cell { display: flex; align-items: center; flex: none; padding: 0 33px; white-space: nowrap;
                   font-size: 60px; font-weight: 700; color: var(--sport-led); }
 /* Fix round 3, F6 — the between-cells LED count (`_THEMES.md` §3's rows for
    tennis/badminton/tabletennis/volleyball, e.g. "games-won cell LED
    ('1 : 0')"). Same slot football/hockey/icehockey's `.ovl-clock-cell`
    occupies (never both at once — `overlay-bar.tsx` renders exactly one). */
-.ovl-cells-led { display: flex; align-items: center; padding: 0 33px;
+.ovl-cells-led { display: flex; align-items: center; flex: none; padding: 0 33px; white-space: nowrap;
                  font-size: 60px; font-weight: 700; color: var(--sport-led); }
 /* Fix round 3, F5 — the bar's per-side set/game cells, moved out of the live
    cell's context line (F4/F5) and into the team cell, the bug's own
@@ -1682,10 +1684,6 @@ html:has(.mkf) { scroll-snap-type: y proximity; }
 .ovl-bar-cell-current { font-weight: 700; color: var(--sport-ink); }
 .ovl-canvas[data-sport-theme="volleyball"] .ovl-bar-cells { font-size: 45px; }
 .ovl-canvas[data-sport-theme="volleyball"] .ovl-bar-cell-current { font-size: 54px; }
-.ovl-brand { display: flex; align-items: center; padding: 0 33px;
-             background: var(--sport-board-2); font-size: 30px; font-weight: 600;
-             letter-spacing: 0.08em;
-             color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
 .ovl-detail-band { display: flex; align-items: center; gap: 33px; height: var(--ovl-bar-band-h);
                    padding: 0 33px; font-size: 30px; font-weight: 500;
                    background: color-mix(in srgb, var(--sport-board) 90%, transparent);
@@ -1825,9 +1823,6 @@ html:has(.mkf) { scroll-snap-type: y proximity; }
 .ovl-bug-context { font-size: 30px; font-weight: 500; min-width: 0;
                    white-space: nowrap; overflow: hidden;
                    color: color-mix(in srgb, var(--sport-ink) 65%, transparent); }
-.ovl-bug-brand { margin-left: auto; font-size: 30px; font-weight: 600;
-                 letter-spacing: 0.08em;
-                 color: color-mix(in srgb, var(--sport-ink) 70%, transparent); }
 /* Fix round 5, I3 — §4's header, right-hand slot: "brand Barlow 24/600 .08em
    ink 70 % — football family: clock Barlow 33/700 LED instead". The clock had
    been rendering through `.ovl-bug-brand` above with only `color` overridden
@@ -1924,22 +1919,6 @@ html:has(.mkf) { scroll-snap-type: y proximity; }
    (`--sport-board`) with a `--sport-led` limelight border. The composited
    scorebug keeps its own inset unchanged. */
 .ovl-slate { position: absolute; inset: 0; overflow: hidden; background: transparent; z-index: 1; }
-/* The brand sits at the top-RIGHT corner of the card REGION (review, PR #974),
-   not at a fixed 72/54: that point is inside the bug's declared box, under the
-   bug's own board. The region is disjoint from the template's box by
-   construction (`cardRegionFor`), and the gallery's check 4 holds the brand
-   off the card it labels. Right, not left: the region's top-left corner beside
-   the bug put this "seazn" a few px from the bug's own, reading as a stutter;
-   top-right is the broadcast watermark's corner, far from every template's
-   brand (the bar's is at its foot). `right` is measured from the 1920 canvas.
-   R4 S7: the corner is the template's WHOLE region (`--ovl-brand-*`), not the
-   strip the scene carousel moves the card into: a card filling that strip
-   reaches its top-right corner. */
-.ovl-slate-brand { position: absolute; top: var(--ovl-brand-y, var(--ovl-card-y, 72px));
-                    right: calc(1920px - var(--ovl-brand-x, var(--ovl-card-x, 96px)) - var(--ovl-brand-w, var(--ovl-card-w, 1728px)));
-                    font-size: 30px; font-weight: 600; letter-spacing: 0.08em;
-                    color: color-mix(in srgb, var(--sport-ink) 75%, transparent); z-index: 2;
-                    text-shadow: 0 1px 8px color-mix(in srgb, var(--sport-board) 70%, transparent); }
 /* R2007 step 9b (coordinator decision G2): the card is laid out in the REGION
    the template leaves free — `cardRegionFor(def.sceneCardSafeArea)`, written
    by the stage as `--ovl-card-x/y/w/h` on `.ovl-canvas` — and centred in it.
@@ -2523,6 +2502,23 @@ html:has(.mkf) { scroll-snap-type: y proximity; }
    `min-width: 0` on EVERY flex ancestor of the name, or `truncate` silently
    widens the row instead (Review Focus 5).
    ─────────────────────────────────────────────────────────────────────────── */
+/* The corner brand badge (owner, 2026-11-17). Its box is the registry's `BRAND_BADGE_BOX`, set inline by
+   `overlay-brand-badge.tsx`; this only lays out what is inside it. It sits over the PICTURE, not over a board, so the
+   words and the logo ride their own plate and the timer its own — the sport's board, SOLID: ink 75 % on board is a
+   proven pair (`overlay-tokens.ts` `ink75-on-board`), and a see-through plate over bright video is not. Type is 30 px, the canvas's readability floor
+   (`overlay-readability-css.test.ts`): "small" on a broadcast still has to be read on a phone. */
+.ovl-badge { position: absolute; display: flex; align-items: center; justify-content: flex-end; gap: 12px;
+             z-index: 4; pointer-events: none; }
+.ovl-badge-plate { display: flex; align-items: center; gap: 12px; height: 100%; padding: 0 16px 0 18px;
+                   border-radius: 8px; background: var(--sport-board); }
+.ovl-badge-by { font-size: 30px; font-weight: 500; white-space: nowrap;
+                color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
+.ovl-badge-logo { display: block; height: 30px; width: auto; }
+.ovl-badge-timer { display: flex; align-items: center; height: 100%; padding: 0 14px; border-radius: 8px;
+                   background: var(--sport-board);
+                   font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums;
+                   color: color-mix(in srgb, var(--sport-ink) 75%, transparent); }
+
 .ovl-sponsor-slot {
   position: absolute;
   left: var(--ovl-sponsor-x);

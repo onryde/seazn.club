@@ -240,8 +240,12 @@ describe.skipIf(!HAS_DB)("the overlay page's relay access (R2005 change 1)", () 
 
   it("8. without sid/st the page is unchanged: ?host=compositor alone, or sid alone, renders the SAME markup and props", async () => {
     const BEFORE = ["decidedTemplates", "delayMs", "dict", "fit", "fixtureId", "initial", "realtime", "sides", "slateMeta", "sportKey", "startLabel", "style"];
+    // The corner badge's match timer reads the wall clock (owner, 2026-11-17), and this fixture is started: five renders
+    // a DB round-trip apart can straddle a second. Its READING is masked; that it is there (or not) still compares.
+    const render = (el: ReactElement) =>
+      renderToStaticMarkup(el).replace(/(data-testid="ovl-badge-timer"[^>]*>)[^<]*/g, "$1#");
     const plain = await visit(pub.fixtureId);
-    const html = renderToStaticMarkup((plain as { el: ReactElement }).el);
+    const html = render((plain as { el: ReactElement }).el);
     expect(html, "the positive pair: the overlay rendered").toContain('data-testid="ovl-root"');
     expect(Object.keys(propsOf(plain)).sort(), "the props the page passed before R2005, and only those").toEqual(BEFORE);
     let checked = 0;
@@ -250,7 +254,7 @@ describe.skipIf(!HAS_DB)("the overlay page's relay access (R2005 change 1)", () 
       const v = await visit(pub.fixtureId, query);
       const label = JSON.stringify(Object.keys(query));
       expect(propsOf(v), label).toEqual(propsOf(plain));
-      const other = renderToStaticMarkup((v as { el: ReactElement }).el);
+      const other = render((v as { el: ReactElement }).el);
       expect(other, label).toBe(html);
       checked++;
     }

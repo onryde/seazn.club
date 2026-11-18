@@ -120,7 +120,6 @@ describe("OverlayStage threads its dictionary to the theme (`msg`)", () => {
     const partial: Record<string, string> = {
       "overlay.slate.warmingHeadlineVs": "ZZTOP {home} {away}",
       "overlay.slate.warmingLineTossPending": "TOSS|{start}",
-      "overlay.brand": "seazn",
     };
     // Cricket: the toss line is a sport WITH a toss's (review d, PR #974) — the only line here a dictionary writes.
     const html = renderToStaticMarkup(<OverlayStage {...props({ dict: partial, sportKey: "cricket", style: "bar" })} />);

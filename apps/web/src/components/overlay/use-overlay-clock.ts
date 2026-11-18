@@ -146,7 +146,7 @@ function sameMatchTime(a: MatchTimeCfg | undefined, b: MatchTimeCfg | undefined)
 }
 
 /** The label for `clock` as of wall time `nowMs` (pure — the F16 rules). A football clock (`matchTime`) is read by
- *  `footballLabelAt`; every other sport's reading below is unchanged, and never sees `serverOffsetMs`. */
+ *  `footballLabelAt`; every other sport's is elapsed time in the period, capped (F16). Both read the server's time. */
 export function clockLabelAt(
   clock: Clock,
   nowMs: number,
@@ -160,7 +160,9 @@ export function clockLabelAt(
   if (clock.running === false || clock.nominalSeconds === undefined) {
     return formatClockCapped(clock.anchorSeconds, clock.nominalSeconds);
   }
-  const pictureNow = nowMs - presentationNowOffsetMs;
+  // On the SERVER's clock, as football's is (owner ruling 2026-11-17): the anchor is a row's `recorded_at`, so a
+  // viewer machine five minutes fast must not read five minutes ahead.
+  const pictureNow = nowMs + (serverOffsetMs ?? 0) - presentationNowOffsetMs;
   const elapsed = Math.max(0, (pictureNow - clock.anchorAtWallMs) / 1000);
   return formatClockCapped(clock.anchorSeconds + elapsed, clock.nominalSeconds);
 }

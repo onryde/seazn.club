@@ -25,3 +25,9 @@ hand them the 4K PNG.
 | `../logo-wide.png` | Marketing nav (light backgrounds) |
 | `../logo-wide-night.png` | Console nav + night surfaces |
 | `../logo-square.png` | App tile source (`../icons/*` are derived sizes) |
+
+## Stream overlay
+
+| File | Use |
+| --- | --- |
+| `seazn-logo-night-tight.png` | The overlay's corner badge ("Powered by"): `logo-wide-night.png` cropped to its ink, so the wordmark fills a 30 px line |

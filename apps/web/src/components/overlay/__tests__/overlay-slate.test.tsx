@@ -110,12 +110,12 @@ describe("OverlayMatchCard — card-only layer (no nested scorebug)", () => {
     ["warming", { ...BASE_MODEL, live: false, decided: false, voided: false }],
     ["ended (decided)", { ...BASE_MODEL, live: false, decided: true, result: "Milton Keynes Rovers won by 44 runs" }],
     ["ended (voided, no verdict)", { ...BASE_MODEL, live: false, decided: false, voided: true }],
-  ])("%s: .ovl-slate, brand, and card mount — never ovl-bar / ovl-bug", (_label, model) => {
+  ])("%s: .ovl-slate and card mount — never ovl-bar / ovl-bug, and no brand mark of its own", (_label, model) => {
     const tree = render(model).tree();
     expect(tree.some((el) => classesOf(el) === "ovl-slate"), "root").toBe(true);
-    const brand = tree.find((el) => classesOf(el).includes("ovl-slate-brand"));
-    expect(brand, "brand").toBeDefined();
-    expect(textOf(brand!)).toBe("seazn");
+    // Owner, 2026-11-17: the corner badge (`overlay-brand-badge.tsx`) is the one brand mark on the picture.
+    expect(tree.some((el) => classesOf(el).includes("ovl-slate-brand")), "no slate brand").toBe(false);
+    expect(tree.some((el) => textOf(el) === "seazn"), "no wordmark text").toBe(false);
     expect(byTestId(tree, "ovl-slate-card"), "card").toBeDefined();
     expect(
       tree.some((el) => classesOf(el).split(" ").includes("ovl-bar")),
@@ -137,18 +137,15 @@ describe("OverlayMatchCard — card-only layer (no nested scorebug)", () => {
     expect(OverlaySlate).toBe(OverlayMatchCard);
   });
 
-  it("fix round 5, I5 — the brand is RESOLVED, not a hardcoded literal", () => {
-    const keyMsg: OverlayMsg = (key) => key;
-    const tree = renderIsland(
-      OverlayMatchCard,
-      { model: { ...BASE_MODEL, live: false }, msg: keyMsg, sportKey: "cricket" },
-      expand,
-    ).tree();
-    const brand = tree.find((el) => classesOf(el).includes("ovl-slate-brand"));
-    expect(textOf(brand!), "card resolves the wordmark through the dictionary channel").toBe(
-      "overlay.brand",
-    );
-    expect(textOf(brand!)).not.toBe("seazn");
+  it("owner 2026-11-17 — the card asks the dictionary for no brand word", () => {
+    const asked: string[] = [];
+    const spyMsg: OverlayMsg = (key) => {
+      asked.push(key);
+      return key;
+    };
+    renderIsland(OverlayMatchCard, { model: { ...BASE_MODEL, live: false }, msg: spyMsg, sportKey: "cricket" }, expand).tree();
+    expect(asked.length, "the card resolved its copy through msg").toBeGreaterThan(0);
+    expect(asked).not.toContain("overlay.brand");
   });
 });
 

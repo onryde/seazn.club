@@ -75,7 +75,8 @@ interface CellProbe {
   barLift: number | null;
   templateBox: Box | null;
   cardBox: Box | null;
-  /** 4 — the slate's brand mark: painted by the warming/ended layer, so it owes the template's box what the card does. */
+  /** 4 — the corner brand badge (owner, 2026-11-17; the slate's own mark is gone): on EVERY cell, and it owes the
+   *  template's box and the match card what the card owes the template. */
   brandBox: Box | null;
   /** 4b — the card's own fit: content it clips, a score that wraps in its tile, a pill whose first letter is cut. */
   cardFit: string[];
@@ -173,7 +174,7 @@ async function probeCells(page: Page): Promise<CellProbe[]> {
         const templateBox = toCanvas(union(tpl ? [...tpl.children].map((c) => c.getBoundingClientRect()) : []));
         const card = root.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
         const cardBox = card ? toCanvas(card.getBoundingClientRect()) : null;
-        const brand = root.querySelector<HTMLElement>(".ovl-slate-brand");
+        const brand = root.querySelector<HTMLElement>('[data-testid="ovl-badge"]');
         const brandBox = brand ? toCanvas(brand.getBoundingClientRect()) : null;
         // 4b — a card that fits its region by clipping is not a fit (`.ovl-slate-card` is overflow: hidden, max-height
         // 100%); a tile score on two lines, or a pill centred past its own left edge, is the D9 floor bought badly.
@@ -483,16 +484,15 @@ test.describe("the staff overlay gallery (R2007)", () => {
     expect.soft(cardless, "a warming, ended or variant cell with no card").toEqual([]);
     expect.soft(outside, "templates outside their declared sceneCardSafeArea").toEqual([]);
     expect.soft(overlapping, "cards over the template's declared box").toEqual([]);
-    // The brand mark the slate paints beside its card (review, PR #974): it sat at a fixed 72/54 — inside the bug's
-    // declared box, under the bug's own board. It owes the template's box what the card does, and it must not sit on
-    // the card it labels.
+    // The corner brand badge (owner, 2026-11-17 — it replaced the slate's own mark, which once sat inside the bug's
+    // declared box). On every cell it owes the template's box what the card does, and it must not sit on the card.
     const withBrand = cells.filter((c) => c.brandBox !== null);
     const brandOver = withBrand
       .filter((c) => intersects(c.brandBox!, c.safeArea) || (c.cardBox !== null && intersects(c.brandBox!, c.cardBox)))
       .map((c) => `${c.key}: brand ${fmt(c.brandBox)} meets declared ${fmt(c.safeArea)} or card ${fmt(c.cardBox)}`);
-    console.log(`[4] slate brands checked: ${withBrand.length}, over the template or the card: ${brandOver.length}`);
-    expect(withBrand.length, "anti-vacuity: no slate brand was read").toBeGreaterThan(0);
-    expect.soft(brandOver, "the slate's brand over the template's declared box or its own card").toEqual([]);
+    console.log(`[4] brand badges checked: ${withBrand.length}, over the template or the card: ${brandOver.length}`);
+    expect(withBrand.length, "anti-vacuity: no brand badge was read").toBeGreaterThan(0);
+    expect.soft(brandOver, "the brand badge over the template's declared box or the match card").toEqual([]);
     const misfit = withCard.flatMap((c) => c.cardFit.map((f) => `${c.key}: ${f}`));
     const pills = cells.reduce((n, c) => n + c.pillsChecked, 0);
     console.log(`[4b] cards checked for fit: ${withCard.length}, pills checked: ${pills}, misfits: ${misfit.length}`);
@@ -547,7 +547,7 @@ test.describe("the staff overlay gallery (R2007)", () => {
             const card = cards[0];
             const slot = card?.closest<HTMLElement>('[data-testid="ovl-sponsor-slot"]') ?? null;
             const match = root.querySelector<HTMLElement>('[data-testid="ovl-slate-card"]');
-            const brand = root.querySelector<HTMLElement>(".ovl-slate-brand");
+            const brand = root.querySelector<HTMLElement>('[data-testid="ovl-badge"]');
             const base = {
               key: cell.dataset.galleryCell ?? "",
               template: cell.dataset.template ?? "",

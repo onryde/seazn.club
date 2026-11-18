@@ -128,7 +128,6 @@ function TeamName({ ladder }: { ladder: readonly string[] }) {
 export function OverlayBar({
   model,
   tick,
-  msg,
 }: {
   model: OverlayModel;
   tick: [boolean, boolean];
@@ -199,10 +198,8 @@ export function OverlayBar({
           </div>
         ) : null}
         {model.header.clock ? <div className="ovl-clock-cell ovl-display">{model.header.clock}</div> : null}
-        {/* Fix round 5, I5 — `overlay.brand` shipped in all four locales with
-            no reader while three components hardcoded the wordmark. One
-            authority, resolved through the SAME `msg` the projection uses. */}
-        <div className="ovl-brand ovl-display">{msg("overlay.brand")}</div>
+        {/* No brand cell (owner, 2026-11-17): the wordmark left the bar when the corner badge (`overlay-brand-badge.tsx`)
+            took the brand for every template — one mark per picture. */}
       </div>
       {hasDetailBand(model) ? (
         <div data-testid="ovl-detail" className="ovl-detail-band">
