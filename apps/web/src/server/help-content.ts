@@ -15,6 +15,7 @@ import type { Options as SanitizeSchema } from "rehype-sanitize";
 import rehypeStringify from "rehype-stringify";
 import type { MatrixData } from "@/lib/pricing-matrix";
 import { hasHelpTokens, resolveHelpTokens } from "@/server/help-tokens";
+import { rehypeHelpHeadingIds } from "@/server/help-heading-ids";
 
 export const HELP_ROOT = join(process.cwd(), "content", "help");
 
@@ -44,7 +45,7 @@ export interface HelpArticle {
 
 // Help prose allows a little more than organiser prose: inline code and
 // tables (for shortcut/limit tables), still no raw HTML survivors.
-const HELP_SCHEMA: SanitizeSchema = {
+export const HELP_SCHEMA: SanitizeSchema = {
   ...defaultSchema,
   tagNames: [
     "h2", "h3", "p", "strong", "em", "ul", "ol", "li", "a", "img",
@@ -66,6 +67,10 @@ const pipeline = unified()
   .use(remarkGfm)
   .use(remarkRehype)
   .use(rehypeSanitize, HELP_SCHEMA)
+  // AFTER the sanitiser, deliberately: HELP_SCHEMA still strips every `id` (so nothing an
+  // author writes can name one), and this step then gives h2/h3 their own, derived from the
+  // heading text. See help-heading-ids.ts.
+  .use(rehypeHelpHeadingIds)
   .use(rehypeStringify);
 
 /**
