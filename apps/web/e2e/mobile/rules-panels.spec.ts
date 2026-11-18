@@ -986,3 +986,69 @@ test("W2c division lock lines at every width: each line is on screen and readabl
   expect(here, `the lock line set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await ids());
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });
+
+// W5 Task 17c (owner 2026-11-18): below `md` a stage action is pressed inside the Stage tools sheet, and the line it raises is said at
+// the TOP of the page, under the sheet's scrim. The sheet closes when the action settles so the line shows. Driven on the desk with a
+// stale tab (another tab completes the stage first, so Complete answers `already_complete`): the notice must be visible, the sheet and
+// its backdrop gone, focus back on the trigger, and a hit test at the notice's centre must land on the notice - not on a scrim.
+// At >= 768 there is no sheet (the trigger is `md:hidden`): the same press must leave the same notice with no backdrop ever mounted.
+test("stage tools sheet: a settled action closes it, so the outcome notice is visible and not under the scrim", async ({ page, request }) => {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `Mobile sheet closes ${TAG}`,
+    visibility: "private",
+  });
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "Sheet closes",
+    sport_key: "generic",
+    variant_key: "score",
+    config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  const divisionId = div.data!.id;
+  const added = await addEntrantsViaApi(request, divisionId, ["Sheet A", "Sheet B", "Sheet C", "Sheet D"]);
+  expect(added.status, "four entrants").toBe(201);
+  const { stageId, fixtureIds } = await createStageAndGenerate(request, divisionId);
+  expect(fixtureIds.length, "C(4,2) lines").toBe(6);
+  expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+  for (const id of fixtureIds) {
+    const res = await apiJson(request, `/api/v1/fixtures/${id}/events`, "POST", {
+      expected_seq: 0,
+      type: "generic.result",
+      payload: { p1Score: 2, p2Score: 0 },
+    });
+    expect(res.status, JSON.stringify(res.error)).toBe(201);
+  }
+
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const card = page.locator(`[data-stage-id="${stageId}"]`);
+  const trigger = card.getByTestId("stage-rail-trigger");
+  const complete = card.getByTestId("stage-complete");
+  await expect(complete, "every match is settled: Complete is offered").toBeEnabled({ timeout: 20_000 });
+  // The stale tab: another tab completes the stage first.
+  expect((await apiJson<{ completed: boolean }>(request, `/api/v1/stages/${stageId}/complete`, "POST")).data?.completed).toBe(true);
+
+  const folded = await trigger.isVisible(); // gated on the trigger being visible, never on a width literal (AGENTS.md rule 22)
+  if (folded) {
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("stage-rail-backdrop"), "premise: the scrim is up while the sheet is open").toHaveCount(1);
+  }
+  await complete.click();
+
+  const notice = page.getByTestId("schedule-notice");
+  await expect(notice, "the desk says the stage was already complete").toContainText("already complete", { timeout: 20_000 });
+  await expect(page.getByTestId("stage-rail-backdrop"), "no scrim once the action has settled").toHaveCount(0);
+  if (folded) {
+    await expect(trigger, "the sheet is closed").toHaveAttribute("aria-expanded", "false");
+    await expect(trigger, "focus returns to the control that opened the sheet").toBeFocused();
+  }
+  await notice.scrollIntoViewIfNeeded();
+  const hit = await notice.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return at === el || el.contains(at);
+  });
+  expect(hit, "a hit test at the notice lands on the notice, not on a scrim").toBe(true);
+  await expectNoHorizontalScroll(page);
+});

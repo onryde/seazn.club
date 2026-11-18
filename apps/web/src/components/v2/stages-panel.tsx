@@ -727,6 +727,12 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // sheet can usefully be open at a time, since a second open sheet would be
   // a second `position:fixed` overlay stacked on the first.
   const [openRailFor, setOpenRailFor] = useState<string | null>(null);
+  // W5 T17c (owner 2026-11-18): below `md` a stage action is pressed inside the Stage tools sheet, and every line the action
+  // says (notice, caution, refusal, paywall) is said at the top of the PAGE, under the sheet's scrim. So the sheet closes when
+  // the action SETTLES - landed, a no-op or refused - never on the tap, and only if it is THIS stage's sheet that is open (a
+  // late answer must not close a sheet the organiser has since opened on another stage). Closing runs the rail's effect
+  // cleanup, which hands focus back to the trigger that opened it. At `md` and up there is no sheet and this changes nothing.
+  const closeRailSheet = (stageId: string) => setOpenRailFor((cur) => (cur === stageId ? null : cur));
   // Board slots for the fixture "When" / add-match "When" fields (quarter-
   // hour-time-select design). This panel doesn't otherwise hold the
   // division's schedule config, so it's fetched once here; a failed fetch or
@@ -849,6 +855,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       return refusal;
     } finally {
       setBusy(null);
+      closeRailSheet(stageId);
     }
   }
 
@@ -934,11 +941,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // W3 T11 review m1: a caution, not a success — the amber channel.
         setWarning(generateWarningText(out, msgPlural));
         // W3 app-B T7 (X-SW-10): and the look-ahead's caution, in its own line. Pair next is pressed inside the phone's
-        // Stage-tools sheet and the line is said outside it, so - as a refusal does - a caution closes the sheet to be
-        // seen; the ordinary Pair leaves it as it was.
-        const next = nextRoundNoticeOf(out);
-        setNextRound(next);
-        if (next !== null) setOpenRailFor(null);
+        // Stage-tools sheet and the line is said outside it; since W5 T17c every settled action closes the sheet (`finally`).
+        setNextRound(nextRoundNoticeOf(out));
       } else if (action === "unpair") {
         const out = await apiV1<{ cleared: number; round: number }>(
           `/api/v1/stages/${stageId}/unpair`,
@@ -1024,6 +1028,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       return false;
     } finally {
       setBusy(null);
+      closeRailSheet(stageId);
     }
   }
 
@@ -1158,7 +1163,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     <div className="space-y-6">
       {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
       {notice && (
-        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" data-testid="schedule-notice">
           {notice}
           {undoable && (
             <button
