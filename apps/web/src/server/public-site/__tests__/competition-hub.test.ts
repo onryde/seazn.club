@@ -87,6 +87,14 @@ vi.mock("@/server/usecases/player-stats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/player-stats")>()),
   fixturesStatsReading: statsReadingMock,
 }));
+// W5 T8: the departure notes' ledger read (`division_events`) is SQL too - a real database's job (`table-withdrawal-retry-reinstate`).
+// It was unmocked here from T8 on, so this file read "DATABASE_URL is not set" in the unit job, which has
+// no database (and an invalid uuid against a local one). Here it answers no departures: the footnote is not what this file tests.
+const tableWithdrawalsMock = vi.hoisted(() => vi.fn(async (): Promise<never[]> => []));
+vi.mock("../table-withdrawals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../table-withdrawals")>()),
+  loadTableWithdrawals: tableWithdrawalsMock,
+}));
 // Observed, not silenced for its own sake: a read the hub swallows must still
 // leave a warning behind, or a broken discipline query reads as "no bans".
 const logMock = vi.hoisted(() => ({
@@ -875,6 +883,7 @@ beforeEach(() => {
   hasFeatureMock.mockResolvedValue(true);
   readLeaderRowsMock.mockResolvedValue([]);
   suspensionEntriesMock.mockResolvedValue([]);
+  tableWithdrawalsMock.mockResolvedValue([]);
   memberRefsMock.mockResolvedValue({});
   registrationMock.mockResolvedValue({
     competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
