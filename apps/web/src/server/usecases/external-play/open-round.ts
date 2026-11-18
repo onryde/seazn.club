@@ -128,14 +128,45 @@ type Tx = postgres.TransactionSql | postgres.Sql;
  *  call and cannot happen inside this transaction. A board a game IS or MAY BE on file behind keeps its meeting, unmarked -
  *  the camera evidence of that game (N-2; gameEvidenceOn, the one rule ensureMeeting keeps too). The re-arm's boards are
  *  game-less by their own selection (a finished bridge with no challenge, no create marker, no move), so the same clause
- *  spares nothing there. */
-async function retireBoardsMeetings(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<string[]> {
+ *  spares nothing there.
+ *
+ *  `mode` is who is asking, and only the re-open spares by pairing (check-in capacity, spec §11):
+ *  - `"reopen"` (the organiser's re-open, a fresh window for a round nobody was invited into): an UNENDED room that is
+ *    unadopted (both stamps null: the pre-mint job's room for a board with no pairing yet) or stamped for the fixture's
+ *    CURRENT pairing is kept, unmarked - it is a room this window needs, made before anyone checked in, and retiring it would
+ *    make the first claim of every player pay for another. Only an EARLIER pairing's room is retired. An ENDED room is never
+ *    kept, whatever it names: spared, it would refuse every later claim for the board VIDEO_MEETING_ENDED (ensureMeeting: the
+ *    same pair and `endedAt !== null`), so the board could never check in again. The clause is in the mark, so an ended room
+ *    stays on the path it always had (marked, then deleted). It is not the only thing that retires one: the delete takes every
+ *    ended row on its own, so dropping the conjunct alone changes nothing observable - measured, an equivalent mutant - and
+ *    only both together (an ended room spared by the mark AND the delete) fail the ended-room case. A kept room that is ended
+ *    between the two statements is deleted as the ended row it has become.
+ *  - `"rearm"` (D17, a board replayed after its bridge finished with no game): every room of the board without a game, stamped
+ *    for what it likes. The replay's bridge row is made afresh, and nobody ruled that a room carrying the old attempt's
+ *    `last_publisher_seen_at` and seat cache may carry into it. A re-stamp that re-arms a board runs both: the re-open's call
+ *    keeps its current-pairing rooms, and the re-arm's call, after it, takes what that kept.
+ *
+ *  `is not distinct from`, not `=`: a fixture with no pairing reads NULL against a stamp, and `not NULL` would KEEP the room of
+ *  a pairing that is gone. openRound only passes boards it has just read paired, under the division lock - but the guard is
+ *  here, not in that reading. */
+async function retireBoardsMeetings(
+  tx: Tx,
+  fixtureIds: readonly string[],
+  now: Date,
+  mode: "reopen" | "rearm",
+): Promise<string[]> {
   if (fixtureIds.length === 0) return [];
   const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
+  const keepCurrent =
+    mode === "reopen"
+      ? tx`and not (m.ended_at is null and (m.home_entrant_id is null
+             or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id)))`
+      : tx``;
   const marked = await tx<{ fixture_id: string; ended_at: Date | null }[]>`
     update fixture_video_meetings m
        set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
-     where m.fixture_id in ${tx(fixtureIds as string[])} ${spare}
+      from fixtures f
+     where f.id = m.fixture_id and m.fixture_id in ${tx(fixtureIds as string[])} ${spare} ${keepCurrent}
     returning m.fixture_id, m.ended_at`;
   await tx`
     delete from fixture_video_meetings m
@@ -402,11 +433,13 @@ export async function openRound(
       // N-2: the meetings of the last window's pairing. A board a game IS or MAY BE on file behind keeps its
       // meeting — the camera evidence of that game: a recorded challenge, a sent create (T9's marker), or a LIVE mint
       // claim (T9 in flight, before its marker; R2-3) — gameEvidenceOn, the one rule ensureMeeting keeps too. Every
-      // other board's meeting goes, with its participants: players who checked in through the lobby inside the old
-      // window are kicked too, because the window starts now for everyone. Only the still-active meetings are ended
-      // at RealtimeKit, after the commit. D16: a board has a meeting PER PLAYER and this deletes BY BOARD on purpose -
-      // both rows go, and every one returned is ended below, not the first (allow-listed in the source guard).
-      retireBoards = await retireBoardsMeetings(tx, ids, now);
+      // other board's meeting of an EARLIER pairing, and every ended one, goes, with its participants: players who checked in
+      // through the lobby inside the old window are kicked too, because the window starts now for everyone. An unended room
+      // made for the board's CURRENT pairing, or unadopted, is the pre-mint job's (check-in capacity, spec §11) and stays: see
+      // retireBoardsMeetings. Only the still-active meetings are ended at RealtimeKit, after the commit. D16: a board has a
+      // meeting PER PLAYER and this deletes BY BOARD on purpose - every row it takes goes, and every one returned is ended
+      // below, not the first (allow-listed in the source guard).
+      retireBoards = await retireBoardsMeetings(tx, ids, now, "reopen");
       // Spec §3.2.2: the window starts now for everyone, so time an arbiter added to the LAST window is not carried into it.
       // A board a game is or may be on file behind keeps its row as it was (its expiry and expected end were set from the
       // deadline it ran on). `is not true`, not `not`: on a fresh 'pending' row with no mint claim the evidence predicate is NULL
@@ -473,7 +506,7 @@ export async function openRound(
     const refusedIds = new Set(closedSkips.map((s) => s.fixtureId));
     const rearmedIds = [...rearmed].filter((id) => !refusedIds.has(id));
     if (rearmedIds.length > 0) {
-      retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now)));
+      retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now, "rearm")));
       if (kind === "reinvited") {
         for (const r of await tx<{ id: string; extraMs: number; extensions: number }[]>`
           select fixture_id as id, checkin_extra_ms as "extraMs", checkin_extensions as extensions

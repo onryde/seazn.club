@@ -1596,19 +1596,27 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
   const meetingsOf = (fixtureId: string) =>
     sql<{ meeting_id: string; ended_at: Date | null }[]>`
       select meeting_id, ended_at from fixture_video_meetings where fixture_id = ${fixtureId} order by side`;
-  /** Whether each row of the board still names the board's CURRENT pairing (a row marked for retirement, D16 review G1, does not). */
-  const samePairOf = async (fixtureId: string) =>
-    (
-      await sql<{ same: boolean }[]>`
-        select (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as same
-          from fixture_video_meetings m join fixtures f on f.id = m.fixture_id
-         where m.fixture_id = ${fixtureId} order by m.side`
-    ).map((r) => r.same);
   /** A meeting on file for the board's CURRENT pairing (R2-2: a meeting records the pair it was made for). */
   const insertMeeting = (fixtureId: string, meetingId: string, side: "home" | "away" = "home") =>
     sql`
       insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
       select f.id, ${side}, f.org_id, ${meetingId}, f.home_entrant_id, f.away_entrant_id from fixtures f where f.id = ${fixtureId}`;
+  /** A room on file with the pair stamp GIVEN: an earlier pairing's, the current one's, or (`null`) an UNADOPTED room - BOTH
+   *  stamps null, as V529's pair check wants. `endedAt` makes it an ENDED room. */
+  const insertRoomStamped = (
+    fixtureId: string,
+    meetingId: string,
+    side: "home" | "away",
+    stamp: { home: string; away: string } | null,
+    endedAt: Date | null = null,
+  ) =>
+    sql`
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at)
+      values (${fixtureId}, ${side}, (select org_id from fixtures where id = ${fixtureId}), ${meetingId}, ${stamp?.home ?? null}, ${stamp?.away ?? null}, ${endedAt})`;
+  /** The pair stamps on the board's rows, per side: what a room NAMES (RETIRED_PAIR is the open's mark for retirement). */
+  const stampsOf = (fixtureId: string) =>
+    sql<{ side: string; home: string | null; away: string | null }[]>`
+      select side, home_entrant_id as home, away_entrant_id as away from fixture_video_meetings where fixture_id = ${fixtureId} order by side`;
   /** D16: a player's meeting is their side's. */
   const meetingOfSide = async (fixtureId: string, side: "home" | "away") =>
     (await sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${fixtureId} and side = ${side}`)[0]?.meeting_id ?? null;
@@ -1894,25 +1902,33 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
     const personOf = new Map(s.players.map((p) => [p.entrantId, p.personId]));
     const t0 = new Date();
     expect(await open(s, 1, t0)).toMatchObject({ opened: true });
-    const [b] = await swissRound1(s.stageId);
+    const first = await swissRound1(s.stageId);
+    const b = first[0];
     expect(await seatPlayer({ fixtureId: b!.fixtureId, personId: personOf.get(b!.home!)! }, { now: new Date(t0.getTime() + MIN), video: rtk.video }))
       .toMatchObject({ seated: true });
     await unpairSwissRound(s.owner, s.stageId);
     await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
     const [x, y] = await swissRound1(s.stageId);
     const gameBoard = x!.fixtureId === b!.fixtureId ? y! : x!;
+    // The game's meeting was made for the EARLIER pairing (the T3 re-open spares an unended room of the CURRENT pairing on its
+    // own, so a current-pairing stamp here would let that clause cover for the game-evidence one - two guards hiding each
+    // other, and neither tested).
+    const earlier = first.find((f) => f.fixtureId === gameBoard.fixtureId)!;
+    expect(pairKey(earlier), "premise: the re-pair changed the game board's pairing").not.toBe(pairKey(gameBoard));
     // A game on file that no open bound (so the round still reads "nobody invited", and the window re-stamps): its
     // meeting is the game's, and must outlive the re-stamp.
     const gameMeeting = `n2-game-${randomUUID().slice(0, 8)}`;
     await sql`
       insert into fixture_external_play (fixture_id, org_id, status, scheduled_at_basis, challenge_id, white_side, white_lichess_id, black_lichess_id)
       values (${gameBoard.fixtureId}, ${s.orgId}, 'live', now(), ${`g${randomUUID().slice(0, 7)}`}, 'home', 'w-n2', 'b-n2')`;
-    await insertMeeting(gameBoard.fixtureId, gameMeeting);
+    await insertRoomStamped(gameBoard.fixtureId, gameMeeting, "home", earlier);
     const mark = rtk.http.length;
     expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toMatchObject({ opened: true });
     expect(await auditTypes(s.competitionId), "premise: the window re-stamped").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
     expect(await meetingsOf(gameBoard.fixtureId), "the game's meeting stands").toEqual([{ meeting_id: gameMeeting, ended_at: null }]);
-    expect(await samePairOf(gameBoard.fixtureId), "and is NOT marked for retirement: it still names the board's pairing").toEqual([true]);
+    expect(await stampsOf(gameBoard.fixtureId), "and is NOT marked for retirement: it still names the pairing it was made for").toEqual([
+      { side: "home", home: earlier.home, away: earlier.away },
+    ]);
     expect(await meetingsOf(b!.fixtureId), "the game-less board's meeting went").toEqual([]);
     expect(rtk.http.slice(mark).some((c) => c.includes(gameMeeting)), "the game's meeting is not ended").toBe(false);
   });
@@ -1935,9 +1951,15 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
       const t0 = new Date();
       expect(await open(s, 1, t0), c.label).toMatchObject({ opened: true });
+      const [first] = await swissRound1(s.stageId);
       await unpairSwissRound(s.owner, s.stageId);
       await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
       const [board] = await swissRound1(s.stageId);
+      // Every case's meeting is stamped for the EARLIER pairing, "stale" in the only sense that is left: the T3 re-open spares an
+      // unended room of the CURRENT pairing whatever its game evidence, so a current-pairing stamp would make the evidence clause
+      // unwitnessable here (a kept case would pass on the pairing clause, a retired one would be spared by it).
+      expect(board!.fixtureId, `${c.label}: premise - the same board`).toBe(first!.fixtureId);
+      expect(pairKey(board!), `${c.label}: premise - re-paired`).not.toBe(pairKey(first!));
       const reopenAt = new Date(t0.getTime() + 2 * MIN);
       const ago = (ms: number | null) => (ms === null ? null : new Date(reopenAt.getTime() - ms));
       const meeting = `r23-${randomUUID().slice(0, 8)}`;
@@ -1947,7 +1969,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
         values (${board!.fixtureId}, ${s.orgId}, ${c.row.status}, now(), ${c.row.challenge ? `g${randomUUID().slice(0, 7)}` : null},
                 ${c.row.challenge ? "home" : null}, ${c.row.challenge ? "w-r23" : null}, ${c.row.challenge ? "b-r23" : null},
                 ${ago(c.row.sentAgoMs)}, ${ago(c.row.claimAgoMs)})`;
-      await insertMeeting(board!.fixtureId, meeting);
+      await insertRoomStamped(board!.fixtureId, meeting, "home", first!);
       const mark = rtk.http.length;
       expect(await reopen(s, reopenAt, rtk.end), c.label).toMatchObject({ opened: true });
       expect(await auditTypes(s.competitionId), `${c.label}: premise — the window re-stamped`).toEqual([
@@ -1955,7 +1977,9 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
         "external_play.round_reopened",
       ]);
       expect(await meetingsOf(board!.fixtureId), c.label).toEqual(c.kept ? [{ meeting_id: meeting, ended_at: null }] : []);
-      expect(await samePairOf(board!.fixtureId), `${c.label}: a spared meeting is not marked for retirement`).toEqual(c.kept ? [true] : []);
+      expect(await stampsOf(board!.fixtureId), `${c.label}: a spared meeting is not marked for retirement - it names the pairing it was made for`).toEqual(
+        c.kept ? [{ side: "home", home: first!.home, away: first!.away }] : [],
+      );
       expect(rtk.http.slice(mark).some((h) => h.includes(meeting)), `${c.label}: ended at RealtimeKit`).toBe(!c.kept);
       checked++;
     }
@@ -1969,6 +1993,145 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
   // never joins it.
   const paired = async (stageId: string, fixtureId: string) => (await swissRound1(stageId)).find((b) => b.fixtureId === fixtureId)!;
   const vendorCreates = (http: string[]) => http.filter((c) => c === "POST /meetings").length;
+
+  // ── Check-in capacity, plan 2 task 3 (spec §11): the re-open spares the rooms of the board's CURRENT pairing ──────────────
+  // The pre-mint job (plan 2) makes a board's rooms before anybody has checked in, stamped for the pairing the board has then,
+  // or for none yet (unadopted). A re-open that retired every room of the board, as it did, would throw those away and the first
+  // claim of every player would pay for a new one - the cost the pre-mint exists to move out of the window. So an UNENDED room
+  // stamped for the board's CURRENT pairing, or unadopted, survives the re-open; an earlier pairing's is still retired; and an
+  // ENDED one is still retired whatever it names - spared, it would refuse every later claim VIDEO_MEETING_ENDED for ever.
+  /** The 4-player Swiss round, opened, then re-paired by the REAL unpair and generate: two boards, each with the pairing it had
+   *  (`earlier`) and the one it has now. Every board's pairing really changed (a premise, asserted). */
+  async function openedThenRepaired() {
+    const rtk = fakeRtk();
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional" });
+    const t0 = new Date();
+    expect(await open(s, 1, t0)).toMatchObject({ opened: true });
+    const first = await swissRound1(s.stageId);
+    expect(first, "premise: 4 players, 2 boards").toHaveLength(2);
+    await unpairSwissRound(s.owner, s.stageId);
+    await generateStageFixtures(s.owner, s.stageId, { pairing: "rank_adjacent" });
+    const now = await swissRound1(s.stageId);
+    expect(now.map((b) => b.fixtureId).sort(), "premise: the same two boards").toEqual(first.map((b) => b.fixtureId).sort());
+    const earlier = (b: BoardSeat) => first.find((f) => f.fixtureId === b.fixtureId)!;
+    for (const b of now) expect(pairKey(earlier(b)), "premise: the re-pair changed this board's pairing").not.toBe(pairKey(b));
+    return { rtk, s, t0, now, earlier };
+  }
+  const roomId = (tag: string) => `t3${tag}-${randomUUID().slice(0, 8)}`;
+  const claimOn = async (rtk: ReturnType<typeof fakeRtk>, b: BoardSeat, side: "home" | "away") => {
+    const m = rtk.http.length;
+    const got = await rtk.video.ensureMeeting(b.fixtureId, side);
+    return { meetingId: got.meetingId, created: vendorCreates(rtk.http.slice(m)) };
+  };
+
+  it("T3: a re-open (nobody invited) retires the EARLIER pairing's rooms and keeps the unended rooms of the CURRENT pairing - stamped for it or unadopted - unmarked; the next claim on a kept room makes no room, and one on a retired side makes one (counted)", async () => {
+    const { rtk, s, t0, now, earlier } = await openedThenRepaired();
+    const [x, y] = now as [BoardSeat, BoardSeat];
+    const r = { oldX: roomId("ox"), newX: roomId("nx"), unY: roomId("uy"), oldY: roomId("oy") };
+    // Board X: the home side's room is the earlier pairing's, the away side's was made for the new one. Board Y: the home side's
+    // is unadopted, the away side's is the earlier pairing's. (One room per (fixture, side), so each board shows one of each.)
+    await insertRoomStamped(x.fixtureId, r.oldX, "home", earlier(x));
+    await insertRoomStamped(x.fixtureId, r.newX, "away", x);
+    await insertRoomStamped(y.fixtureId, r.unY, "home", null);
+    await insertRoomStamped(y.fixtureId, r.oldY, "away", earlier(y));
+
+    const mark = rtk.http.length;
+    expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toMatchObject({ opened: true });
+    expect(await auditTypes(s.competitionId), "premise: the window re-stamped (the one path that retires)").toEqual([
+      "external_play.round_opened",
+      "external_play.round_reopened",
+    ]);
+    const atReopen = rtk.http.slice(mark);
+    for (const old of [r.oldX, r.oldY]) {
+      expect(atReopen.filter((c) => c.includes(old)), `the earlier pairing's room ${old} is ended at the vendor`).toEqual([
+        `POST /meetings/${old}/active-session/kick-all`,
+        `PATCH /meetings/${old}`,
+      ]);
+    }
+    expect(atReopen.some((c) => c.includes(r.newX) || c.includes(r.unY)), "a kept room is not asked to end").toBe(false);
+    expect(await meetingsOf(x.fixtureId), "X: only the current pairing's room is left").toEqual([{ meeting_id: r.newX, ended_at: null }]);
+    expect(await meetingsOf(y.fixtureId), "Y: only the unadopted room is left").toEqual([{ meeting_id: r.unY, ended_at: null }]);
+    expect(await stampsOf(x.fixtureId), "X: unmarked, it still names the current pairing").toEqual([{ side: "away", home: x.home, away: x.away }]);
+    expect(await stampsOf(y.fixtureId), "Y: unmarked, still unadopted (both stamps null)").toEqual([{ side: "home", home: null, away: null }]);
+
+    // The claims: a kept room is the room (no vendor create), and the unadopted one is adopted by the claim.
+    const onNewX = await claimOn(rtk, x, "away");
+    expect([onNewX.meetingId, onNewX.created], "X away: the kept room, 0 creates").toEqual([r.newX, 0]);
+    const onUnY = await claimOn(rtk, y, "home");
+    expect([onUnY.meetingId, onUnY.created], "Y home: the kept unadopted room, adopted, 0 creates").toEqual([r.unY, 0]);
+    // The positive pair: the sides whose room the re-open retired make a room of their own (so a create is counted, not absent).
+    const freshX = await claimOn(rtk, x, "home");
+    const freshY = await claimOn(rtk, y, "away");
+    expect([freshX.created, freshY.created], "the retired sides pay for exactly one room each").toEqual([1, 1]);
+    expect([r.oldX, r.oldY], "never an earlier pairing's room").not.toContain(freshX.meetingId);
+    expect([r.oldX, r.oldY]).not.toContain(freshY.meetingId);
+    for (const b of [x, y]) {
+      expect(await stampsOf(b.fixtureId), "every room of the board now names its current pairing").toEqual([
+        { side: "away", home: b.home, away: b.away },
+        { side: "home", home: b.home, away: b.away },
+      ]);
+    }
+  });
+
+  it("T3: an ENDED room of the current pairing - stamped for it or unadopted - is still retired by the re-open, and the next claim makes a fresh room instead of being refused VIDEO_MEETING_ENDED (counted)", async () => {
+    let checked = 0;
+    for (const kind of ["stamped for the current pairing", "unadopted"] as const) {
+      const { rtk, s, t0, now } = await openedThenRepaired();
+      const [x] = now as [BoardSeat, BoardSeat];
+      const ended = roomId("en");
+      await insertRoomStamped(x.fixtureId, ended, "home", kind === "unadopted" ? null : x, new Date(t0.getTime() + MIN));
+      expect(await meetingsOf(x.fixtureId), `${kind}: premise - an ended room on file`).toEqual([{ meeting_id: ended, ended_at: expect.any(Date) }]);
+      const mark = rtk.http.length;
+      expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end), kind).toMatchObject({ opened: true });
+      expect(await meetingsOf(x.fixtureId), `${kind}: the ended room's row went with the re-open`).toEqual([]);
+      expect(rtk.http.slice(mark).filter((c) => c.includes(ended)), `${kind}: an ended room is not asked to end again`).toEqual([]);
+      // Never VIDEO_MEETING_ENDED: the claim finds nothing on file and makes the board's room.
+      const claim = await claimOn(rtk, x, "home");
+      expect(claim.meetingId, `${kind}: a fresh room`).not.toBe(ended);
+      expect(claim.created, `${kind}: made by one create`).toBe(1);
+      expect(await stampsOf(x.fixtureId), kind).toEqual([{ side: "home", home: x.home, away: x.away }]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both kinds of ended room").toBe(2);
+  });
+
+  it("T3 sequence: a re-open that invited nobody, then a second re-open with nothing changed - the kept rooms survive BOTH, and the second marks and ends nothing", async () => {
+    const { rtk, s, t0, now, earlier } = await openedThenRepaired();
+    const [x, y] = now as [BoardSeat, BoardSeat];
+    const r = { oldX: roomId("ox"), newX: roomId("nx"), unY: roomId("uy") };
+    await insertRoomStamped(x.fixtureId, r.oldX, "home", earlier(x));
+    await insertRoomStamped(x.fixtureId, r.newX, "away", x);
+    await insertRoomStamped(y.fixtureId, r.unY, "home", null);
+    // Every send fails, so nobody is bound to the open and a second re-open re-stamps the window again (the path that retires).
+    for (const p of s.players) mail.fail.add(p.email);
+    const firstMark = rtk.http.length;
+    try {
+      expect(await reopen(s, new Date(t0.getTime() + 2 * MIN), rtk.end)).toMatchObject({ opened: true });
+    } finally {
+      mail.fail.clear();
+    }
+    expect((await bridgeOf(x.fixtureId))?.round_open_id, "premise: every send failed, nobody is bound").toBeNull();
+    expect(rtk.http.slice(firstMark).filter((c) => c.includes(r.oldX)), "the first re-open ended the earlier pairing's room").toEqual([
+      `POST /meetings/${r.oldX}/active-session/kick-all`,
+      `PATCH /meetings/${r.oldX}`,
+    ]);
+    const kept = async () => [await meetingsOf(x.fixtureId), await meetingsOf(y.fixtureId), await stampsOf(x.fixtureId), await stampsOf(y.fixtureId)];
+    const afterFirst = await kept();
+    expect(afterFirst[0], "X after the first re-open").toEqual([{ meeting_id: r.newX, ended_at: null }]);
+    expect(afterFirst[1], "Y after the first re-open").toEqual([{ meeting_id: r.unY, ended_at: null }]);
+
+    const secondMark = rtk.http.length;
+    const endedBySecond: string[] = [];
+    expect(await reopen(s, new Date(t0.getTime() + 3 * MIN), async (id) => void endedBySecond.push(id))).toMatchObject({ opened: true });
+    expect(await auditTypes(s.competitionId), "premise: both were re-stamps (the path that retires)").toEqual([
+      "external_play.round_opened",
+      "external_play.round_reopened",
+      "external_play.round_reopened",
+    ]);
+    expect(endedBySecond, "the second re-open marked nothing, so nothing was ended after its commit").toEqual([]);
+    expect(rtk.http.slice(secondMark), "and no vendor call at all").toEqual([]);
+    expect(await kept(), "the kept rooms and their stamps are exactly as the first re-open left them").toEqual(afterFirst);
+  });
 
   it("R2-2 (a)(b), the lobby path: re-paired with NO re-open, the newcomer seats into a FRESH meeting; neither the player who moved nor the one who stayed is left in a live old room; the stayer re-seats into the same fresh one — both camera policies, counted", async () => {
     let checked = 0;
@@ -2671,6 +2834,49 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
       checked += 1;
     }
     expect(checked).toBe(2);
+  });
+
+  // Check-in capacity, plan 2 task 3: the RE-OPEN spares the unended rooms of a board's current pairing, the RE-ARM does not. A re-armed
+  // board replays a game its bridge finished with no result, and nobody ruled that a room carrying the old attempt's
+  // `last_publisher_seen_at` and seat cache may carry into the replay - so every room of it goes, whatever it is stamped for. In
+  // a re-stamp (every neighbour decided) both retire calls run on the board: the re-open's spares, the re-arm's takes what it spared.
+  it("T3: the re-arm retires EVERY room of its board - an unended one stamped for the CURRENT pairing and an unadopted one - in the re-invite (re-arm alone) and in the re-stamp (re-open, then re-arm); counted", async () => {
+    let checked = 0;
+    for (const path of ["re-invite", "re-stamp"] as const) {
+      let r: SeedOnlineChessRoundResult;
+      let a: SeedOnlineChessRoundResult["boards"][number];
+      if (path === "re-invite") {
+        // A neighbour still playable keeps the running window: only the re-arm's retire runs.
+        r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2 });
+        await open(r, 1, new Date(Date.now() - 5 * MIN));
+        a = r.boards[0]!;
+      } else {
+        // Every neighbour decided: the window is re-stamped, so the re-open's retire runs first and the re-arm's after it.
+        const closed = await closedRound();
+        await decide(closed.r, closed.b);
+        r = closed.r;
+        a = closed.a;
+      }
+      const home = `t3rh-${randomUUID().slice(0, 12)}`;
+      const away = `t3ra-${randomUUID().slice(0, 12)}`;
+      await sql`
+        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+        values (${a.fixtureId}, 'home', ${r.orgId}, ${home}, ${a.home.entrantId}, ${a.away.entrantId}),
+               (${a.fixtureId}, 'away', ${r.orgId}, ${away}, ${null}, ${null})`;
+      await noResultThenVoid(r, a.fixtureId);
+      const ended: string[] = [];
+      const out = await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: async (id) => void ended.push(id) });
+      expect(out, `${path}: premise - the re-arm invited the board`).toMatchObject({ opened: true, invited: 2 });
+      expect(await auditTypes(r.competitionId), `${path}: premise - which path ran`).toEqual(
+        path === "re-invite"
+          ? ["external_play.round_opened", "external_play.round_reinvited"]
+          : ["external_play.round_opened", "external_play.round_reopened"],
+      );
+      expect(await sql`select meeting_id from fixture_video_meetings where fixture_id = ${a.fixtureId}`, `${path}: both rooms of the re-armed board are gone`).toEqual([]);
+      expect(ended.sort(), `${path}: both ended at the vendor, once each`).toEqual([home, away].sort());
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both re-arm paths").toBe(2);
   });
 
   it("the re-armed board's meeting whose end is REFUSED keeps its row (unended, marked for retirement): a re-arm never orphans an active room", async () => {

@@ -58,7 +58,7 @@ const BOTH_SIDES: readonly BothSides[] = [
     times: 2,
     reason:
       "a re-opened or re-armed board retires BOTH players' meetings: the delete takes every ENDED row of the board, the update marks every still-active one " +
-      "(RETIRED_PAIR) for the room to be ended after the commit, each by board on purpose",
+      "(RETIRED_PAIR) for the room to be ended after the commit - except, on a re-open, an unended room of the board's current pairing or an unadopted one - each by board on purpose",
   },
   {
     file: "external-play/video/realtimekit.ts",
