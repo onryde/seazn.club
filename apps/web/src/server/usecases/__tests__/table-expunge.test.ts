@@ -285,12 +285,12 @@ describe.skipIf(!HAS_DB)("X-WDT-5 (RB5-W4, RB5-W7): the ledger row the footnote 
     await withdrawEntrantCascade(r.auth, p1);
     const rows = await withdrawalRows(r.divisionId);
     expect(rows.map((x) => [x.type, x.payload])).toEqual([
-      ["table_withdrawal", { entrant_id: p1, stage_id: r.stageId, policy: "walkover", played_at_departure: 2, scheduled: 3 }],
+      ["table_withdrawal", { entrant_id: p1, stage_id: r.stageId, policy: "walkover", played_at_departure: 2, scheduled: 3, pool_id: null }],
     ]);
     const { loadTableWithdrawals } = await import("@/server/public-site/table-withdrawals");
     const { withdrawalNotesFor, withdrawalNoteText } = await import("@/lib/table-withdrawal-note");
     const records = await loadTableWithdrawals(r.divisionId);
-    const notes = withdrawalNotesFor(r.stageId, [p1, p2, p3, r.id.get("P4")!], records, { [p1]: "withdrawn" }, { [p1]: "P1" });
+    const notes = withdrawalNotesFor(r.stageId, [p1, p2, p3, r.id.get("P4")!], records, { [p1]: "withdrawn" }, { [p1]: "P1" }, null);
     const { WithdrawalFootnotes } = await import("@/components/public-site/withdrawal-footnotes");
     const html = renderToStaticMarkup(
       createElement(WithdrawalFootnotes, { items: notes.map((n) => withdrawalNoteText(n, (k, v) => interpolate(enPublic as Record<string, string>, k, v))) }),
@@ -308,7 +308,7 @@ describe.skipIf(!HAS_DB)("X-WDT-5 (RB5-W4, RB5-W7): the ledger row the footnote 
     expect(hers.filter((l) => /(^|-)rr-(cu|by)-/.test(l.ext_key ?? "")).length, "rig: at least one is a catch-up line").toBeGreaterThan(0);
     await withdrawEntrantCascade(r.auth, n);
     const rows = await withdrawalRows(r.divisionId);
-    expect(rows.map((x) => x.payload)).toEqual([{ entrant_id: n, stage_id: r.stageId, policy: "expunge", played_at_departure: 0, scheduled: hers.length }]);
+    expect(rows.map((x) => x.payload)).toEqual([{ entrant_id: n, stage_id: r.stageId, policy: "expunge", played_at_departure: 0, scheduled: hers.length, pool_id: null }]);
     for (const l of hers) expect(await hasActiveExpunge(l.id), `catch-up line ${l.ext_key} expunged`).toBe(true);
   }, 120_000);
 });
@@ -626,7 +626,7 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     const { withdrawalNotesFor } = await import("@/lib/table-withdrawal-note");
     const records = await loadTableWithdrawals(r.divisionId);
     expect(records.map((x) => x.entrant_id), "the row stands with the table").toEqual([p1]);
-    expect(withdrawalNotesFor(r.stageId, [p1, p2, p3], records, { [p1]: "registered" }, {}), "she is playing again: no note").toEqual([]);
+    expect(withdrawalNotesFor(r.stageId, [p1, p2, p3], records, { [p1]: "registered" }, {}, null), "she is playing again: no note").toEqual([]);
   }, 120_000);
 
   it("a member a late entrant owes catch-up against: expunged, and back on Reinstate", async () => {

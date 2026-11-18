@@ -251,7 +251,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}
               swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
-              withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames)}
+              withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, snap.pool_id ?? null)}
               stageKind={stage.kind}
               locale={orgLocale}
               tz={tz}

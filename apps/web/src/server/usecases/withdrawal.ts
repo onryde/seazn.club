@@ -584,6 +584,8 @@ async function runWithdrawEntrantCascade(
     policy: TableWithdrawalPolicy;
     played_at_departure: number;
     scheduled: number;
+    /** B4 fix wave: the pool her lines were in (null: a league), so an unlisted under-half leaver's note finds her pool's table. */
+    pool_id: string | null;
     actor?: CascadeActor;
   }[] = [];
   const settledTables: { id: string; kind: string }[] = [];
@@ -668,6 +670,7 @@ async function runWithdrawEntrantCascade(
             policy: mode,
             played_at_departure: decision.played,
             scheduled: decision.scheduled,
+            pool_id: mine.find((f) => f.pool_id != null)?.pool_id ?? null,
             ...(opts.actor !== undefined ? { actor: opts.actor } : {}),
           });
         }

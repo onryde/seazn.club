@@ -186,8 +186,8 @@ export function bracketTitleOf(fixtures: readonly ChampionFixture[]): BracketTit
 export interface ChampionStandings {
   stage_id: string;
   pool_id: string | null;
-  /** The engine's own flags on a row (`tieUnbroken`, `level`, `tieBreak`) ride along on a real snapshot. NOTHING here reads them,
-   *  on purpose: who wins a table is the row ranked 1 (`rankOneOf`), for the champion and for a pool winner alike. */
+  /** The engine's own flags on a row (`tieUnbroken`, `level`, `tieBreak`) ride along on a real snapshot. Only `level` is read, by
+   *  `rankOneOf`: who wins a table is the row ranked 1, for the champion and a pool winner alike, unless nothing counted there. */
   rows: readonly { entrantId: string; rank?: number; level?: boolean; tieUnbroken?: boolean; tieBreak?: { key: string } }[];
 }
 
@@ -356,10 +356,13 @@ export function divisionTitle(
 
 /** THE rule for who a table's winner is, shared by the champion and every pool winner: the row the standings fold ranked 1.
  *  The engine ranks every row (`rank = index + 1`), so a tie its cascade could not split on the criteria (`tieUnbroken`) is ended
- *  by stored lots or by the seed fallback and still has ONE rank 1; the champion has always been that row, flags and `level` and
- *  `tieBreak` notwithstanding, and so is a pool's winner. Only a table with no rank 1 row at all has no winner. */
-function rankOneOf<R extends { entrantId: string; rank?: number }>(rows: readonly R[]): R | undefined {
-  return rows.find((r) => r.rank === 1);
+ *  by stored lots or by the seed fallback and still has ONE rank 1; the champion has always been that row, `tieUnbroken` and
+ *  `tieBreak` notwithstanding, and so is a pool's winner. A table with no rank 1 row has no winner - and neither has a table with
+ *  NO counted result (every fixture voided or abandoned without an outcome): the engine's LEVEL table (`level` on every row, W2d
+ *  X-TB-6), where nobody won anything. T14b's pool rule, made the champion's too in the B4 fix wave (owner 2026-11-18). */
+function rankOneOf<R extends { entrantId: string; rank?: number; level?: boolean }>(rows: readonly R[]): R | undefined {
+  const top = rows.find((r) => r.rank === 1);
+  return top && top.level !== true ? top : undefined;
 }
 
 /** The decisive TABLE stage's snapshots once the stage is DONE (flagged complete, or every fixture decided), else null.
@@ -399,9 +402,9 @@ export interface PoolWinner {
  * cascade could not split is ended by the engine itself - a stored lots draw (RB5-G9's `lots` step, `tieBreak.key` "lots") or the
  * seed fallback ("seed") - which leaves a SOLE rank 1 carrying `tieUnbroken` on every tied row; that row is the winner, as it is the
  * champion of a league (the owner's rulings 183 / RB5-U4: the pool's own cascade, stored lots included). So this never second-guesses
- * the tie flags: one rule for the champion and for each pool's winner. The ONE addition (controller ruling, fix round 2): a pool with no
- * COUNTED result - the engine's `level` table, where every fixture was voided or abandoned without an outcome - has no winner, whatever
- * its first-ranked row. Such a pool, and one whose table has no rank 1 row at all, is listed with `entrantId: null` (the UI says
+ * the tie flags: one rule for the champion and for each pool's winner. A pool with no COUNTED result - the engine's `level` table, where
+ * every fixture was voided or abandoned without an outcome - has no winner, whatever its first-ranked row (`rankOneOf`; since the B4 fix
+ * wave the champion's rule too). Such a pool, and one whose table has no rank 1 row at all, is listed with `entrantId: null` (the UI says
  * "No single winner"), so a reader never mistakes "Group A: X" for the whole result. A winner who has since departed is named all the
  * same, as a champion is.
  */
@@ -426,11 +429,9 @@ export function poolWinnersOf(
   for (const pool of configured) {
     const snap = mine.find((s) => s.pool_id === pool.id);
     if (!snap) return null; // a configured pool whose table is not written: the set is partial, so it is not final
+    // A pool with NO counted result (the engine's LEVEL table) has no winner: `rankOneOf` answers none for it, as for the champion.
     const top = rankOneOf(snap.rows);
-    // A pool with NO counted result (every fixture voided or abandoned without an outcome) is the engine's LEVEL table (`level` on every
-    // row, W2d X-TB-6: nobody leads, no row is first): nobody won anything there, so no winner - never its first-ranked row. This is the
-    // one place the pool rule goes beyond the champion's (which keeps reading the rank-1 row; noted for a later task).
-    winners.push({ poolId: pool.id, key: pool.key, entrantId: top && top.level !== true ? top.entrantId : null });
+    winners.push({ poolId: pool.id, key: pool.key, entrantId: top ? top.entrantId : null });
   }
   return winners.some((w) => w.entrantId !== null) ? winners : null;
 }

@@ -1380,3 +1380,70 @@ test.describe("T14b a finished multi-pool Groups only division names each pool's
     await expect(page.getByTestId("division-pool-winners")).toHaveCount(0);
   });
 });
+
+// W5 app PR A, B4 fix wave (owner 2026-11-18, RB5-W2 + RB5-W7): an UNDER-half leaver of a POOL has every result removed, so no
+// counted result names her and her pool's table has no row for her - and the footnote used to key on listed rows only, so she had
+// none. Now her ledger row records her pool and the note is printed under THAT pool's table, on the organiser's division page and
+// the public one. Expected text: the en dictionary's own expunge sentence (the owner's R24 pick 11 A wording), typed here.
+test.describe("RB5-W7 an under-half pool leaver keeps her footnote", () => {
+  test("two pools of four, she leaves pool A after 1 of 3: the note sits under pool A's table only, on both division pages", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const label = "PoolLeaver";
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${label} ${TAG}`, visibility: "public" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    const ids = (await addEntrants(request, divisionId, label, 1, 8)).map((e) => e.id);
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    expect((await generate(request, stageId)).status).toBe(200);
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    expect(started.status, JSON.stringify(started.error)).toBe(200);
+
+    const v = ids[0]!;
+    const lines = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    const hers = lines.filter((f) => f.home_entrant_id === v || f.away_entrant_id === v);
+    expect(hers, "premise: a pool of four").toHaveLength(3);
+    const mates = [...new Set(hers.flatMap((f) => [f.home_entrant_id!, f.away_entrant_id!]))].filter((id) => id !== v);
+    const play = async (f: Pairing, homeWins: boolean) => {
+      let seq = 0;
+      for (const [type, payload] of [["core.start", {}], ["generic.result", homeWins ? { p1Score: 3, p2Score: 0 } : { p1Score: 0, p2Score: 3 }]] as const) {
+        const ev = await apiJson<{ seq: number }>(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: seq, type, payload });
+        expect(ev.status, `${type}: ${JSON.stringify(ev.error)}`).toBe(201);
+        seq = ev.data!.seq;
+      }
+    };
+    await play(hers[0]!, hers[0]!.home_entrant_id === v); // she wins her one match
+    for (const f of lines.filter((x) => !hers.includes(x))) await play(f, true);
+    const out = await apiJson<{ policy: string }>(request, `/api/v1/entrants/${v}/withdraw`, "POST");
+    expect(out.status, JSON.stringify(out.error)).toBe(200);
+    expect(out.data?.policy, "RB5-W2: 1 of 3 is under half").toBe("expunge");
+
+    const name = (i: number) => `${label} P${i + 1} ${TAG}`;
+    const vName = name(0);
+    const mateNames = mates.map((id) => name(ids.indexOf(id)));
+    const deskPath = await divisionPath(request, divisionId, "?tab=standings");
+    const livePath = deskPath.replace(/^\/o\//, "/live/").replace(/\/c\//, "/").replace(/\/d\//, "/").replace(/\?tab=standings$/, "");
+    for (const path of [deskPath, livePath]) {
+      await page.goto(path);
+      await dismissCookieBanner(page);
+      const note = page.getByTestId(`standings-withdrawal-note-${v}`);
+      await expect(note, path).toHaveText(`${vName} (withdrawn): left after 1 of 3, so their results are removed and their other matches are void.`);
+      await expect(page.getByTestId("standings-withdrawal-notes"), `${path}: one table carries a note`).toHaveCount(1);
+      // The innermost box holding both a table and the note is that table's own wrapper (document order: ancestors first).
+      const table = page.locator("div").filter({ has: page.getByTestId("standings-withdrawal-notes") }).filter({ has: page.locator("table") }).last();
+      const rows = table.locator('tbody th[scope="row"]');
+      await expect(rows, `${path}: her pool lists her three pool-mates, not her (no counted result names her)`).toHaveCount(3);
+      for (const m of mateNames) await expect(rows.filter({ hasText: m }), `${path}: ${m} is in the noted table`).toHaveCount(1);
+      await expect(rows.filter({ hasText: vName }), path).toHaveCount(0);
+      await expectNoHorizontalScroll(page);
+    }
+
+    const back = await apiJson(request, `/api/v1/entrants/${v}`, "PATCH", { status: "registered" });
+    expect(back.status, JSON.stringify(back.error)).toBe(200);
+    await page.goto(deskPath);
+    await expect(page.getByTestId("standings-withdrawal-notes"), "after Reinstate the footnote is gone").toHaveCount(0);
+  });
+});

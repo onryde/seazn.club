@@ -127,8 +127,8 @@ describe("the ledger fold (activeTableWithdrawals)", () => {
 describe("one table's notes (withdrawalNotesFor)", () => {
   const rec = (entrant_id: string, stage_id = "s1") => ({ seq: 1, entrant_id, stage_id, policy: "expunge" as const, played_at_departure: 1, scheduled: 3 });
   it("an empty table, or a table nobody left, has none", () => {
-    expect(withdrawalNotesFor("s1", [], [rec("a")], { a: "withdrawn" }, {})).toEqual([]);
-    expect(withdrawalNotesFor("s1", ["a", "b"], [], { a: "registered", b: "registered" }, {})).toEqual([]);
+    expect(withdrawalNotesFor("s1", [], [rec("a")], { a: "withdrawn" }, {}, null)).toEqual([]);
+    expect(withdrawalNotesFor("s1", ["a", "b"], [], { a: "registered", b: "registered" }, {}, null)).toEqual([]);
   });
   it("only a departed entrant of THIS stage, in the table's own order", () => {
     const notes = withdrawalNotesFor(
@@ -137,11 +137,57 @@ describe("one table's notes (withdrawalNotesFor)", () => {
       [rec("a"), rec("b"), rec("c"), rec("d", "s2")],
       { a: "withdrawn", b: "registered", c: "disqualified", d: "withdrawn" },
       { a: "Alpha", c: "Cygnus" },
+      null,
     );
     expect(notes.map((n) => [n.entrantId, n.name, n.status])).toEqual([
       ["c", "Cygnus", "disqualified"],
       ["a", "Alpha", "withdrawn"],
     ]);
+  });
+
+  // B4 fix wave, owner 2026-11-18 (RB5-W2 + RB5-W7): an UNDER-half leaver of a pool has every result removed, so no counted result
+  // names her and her pool's table has no row for her - yet the footnote is owed under THAT pool's table. Her ledger row carries
+  // the pool her lines were in; a table is told its pool, and lists her note after its listed rows.
+  // differential: today (c959c9d428) the note keys on listed rows only, so an unlisted leaver has none.
+  const pooled = (entrant_id: string, pool_id: string | null | undefined, seq = 1) => ({
+    seq,
+    entrant_id,
+    stage_id: "s1",
+    policy: "expunge" as const,
+    played_at_departure: 1,
+    scheduled: 3,
+    ...(pool_id !== undefined ? { pool_id } : {}),
+  });
+  it("an unlisted leaver of THIS pool gets her note under its table, after the listed ones", () => {
+    const notes = withdrawalNotesFor(
+      "s1",
+      ["b", "c"],
+      [pooled("z", "poolA", 5), pooled("c", "poolA", 2)],
+      { b: "registered", c: "withdrawn", z: "withdrawn" },
+      { c: "Cygnus", z: "Zed" },
+      "poolA",
+    );
+    expect(notes.map((n) => [n.entrantId, n.name, n.played, n.scheduled])).toEqual([
+      ["c", "Cygnus", 1, 3],
+      ["z", "Zed", 1, 3],
+    ]);
+    expect(line(notes[1]!)).toBe("Zed (withdrawn): left after 1 of 3, so their results are removed and their other matches are void.");
+  });
+  it("an unlisted leaver of ANOTHER pool, of a row written before pools were recorded, or reinstated, gets none here", () => {
+    const records = [pooled("x", "poolB"), pooled("y", undefined), pooled("r", "poolA")];
+    const statuses = { x: "withdrawn", y: "withdrawn", r: "registered" };
+    expect(withdrawalNotesFor("s1", ["b"], records, statuses, {}, "poolA")).toEqual([]);
+    // the league (no pool): a pool's leaver is not its leaver, and a pool-less row is
+    expect(withdrawalNotesFor("s1", [], [pooled("x", "poolB"), pooled("l", null)], { x: "withdrawn", l: "withdrawn" }, { l: "Lee" }, null).map((n) => n.entrantId)).toEqual(["l"]);
+  });
+  it("the ledger fold keeps the row's pool, and leaves it unset on a row written without one", () => {
+    const row = (seq: number, payload: Record<string, unknown>) => ({ seq, type: TABLE_WITHDRAWAL_ROW, payload });
+    const base = { entrant_id: "a", stage_id: "s", policy: "expunge", played_at_departure: 1, scheduled: 3 };
+    expect(activeTableWithdrawals([row(1, { ...base, pool_id: "p" })])).toEqual([{ seq: 1, ...base, pool_id: "p" }]);
+    expect(activeTableWithdrawals([row(1, { ...base, pool_id: null })])).toEqual([{ seq: 1, ...base, pool_id: null }]);
+    expect(activeTableWithdrawals([row(1, base)])).toEqual([{ seq: 1, ...base }]);
+    // a pool this writer never writes is not read as a pool
+    expect(activeTableWithdrawals([row(1, { ...base, pool_id: 7 })])).toEqual([{ seq: 1, ...base }]);
   });
 });
 

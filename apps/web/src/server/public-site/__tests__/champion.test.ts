@@ -535,6 +535,33 @@ describe("divisionTitle — the title through the division rule", () => {
     expect(divisionTitle([koStage()], [vacant], [], null)).toEqual({ kind: "vacant" });
   });
 
+  // B4 fix wave (owner 2026-11-18, "better to fix now"): the champion follows T14b's pool rule. A table with NO counted result - every
+  // fixture voided or abandoned without an outcome, which the engine folds to its LEVEL table (`level` on every row, W2d X-TB-6) -
+  // crowns nobody: nobody won anything there. differential: today (c959c9d428) its first-ranked row is crowned.
+  // Swept over the two table shapes the champion reads: a league's overall table and a one-pool Groups only division's pool table.
+  it("a league or one-pool group with no counted result (level table) crowns nobody; a played one and a lots-tied one still crown", () => {
+    const shapes = [
+      { kind: "league", pool_id: null as string | null, pools: null as ChampionPool[] | null },
+      { kind: "group", pool_id: "p1", pools: [{ id: "p1", stage_id: "s1", key: "A" }] as ChampionPool[] },
+    ];
+    let checked = 0;
+    for (const sh of shapes) {
+      const stages = [stage({ id: "s1", seq: 1, kind: sh.kind, status: "complete" })];
+      const table = (rows: ChampionStandings["rows"]) => [snapshot({ stage_id: "s1", pool_id: sh.pool_id, rows })];
+      const level = table([{ entrantId: "x", rank: 1, level: true }, { entrantId: "y", rank: 2, level: true }]);
+      expect(divisionTitle(stages, [], level, sh.pools), `${sh.kind}: level`).toBeNull();
+      // the positive pairs: a played table crowns its rank 1, and so does a tie the engine ended by stored lots (or seed)
+      expect(divisionTitle(stages, [], table([{ entrantId: "x", rank: 1 }, { entrantId: "y", rank: 2 }]), sh.pools), `${sh.kind}: played`)
+        .toEqual({ kind: "champion", champion: "x" });
+      for (const key of ["lots", "seed"]) {
+        const tied = table([{ entrantId: "drawn", rank: 1, tieUnbroken: true, tieBreak: { key } }, { entrantId: "other", rank: 2, tieUnbroken: true, tieBreak: { key } }]);
+        expect(divisionTitle(stages, [], tied, sh.pools), `${sh.kind}: ${key}-tied`).toEqual({ kind: "champion", champion: "drawn" });
+      }
+      checked++;
+    }
+    expect(checked).toBe(shapes.length);
+  });
+
   it("a TABLE stage answers champion only (never joint or vacant), the pair of the bracket cases above", () => {
     const stages = [stage({ id: "s1", seq: 1, status: "complete" })];
     const standings = [snapshot({ stage_id: "s1", rows: [{ entrantId: "a", rank: 1 }, { entrantId: "b", rank: 1 }] })];
@@ -730,11 +757,12 @@ describe("poolWinnersOf — each pool's winner of a finished Groups only divisio
     expect(checked).toBe(2);
   });
 
-  it("a pool with NO counted result (the engine's level table) names no winner - nobody won anything there - while the champion rule still reads its rank 1; two rank-1 rows name the first, as a champion does", () => {
+  it("a pool with NO counted result (the engine's level table) names no winner - nobody won anything there - and, since the B4 fix wave, crowns no champion either; two rank-1 rows name the first, as a champion does", () => {
     const level = tablesOf(2, (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1, level: true }, { entrantId: "y", rank: 2, level: true }] } : {}));
     // differential: before the ruling the level pool's first-ranked row was named
     expect(poolWinnersOf([groupStage()], [], level, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["top-1", null]);
-    expect(divisionChampion([groupStage()], [], [level[1]!], [poolsOf(2)[1]!]), "the champion rule is unchanged").toBe("x");
+    // B4 fix wave: one rule - the same level table as a one-pool division's crowns nobody (was "x")
+    expect(divisionChampion([groupStage()], [], [level[1]!], [poolsOf(2)[1]!]), "the champion rule is the pool's").toBeNull();
     // the positive pair: the same rows without the flag name their rank 1
     const counted = tablesOf(2, (i) => (i === 2 ? { rows: [{ entrantId: "x", rank: 1 }, { entrantId: "y", rank: 2 }] } : {}));
     expect(poolWinnersOf([groupStage()], [], counted, poolsOf(2))!.map((x) => x.entrantId)).toEqual(["top-1", "x"]);

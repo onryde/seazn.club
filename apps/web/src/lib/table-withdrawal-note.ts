@@ -44,6 +44,9 @@ export interface TableWithdrawalRecord {
   policy: TableWithdrawalPolicy;
   played_at_departure: number;
   scheduled: number;
+  /** B4 fix wave (owner 2026-11-18): the pool her lines in the stage were in (null for a league or an unpooled group). Absent on a
+   *  row written before the cascade recorded it: such a row is noted only where a table lists her, as before. */
+  pool_id?: string | null;
 }
 
 const isCount = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
@@ -74,6 +77,7 @@ export function activeTableWithdrawals(ledger: readonly { seq: number; type: str
       policy: p.policy,
       played_at_departure: p.played_at_departure,
       scheduled: p.scheduled,
+      ...(typeof p.pool_id === "string" || p.pool_id === null ? { pool_id: p.pool_id } : {}),
     });
   }
   return [...latest.values()].sort((a, b) => a.seq - b.seq);
@@ -97,6 +101,10 @@ export interface WithdrawalNote {
  * pool's table names only its pool), and only while the entrant is still departed. A reinstated entrant's row is voided by
  * the Reinstate; one whose reversal the cascade did not run (a table already complete) is back in the field, and a footnote
  * about a player who is playing would be false.
+ *
+ * B4 fix wave (owner 2026-11-18; RB5-W2 + RB5-W7): then the leavers of THIS table that it does not list — an under-half leaver of
+ * a pool has every result removed, so no row names her — by the pool her row records (`poolId`: the table's own pool, null for a
+ * league or an unpooled group), in ledger order. Required, so no surface can forget which table it is.
  */
 export function withdrawalNotesFor(
   stageId: string,
@@ -104,10 +112,14 @@ export function withdrawalNotesFor(
   records: readonly TableWithdrawalRecord[],
   statuses: Readonly<Record<string, string>>,
   names: Readonly<Record<string, string>>,
+  poolId: string | null,
 ): WithdrawalNote[] {
-  const byEntrant = new Map(records.filter((r) => r.stage_id === stageId).map((r) => [r.entrant_id, r]));
+  const ofStage = records.filter((r) => r.stage_id === stageId);
+  const byEntrant = new Map(ofStage.map((r) => [r.entrant_id, r]));
+  const listed = new Set(tableEntrantIds);
+  const unlisted = ofStage.filter((r) => !listed.has(r.entrant_id) && r.pool_id !== undefined && r.pool_id === poolId).map((r) => r.entrant_id);
   const out: WithdrawalNote[] = [];
-  for (const id of tableEntrantIds) {
+  for (const id of [...tableEntrantIds, ...unlisted]) {
     const record = byEntrant.get(id);
     const status = statuses[id];
     if (record === undefined || status === undefined || !DEPARTED.has(status)) continue;

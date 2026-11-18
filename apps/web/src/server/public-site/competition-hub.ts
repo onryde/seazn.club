@@ -1052,7 +1052,7 @@ export async function loadCompetitionHub(
             // owner Q2 is the Swiss table: only a Swiss stage's ladders are spelled in the table's points format
             stageKind: stage.kind,
             // W5 T8 (RB5-W7): this table's departures, in its own row order (a pool names only its pool)
-            withdrawalNotes: withdrawalNotesFor(stage.id, (snap.rows as { entrantId: string }[]).map((r) => r.entrantId), tableWithdrawals, rowFactStatuses, names),
+            withdrawalNotes: withdrawalNotesFor(stage.id, (snap.rows as { entrantId: string }[]).map((r) => r.entrantId), tableWithdrawals, rowFactStatuses, names, snap.pool_id ?? null),
           }),
         );
       }

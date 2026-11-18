@@ -1221,7 +1221,7 @@ export default async function DivisionPage({
                         qualification={qualification}
                         rules={stageOrder(stage.id)}
                         swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
-                        withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames)}
+                        withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, poolId)}
                         stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}
