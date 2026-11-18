@@ -24,6 +24,9 @@ import { markDependentSeedProposalsStale } from "./seed-stale";
 import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import { isFirstLossProgression, maybeProposePlate } from "../plate-field";
 import { onlyPoolOf } from "../stage-table-snapshot";
+import { RANK_OVERRIDE_TABLE_KINDS, planRankOverride } from "@/lib/rank-override";
+import { readStagePins, readStageSeating } from "../rank-override";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -430,23 +433,34 @@ export async function overrideStandings(
     if (!stage) throw new HttpError(404, "stage not found");
     seen.stage = stage;
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // W5 T13 (X-PO-4 <- RB5-P7, ruling 288): a stage with no table has no place to pin an entrant in.
+    if (!RANK_OVERRIDE_TABLE_KINDS.has(stage.kind)) throw roundRobinRefusal("RR_RANK_OVERRIDE_NOT_TABLE", { kind: stage.kind });
     const ids = input.rows.map((r) => r.entrant_id);
     const known = await tx<{ id: string }[]>`
       select id from entrants where id in ${tx(ids)} and division_id = ${stage.division_id}`;
     if (known.length !== ids.length) {
       throw new HttpError(422, "override references an entrant outside this division");
     }
-    const ranks = new Set(input.rows.map((r) => r.rank));
-    if (ranks.size !== input.rows.length) throw new HttpError(422, "duplicate ranks in override");
+    // W5 T13 (X-PO-3 <- RB5-P5, ST-G14): the body is checked PER POOL, against the pool's size, here - the engine would throw a rank above
+    // it at the next recompute, after the write. A second override replaces only the pools it names.
+    const seating = await readStageSeating(tx, stageId);
+    const plan = planRankOverride(await readStagePins(tx, stageId), input.rows, seating);
+    if (!plan.ok) {
+      if (plan.reason === "unseated") throw new HttpError(422, "override references an entrant with no place in this stage's table");
+      throw roundRobinRefusal("RR_RANK_OVERRIDE_POOL", {
+        reason: plan.reason,
+        rank: plan.rank,
+        pool_id: plan.pool_id,
+        ...(plan.reason === "above_size" ? { size: plan.size } : {}),
+      });
+    }
 
     // Server-side merge (design §T2). `stage.config` was read BEFORE the
     // advisory lock above, so a writer that committed while this transaction
     // waited is already invisible to it; spreading that stale object back
     // reverts the other writer's key with no error.
     await tx`
-      update stages set config = config || ${tx.json({
-        rank_overrides: input.rows.map((r) => ({ entrant_id: r.entrant_id, rank: r.rank })),
-      } as never)}
+      update stages set config = config || ${tx.json({ rank_overrides: plan.pins } as never)}
       where id = ${stageId}`;
 
     // audit (actor + reason, hash-chained per the 011 pattern)

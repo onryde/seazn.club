@@ -1014,3 +1014,39 @@ test.describe("X-BD-3 the gallery makes a badminton super-groups event", () => {
   });
 });
 
+// W5 app PR A, Task 13 (X-PO-3 <- RB5-P5, X-PO-4 <- RB5-P7; ST-G14 app half; ruling 288). A rank override is checked at write: a pin above
+// the table's size is refused by name and stores nothing (main stored it and the engine threw it at the next recompute), a pin on a knockout
+// stage is refused by name, and a withdrawal takes the leaver's pin with her. Driven through the route the desk's override calls; there is no
+// screen to verify (the refusal sentences are the dictionary's `roundrobin.refusal.*`, rendered by the toast that already shows them).
+test.describe("X-PO-3 / X-PO-4 a rank override is checked at write", () => {
+  test("a league of four: rank 5 is refused, rank 4 is kept, a knockout stage is refused, a withdrawal drops the leaver's pin", async ({ request }) => {
+    test.setTimeout(90_000);
+    const { divisionId, stageId, ids } = await seedLeague(request, "Pin", 4);
+    expect((await generate(request, stageId)).status).toBe(200);
+    const pins = async () =>
+      (await apiJson<{ id: string; config: { rank_overrides?: { entrant_id: string; rank: number }[] } }[]>(request, `/api/v1/divisions/${divisionId}/stages`)).data!.find(
+        (s) => s.id === stageId,
+      )!.config.rank_overrides;
+    const pin = (target: string, entrants: { id: string; rank: number }[]) =>
+      apiJson(request, `/api/v1/stages/${target}/standings/override`, "POST", {
+        rows: entrants.map((e) => ({ entrant_id: e.id, rank: e.rank, reason: "e2e" })),
+      });
+
+    const over = await pin(stageId, [{ id: ids[0]!, rank: 5 }]);
+    expect(over.status, "above the table's size").toBe(422);
+    expect(over.error?.code).toBe("RR_RANK_OVERRIDE_POOL");
+    expect(await pins(), "a refused write stores nothing").toBeUndefined();
+
+    expect((await pin(stageId, [{ id: ids[0]!, rank: 4 }, { id: ids[1]!, rank: 3 }])).status, "the table's own size is fine").toBe(200);
+    expect((await pins())?.map((p) => `${p.entrant_id}:${p.rank}`).sort()).toEqual([`${ids[0]}:4`, `${ids[1]}:3`].sort());
+
+    const ko = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 2, kind: "knockout", name: "Finals", config: {} });
+    expect(ko.status, JSON.stringify(ko.error)).toBe(201);
+    const onKo = await pin(ko.data!.id, [{ id: ids[0]!, rank: 1 }]);
+    expect(onKo.status, "a bracket has no table").toBe(422);
+    expect(onKo.error?.code).toBe("RR_RANK_OVERRIDE_NOT_TABLE");
+
+    expect((await apiJson(request, `/api/v1/entrants/${ids[0]}/withdraw`, "POST")).status).toBe(200);
+    expect((await pins())?.map((p) => p.entrant_id), "only the leaver's pin goes").toEqual([ids[1]]);
+  });
+});

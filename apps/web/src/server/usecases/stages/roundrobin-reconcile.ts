@@ -36,6 +36,7 @@ import { roundRobinRefusal } from "../roundrobin-refusal";
 import { poolCount, roundRobinStagePlan, type RoundBye } from "./generators";
 import { appendFixturesGenerated, divisionHasStarted, recordFixturesCleared } from "./helpers";
 import { setupRowsOnFixtures, stageAttachmentCounts } from "./roster-drift";
+import { dropPinsOfEntrant } from "../rank-override";
 import type { ActiveEntrant, SealedSetupCounts, StageRow } from "./types";
 
 /** The named no-op that is NOT "up to date": a group whose live field is below what its pools need, so it cannot be snaked again
@@ -242,6 +243,8 @@ export async function reconcileRoundRobinLines(
  * match data is cleared. A fed stage (`config.qualified`, or a progression) is left to its own path.
  */
 export async function dropEntrantFromRoundRobins(tx: Tx, divisionId: string, entrantId: string): Promise<{ dropped: number }> {
+  // W5 T13 (X-PO-3, G7): her rank pins go with her, whatever else this delete finds to do.
+  await dropPinsOfEntrant(tx, divisionId, entrantId);
   const stages = await tx<{ id: string }[]>`
     select s.id from stages s
      where s.division_id = ${divisionId} and s.kind in ('league', 'group') and s.progression is null

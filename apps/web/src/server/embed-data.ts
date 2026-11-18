@@ -6,6 +6,7 @@ import "server-only";
 // ISR-cached themselves, and staying cache-free keeps this testable with
 // plain Postgres. The outcome enum keeps failure modes explicit.
 import { sql } from "@/lib/db";
+import { reportsRankOverrides } from "@/lib/rank-override";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { hasFeature } from "@/lib/entitlements";
@@ -173,6 +174,8 @@ export async function embedDivisionData(divisionId: string): Promise<EmbedResolu
   // W2d Task 9: every stage's table rules from the one loader, as the division page's document carries them.
   const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
   for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
+  // W5 T13 (RB5-P7): the public page reports an organiser's rank pins only on a stage that has a table.
+  for (const st of stages) st.has_rank_overrides = reportsRankOverrides(st.kind, st.has_rank_overrides);
 
   return {
     ok: true,

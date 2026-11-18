@@ -75,6 +75,7 @@ import { BRACKET_WALKOVER_KINDS, divisionHasStarted, listStages, refoldStageTabl
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
 import { advanceAfterSettle, invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
 import { replaceDepartedQualifier } from "./lucky-loser";
+import { dropPinsOfEntrant } from "./rank-override";
 import { afterScheduleWrite } from "./schedule";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
@@ -873,6 +874,12 @@ async function runWithdrawEntrantCascade(
     }
   }
 
+  // W5 T13 (X-PO-3, ruling 288's storage condition G7): her rank pins leave with her, from every league and group still open - before
+  // the status write, so a cascade cut off here is resumed (the next run drops them again) and the refold below never reads her pin.
+  await withTenant(auth.orgId, async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + division.id}))`;
+    await dropPinsOfEntrant(tx, division.id, entrantId);
+  });
   // The internal writer, never `patchEntrant`: a `disqualified` patch routes to this cascade, so writing through it would
   // route straight back (C6).
   await writeEntrantPatch(auth, entrantId, { status: as });

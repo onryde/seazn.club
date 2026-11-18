@@ -52,6 +52,10 @@ import { call, check, html, newSession, signIn, tag, v1, v1data } from "../harne
  * stays; dropping a partner withdraws the pair as the entrant, its seated line walked over to the opponent (W3 R4b / RB4-V1), and a
  * Reinstate leaves the pair in the field. (Main: the members write succeeded and every fixture was left standing.)
  *
+ * Task 13 (X-PO-3, X-PO-4; RB5-P5, RB5-P7): a league of four. A pin above the table's size is refused 422 RR_RANK_OVERRIDE_POOL at write and
+ * stores nothing (main: stored, thrown by the engine at the next recompute); the size itself is accepted; on a knockout stage of the same
+ * division a pin is refused 422 RR_RANK_OVERRIDE_NOT_TABLE; and withdrawing a pinned entrant takes her pin out of the stage's config.
+ *
  * Every check is counted, and a run that checked nothing fails. SMOKE_ONLY=w5RoundRobinA runs it alone (SELECTABLE_SUITES).
  */
 export async function w5RoundRobinASuite(): Promise<void> {
@@ -67,7 +71,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 11: 1 (a confirmed qualifier leaves before the finals start: the proposal goes stale and her seat is given back; the re-proposal seats the next eligible).
   // Task 10b: 1 (the same rule in a started Swiss and a started knockout of pairs: a substitute is refused; dropping a partner withdraws the pair and walks her line over).
   // Task 15: 1 (the any-sport super-groups card builds a badminton pairs event: 6 pools of 4, then 2 groups, then a knockout; a fixed card refuses a choice).
-  const EXPECTED_CHECKS = 16;
+  // Task 13: 1 (a rank override is checked against its pool's size, refused on a bracket, and a withdrawal takes the leaver's pin away).
+  const EXPECTED_CHECKS = 17;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -707,6 +712,36 @@ export async function w5RoundRobinASuite(): Promise<void> {
         JSON.stringify(stages.map((x) => x.config.pools?.count)) === JSON.stringify([6, 2, undefined]) &&
         unchosen.status === 400 && (unchosen.json as { error?: { code?: string } } | undefined)?.error?.code === "TEMPLATE_CHOICE_REQUIRED" &&
         fixed.status === 400 && (fixed.json as { error?: { code?: string } } | undefined)?.error?.code === "TEMPLATE_CHOICE_NOT_OFFERED",
+    );
+  }
+
+  // Check 16 - Task 13 (X-PO-3, X-PO-4; RB5-P5, RB5-P7): the rank override per pool, refused above the table's size and on a bracket; a
+  // withdrawal takes the leaver's pin with her.
+  {
+    const l = await league("Pin", 4);
+    const [first, second] = l.entrants;
+    const code = (r: { json?: unknown }) => (r.json as { error?: { code?: string } } | undefined)?.error?.code;
+    const pin = (entrant: string | undefined, rank: number) =>
+      v1(owner, `/api/v1/stages/${l.stageId}/standings/override`, "POST", { rows: [{ entrant_id: entrant, rank, reason: "smoke" }] });
+    const over = await pin(first?.id, 5);
+    const storedAfterOver = (await l.stage())?.config as { rank_overrides?: unknown[] } | undefined;
+    const exact = await pin(first?.id, 4);
+    const both = await v1(owner, `/api/v1/stages/${l.stageId}/standings/override`, "POST", {
+      rows: [{ entrant_id: first?.id, rank: 4, reason: "smoke" }, { entrant_id: second?.id, rank: 3, reason: "smoke" }],
+    });
+    const ko = v1data<{ id: string } | undefined>(await v1(owner, `/api/v1/divisions/${l.divId}/stages`, "POST", { seq: 2, kind: "knockout", name: "Finals" }));
+    const onKo = await v1(owner, `/api/v1/stages/${ko?.id}/standings/override`, "POST", { rows: [{ entrant_id: first?.id, rank: 1, reason: "smoke" }] });
+    const gone = await v1(owner, `/api/v1/entrants/${first?.id}/withdraw`, "POST");
+    const remaining = ((await l.stage())?.config as { rank_overrides?: { entrant_id: string }[] } | undefined)?.rank_overrides;
+    const ok =
+      over.status === 422 && code(over) === "RR_RANK_OVERRIDE_POOL" && storedAfterOver?.rank_overrides === undefined &&
+      exact.status === 200 && both.status === 200 &&
+      ko?.id !== undefined && onKo.status === 422 && code(onKo) === "RR_RANK_OVERRIDE_NOT_TABLE" &&
+      gone.status === 200 && remaining?.length === 1 && remaining[0]?.entrant_id === second?.id;
+    w5Check(
+      "w5a X-PO-3/X-PO-4: a pin above the table's size is refused at write, one on a knockout stage is refused by name, and a withdrawal takes the leaver's pin away" +
+        (ok ? "" : ` - ${l.created}, over ${over.status} ${JSON.stringify(over.json).slice(0, 160)}, stored ${JSON.stringify(storedAfterOver?.rank_overrides)}, exact ${exact.status}, both ${both.status} ${JSON.stringify(both.json).slice(0, 160)}, ko ${ko?.id}, onKo ${onKo.status} ${JSON.stringify(onKo.json).slice(0, 160)}, gone ${gone.status}, remaining ${JSON.stringify(remaining)}`),
+      ok,
     );
   }
 

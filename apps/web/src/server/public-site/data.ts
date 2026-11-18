@@ -1,4 +1,5 @@
 import "server-only";
+import { reportsRankOverrides } from "@/lib/rank-override";
 // Public dashboard read model (doc 09, PROMPT-12). Every query goes through
 // the consent-filtered public_*_v views ONLY — no auth'd query path exists in
 // these pages. Caching is Next's tag-based data cache (unstable_cache; this
@@ -1018,6 +1019,8 @@ export async function readPublicDivisionDetail(
     // W2d Task 9: every stage's table rules in one read — its pin once started, else its live layers (OC2).
     const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
     for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
+    // W5 T13 (RB5-P7): the public page reports an organiser's rank pins only on a stage that has a table.
+    for (const st of stages) st.has_rank_overrides = reportsRankOverrides(st.kind, st.has_rank_overrides);
     // C16: the progression graph, published as EDGES only. The stored progression is read off `stages` by the VIEW
     // row's id (as `rules` is), inside this one read — an extra query here would cost the sequential path a connection
     // — and is dropped before the row leaves.

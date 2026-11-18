@@ -369,6 +369,7 @@ describe("stageQualMeta / divisionPointsBounds", () => {
   it("maps the V414 columns, defaulting a null per-group flag to false; the table's rule is never read off the row — the loader's alone (T9 review m3)", () => {
     expect(
       stageQualMeta({
+        kind: "league",
         qualify_count: 4,
         qualify_per_group: null,
         next_stage_name: "Cup",
@@ -379,6 +380,7 @@ describe("stageQualMeta / divisionPointsBounds", () => {
     ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true, tablePointsRule: null });
     // a row that still carries a `table_points_rule` key (a stale reader) does not reach the rule the table is paid by
     const stale = {
+      kind: "league",
       qualify_count: null,
       qualify_per_group: true,
       next_stage_name: null,
@@ -388,6 +390,21 @@ describe("stageQualMeta / divisionPointsBounds", () => {
       table_points_rule: { win: { regulation: 4 } },
     };
     expect(stageQualMeta(stale)).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { win: { regulation: 2 } }, hasRankOverrides: false, tablePointsRule: null });
+  });
+  // differential: today the flag reads the stored pins whatever the stage's kind
+  it("X-PO-4 (RB5-P7): the public flag reports an organiser's pins only on a stage that has a table - a bracket or ladder stays false", () => {
+    const row = (kind: string) => ({ kind, qualify_count: null, qualify_per_group: null, next_stage_name: null, swiss_rounds: null, points_rule: null, has_rank_overrides: true });
+    let checked = 0;
+    for (const kind of ["league", "group", "swiss", "americano"]) {
+      expect(stageQualMeta(row(kind)).hasRankOverrides, `${kind} is a table`).toBe(true);
+      checked++;
+    }
+    for (const kind of ["knockout", "double_elim", "stepladder", "page_playoff", "ladder"]) {
+      expect(stageQualMeta(row(kind)).hasRankOverrides, `${kind} has no table`).toBe(false);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: nine kinds").toBe(9);
+    expect(stageQualMeta({ ...row("league"), has_rank_overrides: false }).hasRankOverrides, "no pins stays false").toBe(false);
   });
   it("W2d PF-3: the per-match bounds read the rule the TABLE is paid by (a started stage's pin), never the stage's own rule", () => {
     // A pinned stage with no rule of its own: the pin's bounds, not the sport's.

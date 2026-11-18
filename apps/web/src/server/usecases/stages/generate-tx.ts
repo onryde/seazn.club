@@ -58,6 +58,7 @@ import { swissActiveEntrants, swissGen } from "./swiss-gen";
 import { lockBoardsRefusingOnlineGames } from "./swiss-boards";
 import { stageAttachmentCounts } from "./roster-drift";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
+import { dropPinsOfChangedPools, readPoolMembers } from "../rank-override";
 
 /** A stage's fixture rows as `GenerateOutcome.fixtures` carries them: every column, plus the venue name and the
  *  venue-qualified court name. */
@@ -229,7 +230,11 @@ async function reconcileRoundRobinGenerate(
   if (decision.kind === "regenerate") {
     // `recordCleared`: the old lines are recorded before the delete, so Undo (which inverts the regenerate's own
     // `fixtures_generated` first) brings the previous lines back with their times and courts.
+    // W5 T13 (X-PO-3, RB5-P5, G7): a redraw moves entrants between pools, and a pin names a place in one pool's table - every pool whose
+    // membership changed loses its pins, a pool that came out the same keeps them.
+    const seatedBefore = await readPoolMembers(tx, stage.id);
     const regen = await regenerateStageInTx(tx, auth, stage.id, stage, { carry: "pair", recordCleared: true });
+    await dropPinsOfChangedPools(tx, stage.id, seatedBefore);
     return {
       ...regen.generated,
       outcome: {
