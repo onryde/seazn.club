@@ -3,7 +3,9 @@ import "server-only";
 import type Stripe from "stripe";
 import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
-import { disputeAlertEmail, disputeLostEmail } from "@/lib/email";
+import { disputeAlertEmail, disputeLostEmail, staffDisputeAlertEmail } from "@/lib/email";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
+import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
@@ -36,6 +38,54 @@ export function disputeOutcomeSql(db: AnySql, groupAlias: string, competitionId:
       when ${g}.disputed_at is not null then 'open'
       else 'won'
     end`;
+}
+
+/**
+ * Tell staff about an entry-fee dispute (registration defects fix round 1 I3, owner decision 2026-11-18): the organiser's alert says
+ * Seazn Club responds to the bank on their behalf, so Seazn Club must be told one exists. Queued on the outbox to STAFF_ALERT_EMAIL
+ * (silent when unset), once per dispute phase (`<dispute>:created`, `<dispute>:closed`), so a replayed webhook pages nothing more.
+ * NEVER throws and is called only after the dispute's own writes have committed: a staff mail that cannot be built or queued must not
+ * block the webhook ACK or undo the flag / write-off. No Stripe call and no mail transport happens here (queueing only), and no SQL
+ * transaction is open around it.
+ */
+async function alertStaffEntryFeeDispute(
+  dispute: Stripe.Dispute,
+  reg: RegistrationWithGroupRow,
+  ctx: DivisionCtx,
+  phase: "created" | "closed",
+  recoveredCents?: number,
+): Promise<void> {
+  try {
+    const dueBy = dispute.evidence_details?.due_by;
+    await queueStaffAlert({
+      kind: "staff_dispute_alert",
+      refType: "dispute",
+      id: dispute.id,
+      suffix: phase,
+      render: () =>
+        staffDisputeAlertEmail(
+          {
+            kind: "entry_fee",
+            orgName: ctx.org_name,
+            phase,
+            status: dispute.status,
+            amountCents: dispute.amount,
+            currency: reg.currency,
+            disputeId: dispute.id,
+            entry: {
+              competitionName: ctx.comp_name,
+              entryRef: reg.ref_code ?? reg.id,
+              evidenceUrl: `${fallbackOrigin()}/api/v1/registrations/${reg.id}/evidence`,
+              dueBy: typeof dueBy === "number" ? new Date(dueBy * 1000) : null,
+              ...(recoveredCents === undefined ? {} : { recoveredCents }),
+            },
+          },
+          "en",
+        ),
+    });
+  } catch (err) {
+    log.error({ err, disputeId: dispute.id, phase }, "entry-fee dispute staff alert failed");
+  }
 }
 
 /**
@@ -113,6 +163,7 @@ export async function handleRegistrationDispute(
         amount_cents: dispute.amount,
       }, null);
     });
+    await alertStaffEntryFeeDispute(dispute, reg, ctx, "created");
     return true;
   }
   // An inquiry (opened as `warning_needs_response`) that the bank drops without a chargeback closes `warning_closed`: no money was
@@ -125,6 +176,7 @@ export async function handleRegistrationDispute(
       registration_id: reg.id,
       dispute_id: dispute.id,
     }, null);
+    await alertStaffEntryFeeDispute(dispute, reg, ctx, "closed");
   } else if (dispute.status === "lost") {
     // The write-off must land whatever Stripe does next — same contract as
     // refund failure never undoing a withdrawal. refunded_cents/refunded_at
@@ -149,6 +201,9 @@ export async function handleRegistrationDispute(
     // `already` = a replayed close (metadata guard hit) — everything below
     // already happened on the first run.
     if (!recovery.already) {
+      // Staff are told once, with what the recovery pulled back (0 = nothing). A replayed close (`already`) skips it: the first run
+      // said it, and a replay's `recoveredCents` of 0 would say "nothing recovered" about money that was.
+      await alertStaffEntryFeeDispute(dispute, reg, ctx, "closed", recovery.recoveredCents);
       // The owner's notice states the write-off and what the recovery pulled back, both fixed now, in the owner's language (D4). It is
       // queued once per dispute (`<dispute id>:lost`) and the worker makes the first attempt. A refused enqueue fails the webhook (D1).
       const owner = await orgOwnerRecipient(sql, reg.org_id);

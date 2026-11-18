@@ -93,6 +93,8 @@ export { passRevokedTemplate, type PassRevokedArgs } from "./pass-revoked";
 export {
   staffDisputeAlertTemplate,
   type StaffDisputeAlertArgs,
+  type EntryFeeDisputeDetail,
+  type PlatformDisputeKind,
 } from "./staff-dispute-alert";
 export { officialInviteTemplate, type OfficialInviteArgs } from "./official-invite";
 export { officialAssignedTemplate, type OfficialAssignedArgs } from "./official-assigned";
