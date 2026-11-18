@@ -680,6 +680,13 @@ export const CreateFromTemplate = z
      *  the two create paths must not disagree about what an omitted
      *  visibility means. */
     visibility: Visibility.default("public"),
+    /** W5 X-BD-3: the choice an any-sport template (`super-groups`) asks for. Required, all three, for such a template and
+     *  refused by name (400 `TEMPLATE_CHOICE_REQUIRED` / `TEMPLATE_CHOICE_NOT_OFFERED`) on any other; `entrant_count` is one
+     *  of the template's own offered sizes (`TEMPLATE_COUNT_NOT_OFFERED`) and defaults to the template's. */
+    sport_key: z.string().min(1).max(64).optional(),
+    variant_key: z.string().min(1).max(64).optional(),
+    entrant_kind: z.enum(["team", "pair", "individual"]).optional(),
+    entrant_count: z.number().int().positive().optional(),
   })
   .superRefine(checkDateOrder);
 export type CreateFromTemplate = z.infer<typeof CreateFromTemplate>;

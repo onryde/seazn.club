@@ -229,3 +229,58 @@ describe("TemplateStage — .strict() (F2 full-branch review, Blocker 2): a lega
     expect(() => CompetitionTemplate.parse(bad)).toThrow();
   });
 });
+
+// W5 X-BD-3: a template may name no sport ("any") and offer a set of field sizes; the schema refuses every shape in
+// which that cannot be resolved, so a catalog edit that breaks the arithmetic fails at module init, not at a create.
+describe("CompetitionTemplate — an any-sport template and its offered counts (X-BD-3)", () => {
+  const GROUP = { i18nNameKey: "templates.stage.groupStage", kind: "group", poolSize: 4 };
+  const ANY_DIVISION = {
+    i18nNameKey: "templates.superGroups.div.main",
+    sportKey: "any",
+    variantKey: "any",
+    entrantKind: "any",
+    entrantCount: 16,
+    entrantCountOptions: [8, 12, 16],
+    stages: [GROUP],
+  };
+  const withDivision = (d: Record<string, unknown>) => ({ ...MINIMAL_VALID, divisions: [d] });
+  const refused = (d: Record<string, unknown>): string => {
+    const r = CompetitionTemplate.safeParse(withDivision(d));
+    expect(r.success).toBe(false);
+    return r.success ? "" : r.error.issues.map((i) => i.message).join(" | ");
+  };
+
+  it("accepts the any-sport shape (pin the positive case first, so every refusal below is the rule's and not a typo's)", () => {
+    expect(CompetitionTemplate.safeParse(withDivision(ANY_DIVISION)).success).toBe(true);
+  });
+
+  it("sport, variant and kind are all 'any' or none of them is", () => {
+    let refusedCount = 0;
+    for (const patch of [{ sportKey: "football" }, { variantKey: "t20" }, { entrantKind: "team" }, { sportKey: "football", variantKey: "t20" }]) {
+      expect(refused({ ...ANY_DIVISION, ...patch }), JSON.stringify(patch)).toMatch(/any/);
+      refusedCount++;
+    }
+    expect(refusedCount).toBe(4);
+  });
+
+  it("an any-sport division carries no rule or tie-break of its own (they would be a rule for every sport)", () => {
+    expect(refused({ ...ANY_DIVISION, cfgOverrides: { x: 1 } })).toMatch(/cfgOverrides/);
+    expect(refused({ ...ANY_DIVISION, tiebreakers: ["points", "wins"] })).toMatch(/tiebreakers/);
+  });
+
+  it("the offered counts hold the default, ascending and unique", () => {
+    expect(refused({ ...ANY_DIVISION, entrantCount: 20 })).toMatch(/entrantCountOptions/);
+    expect(refused({ ...ANY_DIVISION, entrantCountOptions: [16, 12, 8] })).toMatch(/ascending/);
+    expect(refused({ ...ANY_DIVISION, entrantCountOptions: [8, 8, 16] })).toMatch(/ascending/);
+    expect(refused({ ...ANY_DIVISION, entrantCountOptions: [] })).toMatch(/./);
+  });
+
+  it("poolSize sits on a group stage only, never beside groups, and every offered count divides by it", () => {
+    expect(refused({ ...ANY_DIVISION, stages: [{ ...GROUP, kind: "knockout" }] })).toMatch(/poolSize/);
+    expect(refused({ ...ANY_DIVISION, stages: [{ ...GROUP, groups: 4 }] })).toMatch(/poolSize/);
+    expect(refused({ ...ANY_DIVISION, entrantCountOptions: [8, 12, 16, 18], stages: [{ ...GROUP, poolSize: 4 }] })).toMatch(/18/);
+    // The same pool size on a fixed template is checked against its one count.
+    const fixed = { ...MINIMAL_VALID.divisions[0], entrantCount: 10, stages: [{ ...GROUP, poolSize: 4 }] };
+    expect(refused(fixed)).toMatch(/10/);
+  });
+});

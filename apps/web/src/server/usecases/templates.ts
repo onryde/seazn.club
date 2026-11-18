@@ -37,6 +37,7 @@ import { HttpError } from "@/lib/errors";
 import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
 import { validatePointsRule } from "@seazn/engine/competition";
 import { log } from "@/server/logger";
+import { effectiveEntrantModel } from "@seazn/engine/sport";
 import { resolveModule } from "@/server/engine-db";
 import { getDictionary, t } from "@/lib/i18n";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -59,10 +60,17 @@ import { refuseCascadeForSport, refuseNewStageTable, refuseStrayPointsMapKeys } 
 import { validateStageProgression } from "./stage-seeding";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
+import { isAnyDivision, resolveTemplate } from "@/server/templates/resolve";
 
 export const TEMPLATE_UNKNOWN_KEY_CODE = "TEMPLATE_UNKNOWN_KEY";
 export const TEMPLATE_VERSION_RETIRED_CODE = "TEMPLATE_VERSION_RETIRED";
 export const TEMPLATE_INSTANTIATION_FAILED_CODE = "TEMPLATE_INSTANTIATION_FAILED";
+/** X-BD-3: a choice (`sport_key`, `variant_key`, `entrant_kind`, `entrant_count`) a template cannot take. */
+export const TEMPLATE_CHOICE_REQUIRED_CODE = "TEMPLATE_CHOICE_REQUIRED";
+export const TEMPLATE_CHOICE_NOT_OFFERED_CODE = "TEMPLATE_CHOICE_NOT_OFFERED";
+export const TEMPLATE_COUNT_NOT_OFFERED_CODE = "TEMPLATE_COUNT_NOT_OFFERED";
+/** X-BD-3: the chosen entrant kind is one the chosen sport does not play (chess: individuals only). */
+export const TEMPLATE_ENTRANT_KIND_UNSUPPORTED_CODE = "TEMPLATE_ENTRANT_KIND_UNSUPPORTED";
 
 /** Effective `stages.config` for a template stage: `groups` sugar first
  *  (a `group` stage's `config.pools.count`), then the declared PointsRule,
@@ -94,7 +102,17 @@ export async function createFromTemplate(
       { live_version: template.version },
     );
   }
-  return instantiateTemplate(auth, template, input);
+  // X-BD-3: an any-sport template is resolved against the organiser's choice into an ordinary template first (the one
+  // function the detail sheet describes it with); a fixed template comes back as itself, so every create that predates it
+  // is unchanged.
+  const resolved = resolveTemplate(template, {
+    sportKey: input.sport_key,
+    variantKey: input.variant_key,
+    entrantKind: input.entrant_kind,
+    entrantCount: input.entrant_count,
+  });
+  if (!resolved.ok) throw new HttpError(400, resolved.message, resolved.code);
+  return instantiateTemplate(auth, resolved.template, input);
 }
 
 /** The instantiation transaction, split out from createFromTemplate so a
@@ -115,6 +133,10 @@ export async function instantiateTemplate(
   // be threaded into the entitlement checks below, BEFORE the row exists —
   // see the requireFeature calls' own comment for why that is still correct.
   const competitionId = randomUUID();
+  // A template that still names no sport was never resolved (createFromTemplate does it): there is nothing to create.
+  if (template.divisions.some(isAnyDivision)) {
+    throw new HttpError(400, `template '${template.key}' names no sport of its own: resolve it against a choice first`, TEMPLATE_CHOICE_REQUIRED_CODE);
+  }
 
   // Entitlement gates BEFORE any insert (doc 10 §1 pattern createStages
   // follows) — checked across every division/stage up front so a Community
@@ -254,6 +276,25 @@ export async function instantiateTemplate(
         if (!parsedConfig.success) {
           throw new Error(`invalid ${templateDivision.sportKey} config: ${parsedConfig.error.message}`);
         }
+        // X-BD-3: an any-sport template narrows its division to the entrant kind the organiser chose (as the builder
+        // does), and the sport must play that kind: chess takes individuals only, badminton no team. The engine's own
+        // entrant model says which; a kind outside it is a refusal by name, not a division that can seat nobody.
+        const chosenKinds = (templateDivision.cfgOverrides?.entrants as { kinds?: string[] } | undefined)?.kinds;
+        if (chosenKinds !== undefined) {
+          const played: readonly string[] = effectiveEntrantModel(sportModule.entrantModel ?? null, null).kinds;
+          const refused = chosenKinds.filter((k) => !played.includes(k));
+          if (refused.length > 0) {
+            throw new HttpError(
+              422,
+              `${templateDivision.sportKey} does not play ${refused.join(", ")} entrants (it plays ${played.join(", ")})`,
+              TEMPLATE_ENTRANT_KIND_UNSUPPORTED_CODE,
+            );
+          }
+        }
+        // The sport's configSchema drops `entrants` (it is a division key beside the rules, not one of them), so the stored
+        // config carries it the way createDivision stores one: set after the parse.
+        const storedConfig: Record<string, unknown> = { ...(parsedConfig.data as Record<string, unknown>) };
+        if (chosenKinds !== undefined) storedConfig.entrants = templateDivision.cfgOverrides!.entrants;
         // W2e (spec §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1): createDivision's next question, the engine's write-door refusals.
         refuseConfigWriteIssues(sportModule, templateDivision.sportKey, parsedConfig.data);
         // W2d Task 10 (spec §5.5) — createDivision's questions: a points table keyed by a set score, and the division's
@@ -281,7 +322,7 @@ export async function instantiateTemplate(
               insert into divisions (competition_id, name, slug, sport_key, variant_key, config,
                                       module_version, tiebreakers)
               values (${competitionId}, ${divisionName}, ${divisionSlug}, ${templateDivision.sportKey},
-                      ${templateDivision.variantKey}, ${q.json(parsedConfig.data as never)},
+                      ${templateDivision.variantKey}, ${q.json(storedConfig as never)},
                       ${sport.module_version},
                       ${storedOrder === null ? null : q.json(storedOrder as never)})
               returning id`;
@@ -403,6 +444,8 @@ export async function instantiateTemplate(
         // transaction (throwing inside a withTenant callback rolls back
         // everything committed so far in it, including the competition
         // insert above — no orphan competition survives a broken division).
+        // The one refusal that is the organiser's choice and not a catalog bug (X-BD-3): said as itself.
+        if (err instanceof HttpError && err.code === TEMPLATE_ENTRANT_KIND_UNSUPPORTED_CODE) throw err;
         const cause = err instanceof Error ? err.message : String(err);
         throw new HttpError(
           422,

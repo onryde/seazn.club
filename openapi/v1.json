@@ -1084,6 +1084,29 @@
                       "unlisted",
                       "public"
                     ]
+                  },
+                  "sport_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "variant_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "entrant_kind": {
+                    "type": "string",
+                    "enum": [
+                      "team",
+                      "pair",
+                      "individual"
+                    ]
+                  },
+                  "entrant_count": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [

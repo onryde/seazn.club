@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { API_ONLY_ROWS, stagesForRow, type ApiOnlyRowKey, type StagePostBody } from "./catalogue.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, stagesForRow, type ApiOnlyRowKey, type StagePostBody } from "./catalogue.ts";
 import type { CaseSpec } from "./scenarios/types.ts";
 
 /** server/templates/catalog/, resolved from this file — never the cwd. */
@@ -33,6 +33,8 @@ export interface TemplateStage {
   readonly kind: string;
   readonly i18nNameKey?: string;
   readonly groups?: number;
+  /** W5 X-BD-3: a group stage's pool count follows the field: `entrantCount / poolSize` (resolved into `groups`). */
+  readonly poolSize?: number;
   readonly points?: unknown;
   readonly config?: Readonly<Record<string, unknown>>;
   readonly progression?: unknown;
@@ -84,7 +86,20 @@ export class TemplateDrifted extends Error {
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
-export function templateField(key: string, dir: string = CATALOG_DIR): TemplateField {
+/** What a template names when it names no sport of its own (W5 X-BD-3): the JSON's word for "chosen when it is used". */
+export const ANY_SPORT = "any";
+
+/** The sport and variant a case runs an any-sport template on. */
+export interface TemplatePick {
+  readonly sport: string;
+  readonly variant: string;
+}
+
+/** `pick` answers an any-sport template's one open question, per cell: the sport (an engine sport, refused by name
+ *  otherwise) and the variant the case plays. Without one, such a template reads as itself: `sport` and `variant` are
+ *  "any". A template with a sport of its own ignores `pick`: the card sets no sport, and the case's own guard
+ *  (templateCase) refuses a case on another one. */
+export function templateField(key: string, dir: string = CATALOG_DIR, pick?: TemplatePick): TemplateField {
   if (typeof key !== "string" || !KEY_SHAPE.test(key)) throw new UnknownTemplate(String(key), "not a catalog key (lowercase words joined by '-')");
   let text: string;
   try {
@@ -102,15 +117,19 @@ export function templateField(key: string, dir: string = CATALOG_DIR): TemplateF
   if (typeof entrantCount !== "number" || !Number.isInteger(entrantCount) || entrantCount < 2) throw new TemplateShapeUnsupported(key, `entrantCount ${JSON.stringify(entrantCount)} is not a whole field of at least 2`);
   if (!Array.isArray(stages) || stages.length === 0 || !stages.every((s) => isRecord(s) && typeof s.kind === "string")) throw new TemplateShapeUnsupported(key, "no stage list of kinds");
   const read = stages as TemplateStage[];
+  const chosen = sportKey === ANY_SPORT && pick !== undefined;
+  if (chosen && !SPORT_KEYS.includes(pick.sport)) throw new TemplateShapeUnsupported(key, `'${pick.sport}' is no engine sport (${SPORT_KEYS.join(", ")})`);
+  if (chosen && pick.variant === "") throw new TemplateShapeUnsupported(key, "an any-sport template is run on a variant of its sport");
   return Object.freeze({
-    key, version: typeof t.version === "number" ? t.version : 0, sport: sportKey, variant: variantKey, entrantKind, entrantCount,
+    key, version: typeof t.version === "number" ? t.version : 0,
+    sport: chosen ? pick.sport : sportKey, variant: chosen ? pick.variant : variantKey, entrantKind, entrantCount,
     stageKinds: Object.freeze(read.map((s) => s.kind)), stages: Object.freeze(read),
   });
 }
 
 /** The API-only row each driven template builds (the two template-only cells,
  *  ruling 47). The cell's sport is the template's own (templateField). */
-export const TEMPLATE_ROW: Readonly<Record<string, ApiOnlyRowKey>> = Object.freeze({ "box-league": "group_only", "t20-super8": "group_group_ko" });
+export const TEMPLATE_ROW: Readonly<Record<string, ApiOnlyRowKey>> = Object.freeze({ "box-league": "group_only", "t20-super8": "group_group_ko", "super-groups": "group_group_ko" });
 
 /** The row `key` builds, checked against the catalogue's bodies for that row. */
 export function templateRow(key: string, dir: string = CATALOG_DIR): ApiOnlyRowKey {
@@ -158,9 +177,12 @@ export function routeViaTemplate(spec: CaseSpec): CaseSpec {
  *  product also lays each stage kind's preset match rules over that config
  *  (W2c Task 12, `validatedStageConfig`): not posted, so not judged here. */
 export function templateBodies(key: string, dir: string = CATALOG_DIR): StagePostBody[] {
-  return templateField(key, dir).stages.map((s, i) => {
+  const { stages, entrantCount } = templateField(key, dir);
+  return stages.map((s, i) => {
     const config: Record<string, unknown> = {};
+    // X-BD-3: a stage that declares a pool size has entrantCount / poolSize pools (resolve.ts), the template's own field.
     if (s.kind === "group" && s.groups !== undefined) config.pools = { count: s.groups };
+    else if (s.kind === "group" && s.poolSize !== undefined) config.pools = { count: entrantCount / s.poolSize };
     if (s.points !== undefined) config.points = s.points;
     Object.assign(config, s.config ?? {});
     return { seq: i + 1, kind: s.kind, name: s.i18nNameKey ?? s.kind, config, progression: (s.progression ?? null) as StagePostBody["progression"] };

@@ -43,9 +43,11 @@ const REFUSED_API_ONLY_CELLS = REFUSED_CELLS.filter((c) => (API_ONLY_ROWS as rea
  *  owner ruling 2026-11-01): it comes off the driven count and onto the 🚫 one, and every L2 run on it is 🚫. */
 const NO_PATH_TEMPLATE_CELLS = NO_ORGANISER_PATH_CELLS.filter((c) => (TEMPLATE_ROW_KEYS as readonly string[]).includes(c.split("|")[0]!)).length;
 /** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. */
-const TEMPLATE_CELLS = new Map(Object.entries(TEMPLATE_ROW).map(([key, row]) => {
+const TEMPLATE_CELLS = new Map(Object.entries(TEMPLATE_ROW).flatMap(([key, row]) => {
   const d = rawCatalogTemplate(key).divisions[0]!;
-  return [cellId(row, d.sportKey), { key, row, sport: d.sportKey, variant: d.variantKey }] as const;
+  // W5 X-BD-3: an any-sport template (super-groups) has no sport of its own, so it is no cell of its own here; routing it
+  // onto every sport's group_group_ko cell is the matrix routing task's (W5 Task 24), not the planner's today.
+  return d.sportKey === "any" ? [] : [[cellId(row, d.sportKey), { key, row, sport: d.sportKey, variant: d.variantKey }] as const];
 }));
 /** Whether the run's atom has a harness script (the scenario catalogue's own declaration). */
 const hasScript = (r: L2Run): boolean => Object.hasOwn(HARNESS_SCENARIO, r.scenario);

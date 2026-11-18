@@ -601,6 +601,8 @@ function templateOnlyCells(): Record<string, string> {
     const t = JSON.parse(readFileSync(join(dir, f), "utf8")) as { key: string; divisions: { sportKey: string; stages: CatalogStage[] }[] };
     templates++;
     for (const d of t.divisions) {
+      // W5 X-BD-3: an any-sport template names no sport, so it is no cell of its own (the matrix routing task, W5 Task 24, routes it).
+      if (d.sportKey === "any") continue;
       for (const row of API_ONLY_ROWS) {
         const want = stagesForRow(row);
         if (kinds(d.stages) !== kinds(want)) continue;

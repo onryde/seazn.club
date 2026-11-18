@@ -85,17 +85,18 @@ describe("templateField — the product's catalog JSON, read as text (D11)", () 
 });
 
 describe("the API-only row each driven template builds", () => {
-  it("TEMPLATE_ROW names exactly the two template-only cells' templates, and each builds its row's stage kinds (stagesForRow)", () => {
-    expect(Object.keys(TEMPLATE_ROW).sort()).toEqual(["box-league", "t20-super8"]);
+  it("TEMPLATE_ROW names the template-only cells' templates (W5 adds the any-sport super-groups), and each builds its row's stage kinds (stagesForRow)", () => {
+    expect(Object.keys(TEMPLATE_ROW).sort()).toEqual(["box-league", "super-groups", "t20-super8"]);
     let checked = 0;
     for (const key of Object.keys(TEMPLATE_ROW)) {
       const row = templateRow(key);
       expect(kindsOf(raw(key).divisions[0]!.stages), key).toEqual(kindsOf(stagesForRow(row)));
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(3);
     expect(templateRow("box-league")).toBe("group_only");
     expect(templateRow("t20-super8")).toBe("group_group_ko");
+    expect(templateRow("super-groups")).toBe("group_group_ko");
   });
 
   it("a template whose JSON changed (its stage kinds no longer its row's) is refused by name — the pin reds, the case never runs a different shape", () => {
@@ -123,6 +124,51 @@ describe("the API-only row each driven template builds", () => {
     // The two cells browser-driver.test.ts derives from the catalog JSON (templateOnlyCells).
     expect(found).toEqual({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
     expect(templateFor("league", "badminton")).toBeNull();
+  });
+});
+
+// W5 X-BD-3 (NEW-W1d-5): the super-groups template names no sport; the case's cell supplies it.
+describe("an any-sport template resolves its sport per cell (X-BD-3)", () => {
+  it("X-BD-3 the harness resolves group_group_ko × every sport", () => {
+    // differential: today no template reaches group_group_ko on any sport but cricket
+    const want = stagesForRow("group_group_ko");
+    let checked = 0;
+    for (const sport of SPORT_KEYS) {
+      const f = templateField("super-groups", CATALOG, { sport, variant: "any-variant" });
+      expect(f, sport).toMatchObject({ key: "super-groups", sport, variant: "any-variant", entrantKind: "any", entrantCount: 16 });
+      expect(f.stageKinds, sport).toEqual(kindsOf(want));
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(templateRow("super-groups")).toBe("group_group_ko");
+    // The bodies the product inserts: pools of 4 of the template's own 16 (4 pools), then t20-super8's 2 groups and feeds.
+    const bodies = templateBodies("super-groups");
+    // The catalogue's builder bodies also carry the builder's `legs` knob (not a template field): compared on the pools.
+    const shape = (b: { kind: string; config: Record<string, unknown>; progression: unknown }) => ({ kind: b.kind, pools: b.config.pools, progression: b.progression });
+    expect(bodies.map(shape)).toEqual(want.map(shape));
+    expect(bodies.map((b) => (b.config.pools as { count: number } | undefined)?.count)).toEqual([4, 2, undefined]);
+  });
+
+  it("without a pick the template reads as itself; with a pick that names no engine sport, or no variant, it is refused by name", () => {
+    expect(templateField("super-groups")).toMatchObject({ sport: "any", variant: "any", entrantKind: "any" });
+    expect(() => templateField("super-groups", CATALOG, { sport: "no-such-sport", variant: "x" })).toThrow(TemplateShapeUnsupported);
+    expect(() => templateField("super-groups", CATALOG, { sport: "football", variant: "" })).toThrow(TemplateShapeUnsupported);
+  });
+
+  it("a template with a sport of its own ignores a pick (its case is guarded elsewhere), and a second call answers the same", () => {
+    expect(templateField("box-league", CATALOG, { sport: "football", variant: "x" })).toEqual(templateField("box-league"));
+    const pick = { sport: "badminton", variant: "short" };
+    expect(templateField("super-groups", CATALOG, pick)).toEqual(templateField("super-groups", CATALOG, pick));
+  });
+
+  it("a stage with a poolSize gets entrantCount / poolSize pools in its body, and an explicit groups wins", () => {
+    const one = raw("super-groups");
+    const div = one.divisions[0]!;
+    const sized = dirWith("super-groups", { ...one, divisions: [{ ...div, entrantCount: 12, stages: [{ kind: "group", poolSize: 4 }] }] });
+    expect(templateBodies("super-groups", sized)[0]!.config).toEqual({ pools: { count: 3 } });
+    const both = dirWith("super-groups", { ...one, divisions: [{ ...div, stages: [{ kind: "group", groups: 5, poolSize: 4 }] }] });
+    expect(templateBodies("super-groups", both)[0]!.config).toEqual({ pools: { count: 5 } });
   });
 });
 

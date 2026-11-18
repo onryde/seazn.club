@@ -66,7 +66,8 @@ export async function w5RoundRobinASuite(): Promise<void> {
   // Task 10: 1 (a started league's pair: a substitute partner is refused by name; dropping a partner withdraws the pair by the 50 percent rule).
   // Task 11: 1 (a confirmed qualifier leaves before the finals start: the proposal goes stale and her seat is given back; the re-proposal seats the next eligible).
   // Task 10b: 1 (the same rule in a started Swiss and a started knockout of pairs: a substitute is refused; dropping a partner withdraws the pair and walks her line over).
-  const EXPECTED_CHECKS = 15;
+  // Task 15: 1 (the any-sport super-groups card builds a badminton pairs event: 6 pools of 4, then 2 groups, then a knockout; a fixed card refuses a choice).
+  const EXPECTED_CHECKS = 16;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -674,6 +675,38 @@ export async function w5RoundRobinASuite(): Promise<void> {
       "w5a X-RP-2/X-RP-3 (ruling 292): in a started Swiss and a started knockout a substitute partner is refused by name; dropping a partner withdraws the pair and walks her line over; Reinstate puts her back" +
         (verdicts.every((v) => v.endsWith(" ok")) ? "" : ` - ${verdicts.join("; ")}`),
       verdicts.length === 2 && verdicts.every((v) => v.endsWith(" ok")),
+    );
+  }
+
+  // Task 15 (X-BD-3): the sport-agnostic two-tier card, through the real route.
+  {
+    // A fresh org: the first one's competitions are at their caps (the module's header).
+    const third = newSession();
+    await signIn(third, `delivered+w5a3_${tag}@resend.dev`);
+    type Made = { templateKey: string; divisions: { id: string; stages: { id: string; fixtureCount: number }[] }[] };
+    const made = await v1(third, "/api/v1/competitions/from-template", "POST", {
+      template_key: "super-groups", name: `W5 super groups ${tag}`, ends_on: "2030-12-31",
+      sport_key: "badminton", variant_key: "short", entrant_kind: "pair", entrant_count: 24,
+    });
+    const out = v1data<Made | undefined>(made);
+    const divId = out?.divisions[0]?.id;
+    const div = divId ? v1data<{ sport_key?: string; config?: { entrants?: { kinds?: string[] } } } | undefined>(await v1(third, `/api/v1/divisions/${divId}`)) : undefined;
+    const stages = divId
+      ? (v1data<{ seq: number; kind: string; config: { pools?: { count: number } } }[] | undefined>(await v1(third, `/api/v1/divisions/${divId}/stages`)) ?? []).sort((a, b) => a.seq - b.seq)
+      : [];
+    const unchosen = await v1(third, "/api/v1/competitions/from-template", "POST", { template_key: "super-groups", name: `W5 super groups none ${tag}`, ends_on: "2030-12-31" });
+    const fixed = await v1(third, "/api/v1/competitions/from-template", "POST", { template_key: "t20-super8", name: `W5 t20 choice ${tag}`, ends_on: "2030-12-31", sport_key: "football" });
+    w5Check(
+      "w5a X-BD-3: super-groups builds a badminton pairs event of 24 (6 pools of 4, 2 groups, a knockout); a choice left out or offered to a fixed card is refused by name" +
+        (made.status === 201 && unchosen.status === 400 && fixed.status === 400
+          ? ""
+          : ` - made ${made.status} ${JSON.stringify(made.json).slice(0, 200)}, unchosen ${unchosen.status} ${JSON.stringify(unchosen.json).slice(0, 160)}, fixed ${fixed.status} ${JSON.stringify(fixed.json).slice(0, 160)}`),
+      made.status === 201 && out?.templateKey === "super-groups" && div?.sport_key === "badminton" &&
+        JSON.stringify(div?.config?.entrants?.kinds) === JSON.stringify(["pair"]) &&
+        JSON.stringify(stages.map((x) => x.kind)) === JSON.stringify(["group", "group", "knockout"]) &&
+        JSON.stringify(stages.map((x) => x.config.pools?.count)) === JSON.stringify([6, 2, undefined]) &&
+        unchosen.status === 400 && (unchosen.json as { error?: { code?: string } } | undefined)?.error?.code === "TEMPLATE_CHOICE_REQUIRED" &&
+        fixed.status === 400 && (fixed.json as { error?: { code?: string } } | undefined)?.error?.code === "TEMPLATE_CHOICE_NOT_OFFERED",
     );
   }
 

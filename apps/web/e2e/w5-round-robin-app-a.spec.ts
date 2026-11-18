@@ -968,3 +968,49 @@ test.describe("X-CUT-4 a corrected league is re-proposed", () => {
     }
   });
 });
+
+// W5 round-robin app PR A, Task 15 (X-BD-3, NEW-W1d-5, S1). The gallery's super-groups card is sport-agnostic: the sheet asks
+// the organiser for the sport, variant, entrant kind and field, and the division is built for THAT sport. Driven through the
+// real card, sheet and POST, and read back from the division the product wrote.
+test.describe("X-BD-3 the gallery makes a badminton super-groups event", () => {
+  test("pick the card, choose badminton, pairs and 24 players: the division is badminton, narrowed to pairs, with 6 pools of 4 then 2 groups then a knockout; at every width the sheet does not scroll sideways", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const orgs = await apiJson<{ slug: string }[]>(request, "/api/orgs");
+    const orgSlug = orgs.data?.[0]?.slug;
+    expect(orgSlug, "an org for the signed-in session").toBeTruthy();
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(`/o/${orgSlug}/c/new`);
+      await dismissCookieBanner(page);
+      await page.getByTestId("template-card-super-groups").click();
+      const sheet = page.getByRole("dialog");
+      await expect(sheet).toBeVisible();
+      await expect(page.getByTestId("template-choice"), `the choice block is shown at ${width}`).toBeVisible();
+      if (width !== 1280) {
+        await expectNoHorizontalScroll(page);
+        continue;
+      }
+      await page.getByTestId("template-choice-sport").selectOption("badminton");
+      await page.getByTestId("template-choice-kind").selectOption("pair");
+      await page.getByTestId("template-choice-count").selectOption("24");
+      await sheet.getByLabel("Ends on", { exact: false }).fill("2030-12-31");
+      const name = `Super groups ${TAG}`;
+      await sheet.getByLabel("Name", { exact: false }).first().fill(name);
+      const posted = page.waitForResponse((r) => r.url().includes("/api/v1/competitions/from-template") && r.request().method() === "POST");
+      await page.getByTestId("template-detail-submit").click();
+      const res = await posted;
+      expect(res.status(), await res.text()).toBe(201);
+      const body = (await res.json()) as { data: { divisions: { id: string }[] } };
+      expect(body.data.divisions.length, "one division").toBe(1);
+      const divisionId = body.data.divisions[0]!.id;
+      const div = await apiJson<{ sport_key: string; config: { entrants?: { kinds?: string[] } } }>(request, `/api/v1/divisions/${divisionId}`);
+      expect(div.data?.sport_key).toBe("badminton");
+      expect(div.data?.config.entrants?.kinds, "the kind the organiser chose narrows the division").toEqual(["pair"]);
+      const stages = await apiJson<{ seq: number; kind: string; config: { pools?: { count: number } } }[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+      const ordered = [...stages.data!].sort((a, b) => a.seq - b.seq);
+      expect(ordered.map((st) => st.kind)).toEqual(["group", "group", "knockout"]);
+      expect(ordered.map((st) => st.config.pools?.count), "24 players in pools of 4, then 2 super groups").toEqual([6, 2, undefined]);
+    }
+  });
+});
+

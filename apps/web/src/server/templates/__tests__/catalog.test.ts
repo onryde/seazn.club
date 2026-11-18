@@ -5,16 +5,21 @@
 // entry reintroducing the API-vs-engine StageKind divergence even if the
 // loader's own parse were ever loosened).
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { StageKind } from "@/server/api-v1/schemas";
 import { TEMPLATE_CATALOG, getTemplate } from "../catalog";
+import { resolveTemplate } from "../resolve";
 import { sportRefusesStageKind } from "@/lib/chess-individual-only";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 
-// The full 8-template design-doc catalog: P4's 5 + P7's 3 (euro24/
-// t20-super8/league-playoff), the ones that needed D4's StageSeeding.
+// The 8-template design-doc catalog: P4's 5 + P7's 3 (euro24/
+// t20-super8/league-playoff), the ones that needed D4's StageSeeding; plus W5's
+// sport-agnostic super-groups (X-BD-3, NEW-W1d-5).
 const CATALOG_KEYS = [
   "slam128",
   "swiss11",
@@ -24,10 +29,11 @@ const CATALOG_KEYS = [
   "euro24",
   "t20-super8",
   "league-playoff",
+  "super-groups",
 ];
 
 describe("template catalog", () => {
-  it("ships exactly the 8 design-doc templates, each parsed and unique by key", () => {
+  it("ships exactly the 9 catalog templates, each parsed and unique by key", () => {
     expect(TEMPLATE_CATALOG.map((t) => t.key).sort()).toEqual([...CATALOG_KEYS].sort());
   });
 
@@ -212,6 +218,69 @@ describe("template catalog", () => {
       expect(playoff.progression?.sources[0]?.take).toEqual([{ kind: "rankRange", from: 1, to: 4 }]);
       expect(playoff.progression?.placement).toBe("rank_order");
       expect(playoff.progression?.timing).toBe("setup");
+    });
+  });
+
+  // W5 X-BD-3 (rulebook RB5-S2; owner S1, 2026-11-06): the "T20 Super 8" shape generalised to any sport and any field
+  // that divides cleanly, so every group_group_ko cell has an organiser path.
+  describe("super-groups — the sport-agnostic two-tier groups template (X-BD-3)", () => {
+    // The rule's own numbers (brief, Task 15): pools of 4, and the field sizes the card offers.
+    const POOL_SIZE = 4;
+    const COUNT_OPTIONS = [8, 12, 16, 24, 32];
+
+    it("X-BD-3 super-groups is t20-super8's shape (group, group, knockout) with no sport, variant or kind of its own", () => {
+      // differential: today no such template
+      const t = getTemplate("super-groups");
+      expect(t).not.toBeNull();
+      const d = t!.divisions[0]!;
+      expect([d.sportKey, d.variantKey, d.entrantKind]).toEqual(["any", "any", "any"]);
+      expect(d.stages.map((s) => s.kind)).toEqual(getTemplate("t20-super8")!.divisions[0]!.stages.map((s) => s.kind));
+      expect(d.entrantCount).toBe(16);
+      expect(d.entrantCountOptions).toEqual(COUNT_OPTIONS);
+      expect(d.cfgOverrides).toBeUndefined(); // a sport's rule would be a rule for every sport
+      expect(d.tiebreakers).toBeUndefined();
+    });
+
+    it("X-BD-3 every count option divides into pools of 4, and its second tier into whole groups", () => {
+      const t = getTemplate("super-groups")!;
+      let checked = 0;
+      for (const count of COUNT_OPTIONS) {
+        const r = resolveTemplate(t, { sportKey: "football", variantKey: "11-a-side", entrantKind: "team", entrantCount: count });
+        expect(r.ok, String(count)).toBe(true);
+        if (!r.ok) continue;
+        const [first, second, knockout] = r.template.divisions[0]!.stages;
+        expect(count % POOL_SIZE, `${count} entrants`).toBe(0);
+        expect(first!.groups, `${count} entrants`).toBe(count / POOL_SIZE);
+        // The top 2 of every first-tier pool feed the second tier, two groups of count/4 each (t20-super8's own shape).
+        const fed = first!.groups! * 2;
+        expect(fed % second!.groups!, `${count} entrants`).toBe(0);
+        expect(fed / second!.groups!).toBe(count / POOL_SIZE);
+        expect(knockout!.size).toBe(4);
+        checked++;
+      }
+      expect(checked).toBe(COUNT_OPTIONS.length);
+      expect(checked).toBeGreaterThan(0);
+    });
+
+    it("X-BD-3 a count outside the offered options is refused by name", () => {
+      const t = getTemplate("super-groups")!;
+      let refused = 0;
+      for (const count of [0, 1, 4, 7, 10, 15, 17, 20, 33, 64]) {
+        const r = resolveTemplate(t, { sportKey: "football", variantKey: "11-a-side", entrantKind: "team", entrantCount: count });
+        expect(r, String(count)).toMatchObject({ ok: false, code: "TEMPLATE_COUNT_NOT_OFFERED" });
+        refused++;
+      }
+      expect(refused).toBe(10);
+    });
+
+    it("X-BD-3 t20-super8 is byte-identical", () => {
+      // pin, no defect expected: the file as committed before W5 touched the catalog.
+      const bytes = readFileSync(join(__dirname, "..", "catalog", "t20-super8.json"));
+      expect(createHash("sha256").update(bytes).digest("hex")).toBe("f2f599f2a73b0f3a0a77a4b1ac7319e2cfa49959d41745449054481b208f744c");
+      // And with no choice a fixed template resolves to itself: the very object, so every existing create is unchanged.
+      const t20 = getTemplate("t20-super8")!;
+      const r = resolveTemplate(t20, undefined);
+      expect(r.ok && r.template === t20).toBe(true);
     });
   });
 });
