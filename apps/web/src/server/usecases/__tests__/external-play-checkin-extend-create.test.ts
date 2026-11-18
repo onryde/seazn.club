@@ -254,7 +254,7 @@ describe.skipIf(!HAS_DB)("the extension at the create (T9)", () => {
 });
 
 describe.skipIf(!HAS_DB)("the extension in the sweep's create and end readers", () => {
-  const sweep = (r: SeedOnlineChessRoundResult, now: Date, over: SweepDeps = {}) => sweepExternalPlay({ ...over, now, orgIds: [r.orgId] });
+  const sweep = (r: SeedOnlineChessRoundResult, now: Date, over: SweepDeps = {}) => sweepExternalPlay({ serialise: false, ...over, now, orgIds: [r.orgId] });
 
   it("[extend-reader:mint-retry] a create Lichess throttled is retried past the unextended cap when the board is extended, and not retried on an unextended board", async () => {
     const r = await openedRound(2);

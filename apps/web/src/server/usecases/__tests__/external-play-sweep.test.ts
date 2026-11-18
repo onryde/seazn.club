@@ -569,8 +569,11 @@ async function openedBoard(
 const GIVE_UP = "camera_evidence:CAMERA_EVIDENCE_UNREAD";
 const failureKindsSeen = new Map<string, number>();
 let passesChecked = 0;
-async function checkedPass(deps: SweepDeps): Promise<SweepReport> {
-  const r = await sweepExternalPlay(deps);
+/** Every pass here is scoped by org (`orgIds`), never by the sweep's global lock: test files sweeping one database at once
+ *  (vitest's threads share a CI shard's Postgres) would otherwise find the lock held and get an empty `skipped` report, which
+ *  reads as the job doing nothing. Only the tests OF the lock (M8, through `lockedSweep`) take it. */
+async function checkedPass(deps: SweepDeps, { locked = false }: { locked?: boolean } = {}): Promise<SweepReport> {
+  const r = await sweepExternalPlay(locked ? deps : { serialise: false, ...deps });
   expect(r.failed, `failed = failures.length: ${JSON.stringify(r.failures)}`).toBe(r.failures.length);
   passesChecked++;
   for (const f of r.failures) {
@@ -583,6 +586,11 @@ async function checkedPass(deps: SweepDeps): Promise<SweepReport> {
 async function sweep(b: Board | readonly Board[], deps: SweepDeps): Promise<SweepReport> {
   const boards = Array.isArray(b) ? (b as readonly Board[]) : [b as Board];
   return checkedPass({ ...deps, orgIds: boards.map((x) => x.orgId) });
+}
+
+/** M8 only: a pass that takes the sweep's global lock, as production's does (the lock is the subject there). */
+async function lockedSweep(b: Board, deps: SweepDeps): Promise<SweepReport> {
+  return checkedPass({ ...deps, orgIds: [b.orgId] }, { locked: true });
 }
 
 
@@ -2712,8 +2720,8 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     let signalInside!: () => void;
     const inside = new Promise<void>((resolve) => (signalInside = resolve));
     let reads = 0;
-    // The first pass parks inside its read of the board.
-    const first = sweep(b, {
+    // The first pass parks inside its read of the board. Every pass in this describe takes the lock (`lockedSweep`): it is the subject.
+    const first = lockedSweep(b, {
       now: b.at(8),
       reconcile: async () => {
         reads++;
@@ -2723,7 +2731,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
       },
     });
     await inside;
-    const second = await sweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
+    const second = await lockedSweep(b, { now: b.at(8), reconcile: async () => { reads++; return null; } });
     expect(second).toEqual({
       skipped: 1, bridgesClosed: 0, noShows: 0, mintRetries: 0, meetingsEnded: 0, reconciled: 0, heldForOrganiser: 0,
       cameraSettled: 0, cameraFlags: 0, connectionFlags: 0, deviceFlags: 0, arbitersRemoved: 0, windowsOpen: 0, scanned: 0, deferred: 0, failed: 0, failures: [],
@@ -2731,7 +2739,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     release();
     const done = await first;
     expect([done.skipped, done.reconciled, reads]).toEqual([0, 1, 1]);
-    const third = await sweep(b, { now: b.at(14), reconcile: async () => { reads++; return null; } });
+    const third = await lockedSweep(b, { now: b.at(14), reconcile: async () => { reads++; return null; } });
     expect([third.skipped, third.reconciled, reads], "the lock went with the first pass").toEqual([0, 1, 2]);
   });
 
@@ -2740,7 +2748,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     // An org scope Postgres cannot read fails a candidate query, outside any
     // job's own catch: the pass itself throws.
     await expect(sweepExternalPlay({ now: b.at(5), orgIds: ["not-a-uuid"] })).rejects.toThrow();
-    const next = await sweep(b, { now: b.at(5) });
+    const next = await lockedSweep(b, { now: b.at(5) });
     expect(next.skipped).toBe(0);
     expect(next.scanned, "premise: the next pass looked at the board").toBeGreaterThan(0);
   });
@@ -5251,6 +5259,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     await expect(
       sweepExternalPlay({
         now: after(m, CAMERA_EVIDENCE_AFTER_MS),
+        serialise: false,
         orgIds: [m.b.orgId],
         endMeeting: (id) => endMeeting(id, RTK),
         realtimeKit: RTK,
@@ -5551,6 +5560,7 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     await expect(
       sweepExternalPlay({
         now: new Date(w.createdAt + 60_000),
+        serialise: false,
         orgIds: [w.b.orgId],
         ...quiet,
         parkedRooms: async () => {
