@@ -108,6 +108,7 @@ import { cricketBothLanesSuite } from "./suites/cricketBothLanes.ts";
 import { cricketTossDraftDivisionSuite } from "./suites/cricketTossDraftDivision.ts";
 import { emailOutboxCronSmoke } from "./suites/emailOutboxCronSmoke.ts";
 import { resendWebhookSmoke } from "./suites/resendWebhookSmoke.ts";
+import { realtimekitWebhookSmoke } from "./suites/realtimekitWebhookSmoke.ts";
 import { externalPlayOtBSmoke } from "./suites/externalPlayOtBSmoke.ts";
 import { matchRoomSuite } from "./suites/matchRoom.ts";
 import { arbiterSuite } from "./suites/arbiter.ts";
@@ -1248,6 +1249,10 @@ export async function main() {
   // Email outbox, phase 1 (Task 5): the Resend webhook fails closed. The smoke server is a production build, so an event with
   // no valid signature is refused whether or not RESEND_WEBHOOK_SECRET is set. Keyless; touches no org.
   await suite("resendWebhookSmoke", () => resendWebhookSmoke());
+
+  // Check-in capacity plan 1 (Task 10a): the RealtimeKit webhook refuses an unsigned or forged delivery. The smoke server has no
+  // REALTIMEKIT_BASE_URL, so the accepted path is the route suite's and the Task 10 walkthrough's; touches no org.
+  await suite("realtimekitWebhookSmoke", () => realtimekitWebhookSmoke());
 
   // Chess in-page board T14: the match room's neutral card and its API's
   // refusals. Keyless; one signed-in stranger.
