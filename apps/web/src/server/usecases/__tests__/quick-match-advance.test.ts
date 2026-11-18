@@ -15,9 +15,12 @@
 //
 // Real Postgres required; the cases skip without DATABASE_URL.
 import { randomBytes as kekBytes, randomUUID } from "node:crypto";
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { forEachSportAsync } from "@seazn/engine/testkit";
+import { builtinModules } from "@seazn/engine/sports";
 
 import { POST as postEvent } from "@/app/api/v1/fixtures/[id]/events/route";
 import { POST as skipRoute } from "@/app/q/[token]/skip/[fixtureId]/route";
@@ -34,6 +37,7 @@ import { declaredVariant } from "@/server/engine-db/__tests__/helpers/seed-brack
 import { CreateQuickMatch, CreateStage } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { ensureGuestDeviceLink } from "../device-links";
+import { scoreEvent } from "../scoring";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { addQuickMatchDecider } from "../quick-match-add";
@@ -937,4 +941,246 @@ describe.skipIf(!HAS_DB)("the decision's post limit", () => {
     expect(keys.filter((k) => k === `rl:qm-cut:${m.row.id}`)).toHaveLength(2);
     expect((await decisionOf(m)).value).toBeNull();
   });
+});
+
+// ---- W5 app PR A, Task 16b (REC-10, ruling 288, #1216): a quick match League + Knockout across the round-robin wave -------------
+// W5 changed the seams this flow stands on: Generate / Add match (Tasks 2, 3), late entry (5, 6), the withdrawal cascade (8, 8b),
+// the table cut drift (11). The quick match's own flow must read exactly as it did. `quick-match-sweep.test.ts` is the EXPIRY sweep
+// (it never plays a league), so these pins live here, where every case is made by the real create and scored by the real write
+// path. Expected values come from the rulebook (a round robin of n is n-1 rounds of n/2, the circle method; chess: a resignation
+// decides for the other side; the table ranks by wins; semi-finals 1st v 4th and 2nd v 3rd) and from the spec's rules (a decider
+// is a NEW round at max(round)+1, `quick-match-add.ts`; a Not played match counts as ended), never from the code under test.
+const finalLine = async (m: Lk): Promise<Line> => (await linesOf(m.koStageId)).find((l) => l.is_final)!;
+async function lineOf(id: string): Promise<Line & { ext_key: string | null }> {
+  const [l] = await sql<(Line & { ext_key: string | null })[]>`
+    select id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status, is_final, ext_key from fixtures where id = ${id}`;
+  return l!;
+}
+/** Lines of the league that still SEAT `sides` in `round`: a Not played (cancelled) line seats nobody. */
+const seatedIn = (lines: readonly Line[], round: number, sides: readonly string[]) =>
+  lines.filter((l) => l.round_no === round && l.status !== "cancelled" && sides.some((s) => l.home_entrant_id === s || l.away_entrant_id === s));
+
+describe.skipIf(!HAS_DB)("REC-10 (W5): quick match League + Knockout across the round-robin wave", () => {
+  it("REC-10 quick match league_ko: create, play, cut and advance are unchanged by W5 (seats of the knockout from the league's cut; deciders at max+1; a \"Not played\" skip still ends the league; the champion)", async () => {
+    const failures = vi.spyOn(log, "error");
+    try {
+      const m = await chessLk(["W", "X", "Y", "Z"], 4);
+      const [w, x, y, z] = ["W", "X", "Y", "Z"].map((n) => m.id.get(n)!) as [string, string, string, string];
+      const league = await linesOf(m.leagueStageId);
+      expect(league, "premise: a round robin of 4 is 4·3/2 matches").toHaveLength(6);
+      const rounds = Math.max(...league.map((l) => l.round_no));
+      expect(rounds, "premise: 4 sides play 3 rounds of 2 (the circle method)").toBe(3);
+      expect(await linesOf(m.koStageId), "premise: semi-finals and a final, seated by rank only once the league ends").toHaveLength(3);
+
+      // A Not played match leaves its round FREE for both sides.
+      const yz = (await between(m, "Y", "Z"))[0]!;
+      expect(await skipQuickMatchFixture(m.row, yz.id)).toEqual({ changed: true });
+      expect(seatedIn(await linesOf(m.leagueStageId), yz.round_no, [y, z]), "premise: Y and Z are free in the round the Not played match left").toEqual([]);
+
+      // The first decider, Y v Z, lands at max+1 and not in that free round (a latest-free default would put it there).
+      const d1 = await lineOf((await addQuickMatchDecider(m.row, { home: y, away: z })).fixtureId);
+      expect(d1.round_no, "differential: the decider is a NEW round, not the free round").toBe(rounds + 1);
+      expect(d1.round_no).not.toBe(yz.round_no);
+      expect(d1.ext_key, "named adhoc-<n>, n the stage's line count after the add (spec C5)").toBe(`adhoc-${league.length + 1}`);
+      // The second, W v X: both are free in round 4 (it holds only Y v Z), and it still lands at max+1.
+      expect(seatedIn(await linesOf(m.leagueStageId), d1.round_no, [w, x]), "premise: W and X are free in the first decider's round").toEqual([]);
+      const d2 = await lineOf((await addQuickMatchDecider(m.row, { home: w, away: x })).fixtureId);
+      expect(d2.round_no, "differential: max+1 again, though round 4 is free for W and X").toBe(rounds + 2);
+      expect(d2.ext_key).toBe(`adhoc-${league.length + 2}`);
+      expect((await linesOf(m.koStageId)).filter((l) => l.home_entrant_id || l.away_entrant_id), "no knockout seat before the league ends").toEqual([]);
+
+      // W beats everyone, X beats Y and Z, Y beats Z in the decider: wins 3, 2, 1, 0 (the second decider is the last to be skipped).
+      for (const [a, b] of [["W", "X"], ["W", "Y"], ["W", "Z"], ["X", "Y"], ["X", "Z"]] as const) await beat(m, a, b);
+      await playWin(d1.id, y);
+      expect(await advanceQuickMatch(m.row), "the second decider is still open").toEqual({ state: "league" });
+      expect(await stageStatus(m.leagueStageId)).toBe("active");
+      expect(await koSeated(m)).toBe(0);
+
+      // The last open match is Not played, through the real skip route: that ends the league and the advance fills the knockout.
+      const res = await skipRoute(new Request(`http://localhost/q/${m.out.token}/skip/${d2.id}`, { method: "POST" }), {
+        params: Promise.resolve({ token: m.out.token, fixtureId: d2.id }),
+      });
+      expect(res.status).toBe(303);
+      expect((await tableOf(m)).map((r) => r.entrantId), "premise: the stored table ranks by wins, 3-2-1-0").toEqual([w, x, y, z]);
+      expect(await firstRound(m), "semi-finals 1st v 4th and 2nd v 3rd").toEqual(sortedPairs([w, z], [x, y]));
+      expect(await stageStatus(m.leagueStageId), "the league completes as the knockout fills").toBe("complete");
+      expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
+      expect(await seedConfirmedEvents(m)).toBe(1);
+      const cut = await loadLeagueCut(m.row);
+      expect(cut).toMatchObject({ qualifiers: 4, leagueDone: true, leagueComplete: true, filled: true, ties: [] });
+      expect(await advanceQuickMatch(m.row), "a second call").toEqual({ state: "filled" });
+      expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
+      expect(await seedConfirmedEvents(m)).toBe(1);
+
+      // The knockout is played: W beats Z; Y upsets X; the final seats the two winners and Y takes it.
+      const semiW = (await linesOf(m.koStageId)).find((l) => !l.is_final && [l.home_entrant_id, l.away_entrant_id].includes(w))!;
+      const semiX = (await linesOf(m.koStageId)).find((l) => !l.is_final && [l.home_entrant_id, l.away_entrant_id].includes(x))!;
+      await playWin(semiW.id, w);
+      await playWin(semiX.id, y);
+      const final = await finalLine(m);
+      expect([final.home_entrant_id, final.away_entrant_id].sort(), "the final holds the two semi-final winners").toEqual(pairing(w, y));
+      await playWin(final.id, y);
+
+      const done = await readQuickMatchHome(m.row);
+      expect(done?.finished).toBe(true);
+      expect(done?.champion, "the champion is the final's winner, the 3rd seed, never the table's leader").toEqual({ entrantId: y, finalFixtureId: final.id });
+      expect(done?.league, "6 decided, 2 Not played (the first match and the second decider) of 8").toEqual({ played: 6, notPlayed: 2, total: 8, done: true });
+      expect(advanceFailures(failures), "no advance failed on the way").toEqual([]);
+    } finally {
+      failures.mockRestore();
+    }
+  }, 60_000);
+
+  it("REC-10 a quick match never takes a table late entrant: no quick-match path reaches an entrant add after Start (the only add is the create's, before Start); a foreign org's add is refused and writes nothing", async () => {
+    // The read (Task 16b Step 1): in `quick-match-*.ts` the only entrant writer is the create's `createEntrants`, which runs
+    // BEFORE the division starts. Asserted as a guard, not a comment: a new door reads red until it is pinned.
+    const dir = resolve(__dirname, "..");
+    const files = readdirSync(dir).filter((f) => /^quick-match-.*\.ts$/.test(f));
+    expect(files.length, "anti-vacuity: the quick-match modules were found").toBeGreaterThan(15);
+    const doors = /createEntrants?\b|admitTableLateEntrant|placeWaiting|writeEntrantPatch|patchEntrant|withdrawEntrantCascade|late_entry/;
+    const hits = files.filter((f) => doors.test(readFileSync(resolve(dir, f), "utf8"))).sort();
+    expect(hits, "premise: only the create touches an entrant add").toEqual(["quick-match-create.ts"]);
+    const createSrc = readFileSync(resolve(dir, "quick-match-create.ts"), "utf8");
+    expect(createSrc.indexOf("createEntrants("), "the create adds its sides").toBeGreaterThan(-1);
+    expect(createSrc.indexOf("createEntrants("), "before it starts the division").toBeLessThan(createSrc.indexOf("startDivisionInTx("));
+
+    // What the create's add left behind: no catch-up line, no bye line, no waiting marker, no late-entry ledger row.
+    const m = await chessLk(["A", "B", "C", "D"], 2);
+    const lines = await sql<{ ext_key: string | null }[]>`select ext_key from fixtures where stage_id = ${m.leagueStageId}`;
+    expect(lines, "premise: 4·3/2 league matches").toHaveLength(6);
+    expect(lines.filter((l) => /^rr-(cu|by)-/.test(l.ext_key ?? "")), "no catch-up or bye line").toEqual([]);
+    const waiting = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${m.out.divisionId} and table_waiting_stage_id is not null`;
+    expect(waiting[0]!.n).toBe(0);
+    const ledger = await sql<{ n: number }[]>`select count(*)::int as n from division_events where division_id = ${m.out.divisionId} and type = 'roundrobin_late_entry'`;
+    expect(ledger[0]!.n).toBe(0);
+
+    // The one other door in the product, an organiser's add, is an org's own: another org cannot reach a quick match's division.
+    const { auth } = await seedOrg("pro");
+    const err = await refusalOf(createEntrants(auth, m.out.divisionId, [{ kind: CHESS.kind, display_name: "Late", seed: 5, members: [] }]));
+    expect((err as HttpError).status, String(err)).toBe(404);
+    const after = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${m.out.divisionId}`;
+    expect(after[0]!.n, "nobody joined").toBe(4);
+    expect(await linesOf(m.leagueStageId), "no line was written").toHaveLength(6);
+  });
+
+  it("REC-10 a correction after the league completes: a guest's pad is refused and nothing moves; the one other door re-seeds the knockout until its first match starts, then the bracket stands (RB5-K6)", async () => {
+    const m = await chessLk(["A", "B", "C"], 2);
+    const [a, b, c] = ["A", "B", "C"].map((n) => m.id.get(n)!) as [string, string, string];
+    await beat(m, "A", "B");
+    await beat(m, "A", "C");
+    const [bc] = await between(m, "B", "C");
+    const pad = await padOf(m.row, bc!.id);
+    await playWin(bc!.id, b, pad.auth); // the last league result, by the pad's own tap: wins 2-1-0
+    expect((await tableOf(m)).map((r) => r.entrantId), "premise: the table ranks by wins").toEqual([a, b, c]);
+    expect(await firstRound(m), "premise: the final holds 1st and 2nd").toEqual([pairing(a, b)]);
+    expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
+
+    // The guest's door: refused for the void and for an append, and nothing moves.
+    const before = await ledgerTail(bc!.id);
+    const voided = await padPost(bc!.id, pad.secret, { expected_seq: before.lastSeq, type: "core.void", payload: { event_id: before.lastId } });
+    expect(voided.status, await voided.clone().text()).toBe(403);
+    expect(await voided.text()).toContain("RESULT_CARRIED_FORWARD");
+    const appended = await padPost(bc!.id, pad.secret, { expected_seq: before.lastSeq, type: "boardgame.result", payload: { winner: c, method: "resign" } });
+    expect(appended.status).toBe(403);
+    expect(await ledgerTail(bc!.id), "nothing landed").toEqual(before);
+    expect(await firstRound(m)).toEqual([pairing(a, b)]);
+    expect(await proposalsOf(m)).toEqual({ confirmed: 1 });
+    expect(await stageStatus(m.leagueStageId)).toBe("complete");
+
+    // The organiser's door (scoreEvent as the system org, what a support correction is): the result is taken back and C beats B
+    // instead. The league table is now A 2 wins, C 1, B 0, so the unstarted final is re-seated A v C (RB5-K6: re-propose, re-confirm).
+    const voidTip = async (fixtureId: string) => {
+      const [t] = await sql<{ id: string; seq: number }[]>`select id, seq from score_events where fixture_id = ${fixtureId} order by seq desc limit 1`;
+      await scoreEvent(systemAuth(), fixtureId, { expected_seq: t!.seq, type: "core.void", payload: { event_id: t!.id } });
+    };
+    await voidTip(bc!.id);
+    await playWin(bc!.id, c);
+    expect((await tableOf(m)).map((r) => r.entrantId), "premise: the corrected table").toEqual([a, c, b]);
+    expect(await firstRound(m), "differential: the final follows the corrected table, A v C").toEqual([pairing(a, c)]);
+    expect(await advanceQuickMatch(m.row), "a second call").toEqual({ state: "filled" });
+    // How many drafts the correction passed through (the void's own re-propose, the replay's) is the cascade's business and varies
+    // with the order the hooks land in: the pin is the end state, one confirmed proposal, the old one stale, no draft left behind.
+    const settled = await proposalsOf(m);
+    expect({ confirmed: settled.confirmed, draft: settled.draft ?? 0, staleOldOne: (settled.stale ?? 0) >= 1 }).toEqual({ confirmed: 1, draft: 0, staleOldOne: true });
+    expect(await seedConfirmedEvents(m), "the knockout was confirmed again").toBeGreaterThanOrEqual(2);
+
+    // The final starts: from then the bracket stands, whatever the table says (RB5-K6 after the start).
+    const final = await finalLine(m);
+    await scoreEvent(systemAuth(), final.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await voidTip(bc!.id);
+    await playWin(bc!.id, b); // back to A, B, C
+    expect((await tableOf(m)).map((r) => r.entrantId), "premise: the table moved back").toEqual([a, b, c]);
+    expect(await firstRound(m), "the started final keeps its seats").toEqual([pairing(a, c)]);
+    expect(await proposalsOf(m), "no new confirmation after the start").toEqual(settled);
+    expect(await advanceQuickMatch(m.row)).toEqual({ state: "filled" });
+    expect(await firstRound(m)).toEqual([pairing(a, c)]);
+  }, 60_000);
+
+  it("REC-10 a quick-match withdrawal path: the one door is the pad's disqualifying sanction (a table withdrawal since ruling 289); the flow still ends in a champion who is not the disqualified side (RB5-K1, RB5-W3)", async () => {
+    // The read (Task 16b Step 1): quick match has no organizer and no entrant door, so a side leaves a league one way only, a
+    // guest's pad recording the sport's ENDING sanction and its disqualifying forfeit. Only the sports whose engine module declares
+    // an ending level can: the list is the engine's own, narrowed to what a guest is offered a knockout of.
+    const sanctioning = builtinModules.filter((x) => (x.sanctionEnding?.endLevels.length ?? 0) > 0 && OFFERED_SPORT_KEYS.includes(x.key));
+    expect(sanctioning.length, "anti-vacuity: at least one offered sport can disqualify in a match").toBeGreaterThan(0);
+    const offered = new Map((await listQuickMatchSports()).map((o) => [o.sport_key, o]));
+    let checked = 0;
+    for (const mod of sanctioning) {
+      const key = mod.key;
+      const sport = offered.get(key)!;
+      // One point of play for `side`, in the sport's own event (test input, not an expected value).
+      const point = (side: string) => (key === "badminton" ? { type: "badminton.rally", payload: { wonBy: side } } : { type: "tennis.point", payload: { by: side } });
+      expect(["badminton", "tennis"], `${key}: a sport this test knows how to play point by point`).toContain(key);
+      const tipOf = async (id: string) => (await sql<{ s: number }[]>`select last_seq as s from match_states where fixture_id = ${id}`)[0]?.s ?? 0;
+      const win = async (id: string, side: string) => {
+        await scoreEvent(systemAuth(), id, { expected_seq: 0, type: "core.start", payload: {} } as never);
+        for (let i = 0; i < 400; i++) {
+          const [f] = await sql<{ w: string | null }[]>`select outcome->>'winner' as w from fixtures where id = ${id}`;
+          if (f!.w) {
+            expect(f!.w, `${key}: the steered side won`).toBe(side);
+            return;
+          }
+          const p = point(side);
+          await scoreEvent(systemAuth(), id, { expected_seq: await tipOf(id), type: p.type, payload: p.payload } as never);
+        }
+        throw new Error(`${key}: ${id} was not decided in 400 points`);
+      };
+
+      const m = await lk({ sport_key: key, variant_key: sport.variants[0]!.variant_key, kind: sport.kinds.at(-1)!, sides: ["A", "B", "C"] });
+      const [a, b, c] = ["A", "B", "C"].map((n) => m.id.get(n)!) as [string, string, string];
+      await win((await between(m, "A", "B"))[0]!.id, a); // A beats B
+      await win((await between(m, "B", "C"))[0]!.id, c); // C beats B: C has 1 win, B none
+      // C is disqualified on the pad of her last league line, v A: the pad's own events (a point, the ending sanction, the forfeit).
+      const ac = (await between(m, "A", "C"))[0]!;
+      const pad = await padOf(m.row, ac.id);
+      const send = async (type: string, payload: unknown) => (await padPost(ac.id, pad.secret, { expected_seq: await tipOf(ac.id), type, payload })).status;
+      expect(await send("core.start", {}), `${key}: start`).toBe(201);
+      const p = point(a);
+      expect(await send(p.type, p.payload), `${key}: a point`).toBe(201);
+      expect(await send(`${key}.sanction`, { by: c, level: mod.sanctionEnding!.endLevels[0] }), `${key}: the ending sanction`).toBe(201);
+      expect(await send("core.forfeit", { by: c, reason: "disqualified" }), `${key}: its ending`).toBe(201);
+
+      expect((await sql<{ status: string }[]>`select status from entrants where id = ${c}`)[0]!.status, `${key}: C is out of the field`).toBe("disqualified");
+      const [acRow] = await sql<{ status: string; outcome: { winner?: string; reason?: string } }[]>`select status, outcome from fixtures where id = ${ac.id}`;
+      expect({ status: acRow!.status, winner: acRow!.outcome.winner, reason: acRow!.outcome.reason }, `${key}: the disqualifying match stands, A's by forfeit (RB5-W3: C played 2 of 2)`)
+        .toEqual({ status: "forfeited", winner: a, reason: "disqualified" });
+      // Every league line is settled now, so the guest's next look at the home moves the knockout on (its load runs the advance).
+      const home = await readQuickMatchHome(m.row);
+      expect(home?.league, `${key}: three matches, all decided`).toMatchObject({ played: 3, total: 3, done: true });
+      expect(await advanceQuickMatch(m.row), key).toEqual({ state: "filled" });
+      // C has one win and B none, so a table-only cut would seat C. A disqualified side leaves the cut: the next eligible, B, is seated.
+      expect(await firstRound(m), `${key}: differential, the final is A v B and never C`).toEqual([pairing(a, b)]);
+      expect(await proposalsOf(m), `${key}: one confirmed proposal`).toMatchObject({ confirmed: 1 });
+      expect(await seedConfirmedEvents(m) >= 1, key).toBe(true);
+
+      // The final is played and B takes it: the champion is the final's winner, and C is nowhere in the knockout.
+      const final = await finalLine(m);
+      await win(final.id, b);
+      const done = await readQuickMatchHome(m.row);
+      expect(done?.finished, key).toBe(true);
+      expect(done?.champion, `${key}: the final's winner`).toEqual({ entrantId: b, finalFixtureId: final.id });
+      expect((await linesOf(m.koStageId)).some((l) => l.home_entrant_id === c || l.away_entrant_id === c), `${key}: C is in no knockout line`).toBe(false);
+      checked++;
+    }
+    expect(checked, "every sanctioning offered sport was driven").toBe(sanctioning.length);
+  }, 180_000);
 });
