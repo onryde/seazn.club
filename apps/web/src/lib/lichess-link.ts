@@ -1,21 +1,28 @@
-// Where "Link your Lichess account" points (T20). Client-safe: the settings card and the registration stepper both
-// build the start URL here, and the start route reads the same parameter name, so the two cannot drift.
+// Where "Link your Lichess account" points (T20). Client-safe: the settings card, the registration stepper and the match
+// room all build the start URL here, and the start route reads the same parameter name, so they cannot drift.
 //
-// The start names the CLUB the link is for: linking is how online chess starts for a player, and online chess is
-// offered per club (the PostHog flag `online-chess`), so `/api/auth/lichess` refuses a start that names no club, an
-// unknown one, or one not offered online chess. A renamed club's old slug is followed once. The refusal is a
-// navigation like the callback's own failures (fix round 1, m5): back to the page the start came from, or `/me`, with
-// `?lichess=unavailable` — never a raw JSON body.
+// A start MAY name a club, and two kinds do not:
+//  - one that names a club (the registration form, the match room) is for that club's online chess, and online chess is
+//    offered per club (the PostHog flag `online-chess`), so `/api/auth/lichess` refuses it for an unknown club or one not
+//    offered online chess. A renamed club's old slug is followed once. The refusal is a navigation like the callback's
+//    own failures (fix round 1, m5): back to the page the start came from, or `/me`, with `?lichess=unavailable` - never
+//    a raw JSON body.
+//  - one that names NONE is the player's own (owner 2026-11-18): the /me and Settings card, shown to every signed-in
+//    player. Linking Lichess is the player's, not a club's, so no club's flag is asked. Everything else about the start
+//    is unchanged (sign-in first, the configuration check, a validated `next`, the state and PKCE cookies).
 export const LICHESS_LINK_START_PATH = "/api/auth/lichess";
 /** The query parameter carrying the club's slug. */
 export const LICHESS_LINK_ORG_PARAM = "org";
 
-/** The start URL for linking a Lichess account for `orgSlug`'s online chess, returning to `next` (a same-origin
- *  path; the route re-validates it) when given. */
-export function lichessLinkStartHref(orgSlug: string, next?: string): string {
-  const q = new URLSearchParams({ [LICHESS_LINK_ORG_PARAM]: orgSlug });
+/** The start URL for linking a Lichess account, returning to `next` (a same-origin path; the route re-validates it)
+ *  when given. Names `orgSlug`'s club only when there is one - `null`, `undefined` or "" names none, never the text
+ *  "null": the player's own start (the /me and Settings card). */
+export function lichessLinkStartHref(orgSlug: string | null | undefined, next?: string): string {
+  const q = new URLSearchParams();
+  if (orgSlug) q.set(LICHESS_LINK_ORG_PARAM, orgSlug);
   if (next) q.set("next", next);
-  return `${LICHESS_LINK_START_PATH}?${q.toString()}`;
+  const query = q.toString();
+  return query === "" ? LICHESS_LINK_START_PATH : `${LICHESS_LINK_START_PATH}?${query}`;
 }
 
 /** Every outcome the start route and the callback report on the page they land on, as `?lichess=<code>`. */

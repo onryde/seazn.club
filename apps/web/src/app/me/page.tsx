@@ -88,8 +88,8 @@ export default async function MePage({
       getMySuspensions(user.id),
       // The official's own cross-org average (D4) — null below 3 marks.
       myMarksAverage(user.id),
-      // T16 (T20 m1): the Lichess card — linked, and the club a link starts at (one offered online chess that this
-      // player is entered in online; never just the club they administer).
+      // The Lichess card (T16): shown to every signed-in player (owner 2026-11-18) — what it needs is the player's own
+      // link state, not a club.
       myLichessLink(user.id),
       // Quick match plan 3 T6: the quick matches this person saved (spec §7.7), in the platform's system org, never theirs (C9).
       listMyQuickMatches(user.id, { links: !session.impersonated }),
@@ -470,17 +470,14 @@ export default async function MePage({
 
         {persons.length > 0 && <ConsentCard persons={persons} />}
 
-        {lichessCard.show && (
-          <div className="mt-6">
-            <LichessLinkCard
-              linkedUsername={lichessCard.linkedUsername}
-              configured={lichessConfigured()}
-              orgSlug={lichessCard.orgSlug}
-              needsReconsent={lichessCard.needsReconsent}
-              next="/me"
-            />
-          </div>
-        )}
+        <div className="mt-6">
+          <LichessLinkCard
+            linkedUsername={lichessCard.linkedUsername}
+            configured={lichessConfigured()}
+            needsReconsent={lichessCard.needsReconsent}
+            next="/me"
+          />
+        </div>
 
         {/* Growth seam (PROMPT-53): every claimed player is a future
             organiser. Quiet, last, and only when they run nothing yet — the
