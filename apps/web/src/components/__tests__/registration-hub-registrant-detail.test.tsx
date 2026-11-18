@@ -59,6 +59,7 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     refunded_at: null,
     disputed_at: null,
     dispute_id: null,
+    dispute: null,
     offline_marked_paid_at: null,
     offline_marked_paid_by: null,
     fee_percent: 8,
@@ -689,5 +690,53 @@ describe("RegistrationHubRegistrantDetail — the guardian who consented is name
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+describe("RegistrationHubRegistrantDetail - dispute (registration defects items 3 and 4)", () => {
+  // A disputed cart: `disputed_at` is set while open AND after a loss (a loss does not clear it); a win clears it.
+  const OPEN = { disputed_at: new Date("2026-02-01T00:00:00Z"), dispute_id: "dp_1", dispute: "open" as const };
+  const LOST = { ...OPEN, dispute: "lost" as const, refunded_cents: 1500 };
+  const WON = { disputed_at: null, dispute_id: "dp_1", dispute: "won" as const };
+  const evidenceLinks = (props: RegistrationHubRegistrantDetailProps) =>
+    walk(RegistrationHubRegistrantDetail(props)).filter((e) => "data-registration-hub-registrant-evidence" in propsOf(e));
+
+  it("open, lost and won read differently: Disputed / Dispute lost / the payment itself", () => {
+    const text = (over: Partial<RegistrationListRow>) => textOf(RegistrationHubRegistrantDetail(baseProps({ row: row(over) })));
+    const open = text(OPEN);
+    const lost = text(LOST);
+    const won = text({ ...WON, entry_payment_intent_id: "pi_1" });
+    expect(open).toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputed"));
+    expect(open).not.toContain(t(dict, "reg.chip.disputeLost"));
+    expect(lost).toContain(t(dict, "reg.chip.disputeLost"));
+    expect(lost, "the loss is explained in words, not only in a hover title").toContain(t(dict, "reg.chip.disputeLostTitle"));
+    expect(lost).not.toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputed"));
+    expect(won).toContain(t(dict, "reg.hub.registrants.detail.paymentState.paid"));
+    expect(won).not.toContain(t(dict, "reg.chip.disputeLost"));
+  });
+
+  it("offers the evidence pack for an entry that has or had a dispute, as a download of THIS entry's route, and for no other", () => {
+    const hrefs = ([["open", OPEN], ["lost", LOST], ["won", WON]] as const).map(([label, over]) => {
+      const links = evidenceLinks(baseProps({ row: row(over) }));
+      expect(links, `${label}: one link`).toHaveLength(1);
+      const p = propsOf(links[0]!);
+      expect(p, label).toHaveProperty("download");
+      return p.href;
+    });
+    expect(hrefs).toEqual(["/api/v1/registrations/reg-1/evidence", "/api/v1/registrations/reg-1/evidence", "/api/v1/registrations/reg-1/evidence"]);
+    expect(evidenceLinks(baseProps({ row: row() })), "never disputed: no link").toHaveLength(0);
+  });
+
+  it("the evidence link is the label and hover text the dictionary declares", () => {
+    const [link] = evidenceLinks(baseProps({ row: row(OPEN) }));
+    expect(textOf(link!)).toBe(t(dict, "reg.action.evidence"));
+    expect(propsOf(link!).title).toBe(t(dict, "reg.action.evidenceTitle"));
+  });
+
+  it("is ABSENT for a viewer (the route needs write access), and shows its Actions section for an entry whose only legal action is the evidence pack", () => {
+    expect(evidenceLinks(baseProps({ row: row(OPEN), canEdit: false }))).toHaveLength(0);
+    const withdrawn = baseProps({ row: row({ ...LOST, status: "withdrawn" }) });
+    expect(evidenceLinks(withdrawn), "a terminal disputed entry keeps its pack").toHaveLength(1);
+    expect(textOf(RegistrationHubRegistrantDetail(withdrawn))).toContain(t(dict, "reg.hub.registrants.detail.section.actions"));
   });
 });

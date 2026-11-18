@@ -241,6 +241,8 @@ export function RegistrationHubRegistrantActions({
       free_agent: false,
       assigned_team_id: null,
       division_started: false,
+      // Evidence is a plain download link rendered by the detail panel beside this island, not a control of this one.
+      dispute: null,
     },
   );
 

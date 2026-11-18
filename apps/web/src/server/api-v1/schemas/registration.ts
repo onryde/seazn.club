@@ -234,6 +234,9 @@ export const RegistrationListEntry = Registration.extend({
    *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped on <date>: Lichess wasn't
    *  linked". */
   promotion_skipped_at: z.string().nullable(),
+  /** Where this entry's card chargeback stands: null when it never had one, `open` while it is being decided, `lost` (the cardholder was
+   *  repaid and the entry is marked refunded) or `won`. The hub shows "Disputed" / "Dispute lost · refunded" and offers the evidence pack. */
+  dispute: z.enum(["open", "lost", "won"]).nullable(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which

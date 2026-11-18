@@ -10,6 +10,7 @@ import { omit } from "@/lib/omit";
 import type { Tx, RegistrationSettingsRow, RegistrationWithGroupRow, AnySql } from "./types";
 import { regGroupCols } from "./lookups";
 import { promotionSkippedAtSql, waitlistPositionSql } from "./waitlist";
+import { disputeOutcomeSql } from "./disputes";
 import { remindersInWindowSql } from "./reminder-window";
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,9 @@ export interface RegistrationListRow extends Omit<RegistrationWithGroupRow, "acc
    *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait; null otherwise. The hub shows "Skipped on <date>: Lichess
    *  wasn't linked" beside the waitlist place (walk-fix F16, final review m1). */
   promotion_skipped_at: Date | null;
+  /** Where this entry's cart chargeback stands (`disputeOutcomeSql`, registrations/disputes.ts): null when it never had one, else
+   *  `open`, `lost` (the cardholder was repaid; the entry is marked refunded) or `won`. Not a column: read off the audit ledger. */
+  dispute: "open" | "lost" | "won" | null;
 }
 
 /** Raw wire shape — `RegistrationListRow` plus the hash the query still
@@ -356,7 +360,8 @@ export async function listRegistrations(
             and ev.payload->>'registration_id' = r.id::text) as last_reminded_at,
         ${remindersInWindowSql(tx, tx`c.id`, tx`r.id::text`)} as reminders_in_window,
         ${waitlistPositionSql(tx, "r")} as waitlist_position,
-        ${promotionSkippedAtSql(tx, "r")} as promotion_skipped_at
+        ${promotionSkippedAtSql(tx, "r")} as promotion_skipped_at,
+        ${disputeOutcomeSql(tx, "g", tx`c.id`)} as dispute
       from registrations r
       join registration_groups g on g.id = r.group_id
       join divisions d on d.id = r.division_id

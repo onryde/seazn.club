@@ -12,7 +12,12 @@ import {
   answerLabel,
   registrantRowAnchor,
   deriveRegistrantActionFlags,
+  REGISTRANT_PAYMENT_STATE_KEY,
 } from "@/components/registration-hub-registrant-derive";
+import uiEn from "@/dictionaries/en/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import type { RegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
 import type { RegistrantsFilters } from "@/app/o/[orgSlug]/c/[compSlug]/registration/data";
 import type { RegistrationFormField } from "@/server/api-v1/schemas";
@@ -44,6 +49,8 @@ const NOT_A_SOLO_SIGNUP = {
   approved_at: null,
   // No late payment sent back unless a case says so (V512; polish wave final fix m2).
   late_refunded_cents: 0,
+  // Never disputed unless a case says so (registration defects item 3: the evidence-pack flag reads it).
+  dispute: null as "open" | "lost" | "won" | null,
 } as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
@@ -133,6 +140,7 @@ const PAYMENT_BASE = {
   amount_cents: 1500,
   refunded_cents: 0,
   disputed_at: null,
+  dispute: null as "open" | "lost" | "won" | null,
   // The CART's intent (set by whichever entry paid) - read by nothing below; kept so a test can show it is ignored.
   payment_intent_id: null as string | null,
   // THIS entry's own card payment (V387), the only intent the payment state reads (polish wave P5, carry d).
@@ -141,6 +149,71 @@ const PAYMENT_BASE = {
 };
 /** A cart whose card payment was a SIBLING's: the cart's intent is set, this entry's own is not. */
 const CART_PAID_BY_SIBLING = { ...PAYMENT_BASE, payment_intent_id: "pi_sibling" };
+
+describe("deriveRegistrantPaymentState - dispute outcome (registration defects item 4)", () => {
+  // `disputed_at` is what the cart says: set while open AND after a loss (a loss does not clear it), cleared by a win.
+  const OPEN = { ...PAYMENT_BASE, disputed_at: new Date(), dispute: "open" as const };
+  const LOST = { ...PAYMENT_BASE, disputed_at: new Date(), dispute: "lost" as const, refunded_cents: 1500 };
+  const WON = { ...PAYMENT_BASE, disputed_at: null, dispute: "won" as const, status: "confirmed" as const, entry_payment_intent_id: "pi_1" };
+
+  it("open, lost and won read as three different states: Disputed, Dispute lost, and the payment it is", () => {
+    const states = [deriveRegistrantPaymentState(OPEN), deriveRegistrantPaymentState(LOST), deriveRegistrantPaymentState(WON)];
+    expect(states).toEqual(["disputed", "disputeLost", "paid"]);
+    expect(new Set(states).size, "three outcomes, three states").toBe(3);
+  });
+
+  it("a lost dispute beats the refunded state it also implies (refunded_cents is set by the loss)", () => {
+    expect(deriveRegistrantPaymentState(LOST)).toBe("disputeLost");
+    expect(deriveRegistrantPaymentState({ ...LOST, refunded_cents: 1500, amount_cents: 1500 })).not.toBe("refunded");
+  });
+
+  it("never disputed is unchanged (the empty case)", () => {
+    expect(deriveRegistrantPaymentState({ ...PAYMENT_BASE, entry_payment_intent_id: "pi_1" })).toBe("paid");
+  });
+
+  it("every payment state names a dictionary key that exists in all four locales (anti-vacuity: the sweep counts)", () => {
+    const states = Object.keys(REGISTRANT_PAYMENT_STATE_KEY) as (keyof typeof REGISTRANT_PAYMENT_STATE_KEY)[];
+    let checked = 0;
+    for (const dict of [uiEn, uiFr, uiEs, uiNl] as Record<string, string>[]) {
+      for (const state of states) {
+        expect(dict[REGISTRANT_PAYMENT_STATE_KEY[state]], `${state}`).toBeTruthy();
+        checked += 1;
+      }
+    }
+    expect(states).toContain("disputeLost");
+    expect(checked).toBe(states.length * 4);
+  });
+});
+
+describe("deriveRegistrantActionFlags - canDownloadEvidence (registration defects item 3)", () => {
+  const FLAG_BASE = {
+    status: "confirmed" as const,
+    approval: "auto" as const,
+    amount_cents: 1500,
+    refunded_cents: 0,
+    late_refunded_cents: 0,
+    payment_intent_id: "pi_1" as string | null,
+    entry_payment_intent_id: "pi_1" as string | null,
+    approved_at: null,
+    division_fee_cents: 1500,
+    free_agent: false,
+    assigned_team_id: null,
+    division_started: false,
+    dispute: null as "open" | "lost" | "won" | null,
+  };
+
+  it("offered for an entry that has or had a dispute (open, lost, won) and for no other", () => {
+    const results = (["open", "lost", "won", null] as const).map((dispute) => [dispute, deriveRegistrantActionFlags({ ...FLAG_BASE, dispute }).canDownloadEvidence]);
+    expect(results).toEqual([["open", true], ["lost", true], ["won", true], [null, false]]);
+  });
+
+  it("is offered even on a terminal entry with no other action (a withdrawn, disputed entry still has its pack)", () => {
+    // Nothing paid is left to refund (fully refunded by the loss), so Refund is not legal either.
+    const flags = deriveRegistrantActionFlags({ ...FLAG_BASE, status: "withdrawn", dispute: "lost", refunded_cents: 1500 });
+    expect(flags.canDownloadEvidence).toBe(true);
+    expect(Object.entries(flags).filter(([k, v]) => v && k !== "canDownloadEvidence"), "premise: nothing else is legal").toEqual([]);
+  });
+});
 
 describe("deriveRegistrantPaymentState", () => {
   it("a disputed entry is 'disputed' regardless of anything else", () => {
@@ -599,6 +672,7 @@ describe("deriveRegistrantActionFlags", () => {
     canRefund: true,
     canAssign: true,
     canUnassign: true,
+    canDownloadEvidence: true,
   } satisfies Record<keyof RegistrantActionFlags, true>);
 
   // Completeness sweep, RS005 W1a-style: iterates the REAL zod enum rather

@@ -32,6 +32,7 @@ import {
   REGISTRANT_STATUS_STYLE,
   CONSENT_STATUS_STYLE,
   deriveRegistrantPaymentState,
+  REGISTRANT_PAYMENT_STATE_KEY,
   answerLabel,
   registrantRowAnchor,
   registrantKindLabel,
@@ -172,7 +173,15 @@ export function RegistrationHubRegistrantDetail({
           {detailField(t(dict, "reg.hub.registrants.detail.field.paymentMethod"), paymentMethodText)}
           {detailField(
             t(dict, "reg.hub.registrants.detail.field.paymentState"),
-            t(dict, `reg.hub.registrants.detail.paymentState.${paymentState}`),
+            paymentState === "disputeLost" ? (
+              // The chip's own sentence for what a lost chargeback did, said in the panel (a hover title alone is invisible on a phone).
+              <span data-registration-hub-registrant-dispute-lost className="flex flex-col items-end gap-0.5 text-right">
+                <span>{t(dict, REGISTRANT_PAYMENT_STATE_KEY[paymentState])}</span>
+                <span className="text-xs font-normal text-slate-500">{t(dict, "reg.chip.disputeLostTitle")}</span>
+              </span>
+            ) : (
+              t(dict, REGISTRANT_PAYMENT_STATE_KEY[paymentState])
+            ),
           )}
           {detailField(
             t(dict, "reg.hub.registrants.detail.field.entryRef"),
@@ -348,6 +357,20 @@ export function RegistrationHubRegistrantDetail({
               `hasAnyAction` counts them automatically. Deriving them here
               instead would have let a solo sign-up whose ONLY legal action
               is Assign fall under a section that never renders. */}
+          {/* A disputed entry's evidence pack: the one document, mapped to Stripe's evidence fields, that the platform answers the bank
+              with (`GET /api/v1/registrations/{id}/evidence`, an attachment). The sponsor deal page offers the same rail
+              (components/sponsors/deal-page.tsx). A plain link with `download`: no client JS, and the browser saves the file. */}
+          {actionFlags.canDownloadEvidence && (
+            <a
+              data-registration-hub-registrant-evidence
+              href={`/api/v1/registrations/${row.id}/evidence`}
+              download
+              title={t(dict, "reg.action.evidenceTitle")}
+              className="btn btn-ghost text-xs font-medium text-rose-700 max-md:min-h-11"
+            >
+              {t(dict, "reg.action.evidence")}
+            </a>
+          )}
           {(actionFlags.canAssign || actionFlags.canUnassign) && (
             <RegistrationHubAssignPicker
               registrationId={row.id}

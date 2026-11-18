@@ -1,6 +1,7 @@
 import "server-only";
 // Chargeback handling and the dispute evidence pack (see ./index.ts).
 import type Stripe from "stripe";
+import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { disputeAlertEmail, disputeLostEmail } from "@/lib/email";
 import { routes } from "@/lib/routes";
@@ -10,9 +11,32 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "../dispute-recovery";
 import { orgOwnerRecipient } from "../org-owner";
 import { audit } from "../audit";
-import type { RegistrationRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
+import type { AnySql, RegistrationRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, divisionCtx, fallbackOrigin, orgReg } from "./lookups";
 import { buildCartMail } from "./mail";
+
+/** Where a cart's chargeback stands, as one SQL expression over the cart aliased `groupAlias` and the competition id expression
+ *  `competitionId` (registration defects item 4): null when the cart never had one, else `'open'`, `'lost'` or `'won'`.
+ *  No column stores the outcome. `handleRegistrationDispute` leaves it in two places, read here:
+ *  - lost: a `registration.dispute_lost` ledger row naming the cart's CURRENT dispute id (a lost dispute keeps `disputed_at`, so the
+ *    cart alone cannot tell it from an open one; keyed on the id so an earlier dispute's outcome never speaks for a newer one);
+ *  - open: `disputed_at` is set and no such row exists;
+ *  - won: `disputed_at` was cleared while the cart still names a dispute (a won chargeback, or an inquiry the bank closed).
+ *  One correlated read, evaluated only for a cart that names a dispute. */
+export function disputeOutcomeSql(db: AnySql, groupAlias: string, competitionId: postgres.PendingQuery<postgres.Row[]>) {
+  const g = db(groupAlias);
+  return db`case
+      when ${g}.dispute_id is null then null
+      when exists (
+        select 1 from competition_events ev
+         where ev.competition_id = ${competitionId}
+           and ev.type = 'registration.dispute_lost'
+           and ev.payload->>'dispute_id' = ${g}.dispute_id
+      ) then 'lost'
+      when ${g}.disputed_at is not null then 'open'
+      else 'won'
+    end`;
+}
 
 /**
  * Dispute lifecycle (spec issue #5 — destination charges make the PLATFORM

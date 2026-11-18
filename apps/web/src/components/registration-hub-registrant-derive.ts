@@ -21,6 +21,7 @@ import { isSoloAssignableStatus, isTerminalRegistrationStatus, ownPaymentRefunde
 // in this file that has to take the client-safe path instead.
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 
 /** Keyed by `Record<..., string>` against the REAL status union (not a
  *  hand-copied string literal list) so a missing entry is a compile error,
@@ -108,6 +109,7 @@ export const CONSENT_STATUS_STYLE: Record<ConsentStatus, string> = {
 
 export type RegistrantPaymentState =
   | "disputed"
+  | "disputeLost"
   | "refunded"
   | "partiallyRefunded"
   | "waitlisted"
@@ -115,6 +117,20 @@ export type RegistrantPaymentState =
   | "paid"
   | "awaitingPayment"
   | "free";
+
+/** The dictionary key naming each payment state: the ONE map, so the detail panel cannot name a state with a key that does not exist.
+ *  A lost chargeback reuses the console chip's own copy (`reg.chip.disputeLost`) rather than minting a second string for it. */
+export const REGISTRANT_PAYMENT_STATE_KEY: Record<RegistrantPaymentState, DictionaryKey> = {
+  disputed: "reg.hub.registrants.detail.paymentState.disputed",
+  disputeLost: "reg.chip.disputeLost",
+  refunded: "reg.hub.registrants.detail.paymentState.refunded",
+  partiallyRefunded: "reg.hub.registrants.detail.paymentState.partiallyRefunded",
+  waitlisted: "reg.hub.registrants.detail.paymentState.waitlisted",
+  paidOffline: "reg.hub.registrants.detail.paymentState.paidOffline",
+  paid: "reg.hub.registrants.detail.paymentState.paid",
+  awaitingPayment: "reg.hub.registrants.detail.paymentState.awaitingPayment",
+  free: "reg.hub.registrants.detail.paymentState.free",
+};
 
 /**
  * The detail panel's "payment state" field (task 2) — distinct from
@@ -125,7 +141,7 @@ export type RegistrantPaymentState =
  * actually moved, which `status` alone cannot say.
  *
  * Precedence, checked in order: a dispute wins over everything (Stripe has
- * already pulled the money back pending resolution); then refunded/partially
+ * already pulled the money back pending resolution; once LOST it reads "Dispute lost · refunded"); then refunded/partially
  * refunded; then a WAITLISTED entry reads "waitlisted", never "free" (RS005
  * F2 finding 2, below); then a genuinely zero-fee entry is "free" (never
  * "awaiting payment" — there is nothing to await); then a paid/confirmed
@@ -170,9 +186,13 @@ export type RegistrantPaymentState =
 export function deriveRegistrantPaymentState(
   row: Pick<
     RegistrationListRow,
-    "amount_cents" | "refunded_cents" | "disputed_at" | "entry_payment_intent_id" | "status"
+    "amount_cents" | "refunded_cents" | "disputed_at" | "dispute" | "entry_payment_intent_id" | "status"
   >,
 ): RegistrantPaymentState {
+  // A LOST chargeback keeps `disputed_at` (the cart alone cannot tell it from an open one), so it is read first: the money is gone and
+  // the entry is marked refunded, which "Disputed" (still being decided) does not say. A WON one cleared `disputed_at` and reads as the
+  // payment it is.
+  if (row.dispute === "lost") return "disputeLost";
   if (row.disputed_at !== null) return "disputed";
   if (row.refunded_cents > 0) {
     return row.refunded_cents >= row.amount_cents ? "refunded" : "partiallyRefunded";
@@ -247,6 +267,9 @@ export interface RegistrantActionFlags {
    *  refused, for the same reason `canApprove` reads the division's LIVE fee:
    *  a control the server will refuse is worse than no control. */
   canUnassign: boolean;
+  /** Download the dispute evidence pack: any entry whose cart has (or had) a chargeback - open, lost or won. A plain download link, not
+   *  an action that changes anything, but gated like the controls (write access) and counted by `hasAnyAction` so the section shows. */
+  canDownloadEvidence: boolean;
 }
 
 /**
@@ -378,6 +401,7 @@ export function deriveRegistrantActionFlags(
     | "free_agent"
     | "assigned_team_id"
     | "division_started"
+    | "dispute"
   >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
@@ -431,5 +455,6 @@ export function deriveRegistrantActionFlags(
       nonTerminal &&
       isSoloAssignableStatus(row.status),
     canUnassign: row.free_agent && row.assigned_team_id !== null && !row.division_started,
+    canDownloadEvidence: row.dispute !== null,
   };
 }

@@ -34,7 +34,7 @@ import "server-only";
 //   pay-page-checkout    the payment page's Pay: reuse-or-expire on the entry's own session, mint for the entry, return to the page
 //   checkout-completion  payment completion: the checkout webhooks, confirmPaidRegistration, reconcile-on-return
 //   refunds              refund money and policy: stripeRefund, receipts, the failure alert, the resolved policy
-//   disputes             chargeback handling and the dispute evidence pack
+//   disputes             chargeback handling, where a cart's chargeback stands (open / lost / won), and the dispute evidence pack
 //   withdraw             withdrawal core shared by the public and organiser paths, and the solo placement release
 //   public-status        token- and ref-gated public views: status, cart, public withdraw
 //   group-status         the group (cart) read model behind the /r/[ref] status page
@@ -130,7 +130,7 @@ export {
   resolveRefundPolicy,
 } from "./refunds";
 export type { ResolvedRefundPolicy } from "./refunds";
-export { handleRegistrationDispute, buildDisputeEvidence } from "./disputes";
+export { handleRegistrationDispute, buildDisputeEvidence, disputeOutcomeSql } from "./disputes";
 export { releaseSoloSignUpPlacement } from "./withdraw";
 export { queueRegistrationApprovedMails, queueRegistrationJoinedMail, queueRegistrationRejectedMails } from "./lifecycle-mail";
 export {

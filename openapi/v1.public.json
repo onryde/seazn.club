@@ -56799,6 +56799,21 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "dispute": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "lost",
+                                  "won"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -56842,7 +56857,8 @@
                           "division_started",
                           "last_reminded_at",
                           "reminders_in_window",
-                          "promotion_skipped_at"
+                          "promotion_skipped_at",
+                          "dispute"
                         ],
                         "additionalProperties": false
                       }
@@ -56897,7 +56913,8 @@
                       "division_started": true,
                       "last_reminded_at": "example",
                       "reminders_in_window": 0,
-                      "promotion_skipped_at": "example"
+                      "promotion_skipped_at": "example",
+                      "dispute": "open"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -57713,6 +57730,21 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "dispute": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "lost",
+                                  "won"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -57756,7 +57788,8 @@
                           "division_started",
                           "last_reminded_at",
                           "reminders_in_window",
-                          "promotion_skipped_at"
+                          "promotion_skipped_at",
+                          "dispute"
                         ],
                         "additionalProperties": false
                       }
@@ -57811,7 +57844,8 @@
                       "division_started": true,
                       "last_reminded_at": "example",
                       "reminders_in_window": 0,
-                      "promotion_skipped_at": "example"
+                      "promotion_skipped_at": "example",
+                      "dispute": "open"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
