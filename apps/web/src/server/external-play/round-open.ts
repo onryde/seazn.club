@@ -17,7 +17,7 @@ import "server-only";
 // the chesslep DB 2026-10-09 — which is why patchDivision asks BEFORE it opens
 // its tenant transaction, the same placement as its `requireFeature` reads.
 import type postgres from "postgres";
-import { boardAnchor, type BoardAnchor } from "./window";
+import { CHECKIN_BATCH_GAP_MS, CHECKIN_BATCH_SIZE, ROUND_WINDOW_TAIL_MS, boardAnchor, type BoardAnchor } from "./window";
 
 type AnySql = postgres.TransactionSql | postgres.Sql;
 
@@ -146,4 +146,40 @@ export async function anyRoundOpened(db: AnySql, divisionId: string, now: Date):
          and sro.opened_at <= ${now}
     ) as opened`;
   return row?.opened === true;
+}
+
+/** THE one SQL spelling of a ROUND's window bound, for the alias `o` (a `stage_round_opens` row): its last batch's start plus
+ *  `ROUND_WINDOW_TAIL_MS` (the deadline, the line's grace and the arbiter's most extension, declared in window.ts and NOT summed
+ *  here: rule 3 of batch-anchor-source-guard.test.ts refuses arithmetic with DEADLINE_AFTER_MS anywhere but window.ts). The last
+ *  batch's start is `opened_at + (batchCount(boards) - 1) * CHECKIN_BATCH_GAP_MS` when the round staggers (the flag its open STORED,
+ *  spec §3.2.1) and `opened_at` otherwise; `boards` is EVERY fixture row of the (stage, round), a bye and a withdrawn board
+ *  included, as `boardRankSql` counts them. Conservative and per round: a board's own deadline can be earlier, and no board's later.
+ *  Shared with the Match Day plan's "today" rule. The caller names its `stage_round_opens` table `o`; the fragment reads the round's
+ *  fixtures itself, so it needs no join. */
+export function roundWindowBoundSql(db: AnySql) {
+  return db`(o.opened_at
+    + (case when o.staggered
+            then (greatest(1, ceil((select count(*) from fixtures rb where rb.stage_id = o.stage_id and rb.round_no = o.round_no)::numeric / ${CHECKIN_BATCH_SIZE}::numeric)) - 1)
+                 * ${CHECKIN_BATCH_GAP_MS}::float8
+            else 0::float8 end) * interval '1 millisecond'
+    + ${ROUND_WINDOW_TAIL_MS}::float8 * interval '1 millisecond')`;
+}
+
+/** Is ANY board inside a check-in window, its grace or an extension at `now` (an open round whose bound has not passed)? The question
+ *  the sweep asks before it tears rooms down or reads camera evidence, and the pre-mint before it makes rooms: a window open means
+ *  players are claiming seats, and a vendor call spent on housekeeping is one a player could have used. Platform-wide in production.
+ *  `orgIds` is a TEST scope (the sweep's own `SweepDeps.orgIds` rule): it limits the question to those orgs' rounds so the shared
+ *  test database's other suites cannot flip the answer, and an EMPTY list matches nothing, never "every org". The privileged client:
+ *  `stage_round_opens` is sealed. */
+export async function anyCheckinWindowOpen(db: AnySql, now: Date, orgIds?: readonly string[]): Promise<boolean> {
+  const scope = orgIds === undefined ? db`` : db`and o.org_id in ${db(orgIds as string[])}`;
+  const [row] = await db<{ open: boolean }[]>`
+    select exists (select 1 from stage_round_opens o where ${roundWindowBoundSql(db)} > ${now} ${scope}) as open`;
+  return row?.open === true;
+}
+
+/** The sweep's and the pre-mint's open-window deferral is ON unless `EXTERNAL_PLAY_WINDOW_DEFER` is exactly "0" (the e2e server's
+ *  setting, whose specs share one platform-wide window state, and an operator's rollback lever). Read at call time. */
+export function windowDeferralOn(): boolean {
+  return process.env.EXTERNAL_PLAY_WINDOW_DEFER !== "0";
 }

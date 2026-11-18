@@ -82,6 +82,13 @@ export function boardCap(anchor: BoardAnchor): Date {
   return new Date(windowFor(anchor).deadline.getTime() + LINE_DEADLINE_GRACE_MS);
 }
 
+/** How long past a round's LAST batch start any of its boards can still be inside a check-in window, its grace or an extension: the
+ *  deadline, the line's grace and the arbiter's most extension (`CHECKIN_EXTEND_MAX` presses of `CHECKIN_EXTEND_STEP_MS`). A bound for
+ *  the whole round, never a per-board re-derivation of `windowFor`: `roundWindowBoundSql` (round-open.ts) adds it to the round's last
+ *  batch start. Summed HERE, and only here, because rule 3 of batch-anchor-source-guard.test.ts refuses arithmetic with
+ *  DEADLINE_AFTER_MS anywhere but this file. */
+export const ROUND_WINDOW_TAIL_MS = DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS + CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS;
+
 export type RoomPhase = "before" | "open" | "closed";
 
 export function roomPhase(now: Date, anchor: BoardAnchor): RoomPhase {
