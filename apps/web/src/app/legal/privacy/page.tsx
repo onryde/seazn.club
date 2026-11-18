@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { MarketingNav } from "@/components/marketing-nav";
 import { MarketingFooter } from "@/components/marketing-footer";
 import Link from "next/link";
-import { GOOGLE_PRIVACY_URL, GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_TOS_URL } from "@/lib/youtube";
+import { GOOGLE_API_USER_DATA_POLICY_URL, GOOGLE_PRIVACY_URL, GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_TOS_URL } from "@/lib/youtube";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — Seazn Club",
@@ -77,6 +77,7 @@ export default function PrivacyPage() {
           <section id="youtube-api-services">
             <h2 className="mb-2 text-lg font-semibold text-slate-800">7. YouTube live streaming (YouTube API Services)</h2>
             <p>Seazn Club uses YouTube API Services. If an organiser of your organisation connects its YouTube channel, we use them (the YouTube Data API and Google&apos;s authorisation (OAuth) service for the YouTube permission) so that a match can be streamed live to that channel. By using this feature you agree to be bound by the <a href={YOUTUBE_TOS_URL} className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">YouTube Terms of Service</a>. What Google does with your data is described in the <a href={GOOGLE_PRIVACY_URL} className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>. Nothing in this section applies unless an organiser connects a channel.</p>
+            <p className="mt-2">Seazn Club&apos;s use and transfer to any other app of information received from Google APIs will adhere to the <a href={GOOGLE_API_USER_DATA_POLICY_URL} className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
             <ul className="mt-2 list-disc space-y-1 pl-5">
               <li><strong>What we access:</strong> with the permission you give at Google, your channel&apos;s id and title, and the live broadcasts and live streams on that channel. For a match your organisation streams, we create a broadcast and a stream key on the channel, start the broadcast, and end it when the match is over.</li>
               <li><strong>What we store:</strong> the channel id and title; an identifier of the Google account that granted access; a refresh token (encrypted at rest); for each broadcast, its id, which is also its video id, and its title (the two sides, the division and the competition); the stream keys we create on the channel (encrypted at rest); a keyed one-way fingerprint of the channel id, kept on the channel&apos;s entry in your organisation&apos;s list of stream destinations; the visibility and made-for-kids choices your organisation made; and a record of who agreed to connect, when, and to which wording.</li>

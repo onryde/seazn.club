@@ -225,6 +225,8 @@ export const YOUTUBE_TOS_URL = "https://www.youtube.com/t/terms";
 export const YOUTUBE_GUIDELINES_URL = "https://www.youtube.com/t/community_guidelines";
 /** Developer Policies III.A.2: the privacy policy must link Google's, exactly as Google spells it. */
 export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
+/** Google's API Services User Data Policy: the privacy policy's Limited Use affirmation links it (OAuth verification). */
+export const GOOGLE_API_USER_DATA_POLICY_URL = "https://developers.google.com/terms/api-services-user-data-policy";
 /** Where a person removes Seazn from their Google account: Google's security-permissions page, the URL the Developer Policies name
  *  (III.A.2.h, "users can revoke access via ..."; it answers 301 to myaccount.google.com/permissions). The ONE link for it - the privacy
  *  policy and the Disconnect notice for an organiser whose revoke Seazn could not confirm are the same place (a plain link - no Google

@@ -377,6 +377,47 @@ describe("privacy — what the YouTube section says about the other halves of th
   });
 });
 
+describe("privacy — Google's Limited Use affirmation (Google API Services User Data Policy)", () => {
+  // Google's OAuth verification asks the privacy policy of an app that receives data from Google APIs to affirm Limited Use, in Google's
+  // own words: "[App]'s use and transfer to any other app of information received from Google APIs will adhere to Google API Services
+  // User Data Policy, including the Limited Use requirements", with the policy's name linked to the policy. The URL and the phrases below
+  // are Google's literals (the rulebook), typed here and never read back from our constants, so a constant that drifts reds here.
+  const POLICY_USER_DATA = "https://developers.google.com/terms/api-services-user-data-policy";
+  const LINK_TEXT = "Google API Services User Data Policy";
+  /** Google's required phrases: each must appear verbatim in the section. */
+  const GOOGLE_PHRASES = [
+    "use and transfer to any other app of information received from Google APIs",
+    "will adhere to",
+    LINK_TEXT,
+    "including the Limited Use requirements",
+  ];
+  /** The sentence as the page states it (Google's wording with the app's name, and "the" before the policy's name). */
+  const LIMITED_USE =
+    "Seazn Club's use and transfer to any other app of information received from Google APIs will adhere to the Google API Services User Data Policy, including the Limited Use requirements.";
+
+  it("the YouTube section affirms Limited Use in Google's own words (4 phrases checked)", () => {
+    let checked = 0;
+    const missing = GOOGLE_PHRASES.filter((p) => {
+      checked++;
+      return !ytText.includes(p);
+    });
+    expect(checked, "anti-vacuity: every phrase was tried").toBe(4);
+    expect(missing, "Google's phrases missing from the YouTube section").toEqual([]);
+    expect(ytText).toContain(LIMITED_USE);
+  });
+
+  it("the policy's name links to Google's policy URL, opened like the neighbouring Google links", () => {
+    const anchors = [...yt.matchAll(/<a\b([^>]*)>(.*?)<\/a>/g)];
+    expect(anchors.length, "anti-vacuity: the section's links were read").toBeGreaterThan(3);
+    const policy = anchors.filter(([, , inner]) => text(inner) === LINK_TEXT);
+    expect(policy.length, "exactly one link carries the policy's name").toBe(1);
+    const attrs = policy[0][1];
+    expect(attrs).toContain(`href="${POLICY_USER_DATA}"`);
+    expect(attrs).toContain('target="_blank"');
+    expect(attrs).toContain('rel="noopener noreferrer"');
+  });
+});
+
 describe("privacy — regression: every section that existed before T19 still renders (O4)", () => {
   // Snapshot of /legal/privacy as of main da17c2bc50 (19 October 2026 text): each heading (number stripped - the YouTube section is
   // inserted at 7 and the later ones moved down one) with a sentence distinctive of its body. The sibling tests pin sections 5 and 6 in
