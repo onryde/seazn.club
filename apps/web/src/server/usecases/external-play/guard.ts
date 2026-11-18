@@ -170,10 +170,21 @@ type LoadedRow = Omit<OnlinePlayFixture, "clock" | "bridge"> & {
  * being re-paired seats nobody); the rule's last test, the clock, is onlinePlayClock beside it.
  */
 export function onlinePlayBoardWhere() {
-  return sql`d.sport_key = 'boardgame'
-       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'
+  return sql`${onlinePlayDivisionWhere()}
        and d.status not in ('setup', 'scheduled')
        and f.status not in ('finalized', 'cancelled')`;
+}
+
+/**
+ * The DIVISION half of the rule, on its own: a boardgame division with `onlinePlay: 'lichess'`. `onlinePlayBoardWhere`
+ * adds the started-division test to it. The pre-mint job (premint.ts) asks the division half alone, because it also
+ * serves a paired round-1 board of a division still in setup (check-in capacity R3: a Swiss round is paired before
+ * Start), which the started-division conjunct would refuse. One home for the two lines, so a division-level change moves
+ * both.
+ */
+export function onlinePlayDivisionWhere() {
+  return sql`d.sport_key = 'boardgame'
+       and coalesce(d.config->>'onlinePlay', 'off') = 'lichess'`;
 }
 
 /** The online-play rule's last test, in code: the division's clock maps onto a Lichess clock (see below). */

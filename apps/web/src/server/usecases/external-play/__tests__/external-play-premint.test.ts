@@ -1,0 +1,668 @@
+// Check-in capacity, plan 2 task 4 - the pre-mint pass (spec 2026-11-05 §11, owner rulings R3 and 2026-11-17 (2)).
+//
+// The job makes ROOMS, and only rooms, for every board of an UNOPENED round in an online, camera-on division, nearest round
+// first, so the first claim of a round finds its room waiting instead of paying for it inside the check-in window. It never
+// adopts a room, never makes a participant, never touches a board whose round is open.
+//
+// Driven through the REAL adapter against the e2e RealtimeKit fixture server (e2e/realtimekit-fixture-server.ts), whose
+// `calls` count what the vendor was actually asked. Expected values come from the rulings and from the engine's own
+// declarations (`FIXTURE_STATUSES`, `effectivePolicy`, `divisionScoringClosed`), never from the module under test. Every
+// sweep reports how many items it checked and zero checked is a failure (TEST-STRATEGY.md).
+//
+// Chess-only (single-sport reason): online play is `onlinePlay = 'lichess'` on `boardgame`; no other sport has an online
+// board (guard.ts `d.sport_key = 'boardgame'`), so there is no sport axis to sweep.
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import type { DeliverMessage } from "@/server/email-outbox/transport";
+import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
+import { sql } from "@/lib/db";
+import { divisionScoringClosed } from "@/lib/division-phase";
+import { FIXTURE_STATUSES } from "@/lib/fixture-status";
+import { CAMERA_POLICIES } from "@/lib/camera-policy";
+import { effectivePolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
+import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
+import { REALTIMEKIT_FIXTURE_ENV, startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../../../../../e2e/realtimekit-fixture-server";
+import { unpairSwissRound } from "../../stages";
+import { openRound } from "../open-round";
+import { seatPlayer } from "../preflight";
+import {
+  PREMINT_CALL_INTERVAL_MS,
+  PREMINT_CALLS_PER_PASS,
+  PREMINT_LOCK,
+  PREMINT_PASS_BUDGET_MS,
+  premintCandidates,
+  premintExternalPlay,
+  type PremintCandidate,
+  type PremintDeps,
+} from "../premint";
+import {
+  seedOnlineChessRound,
+  seedOnlineSwiss,
+  seedOwner,
+  type SeedOnlineChessRoundOpts,
+  type SeedOnlineChessRoundResult,
+} from "../../__tests__/_external-play-seed";
+
+const DB = !!process.env.DATABASE_URL;
+const MIN = 60_000;
+const HOUR = 60 * MIN;
+
+// The invite mail seam of the one test that opens a round (_invite-mail.ts): the invite is rendered, queued on the outbox and
+// sent after commit through the outbox's network seam, which is replaced here. `fail` names recipients the provider refuses.
+const mail = vi.hoisted(() => ({ sent: [] as SentInvite[], fail: new Set<string>() }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
+});
+vi.mock("@/server/email-outbox/transport", async () => {
+  const h = await import("@/server/usecases/__tests__/_invite-mail");
+  return { deliver: (msg: DeliverMessage) => h.deliverForTest(mail, msg) };
+});
+
+let fx: RealtimeKitFixtureServer;
+beforeAll(async () => {
+  fx = await startRealtimeKitFixtureServer(0);
+});
+afterAll(async () => {
+  await fx.close();
+  if (DB) await sql.end({ timeout: 2 }).catch(() => undefined);
+});
+beforeEach(async () => {
+  await fx.reset();
+  for (const [k, v] of Object.entries(REALTIMEKIT_FIXTURE_ENV)) vi.stubEnv(k, v);
+  vi.stubEnv("REALTIMEKIT_BASE_URL", fx.url);
+  vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
+  mail.sent.length = 0;
+  mail.fail.clear();
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
+
+// ─── seeds and readers ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A STARTED division with `fixtures` paired boards in an unopened round 1, camera `optional` unless said otherwise. */
+const seedRound = (fixtures: number, over: Partial<SeedOnlineChessRoundOpts> = {}) =>
+  seedOnlineChessRound({ fixtures, cameraPolicy: "optional", ...over });
+type Round = SeedOnlineChessRoundResult;
+const ids = (r: Round) => r.boards.map((b) => b.fixtureId);
+
+const unseat = (fixtureIds: string[]) =>
+  sql`update fixtures set home_entrant_id = null, away_entrant_id = null where id in ${sql(fixtureIds)}`;
+const reseat = async (r: Round) => {
+  for (const b of r.boards) {
+    await sql`update fixtures set home_entrant_id = ${b.home.entrantId}, away_entrant_id = ${b.away.entrantId} where id = ${b.fixtureId}`;
+  }
+};
+
+const rowsOf = (orgIds: string[]) => premintCandidates(new Date(), orgIds);
+const key = (c: Pick<PremintCandidate, "fixtureId" | "side">) => `${c.fixtureId}/${c.side}`;
+const keysOf = (rows: PremintCandidate[]) => rows.map(key);
+const bothSides = (fixtureIds: string[]) => fixtureIds.flatMap((id) => [`${id}/away`, `${id}/home`]);
+
+const noWait = async () => {};
+const run = (orgIds: string[], over: PremintDeps = {}) => premintExternalPlay({ orgIds, serialise: false, wait: noWait, ...over });
+
+type Room = { fixture_id: string; side: string; meeting_id: string; home: string | null; away: string | null; ended_at: Date | null };
+const roomsOf = (fixtureIds: string[]) =>
+  sql<Room[]>`
+    select fixture_id, side, meeting_id, home_entrant_id as home, away_entrant_id as away, ended_at
+      from fixture_video_meetings where fixture_id in ${sql(fixtureIds)} order by fixture_id, side`;
+const participantRows = async (fixtureIds: string[]) =>
+  (await sql<{ n: number }[]>`select count(*)::int as n from fixture_video_participants where fixture_id in ${sql(fixtureIds)}`)[0]!.n;
+
+const creates = () => fx.calls.filter((c) => c.route === "POST /meetings");
+const titleOf = (c: { body: unknown }) => (c.body as { title: string }).title;
+const titleFor = (c: Pick<PremintCandidate, "fixtureId" | "side">) => `seazn-fixture-${c.fixtureId}-${c.side}`;
+/** The create titles that name one of `fixtureIds`: per-uuid, so another test's board never counts here. */
+const createsFor = (fixtureIds: string[]) => creates().map(titleOf).filter((t) => fixtureIds.some((id) => t.includes(id)));
+const participantPosts = () => fx.calls.filter((c) => c.route === "POST /meetings/:id/participants");
+
+/** A room on file with the stamp GIVEN - an earlier pairing's, the current one's, or (`null`) an UNADOPTED room: both stamps
+ *  null, as V529's pair check wants. `endedAt` makes it an ENDED room. */
+const insertRoom = (
+  fixtureId: string,
+  side: "home" | "away",
+  stamp: { home: string; away: string } | null,
+  endedAt: Date | null = null,
+) =>
+  sql`
+    insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at)
+    values (${fixtureId}, ${side}, (select org_id from fixtures where id = ${fixtureId}), ${`pm-${randomUUID().slice(0, 12)}`},
+            ${stamp?.home ?? null}, ${stamp?.away ?? null}, ${endedAt})`;
+
+// ─── the candidate set ───────────────────────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!DB)("premint candidates (the set)", () => {
+  it("empty case: an org with no online camera division yields [], and the pass over it scans nothing and makes no vendor call; an empty scope is not 'every org'", async () => {
+    const owner = await seedOwner();
+    expect(await rowsOf([owner.orgId])).toEqual([]);
+    expect(await run([owner.orgId])).toEqual({
+      skipped: 0,
+      disabled: 0,
+      scanned: 0,
+      roomsMade: 0,
+      deferred: 0,
+      failed: 0,
+      windowsOpen: 0,
+      failures: [],
+    });
+    expect(fx.calls, "no vendor call for nothing to do").toEqual([]);
+
+    // The positive pair: the same query sees a real board, and `orgIds: []` still matches nothing (never read as unscoped).
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    expect(await premintCandidates(new Date(), []), "an empty scope matches nothing").toEqual([]);
+    expect(keysOf(await rowsOf([r.orgId])).sort(), "positive pair: its own scope finds the board").toEqual(bothSides(ids(r)));
+  });
+
+  it("a placeholder board (null entrants) of an unopened round in a STARTED division yields two rows, one per side", async () => {
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    const rows = await rowsOf([r.orgId]);
+    expect(rows).toEqual([
+      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, side: "away" },
+      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, side: "home" },
+    ]);
+  });
+
+  it("a division still in setup: its paired Swiss round-1 board yields two rows; its placeholder shells yield none (R3; counted)", async () => {
+    const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional", divisionStarted: false });
+    const [{ status }] = await sql<{ status: string }[]>`select status from divisions where id = ${s.divisionId}`;
+    expect(divisionScoringClosed(status!), "premise: the division has not started").toBe(true);
+    const paired = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${s.stageId} and home_entrant_id is not null and away_entrant_id is not null`;
+    const shells = await sql<{ id: string }[]>`
+      select id from fixtures where stage_id = ${s.stageId} and (home_entrant_id is null or away_entrant_id is null)`;
+    expect(paired.length, "premise: round 1 is paired (4 players, 2 boards)").toBe(2);
+    expect(shells.length, "premise: later rounds exist as placeholders (else 'yields none' is vacuous)").toBeGreaterThan(0);
+    expect(keysOf(await rowsOf([s.orgId])).sort(), "exactly the paired boards, both sides; no shell").toEqual(bothSides(paired.map((p) => p.id)).sort());
+  });
+
+  it("the started arm is the negation of divisionScoringClosed: every division status × (paired, placeholder) is a candidate iff started OR paired (counted)", async () => {
+    const r = await seedRound(1);
+    const f = r.boards[0]!.fixtureId;
+    let checked = 0;
+    for (const status of ["setup", "scheduled", "active", "completed"]) {
+      for (const paired of [true, false]) {
+        await sql`update divisions set status = ${status} where id = ${r.divisionId}`;
+        if (paired) await reseat(r);
+        else await unseat([f]);
+        const expected = !divisionScoringClosed(status) || paired;
+        expect(keysOf(await rowsOf([r.orgId])).sort(), `${status}, ${paired ? "paired" : "placeholder"}`).toEqual(expected ? bothSides([f]) : []);
+        checked += 1;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 statuses × 2 pairings").toBe(8);
+  });
+
+  it("a side with ANY room on file yields no row, whatever the row: adopted for the current pairing, unadopted on a since-paired board, stamped for an EARLIER pairing, ended (count 4)", async () => {
+    const r = await seedRound(5);
+    const [current, unadopted, earlier, ended, control] = r.boards as [Round["boards"][0], Round["boards"][0], Round["boards"][0], Round["boards"][0], Round["boards"][0]];
+    await insertRoom(current.fixtureId, "home", { home: current.home.entrantId, away: current.away.entrantId });
+    await insertRoom(unadopted.fixtureId, "home", null);
+    await insertRoom(earlier.fixtureId, "home", { home: randomUUID(), away: randomUUID() });
+    await insertRoom(ended.fixtureId, "home", { home: ended.home.entrantId, away: ended.away.entrantId }, new Date());
+    const rows = keysOf(await rowsOf([r.orgId])).sort();
+    const away = [current, unadopted, earlier, ended].map((b) => `${b.fixtureId}/away`);
+    expect(rows, "each of the four boards keeps only its empty (away) side; the control board keeps both").toEqual([...away, ...bothSides([control.fixtureId])].sort());
+    expect(rows.filter((k) => k.endsWith("/home")), "the four home sides are never candidates: only the control's").toEqual([`${control.fixtureId}/home`]);
+    expect(away.length, "anti-vacuity: four kinds of room on file").toBe(4);
+  });
+
+  it("never candidates, one case each: an opened round, a camera-off policy, an OTB division, a cancelled board, a withdrawn board - and a control that IS (count 5 + 1)", async () => {
+    const control = await seedRound(1);
+    const opened = await seedRound(1);
+    await sql`
+      insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by, staggered)
+      values (${opened.stageId}, ${opened.orgId}, 1, now(), ${opened.ownerUserId}, false)`;
+    const cameraOff = await seedRound(1, { cameraPolicy: undefined });
+    const otb = await seedRound(1, { onlinePlay: "off" });
+    const cancelled = await seedRound(1);
+    await sql`update fixtures set status = 'cancelled' where id = ${cancelled.boards[0]!.fixtureId}`;
+    const withdrawn = await seedRound(1);
+    await sql`update fixtures set status = 'abandoned' where id = ${withdrawn.boards[0]!.fixtureId}`;
+
+    expect(keysOf(await rowsOf([control.orgId])).sort(), "the control: the same board, untouched, is a candidate").toEqual(bothSides(ids(control)));
+    let checked = 0;
+    for (const [why, r] of [
+      ["an opened round", opened],
+      ["a camera-off policy (the division's own, over the competition's off)", cameraOff],
+      ["an OTB division", otb],
+      ["a cancelled board", cancelled],
+      ["a withdrawn board", withdrawn],
+    ] as const) {
+      expect(await rowsOf([r.orgId]), why).toEqual([]);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: five exclusions").toBe(5);
+  });
+
+  it("a fixture is playable only while `scheduled` or `in_play` (controller ruling Q2): every FIXTURE_STATUSES value is a candidate iff it is one of those two (counted)", async () => {
+    const r = await seedRound(1);
+    const f = r.boards[0]!.fixtureId;
+    // The ruling, written out - not read from preflight's predicate or the module under test.
+    const playable = new Set(["scheduled", "in_play"]);
+    let candidates = 0;
+    let excluded = 0;
+    for (const status of FIXTURE_STATUSES) {
+      await sql`update fixtures set status = ${status} where id = ${f}`;
+      const got = keysOf(await rowsOf([r.orgId])).sort();
+      expect(got, status).toEqual(playable.has(status) ? bothSides([f]) : []);
+      if (playable.has(status)) candidates += 1;
+      else excluded += 1;
+    }
+    expect([candidates, excluded], "anti-vacuity: both outcomes occur").toEqual([2, FIXTURE_STATUSES.length - 2]);
+  });
+
+  it("the camera policy is the NEAREST set level: stage, then division, then the competition's floor - every combination agrees with effectivePolicy (counted)", async () => {
+    const r = await seedRound(1);
+    const f = r.boards[0]!.fixtureId;
+    const levels: (CameraPolicy | null)[] = [null, ...CAMERA_POLICIES];
+    let kept = 0;
+    let dropped = 0;
+    let checked = 0;
+    for (const stage of levels) {
+      for (const division of levels) {
+        for (const competition of CAMERA_POLICIES) {
+          await sql`update stages set camera_policy = ${stage} where id = ${r.stageId}`;
+          await sql`update divisions set camera_policy = ${division} where id = ${r.divisionId}`;
+          await sql`update competitions set camera_policy = ${competition} where id = ${r.competitionId}`;
+          const on = effectivePolicy({ stage, division, competition }) !== "off";
+          expect(keysOf(await rowsOf([r.orgId])).sort(), `stage ${stage}, division ${division}, competition ${competition}`).toEqual(on ? bothSides([f]) : []);
+          if (on) kept += 1;
+          else dropped += 1;
+          checked += 1;
+        }
+      }
+    }
+    expect(checked, "4 stage levels × 4 division levels × 3 competition levels").toBe(4 * 4 * CAMERA_POLICIES.length);
+    expect([kept > 0, dropped > 0], "anti-vacuity: the sweep saw both outcomes").toEqual([true, true]);
+  });
+
+  it("a voided round put back on its shells is a placeholder again: rooms in a STARTED division, nothing in one still in setup (sequence: paired → void → candidates)", async () => {
+    const roundOne = async (stageId: string) =>
+      sql<{ id: string; home: string | null; away: string | null }[]>`
+        select id, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${stageId} and round_no = 1`;
+    for (const started of [true, false]) {
+      const s = await seedOnlineSwiss({ players: 4, pairing: "fold", cameraPolicy: "optional", divisionStarted: started });
+      const label = started ? "started" : "setup";
+      const before = await roundOne(s.stageId);
+      expect(before.every((b) => b.home !== null && b.away !== null), `${label}: premise - round 1 is paired`).toBe(true);
+      const round1 = before.map((b) => b.id);
+      expect(keysOf(await rowsOf([s.orgId])), `${label}: the paired board's rooms are wanted before the void`).toEqual(expect.arrayContaining(bothSides(round1)));
+
+      await unpairSwissRound(s.owner, s.stageId);
+      const after = await roundOne(s.stageId);
+      expect(after.map((b) => b.id).sort(), `${label}: premise - the same boards`).toEqual([...round1].sort());
+      expect(after.every((b) => b.home === null && b.away === null), `${label}: premise - the void left placeholders`).toBe(true);
+      const got = keysOf(await rowsOf([s.orgId]));
+      if (started) expect(got, "started: a placeholder in a started division is wanted").toEqual(expect.arrayContaining(bothSides(round1)));
+      else expect(got, "setup: nothing - a placeholder in a division still in setup is never a candidate").toEqual([]);
+    }
+  });
+
+  it("NEAREST ROUND FIRST: A round 2 at T+1h (its second board T+5h), B round 1 at T+3h, an unscheduled round 1 - A's rows lead, then B, then the unscheduled; the key does not move as A's rooms are made (counted)", async () => {
+    const T = Date.now() + 24 * HOUR;
+    const seeded = await Promise.all([seedRound(2), seedRound(2), seedRound(2)]);
+    // The org id is a sort key of the tie-break: B (round 1, scheduled later) is given the smallest org id, then the unscheduled
+    // round, then A - so round number, org id and the unscheduled-last rule each disagree with the scheduled time.
+    const [B, C, A] = [...seeded].sort((p, q) => (p.orgId < q.orgId ? -1 : 1));
+    // B and C are one-board rounds: their second board is cancelled, so it is never a candidate.
+    for (const one of [B!, C!]) await sql`update fixtures set status = 'cancelled' where id = ${one.boards[1]!.fixtureId}`;
+    await sql`update fixtures set round_no = 2 where stage_id = ${A!.stageId}`;
+    await sql`update fixtures set scheduled_at = ${new Date(T + HOUR)} where id = ${A!.boards[0]!.fixtureId}`;
+    await sql`update fixtures set scheduled_at = ${new Date(T + 5 * HOUR)} where id = ${A!.boards[1]!.fixtureId}`;
+    await sql`update fixtures set scheduled_at = ${new Date(T + 3 * HOUR)} where id = ${B!.boards[0]!.fixtureId}`;
+    await sql`update fixtures set scheduled_at = null where id = ${C!.boards[0]!.fixtureId}`;
+    const orgs = [A!.orgId, B!.orgId, C!.orgId];
+    const [a0, a1] = [A!.boards[0]!.fixtureId, A!.boards[1]!.fixtureId];
+    const b0 = B!.boards[0]!.fixtureId;
+    const c0 = C!.boards[0]!.fixtureId;
+
+    expect(keysOf(await rowsOf(orgs)), "round A (T+1h, later round) < B (T+3h) < the unscheduled round; inside A, board order").toEqual([
+      ...bothSides([a0, a1, b0, c0]),
+    ]);
+
+    // The cap spends the pass on the round that opens next: callCap 2 makes A's two rooms for its EARLIEST board only.
+    const report = await run(orgs, { callCap: 2 });
+    expect(report).toMatchObject({ scanned: 8, roomsMade: 2, deferred: 6, failed: 0 });
+    expect(creates().map(titleOf).sort(), "A's earliest board, both sides - nothing of B or the unscheduled round").toEqual(
+      [`seazn-fixture-${a0}-away`, `seazn-fixture-${a0}-home`].sort(),
+    );
+    // Stable key: A's earliest board now has rooms, so it is out of the set, yet A's round still leads B. A key taken after the
+    // rooms filter would read A's remaining board as T+5h and put B (T+3h) first.
+    expect(keysOf(await rowsOf(orgs)), "A's remaining board still leads B and the unscheduled round").toEqual([...bothSides([a1, b0, c0])]);
+  });
+
+  it("inside one stage, two unopened unscheduled rounds: round 1's rows come before round 2's, whatever the insert order", async () => {
+    const r = await seedRound(1, { scheduledAt: null });
+    const f2 = r.boards[0]!.fixtureId;
+    await sql`update fixtures set round_no = 2 where id = ${f2}`;
+    const [{ id: f1 }] = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+      values (${r.stageId}, ${r.divisionId}, ${r.orgId}, 1, 1, ${`pm-${randomUUID().slice(0, 8)}`}, 'scheduled')
+      returning id`;
+    expect(keysOf(await rowsOf([r.orgId])), "round 1 (inserted second) before round 2 (inserted first)").toEqual([...bothSides([f1!, f2])]);
+  });
+});
+
+// ─── the pass ────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+describe.skipIf(!DB)("premint pass", () => {
+  it("the flag is exactly '1': unset or anything else is `disabled` - no scan, no vendor call, no failure - and '1' makes the rooms (positive pair)", async () => {
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    let checked = 0;
+    for (const value of [undefined, "", "0", "true", "yes", "2"]) {
+      vi.stubEnv("EXTERNAL_PLAY_PREMINT", value);
+      expect(await run([r.orgId]), `flag ${JSON.stringify(value)}`).toEqual({
+        skipped: 0,
+        disabled: 1,
+        scanned: 0,
+        roomsMade: 0,
+        deferred: 0,
+        failed: 0,
+        windowsOpen: 0,
+        failures: [],
+      });
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: six off values").toBe(6);
+    expect(fx.calls, "disabled makes no vendor call").toEqual([]);
+    expect(await roomsOf(ids(r)), "and no room").toEqual([]);
+    vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
+    expect(await run([r.orgId]), "positive pair: '1' does the work").toMatchObject({ disabled: 0, roomsMade: 2, failed: 0 });
+  });
+
+  it("makes rooms for 10 placeholders (20 POST /meetings, one per (board, side)) stamped (null, null); a second pass makes none; another org in the DB is left alone", async () => {
+    const r = await seedRound(10);
+    const other = await seedRound(1);
+    await unseat([...ids(r), ...ids(other)]);
+    const report = await run([r.orgId]);
+    expect(report).toEqual({ skipped: 0, disabled: 0, scanned: 20, roomsMade: 20, deferred: 0, failed: 0, windowsOpen: 0, failures: [] });
+    const wanted = ids(r).flatMap((id) => [`seazn-fixture-${id}-away`, `seazn-fixture-${id}-home`]).sort();
+    expect(createsFor(ids(r)).sort(), "exactly one create per (board, side), each title once").toEqual(wanted);
+    const rooms = await roomsOf(ids(r));
+    expect(rooms, "20 rows").toHaveLength(20);
+    expect(rooms.every((m) => m.home === null && m.away === null && m.ended_at === null), "every room is unadopted and unended").toBe(true);
+    expect(await roomsOf(ids(other)), "an org outside the scope got nothing").toEqual([]);
+
+    const before = fx.calls.length;
+    expect(await run([r.orgId]), "the second pass: nothing is a candidate").toMatchObject({ scanned: 0, roomsMade: 0, deferred: 0, failed: 0 });
+    expect(fx.calls.length, "and it makes no vendor call").toBe(before);
+  });
+
+  it("rooms only (ruling 2026-11-17 (2)): once the 10 boards are paired a pass makes NO vendor call, the 20 rows keep both stamps null, no participant exists; the seat's own ensureMeeting then ADOPTS one board's rooms with no vendor call", async () => {
+    const r = await seedRound(10);
+    await unseat(ids(r));
+    expect(await run([r.orgId]), "premise: the 20 rooms are made on the placeholders").toMatchObject({ roomsMade: 20 });
+    await reseat(r);
+    const before = fx.calls.length;
+    const report = await run([r.orgId]);
+    expect(report, "a second pass over the now-paired boards: every side has a room on file").toMatchObject({ scanned: 0, roomsMade: 0, deferred: 0, failed: 0 });
+    expect(fx.calls.length, "0 vendor calls: 0 POST /meetings, 0 POST participants").toBe(before);
+    expect(participantPosts(), "no participant was ever made").toEqual([]);
+    expect(await participantRows(ids(r)), "and none is on file").toBe(0);
+    const rooms = await roomsOf(ids(r));
+    expect(rooms.length).toBe(20);
+    expect(rooms.every((m) => m.home === null && m.away === null), "the job never adopts: every stamp is still null").toBe(true);
+
+    // The claim: the seat's own door, no opts. It adopts the board's two rooms (Task 2) - a database write, not a vendor call.
+    const [b0, b1] = r.boards as [Round["boards"][0], Round["boards"][0]];
+    const room0 = rooms.find((m) => m.fixture_id === b0.fixtureId && m.side === "home")!;
+    const got = await ensureMeeting(b0.fixtureId, "home");
+    expect(got.meetingId, "the job's own room, not a new one").toBe(room0.meeting_id);
+    expect(fx.calls.length, "adopting made no vendor call").toBe(before);
+    expect((await roomsOf([b0.fixtureId])).map((m) => [m.side, m.home, m.away]), "both of the board's rooms now name its pairing").toEqual([
+      ["away", b0.home.entrantId, b0.away.entrantId],
+      ["home", b0.home.entrantId, b0.away.entrantId],
+    ]);
+    expect((await roomsOf([b1.fixtureId])).every((m) => m.home === null), "another board's rooms are untouched").toBe(true);
+  });
+
+  it("a board already PAIRED when the job reaches it: its two rooms are stamped with the pairing, and no participant is made", async () => {
+    const r = await seedRound(1);
+    const b = r.boards[0]!;
+    expect(await run([r.orgId])).toMatchObject({ scanned: 2, roomsMade: 2, failed: 0 });
+    expect((await roomsOf([b.fixtureId])).map((m) => [m.side, m.home, m.away, m.ended_at]), "stamped with the pairing, unended").toEqual([
+      ["away", b.home.entrantId, b.away.entrantId, null],
+      ["home", b.home.entrantId, b.away.entrantId, null],
+    ]);
+    expect(participantPosts(), "0 POST participants").toEqual([]);
+    expect(await participantRows([b.fixtureId]), "no participant row").toBe(0);
+  });
+
+  it("the cap: callCap 7 over 10 boards' rooms makes 7 POST /meetings at the head of the order, reports deferred = the 13 remaining rows, and the next pass continues from the top", async () => {
+    const r = await seedRound(10);
+    await unseat(ids(r));
+    const order = await rowsOf([r.orgId]);
+    expect(order.length, "premise: 20 candidate rows").toBe(20);
+
+    let waits = 0;
+    const first = await run([r.orgId], { callCap: 7, wait: async () => void (waits += 1) });
+    expect(first).toMatchObject({ scanned: 20, roomsMade: 7, deferred: 13, failed: 0, failures: [] });
+    expect(waits, "7 calls wait between them (6); the 8th was refused by the cap and made no call, so it waited for nothing").toBe(6);
+    expect(createsFor(ids(r)).sort(), "the first 7 rows of the candidate order, and only those").toEqual(order.slice(0, 7).map(titleFor).sort());
+    expect(await roomsOf(ids(r)), "7 rows on file").toHaveLength(7);
+
+    const second = await run([r.orgId]);
+    expect(second, "the next pass continues from the top: only the 13 not yet made").toMatchObject({ scanned: 13, roomsMade: 13, deferred: 0, failed: 0 });
+    expect(createsFor(ids(r)).sort(), "20 creates in all, each (board, side) once").toEqual(order.map(titleFor).sort());
+  });
+
+  it("the DEFAULT cap is PREMINT_CALLS_PER_PASS: 24 boards (48 rows) and no callCap make exactly that many rooms and defer the rest, none a failure", async () => {
+    const r = await seedRound(1);
+    // 23 more placeholder boards in round 2, by one statement: rooms need no entrants, only a board.
+    await sql`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status)
+      select ${r.stageId}::uuid, ${r.divisionId}::uuid, ${r.orgId}::uuid, 2, g, 'pm-' || g || '-' || gen_random_uuid()::text, 'scheduled'
+        from generate_series(1, 23) g`;
+    const rows = 2 * 24;
+    expect(PREMINT_CALLS_PER_PASS, "premise: the cap is below the row count, so it binds").toBeLessThan(rows);
+    const report = await run([r.orgId]);
+    expect(report).toMatchObject({ scanned: rows, roomsMade: PREMINT_CALLS_PER_PASS, deferred: rows - PREMINT_CALLS_PER_PASS, failed: 0, failures: [] });
+    expect(creates().length, "the vendor was asked exactly PREMINT_CALLS_PER_PASS times").toBe(PREMINT_CALLS_PER_PASS);
+  });
+
+  it("a cap that is not a non-negative integer is refused by name and never fails open; callCap 0 makes nothing and defers everything; the default is the brief's 45", async () => {
+    const r = await seedRound(2);
+    await unseat(ids(r));
+    let refused = 0;
+    for (const bad of [Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY]) {
+      await expect(run([r.orgId], { callCap: bad }), `callCap ${bad}`).rejects.toBeInstanceOf(RangeError);
+      refused += 1;
+    }
+    expect(refused, "anti-vacuity: four bad caps").toBe(4);
+    expect(fx.calls, "a refused cap made no vendor call").toEqual([]);
+
+    expect(await run([r.orgId], { callCap: 0 }), "a zero cap is valid: nothing is made, every row is deferred").toMatchObject({
+      scanned: 4,
+      roomsMade: 0,
+      deferred: 4,
+      failed: 0,
+    });
+    expect(fx.calls, "and the zero cap made no vendor call").toEqual([]);
+
+    expect(PREMINT_CALLS_PER_PASS, "45: the brief's pass budget over its one-second interval").toBe(45);
+    expect(Number.isInteger(PREMINT_CALLS_PER_PASS), "an integer cappedBudget accepts").toBe(true);
+  });
+
+  it("pacing: with a counting `wait`, a pass of 5 calls waits PREMINT_CALL_INTERVAL_MS exactly 4 times - between calls, never before the first", async () => {
+    const r = await seedRound(3);
+    await unseat(ids(r));
+    // One side already has a room, so the 3 boards are 5 candidate rows.
+    await insertRoom(ids(r)[2]!, "home", null);
+    const waits: { ms: number; callsSoFar: number }[] = [];
+    const report = await run([r.orgId], { wait: async (ms) => void waits.push({ ms, callsSoFar: creates().length }) });
+    expect(report).toMatchObject({ scanned: 5, roomsMade: 5, failed: 0 });
+    expect(waits.map((w) => w.ms), "four waits of the interval").toEqual(Array(4).fill(PREMINT_CALL_INTERVAL_MS));
+    expect(waits.map((w) => w.callsSoFar), "each wait sits AFTER a call: 1, 2, 3, 4 calls made - never before the first").toEqual([1, 2, 3, 4]);
+    expect(creates().length).toBe(5);
+  });
+
+  it("the pass's own wall-clock budget: calls stop being STARTED once PREMINT_PASS_BUDGET_MS is spent, the rest is deferred and nothing fails (counted, derived from the constant)", async () => {
+    const r = await seedRound(4);
+    await unseat(ids(r));
+    // A clock that the pacing wait moves: each wait costs 10 s, so call k starts (k - 1) × 10 s into the pass.
+    const step = 10_000;
+    let t = 0;
+    const report = await run([r.orgId], { wallClock: () => t, wait: async () => void (t += step) });
+    const startable = Math.ceil(PREMINT_PASS_BUDGET_MS / step); // calls k with (k - 1) × step < the budget
+    expect(startable, "premise: the budget is spent mid-pass, below the 8 rows").toBeLessThan(8);
+    expect(report).toMatchObject({ scanned: 8, roomsMade: startable, deferred: 8 - startable, failed: 0, failures: [] });
+    expect(creates().length, "no call was started past the budget").toBe(startable);
+  });
+
+  it("the platform bucket dry: RealtimeKitDeferred stops the pass with the rest deferred and failed 0 - and a bucket that runs dry part-way is consulted for every call (rtk.budget)", async () => {
+    const r = await seedRound(3);
+    await unseat(ids(r));
+    const dry = await run([r.orgId], { rtk: { budget: async () => false } });
+    expect(dry, "dry from the first call: nothing made, all 6 rows deferred, no failure").toEqual({
+      skipped: 0,
+      disabled: 0,
+      scanned: 6,
+      roomsMade: 0,
+      deferred: 6,
+      failed: 0,
+      windowsOpen: 0,
+      failures: [],
+    });
+    expect(fx.calls, "a refused request never reached the vendor").toEqual([]);
+
+    let granted = 0;
+    const askedFor: string[] = [];
+    const partway = await run([r.orgId], {
+      rtk: {
+        budget: async (k) => {
+          askedFor.push(k);
+          return granted++ < 3;
+        },
+      },
+    });
+    expect(partway, "3 tokens, then dry").toMatchObject({ scanned: 6, roomsMade: 3, deferred: 3, failed: 0 });
+    expect(creates().length, "exactly the 3 granted calls were made").toBe(3);
+    expect(askedFor.length, "the bucket was asked for every attempt: 3 granted + the 1 refusal that stopped the pass").toBe(4);
+  });
+
+  it("a club not offered online chess is skipped (deferred), never minted and never a failure; the flag is asked once per club", async () => {
+    const [a, b] = await Promise.all([seedRound(1), seedRound(2)]);
+    await unseat([...ids(a), ...ids(b)]);
+    const asked: string[] = [];
+    const report = await run([a.orgId, b.orgId], {
+      offered: async ({ orgId }) => {
+        asked.push(orgId);
+        return orgId === a.orgId;
+      },
+    });
+    expect(report, "club A's 2 rows made; club B's 4 rows deferred").toMatchObject({ scanned: 6, roomsMade: 2, deferred: 4, failed: 0, failures: [] });
+    expect(createsFor(ids(a)).length, "club A is minted").toBe(2);
+    expect(createsFor(ids(b)), "club B never is").toEqual([]);
+    expect(asked.sort(), "each club asked exactly once, however many rows it has").toEqual([a.orgId, b.orgId].sort());
+  });
+
+  it("a vendor 503 on one board is one failure (a code, never a message) and the pass goes on; the failed side has no room and is made by the next pass", async () => {
+    const r = await seedRound(3);
+    await unseat(ids(r));
+    const bad = { fixtureId: ids(r)[1]!, orgId: r.orgId, side: "home" as const };
+    const flaky: typeof fetch = async (input, init) => {
+      const body = typeof init?.body === "string" ? (JSON.parse(init.body) as { title?: string }) : null;
+      if (init?.method === "POST" && body?.title === titleFor(bad)) {
+        return new Response(JSON.stringify({ success: false, error: { code: 503, message: "vendor down" } }), { status: 503 });
+      }
+      return fetch(input, init);
+    };
+    const report = await run([r.orgId], { rtk: { fetch: flaky } });
+    expect(report).toMatchObject({ scanned: 6, roomsMade: 5, deferred: 0, failed: 1 });
+    expect(report.failures, "one failure: which row, and a code").toEqual([{ fixtureId: bad.fixtureId, side: "home", code: "unavailable" }]);
+    expect((await roomsOf(ids(r))).map((m) => `${m.fixture_id}/${m.side}`), "the other 5 rows got their rooms; the failed one did not").not.toContain(key(bad));
+    expect(await roomsOf(ids(r))).toHaveLength(5);
+
+    expect(await run([r.orgId]), "the next pass retries exactly the failed side").toMatchObject({ scanned: 1, roomsMade: 1, failed: 0 });
+    expect(createsFor(ids(r)).filter((t) => t === titleFor(bad)), "the failed side reached the vendor once: only the retry (the first was refused on the wire)").toHaveLength(1);
+    expect(createsFor(ids(r)), "6 creates in all, each (board, side) once").toHaveLength(6);
+  });
+
+  it("two passes at once: the second is skipped by the lock, makes no call and reports it; once the first finishes the next runs", async () => {
+    const r = await seedRound(1);
+    await unseat(ids(r));
+    const skipped = await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${PREMINT_LOCK}))`;
+      return premintExternalPlay({ orgIds: [r.orgId], wait: noWait });
+    });
+    expect(skipped, "the lock was held: skipped 1, and nothing was looked at").toEqual({
+      skipped: 1,
+      disabled: 0,
+      scanned: 0,
+      roomsMade: 0,
+      deferred: 0,
+      failed: 0,
+      windowsOpen: 0,
+      failures: [],
+    });
+    expect(fx.calls, "a skipped pass made no vendor call").toEqual([]);
+    const next = await premintExternalPlay({ orgIds: [r.orgId], wait: noWait });
+    expect(next, "positive pair: the lock was released with the transaction").toMatchObject({ skipped: 0, roomsMade: 2 });
+  });
+});
+
+// ─── the seam: the real producer, through a re-open, to a claim ──────────────────────────────────────────────────────────
+
+describe.skipIf(!DB)("premint, through its real consumers", () => {
+  it("SEAM: the pass's rooms (ensureMeeting, unpaired allow) on a placeholder board → the board is paired → a re-open → a player's claim ADOPTS the pre-made room: no second room, the participant joins it, no SQL-written rooms", async () => {
+    stubOutboxEnv();
+    const r = await seedRound(1);
+    const b = r.boards[0]!;
+    const f = b.fixtureId;
+    await unseat([f]);
+
+    // The REAL producer: the pass makes the board's two rooms while it has no pairing.
+    expect(await run([r.orgId]), "premise: two rooms made on the placeholder").toMatchObject({ scanned: 2, roomsMade: 2, failed: 0 });
+    const made = await roomsOf([f]);
+    expect(made.map((m) => [m.side, m.home, m.away]), "premise: both rooms are unadopted").toEqual([
+      ["away", null, null],
+      ["home", null, null],
+    ]);
+    const roomOf = (side: string) => made.find((m) => m.side === side)!.meeting_id;
+    await reseat(r);
+
+    // A re-open (Task 3): the first open is refused every send, so nobody is bound to it and the second re-stamps the window.
+    mail.fail.add(b.home.email).add(b.away.email);
+    const end = (id: string) => endMeeting(id);
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: new Date(Date.now() - 30 * MIN), endMeeting: end })).toMatchObject({
+      opened: true,
+      invited: 0,
+    });
+    mail.fail.clear();
+    const mark = fx.calls.length;
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true, invited: 2 });
+    const audit = await sql<{ type: string }[]>`
+      select type from competition_events where competition_id = ${r.competitionId} and type like 'external_play.round_%' order by created_at, id`;
+    expect(audit.map((a) => a.type), "premise: the second open was a RE-OPEN (the path that retires)").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
+    expect(fx.calls.slice(mark).filter((c) => c.route === "PATCH /meetings/:id" || c.route === "POST /meetings"), "the re-open ended and made no room").toEqual([]);
+    expect((await roomsOf([f])).map((m) => [m.side, m.meeting_id, m.home]), "the pre-made rooms survived the re-open, still unadopted").toEqual([
+      ["away", roomOf("away"), null],
+      ["home", roomOf("home"), null],
+    ]);
+
+    // The claim: the player's seat, the real adapter, the real adoption.
+    const afterReopen = fx.calls.length;
+    const seat = await seatPlayer({ fixtureId: f, personId: b.home.personId });
+    expect(seat, "the home player seats").toMatchObject({ seated: true });
+    const myParticipant = fx.participantFor(b.home.personId);
+    expect(myParticipant?.meetingId, "the participant joined the PRE-MADE room").toBe(roomOf("home"));
+    expect(fx.calls.slice(afterReopen).filter((c) => c.route === "POST /meetings"), "the claim made no room: the one it needed was waiting").toEqual([]);
+    expect((await roomsOf([f])).map((m) => [m.side, m.meeting_id, m.home, m.away]), "both rooms are now adopted for the pairing, and none was replaced").toEqual([
+      ["away", roomOf("away"), b.home.entrantId, b.away.entrantId],
+      ["home", roomOf("home"), b.home.entrantId, b.away.entrantId],
+    ]);
+
+    // The other side's claim finds its room too.
+    const seatAway = await seatPlayer({ fixtureId: f, personId: b.away.personId });
+    expect(seatAway).toMatchObject({ seated: true });
+    expect(fx.participantFor(b.away.personId)?.meetingId, "the away participant joined ITS pre-made room").toBe(roomOf("away"));
+    expect(creates().length, "two rooms in all, both made by the pass").toBe(2);
+  });
+});

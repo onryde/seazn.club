@@ -482,6 +482,9 @@ export async function seedOnlineSwiss(opts: {
   rounds?: number;
   pairing?: "fold" | "rank_adjacent";
   cameraPolicy?: CameraPolicy;
+  /** Defaults to true (Start pressed). `false` leaves the division in `setup` with round 1 already paired - what the
+   *  generator leaves before Start (check-in capacity R3: the pre-mint job serves that paired board). */
+  divisionStarted?: boolean;
 }): Promise<SeedOnlineSwissResult> {
   const owner = await seedOwner();
   const ownerUserId = owner.userId;
@@ -522,7 +525,7 @@ export async function seedOnlineSwiss(opts: {
   // A start time on every board: the guard serves only scheduled fixtures, and
   // a timetable write is not what these tests are about.
   await sql`update fixtures set scheduled_at = ${ROUND_T} where stage_id = ${stage!.id}`;
-  await startDivision(owner, division.id);
+  if (opts.divisionStarted ?? true) await startDivision(owner, division.id);
   return {
     orgId: owner.orgId,
     competitionId: competition.id,
