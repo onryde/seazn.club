@@ -260,6 +260,9 @@ async function cachedJustBefore(): Promise<number> {
   await sleep(3);
   const at = Date.now();
   await sleep(3);
+  // B5 fix wave G4 (the pre-existing flake): on a loaded machine the write under test could land in the SAME millisecond as `at`,
+  // and a tie is not "after" the cached entry. Leave `at` behind for certain before returning.
+  while (Date.now() <= at) await sleep(1);
   return at;
 }
 

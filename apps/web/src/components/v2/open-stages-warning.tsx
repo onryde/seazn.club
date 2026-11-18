@@ -119,8 +119,9 @@ export function OpenStagesWarning({
           );
         })}
       </ul>
-      {/* B5 n1: a stage that completed leaves the list on the refresh; its "completed, but" line stays, under the list. */}
-      {notice !== null && !stages.some((s) => s.stageId === notice.stageId) && noticeLine(notice.tone, notice.text)}
+      {/* B5 n1: a stage that completed leaves the list on the refresh; its "completed, but" line stays, under the list. Only that one:
+          a red line says nothing was written to its row's stage, so it goes with the row (B5 fix wave G4). */}
+      {notice !== null && notice.tone === "warning" && !stages.some((s) => s.stageId === notice.stageId) && noticeLine(notice.tone, notice.text)}
     </div>
   );
 }

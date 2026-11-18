@@ -272,6 +272,29 @@ describe("OpenStagesWarning — the list itself", () => {
     expect(island.text()).toContain(want);
   });
 
+  // B5 fix wave G4: only the "completed, but" line outlives its row. A red line says nothing was written to THAT stage; once the
+  // stage has left the list (another tab completed it, a refresh), a floating "Couldn't complete this stage" names no stage at all.
+  // differential: today the orphan line renders for either tone.
+  it("G4: an error line whose stage has left the list goes with it (only the amber 'completed, but' line stays)", async () => {
+    let checked = 0;
+    for (const [label, arm, want] of [
+      ["not ready", () => api.mockResolvedValueOnce({ completed: false }), say("schedule.notice.notReady")],
+      ["failed", () => api.mockRejectedValueOnce(new Error("boom")), say("compset.openStages.completeFailed")],
+    ] as const) {
+      arm();
+      const island = warn();
+      await click(completeButtons(island.tree())[0]!);
+      expect(island.text(), `${label}: premise - the red line is on screen under its row`).toContain(want);
+      island.rerender({ id: "w", stages: STAGES.filter((s) => s.stageId !== "s-ko"), canComplete: true });
+      expect(island.text(), `${label}: premise - the row is gone`).not.toContain(
+        say("compset.openStages.row", { division: STAGES[0]!.divisionName, seq: STAGES[0]!.seq, stage: STAGES[0]!.stageName }),
+      );
+      expect(island.text(), `${label}: the red line went with its row`).not.toContain(want);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("n1: a wrap with any other cause still says 'completed, but' and refreshes (the rail's reason: the server's own sentence)", async () => {
     api.mockRejectedValueOnce(new ApiV1Error("seed map ambiguous", 409, "STAGE_COMPLETED_SEEDING_FAILED", { cause: "SEEDING_MAP_SOURCE_AMBIGUOUS" }));
     const island = warn();

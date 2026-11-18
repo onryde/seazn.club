@@ -16,6 +16,14 @@ export interface RebuildAttachments {
   calls: number;
 }
 
+/** The roster-drift shape the card passes (`StageRosterDrift`); only `attachments` is read. */
+export interface RebuildDriftLike {
+  ghosts?: readonly unknown[];
+  unplaced?: readonly unknown[];
+  vacantLines?: number;
+  attachments?: RebuildAttachments;
+}
+
 /**
  * F3 ultrareview finding 5 — the sentence appended to the rebuild confirm
  * dialog naming the organiser SETUP the rebuild clears along with the
@@ -33,14 +41,6 @@ export interface RebuildAttachments {
  * exist only to spell out punctuation. Exported (pure) for the same reason
  * rebuildBlockedMessage is: testable without a jsdom harness.
  */
-/** The roster-drift shape the card passes (`StageRosterDrift`); only `attachments` is read. */
-export interface RebuildDriftLike {
-  ghosts?: readonly unknown[];
-  unplaced?: readonly unknown[];
-  vacantLines?: number;
-  attachments?: RebuildAttachments;
-}
-
 export function attachmentWarning(drift: RebuildDriftLike | undefined, msg: Msg, locale: string): string {
   const a = drift?.attachments;
   if (!a) return "";
