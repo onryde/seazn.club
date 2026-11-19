@@ -285,57 +285,113 @@ describe.skipIf(!HAS_DB)("every door that admits an entrant appends to a running
   });
 });
 
+// ---- interleave rig ------------------------------------------------------------------------------------------------
+// DB test files run in parallel on ONE database, so a probe that matches "any session waiting on a Lock" by query text can
+// be satisfied by another file's session. These tests tie the probe to their OWN holder instead: a transaction held open
+// here has a known backend pid, and the probe asks Postgres which sessions are blocked BY that pid.
+class RolledBack extends Error {}
+
+interface Held {
+  /** The holder's backend pid - valid once `ready` has resolved. */
+  readonly pid: () => number;
+  /** Resolves once the holder's work is done and it is sitting in its open transaction. */
+  readonly ready: Promise<void>;
+  /** Let the transaction commit. */
+  commit(): void;
+  /** Roll the transaction back (a no-op once it has settled). */
+  rollback(): void;
+  /** Settles when the transaction has committed or rolled back. A rollback is swallowed; any other failure surfaces. */
+  readonly done: Promise<void>;
+}
+
+function holdOpen(work: (tx: Parameters<Parameters<typeof sql.begin>[1]>[0]) => Promise<void>): Held {
+  let commit!: () => void;
+  let rollback!: () => void;
+  const gate = new Promise<void>((res, rej) => {
+    commit = res;
+    rollback = () => rej(new RolledBack());
+  });
+  let pid = 0;
+  let ready!: () => void;
+  let failed!: (e: unknown) => void;
+  const readyPromise = new Promise<void>((res, rej) => {
+    ready = res;
+    failed = rej;
+  });
+  const done = sql
+    .begin(async (tx) => {
+      try {
+        const [me] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        pid = me!.pid;
+        await work(tx);
+      } catch (e) {
+        failed(e);
+        throw e;
+      }
+      ready();
+      await gate;
+    })
+    .then(
+      () => undefined,
+      (e: unknown) => {
+        if (!(e instanceof RolledBack)) throw e;
+      },
+    );
+  done.catch(() => undefined); // surfaced by whoever awaits `done`; never an unhandled rejection in the meantime
+  return { pid: () => pid, ready: readyPromise, commit, rollback, done };
+}
+
+/** How many sessions are waiting on a lock THIS holder owns - polled, and 0 after 5 s (a failing assertion, not a hang). */
+async function sessionsBlockedBy(holderPid: number): Promise<number> {
+  for (let i = 0; i < 100; i++) {
+    const [row] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity where ${holderPid} = any(pg_blocking_pids(pid))`;
+    if (row!.n > 0) return row!.n;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return 0;
+}
+
 // The result hook (scoring.ts) swaps two rungs. It used to rewrite the WHOLE `ladder_order` from the `stage_config` it
 // read at the top of its transaction, so a late add that committed its append while the result was being scored was
 // overwritten by the stale order. Driven here with two connections: tx1 admits a newcomer and appends them but has not
 // committed; the result is scored meanwhile (it reads the pre-append order and its write blocks on tx1's row lock);
 // tx1 then commits. The newcomer must survive the swap.
 describe.skipIf(!HAS_DB)("a late add that commits while a ladder result is being scored survives the swap", () => {
-  async function scoringBlockedOnALock(): Promise<boolean> {
-    for (let i = 0; i < 100; i++) {
-      const [row] = await sql<{ n: number }[]>`
-        select count(*)::int as n from pg_stat_activity
-        where wait_event_type = 'Lock' and query ilike '%jsonb_build_object%ladder_order%'`;
-      if (row!.n > 0) return true;
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    return false;
-  }
-
   it("the swap lands, the newcomer is still on the ladder at the bottom, nobody is lost or duplicated", async () => {
     const r = await ladder(3);
     const before = await startTheLadder(r); // [L1, L2, L3]
     const fx = await issueChallenge(r.auth, r.stageId, { challenger_id: r.ids[2]!, opponent_id: r.ids[0]! });
 
-    let release!: () => void;
-    const held = new Promise<void>((res) => (release = res));
-    let admitted!: () => void;
-    const admittedSignal = new Promise<void>((res) => (admitted = res));
     let lateId = "";
-    const tx1 = sql.begin(async (tx) => {
+    const append = holdOpen(async (tx) => {
       const [e] = await tx<{ id: string }[]>`
         insert into entrants (division_id, org_id, kind, display_name, seed)
         values (${r.divisionId}, ${r.auth.orgId}, 'individual', 'Late in flight', 99) returning id`;
       lateId = e!.id;
       await appendToLadderOrder(tx, r.divisionId);
-      admitted();
-      await held;
     });
-    await admittedSignal;
+    let scoring: Promise<unknown> = Promise.resolve();
+    try {
+      await append.ready;
+      // L3 (the challenger) takes the game: the hook swaps L3 above L1.
+      scoring = scoreEvent(r.auth, fx.fixture_id, { expected_seq: 0, type: "core.forfeit", payload: { by: r.ids[0]!, reason: "walkover" } });
+      scoring.catch(() => undefined);
+      // Anti-vacuity: the score really is blocked behind THIS test's uncommitted append. If it were not, the test would
+      // pass without ever interleaving anything.
+      expect(await sessionsBlockedBy(append.pid()), "the result's ladder write is waiting on the append's row lock").toBeGreaterThan(0);
+      append.commit();
+      await append.done;
+      await scoring;
 
-    // L3 (the challenger) takes the game: the hook swaps L3 above L1.
-    const scoring = scoreEvent(r.auth, fx.fixture_id, { expected_seq: 0, type: "core.forfeit", payload: { by: r.ids[0]!, reason: "walkover" } });
-    // Anti-vacuity: the score really is blocked behind the uncommitted append. If it were not, the test would pass without
-    // ever interleaving anything.
-    expect(await scoringBlockedOnALock(), "the result's ladder write is waiting on the append's row lock").toBe(true);
-    release();
-    await tx1;
-    await scoring;
-
-    const order = await storedOrder(r.stageId);
-    expect(order, "the late entrant survived the swap, at the bottom").toEqual([r.ids[2]!, r.ids[1]!, r.ids[0]!, lateId]);
-    expect(new Set(order).size, "nobody duplicated").toBe(order!.length);
-    expect(before).toHaveLength(3);
+      const order = await storedOrder(r.stageId);
+      expect(order, "the late entrant survived the swap, at the bottom").toEqual([r.ids[2]!, r.ids[1]!, r.ids[0]!, lateId]);
+      expect(new Set(order).size, "nobody duplicated").toBe(order!.length);
+      expect(before).toHaveLength(3);
+    } finally {
+      append.rollback(); // a no-op after a commit; after a failed assertion it releases the lock the score waits on
+      await Promise.allSettled([append.done, scoring]);
+    }
   });
 
   // The REVERSE direction: the swap is in flight (it holds the stage row's lock), the append reads the pre-swap order and
@@ -348,41 +404,67 @@ describe.skipIf(!HAS_DB)("a late add that commits while a ladder result is being
     expect(before).toEqual([r.ids[0]!, r.ids[1]!, r.ids[2]!]);
     const swapped = [r.ids[2]!, r.ids[1]!, r.ids[0]!];
 
-    let releaseSwap!: () => void;
-    const swapHeld = new Promise<void>((res) => (releaseSwap = res));
-    let swapWritten!: () => void;
-    const swapWrittenSignal = new Promise<void>((res) => (swapWritten = res));
-    const swapTx = sql.begin(async (tx) => {
+    const swap = holdOpen(async (tx) => {
       await tx`update stages set config = config || ${tx.json({ ladder_order: swapped } as never)} where id = ${r.stageId}`;
-      swapWritten();
-      await swapHeld;
     });
-    await swapWrittenSignal;
-
-    // The newcomer's own admission + append, in a second transaction: it reads the committed (pre-swap) order, then its
-    // write waits on the swap's row lock.
     let lateId = "";
-    const appendTx = sql.begin(async (tx) => {
-      const [e] = await tx<{ id: string }[]>`
-        insert into entrants (division_id, org_id, kind, display_name, seed)
-        values (${r.divisionId}, ${r.auth.orgId}, 'individual', 'Late behind a swap', 99) returning id`;
-      lateId = e!.id;
-      await appendToLadderOrder(tx, r.divisionId);
-    });
-    // Anti-vacuity: the append really is waiting on the swap's lock (otherwise nothing interleaved).
-    let blocked = false;
-    for (let i = 0; i < 100 && !blocked; i++) {
-      const [row] = await sql<{ n: number }[]>`
-        select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock' and query ilike '%update stages%ladder_order%'`;
-      blocked = row!.n > 0;
-      if (!blocked) await new Promise((res) => setTimeout(res, 50));
-    }
-    expect(blocked, "the append's write is waiting on the swap's row lock").toBe(true);
-    releaseSwap();
-    await swapTx;
-    await appendTx;
+    let append: Promise<unknown> = Promise.resolve();
+    try {
+      await swap.ready;
+      // The newcomer's own admission + append, in a second transaction: it reads the committed (pre-swap) order, then its
+      // write waits on the swap's row lock.
+      append = sql.begin(async (tx) => {
+        const [e] = await tx<{ id: string }[]>`
+          insert into entrants (division_id, org_id, kind, display_name, seed)
+          values (${r.divisionId}, ${r.auth.orgId}, 'individual', 'Late behind a swap', 99) returning id`;
+        lateId = e!.id;
+        await appendToLadderOrder(tx, r.divisionId);
+      });
+      append.catch(() => undefined);
+      // Anti-vacuity: the append really is waiting on THIS test's swap (otherwise nothing interleaved).
+      expect(await sessionsBlockedBy(swap.pid()), "the append's write is waiting on the swap's row lock").toBeGreaterThan(0);
+      swap.commit();
+      await swap.done;
+      await append;
 
-    expect(await storedOrder(r.stageId), "the swap landed AND the newcomer is on the ladder at the bottom").toEqual([...swapped, lateId]);
+      expect(await storedOrder(r.stageId), "the swap landed AND the newcomer is on the ladder at the bottom").toEqual([...swapped, lateId]);
+    } finally {
+      swap.rollback();
+      await Promise.allSettled([swap.done, append]);
+    }
+  });
+
+  // The same direction through the READER's backstop (issueChallenge): an entrant a door never appended is completed into
+  // the order by the challenge itself, and that write must not undo a swap committing under it either.
+  it("the challenge backstop appends against the order a swap commits under it, and judges the challenge on that order", async () => {
+    const r = await ladder(3);
+    const before = await startTheLadder(r); // [L1, L2, L3]
+    const swapped = [r.ids[2]!, r.ids[1]!, r.ids[0]!];
+    const [raw] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, status)
+      values (${r.divisionId}, ${r.auth.orgId}, 'individual', 'Raw door', 'registered') returning id`;
+    expect(await storedOrder(r.stageId), "premise: the raw insert bypassed every door").toEqual(before);
+
+    const swap = holdOpen(async (tx) => {
+      await tx`update stages set config = config || ${tx.json({ ladder_order: swapped } as never)} where id = ${r.stageId}`;
+    });
+    let challenge: Promise<{ fixture_id: string; ladder_order: string[] }> | undefined;
+    try {
+      await swap.ready;
+      // raw challenges the rung directly above them: valid whichever order the challenge is judged on
+      challenge = issueChallenge(r.auth, r.stageId, { challenger_id: raw!.id, opponent_id: r.ids[0]! });
+      challenge.catch(() => undefined);
+      expect(await sessionsBlockedBy(swap.pid()), "the backstop's write is waiting on the swap's row lock").toBeGreaterThan(0);
+      swap.commit();
+      await swap.done;
+      const out = await challenge;
+
+      expect(await storedOrder(r.stageId), "the swap landed AND the unlisted entrant is at the bottom").toEqual([...swapped, raw!.id]);
+      expect(out.ladder_order, "the challenge answers with the stored order, swap included").toEqual([...swapped, raw!.id]);
+    } finally {
+      swap.rollback();
+      await Promise.allSettled([swap.done, challenge]);
+    }
   });
 
   it("a result where the holder wins swaps nothing (the SQL guard: winner below loser), and a later add still lands at the bottom", async () => {

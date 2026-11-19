@@ -47,19 +47,24 @@ export async function appendToLadderOrder(tx: Tx, divisionId: string): Promise<v
     if (!Array.isArray(order)) continue;
     const missing = await missingFromLadder(tx, divisionId, order as string[]);
     if (missing.length === 0) continue;
-    // ONE statement against the stage row's CURRENT order, never a write of the literal array read above. A result's
-    // swap (scoring.ts) does not take the `division:` lock this function holds, so it can commit between that read and
-    // this write; a literal `[...order, ...missing]` would put the stale order back and lose the swap. A blocked UPDATE
-    // re-evaluates its SET against the committed row version, so the newcomers are appended to whatever order is current.
-    // A swap never changes membership, and every other writer of membership (this function, the first challenge's
-    // initialisation) holds the `division:` lock taken above, so `missing` is still exactly what the row lacks when the
-    // UPDATE runs: a guard against double-adding would be unreachable (mutated, no test could tell, so it is not there).
-    await tx`
-      update stages s set config = s.config || jsonb_build_object('ladder_order',
-        s.config->'ladder_order' || coalesce((
-          select jsonb_agg(m.v order by m.ord)
-          from jsonb_array_elements_text(${tx.json(missing as never)}::jsonb) with ordinality as m(v, ord)
-          ), '[]'::jsonb))
-      where s.id = ${stage.id} and jsonb_typeof(s.config->'ladder_order') = 'array'`;
+    await appendMissingToStage(tx, stage.id, missing);
   }
+}
+
+/** Append `missing` to the bottom of ONE stage's `ladder_order`, as ONE statement against the row's CURRENT order, never
+ *  a write of a literal array the caller read earlier. A result's swap (scoring.ts) does not take the `division:` lock
+ *  the callers hold, so it can commit between their read and this write; a literal `[...order, ...missing]` would put
+ *  the stale order back and lose the swap. A blocked UPDATE re-evaluates its SET against the committed row version, so
+ *  the newcomers are appended to whatever order is current. A swap never changes membership, and every other writer of
+ *  membership (the first challenge's initialisation, the other callers of this) holds the `division:` lock, so `missing`
+ *  is still exactly what the row lacks when the UPDATE runs: a guard against double-adding would be unreachable
+ *  (mutated, no test could tell, so it is not there). Callers hold the `division:` lock and have seen an array order. */
+export async function appendMissingToStage(tx: Tx, stageId: string, missing: readonly string[]): Promise<void> {
+  await tx`
+    update stages s set config = s.config || jsonb_build_object('ladder_order',
+      s.config->'ladder_order' || coalesce((
+        select jsonb_agg(m.v order by m.ord)
+        from jsonb_array_elements_text(${tx.json(missing as never)}::jsonb) with ordinality as m(v, ord)
+        ), '[]'::jsonb))
+    where s.id = ${stageId} and jsonb_typeof(s.config->'ladder_order') = 'array'`;
 }
