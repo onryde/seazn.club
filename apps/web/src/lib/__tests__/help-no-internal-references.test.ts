@@ -69,7 +69,7 @@ const CASES: Record<LeakRule, { hit: string[]; clean: string[] }> = {
     hit: [
       "The engine builds the draw.",
       "A reducer folds the events.",
-      "The reducer carries the score.",
+      "The payload carries the score.",
       "stored as jsonb",
       "POST to the webhook",
       "A cron job runs nightly.",
@@ -206,6 +206,14 @@ describe("findLeaks: one positive and one negative per rule", () => {
     // A longer token that merely starts with a listed phrase is not excused.
     expect(findLeaks("Winner of R1·10 plays on.").map((l) => l.match)).toEqual(["R1"]);
     expect(findLeaks("See XR1·1 here.")).toEqual([]);
+  });
+
+  it("the batch-import file's field name is allowed only as the exact phrase, bare payload is still a leak", () => {
+    expect(findLeaks("Each event has a type and payload.")).toEqual([]);
+    expect(findLeaks('{ "type": "core.start", "payload": {} }')).toEqual([]);
+    expect(findLeaks("The payload carries the score.").map((l) => l.match)).toEqual(["payload"]);
+    expect(findLeaks("Large payloads are rejected.").map((l) => l.match)).toEqual(["payloads"]);
+    expect(findLeaks("A type and payload mismatch, plus a stray payload.").map((l) => l.match)).toEqual(["payload"]);
   });
 
   it("a leak in a picture's alt text or caption is caught, though helpPlainText drops both", async () => {

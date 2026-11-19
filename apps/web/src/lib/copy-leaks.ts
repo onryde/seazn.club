@@ -85,8 +85,12 @@ export const LEAK_ALLOW: LeakAllow[] = [
     reason: "Twenty20 is the cricket format's real name, not a task id.",
   },
   {
-    match: "payload",
-    reason: "The batch-import file's own field is named payload; the sample file and the line that describes it must say so.",
+    match: "type and payload",
+    reason: "The batch-import file's own fields are named type and payload; the line that describes them has to say so.",
+  },
+  {
+    match: '"payload"',
+    reason: "The same field as it is spelled in the batch-import sample file (a JSON key, quoted).",
   },
   {
     match: "search engines",

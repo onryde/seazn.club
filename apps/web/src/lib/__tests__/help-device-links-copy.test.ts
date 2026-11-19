@@ -43,7 +43,7 @@ const SENTENCES = ARTICLE.replace(/\*\*|__|`/g, "")
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
-/** The pad says "Void" (score.void), the older copy said "undo"; either word names the action these pins are about. */
+/** The pad says "Void" (score.void). The page must say "void" too: "undo" is the old, false word for it, and is deliberately not accepted. */
 const VOIDED = /\bvoid\b/i;
 const SHOW_QR = en["dlink.showQr"];
 const REISSUE = en["dlink.reissue"];
