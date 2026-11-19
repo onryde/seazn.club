@@ -197,8 +197,10 @@ describe("X-RR-6 no source names triple_rr", () => {
   // B4 fix wave (T16): every app (not only web's src and e2e) and the migrations (`db`), so a seed row or a second app naming the
   // key is seen.
   const SCOPE = ["apps", "db", "tools/matrix", "content", "scripts", "packages"];
-  /** This file's own literals are the whole allowlist (no door was found, so no refusal literal exists either). */
-  const ALLOWLIST = ["apps/web/src/server/usecases/__tests__/triple-rr-deleted.test.ts"];
+  /** This file's own literals, and the matrix's W5 baseline test: it MEASURES the removal (the W4 run held triple_rr cases, the W5 run
+   *  holds none, and the product's row list lacks it), so it has to name the row it proves gone. No door was found, so no refusal
+   *  literal exists either. Found at the Task 26 gate: the baseline test (Task 25) landed after this scan and reddened it. */
+  const ALLOWLIST = ["apps/web/src/server/usecases/__tests__/triple-rr-deleted.test.ts", "tools/matrix/__tests__/baseline-w5.test.ts"];
   // The key, its kebab and camel spellings, and the two display names it carried (label "Triple round robin", seed "Triple RR").
   const PATTERN = "triple_rr|triple-rr|triplerr|triple rr|triple round";
 

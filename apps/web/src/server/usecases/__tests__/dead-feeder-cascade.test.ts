@@ -1509,9 +1509,11 @@ describe.skipIf(!HAS_DB)("ruling D-G3, answered by W2b (spec §5.4), and the tab
     const ch = await fixtureRow(l.challengeId);
     expect([ch.status, ch.outcome]).toEqual(["forfeited", { kind: "award", winner: challenger, loser: holder, reason: "withdrew" }]);
     // Jul3/08 §6: the challenger taking the game takes the position — the departed holder drops one place. Twice.
-    // The second call is the idempotent one: completed, no second stage_completed event.
+    // The second call is the idempotent one. Since W5 X-BD-4 (RB5-S4) a repeat Complete is a NAMED no-op: it completes nothing
+    // (`completed: false`), says `already_complete: true`, and writes no second stage_completed event.
     expect(await completionOrRefusal(l.auth, l.stageId), "first").toEqual({ completed: true, ranks: [challenger, holder, l3, l4] });
-    expect(await completionOrRefusal(l.auth, l.stageId), "second").toEqual({ completed: true, ranks: null });
+    const second = await completeStage(l.auth, l.stageId);
+    expect([second.completed, second.already_complete, second.events], "second").toEqual([false, true, []]);
   });
 
   it("table stages: a scorer's abandon HOLDS completion until the organiser settles it, a withdrawal's EXPUNGE never does (X-AB-5; ruling 105)", async () => {

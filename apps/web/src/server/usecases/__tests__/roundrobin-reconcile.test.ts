@@ -48,7 +48,7 @@ afterAll(async () => {
 });
 
 /** The plan's sentence (RB5-G7, task-2 brief), typed here: the refusal table is the code under test. */
-const AFTER_START = "Play has started, so Generate won't change the fixtures. Use Add late player.";
+const AFTER_START = "Play has started, so Generate won't change the fixtures. Players waiting to join are listed on this stage: use Add to the table.";
 /** Main's own copy (stages/generate-tx.ts, the `entrants.length < 2` refusal): X-BD-5's pin. */
 const NOT_READY = "need at least 2 active entrants to generate";
 
