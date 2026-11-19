@@ -1,5 +1,7 @@
 // Scoring-defects batch (help-audit follow-up, 2026-11-19): copy that told a person something the product cannot do.
 // One file for the batch; each describe is one item and carries its own anti-vacuity count.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import en from "@/dictionaries/en/ui.json";
@@ -7,6 +9,7 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { TIPS } from "@/config/tips";
+import { FEATURE_REASONS } from "@/lib/feature-copy";
 import { LOCALES } from "@/lib/i18n-constants";
 
 const DICTS: Record<(typeof LOCALES)[number], Record<string, string>> = { en, es, fr, nl };
@@ -18,20 +21,21 @@ const DICTS: Record<(typeof LOCALES)[number], Record<string, string>> = { en, es
 describe("item 1: the decided / finalized lines say what a person can actually do", () => {
   const REOPEN_WORDS = /reopen|reábr|reabr|rouvr|heropen|herstel/i; // en, es x2, fr, nl
   const ASK_ORGANISER = /organi[sz](er|ador|ateur|ator)/i;
-  // the button's own label, minus its glyph: the line must name the control the person will look for
-  const voidLabel = (loc: (typeof LOCALES)[number]) => DICTS[loc]["score.voidLast"]!.replace(/^⟲\s*/, "");
+  // The sentence for each surface, read the way the pad reads it: its control's label is filled from the dictionary, never typed.
+  const SURFACE_KEYS = ["engineError.ALREADY_DECIDED", "scorepad.refusal.alreadyDecidedDevice", "scorepad.refusal.alreadyDecidedGuest"] as const;
 
-  it("ALREADY_DECIDED names the console's own void control, in every locale, and never 'reopen'", () => {
+  it("every surface's ALREADY_DECIDED sentence leaves its control to be filled, and none of them says 'reopen'", () => {
     let checked = 0;
     for (const loc of LOCALES) {
-      const line = DICTS[loc]["engineError.ALREADY_DECIDED"]!;
-      expect(typeof line, loc).toBe("string");
-      expect(voidLabel(loc).length, `${loc}: the label this is derived from exists`).toBeGreaterThan(4);
-      expect(line, `${loc} names the control`).toContain(voidLabel(loc));
-      expect(line, `${loc} promises no reopen`).not.toMatch(REOPEN_WORDS);
-      checked += 1;
+      for (const key of SURFACE_KEYS) {
+        const line = DICTS[loc][key]!;
+        expect(typeof line, `${loc} ${key}`).toBe("string");
+        expect(line, `${loc} ${key} takes its control by name, not typed into the sentence`).toContain("{control}");
+        expect(line, `${loc} ${key} promises no reopen`).not.toMatch(REOPEN_WORDS);
+        checked += 1;
+      }
     }
-    expect(checked, "anti-vacuity: four locales").toBe(LOCALES.length);
+    expect(checked, "anti-vacuity: 4 locales x 3 surfaces").toBe(LOCALES.length * SURFACE_KEYS.length);
   });
 
   it("the finalized View-only line says the result is final and sends nobody to an organiser, in every locale", () => {
@@ -108,6 +112,33 @@ describe("item 4: the signed-audit lock says what the gate really is", () => {
       expect(DICTS[loc][HINT], `${loc} the hint names the pass (a product name, never translated)`).toContain("Event Pass");
     }
     expect(checked, "anti-vacuity: 4 locales x label and hint").toBe(LOCALES.length * 2);
+  });
+});
+
+// Fix round 1, m4. The same gate is described in two more places a reader meets it, and each said "Pro": the paywall
+// sentence the 402 carries, and the API reference's summary of the audit route. Both now name the gate.
+describe("item 4 (m4): the paywall sentence and the API reference name the gate, not Pro alone", () => {
+  it("the 402's feature sentence says paid plans and the Event Pass, and never calls it Pro-only", () => {
+    const line = FEATURE_REASONS["scoring.audit_export"]!;
+    expect(typeof line).toBe("string");
+    expect(line).toMatch(/paid plans/);
+    expect(line).toContain("Event Pass");
+    expect(line).not.toMatch(/\bPro\b/);
+  });
+
+  it("the generated API reference (both documents) describes the audit route by the same gate", () => {
+    let checked = 0;
+    for (const file of ["v1.json", "v1.public.json"]) {
+      const doc = JSON.parse(readFileSync(join(process.cwd(), "..", "..", "openapi", file), "utf8")) as {
+        paths: Record<string, { get?: { summary?: string } }>;
+      };
+      const summary = doc.paths["/api/v1/fixtures/{id}/audit"]?.get?.summary ?? "";
+      expect(summary, `${file}: the audit route is documented`).toMatch(/audit trail/i);
+      expect(summary, `${file}: names the gate`).toContain("paid plans and the Event Pass");
+      expect(summary, `${file}: no longer says Pro alone`).not.toMatch(/\(Pro /);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: both documents").toBe(2);
   });
 });
 

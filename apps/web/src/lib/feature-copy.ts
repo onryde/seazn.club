@@ -132,7 +132,8 @@ export const FEATURE_REASONS: Record<string, string> = {
   // forward the OLD `stats.player` sentence verbatim (it is still Pro + pass,
   // exactly as `stats.player` was before the split).
   "stats.player.career": "Career stats across every competition are on Pro and the Event Pass.",
-  "scoring.audit_export": "The signed match audit trail download is on Pro and the Event Pass.",
+  // Every paid plan (Pro, Enterprise) and both Event Pass rungs: only Community lacks it. Named by the gate, not a plan list.
+  "scoring.audit_export": "The signed match audit trail download is on paid plans and the Event Pass.",
   "discipline.enforced": "Automatic suspension tracking is on Pro and the Event Pass.",
   "tiebreakers.custom": "Custom tiebreaker order is switched off for this organisation.",
   "standings.custom_points": "Bonus-point rules and forfeit points are switched off for this organisation — plain win/draw/loss points work on every plan.",

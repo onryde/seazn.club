@@ -45568,7 +45568,7 @@
     },
     "/api/v1/fixtures/{id}/audit": {
       "get": {
-        "summary": "Signed per-match audit trail: the full hash-chained event stream, chain-verification verdict and an Ed25519 signature over the head hash (Pro `scoring.audit_export`; verify keys at /.well-known/seazn-audit-keys)",
+        "summary": "Signed per-match audit trail: the full hash-chained event stream, chain-verification verdict and an Ed25519 signature over the head hash (paid plans and the Event Pass, `scoring.audit_export`; verify keys at /.well-known/seazn-audit-keys)",
         "tags": [
           "scoring"
         ],
