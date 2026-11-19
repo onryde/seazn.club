@@ -206,6 +206,9 @@ describe.skipIf(!HAS_DB)("a lost dispute blocks only the entries paid on the dis
   });
 });
 
+// Fix round 2 M-5: the lost close's two writes (the cart's write-off and the `dispute_lost` ledger row the refund guard and the list's
+// per-entry dispute state read) commit together. Probed by making the ledger insert fail for ONE dispute id (a BEFORE INSERT trigger):
+// the write-off must not have landed.
 describe.skipIf(!HAS_DB)("a lost close writes the write-off and its ledger row in ONE transaction (fix round 2 M-5)", () => {
   it("a ledger row that cannot be written leaves the cart's write-off unwritten, and a retry lands both", async () => {
     const e = await paidEntry();

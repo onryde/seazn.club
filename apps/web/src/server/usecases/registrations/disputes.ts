@@ -57,7 +57,7 @@ export function disputeOutcomeSql(db: AnySql, competitionId: postgres.PendingQue
 }
 
 /** Whether the payment `entryIntent` (an entry's OWN payment intent) was lost to a chargeback, as one SQL boolean over the competition id
- *  expression `competitionId` (fix round 2 I-1). `disputeOutcomeSql` speaks for the CART; a refund moves ONE entry's own charge, and a cart
+ *  expression `competitionId` (fix round 2 I-1). `disputeOutcomeSql` (above) reads the same per-entry-payment ledger rows for display; a refund moves ONE entry's own charge, and a cart
  *  can be paid in several Checkout sessions (V387), so a loss on one session's charge says nothing about a sibling paid in another.
  *  True when a `registration.dispute_lost` ledger row names that intent (the handler stamps the disputed charge's intent on it, and on
  *  the `registration.disputed` / `dispute_won` rows). A cart paid in ONE session shares one intent across its entries, so a lost dispute

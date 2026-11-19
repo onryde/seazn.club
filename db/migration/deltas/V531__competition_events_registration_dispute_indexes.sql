@@ -14,13 +14,14 @@
 --   * (competition_id, payload->>'dispute_id') for the `dispute_won` rows (the by-dispute probe).
 -- Both predicates are the literal types the queries name, so the planner proves them from `type = '...'`.
 --
--- Plain CREATE INDEX (not CONCURRENTLY: Flyway runs each delta in a transaction). It takes a SHARE lock on competition_events for
--- the build, which blocks ledger writes for that moment; the indexes are partial (a handful of rows) so the build is a scan and
--- an instant sort. Same trade V425 made.
-create index competition_events_reg_dispute_intent_idx
+-- Plain CREATE INDEX (not CONCURRENTLY: Flyway runs each delta in a transaction). Each build scans the WHOLE competition_events table
+-- (a partial index still reads every row to test its predicate) under a SHARE lock, which blocks ledger writes for the duration, as
+-- V491's header states. That is acceptable only while the table is small: the assumption is a ledger of at most a few million rows
+-- (a scan of seconds); revisit (CONCURRENTLY outside Flyway) before it grows past that. IF NOT EXISTS keeps a re-run harmless.
+create index if not exists competition_events_reg_dispute_intent_idx
   on competition_events (competition_id, (payload->>'payment_intent_id'))
   where type in ('registration.disputed', 'registration.dispute_lost');
 
-create index competition_events_reg_dispute_won_idx
+create index if not exists competition_events_reg_dispute_won_idx
   on competition_events (competition_id, (payload->>'dispute_id'))
   where type = 'registration.dispute_won';
