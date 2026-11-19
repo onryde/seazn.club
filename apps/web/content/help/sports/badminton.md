@@ -7,7 +7,7 @@ related: scoring/basics, scoring/fidelity, scoring/attribution, scoring/correcti
 
 You score badminton by tapping the half of the side that won the rally. One tap is one entry. The pad keeps the game, the server and the service court up to date for you.
 
-![The badminton pad at 9 to 5 in the first game of a BWF 3×15 match. The context line reads Best of 3, Game 1, and the strip reads Games 0–0, Serving Home, Left service court. Below are the notice Rally recorded with Take back, the Recording chip set to Every detail, and a Sanction tile for each side.](/help/sports/badminton-pad.webp "The badminton pad at 9 to 5 in game 1 of a BWF 3×15 match")
+![The badminton pad at 9 to 5 in the first game of a BWF 3×15 match, as it looks on a phone. The score board reads Best of 3, Game 1, with Home 9 and Away 5, and the strip below it reads Games 0–0, Serving Home, Left service court. Under the board are a Sanction tile for each side, then the notice Rally recorded with Take back, then the Recording chip set to Every detail.](/help/sports/badminton-pad.webp "The badminton pad at 9 to 5 in game 1 of a BWF 3×15 match")
 
 ## Choose the format
 

@@ -10,7 +10,7 @@ You record an ice hockey penalty with the **Penalty** tile for a side. The pad a
 ## Record a penalty
 
 1. Tap **Penalty** for the side. The pad asks **Which penalty?** and lists the classes in order of severity: **Minor**, **Bench minor**, **Double minor**, **Major**, **Misconduct**, **Game misconduct** and **Match penalty**.
-2. Choose **What for?** The list runs from Elbowing, Charging and Boarding to Delay of game, Too many men, Fighting and Other.
+2. Choose **What for?** The list starts at **Tripping** and ends at **Other**. In between are Elbowing, Charging, Boarding, Delay of game, Too many men and Fighting.
 3. Check the **Minutes**. The step opens at the class's usual length. Change it if the official gave more.
 4. Choose **Served by** if a team-mate sits the penalty.
 5. Choose **Who was penalised?**

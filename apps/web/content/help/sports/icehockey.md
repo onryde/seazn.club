@@ -7,7 +7,7 @@ related: sports/icehockey-penalties, scoring/knockout-deciders, scoring/lineups,
 
 You score ice hockey on one pad with a clock, a goal tile for each side and a tile for each penalty. This page covers the game itself. Penalties have [their own page](/help/sports/icehockey-penalties).
 
-![The ice hockey pad at 2 to 1 in the first period of an IIHF match. The header reads 3 × 20 min, Overtime, GWS, the score board shows Home 2 and Away 1 with Period P1, and a Clock at 0:00 with Start. Below are the notice Goal with Take back, the Recording chip set to Every detail, and tiles for Goal and Penalty on each side, plus Advance period, Line change and Set piece awarded.](/help/sports/icehockey-pad.webp "The ice hockey pad in the first period of an IIHF match")
+![The ice hockey pad at 2 to 1 in the first period of an IIHF match, as it looks on a phone. The header reads 3 × 20 min, Overtime, GWS, the score board shows Home 2 and Away 1 with Period P1, then a Clock at 0:00 with Start. Under the board are tiles for Goal and Penalty on each side, plus Advance period, Line change, Injured, no sub, Set piece awarded and More, then the notice Goal with Take back and the Recording chip set to Every detail.](/help/sports/icehockey-pad.webp "The ice hockey pad in the first period of an IIHF match")
 
 ## Choose the format
 
@@ -15,8 +15,8 @@ You pick a format when you create the division. A new ice hockey division starts
 
 | Format | Periods | If the match is level | Table points |
 |---|---|---|---|
-| **IIHF** | 3 periods of 20 minutes | Sudden-death overtime of 5 minutes with 3 skaters a side, then a 5-attempt shoot-out | Win 3, overtime or shoot-out win 2, overtime or shoot-out loss 1, loss 0 |
-| **Recreational** | 3 periods of 20 minutes | No overtime and no shoot-out. The draw stands | Win 2, draw 1, loss 0 |
+| **IIHF** | 3 periods of 20 minutes | In a league or group stage, sudden-death overtime of 5 minutes with 3 skaters a side, then a 5-attempt shoot-out | Win 3, overtime or shoot-out win 2, overtime or shoot-out loss 1, loss 0 |
+| **Recreational** | 3 periods of 20 minutes | In a league or group stage, no overtime and no shoot-out. The draw stands | Win 2, draw 1, loss 0 |
 
 The band above the score says which settings apply. On IIHF it reads "3 × 20 min · Overtime · GWS". On Recreational it reads "3 × 20 min".
 
@@ -37,7 +37,7 @@ To undo a goal, press **Take back** on the ribbon. See [fixing a mistake](/help/
 > **Example**
 > An IIHF match is 2–2 at the end of P3. You press **Advance period** and the pad moves to **OT**, a sudden-death period of 5 minutes with 3 skaters a side. The home side scores in overtime. In the league table the home side gets 2 points and the away side 1.
 
-In the division's rules, ice hockey has settings for the variant, period length, **Sudden-death overtime**, the overtime length and skaters, **Shootout (GWS)**, the shoot-out attempts and **If a match is abandoned** (**Replay the match** or **Result stands**). In a knockout stage the deciders start on. See [knockout deciders](/help/scoring/knockout-deciders).
+In the division's rules, ice hockey has settings for the variant, period length, **Sudden-death overtime**, the overtime length and skaters, **Shootout (GWS)**, the shoot-out attempts and **If a match is abandoned** (**Replay the match** or **Result stands**). A new knockout stage starts both deciders on, for IIHF and Recreational alike, with a 10-minute sudden-death overtime of 3 skaters a side and a 5-attempt shoot-out. See [knockout deciders](/help/scoring/knockout-deciders).
 
 ## Other tiles
 

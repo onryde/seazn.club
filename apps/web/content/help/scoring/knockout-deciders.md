@@ -15,7 +15,7 @@ A knockout match cannot end level, or nobody would go through to the next round.
 | Cricket | Limited-overs cricket (T20, ODI, The Hundred): **Super over on a tie** and **If the super over is tied**. A drawn Test has no decider, so a level Test in a knockout is held |
 | Field hockey | **Shoot-out on a draw** |
 | Ice hockey | **Sudden-death overtime** and **Shootout (GWS)** |
-| Chess and other board games | **Tie-break games, in order** |
+| Chess | **Tie-break games, in order** |
 | Carrom | An extra board is always played. It is not an option: **Game tied at max boards** only applies in a league or group stage |
 | Generic scoring | None. A level result in a knockout is refused |
 | Tennis, badminton, table tennis, volleyball | None. These sports cannot finish level |

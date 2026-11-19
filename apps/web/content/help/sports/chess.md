@@ -1,5 +1,5 @@
 ---
-title: Chess and other board games
+title: Chess
 description: Score chess by tapping the winner and saying how the game ended, with an optional pairing card for the board number and colours.
 order: 3
 related: scoring/basics, scoring/fidelity, scoring/corrections, scoring/knockout-deciders
@@ -7,7 +7,7 @@ related: scoring/basics, scoring/fidelity, scoring/corrections, scoring/knockout
 
 You score chess by tapping the winner and, if you want, saying how the game ended. A draw has its own tile.
 
-![The chess pad before a result, in a Blitz match. The header reads Colours tracked, the two players are Meena A, marked Playing White, and Ravi A, each with a dash and the words Tap to record the winner. Below are the notice Match started with Take back, the Recording chip set to Key moments, and a Draw or no result tile.](/help/sports/chess-pad.webp "The chess pad before a result, in a Blitz match")
+![The chess pad before a result, in a Blitz match, as it looks on a phone. The header reads Colours tracked. Meena A, with a coloured dot beside the name to mark who plays White, and Ravi A each show a dash and the words Tap to record the winner. Under the board are a Draw or no result tile, then the notice Match started with Take back, then the Recording chip set to Key moments.](/help/sports/chess-pad.webp "The chess pad before a result, in a Blitz match")
 
 ## Choose the time control
 

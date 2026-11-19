@@ -7,7 +7,7 @@ related: scoring/basics, scoring/knockout-deciders, scoring/lineups, scoring/att
 
 You score football on one pad with a tile for each action, one per side where it belongs to a side. A goal is one tap. The details come after it.
 
-![The football pad at 2 to 1 in the first half of an 11-a-side match. The score board shows Home 2 and Away 1 with Period First half, and a Clock at 0:00 with Start. Below are the notice Goal recorded with Take back, the Recording chip set to Every detail, and tiles for Goal, Card, Substitution and Injured, no sub on each side, plus End of period, Penalty and More.](/help/sports/football-pad.webp "The football pad in the first half of an 11-a-side match")
+![The football pad at 2 to 1 in the first half of an 11-a-side match, as it looks on a phone. The score board shows Home 2 and Away 1 with Period First half, then a Clock at 0:00 with Start. Under the board are tiles for Goal, Card, Substitution and Injured, no sub on each side, plus End of period, Penalty and More, then the notice Goal recorded with Take back and the Recording chip set to Every detail.](/help/sports/football-pad.webp "The football pad in the first half of an 11-a-side match")
 
 ## Choose the format
 
@@ -36,7 +36,7 @@ Tap **Goal** for the side that scored. The goal is recorded at once, and a **Goa
 
 ## Periods, extra time and shoot-outs
 
-**End of period** asks **Which break?** and offers **Half-time**, **Full-time**, **Extra time — half-time** and **End of extra time**. An option that does not fit the moment is greyed out with a reason.
+**End of period** asks **Which break?** The breaks depend on the format. The halves formats offer **Half-time** and **Full-time**. Mini-soccer plays quarters and offers **Quarter-time**, **Half-time**, **Three-quarter-time** and **Full-time**. When extra time is on, every format also offers **Extra time — half-time** and **End of extra time**. An option that does not fit the moment is greyed out with a reason.
 
 In a knockout stage, a match that is level at full time goes into extra time, and a match still level after extra time goes to the **shoot-out**. These deciders start **on** in a knockout stage. You turn them off in the stage's **Match rules**. See [knockout deciders](/help/scoring/knockout-deciders).
 

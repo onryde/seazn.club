@@ -7,7 +7,7 @@ related: scoring/basics, scoring/fidelity, scoring/corrections, sports/chess
 
 Pick **Any other game** when your sport is not in the list, for example netball, squash or kabaddi. The pad knows two sides and a number, or two sides and a winner. It has no goals, rallies or periods.
 
-![The generic scoring pad in a Score match. The header reads Running score, Draws allowed. Meena A has 3 and Ravi A has 1, each half reads Tap to add a point, and the line below says Home leads by 2. Below are the notice Point recorded with Take back, the Recording chip set to Key moments, and tiles for Finish from tally, Enter final score and Correction.](/help/sports/generic-pad.webp "The generic pad in a Score match, three points to one")
+![The generic scoring pad in a Score match, as it looks on a phone. The header reads Running score, Draws allowed. Meena A has 3 and Ravi A has 1, each half reads Tap to add a point, and the line below says Home leads by 2. Under the board are tiles for Finish from tally, Enter final score and Correction, then the notice Point recorded with Take back, then the Recording chip set to Key moments.](/help/sports/generic-pad.webp "The generic pad in a Score match, three points to one")
 
 ## Choose the format
 
@@ -42,7 +42,7 @@ Tap the half of the winner. The match is decided at once and the match page read
 
 ## Recording level
 
-A new generic match opens at **Key moments**. See [choosing a detail level](/help/scoring/fidelity). To undo an entry, press **Take back** on the ribbon. See [fixing a mistake](/help/scoring/corrections).
+A new match of **Any other game** opens at **Key moments**. See [choosing a detail level](/help/scoring/fidelity). To undo an entry, press **Take back** on the ribbon. See [fixing a mistake](/help/scoring/corrections).
 
 ## The league table
 

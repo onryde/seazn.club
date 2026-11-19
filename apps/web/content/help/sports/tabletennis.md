@@ -7,7 +7,7 @@ related: scoring/basics, scoring/fidelity, scoring/attribution, sports/badminton
 
 You score table tennis by tapping the half of the side that won the rally. The pad adds **Deuce** when it is needed and can follow the serve once it knows who served.
 
-![The table tennis pad at 6 to 3 in the first game of a Best of 5 match. The context line reads Best of 5, Game 1, and the strip reads Games 0–0. Below are the notice Rally recorded with Take back, the Recording chip set to Every detail, and tiles for Sanction and Time-out on each side.](/help/sports/tabletennis-pad.webp "The table tennis pad in game 1 of a Best of 5 match")
+![The table tennis pad at 6 to 3 in the first game of a Best of 5 match, as it looks on a phone. The score board reads Best of 5, Game 1, with Home 6 and Away 3, and the strip reads Games 0–0. Under the board are tiles for Sanction and Time-out on each side, plus Start expedite and Note the server, then the notice Rally recorded with Take back and the Recording chip set to Every detail.](/help/sports/tabletennis-pad.webp "The table tennis pad in game 1 of a Best of 5 match")
 
 ## Choose the format
 
@@ -36,9 +36,9 @@ To undo a rally, press **Take back** on the ribbon. See [fixing a mistake](/help
 
 ## The serve
 
-The strip carries **Games** and **Serving**, then **1st serve** or **2nd serve**. A side serves two points in turn, then the other side does.
+The strip carries **Games** and **Serving**, then **1st serve** or **2nd serve**. A side serves two points in turn, then the other side does. From 10–10 (20–20 in Hardbat), and once expedite is on, the serve changes after every rally.
 
-The pad does not guess who served first. **Note the server** is a tile of its own. Press it, say **Who served?**, then **Who won it?** for one rally. From then on the strip names the server and shows **1st serve** or **2nd serve**, and it alternates after every two rallies.
+The pad does not guess who served first. **Note the server** is a tile of its own. Press it, say **Who served?**, then **Who won it?** for one rally. From then on the strip names the server and shows **1st serve** or **2nd serve**, and it follows that rule.
 
 ## Time-outs and sanctions
 
@@ -47,7 +47,7 @@ The pad does not guess who served first. **Note the server** is a tile of its ow
 
 ## The expedite system
 
-**Start expedite** records the umpire starting the expedite system. It is offered at 0–0 and is hidden once it is running. It is also hidden when both sides have more than 9 points in the game, for example at 10–10. The strip then shows **Expedite**.
+**Start expedite** records the umpire starting the expedite system. It is offered at 0–0 and is hidden once it is running. It is also hidden once both sides have 9 points or more in the game, for example at 9–9. The strip then shows **Expedite**.
 
 While expedite is on and the pad does not know who served, each rally offers a **13th return?** chip with a **13th return** button, for the receiver winning on the thirteenth return. The pad does not time the ten minutes. That part of the rule is yours to judge.
 

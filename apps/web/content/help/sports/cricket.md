@@ -7,7 +7,7 @@ related: scoring/basics, scoring/knockout-deciders, scoring/fidelity, scoring/li
 
 You score cricket one delivery at a time. The striker, non-striker and bowler stay at the top of the pad, so you do not enter them again for each ball.
 
-![The cricket pad after five balls of a T20 match. The header reads T20, Over 0.5 and a run rate of 15.6, and the score board reads Batting Harbour CC 13/0 and Overs 0.5. Below are the batters and bowler, the notice Ball recorded with Take back, the run tiles 0, 1, 2, 3, 4 and 6, and tiles for Wide, Wicket, No-ball, Bye, Leg bye, Penalty, Review, Retire, Close innings and More.](/help/sports/cricket-pad.webp "The cricket pad in a T20 match, five balls into the first over")
+![The cricket pad after five balls of a T20 match, as it looks on a phone. The header reads T20, Over 0.5 and a run rate of 15.6, and the score board reads Batting Harbour CC 13/0 and Overs 0.5, with the batters and bowler on the strip below. Under the board are the run tiles 0, 1, 2, 3, 4 and 6, then Wide, Wicket, No-ball, Bye, Leg bye, Penalty, Review, Retire, Close innings and More, then the notice Ball recorded with Take back, the three player chips and the Recording chip set to Every detail.](/help/sports/cricket-pad.webp "The cricket pad in a T20 match, five balls into the first over")
 
 ## Choose the format
 
@@ -67,7 +67,7 @@ A Test match has no super over.
 
 ## Recording level
 
-A new cricket match opens at **Every detail**. A lower level records innings totals instead of balls. See [choosing a detail level](/help/scoring/fidelity). For what happens to an abandoned match, see [if a match is abandoned](/help/scoring/basics#if-a-match-is-abandoned).
+A new cricket match opens at **Every detail**. Lower levels record less: **Result only** and **Key moments** take innings totals, **Full timeline** takes scorecard lines, and only **Every detail** takes balls. See [choosing a detail level](/help/scoring/fidelity). For what happens to an abandoned match, see [if a match is abandoned](/help/scoring/basics#if-a-match-is-abandoned).
 
 ## The league table
 

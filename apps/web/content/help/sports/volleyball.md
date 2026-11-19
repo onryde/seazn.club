@@ -7,7 +7,7 @@ related: scoring/basics, scoring/fidelity, scoring/lineups, scoring/attribution
 
 You score volleyball by tapping the half of the side that won the rally. The halves read **Home** and **Away**. The strip below them follows the set, the server and, indoors, the rotation.
 
-![The volleyball pad at 7 to 4 in the first set of a Beach match. The context line reads Best of 3, Set 1, and the strip reads Sets 0–0 and Serving Home. Below are the notice Rally recorded with Take back, the Recording chip set to Every detail, and tiles for Sanction and Time-out on each side.](/help/sports/volleyball-pad.webp "The volleyball pad in set 1 of a Beach match")
+![The volleyball pad at 7 to 4 in the first set of a Beach match, as it looks on a phone. The score board reads Best of 3, Set 1, with Home 7 and Away 4, and the strip reads Sets 0–0 and Serving Home. Under the board are a Sanction and a Time-out tile for each side, then the notice Rally recorded with Take back, then the Recording chip set to Every detail.](/help/sports/volleyball-pad.webp "The volleyball pad in set 1 of a Beach match")
 
 ## Choose the format
 

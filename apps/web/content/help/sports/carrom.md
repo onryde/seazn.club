@@ -7,11 +7,11 @@ related: scoring/basics, scoring/fidelity, scoring/corrections, scoring/knockout
 
 You score carrom a board at a time. You say who won the board and how many coins the loser has left, and the pad adds up the points, the games and the match.
 
-![The carrom pad after two boards of a Club 29 match. The header reads Best of 3, First to 29, and the score board shows Meena A with 8 and Ravi A with 2, with Game 1 of 3 below. Below are the notice Board recorded, with Take back, the Recording chip set to Key moments, and tiles for Board with no queen, Board with queen covered, and Adjustment credit and deduction.](/help/sports/carrom-pad.webp "The carrom pad after two boards of a Club 29 match")
+![The carrom pad after two boards of a Club 29 match, as it looks on a phone. The score board reads Best of 3, First to 29, with Meena A on 8 and Ravi A on 2 and Game 1 of 3 below. Under the board are tiles for Board with no queen, Board with queen covered, and Adjustment credit and deduction, then the notice Board recorded with Take back, then the Recording chip set to Key moments.](/help/sports/carrom-pad.webp "The carrom pad after two boards of a Club 29 match")
 
 ## Choose the format
 
-You pick a format when you create the division. A new carrom division starts on **Club (29 points)**. Every format is best of three games, over at most 8 boards.
+You pick a format when you create the division. A new carrom division starts on **Club (29 points)**. Every format is best of three games, and a game lasts at most 8 boards.
 
 | Format | A game is played to | Queen bonus | The bonus lapses at |
 |---|---|---|---|
@@ -52,7 +52,7 @@ The rules also set **If a match is abandoned**: **Replay** or **Share the points
 
 ## Recording level
 
-A new carrom match opens at **Key moments**. At **Result only** the pad offers the two board tiles and no adjustment tiles. At **Key moments** and above you also get the adjustments. See [choosing a detail level](/help/scoring/fidelity).
+A new carrom match opens at **Key moments**. At **Result only** the pad offers the two board tiles and no adjustment tiles. Every other level adds the adjustments. See [choosing a detail level](/help/scoring/fidelity).
 
 ## The league table
 
