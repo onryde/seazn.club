@@ -268,6 +268,7 @@ const LANDING_KEY = {
   not_configured: "streaming.youtube.landing.not_configured",
   forbidden: "streaming.youtube.landing.forbidden",
   unavailable: "streaming.youtube.landing.unavailable",
+  suspended: "streaming.youtube.landing.suspended",
 } as const satisfies Record<Exclude<YoutubeLandingCode, "pick">, MessageKey>;
 export type BannerCode = keyof typeof LANDING_KEY;
 

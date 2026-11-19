@@ -1152,7 +1152,10 @@ export function PhoneTab({
   const balance = view ? view.balance : noCredits ? 0 : streamBalance;
 
   const onGoLive = async () => {
-    const chosen = selectedTargetId;
+    // Court device check (2026-11-19, finding B): a court-streamed match goes to its court link's channel whatever the body names
+    // (O9, `createSession`), and its panel draws no picker — so it needs no pick of its own. With none (the match's own saved
+    // choice archived, say) it sends any listed destination; the server streams to the court's channel regardless.
+    const chosen = selectedTargetId ?? (court !== null && targets.status === "ok" ? (targets.list[0]?.id ?? null) : null);
     if (!chosen) return;
     setBusy(true);
     setCreateError(null);
@@ -2249,7 +2252,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a failed or pending
   // read offers nothing to stream to, and neither does a selection left over from before. Mockup state 5: a destination another
   // match holds cannot start until it is picked again or freed. §6.12 (W5): and only with a phone paired and answering.
-  const goLiveDisabled = p.busy || !p.selectedTargetId || targetList.length === 0 || inUseBox || !canGoLive(ready);
+  // Court device check (finding B): a court match has no picker and streams to its court's channel, so no pick is owed there —
+  // a match whose court phone is paired (Automatic or Operator, latched or not) can always be started by hand.
+  const goLiveDisabled = p.busy || (!p.selectedTargetId && !court) || targetList.length === 0 || inUseBox || !canGoLive(ready);
   const refusalFix = ytRefusal ? YOUTUBE_REFUSAL_FIX[ytRefusal] : null;
   const refusalBlock =
     ytRefusal && p.createError ? (

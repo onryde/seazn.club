@@ -26,6 +26,10 @@ function failureOf(err: unknown): { failure: string; reason?: string } {
   return { failure: err instanceof Error ? err.name : "unknown" };
 }
 
+/** Google's Data API reason for a Google account whose YouTube is suspended (errors page: `authenticatedUserAccountSuspended`). */
+const YOUTUBE_SUSPENDED_REASON = "authenticatedUserAccountSuspended";
+const isSuspended = (err: unknown): boolean => err instanceof YouTubeError && err.reason === YOUTUBE_SUSPENDED_REASON;
+
 /** The ids of the channels this grant can act on, or NULL when they cannot be read. Only used to decide whether a grant we are
  *  refusing may be revoked, and "cannot read" is not "none": a grant whose channels are unknown might be the one a live
  *  connection (any org) runs on, and revoking it would kill that connection. So null means the grant is left alone. */
@@ -144,7 +148,9 @@ async function callback(req: Request): Promise<Response> {
       // YouTube did not answer (or the grant is unusable): that is not "no channel", and it is not a reason to revoke.
       log.warn({ orgId: pending.orgId, ...failureOf(err) }, "youtube connect callback: the grant's channels could not be read");
       channelIds = null;
-      return await refuse("unavailable");
+      // Court device check (2026-11-19, finding C): a suspended YouTube account is not "try again in a minute" — retrying the
+      // same account cannot help, so it lands on its own outcome. The grant is still not revoked: its channels are unknown.
+      return await refuse(isSuspended(err) ? "suspended" : "unavailable");
     }
     const grantChannelIds = channels.map((c) => c.id);
     channelIds = grantChannelIds;

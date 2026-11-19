@@ -26,7 +26,7 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { courtMinAppVersion, POLL_FAR_SECONDS, POLL_NEAR_SECONDS } from "@/server/relay/config";
 import { deferred } from "@/lib/deferred";
-import { startingOfCurrent, type CourtFocus, type CourtMatchFacts } from "@/server/relay/domain/court-stream";
+import { courtLatchedStart, startingOfCurrent, type CourtFocus, type CourtMatchFacts } from "@/server/relay/domain/court-stream";
 import { ACTIVE_STATES, isActive, type SessionState } from "@/server/relay/domain/session";
 import {
   alreadyLive, captureCommon, captureOrigin, DEST_MAX, fitText, holderOf, HTTPS_ORIGIN, isForeignKeyViolation, LABEL_MAX, latestSession,
@@ -40,7 +40,7 @@ import { asFixtureCode, courtFocusOf, linkOpenAt, matchLabelOf, type ResolvedCou
 import { endOtherCourtSessions } from "./court-stream-sessions";
 import { courtRefusalOf } from "./court-streams";
 import { claimCourtAutoStart } from "./stream-auto-court";
-import { markAutoStartBlocked, startModeFor } from "./stream-codes";
+import { clearLatchAfterStart, markAutoStartBlocked, startModeFor } from "./stream-codes";
 import { startBroadcast, type SessionDeps } from "./stream-sessions";
 import { COURT_STREAM_OFF } from "./stream-sessions/start";
 
@@ -59,17 +59,22 @@ const buildCountOf = (v: string): number | null => {
 
 /**
  * O13 (owner, 2026-11-15): a court code's claim (`new` or `resume`) from a build older than `COURT_MIN_APP_VERSION` is
- * refused exactly as an unknown code is — `404 not_a_stream_code`, which every shipped build shows as "Not valid for
- * streaming" — so an old phone never pairs to a court and then unpairs it with its Stop. Builds compare by the `-<count>`
- * suffix only. With no minimum configured (unset or malformed), or a build that carries no count, nothing can prove court
- * support, so the claim is refused (fail closed); `linkCourtStream` refuses to mint a court QR in that state anyway.
+ * refused, so an old phone never pairs to a court and then unpairs it with its Stop. Builds compare by the `-<count>`
+ * suffix only; a build that carries no count cannot prove court support and is refused as outdated.
+ *
+ * Court device check (2026-11-19, finding A): the refusal is its OWN answer, `426 app_outdated` — it was `404
+ * not_a_stream_code`, the unknown code's, so the operator could not tell "update the app" from "wrong QR". With no minimum
+ * configured (unset or malformed) nothing can prove court support either, but updating the app would not help: that is the
+ * server's state, `503 unavailable` (fail closed; `linkCourtStream` refuses to mint a court QR in that state anyway). The
+ * message names neither the code nor its tok.
  */
 export function courtClaimRefusal(appVersion: string): CaptureRefusalError | null {
   const min = courtMinAppVersion();
   const need = min === null ? null : buildCountOf(min);
+  if (need === null) return new CaptureRefusalError(503, "unavailable", "court streaming has no minimum app version configured");
   const have = buildCountOf(appVersion);
-  if (need !== null && have !== null && have >= need) return null;
-  return new CaptureRefusalError(404, "not_a_stream_code", "not a stream code");
+  if (have !== null && have >= need) return null;
+  return new CaptureRefusalError(426, "app_outdated", "this build has no court support; update the app");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -141,8 +146,12 @@ export async function courtCommon(
   const starting = startingFixtureId ?? startingOfCurrent(view.facts, view.focus, s.open);
   const next = starting !== null ? await startingNextOf(court, starting) : await nextOf(court, view);
   // E2: not told while a start is in flight; an open session settles the match, so the stored word is already ignored.
+  // Finding B (2026-11-19): with no stored refusal, a court whose only match in play is latched says so (`match_stopped`), so the
+  // phone can tell its operator a person must start it again — never while a start is in flight or a session is open.
   const autoRefusal = starting === null
-    ? await courtRefusalOf(court.orgId, court.link.courtId, view.facts.map((f) => f.fixtureId), view.focus.start) : null;
+    ? (await courtRefusalOf(court.orgId, court.link.courtId, view.facts.map((f) => f.fixtureId), view.focus.start))
+      ?? (courtLatchedStart(view.facts) !== null ? "match_stopped" : null)
+    : null;
   return { ...base, court: { name: fitText(court.link.courtName, CAPTURE_COURT_NAME_MAX) }, next, autoRefusal };
 }
 
@@ -248,7 +257,11 @@ export async function postCourtBeat(court: ResolvedCourtCode, body: Beat, deps: 
   if (body.claim !== null) {
     const refused = courtClaimRefusal(body.appVersion);
     if (refused !== null) {
-      log.info({ codeId: court.codeId, appVersion: body.appVersion }, "capture court: a claim from a build without court support was refused (O13)");
+      if (refused.code === "unavailable") {
+        log.error({ codeId: court.codeId }, "capture court: a claim was refused because COURT_MIN_APP_VERSION is unset or malformed (O13, fail closed)");
+      } else {
+        log.info({ codeId: court.codeId, appVersion: body.appVersion }, "capture court: a claim from a build without court support was refused (O13)");
+      }
       throw refused;
     }
   }
@@ -273,9 +286,12 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
   // Final review m-1: a code for a later day (or one past its day) has no match to stream today — the existing `no_match`, the
   // contract being pinned. Read before the focus, so a closed window costs no match read.
   if (!linkOpenAt(court.link, deps.now())) throw new CaptureRefusalError(409, "no_match", "this court's day is not open");
-  const { focus } = await courtFocusOf(court.link);
-  if (focus.start === null) throw new CaptureRefusalError(409, "no_match", "this court has no match in play to stream");
-  const fixtureId = focus.start;
+  const { facts, focus } = await courtFocusOf(court.link);
+  // Finding B (2026-11-19, controller ruling): the hold is a person's start, so with no match the court would start itself it
+  // starts the court's latched one (streamed, in play, stopped by hand) and clears its latch once the start has committed.
+  const latched = focus.start === null ? courtLatchedStart(facts) : null;
+  const fixtureId = focus.start ?? latched;
+  if (fixtureId === null) throw new CaptureRefusalError(409, "no_match", "this court has no match in play to stream");
   const mode = await startModeFor(sql, fixtureId);
   let sessionId: string;
   try {
@@ -297,6 +313,7 @@ export async function postCourtStart(court: ResolvedCourtCode, body: CaptureStar
     if (running) throw alreadyLive(running);
     throw new CaptureRefusalError(503, "unavailable", "a session was running and has just ended; try again");
   }
+  if (latched !== null) await clearLatchAfterStart(court.orgId, latched, court.issuedBy, sessionId);
   try {
     await endOtherCourtSessions({ linkId: court.link.id, keepSid: sessionId, actorUserId: court.issuedBy }, deps);
   } catch (err) {

@@ -94,7 +94,8 @@
                 "invalid",
                 "rate_limited",
                 "match_finished",
-                "no_match"
+                "no_match",
+                "app_outdated"
               ]
             },
             "message": {

@@ -58,7 +58,7 @@ beforeEach(() => {
 afterEach(() => setRelayDriversForTest(null));
 
 describe("Streaming page + real panel — the connect round trip's landing reaches the screen", () => {
-  it("EVERY banner code in the URL shows ITS sentence (eleven checked), and only that one", async () => {
+  it("EVERY banner code in the URL shows ITS sentence (twelve checked), and only that one", async () => {
     const banners = YOUTUBE_LANDING_CODES.filter((c) => c !== "pick");
     // The one banner whose sentence is not under `streaming.youtube.landing.` is the key the review ruling named.
     const keyOf = (code: string): MessageKey => (code === "already_connected" ? "streaming.youtube.alreadyConnected" : (`streaming.youtube.landing.${code}` as MessageKey));
@@ -71,7 +71,7 @@ describe("Streaming page + real panel — the connect round trip's landing reach
       expect(html, `${code}: no picker`).not.toContain('data-testid="youtube-picker"');
       checked++;
     }
-    expect(checked).toBe(11);
+    expect(checked).toBe(12);
   });
 
   it("the picker's already-connected landing says the settings were kept — and not the plain 'connected' sentence (the pair)", async () => {

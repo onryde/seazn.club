@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   courtCodeView,
   courtFocus,
+  courtLatchedStart,
   courtPhoneStatus,
   courtRestartsAfter,
   courtStartFacts,
@@ -125,6 +126,25 @@ describe("court resolver", () => {
       current: { fixtureId: "a", sid: "sa" },
       start: null,
     });
+  });
+  it("finding B (2026-11-19): courtLatchedStart names the latched in-play streamed match only when the court has nothing else to do", () => {
+    const L = (id: string, o: Partial<CourtMatchFacts> = {}) => m(id, { status: "in_play", latched: true, kickoffAt: T("10:00"), ...o });
+    const cases: [string, CourtMatchFacts[], string | null][] = [
+      ["the one latched match in play", [L("a")], "a"],
+      ["two latched: the newest kickoff", [L("a"), L("b", { kickoffAt: T("10:05") })], "b"],
+      ["an unlatched candidate is the court's own start", [L("a", { kickoffAt: T("10:05") }), m("b", { status: "in_play", kickoffAt: T("10:00") })], null],
+      ["a court session open (any match): nothing", [L("a"), m("b", { status: "decided", openSession: open("sb", "09:00") })], null],
+      ["latched but Stream off", [L("a", { streamed: false })], null],
+      ["latched but not in play (decided)", [L("a", { status: "decided" })], null],
+      ["latched but not started", [L("a", { status: "scheduled", kickoffAt: null })], null],
+      ["no matches", [], null],
+    ];
+    for (const [name, facts, want] of cases) {
+      expect(courtLatchedStart(facts), name).toBe(want);
+      // The automatic side never moves: the court's own start stays null whenever a latched match is the answer.
+      if (want !== null) expect(courtFocus(facts).start, `${name}: courtFocus never starts it`).toBeNull();
+    }
+    expect(cases.length).toBe(8);
   });
   it("an unstreamed match in play is never start", () => {
     expect(

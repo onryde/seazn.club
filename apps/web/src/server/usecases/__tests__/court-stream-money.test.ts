@@ -277,14 +277,16 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     expect(await beat(P, { stopped: sidA })).toMatchObject({ state: "over", sid: sidA });
     expect((await sessionRow(sidA)).end_reason).toBe("operator_stopped");
     expect(await latchedAt(A), "the phone's Stop hold latches A").not.toBeNull();
-    // Latched: A is not re-offered by itself.
+    // Latched: A is not re-offered by itself, and the court says why (finding B).
     now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
-    expect((await beat(P)).state).toBe("waiting");
+    expect(await beat(P)).toMatchObject({ state: "waiting", autoRefusal: "match_stopped" });
     // The desk restarts it from the match page, the body naming ANOTHER destination.
     const { sessionId: again } = await deskGoLive(A, other);
     expect(await sessionRow(again)).toMatchObject({
       fixture_id: A, court_link_id: linkId, target_id: targetId, start_cause: "organiser", pairing_id: (await pairingOf(P))[0]!.id,
     });
+    // Court device check (2026-11-19, finding B; controller ruling): the desk's Go live is a person's start — it clears the latch.
+    expect(await latchedAt(A), "the desk's restart cleared A's latch").toBeNull();
     // The match's own destination choice is untouched: no pre-pick written by a court start.
     expect(await prePick(A)).toBe(pickBefore);
     // The court phone is handed the restart, and it goes live.
@@ -292,6 +294,26 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     expect(await beat(P)).toMatchObject({ state: "go-live", sid: again });
     await publish(again);
     expect(await activeOfLink()).toEqual([again]);
+  });
+
+  // Review of #1265, hardening + R10's real case: A's own saved destination is a channel since archived (target_chosen, a
+  // reconnected YouTube), and the desk's Go live sends ANOTHER org's destination. A court start ignores the body: it streams to
+  // the court link's channel only, and saves nothing as A's pre-pick.
+  it("#1265 review: R10 — A latched with its own choice archived, the desk's Go live sending another org's destination: streams to the court's channel, saves no pre-pick, clears the latch", async () => {
+    const sidA = await autoLive(A, 0);
+    const archived = await rigTarget(day.orgId, "Old channel");
+    await sql`update org_stream_targets set archived_at = now() where id = ${archived}`;
+    await sql`update fixture_stream_settings set target_id = ${archived}, target_chosen = true where fixture_id = ${A}`;
+    now += SEC;
+    expect(await beat(P, { stopped: sidA })).toMatchObject({ state: "over", sid: sidA });
+    expect(await latchedAt(A), "premise: latched").not.toBeNull();
+    const foreignOrg = await seedDay();
+    const foreign = await rigTarget(foreignOrg.orgId, "Someone else's channel");
+    const { sessionId: again } = await deskGoLive(A, foreign);
+    expect(await sessionRow(again)).toMatchObject({ fixture_id: A, court_link_id: linkId, target_id: targetId, start_cause: "organiser" });
+    expect(await prePick(A), "the match's own (archived) choice is untouched; the foreign one is never saved").toBe(archived);
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_settings where target_id = ${foreign}`)[0]!.n).toBe(0);
+    expect(await latchedAt(A), "the desk's start cleared the latch").toBeNull();
   });
 
   it("a match-page restart of A while B's court session is live ends B (one active session per court link)", async () => {
