@@ -326,7 +326,8 @@ export function RegistrationHubRegistrantActions({
   async function reject() {
     const ok = await confirmDialog({
       title: msg("reg.hub.registrants.detail.actions.confirmReject.title"),
-      body: msg("reg.hub.registrants.detail.actions.confirmReject.body"),
+      // A paid entry is refunded on reject, except one whose payment was lost to a dispute (nothing to send back): no promise then.
+      body: msg(paymentLostToDispute ? "reg.hub.registrants.detail.actions.confirmReject.bodyPaymentLost" : "reg.hub.registrants.detail.actions.confirmReject.body"),
       confirmLabel: msg("reg.hub.registrants.detail.actions.confirmReject.confirm"),
       tone: "danger",
     });

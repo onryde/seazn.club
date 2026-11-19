@@ -280,6 +280,10 @@ describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", (
     const after = await policies();
     expect(after.get(first.registration.id), "A's charge was lost: no automatic refund is promised").toBe(false);
     expect(after.get(second.id), "B's charge is intact").toBe(true);
+    const view = await groupByRef(refCode, first.access_token);
+    const reasons = new Map(view.entries.map((e) => [e.id, e.refund_policy.reason]));
+    expect(reasons.get(first.registration.id), "the page is told WHY (not a silent 'discretion')").toBe("payment_lost");
+    expect(reasons.get(second.id)).not.toBe("payment_lost");
   });
 
   it("a paid entry with no refund_lock_at falls back to the competition's own starts_on, and reads refundable while that is still ahead", async () => {

@@ -196,6 +196,22 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
     expect(findAction(mount({ ...paid, paymentLostToDispute: false }), "refund"), "not lost: Refund offered").toBeTruthy();
   });
 
+  // Fix round 3: Reject refunds a paid entry, except one whose payment was lost to a dispute: the confirm must not promise money.
+  it("the reject confirm promises a refund for an ordinary paid entry, and not for one whose payment was lost", async () => {
+    const bodies: string[] = [];
+    for (const lost of [false, true]) {
+      confirmMock.fn.mockClear();
+      const island = mount({ status: "paid", approval: "manual", amountCents: 2500, paymentIntentId: "pi_1", entryPaymentIntentId: "pi_1", paymentLostToDispute: lost });
+      await (propsOf(findAction(island, "reject")!).onClick as () => Promise<void>)();
+      bodies.push((confirmMock.fn.mock.calls[0]![0] as { body: string }).body);
+    }
+    expect(bodies[0], "premise: the ordinary confirm says it will be refunded").toBe(t(uiEn, "reg.hub.registrants.detail.actions.confirmReject.body"));
+    expect(bodies[0]).toMatch(/it will be refunded/);
+    expect(bodies[1]).toBe(t(uiEn, "reg.hub.registrants.detail.actions.confirmReject.bodyPaymentLost"));
+    expect(bodies[1]).not.toMatch(/it will be refunded/);
+    expect(bodies[1]).toMatch(/nothing will be refunded/);
+  });
+
   it("hides refund once the entry is fully refunded — the server answers 'Already fully refunded'", () => {
     expect(
       findAction(

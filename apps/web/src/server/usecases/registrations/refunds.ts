@@ -335,7 +335,7 @@ export interface ResolvedRefundPolicy {
    *  organiser" from an ordinary past-deadline decline. Null in every other
    *  case, refundable or not (including a KNOWN deadline that has simply
    *  passed). */
-  reason: "no_deadline" | null;
+  reason: "no_deadline" | "payment_lost" | null;
 }
 
 /**

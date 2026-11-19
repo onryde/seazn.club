@@ -157,6 +157,23 @@ describe("CancelEntry", () => {
     expect(body).not.toContain("£25.00");
   });
 
+  // Fix round 3: a payment lost to a dispute is neither "refunded automatically" nor "at the organiser's discretion" (manual Refund answers 422).
+  it("confirm copy for an entry whose payment was LOST says no refund can be made: no amount, no 'discretion'", async () => {
+    const island = renderIsland(CancelEntry, {
+      entryId: "reg-1",
+      token: "rg_tok",
+      divisionName: "Mixed Doubles",
+      refundable: false,
+      paymentLost: true,
+      refundAmountFormatted: "£25.00",
+    });
+    await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+    const body = textOf(confirmMock.calls[0]!.body as never);
+    expect(body).toContain("no refund can be made");
+    expect(body.toLowerCase()).not.toContain("discretion");
+    expect(body).not.toContain("£25.00");
+  });
+
   // RS007 i18n follow-up — AUDIT FINDING: this used to render `err.message`
   // (un-localized English straight off the server) as the ONLY thing a
   // public visitor saw. Every failure now shows a LOCALIZED, HTTP-status-

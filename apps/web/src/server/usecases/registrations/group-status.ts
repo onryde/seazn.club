@@ -452,6 +452,11 @@ async function buildGroupStatusView(
         ).map((r) => r.pi),
   );
 
+  /** An entry whose own payment was lost: never refundable, and the page says why (`reason: "payment_lost"`) instead of promising an
+   *  automatic refund or "at the organiser's discretion" while manual Refund answers 422 (fix round 3). */
+  const withLostReason = (intent: string | null, policy: ResolvedRefundPolicy): ResolvedRefundPolicy =>
+    intent && lostIntents.has(intent) ? { ...policy, refundable: false, reason: "payment_lost" } : policy;
+
   const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
   for (const p of players) {
     const list = playersByEntry.get(p.registration_id) ?? [];
@@ -535,7 +540,7 @@ async function buildGroupStatusView(
           : null,
       players: playersByEntry.get(e.id) ?? [],
       settled_by: settledByEntry.get(e.id) ?? null,
-      refund_policy: resolveRefundPolicy(
+      refund_policy: withLostReason(entry_payment_intent_id, resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
         comp?.starts_on ?? null,
         refundTz,
@@ -561,7 +566,7 @@ async function buildGroupStatusView(
         e.amount_cents,
         // Polish wave P5 (carry b), the read twin of withdrawCore's: what was sent back of THIS payment, not the history.
         ownPaymentRefundedCents({ refunded_cents, late_refunded_cents }),
-      ),
+      )),
     })),
   };
 }
