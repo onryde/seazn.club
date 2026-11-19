@@ -36,13 +36,17 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn(async () => (
 // The enqueue is the real one; a test can arm a failure for the STAFF kind only (the organiser's mail must still be written).
 // The outbox seals every body at rest, so what a staff alert SAYS is read where it enters the writer: the real enqueue is called
 // through, and the first body offered under each staff once-key is kept (a replay offers the same key again and the writer drops it).
-const gate = vi.hoisted(() => ({ failStaff: false, probe: null as null | (() => Promise<void>), bodies: new Map<string, { html: string; text: string }>() }));
+const gate = vi.hoisted(() => ({ failStaff: false, failOwnerLost: false, probe: null as null | (() => Promise<void>), bodies: new Map<string, { html: string; text: string }>() }));
 vi.mock("@/server/email-outbox", async (io) => {
   const m = await io<typeof import("@/server/email-outbox")>();
   return {
     ...m,
     enqueueEmailOnce: vi.fn(async (...args: Parameters<typeof m.enqueueEmailOnce>) => {
       const msg = args[1] as { kind: string; dedupeKey: string; html: string; text: string };
+      if (msg.kind === "registration_dispute_lost") {
+        if (gate.failOwnerLost) throw new Error("outbox is down (owner)");
+        if (!gate.bodies.has(msg.dedupeKey)) gate.bodies.set(msg.dedupeKey, { html: msg.html, text: msg.text });
+      }
       if (msg.kind === "staff_dispute_alert") {
         if (gate.failStaff) throw new Error("outbox is down");
         await gate.probe?.();
@@ -80,6 +84,7 @@ beforeEach(() => {
   stubOutboxEnv();
   vi.stubEnv("STAFF_ALERT_EMAIL", STAFF);
   gate.failStaff = false;
+  gate.failOwnerLost = false;
   gate.bodies.clear();
   gate.probe = null;
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_x" });
@@ -237,6 +242,33 @@ describe.skipIf(!HAS_DB)("entry-fee dispute -> staff alert (fix round 1 I3)", ()
     // A THIRD delivery changes nothing: the once-key holds the line.
     await handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed");
     expect((await staffRows(id)).filter((r) => r.ref_id === `${id}:closed`).length, "still one alert").toBe(1);
+  });
+
+  it("a REPLAYED lost close still tells the OWNER, with the recovered amount, when the first delivery's owner notice was refused (fix round 3)", async () => {
+    // The owner's enqueue failing fails the webhook (D1), so Stripe redelivers; the redelivery finds the reversal already made
+    // (`already`) and used to skip the notice, so the owner was never told. Exactly one notice must exist after the replay, and a
+    // third delivery must not add another (the once-key).
+    const e = await paidEntry();
+    const id = newDisputeId();
+    await handleRegistrationDispute(disputeOf(id, e.intent, "needs_response"), "created");
+    stripeMock.retrieve.mockResolvedValue({ amount: FEE, application_fee_amount: 100, transfer: { id: "tr_1", amount: FEE, amount_reversed: 0 } });
+    stripeMock.listReversals.mockResolvedValue({ data: [] });
+    stripeMock.createReversal.mockResolvedValue({ id: "trr_1" });
+    gate.failOwnerLost = true;
+    await expect(handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed")).rejects.toThrow(/outbox is down/);
+    expect(stripeMock.createReversal, "premise: the first run made the reversal").toHaveBeenCalledTimes(1);
+    const lostMails = async () => (await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'registration_dispute_lost' and ref_id = ${id}`)[0]!.n;
+    expect(await lostMails(), "premise: the owner's notice was not written").toBe(0);
+    gate.failOwnerLost = false;
+    stripeMock.listReversals.mockResolvedValue({ data: [{ id: "trr_1", amount: 1100, metadata: { dispute_id: id } }] });
+    await handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed");
+    expect(stripeMock.createReversal, "the replay reverses nothing more").toHaveBeenCalledTimes(1);
+    expect(await lostMails(), "the replay told the owner").toBe(1);
+    const ownerBody = [...gate.bodies.entries()].find(([k]) => k.includes(id) && k.includes("lost"))?.[1];
+    expect(ownerBody, "premise: the owner's body was captured at enqueue").toBeTruthy();
+    expect(ownerBody!.text, "the recovered figure is the reversal's, not 0").toContain("11.00");
+    await handleRegistrationDispute(disputeOf(id, e.intent, "lost", { charge: "ch_1" }), "closed");
+    expect(await lostMails(), "a third delivery does not mail again").toBe(1);
   });
 
   it("closed LOST with NOTHING recovered (no transfer to reverse): says it was not recovered, not that it was", async () => {

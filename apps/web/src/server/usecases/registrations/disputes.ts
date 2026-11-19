@@ -254,47 +254,47 @@ export async function handleRegistrationDispute(
       }, null);
     });
     const recovery = await recoverDisputedTransfer(dispute, reg, ctx);
-    // `already` = a replayed close (metadata guard hit) — everything below
-    // already happened on the first run.
-    // Staff are told with what the recovery pulled back (0 = nothing). Sent on a REPLAY too (fix round 2 M-4): the once-key
+    // `already` = a replayed close (the reversal exists). Both notices below still go out; their once-keys keep a redelivery from
+    // mailing twice. Staff are told with what the recovery pulled back (0 = nothing). Sent on a REPLAY too (fix round 2 M-4): the once-key
     // (`<dispute>:closed`) drops it when the first run's alert was queued, and if that one could not be queued (it is dropped silently)
     // the replay is the only second chance. A replay's figure is the reversal Stripe holds for this dispute (`recovery` returns it).
     await alertStaffEntryFeeDispute(dispute, reg, ctx, "closed", recovery.recoveredCents);
-    if (!recovery.already) {
-      // The owner's notice states the write-off and what the recovery pulled back, both fixed now, in the owner's language (D4). It is
-      // queued once per dispute (`<dispute id>:lost`) and the worker makes the first attempt. A refused enqueue fails the webhook (D1).
-      const owner = await orgOwnerRecipient(sql, reg.org_id);
-      if (owner) {
-        const locale = await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale });
-        const kind = "registration_dispute_lost";
-        await enqueueEmailOnce(sql, {
-          kind,
-          refType: "dispute",
-          refId: dispute.id,
-          orgId: reg.org_id,
-          to: owner.email,
-          recipientUserId: owner.userId,
-          ...(await disputeLostEmail(
-            {
-              orgName: ctx.org_name,
-              competitionName: ctx.comp_name,
-              displayName: reg.display_name,
-              amountCents: dispute.amount,
-              currency: reg.currency,
-              refCode: reg.ref_code,
-              recoveredCents: recovery.recoveredCents,
-              // divisionRegistrations route deleted (RS001 demolition) —
-              // point at the competition page for now; RS004's hub re-points
-              // this at the new competition-level Registration hub.
-              consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
-            },
-            locale,
-          )),
-          transactional: false,
-          expiresAt: expiryWithin(null),
-          dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
-        });
-      }
+    // The owner's notice is sent on a REPLAY too (fix round 3, as the staff alert in round 2): the first delivery's enqueue can be refused
+    // (D1: that fails the webhook, so Stripe redelivers) and the redelivery finds the reversal already made (`already`), which used to skip
+    // this and leave the owner never told. The once-key (`<dispute id>:lost`) keeps a second delivery from mailing twice.
+    // It states the write-off and what the recovery pulled back, both fixed now, in the owner's language (D4); the worker makes the
+    // first attempt. A refused enqueue fails the webhook (D1).
+    const owner = await orgOwnerRecipient(sql, reg.org_id);
+    if (owner) {
+      const locale = await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale });
+      const kind = "registration_dispute_lost";
+      await enqueueEmailOnce(sql, {
+        kind,
+        refType: "dispute",
+        refId: dispute.id,
+        orgId: reg.org_id,
+        to: owner.email,
+        recipientUserId: owner.userId,
+        ...(await disputeLostEmail(
+          {
+            orgName: ctx.org_name,
+            competitionName: ctx.comp_name,
+            displayName: reg.display_name,
+            amountCents: dispute.amount,
+            currency: reg.currency,
+            refCode: reg.ref_code,
+            recoveredCents: recovery.recoveredCents,
+            // divisionRegistrations route deleted (RS001 demolition) —
+            // point at the competition page for now; RS004's hub re-points
+            // this at the new competition-level Registration hub.
+            consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
+          },
+          locale,
+        )),
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
+      });
     }
   }
   return true;
