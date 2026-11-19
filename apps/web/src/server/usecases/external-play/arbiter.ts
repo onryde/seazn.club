@@ -444,9 +444,13 @@ export type PlayerPresence = {
  * equal `joined_at` is deterministic. `present` applies plan 1's read-row rule (a `source = 'read'` row is current only within
  * PRESENCE_READ_TRUST_MS of its `received_at`, judged on `now`); `everJoined` counts every row, as `everJoined()` does.
  *
- * Window scope: a re-open keeps a room (and its presence rows). A row whose join (`joined_at`, else `received_at`) is BEFORE the board's
- * `windowStart` (the round open's `opened_at`, re-stamped by a re-open) is the last window's and is ignored, for `present` and
- * `everJoined` alike. Empty `boards`: an empty map and NO statement.
+ * Window scope: a re-open keeps a room (and its presence rows). A CLOSED row whose `left_at` is BEFORE the board's `windowStart` (the round
+ * open's `opened_at`, re-stamped by a re-open) is the last window's and is ignored, for `present` and `everJoined` alike; an open row
+ * counts whatever its `joined_at`.
+ *
+ * Participants are keyed by (fixture, side, preset = 'player') WITHOUT `person_id`: `loadSides` runs after this statement, and the join
+ * filters by person_id (`joinAsArbiter`). A swapped player's old participant cannot be reached on a kept room of the same pairing (a
+ * re-pair retires the meeting and its participants with it). Empty `boards`: an empty map and NO statement.
  */
 export async function readPlayerPresence(
   boards: readonly { fixtureId: string; windowStart: Date | null }[],
@@ -486,11 +490,9 @@ export async function readPlayerPresence(
     const fixtureId = list[0]!.fixtureId;
     const windowStart = windowOf.get(fixtureId) ?? null;
     const participants = [...new Set(list.map((r) => r.participantId))];
-    const inWindow = list.filter((r) => {
-      if (r.peerId === null) return false;
-      const joined = r.joinedAt ?? r.receivedAt!;
-      return windowStart === null || joined.getTime() >= windowStart.getTime();
-    });
+    // Only a CLOSED row can belong to an earlier window: a peer that left before the window began is the last window's. An OPEN row is
+    // current whatever its `joined_at` - a player connected across a re-open fires no new participantJoined.
+    const inWindow = list.filter((r) => r.peerId !== null && !(r.leftAt !== null && windowStart !== null && r.leftAt.getTime() < windowStart.getTime()));
     const current = currentPeerOf(
       inWindow
         .filter((r) => r.leftAt === null && (r.source === "webhook" || r.receivedAt!.getTime() > cutoff))

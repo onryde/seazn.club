@@ -2298,16 +2298,4 @@ describe.runIf(HAS_DB)("loadArbiterRound - `joinable`, per side, in both flag st
       expect((await joinAsArbiter(r.owner, b.fixtureId, "home", { video })).side).toBe("home");
     });
   }
-
-  it("a re-open (CARRY): a kept room whose player was present in window 1 reads absent and not joinable until the player returns (flag on)", async () => {
-    vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", "1");
-    const { r, b } = await seedShape("present");
-    const side = async () => sidesOf((await loadArbiterRound(r.owner, r.divisionId))!, b.fixtureId).home;
-    expect(await side(), "window 1: present").toMatchObject({ joinable: true, presence: { present: true } });
-    // The re-open's own effect on the window: `stage_round_opens.opened_at` re-stamped (open-round.ts), the kept room's presence rows left as they are.
-    await sql`update stage_round_opens set opened_at = ${new Date(OPENED.getTime() + 3600_000)} where stage_id = ${r.stageId} and round_no = ${r.roundNo}`;
-    expect(await side(), "window 2, before the player returns").toMatchObject({ joinable: false, presence: { present: false, since: null } });
-    await presenceRow(b.fixtureId, "home", { participantId: await playerOf(b.fixtureId, "home"), custom: b.home.personId, joinedAt: new Date(OPENED.getTime() + 3600_000 + 120_000) });
-    expect(await side(), "the player returns").toMatchObject({ joinable: true, presence: { present: true } });
-  });
 });
