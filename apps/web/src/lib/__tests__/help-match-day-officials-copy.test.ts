@@ -5,15 +5,20 @@
 //  2. the Documents table says which formats each document comes in, as the menu's own rows declare them;
 //  3. the claim link lifetime and the court-stream tail are the constants the code enforces;
 //  4. the call sheet page states what a call changes (the called match takes the call's court and time), the sentence
-//     that replaced "planned times never move".
+//     that replaced "planned times never move";
+//  5. (fix round 1) the roles the page names are the roles the code declares, the Match Day code sheet's choices are the
+//     dictionary's, the email subjects are the dictionary's, and one match move is still the only place that queues
+//     the "Match moved" email.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { COURT_AUTO_STOP_AFTER_RESULT_SECONDS } from "@/server/relay/config";
+import { EDITOR_ROLES, ORG_ROLES } from "@/lib/types";
 
 const WEB = path.join(__dirname, "../../..");
 const PAGES = [
   "match-day",
+  "match-day-scorers",
   "match-day-stream",
   "matchday-documents",
   "officials",
@@ -47,9 +52,13 @@ const NOT_A_SCREEN_STRING = new Set([
   // Bold lead-ins and questions that are the page's own words, not screen text.
   "Blackout dates.", "Booked elsewhere.", "On the board.", "On the match page.",
   "Why can't I call a match?", "Where is the Needs you list?", "AI Officials",
+  // A Match Day code's list row, which the sheet composes from the scope's words or the courts' names, the day and the
+  // powers' words; and the venue and court names the example gives them.
+  "Always:", "Hall A", "Court 2", "Court 3", "Hall A · Today · Approves pairings and brackets", "Court 2, Court 3 · Today",
+  "Whole competition · Opens Fri 20 Nov",
   // Screen text assembled from a dictionary string plus a live value (a time, a name, a count) or a glyph the screen draws.
-  "4 free", "~", "~19:49", "Call to", "Called at", "Called at 19:19", "3 matches could start here now",
-  "referee", "accepted", "5", "✓", "·", "✗", "⚠", "— unavailable", "booked elsewhere", "OFFICIALS", "Marta Quinn",
+  "3 free", "~", "~19:49", "Call to", "Called at", "Called at 19:19", "3 matches could start here now",
+  "referee", "accepted", "5", "✓", "·", "✗", "⚠", "✕", "— unavailable", "booked elsewhere", "OFFICIALS", "Marta Quinn",
   "✓ Marta Quinn referee ⚠", "✗ Marta Quinn referee ⚠", "Marta Quinn — unavailable", "New officiating assignment",
   "As Referee", "19 Nov 2026, 13:23 GMT-7", "13:23 GMT-7", "20:23 GMT", "Score this match →",
   "4.0", "AVG · 3", "AVG · 2", "6/6", "5/6",
@@ -74,7 +83,7 @@ describe("Match Day and officials pages quote the screen, whole", () => {
       expect(missing, `${slug}: bold phrases the screen does not show`).toEqual([]);
       checked += spans.length;
     }
-    expect(checked, "phrases checked across the eight pages").toBeGreaterThan(200);
+    expect(checked, "phrases checked across the nine pages").toBeGreaterThan(200);
   });
 });
 
@@ -122,8 +131,86 @@ describe("what a call changes", () => {
   it("says the called match takes the call's court and time, and that other matches keep theirs", () => {
     const md = page("match-day");
     expect(md).toContain("A call moves the match you called, and nothing else.");
-    expect(md).toContain("That match takes the court you chose and the time of the call");
+    expect(md).toContain("It takes the court you chose and the time of the call");
     expect(md).toContain("Every other match keeps its planned time.");
     expect(md).not.toMatch(/never move/i);
+  });
+});
+
+describe("who runs the day", () => {
+  const md = page("match-day");
+  const editors = [...EDITOR_ROLES];
+  const others = ORG_ROLES.filter((r) => !(editors as readonly string[]).includes(r));
+
+  it("names the roles the code declares as editors and the rest as Viewer", () => {
+    expect(editors.length, "no editor roles declared: the check would be vacuous").toBeGreaterThan(0);
+    expect(others.length, "no read-only role declared: the check would be vacuous").toBeGreaterThan(0);
+    expect(editors.length, "the page sentence is written for exactly two editor roles").toBe(2);
+    const cap = (r: string) => r[0]!.toUpperCase() + r.slice(1);
+    expect(md).toContain(`${cap(editors[0]!)}s and ${editors[1]}s run the day.`);
+    for (const r of others) expect(md).toContain(`A ${r[0]!.toUpperCase() + r.slice(1)} in your organisation`);
+  });
+
+  it("names no role the code does not have", () => {
+    expect(md).not.toMatch(/\beditors?\b/i);
+  });
+});
+
+describe("the Match Day code page quotes the sheet", () => {
+  const ui: Record<string, string> = JSON.parse(readFileSync(path.join(dictDir, "ui.json"), "utf8"));
+  const sc = page("match-day-scorers");
+
+  it("names every scope and both ticks the sheet offers, in bold", () => {
+    const keys = Object.keys(ui).filter((k) => /^matchDay\.code\.scope\.(competition|venue|courts)$/.test(k));
+    expect(keys.length, "the sheet's three scope choices").toBe(3);
+    for (const k of [...keys, "matchDay.code.approve", "matchDay.code.call", "matchDay.code.mint", "matchDay.code.list"]) {
+      expect(ui[k], `${k} missing from ui.json`).toBeTruthy();
+      expect(sc, `${k} not quoted`).toContain(`**${ui[k]}**`);
+    }
+  });
+
+  it("states the day window the sheet's own hint states", () => {
+    const hint = ui["matchDay.code.dayHint"]!;
+    const window = /from (\d\d:\d\d to \d\d:\d\d)/.exec(hint)?.[1];
+    expect(window, "no window in the day hint").toBeTruthy();
+    expect(sc).toContain(`The code works from ${window} on its day`);
+  });
+
+  it("says a Viewer does not see the button, which the shell hides for read-only readers", () => {
+    const shell = readFileSync(path.join(WEB, "src/components/v2/match-day/match-day-shell.tsx"), "utf8");
+    expect(shell).toMatch(/\{!readOnly && \(\s*<button[^>]*data-testid="md-code-open"/);
+    expect(sc).toContain("A Viewer does not see the **Match Day code** button.");
+  });
+});
+
+describe("the officials emails", () => {
+  const emails: Record<string, string> = JSON.parse(readFileSync(path.join(dictDir, "emails.json"), "utf8"));
+  const org = "Riverside Club";
+  const fill = (k: string) => emails[k]!.replace("{orgName}", org);
+
+  it("quotes both subjects as the dictionary words them", () => {
+    const assign = page("officials-assign");
+    for (const k of ["officialAssigned.subject", "officialChanged.subject"]) {
+      expect(emails[k], `${k} missing from emails.json`).toBeTruthy();
+      expect(assign, `${k} not quoted`).toContain(`**${fill(k)}**`);
+    }
+  });
+
+  it("one match move is the only place that queues the Match moved email, and the page says so", () => {
+    const root = path.join(WEB, "src");
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== "__tests__" && e.name !== "node_modules") walk(full);
+        } else if (/\.tsx?$/.test(e.name) && /kind: "official_assignment_changed"/.test(readFileSync(full, "utf8"))) {
+          hits.push(path.relative(root, full));
+        }
+      }
+    };
+    walk(root);
+    expect(hits, "the sites that queue official_assignment_changed").toEqual(["server/usecases/schedule/move.ts"]);
+    expect(page("officials-assign")).toContain("when you move one match to another time or court");
   });
 });

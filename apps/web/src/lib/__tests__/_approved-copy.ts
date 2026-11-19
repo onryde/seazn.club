@@ -277,7 +277,7 @@ export const APPROVED_PLANS_INVENTORY: string[] = [
   "4dfe30f3187b4fef",
   "19cc31042b1e3028",
   "2f2961e11a66159d",
-  "0ba155341fe9b6f0",
+  "0547c122a8e9939e",
   "f8caf2ade16bbe59",
   "1bd31d9b7a370257",
   "63402ce5db94d1d1",
