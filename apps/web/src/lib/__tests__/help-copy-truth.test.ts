@@ -590,7 +590,7 @@ describe("scheduling/ai-officials.md is gated too (#365)", () => {
   // absence of a call, the describe below pins the row.
   it("reds on the exact Pro-Plus-gate sentence #365 found", () => {
     const reverted = aiOfficials.replace(
-      "Like the schedule pass, it needs no upgrade — it runs on **every plan, Community included**.",
+      /You can draft and review on every plan\. Saving the officials when you apply needs [^\n]*?the same as \*\*Propose\*\* on the \[Officials tab\]\(\/help\/scheduling\/officials-assign\)\./,
       "Automatic officials assignment is a **Pro Plus** feature.",
     );
     expect(reverted, "the replacement never matched — the article moved").not.toBe(aiOfficials);
@@ -604,7 +604,7 @@ describe("scheduling/ai-officials.md is gated too (#365)", () => {
   // no-instruction default spread that makes no model call.
   it("reds on the exact unmetered sentence #365 found", () => {
     const reverted = aiOfficials.replace(
-      /## Credits and rate limits\n\n[\s\S]*?(?=\n\nInstruction runs carry)/,
+      /## What a run costs\n\n[\s\S]*?(?=\n\n## Review and apply)/,
       `## Run quotas
 
 Unlike schedule generations, **officials AI runs are not metered** — restaff as often as you like. The empty-instruction default spread is produced without a model call at all, so it's effectively free.`,
@@ -752,6 +752,21 @@ describe.skipIf(!HAS_DB)("ai-officials.md's 'every plan' claim is the matrix's (
       rows.filter((r) => r.bool_value !== true).map((r) => r.plan_key),
       "ai-officials.md says AI Officials runs on every plan — these plans no longer allow it",
     ).toEqual([]);
+  });
+
+  // The other half of the page's claim: SAVING the officials needs `officials.auto` (applyOfficialAssignments calls
+  // requireFeature on it — the AI console's apply posts to the same route). The page says Pro, Enterprise or an Event
+  // Pass can save, and Community cannot. Read from the matrix, never typed here.
+  it("officials.auto is on for Pro, Enterprise and the Event Pass and off for Community", async () => {
+    const rows = await sql<{ plan_key: string; bool_value: boolean | null }[]>`
+      select plan_key, bool_value from plan_entitlements
+      where feature_key = 'officials.auto' order by plan_key`;
+    expect(rows.length, "no officials.auto rows — the gate's key moved").toBeGreaterThan(3);
+    const on = (plan: string) => rows.find((r) => r.plan_key === plan)?.bool_value === true;
+    for (const plan of ["pro", "enterprise", "event_pass", "event_pass_l"]) {
+      expect(on(plan), `ai-officials.md says ${plan} can save officials on apply`).toBe(true);
+    }
+    expect(on("community"), "ai-officials.md says Community cannot save officials on apply").toBe(false);
   });
 });
 
