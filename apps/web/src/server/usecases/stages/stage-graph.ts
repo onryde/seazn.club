@@ -234,7 +234,7 @@ export async function assertStageBatchGates(
     const refusal = standaloneStageRefusal({ kind: s.kind, progression: s.progression ?? null });
     if (refusal !== null) throw knockoutRefusal(refusal, { seq: s.seq, kind: s.kind });
   }
-  // Doc 10 §1: `formats.double_elim` is Pro — gate before any insert.
+  // Doc 10 §1: `formats.double_elim` gates these kinds (every plan has it since V393; a plan row can still turn it off) — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);
   }

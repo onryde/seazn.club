@@ -37,7 +37,8 @@ export interface StageFormatGateInput {
   config?: Record<string, unknown> | undefined;
 }
 
-/** Doc 10 §1: `formats.double_elim` is Pro. */
+/** Doc 10 §1: `formats.double_elim` gates the double-elimination and page-playoff kinds. Every plan has it since V393
+ *  (Community included), so today it refuses nothing a live org can reach; the gate stays for a plan row that turns it off. */
 export function stageNeedsDoubleElimGate(kind: string): boolean {
   return kind === "double_elim" || kind === "page_playoff";
 }
