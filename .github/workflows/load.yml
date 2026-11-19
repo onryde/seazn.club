@@ -6,7 +6,7 @@ name: Load
 #
 # Two jobs, each with its own Postgres, production build and server on localhost (the harness's fixture vendors listen
 # on 127.0.0.1, so this cannot target staging):
-#   baseline  flags OFF
+#   baseline  flags OFF (EXTERNAL_PLAY_WINDOW_DEFER=0 too: the harness teardown needs the sweep undeferred)
 #   flags-on  EXTERNAL_PLAY_PREMINT=1, EXTERNAL_PLAY_PRESENCE_PROOF=1, LOAD_PRESENCE_PROOF=1 (must equal the server flag),
 #             EXTERNAL_PLAY_WINDOW_DEFER=0 (this load server only)
 # BOTH run LOAD_WEBHOOKS=1 so the comparison isolates the two flags. NOTE the recorded baseline in
@@ -125,6 +125,8 @@ jobs:
           AUTH_DEV_LINKS: "1"
           RESEND_API_KEY: ""
           PORT: "3391"
+          # The harness teardown waits on the sweep; window deferral (default ON since plan 2) would block it.
+          EXTERNAL_PLAY_WINDOW_DEFER: "0"
         run: |
           set -euo pipefail
           mkdir -p "$LOAD_OUT"
