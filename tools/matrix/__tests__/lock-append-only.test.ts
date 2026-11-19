@@ -72,18 +72,22 @@ describe("lockChanges (item 1, D10)", () => {
     expect(r.compared).toBeGreaterThanOrEqual(135);
     expect(r.changed).toEqual([]);
   });
+  // Each pass compares the WHOLE real lock (2 MB, canonised on both sides), so the cost is runs x lock size, not a constant: the budget is
+  // stated from the run count and a per-pass allowance (AGENTS.md class 20: a flat timeout beside a derived cost is a latent red). The head
+  // shares every untouched entry with REAL (a shallow copy, no 2 MB structuredClone per pass): lockChanges only reads.
+  const PER_RUN_MS = 600; // measured ~150 ms a pass idle (20 s in all); CI runs the file under --testTimeout=30000 and timed out there
   it("the real lock, one driven id changed in one real entry: that run — and only that run — is named", () => {
     const runs = Object.keys(REAL.runs);
     expect(runs.length).toBeGreaterThanOrEqual(135);
     let swept = 0;
     for (const run of runs) {
-      const tampered = structuredClone(REAL) as { runs: Record<string, { driven: string[] }> };
-      tampered.runs[run]!.driven = [...tampered.runs[run]!.driven, "tampered|case|id|M1"];
+      const entryOf = REAL.runs[run] as { driven: string[] };
+      const tampered = { runs: { ...REAL.runs, [run]: { ...entryOf, driven: [...entryOf.driven, "tampered|case|id|M1"] } } };
       expect(lockChanges(REAL, tampered).changed, run).toEqual([{ run, kind: "edited" }]);
       swept++;
     }
     expect(swept).toBe(runs.length);
-  });
+  }, Math.max(30_000, Object.keys(REAL.runs).length * PER_RUN_MS));
 });
 
 describe("lock-append-only CLI", () => {
