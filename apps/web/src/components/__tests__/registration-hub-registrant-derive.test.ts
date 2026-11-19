@@ -51,7 +51,6 @@ const NOT_A_SOLO_SIGNUP = {
   late_refunded_cents: 0,
   // Never disputed unless a case says so (registration defects item 3: the evidence-pack flag reads it).
   dispute: null as "open" | "lost" | "won" | null,
-  dispute_lost_own: false,
 } as const;
 
 describe("REGISTRANT_STATUS_STYLE", () => {
@@ -140,7 +139,6 @@ describe("CONSENT_STATUS_STYLE", () => {
 const PAYMENT_BASE = {
   amount_cents: 1500,
   refunded_cents: 0,
-  disputed_at: null,
   dispute: null as "open" | "lost" | "won" | null,
   // The CART's intent (set by whichever entry paid) - read by nothing below; kept so a test can show it is ignored.
   payment_intent_id: null as string | null,
@@ -152,10 +150,10 @@ const PAYMENT_BASE = {
 const CART_PAID_BY_SIBLING = { ...PAYMENT_BASE, payment_intent_id: "pi_sibling" };
 
 describe("deriveRegistrantPaymentState - dispute outcome (registration defects item 4)", () => {
-  // `disputed_at` is what the cart says: set while open AND after a loss (a loss does not clear it), cleared by a win.
-  const OPEN = { ...PAYMENT_BASE, disputed_at: new Date(), dispute: "open" as const };
-  const LOST = { ...PAYMENT_BASE, disputed_at: new Date(), dispute: "lost" as const, refunded_cents: 1500 };
-  const WON = { ...PAYMENT_BASE, disputed_at: null, dispute: "won" as const, status: "confirmed" as const, entry_payment_intent_id: "pi_1" };
+  // `dispute` is the outcome of THIS entry's own payment (fix round 3), never the cart's `disputed_at`.
+  const OPEN = { ...PAYMENT_BASE, dispute: "open" as const };
+  const LOST = { ...PAYMENT_BASE, dispute: "lost" as const, refunded_cents: 1500 };
+  const WON = { ...PAYMENT_BASE, dispute: "won" as const, status: "confirmed" as const, entry_payment_intent_id: "pi_1" };
 
   it("open, lost and won read as three different states: Disputed, Dispute lost, Paid - dispute won", () => {
     const states = [deriveRegistrantPaymentState(OPEN), deriveRegistrantPaymentState(LOST), deriveRegistrantPaymentState(WON)];
@@ -207,8 +205,7 @@ describe("deriveRegistrantActionFlags - canDownloadEvidence (registration defect
     assigned_team_id: null,
     division_started: false,
     dispute: null as "open" | "lost" | "won" | null,
-    dispute_lost_own: false,
-  };
+    };
 
   it("offered for an entry that has or had a dispute (open, lost, won) and for no other", () => {
     const results = (["open", "lost", "won", null] as const).map((dispute) => [dispute, deriveRegistrantActionFlags({ ...FLAG_BASE, dispute }).canDownloadEvidence]);
@@ -226,7 +223,7 @@ describe("deriveRegistrantActionFlags - canDownloadEvidence (registration defect
 describe("deriveRegistrantPaymentState", () => {
   it("a disputed entry is 'disputed' regardless of anything else", () => {
     expect(
-      deriveRegistrantPaymentState({ ...PAYMENT_BASE, disputed_at: new Date(), refunded_cents: 1500 }),
+      deriveRegistrantPaymentState({ ...PAYMENT_BASE, dispute: "open" as const, refunded_cents: 1500 }),
     ).toBe("disputed");
   });
 
@@ -307,7 +304,6 @@ describe("deriveRegistrantPaymentState", () => {
     const entryA_markedPaid = deriveRegistrantPaymentState({
       amount_cents: 1000,
       refunded_cents: 0,
-      disputed_at: null,
       dispute: null,
       entry_payment_intent_id: null,
       status: "confirmed", // A was just marked paid -> materialised to confirmed
@@ -315,7 +311,6 @@ describe("deriveRegistrantPaymentState", () => {
     const entryB_stillPending = deriveRegistrantPaymentState({
       amount_cents: 2000,
       refunded_cents: 0,
-      disputed_at: null,
       dispute: null,
       entry_payment_intent_id: null, // B's own column, untouched by A's mark-paid
       status: "pending", // B's own status, untouched by A's mark-paid
@@ -780,12 +775,12 @@ describe("deriveRegistrantActionFlags", () => {
 
     // Fix round 1 Q: a LOST chargeback already returned the money (booked on the cart; the entry's own refunded_cents stays 0), so the
     // server refuses Refund (422) and the control is hidden. Won, open and never-disputed keep it.
-    // Fix round 2 I-1: it is THIS entry's own charge that matters, not the cart's outcome. A cart paid in two sessions can lose one
-    // charge and keep the other refundable, so the row carries `dispute_lost_own` (the entry-scoped read) beside the cart-level `dispute`.
-    it("is false once THIS entry's own payment was lost, and only then; a sibling's loss (cart reads lost, own false) keeps Refund", () => {
+    // Fix rounds 2 and 3: `dispute` is read per entry PAYMENT (the ledger rows name the disputed charge), so a sibling paid on another
+    // charge reads null here and keeps Refund; the cart's own state never reaches this row.
+    it("is false once THIS entry's own payment was lost, and only then (won, open and never disputed keep Refund)", () => {
       const paid = { ...NOT_A_SOLO_SIGNUP, ...base, status: "confirmed", amount_cents: 2500, refunded_cents: 0, payment_intent_id: "pi_1", entry_payment_intent_id: "pi_1" } as const;
-      const offered = (dispute: "open" | "lost" | "won" | null, own: boolean) => deriveRegistrantActionFlags({ ...paid, dispute, dispute_lost_own: own }).canRefund;
-      expect([offered(null, false), offered("won", false), offered("open", false), offered("lost", false), offered("lost", true)]).toEqual([true, true, true, true, false]);
+      const offered = (dispute: "open" | "lost" | "won" | null) => deriveRegistrantActionFlags({ ...paid, dispute }).canRefund;
+      expect([offered(null), offered("won"), offered("open"), offered("lost")]).toEqual([true, true, true, false]);
     });
 
     it("is false with no payment on file — refundRegistration answers 'No payment to refund'", () => {

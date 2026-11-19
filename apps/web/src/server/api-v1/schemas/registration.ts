@@ -234,7 +234,8 @@ export const RegistrationListEntry = Registration.extend({
    *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped on <date>: Lichess wasn't
    *  linked". */
   promotion_skipped_at: z.string().nullable(),
-  /** Where this entry's card chargeback stands: null when it never had one, `open` while it is being decided, `lost` (the cardholder was
+  /** Where the card chargeback on THIS entry's own payment stands (a cart paid in several Checkout sessions can dispute one charge and not
+   *  another; an entry with no card payment of its own is null): null when it never had one, `open` while it is being decided, `lost` (the cardholder was
    *  repaid and the entry is marked refunded) or `won`. The hub shows "Disputed" / "Dispute lost · refunded" and offers the evidence pack. */
   dispute: z.enum(["open", "lost", "won"]).nullable(),
 });

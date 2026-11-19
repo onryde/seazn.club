@@ -21,7 +21,7 @@ vi.mock("next/headers", () => ({
 }));
 
 import { sql } from "@/lib/db";
-import { EntrantKind, RegistrationStatus } from "@/server/api-v1/schemas";
+import { EntrantKind, RegistrationListEntry, RegistrationStatus } from "@/server/api-v1/schemas";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { createDivision } from "@/server/usecases/divisions";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
@@ -85,6 +85,21 @@ describe.skipIf(!HAS_DB)("GET /competitions/:id/registrations", () => {
     expect(q.status!.schema.enum).toEqual(RegistrationStatus.options);
     expect(q.kind!.schema.enum).toEqual(EntrantKind.options);
     expect(list!.query).toBe(exp!.query); // same REGISTRATION_LIST_QUERY object — cannot drift apart
+  });
+
+  // Fix round 3: the list handler returns raw rows (api-v1/http.ts neither validates nor strips), so a field the read model carries rides
+  // the wire whether or not the schema documents it. `dispute` is public and documented; an internal helper column must not ride along.
+  it("the wire row carries `dispute` (documented in RegistrationListEntry) and no internal-only field", async () => {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    await seedRegistration(competition.id, division.id, SETTINGS, { status: "pending", displayName: "Wire shape" });
+    const { body } = await read(await GET(listReq(competition.id), ctx(competition.id)));
+    expect(body.data!.length, "anti-vacuity: one row read").toBe(1);
+    const row = body.data![0]!;
+    expect(row, "dispute is on the wire").toHaveProperty("dispute", null);
+    expect(Object.keys(RegistrationListEntry.shape), "dispute is documented").toContain("dispute");
+    expect(Object.keys(row), "no internal-only helper field").not.toContain("dispute_lost_own");
+    expect(Object.keys(row), "the credential-derived hash stays off the wire").not.toContain("access_token_hash");
   });
 
   it("accepts every RegistrationStatus.options value, including rejected and expired", async () => {

@@ -338,7 +338,7 @@ export function RegistrationHubRegistrantDetail({
             lastRemindedAt={row.last_reminded_at ? new Date(row.last_reminded_at).toISOString() : null}
             remindersInWindow={row.reminders_in_window}
             approvedAt={row.approved_at ? new Date(row.approved_at).toISOString() : null}
-            paymentLostToDispute={row.dispute_lost_own}
+            paymentLostToDispute={row.dispute === "lost"}
           />
           {/* The organiser's own last payment-reminder press, in the org's timezone like "Submitted". A full-width line under the
               buttons rather than a button label, so it reads at 320 without squeezing the row. */}

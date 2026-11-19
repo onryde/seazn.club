@@ -188,14 +188,14 @@ export const REGISTRANT_PAYMENT_STATE_KEY: Record<RegistrantPaymentState, Dictio
 export function deriveRegistrantPaymentState(
   row: Pick<
     RegistrationListRow,
-    "amount_cents" | "refunded_cents" | "disputed_at" | "dispute" | "entry_payment_intent_id" | "status"
+    "amount_cents" | "refunded_cents" | "dispute" | "entry_payment_intent_id" | "status"
   >,
 ): RegistrantPaymentState {
-  // A LOST chargeback keeps `disputed_at` (the cart alone cannot tell it from an open one), so it is read first: the money is gone and
-  // the entry is marked refunded, which "Disputed" (still being decided) does not say. A WON one cleared `disputed_at` and reads as the
-  // payment it is.
+  // The dispute on THIS entry's own payment (`dispute`, per entry payment since fix round 3; never the cart's `disputed_at`, which a
+  // sibling's dispute or a win elsewhere moves). A LOST one is read first: the money is gone and the entry is marked refunded, which
+  // "Disputed" (still being decided) does not say. A WON one reads as the payment it is, below.
   if (row.dispute === "lost") return "disputeLost";
-  if (row.disputed_at !== null) return "disputed";
+  if (row.dispute === "open") return "disputed";
   if (row.refunded_cents > 0) {
     return row.refunded_cents >= row.amount_cents ? "refunded" : "partiallyRefunded";
   }
@@ -378,8 +378,8 @@ export interface RegistrantActionFlags {
  * the cart's `payment_intent_id`, which a sibling's payment sets: polish wave
  * W8, where an unpaid entry offered Refund and it refunded the sibling's
  * money), and "Already fully refunded" when
- * `amount_cents - ownPaymentRefundedCents(row) <= 0`, and (fix round 1 Q) "lost to a chargeback" when THIS entry's own payment was lost (`dispute_lost_own`, fix round 2 I-1; a sibling paid in another session keeps
- * its Refund): Stripe already repaid the cardholder, which the entry's own `refunded_cents` does not record. Deliberately NOT gated on status:
+ * `amount_cents - ownPaymentRefundedCents(row) <= 0`, and (fix round 1 Q) "lost to a chargeback" when THIS entry's own payment was lost (`dispute === "lost"`, which is per entry payment since fix round 3; a sibling
+ * paid in another session keeps its Refund): Stripe already repaid the cardholder, which the entry's own `refunded_cents` does not record. Deliberately NOT gated on status:
  * the usecase is not either, and the case that matters most is a WITHDRAWN
  * entry — past `refund_lock_at`, `withdrawCore` refuses to auto-refund and
  * the registrant is told at that moment that "any refund is at the
@@ -409,7 +409,6 @@ export function deriveRegistrantActionFlags(
     | "assigned_team_id"
     | "division_started"
     | "dispute"
-    | "dispute_lost_own"
   >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
@@ -445,7 +444,7 @@ export function deriveRegistrantActionFlags(
     canRemind: row.status === "pending" && feeOwed,
     // The cap `refundRegistration` applies: what is left of THIS payment, never the refund history (a refunded LATE payment is not
     // this payment's; polish wave final fix m2).
-    canRefund: !row.dispute_lost_own && row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
+    canRefund: row.dispute !== "lost" && row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
     // A solo sign-up (an entry with no roster of its own) is the only kind of
     // row that can be placed on a team. `assigned_team_id` is derived from
     // the roster row pointing back at this entry, so these two flags are

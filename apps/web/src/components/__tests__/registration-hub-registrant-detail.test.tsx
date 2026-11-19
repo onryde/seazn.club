@@ -60,7 +60,6 @@ function row(over: Partial<RegistrationListRow> = {}): RegistrationListRow {
     disputed_at: null,
     dispute_id: null,
     dispute: null,
-    dispute_lost_own: false,
     offline_marked_paid_at: null,
     offline_marked_paid_by: null,
     fee_percent: 8,
@@ -731,15 +730,23 @@ describe("RegistrationHubRegistrantDetail - dispute (registration defects items 
   });
 
   // Fix round 2 I-1 (the seam): the detail hands the island the ENTRY-scoped loss, so the Refund control follows the entry's own payment.
-  it("hands the island the entry's own loss: a lost entry gets paymentLostToDispute true, a sibling on another charge (cart reads lost) false", () => {
+  it("hands the island the entry's own loss: a lost entry gets paymentLostToDispute true, a sibling on another charge (its own payment never disputed) false", () => {
     const island = (over: Partial<RegistrationListRow>) =>
       walk(RegistrationHubRegistrantDetail(baseProps({ row: row({ status: "confirmed", amount_cents: 1500, entry_payment_intent_id: "pi_own", payment_intent_id: "pi_cart", ...over }) })))
         .find((e) => "registrationId" in propsOf(e) && "paymentLostToDispute" in propsOf(e));
-    const lostOwn = island({ ...LOST, dispute_lost_own: true, refunded_cents: 0 });
-    const sibling = island({ ...LOST, dispute_lost_own: false, refunded_cents: 0 });
+    const lostOwn = island({ ...LOST, refunded_cents: 0 });
+    const sibling = island({ dispute: null, refunded_cents: 0 });
     expect(lostOwn, "premise: the island is mounted").toBeTruthy();
     expect(propsOf(lostOwn!).paymentLostToDispute).toBe(true);
     expect(propsOf(sibling!).paymentLostToDispute).toBe(false);
+  });
+
+  // Fix round 3: a cart's own `disputed_at` (set by a sibling's dispute) never makes THIS entry read "Disputed"; only its own `dispute` does.
+  it("a cart flagged disputed by a sibling does not make an entry with an undisputed payment read Disputed", () => {
+    const sibling = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ disputed_at: new Date("2026-02-01T00:00:00Z"), dispute_id: "dp_1", dispute: null, status: "confirmed", amount_cents: 1500, entry_payment_intent_id: "pi_own", payment_intent_id: "pi_cart" }) })));
+    const own = textOf(RegistrationHubRegistrantDetail(baseProps({ row: row({ ...OPEN, status: "confirmed", amount_cents: 1500, entry_payment_intent_id: "pi_own", payment_intent_id: "pi_cart" }) })));
+    expect(own, "premise: its own open dispute does read Disputed").toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputed"));
+    expect(sibling).not.toContain(t(dict, "reg.hub.registrants.detail.paymentState.disputed"));
   });
 
   it("the evidence link is the label and hover text the dictionary declares", () => {

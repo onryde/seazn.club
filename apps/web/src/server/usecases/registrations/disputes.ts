@@ -17,26 +17,42 @@ import type { AnySql, RegistrationRow, RegistrationWithGroupRow, DivisionCtx } f
 import { regGroupCols, divisionCtx, fallbackOrigin, orgReg } from "./lookups";
 import { buildCartMail } from "./mail";
 
-/** Where a cart's chargeback stands, as one SQL expression over the cart aliased `groupAlias` and the competition id expression
- *  `competitionId` (registration defects item 4): null when the cart never had one, else `'open'`, `'lost'` or `'won'`.
- *  No column stores the outcome. `handleRegistrationDispute` leaves it in two places, read here:
- *  - lost: a `registration.dispute_lost` ledger row naming the cart's CURRENT dispute id (a lost dispute keeps `disputed_at`, so the
- *    cart alone cannot tell it from an open one; keyed on the id so an earlier dispute's outcome never speaks for a newer one);
- *  - open: `disputed_at` is set and no such row exists;
- *  - won: `disputed_at` was cleared while the cart still names a dispute (a won chargeback, or an inquiry the bank closed).
- *  One correlated read, evaluated only for a cart that names a dispute. */
-export function disputeOutcomeSql(db: AnySql, groupAlias: string, competitionId: postgres.PendingQuery<postgres.Row[]>) {
-  const g = db(groupAlias);
+/** Where the chargeback on ONE ENTRY'S OWN payment stands, as one SQL expression over the competition id expression `competitionId` and the
+ *  entry's own payment intent `entryIntent` (registration defects fix round 3): null when that payment was never disputed (or the entry
+ *  has no card payment of its own), else `'lost'`, `'won'` or `'open'`. No column stores it and the CART does not decide it: a cart can
+ *  be paid in several Checkout sessions, so a dispute on one session's charge says nothing about an entry paid on another (and a `won`
+ *  on one must never clear the display of another's still-open dispute, which the cart's single `disputed_at` did). It is read off the
+ *  ledger rows `handleRegistrationDispute` writes, every one of which names the DISPUTED charge (`payment_intent_id`):
+ *  - lost: a `registration.dispute_lost` row naming the intent (the money is gone whatever happened later);
+ *  - won: the newest `registration.disputed` row for the intent names a dispute that has a `registration.dispute_won` row (a won
+ *    chargeback, or an inquiry the bank closed);
+ *  - open: that newest dispute has neither.
+ *  A cart paid in ONE session shares one intent across its entries, so they all read the same. Evaluated per row: two index-friendly
+ *  probes of `competition_events` (competition, type) with a payload filter. */
+export function disputeOutcomeSql(db: AnySql, competitionId: postgres.PendingQuery<postgres.Row[]>, entryIntent: postgres.PendingQuery<postgres.Row[]>) {
   return db`case
-      when ${g}.dispute_id is null then null
+      when ${entryIntent} is null then null
       when exists (
         select 1 from competition_events ev
          where ev.competition_id = ${competitionId}
            and ev.type = 'registration.dispute_lost'
-           and ev.payload->>'dispute_id' = ${g}.dispute_id
+           and ev.payload->>'payment_intent_id' = ${entryIntent}
       ) then 'lost'
-      when ${g}.disputed_at is not null then 'open'
-      else 'won'
+      else (
+        select case when exists (
+                 select 1 from competition_events w
+                  where w.competition_id = ${competitionId}
+                    and w.type = 'registration.dispute_won'
+                    and w.payload->>'dispute_id' = d.dispute_id
+               ) then 'won' else 'open' end
+          from (
+            select ev.payload->>'dispute_id' as dispute_id from competition_events ev
+             where ev.competition_id = ${competitionId}
+               and ev.type = 'registration.disputed'
+               and ev.payload->>'payment_intent_id' = ${entryIntent}
+             order by ev.created_at desc limit 1
+          ) d
+      )
     end`;
 }
 

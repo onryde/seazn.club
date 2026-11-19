@@ -180,16 +180,18 @@ describe.skipIf(!HAS_DB)("a lost dispute blocks only the entries paid on the dis
     expect(refunds(), "the whole charge was clawed back: no entry on it is refunded again").toBe(0);
   });
 
-  it("the console's row says the same: dispute_lost_own is true only for the entry on the lost charge (list read model)", async () => {
+  it("the console's row says the same: only the entry on the lost charge reads lost (list read model, per entry payment)", async () => {
     const c = await twoSessionCart();
     const before = await listRegistrations(c.owner, c.w.division.id, null);
     expect(before.length, "premise: both entries listed").toBe(2);
-    expect(before.every((r) => r.dispute_lost_own === false), "nothing lost yet").toBe(true);
+    expect(before.map((r) => r.dispute), "nothing disputed yet").toEqual([null, null]);
     await lose(c.a.entry_payment_intent_id!);
     const rows = await listRegistrations(c.owner, c.w.division.id, null);
-    expect(rows.find((r) => r.id === c.a.id)!.dispute_lost_own, "A's own charge was lost").toBe(true);
-    expect(rows.find((r) => r.id === c.b.id)!.dispute_lost_own, "B's charge is intact").toBe(false);
-    expect(rows.find((r) => r.id === c.b.id)!.dispute, "the cart-level chip still tells staff the cart had a chargeback").toBe("lost");
+    expect(rows.find((r) => r.id === c.a.id)!.dispute, "A's own charge was lost").toBe("lost");
+    expect(rows.find((r) => r.id === c.b.id)!.dispute, "B's charge was never disputed: no chip, no state").toBeNull();
+    // The cart's own flag is still set (it speaks for the cart), but no per-entry state reads it.
+    const groupRow = await loadWithGroup(c.b.id);
+    expect(groupRow.disputed_at, "premise: the cart itself is flagged").not.toBeNull();
   });
 
   it("an open (undecided) dispute on A leaves both entries refundable; a WON one too", async () => {
@@ -197,15 +199,13 @@ describe.skipIf(!HAS_DB)("a lost dispute blocks only the entries paid on the dis
     const id = `dp_${RUN}_${++seq}`;
     await handleRegistrationDispute(disputeOf(id, c.a.entry_payment_intent_id!, "needs_response"), "created");
     const rows = await listRegistrations(c.owner, c.w.division.id, null);
-    expect(rows.map((r) => r.dispute_lost_own)).toEqual([false, false]);
+    expect(rows.map((r) => [r.id === c.a.id ? "A" : "B", r.dispute]).sort()).toEqual([["A", "open"], ["B", null]]);
     await handleRegistrationDispute(disputeOf(id, c.a.entry_payment_intent_id!, "won"), "closed");
     await refundRegistration(c.owner, c.a.id, undefined);
     expect(refundedWith()).toEqual([{ intent: c.a.entry_payment_intent_id, amount: FEE }]);
   });
 });
 
-// Fix round 2 M-5: the lost close's two writes (the cart's write-off and the `dispute_lost` ledger row the refund guard reads) commit
-// together. Probed by making the ledger insert fail for ONE dispute id (a BEFORE INSERT trigger): the write-off must not have landed.
 describe.skipIf(!HAS_DB)("a lost close writes the write-off and its ledger row in ONE transaction (fix round 2 M-5)", () => {
   it("a ledger row that cannot be written leaves the cart's write-off unwritten, and a retry lands both", async () => {
     const e = await paidEntry();
