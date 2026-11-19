@@ -162,7 +162,7 @@ test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", (
     request,
   }) => {
     test.setTimeout(120_000);
-    const { divisionId, stageId } = await seedLeague(request, "Late", 4);
+    const { divisionId, stageId } = await seedLeague(request, "Late", 4, "public");
     expect((await generate(request, stageId)).status).toBe(200);
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
     expect(started.status, JSON.stringify(started.error)).toBe(200);
@@ -172,11 +172,17 @@ test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", (
     expect(unchanged.status, JSON.stringify(unchanged.error)).toBe(200);
     expect(unchanged.data!.reconcile?.kind).toBe("noop");
 
-    await addEntrants(request, divisionId, "Late", 5, 5);
+    // The arrival is one the app does not place: a registration confirmed after Start WAITS (W5 T6, X-CU-8). The organiser's own
+    // entrants POST after Start is no such arrival - since W5 T5 it IS Add late player, and writes the catch-up lines itself.
+    const div = await apiJson<{ competition_id: string }>(request, `/api/v1/divisions/${divisionId}`);
+    const lateId = await registerLate(request, div.data!.competition_id, divisionId, `Late Arrival ${TAG}`);
+    const seated = (await stageFixtures(request, divisionId, stageId)) as Pairing[];
+    expect(seated.some((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId), "premise: the arrival holds no line").toBe(false);
     const refused = await generate(request, stageId);
     expect(refused.status).toBe(409);
     expect(refused.error?.code).toBe("RR_GENERATE_AFTER_START");
-    expect(refused.error?.message).toBe("Play has started, so Generate won't change the fixtures. Use Add late player.");
+    // The sentence the server answers in is the en catalog's (W5 T6, 2aa2298ffa reworded it to point at the waiting strip), read, not typed.
+    expect(refused.error?.message).toBe(uiEn["roundrobin.refusal.RR_GENERATE_AFTER_START"]);
     const after = await stageFixtures(request, divisionId, stageId);
     expect(after.map((f) => f.id).sort(), "the refusal wrote nothing").toEqual(before.map((f) => f.id).sort());
   });
