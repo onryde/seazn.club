@@ -35,6 +35,9 @@ p95). Record beside the baseline in `docs/superpowers/plans/2026-11-05-checkin-c
 `lockWaitMs` p95, busy count, `presenceFallbackCount` (expected 0). Plan 1's end-of-run presence checks must pass. Adjust the harness's
 price bars for flag-on first (section 0).
 
+It can also run on a quiet hosted runner: `gh workflow run load.yml --ref <branch> -f boards=100 -f scenario=B` (`.github/workflows/load.yml`: a flags-off
+control and a flags-on job, both `LOAD_WEBHOOKS=1`, tabulated in the run summary).
+
 ## 3. Step 2: THE GATE (staging, real Cloudflare RealtimeKit, webhook registered)
 
 Defined in plan 1 Task 12 step 5; run after Step 1 is green with both of this plan's flags ON on staging. In the same round record:
