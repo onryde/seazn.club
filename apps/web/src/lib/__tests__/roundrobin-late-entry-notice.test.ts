@@ -7,7 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { TableLateEntryResult as TableLateEntryResultSchema } from "@/server/api-v1/schemas/entrants";
 import type { LateEntryResult, TableLateEntryResult } from "@/server/api-v1/schemas";
-import { lateEntryNotice, lateEntryNoticeText, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import { lateEntryNotice, lateEntryNoticeText, reinstateNotice, reinstateReplyNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import { TABLE_LATE_ENTRY_MESSAGE_KEYS, TABLE_LATE_ENTRY_PLURAL_KEYS, tableLateEntryLines } from "@/lib/roundrobin-late-entry-notice";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
@@ -189,5 +189,52 @@ describe("X-CU-7 / X-CU-8 the late-entry notice for a league or group: one row p
       }
     }
     expect(checked).toBe(keys.length * 4);
+  });
+
+  // Final fix wave (m3): a Reinstate's `reinstate.not_restored` had no reader (an inert seam). Expected sentences are typed here,
+  // in every locale, from the approved copy; the count is the number of lines the reply names.
+  it("m3 a Reinstate that could not restore results says how many, in every locale (the empty and the absent reply say nothing)", () => {
+    const ids = ["11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"];
+    expect(reinstateNotice(undefined, "Ivy"), "no reply").toEqual([]);
+    expect(reinstateNotice(null, "Ivy"), "no reply").toEqual([]);
+    expect(reinstateNotice({}, "Ivy"), "an ordinary patch carries no `reinstate`").toEqual([]);
+    expect(reinstateNotice({ reinstate: { not_restored: [] } }, "Ivy"), "everything came back").toEqual([]);
+    const one = reinstateNotice({ reinstate: { not_restored: ids.slice(0, 1) } }, "Ivy");
+    const three = reinstateNotice({ reinstate: { not_restored: ids } }, "Ivy");
+    expect([one, three].map((l) => l.map((x) => x.tone))).toEqual([["todo"], ["todo"]]);
+    const WANT = {
+      en: ["Ivy is back in the table, but the result removed from 1 of their matches could not be put back. Check that match and enter the result again.",
+           "Ivy is back in the table, but the results removed from 3 of their matches could not be put back. Check those matches and enter the results again."],
+      es: ["Ivy vuelve a estar en la tabla, pero no se pudo restaurar el resultado eliminado de 1 de sus partidos. Revisa ese partido e introduce el resultado de nuevo.",
+           "Ivy vuelve a estar en la tabla, pero no se pudieron restaurar los resultados eliminados de 3 de sus partidos. Revisa esos partidos e introduce los resultados de nuevo."],
+      fr: ["Ivy est de retour dans le classement, mais le résultat retiré de 1 de ses matchs n'a pas pu être rétabli. Vérifiez ce match et saisissez à nouveau le résultat.",
+           "Ivy est de retour dans le classement, mais les résultats retirés de 3 de ses matchs n'ont pas pu être rétablis. Vérifiez ces matchs et saisissez à nouveau les résultats."],
+      nl: ["Ivy staat weer in de stand, maar het weggehaalde resultaat van 1 van de wedstrijden kon niet worden teruggezet. Controleer die wedstrijd en voer het resultaat opnieuw in.",
+           "Ivy staat weer in de stand, maar de weggehaalde resultaten van 3 van de wedstrijden konden niet worden teruggezet. Controleer die wedstrijden en voer de resultaten opnieuw in."],
+    } as const;
+    const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
+    let checked = 0;
+    for (const [loc, d] of Object.entries(dicts)) {
+      const i18n = {
+        t: (key: string, vars?: Record<string, string | number>) => tRuntime(d, key, vars),
+        plural: (key: string, count: number, vars?: Record<string, string | number>) => pluralRuntime(d, key, count, loc as "en" | "es" | "fr" | "nl", vars),
+      };
+      expect(one.map((l) => lateEntryNoticeText(l, i18n)), `${loc} one`).toEqual([WANT[loc as keyof typeof WANT][0]]);
+      expect(three.map((l) => lateEntryNoticeText(l, i18n)), `${loc} several`).toEqual([WANT[loc as keyof typeof WANT][1]]);
+      checked += 2;
+    }
+    expect(checked, "(locale, count) sentences read").toBe(8);
+  });
+
+  it("m3 the panel's one reader: a knockout late-entry answer and a not-restored list are both said; neither alone adds the other's line; a plain reply says nothing", () => {
+    const koBye = { format: "knockout", case: "bye", entrant_id: WES, stage_id: STAGE, source: "organiser", opponent_id: "e-ivy" } as LateEntryResult;
+    const lost = { not_restored: ["11111111-1111-4111-8111-111111111111"] };
+    const says = (reply: unknown) => reinstateReplyNotice(reply, WES, NAMES, { locale: "en" }).map((l) => ("plural" in l ? l.plural : l.key));
+    expect(says(null), "no reply").toEqual([]);
+    expect(says({}), "an ordinary reinstate").toEqual([]);
+    expect(says({ reinstate: { not_restored: [] } }), "a clean league reinstate").toEqual([]);
+    expect(says({ reinstate: lost })).toEqual(["roundrobin.reinstate.notRestored"]);
+    expect(says({ late_entry: koBye }), "a knockout answer alone: its own line, none of the other").toEqual(["knockout.lateEntry.tookBye"]);
+    expect(says({ late_entry: koBye, reinstate: lost })).toEqual(["knockout.lateEntry.tookBye", "roundrobin.reinstate.notRestored"]);
   });
 });

@@ -15,6 +15,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { entrantKindCap } from "@seazn/engine/sport";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { ROUND_ROBIN_REFUSALS } from "@/lib/roundrobin-refusals";
 import { isRrExtKey, rrKey, rrLegOfExtKey } from "@/lib/roundrobin-reconcile";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -1047,6 +1048,7 @@ describe.skipIf(!HAS_DB)("X-CU-6 an entrant delete refreshes the removed lines' 
     const err = await refusal(deleteEntrant(r.auth, line.home_entrant_id!));
     expect(err.status).toBe(409);
     expect(err.code).toBe("ENTRANT_FIXTURES_HAVE_RESULTS");
+    expect(err.message, "the sentence is the table row's, so every locale has it").toBe(ROUND_ROBIN_REFUSALS.ENTRANT_FIXTURES_HAVE_RESULTS.en);
     expect(await rowsOf(r.stageId), "nothing was dropped").toEqual(rows);
   });
 });

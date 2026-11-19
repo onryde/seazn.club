@@ -26,7 +26,12 @@ import type { MessageKey } from "@/lib/messages";
 import { KO_LATE_ENTRY_PLAYED_ON, KO_LATE_ENTRY_SCHEDULE_FROZEN } from "@/lib/knockout-late-entry";
 import { swissFirstRoundIn } from "@/lib/swiss-late-entry";
 import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
-import { TABLE_LATE_ENTRY_MESSAGE_KEYS, TABLE_LATE_ENTRY_PLURAL_KEYS, tableLateEntryLines } from "@/lib/roundrobin-late-entry-notice";
+import {
+  TABLE_LATE_ENTRY_MESSAGE_KEYS,
+  TABLE_LATE_ENTRY_PLURAL_KEYS,
+  reinstateNotRestoredLines,
+  tableLateEntryLines,
+} from "@/lib/roundrobin-late-entry-notice";
 
 /** The plain keys this module emits — tied to the English catalog by `satisfies`, so a missing key is a tsc error. */
 export const LATE_ENTRY_MESSAGE_KEYS = [
@@ -223,6 +228,39 @@ function knockoutLines(r: KnockoutLateEntryResult, nameOf: (id: string) => strin
     case "waiting":
       throw refuse("is counted by the caller, never said one by one");
   }
+}
+
+/**
+ * Final fix wave (m3): the line a league / group REINSTATE says when some removed results could not be put back
+ * (`PatchedEntrant.reinstate.not_restored`). Nothing when none failed.
+ */
+export function reinstateNotice(
+  reply: Parameters<typeof reinstateNotRestoredLines>[0],
+  name: string,
+): LateEntryNoticeLine[] {
+  return reinstateNotRestoredLines(reply, name);
+}
+
+/**
+ * W4 T19 (K13) + final fix wave (m3): everything a Reinstate's PATCH reply says, in one block - the ONE function the entrants
+ * panel calls (a pure builder, so a test reads the block the panel renders). Of `late_entry` only a KNOCKOUT answer is read; any
+ * other reply (an ordinary reinstate, a Swiss one) says nothing for it, as it always did. `reinstate.not_restored` (a league or
+ * group Reinstate) says how many removed results could not be put back. Throws what `lateEntryNotice` throws: a notice that
+ * cannot be said truthfully is an error.
+ */
+export function reinstateReplyNotice(
+  reply: unknown,
+  entrantId: string,
+  names: Readonly<Record<string, string>>,
+  opts: LateEntryNoticeOptions,
+): LateEntryNoticeLine[] {
+  const body = reply as { late_entry?: LateEntryResult; reinstate?: { not_restored: readonly string[] } } | null | undefined;
+  const late = body?.late_entry;
+  const all = { ...names, [entrantId]: names[entrantId] ?? "?" };
+  return [
+    ...(late !== undefined && late.format === "knockout" ? lateEntryNotice([late], all, opts) : []),
+    ...reinstateNotice(body, all[entrantId]!),
+  ];
 }
 
 /**

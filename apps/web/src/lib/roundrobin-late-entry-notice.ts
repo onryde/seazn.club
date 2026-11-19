@@ -42,6 +42,8 @@ export const TABLE_LATE_ENTRY_PLURAL_KEYS = [
   "roundrobin.lateWaiting",
   // B5 fix wave G1 (I1): the strip's Rebuild is the card's, so it names the manual ranks it dropped in the card's own clause.
   "progression.rosterDrift.pinsCleared",
+  // Final fix wave (m3): a Reinstate whose removed results could not all be put back (`PatchedEntrant.reinstate.not_restored`).
+  "roundrobin.reinstate.notRestored",
 ] as const;
 export type TableLateEntryPluralKey = (typeof TABLE_LATE_ENTRY_PLURAL_KEYS)[number];
 
@@ -58,6 +60,21 @@ export interface TableLateEntryOptions {
   /** Whether the stage names its pools — more than one (owner R24: a one-pool division shows no pool letter). A `pool_key` on
    *  the answer of a one-pool group is never said. */
   pooled: boolean;
+}
+
+/**
+ * Final fix wave (m3; whole-PR review): a league or group REINSTATE's reply says, in `reinstate.not_restored`, which lines'
+ * removed results could not be put back (a line rescored since the withdrawal, or one the engine refused) - they are left as they
+ * are for the organiser. Said once, with the COUNT, in the "todo" tone: the organiser has those matches to look at. Nothing when
+ * the reply carries no `reinstate` (every other patch) or lists nothing: a line for a thing that did not happen would be the false one.
+ */
+export function reinstateNotRestoredLines(
+  reply: { reinstate?: { not_restored: readonly string[] } } | null | undefined,
+  name: string,
+): TableLateEntryLine[] {
+  const lines = reply?.reinstate?.not_restored ?? [];
+  if (lines.length === 0) return [];
+  return [{ plural: "roundrobin.reinstate.notRestored", count: lines.length, params: { name }, tone: "todo" }];
 }
 
 /**

@@ -16,7 +16,6 @@ import "server-only";
 // The decision is made BEFORE the first write, so a regenerate never starts from a half-patched table.
 import { randomUUID } from "node:crypto";
 import type { Tx } from "@/lib/db";
-import { HttpError } from "@/lib/errors";
 import {
   isRrExtKey,
   planRoundRobinReconcile,
@@ -261,11 +260,7 @@ export async function dropEntrantFromRoundRobins(tx: Tx, divisionId: string, ent
        and ${fixtureHasResultSql(tx)}
      limit 1`;
   if (blocked) {
-    throw new HttpError(
-      409,
-      "this entrant's fixtures hold recorded match data — clear it before deleting the entrant",
-      "ENTRANT_FIXTURES_HAVE_RESULTS",
-    );
+    throw roundRobinRefusal("ENTRANT_FIXTURES_HAVE_RESULTS");
   }
   const lines = await tx<{ id: string }[]>`
     select id from fixtures

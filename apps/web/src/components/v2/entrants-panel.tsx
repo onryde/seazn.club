@@ -46,7 +46,7 @@ import {
   type SwissFinishAnswer,
   type SwissFinishPlan,
 } from "@/lib/swiss-finish-plan";
-import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, reinstateReplyNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import { knockoutRefusalText } from "@/lib/knockout-refusals";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import { undoRefusalText } from "@/lib/undo-refusals";
@@ -557,13 +557,12 @@ export function EntrantsPanel({
   /** The division's entrants by id — what the late-entry and departure notices name. */
   const namesById = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
 
-  /** W4 T19 (K13): a Reinstate's reply, said. Only a KNOCKOUT answer (`late_entry.format`) is read here; any other reply (an
-   *  ordinary reinstate, a Swiss one) says nothing, as it always did. A notice that cannot be said truthfully is an error. */
+  /** W4 T19 (K13): a Reinstate's reply, said. Of `late_entry` only a KNOCKOUT answer (`late_entry.format`) is read here; any other
+   *  reply (an ordinary reinstate, a Swiss one) says nothing, as it always did - except a league or group Reinstate's
+   *  `reinstate.not_restored` (final fix wave m3). A notice that cannot be said truthfully is an error. */
   function sayReinstated(entrantId: string, reply: unknown) {
-    const late = (reply as { late_entry?: LateEntryResult } | null)?.late_entry;
-    if (late === undefined || late.format !== "knockout") return;
     try {
-      setDepartureNotice(lateEntryNotice([late], { ...namesById, [entrantId]: namesById[entrantId] ?? "?" }, { locale }));
+      setDepartureNotice(reinstateReplyNotice(reply, entrantId, namesById, { locale }));
     } catch (err) {
       fail(err);
     }

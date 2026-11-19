@@ -10,8 +10,8 @@
 -- (Task 6). `on delete set null`: deleting the stage leaves nothing to wait for. The partial index serves that set-null and the
 -- desk's count: almost no entrant waits (the V494 shape).
 --
--- DATA CHANGE (LOUD): the backfill flags the entrants this gap already stranded. Pre-flight count 2 (W5 app-A Task 0, 2026-11-16:
--- active entrants of a started league/group entry stage seated in none of its fixtures): stg 4 rows, of which 1 sits in a COMPLETE
+-- DATA CHANGE (LOUD): the backfill flags the entrants this gap already stranded. Pre-flight (W5 app-A Task 0, 2026-11-16: active
+-- entrants of a started league/group entry stage seated in none of its fixtures): stg 4 rows, of which 1 sits in a COMPLETE
 -- football group and is NOT flagged (controller ruling 2026-11-16: a finished table takes no one, RB5-L8), so stg 3 rows are
 -- flagged; prod 0 rows (prod's only league is complete). stg data is test-only: no compat shim. Runs pre-deploy; listed in the PR
 -- body.

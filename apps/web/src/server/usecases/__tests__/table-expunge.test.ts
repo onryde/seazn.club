@@ -17,6 +17,8 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { forEachSportAsync } from "@seazn/engine/testkit";
 import enPublic from "@/dictionaries/en/public.json";
 import { sql } from "@/lib/db";
+import { reinstateReplyNotice } from "@/lib/swiss-late-entry-notice";
+import { PatchedEntrant } from "@/server/api-v1/schemas";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { playBadminton, post, tip } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { createCompetition } from "../competitions";
@@ -528,6 +530,30 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
     const out = await reinstateTableEntrant(r.auth, p1);
     expect(out.not_restored, "the rescored line is named").toEqual([signed.id]);
     expect(await lineState(signed.id), "and left as the organiser left it").toEqual(rescored);
+  }, 120_000);
+
+  // Final fix wave (m3): the reply's `reinstate.not_restored` reaches the organiser. Through the REAL producer (the PATCH door,
+  // `patchEntrant`, the reply as the route serializes it - JSON, then the wire schema) and the REAL reader the entrants panel
+  // calls (`reinstateNotice`). Differential: before the fix nothing read the field, so the panel said nothing.
+  it("m3 a Reinstate whose line was rescored: the PATCH reply names it and the panel's reader (`reinstateReplyNotice`) says so; an untouched one says nothing", async () => {
+    const r = await started(4);
+    const [p1, p2, p3] = [r.id.get("P1")!, r.id.get("P2")!, r.id.get("P3")!];
+    const signed = await lineBetween(r.stageId, p1, p2);
+    await playBadminton(r.auth, signed.id, true);
+    await withdrawEntrantCascade(r.auth, p1);
+    const [exp] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${signed.id} and type = 'core.abandon'`;
+    await scoreEvent(r.auth, signed.id, { expected_seq: await tip(signed.id), type: "core.void", payload: { event_id: exp!.id } } as never);
+    await post(r.auth, signed.id, "badminton.game.summary", { home: 5, away: 21 });
+    const reply = PatchedEntrant.parse(JSON.parse(JSON.stringify(await patchEntrant(r.auth, p1, { status: "registered" }))));
+    expect(reply.reinstate?.not_restored, "premise: the rescored line is the one not restored").toEqual([signed.id]);
+    const said = reinstateReplyNotice(reply, p1, { [p1]: "P1" }, { locale: "en" });
+    expect(said.map((l) => [l.tone, "plural" in l ? l.count : null]), "one line, todo, counting what the reply names").toEqual([["todo", 1]]);
+
+    // The positive pair: a Reinstate that put everything back says nothing.
+    await withdrawEntrantCascade(r.auth, p3);
+    const clean = PatchedEntrant.parse(JSON.parse(JSON.stringify(await patchEntrant(r.auth, p3, { status: "registered" }))));
+    expect(clean.reinstate?.not_restored, "premise: this reinstate ran and restored everything").toEqual([]);
+    expect(reinstateReplyNotice(clean, p3, { [p3]: "P3" }, { locale: "en" })).toEqual([]);
   }, 120_000);
 
   // m3: an Add match line (`adhoc-N`) is one of her ordinary lines (the stated decision): counted, expunged, walked over, and

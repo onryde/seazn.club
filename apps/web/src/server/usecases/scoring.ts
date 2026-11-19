@@ -1278,7 +1278,10 @@ export async function onDecided(
       try {
         advanced.push(...(await markDependentSeedProposalsStale(auth, context.stage_id, { includeConfirmed: true })));
       } catch (err) {
-        log.error({ err, stageId: context.stage_id }, "scoring: a corrected table's proposals did not update (score write unaffected)");
+        log.error(
+          { err, event: "table_cut_drift_stale_failed", fixtureId, stageId: context.stage_id },
+          "scoring: a corrected table's proposals did not update (score write unaffected)",
+        );
       }
     } else {
       try {

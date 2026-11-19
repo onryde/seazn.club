@@ -294,6 +294,29 @@ describe.skipIf(!HAS_DB)("post-commit hooks that fail after the score committed"
     });
   }, 120_000);
 
+  // Final fix wave (m5): the COMPLETED table's branch of the same hook (a correction inside a finished league or group,
+  // `includeConfirmed`) logged without an `event:` tag, unlike its sibling above - an alert keyed on the tag never saw it.
+  it("a failed staleness mark inside a COMPLETED table (a correction): answered and logged by name, with the fixture and the stage", async () => {
+    const r = await rig();
+    const [f1, f2, f3] = r.fixtures as [string, string, string];
+    const errors = vi.spyOn(log, "error");
+    await win(r.auth, f1);
+    await win(r.auth, f2);
+    await win(r.auth, f3);
+    expect((await state(r, f3)).league, "premise: the league is complete, so the next write is a correction inside it").toBe("complete");
+    const res3 = await resultOf(f3);
+    const corrected = await firesOnce(() => {
+      inject.failStaleMark = 1;
+      return post(r.auth, f3, "core.void", { event_id: res3 });
+    });
+    expect(corrected.outcome, "the correction is answered: the result is gone").toBeNull();
+    expect(
+      logged(errors, "table_cut_drift_stale_failed").map((o) => ({ fixtureId: o.fixtureId, stageId: o.stageId })),
+      "logged by name, with the fixture and the stage",
+    ).toEqual([{ fixtureId: f3, stageId: r.leagueId }]);
+    expect(logged(errors, "seed_proposals_stale_mark_failed"), "and not under the incomplete table's tag").toEqual([]);
+  }, 120_000);
+
   it("a failed auto-advance readiness read: answered and logged, nothing advanced; the next result advances", async () => {
     const r = await rig();
     const [f1, f2, f3] = r.fixtures as [string, string, string];

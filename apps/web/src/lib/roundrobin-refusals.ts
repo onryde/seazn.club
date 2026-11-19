@@ -42,7 +42,10 @@ export type RoundRobinRefusalCode =
   | "RR_REGENERATE_WOULD_CLEAR_SETUP"
   // B1 batch C1: the same redraw over a table that holds an Add match row. The row cannot be kept through a redraw and is never
   // dropped silently, so the Generate is refused. Details: `matches`, how many extra rows the stage holds.
-  | "RR_REGENERATE_WOULD_DROP_ADD_MATCH";
+  | "RR_REGENERATE_WOULD_DROP_ADD_MATCH"
+  // Final fix wave (m1): deleting a setup-phase entrant whose line holds recorded match data (a team sheet, match rules, a result
+  // voided since). A code from W5's own row set, kept without the RR_ prefix: it is the wire code the reconcile has always thrown.
+  | "ENTRANT_FIXTURES_HAVE_RESULTS";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -127,6 +130,11 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 409,
     en: "The table would have to be drawn again, which removes the matches you added with Add match. Rebuild fixtures removes them too: note them down first, then use it.",
     key: "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH",
+  },
+  ENTRANT_FIXTURES_HAVE_RESULTS: {
+    status: 409,
+    en: "This entrant's fixtures hold recorded match data. Clear it before deleting the entrant.",
+    key: "roundrobin.refusal.ENTRANT_FIXTURES_HAVE_RESULTS",
   },
 };
 
