@@ -55,7 +55,7 @@ export const PUBLIC_HOLD: Record<NeedsReason, PublicHold | null> = {
   account_changed: null,
   // T17B fix 2, D11: a clock ran out and Lichess has not ended the game — the result waits on the organiser.
   clock_flag_unsettled: "confirm",
-  // V535: held at the open for a player's Lichess link - no game exists, the result waits on the organiser.
+  // V536: held at the open for a player's Lichess link - no game exists, the result waits on the organiser.
   lichess_unlinked: "confirm",
   lichess_reconnect: "confirm",
 };

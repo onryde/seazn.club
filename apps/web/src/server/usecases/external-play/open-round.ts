@@ -425,7 +425,7 @@ export async function openRound(
       ).map((r) => r.fixture_id),
     );
     /** The bridge facts this open reads for a board: none at all for one it re-arms (it is reset before any invite). */
-    // A link hold of an EARLIER open (V535) whose player has linked since is cleared here: its row goes, so the board is a board with
+    // A link hold of an EARLIER open (V536) whose player has linked since is cleared here: its row goes, so the board is a board with
     // no row again and takes this open's invite. One still unlinked keeps its row - and is reported again below.
     const linkHeldRows = new Set(
       bridges.filter((b) => b.status === "needs_organiser" && LINK_HOLDS.includes(b.needs_reason as LinkHold)).map((b) => b.fixture_id),

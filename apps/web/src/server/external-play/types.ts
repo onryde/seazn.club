@@ -53,7 +53,7 @@ export const NEEDS_REASONS = [
   // reports the game `started` a minute later — never a flag of ours; the
   // organiser decides, with the evidence (reconcile.ts).
   "clock_flag_unsettled",
-  // V535: the organiser's Open round found a player with no Lichess link that plays (`lichess_unlinked`: none; `lichess_reconnect`: a
+  // V536: the organiser's Open round found a player with no Lichess link that plays (`lichess_unlinked`: none; `lichess_reconnect`: a
   // grant short of a play scope). The board is not invited and is never a no-show: the organiser awards it or waits for the link.
   "lichess_unlinked",
   "lichess_reconnect",
