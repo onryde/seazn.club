@@ -101,8 +101,10 @@ export function departedRankedLast<T extends TieNotes>(rows: readonly T[], depar
       .sort((a, b) => a.rank! - b.rank!)
       .map((r) => untie({ ...r, rank: base + 1 + group.filter((o) => o.rank! < r.rank!).length }));
   const withoutNotes = (r: T): T => {
-    const { tieBreak: _tieBreak, tieUnbroken: _tieUnbroken, ...rest } = r;
-    return rest as T;
+    const bare = { ...r };
+    delete bare.tieBreak;
+    delete bare.tieUnbroken;
+    return bare;
   };
   const withoutDeparted = (r: T): T => {
     if (r.tieBreak === undefined) return r;
