@@ -89,8 +89,8 @@ export const LEAK_ALLOW: LeakAllow[] = [
     reason: "The batch-import file's own fields are named type and payload; the line that describes them has to say so.",
   },
   {
-    match: '"payload"',
-    reason: "The same field as it is spelled in the batch-import sample file (a JSON key, quoted).",
+    match: '"payload":',
+    reason: "The same field as it is spelled in the batch-import sample file (a JSON key, quoted, followed by its colon).",
   },
   {
     match: "search engines",

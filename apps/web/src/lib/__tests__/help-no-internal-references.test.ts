@@ -211,6 +211,7 @@ describe("findLeaks: one positive and one negative per rule", () => {
   it("the batch-import file's field name is allowed only as the exact phrase, bare payload is still a leak", () => {
     expect(findLeaks("Each event has a type and payload.")).toEqual([]);
     expect(findLeaks('{ "type": "core.start", "payload": {} }')).toEqual([]);
+    expect(findLeaks('Fill in the "payload" field.').map((l) => l.match)).toEqual(["payload"]);
     expect(findLeaks("The payload carries the score.").map((l) => l.match)).toEqual(["payload"]);
     expect(findLeaks("Large payloads are rejected.").map((l) => l.match)).toEqual(["payloads"]);
     expect(findLeaks("A type and payload mismatch, plus a stray payload.").map((l) => l.match)).toEqual(["payload"]);
