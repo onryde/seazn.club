@@ -15,6 +15,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 // court/venue in this org" 404 in the product.
 import { VENUE_NOT_FOUND_CODE, COURT_NOT_FOUND_CODE } from "../venues";
 import { departedEntrantIds } from "./helpers";
+import { appendMissingToStage, missingFromLadder } from "../ladder-late-entry";
 
 // ---------------------------------------------------------------------------
 // Ladder challenges (Jul3/08 §6): no pre-generated fixtures — players issue
@@ -64,19 +65,35 @@ export async function issueChallenge(
       throw new HttpError(422, SCHEDULE_LOCKED_MESSAGE, SCHEDULE_LOCKED_CODE);
     }
 
+    // The order is read HERE, after the `division:` lock, never from the `stage.config` read above it: a door that
+    // appended while this transaction waited for the lock has already changed it, and everything below (the first-use
+    // initialisation, the unlisted check) must judge the order as it is now.
+    const readOrder = async (): Promise<string[]> => {
+      const [row] = await tx<{ o: unknown }[]>`select config->'ladder_order' as o from stages where id = ${stageId}`;
+      return Array.isArray(row?.o) ? (row.o as string[]) : [];
+    };
     // ladder order initialises from seed order on first use
-    let order = stage.config.ladder_order as string[] | undefined;
-    if (!Array.isArray(order) || order.length === 0) {
+    let order = await readOrder();
+    if (order.length === 0) {
       const entrants = await tx<{ id: string }[]>`
         select id from entrants
         where division_id = ${stage.division_id} and status in ('registered','confirmed')
         order by seed nulls last, created_at, id`;
       order = entrants.map((e) => e.id);
-      // Server-side merge (design §T2): `stage.config` was read before the
-      // advisory lock, so anything written while this transaction waited must
-      // not be spread back over.
+      // Server-side merge (design §T2): only the `ladder_order` key is set, so no other key of `stage.config` is
+      // spread back over.
       await tx`update stages set config = config || ${tx.json({ ladder_order: order } as never)}
                where id = ${stageId}`;
+    }
+    // Backstop (ladder-late-entry.ts): the doors that admit an entrant append them to this order themselves; a reader
+    // that waved through an unlisted entrant as "foreign" would strand a player any door ever forgot, so the order is
+    // completed here, under the same division lock, before the challenge is judged. The append is ONE statement against
+    // the row's current order (a result's swap does not take this lock and can commit under it), and the order is read
+    // back after it, so the challenge is judged against what is stored, swap included.
+    const unlisted = await missingFromLadder(tx, stage.division_id, order);
+    if (unlisted.length > 0) {
+      await appendMissingToStage(tx, stageId, unlisted);
+      order = await readOrder();
     }
     const ci = order.indexOf(input.challenger_id);
     const oi = order.indexOf(input.opponent_id);
@@ -88,17 +105,20 @@ export async function issueChallenge(
     if (ci < 0 || oi < 0) {
       throw new HttpError(422, "both players must be on the ladder", "LADDER_ENTRANT_FOREIGN");
     }
-    // Presence on the ladder is not eligibility. `ladder_order` is written
-    // ONCE, from the live field, and never pruned afterwards; a withdrawal
-    // is a status flip that leaves her row and her rung in place, so the
-    // check above waves a departed player through in EITHER role.
+    // Presence on the ladder is not eligibility. `ladder_order` is initialised
+    // from the live field by the first challenge, then only EXTENDED (a late or
+    // reinstated entrant who holds no rung is appended at the bottom,
+    // usecases/ladder-late-entry.ts) or SWAPPED (a result, scoring.ts); it is
+    // never pruned. A withdrawal is a status flip that leaves her row and her
+    // rung in place, so the check above waves a departed player through in
+    // EITHER role.
     //
     // Filtered here, at read time, rather than pruned from `config` when she
     // withdraws: a pruned array cannot be un-pruned, and an entrant CAN be
-    // un-withdrawn (patchEntrant) — `ladder_order` only initialises while it
-    // is empty, so she would never be re-seated and would silently lose the
-    // rung she earned. Read-time filtering also cannot leave stale config
-    // behind, and needs no matching hook on the un-withdraw path.
+    // un-withdrawn (patchEntrant) — she would silently lose the rung she
+    // earned. Read-time filtering also cannot leave stale config behind. The
+    // un-withdraw path does call `appendToLadderOrder`, but it only appends an
+    // entrant the order does not hold, so a rung she held is found, not moved.
     //
     // BOTH sides, checked together: she can be the challenger or the
     // opponent, and a guard that looks at one is half a fix.

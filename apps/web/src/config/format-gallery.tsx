@@ -339,7 +339,6 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
   {
     slug: "double_elim",
     kinds: ["double_elim"],
-    pro: true,
     cannedStages: [
       { kind: "double_elim", name: "Double elimination", config: {}, progression: null },
     ],
@@ -364,7 +363,6 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
   {
     slug: "page_playoff",
     kinds: ["page_playoff"],
-    pro: true,
     cannedStages: [
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {
@@ -393,7 +391,6 @@ const FAMILY_STRUCTS: FamilyStruct[] = [
     // explanatory note anyway — no static draw exists before results.
     slug: "swiss_playoff",
     kinds: ["swiss", "page_playoff"],
-    pro: true,
     cannedStages: [
       { kind: "swiss", name: "Swiss", config: { pairing: "rank_adjacent" }, progression: null },
       { kind: "page_playoff", name: "Playoffs", config: {}, progression: {

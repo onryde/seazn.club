@@ -281,8 +281,10 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
       fc.array(fc.constantFrom<Act>("none", "none", "forfeit", "void", "withdraw"), { maxLength: ROUNDS }),
       async (sport, seedOrderedPersons, individualsOnly, acts) => {
         reach.runs++;
-        // individualsOnly false = the product's shape; true = the corrected product (the only one that drains).
-        const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons, individualsOnly });
+        // individualsOnly false = the product BEFORE its 2026-11-18 fixes (pairs counted as players, a withdrawal leaving
+        // the pairs playing); true = the product as it is (the only one that drains).
+        const legacy = !individualsOnly;
+        const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons, individualsOnly, legacyWithdrawal: legacy });
         const ctx = ctxFor(driver, "LIFECYCLE", { row: "mexicano", sport });
         const rec = new Recorder();
         const setup = await setUpDivision(ctx, rec, 8);
@@ -308,9 +310,11 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
         expect(rec.notes.some((n) => n.startsWith("mexicano-stalled-on-non-decided:")), `${label}: the non-decided form ⟺ a fixture not decided`).toBe(exit === "stalled_rounds" && nonDecided.length > 0);
         if (exit === "stalled_rounds") expect(rec.facts.has("cut_short"), `${label}: a stall is never cut_short`).toBe(false);
         // The product's wait, the fake held to it (I-3): no round past the lowest round holding a non-decided fixture.
-        if (nonDecided.length > 0) {
+        // A fixture a withdrawal voided (expunged) no longer holds a round back on the product as it is.
+        const blockers = nonDecided.filter((f) => legacy || !driver.isExpunged(f.id));
+        if (blockers.length > 0) {
           reach.blockChecks++;
-          expect(Math.max(...rows.map((f) => f.round_no ?? 0)), label).toBeLessThanOrEqual(Math.min(...nonDecided.map((f) => f.round_no ?? 0)));
+          expect(Math.max(...rows.map((f) => f.round_no ?? 0)), label).toBeLessThanOrEqual(Math.min(...blockers.map((f) => f.round_no ?? 0)));
         }
         reach.round1Checks++;
         expect(driver.repeatsIn(1).size, `${label}: round 1 seats each person once`).toBe(0);
@@ -352,15 +356,22 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     const gen = sliceFunction(src, "americanoGen");
     expect(gen).toContain("STAGE_NOT_READY");
     expect(gen).not.toMatch(/\nasync function /);
-    expect(gen.match(/existing\.some\(\(f\) => f\.status !== "decided"\)/g)?.length).toBe(1);
+    // A fixture a withdrawal voided (an expunged abandon on its ledger) is settled and no longer holds a round back; any
+    // other undecided fixture still does. The fake's `#expunged` is that read.
+    expect(gen.match(/existing\.some\(\(f\) => f\.status !== "decided" && !f\.expunged\)/g)?.length).toBe(1);
+    expect(gen).toMatch(/\$\{hasActiveAbandonSql\(tx, "f", \{ expunge: true \}\)\} as expunged/);
     expect(WAIT_UNLESS).toBe("decided");
     // Since W3 T9 the shared active select lives in swissActiveEntrants (it adds the per-stage Swiss stamp), and
     // generateStageFixturesTx — every kind's Generate, americano's included — reads it.
     expect(src).toMatch(/\n {2}const active = await swissActiveEntrants\(tx, stage\.division_id, stageId\);/);
     const active = sliceFunction(src, "swissActiveEntrants").match(/await tx<[^`]*`([\s\S]*?)`/)?.[1] ?? "";
     expect(active).toMatch(/status in \('registered', 'confirmed'\)/);
-    expect(active).not.toMatch(/\bkind\b/);   // no kind filter: pair entrants are "players" (false premise 17)
-    expect(FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT).toBe(true);
+    expect(active).not.toMatch(/\bkind\b/);   // the ACTIVE read has no kind filter: the pair entrants are in it (false premise 17) ...
+    // ... and the member read that turns entrants into players drops them (generators.ts americanoGen, fixed 2026-11-18).
+    const members = gen.match(/tx<\{ entrant_id: string; person_id: string \}\[\]>`([\s\S]*?)`/)?.[1] ?? "";
+    expect(members).toMatch(/join entrants e on e\.id = em\.entrant_id/);
+    expect(members).toMatch(/e\.kind <> 'pair'/);
+    expect(FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT).toBe(false);
     // The default is DERIVED from the constant (plan review 3 m-4).
     expect(new FakeAmericanoDriver({ mode: "mexicano" }).individualsOnly).toBe(!FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT);
     expect(new FakeAmericanoDriver({ mode: "mexicano", individualsOnly: true }).individualsOnly).toBe(true);
@@ -368,11 +379,13 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(readFileSync(ENTRANT_MEMBERS_SQL, "utf8")).toMatch(/primary key \(entrant_id, person_id\)/);
   });
 
-  it("team americano: the product's member read has no kind filter and no order (text pin, I-2) — one arbitrary member per team, the LAST row read", () => {
+  it("team americano: the product's member read excludes only `pair` and has no order (text pin, I-2) — one arbitrary member per team, the LAST row read", () => {
     const gen = sliceFunction(stagesText(), "americanoGen");
     const select = gen.match(/tx<\{ entrant_id: string; person_id: string \}\[\]>`([\s\S]*?)`/)?.[1] ?? "";
     expect(select).toMatch(/from entrant_members/);
-    expect(select).not.toMatch(/\bkind\b/i);
+    // A team entrant is still a player (its kind is not `pair`); `= 'individual'` would drop every team-default sport.
+    expect(select).toMatch(/e\.kind <> 'pair'/);
+    expect(select).not.toMatch(/kind\s*=\s*'individual'/);
     expect(select).not.toMatch(/order by/i);
     // A Map over every row: the last row per entrant wins (the fake's `players`).
     expect(gen).toContain("const personOf = new Map(memberRows.map((r) => [r.entrant_id, r.person_id]));");
@@ -414,7 +427,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // Badminton folds no score, so every mexicano point is 0 and the order is
     // by person id: round 2's pairing holds no self-pair, isolating the
     // duplicate (the self-pair path is its own test below).
-    const driver = new FakeAmericanoDriver({ mode: "mexicano" });
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", individualsOnly: false });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
     expect(driver.selfPairsIn(2)).toBe(0);
     const dup = driver.firstDuplicate();   // the first round ≥ 2 with a repeat, from the fake's own rows
@@ -453,7 +466,7 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // pair entrant meets its own member there — the self-pair. No fake option
     // forces it: it falls out of the product's points (deviation from the
     // brief's `selfPairAnswers500`).
-    const driver = new FakeAmericanoDriver({ mode: "mexicano" });
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", individualsOnly: false });
     const { out, checks } = await runOn(driver, "LIFECYCLE", { row: "mexicano", sport: "generic" });
     expect(driver.selfPairsIn(2)).toBeGreaterThan(0);
     expect(driver.roundsGenerated()).toEqual([1]);
@@ -603,7 +616,9 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // fake's own rows (the oracle) in each.
     const seen = { later: 0, notLater: 0, round2: 0, cases: 0 };
     for (const sport of SPORT_KEYS) for (const seedOrderedPersons of [false, true]) {
-      const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons });
+      // The product BEFORE the 2026-11-18 fixes (pairs counted as players, a withdrawal leaving the pairs playing): the
+      // harness must still red it, so this is the sweep that proves the signature still fires.
+      const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons, individualsOnly: false, legacyWithdrawal: true });
       const { out, checks } = await runOn(driver, "R4", { row: "mexicano", sport });
       seen.cases++;
       const label = `${sport} seedOrdered=${seedOrderedPersons}`;
@@ -615,8 +630,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
       if (later) seen.later++; else seen.notLater++;
       expect(out.notes.some((n) => /^r4-withdrawn-player-kept-playing/.test(n)), label).toBe(later);
       // T15-R6: nothing of seed 3's is pending when a mexicano withdrawal answers, so the derived policy is "none" —
-      // judged (a pass on the product's "none") iff the second leg is seen, an abstain by name otherwise.
-      expect(check(checks, "r4-policy-reported").verdict, label).toBe(later ? "pass" : "abstain");
+      // judged (a pass on the product's "none") whether or not the second leg is seen.
+      expect(check(checks, "r4-policy-reported").verdict, label).toBe("pass");
       // T15-R9: the re-seat is a CHECK now, not only the note — red iff the person sits in a later round; judged (a pass)
       // when later rounds exist without them; an abstain by name when no round followed (the self-pair stop at round 2).
       const after = driver.fixturesAfterRound(1).length;
@@ -629,8 +644,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(seen.notLater).toBeGreaterThan(0);
   });
 
-  it("mexicano R4 with the second leg (person ids in seed order, badminton): round 2 generated, the signature written, the full failing set pinned", async () => {
-    const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons: true });
+  it("mexicano R4 on the LEGACY product, with the second leg (person ids in seed order, badminton): round 2 generated, the signature written, the full failing set pinned", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons: true, individualsOnly: false, legacyWithdrawal: true });
     const { out, checks } = await runOn(driver, "R4", { row: "mexicano", sport: "badminton" });
     expect(driver.roundsGenerated()).toContain(2);
     expect(seatedAfter(driver, 1, driver.personOfSeed(3))).toBe(true);
@@ -671,20 +686,51 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(i10RepeatEvidence(driver, dup)).toContain(i10.reason);
   });
 
-  it("mexicano R4 WITHOUT the second leg (dropWithdrawnFromPlan; review 3 m-4): round 2 exists, no signature", async () => {
-    // The same field as above, so the only difference is the dropped player:
-    // the option drops the withdrawn individual AND every pair entrant
-    // holding their person.
-    const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons: true, dropWithdrawnFromPlan: true });
+  it("mexicano R4 on the product as it is (pairs are not players; review 3 m-4): round 2 exists, no signature", async () => {
+    // The same field as above, so the only difference is the product: it plans round 2 over the active INDIVIDUALS, the
+    // withdrawn one gone, and no pair entrant is a player.
+    const driver = new FakeAmericanoDriver({ mode: "mexicano", seedOrderedPersons: true });
     const { out, checks } = await runOn(driver, "R4", { row: "mexicano", sport: "badminton" });
     expect(seatedAfter(driver, 1, driver.personOfSeed(3))).toBe(false);
     expect(driver.roundsGenerated()).toContain(2);   // round 2 exists, so "no signature" is not vacuous
     expect(out.notes.some((n) => /r4-withdrawn-player-kept-playing/.test(n))).toBe(false);
-    // T15-R6: with the second leg unseen the policy is not judged — an abstain by name, never a pass or a red.
-    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "abstain", checked: 0 });
-    expect(check(checks, "r4-policy-reported").reason).toMatch(/^second leg unseen: \S+ is seated in no fixture after round 1/);
+    // Nothing of seed 3's was pending when a mexicano withdrawal answered (round 2 not yet generated): "none" is the
+    // derived policy and the product's answer - judged now, never an abstain while the second leg is unseen.
+    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
     // T15-R9 negative pair: later rounds exist without the person — judged, a pass, every later fixture checked.
     expect(check(checks, "r4-not-seated-later")).toMatchObject({ verdict: "pass", checked: driver.fixturesAfterRound(1).length });
+  });
+
+  it("mexicano: a player withdrawn MID-round voids their pair's pending game, and the voided game does not hold round 2 back (the product's expunged read)", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "mexicano" }); // the product as it is
+    const ctx = ctxFor(driver, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
+    const rec = new Recorder();
+    const setup = await setUpDivision(ctx, rec, 8);
+    let withdrawn: { policy: string; voided: number } | null = null;
+    await playMexicano(ctx, rec, setup, setup.stage, {
+      beforeRound: async (round) => {
+        if (round !== 1 || withdrawn !== null) return;
+        const out = await driver.withdraw(driver.entrants.find((e) => e.status !== "withdrawn")!.id);
+        withdrawn = { policy: out.policy, voided: out.voided };
+      },
+    });
+    // The premise, from the fake's own rows: a round-1 game WAS voided by the withdrawal, so a wait that counted it would stall.
+    const voided = driver.fixturesOfRound(1).filter((f) => f.status === "abandoned");
+    expect(withdrawn, "the withdrawal ran").toMatchObject({ policy: "expunge" });
+    expect(voided.length, "the withdrawal voided a round-1 game").toBeGreaterThan(0);
+    expect(withdrawn!.voided).toBe(voided.length);
+    expect(driver.roundsGenerated(), "round 2 was generated although a round-1 game is voided, not decided").toContain(2);
+    // The differing case: a RECORDED abandon (the scorer's, not a withdrawal's) in the same place still stalls the round.
+    const kept = new FakeAmericanoDriver({ mode: "mexicano" });
+    const ctx2 = ctxFor(kept, "LIFECYCLE", { row: "mexicano", sport: "badminton" });
+    const rec2 = new Recorder();
+    const setup2 = await setUpDivision(ctx2, rec2, 8);
+    await playMexicano(ctx2, rec2, setup2, setup2.stage, {
+      beforeRound: async (round, batch) => {
+        if (round === 1 && batch[0] !== undefined) await kept.abandonFixture(kept.fixtures.find((x) => x.id === batch[0]!.id)!);
+      },
+    });
+    expect(kept.roundsGenerated(), "a recorded abandon is not settled: nothing past round 1").toEqual([1]);
   });
 
   it("M1 on americano (D14, ruling 51): targets the first fixture whose pair entrant has seed 1's person as a member, found through entrant members", async () => {
@@ -730,8 +776,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(await TARGET_OF.americano(linked, [], "e1", members)).toBeNull();
   });
 
-  it("R4 on americano (D14, ruling 51): the withdrawn player keeps playing → the predicted signature, routed W7, never a crash", async () => {
-    const driver = new FakeAmericanoDriver({ mode: "americano" });
+  it("R4 on the LEGACY americano (D14, ruling 51): the withdrawn player keeps playing → the predicted signature, routed W7, never a crash", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "americano", legacyWithdrawal: true });
     const { out, checks } = await runOn(driver, "R4", { row: "americano" });
     expect(out.observed.withdrawal!.policy).toBe("none");
     expect(out.observed.withdrawal!.before).toEqual([]);
@@ -739,9 +785,9 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(seatedAfter(driver, 1, p3)).toBe(true);
     const k = driver.fixturesAfterRound(1).filter((f) => [f.home_entrant_id, f.away_entrant_id].some((e) => e !== null && driver.membersOf(e).includes(p3))).length;
     // T15-R6: americano plans every round at Start, so the k later games were PENDING when the withdrawal answered — the
-    // derived policy is "walkover", and the product's "none" is the red (the oracle is the fake's own rows).
+    // derived policy is "expunge", and the legacy product's "none" is the red (the oracle is the fake's own rows).
     expect(k).toBeGreaterThan(0);
-    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "fail", checked: 1, evidence: [`policy none, expected walkover (${k} pending game(s) of the withdrawn entrant (1 person) at withdrawal, through any entrant; withdrawal.ts open-format rule)`] });
+    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "fail", checked: 1, evidence: [`policy none, expected expunge (${k} pending game(s) of the withdrawn entrant (1 person) at withdrawal, through any entrant; withdrawal.ts open-format rule)`] });
     expect(out.notes).toContain(`r4-withdrawn-player-kept-playing: ${p3} still seated in ${k} later fixture(s) — predicted product red → ${KEPT_PLAYING_ROUTE.wave}`);
     // T15-R9: the k later games red r4-not-seated-later too — both covered by the kept-playing signature.
     expect(failing(checks), "full failing set (review 3 I-2; T15-R9)").toEqual(["r4-not-seated-later", "r4-policy-reported"]);
@@ -751,8 +797,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
 
   // W1d Task 13, item 24: the policy note named every person id ("of <id>+<id>+…"), which on a team division is the
   // whole roster, three times. It now counts the persons: the policy and the pending count are still the note's content.
-  it("R4 on TEAM americano (football): the policy note names the withdrawn entrant's persons COUNT, never their ids", async () => {
-    const driver = new FakeAmericanoDriver({ mode: "americano" });
+  it("R4 on TEAM americano (football, legacy product): the policy note names the withdrawn entrant's persons COUNT, never their ids", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "americano", legacyWithdrawal: true });
     const { out, checks } = await runOn(driver, "R4", { row: "americano", sport: "football" });
     const withdrawn = out.observed.withdrawal!.entrantId;
     const persons = (await driver.entrantMembers(withdrawn)).map((m) => m.person_id);
@@ -763,21 +809,29 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     expect(policy.verdict).toBe("fail");
     expect(policy.evidence).toHaveLength(1);
     const note = policy.evidence[0]!;
-    expect(note).toMatch(new RegExp(`^policy none, expected walkover \\(\\d+ pending game\\(s\\) of the withdrawn entrant \\(${persons.length} persons\\) at withdrawal, through any entrant; withdrawal\\.ts open-format rule\\)$`));
+    expect(note).toMatch(new RegExp(`^policy none, expected expunge \\(\\d+ pending game\\(s\\) of the withdrawn entrant \\(${persons.length} persons\\) at withdrawal, through any entrant; withdrawal\\.ts open-format rule\\)$`));
     for (const id of persons) expect(note, id).not.toContain(id);
     expect(note).not.toContain("+");
   });
 
-  it("R4 on americano WITHOUT the second leg (dropWithdrawnFromPlan): no predicted signature — the red goes to normal triage", async () => {
-    const driver = new FakeAmericanoDriver({ mode: "americano", dropWithdrawnFromPlan: true });
+  it("R4 on americano as the product is now (withdrawal voids the pairs' pending games): policy expunge, the cascade consistent, nothing seated later, no signature", async () => {
+    const driver = new FakeAmericanoDriver({ mode: "americano" });
     const { out, checks } = await runOn(driver, "R4", { row: "americano" });
-    expect(seatedAfter(driver, 1, driver.personOfSeed(3))).toBe(false);
+    const p3 = driver.personOfSeed(3);
+    expect(laterSeating(driver, 1, p3).filter((f) => f.status !== "abandoned"), "the player is seated in no later game that is still to be played").toEqual([]);
     expect(driver.fixturesAfterRound(1).length, "later rounds exist, so the absence is not vacuous").toBeGreaterThan(0);
+    // The oracle is the fake's own rows: every game of round 2 on that holds their person through a pair was PENDING.
+    const theirs = driver.rows().filter((f) => (f.round_no ?? 0) > 1 && [f.home_entrant_id, f.away_entrant_id].some((e) => e !== null && driver.membersOf(e).includes(p3)));
+    expect(theirs.length).toBeGreaterThan(0);
+    expect(theirs.every((f) => f.status === "abandoned"), "every one of them was voided").toBe(true);
+    expect(out.observed.withdrawal!.policy).toBe("expunge");
+    expect(out.observed.withdrawal!.voided).toBe(theirs.length);
+    expect(out.observed.withdrawal!.before, "the entrant itself holds no fixture on an americano; its games are the pairs'").toEqual([]);
     expect(out.notes.some((n) => /r4-withdrawn-player-kept-playing/.test(n))).toBe(false);
-    // T15-R6: the second leg unseen — abstain by name.
-    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "abstain", checked: 0 });
-    expect(check(checks, "r4-policy-reported").reason).toMatch(/^second leg unseen: /);
+    expect(check(checks, "r4-policy-reported")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(check(checks, "r4-cascade-consistent").verdict).toBe("pass");
     expect(check(checks, "r4-not-seated-later")).toMatchObject({ verdict: "pass", checked: driver.fixturesAfterRound(1).length });
+    expect(failing(checks)).toEqual([]);
   });
 
   it("keptPlayingNote's legs, each alone: policy none AND nothing pending AND the person seated later — and through ANY entrant", () => {
@@ -846,9 +900,10 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
   // T15-R6 (ruling 53's shape): the americano/mexicano policy is DERIVED from
   // what the withdrawn PLAYER had pending when the withdrawal answered —
   // through any entrant, since the pair entrants hold an americano player's
-  // games — and abstains by name while the second leg is unseen. The old
-  // fixed `policy !== "none"` stayed red even once W7 stops re-seating.
-  it("T15-R6: americanoPolicyExpectation — derived from the player's pending games, abstains while the second leg is unseen", () => {
+  // games. The product voids those games now (policy "expunge"), so there is no
+  // second leg to wait for: the expectation is judged either way, and abstains
+  // by name only when a pending side's members were never recorded.
+  it("T15-R6: americanoPolicyExpectation — derived from the player's pending games (expunge, else none), judged even with the second leg unseen", () => {
     const stage = {
       fixtures: [
         { id: "f1", roundNo: 1, home: "pe1", away: "pe2" },
@@ -859,17 +914,17 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     const w = { entrantId: "e3", afterRound: 1 };
     const row = (id: string, home: string | null, away: string | null, status: string) => ({ id, home, away, status });
     // Americano's shape: round 2 was planned at Start, so p3's game in it was pending through pe3.
-    expect(americanoPolicyExpectation(w, ["p3"], [row("f1", "pe1", "pe2", "decided"), row("f2", "pe3", "pe4", "scheduled")], stage)).toEqual({ want: "walkover", pending: 1 });
+    expect(americanoPolicyExpectation(w, ["p3"], [row("f1", "pe1", "pe2", "decided"), row("f2", "pe3", "pe4", "scheduled")], stage)).toEqual({ want: "expunge", pending: 1 });
     // Mexicano's shape: nothing of p3's was pending (round 2 not yet generated) — "none", where the old constant demanded not-"none".
     expect(americanoPolicyExpectation(w, ["p3"], [row("f1", "pe1", "pe2", "decided")], stage)).toEqual({ want: "none", pending: 0 });
     expect(americanoPolicyExpectation(w, ["p3"], [], stage)).toEqual({ want: "none", pending: 0 });
     // A pending game NOT holding the player counts nothing.
     expect(americanoPolicyExpectation(w, ["p3"], [row("f9", "pe2", "pe4", "scheduled")], stage)).toEqual({ want: "none", pending: 0 });
     // Through the player's own entrant id, too.
-    expect(americanoPolicyExpectation(w, ["p3"], [row("f8", "e3", "pe4", "in_play")], stage)).toEqual({ want: "walkover", pending: 1 });
-    // The second leg unseen (nobody holding p3 sits after round 1): abstain by name, never a pass.
+    expect(americanoPolicyExpectation(w, ["p3"], [row("f8", "e3", "pe4", "in_play")], stage)).toEqual({ want: "expunge", pending: 1 });
+    // The second leg unseen (nobody holding p3 sits after round 1 - the product voided them): STILL judged, never an abstain.
     const unseen = americanoPolicyExpectation(w, ["p3"], [row("f2", "pe3", "pe4", "scheduled")], { ...stage, fixtures: [{ id: "f1", roundNo: 1, home: "pe1", away: "pe2" }] as never });
-    expect(unseen).toEqual({ abstain: "second leg unseen: p3 is seated in no fixture after round 1, so what the withdrawal left cannot be judged (T15-R6)" });
+    expect(unseen).toEqual({ want: "expunge", pending: 1 });
     // A pending game whose side has no recorded members cannot be judged either way: abstain by name.
     expect(americanoPolicyExpectation(w, ["p3"], [row("f7", "pe9", "pe4", "scheduled")], stage)).toEqual({ abstain: "cannot derive the policy: pending fixture f7 seats pe9, whose members were never recorded" });
     // A decided game with an unknown side is not pending, so it blocks nothing.
@@ -1053,8 +1108,8 @@ describe("americano and mexicano rounds (W1-driving Task 8, D9)", () => {
     // (recordPersons is the only reader of the minted pe* sides, so one read per side = one call). "cap" is not
     // reachable on this fake (a generate past config.rounds creates nothing), so it is named, not swept.
     const shapes = [
-      { exit: "refused_generate", opts: { mode: "mexicano" as const }, sport: "badminton" },
-      { exit: "stalled_rounds", opts: { mode: "mexicano" as const, stallAfter: 2 }, sport: "badminton" },
+      { exit: "refused_generate", opts: { mode: "mexicano" as const, individualsOnly: false }, sport: "badminton" },
+      { exit: "stalled_rounds", opts: { mode: "mexicano" as const, stallAfter: 2, individualsOnly: false }, sport: "badminton" },
       { exit: "drained", opts: { mode: "mexicano" as const, individualsOnly: true }, sport: "badminton" },
     ];
     let sides = 0;

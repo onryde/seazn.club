@@ -10,6 +10,7 @@ import { FORMAT_FAMILIES, FormatDiagram, familyForKind, formatFamily } from "@/c
 import { previewDivisionFixtures } from "@/server/usecases/stages";
 import { recommendFormats } from "@/lib/format-recommend";
 import { helpUrl } from "@/lib/help";
+import { stageNeedsAdvancedFormatsGate } from "@/server/usecases/format-gates";
 
 describe("format gallery enumeration", () => {
   it("every engine stage kind has an explainer family", () => {
@@ -108,10 +109,9 @@ describe("cannedStages emit progression, not qualification (F2)", () => {
       placement: "rank_order",
       timing: "setup",
     });
-    // Pro, like the page_playoff family it composes — and the server gate
-    // (usecases/format-gates.ts) already refuses a page_playoff stage without
-    // `formats.double_elim`, so the badge and the enforcement agree.
-    expect(family.pro).toBe(true);
+    // NOT Pro: page_playoff needs `formats.double_elim`, which every plan has had since V393 (Community included), so
+    // a Pro badge here is a paywall that does not exist. See the gate-derived test below.
+    expect(family.pro).toBeUndefined();
   });
 
   it("swiss_knockout's canned graph is a rank-adjacent swiss feeding a plain knockout", () => {
@@ -134,9 +134,27 @@ describe("cannedStages emit progression, not qualification (F2)", () => {
   // exist. Asserted as an explicit `undefined` rather than a falsy check so
   // that a later `pro: false` (which reads the same to a user and different
   // to every `f.pro` consumer) has to be a deliberate edit to this line.
-  it("swiss_knockout is NOT Pro — unlike swiss_playoff, neither half is a gated kind", () => {
+  it("swiss_knockout is NOT Pro, and neither is swiss_playoff - no half of either needs the advanced layer", () => {
     expect(formatFamily("swiss_knockout")!.pro).toBeUndefined();
-    expect(formatFamily("swiss_playoff")!.pro).toBe(true);
+    expect(formatFamily("swiss_playoff")!.pro).toBeUndefined();
+  });
+
+  // The badge follows the SERVER gate, derived rather than typed: a family is Pro exactly when one of its stage kinds
+  // needs `formats.advanced` (usecases/format-gates.ts, the one definition createStages and the builder's locks use).
+  // Double elimination and the page playoff are NOT in that set: `formats.double_elim` is on for Community (V393;
+  // builder-template-locks-live.test.ts reads the plan rows).
+  it("a family carries the Pro flag exactly when the gate says one of its stage kinds needs formats.advanced", () => {
+    let checked = 0;
+    let flagged = 0;
+    for (const f of FORMAT_FAMILIES) {
+      const gated = f.kinds.some((kind) => stageNeedsAdvancedFormatsGate({ kind }));
+      expect(f.pro === true, `${f.slug}: pro flag vs the advanced gate`).toBe(gated);
+      checked++;
+      if (gated) flagged++;
+    }
+    expect(checked, "anti-vacuity: every family was judged").toBe(FORMAT_FAMILIES.length);
+    expect(flagged, "the gate must flag something (americano, ladder), or the equality above is vacuous").toBeGreaterThanOrEqual(2);
+    for (const slug of ["double_elim", "page_playoff", "swiss_playoff"]) expect(formatFamily(slug)!.pro, `${slug} is free on every plan`).toBeUndefined();
   });
 
   it("every family's cannedStages progression is either null or a schema-valid ProgressionSpec", () => {

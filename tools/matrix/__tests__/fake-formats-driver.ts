@@ -878,11 +878,14 @@ export class FakeLadderDriver extends FakeLeagueDriver {
 //    (format-templates.ts:261); the product reads anything else as americano
 //    (:756). The fake stores the posted body, so it serves exactly that shape.
 //  - players: one person per ACTIVE entrant, in the active read's order —
-//    status registered/confirmed, NO kind filter, `order by seed nulls last,
-//    created_at, id` (:2290-2293). Each entrant's person is its LAST member
-//    row (:744-747: a Map over every row, no ORDER BY). An individual has one
-//    row, a team its whole roster (one arbitrary member, false premise 10),
-//    and from mexicano round 2 a pair entrant round 1 minted has two (false
+//    status registered/confirmed, `order by seed nulls last, created_at, id`
+//    (:2290-2293) - whose member rows are read with `e.kind <> 'pair'`
+//    (generators.ts americanoGen, fixed 2026-11-18): the pair entrants an
+//    earlier round minted are NOT players. Each entrant's person is its LAST
+//    member row (a Map over every row, no ORDER BY). An individual has one
+//    row, a team its whole roster (one arbitrary member, false premise 10).
+//    `individualsOnly: false` models the product BEFORE that fix: from mexicano
+//    round 2 a pair entrant round 1 minted has two rows and counts (false
 //    premise 17). The fake returns rows in storage order — a roster in squad
 //    order, a pair's two persons sorted ascending as :722-728 inserts them —
 //    so a pair reads as its HIGHER person id. Fewer than 4 players is 422
@@ -892,8 +895,9 @@ export class FakeLadderDriver extends FakeLeagueDriver {
 //    that moment and inserts only the fixtures whose ext_key is new (:2436).
 //  - mexicano: each generate plans ONE round (pairMexicanoRound, points then
 //    person id, americano.ts:93-95) — unless any fixture of the stage is not
-//    WAIT_UNLESS (:769: a forfeited walkover and a void both block, false
-//    premise 14), or `rounds` rounds exist (:770). A person's points: the
+//    WAIT_UNLESS (:769: a forfeited walkover and a recorded abandon both block,
+//    false premise 14; a fixture a WITHDRAWAL voided - an expunged abandon -
+//    no longer does, `legacyWithdrawal: true` restores the old wait), or `rounds` rounds exist (:770). A person's points: the
 //    folded state's score.home/away of each DECIDED fixture, credited to every
 //    member of that side (:774-783; null → 0, and only generic's fold carries
 //    a score).
@@ -906,19 +910,24 @@ export class FakeLadderDriver extends FakeLeagueDriver {
 //  - Complete (engine-db/competition.ts:39, :399, :575-583): a table stage
 //    folded as a league — not complete with no fixture or any open one; else
 //    finalRanks = the stage's SIDES (the pair entrants, :360-365) by points.
-//  - Withdraw (withdrawal.ts open-format branch): only the entrant's OWN
-//    fixtures are voided; an individual seats none here, so the policy is
-//    "none" and the pair entrants holding their person play on.
+//  - Withdraw (withdrawal.ts americano branch, 2026-11-18): the fixtures of the
+//    pair entrants holding the withdrawn individual's person (americanoPairsHolding)
+//    are theirs too; every PENDING one is voided (an expunged abandon) and the
+//    policy reads "expunge" once anything was. `legacyWithdrawal: true` models
+//    the product before: only the entrant's OWN fixtures, an individual seats
+//    none, so the policy is "none" and the pairs holding their person play on.
 //  - The entrant list carries every entrant, the minted pairs included
 //    (entrants.ts listEntrants has no kind filter), each with its `kind`.
 
 /** usecases/stages/ — the mexicano wait: a fixture in any other status blocks the next round. */
 export const WAIT_UNLESS = "decided";
-/** usecases/stages/ — the active read has no kind filter, so from mexicano
- *  round 2 the pair entrants an earlier round minted are players too (false
- *  premise 17). The fake's default IS that shape; `individualsOnly` models
- *  the corrected product, and the default is derived from this constant. */
-export const FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT = true;
+/** usecases/stages/generators.ts americanoGen — the member read keeps the pair
+ *  entrants an earlier round minted out of the players (`e.kind <> 'pair'`), so
+ *  from mexicano round 2 they are NOT players (false premise 17, fixed). The
+ *  fake's default IS that shape; `individualsOnly: false` models the product
+ *  before the fix (a deliberately WRONG product, the harness must still red
+ *  it), and the default is derived from this constant. */
+export const FAKE_COUNTS_PAIR_ENTRANTS_AS_PLAYERS_BY_DEFAULT = false;
 /** usecases/stages/ — the statuses the active read keeps. */
 const AMERICANO_ACTIVE = new Set(["registered", "confirmed"]);
 
@@ -931,11 +940,11 @@ export interface FakeAmericanoOptions {
   /** Mexicano: once this many rounds exist, a generate creates nothing even
    *  with every fixture decided — a product that stops early. */
   readonly stallAfter?: number;
-  /** A product that DID drop a withdrawn player from what follows: americano
-   *  deletes every pending fixture seating a pair entrant that holds their
-   *  person; mexicano's later plans leave out the withdrawn individual AND
-   *  every pair entrant holding their person. */
-  readonly dropWithdrawnFromPlan?: boolean;
+  /** The product BEFORE the 2026-11-18 withdrawal fix (a deliberately WRONG
+   *  product): an individual's withdrawal touches only their OWN fixtures, so
+   *  the pair entrants holding their person play on (policy "none"), and a
+   *  fixture of any status but decided holds a mexicano round back. */
+  readonly legacyWithdrawal?: boolean;
   /** americanoView answers this mode whatever the stage's config says — a
    *  product whose read model disagrees with its own generator. */
   readonly viewMode?: "americano" | "mexicano";
@@ -954,6 +963,8 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   readonly opts: FakeAmericanoOptions;
   readonly individualsOnly: boolean;
   readonly #pairs: PairEntrant[] = [];
+  /** The fixtures a withdrawal voided: an expunged abandon on the ledger (withdrawal.ts). */
+  readonly #expunged = new Set<string>();
   /** Round numbers in the order a generate (Start's included) created them. */
   readonly #generated: number[] = [];
   /** Round numbers in the order their last open fixture finished. */
@@ -1014,17 +1025,11 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   override kindsInUse(): string[] {
     return [...new Set([...super.kindsInUse(), ...(this.#pairs.length > 0 ? ["pair"] : [])])];
   }
-  #withdrawnPersons(): Set<string> {
-    return new Set(this.entrants.filter((e) => e.status === "withdrawn").flatMap((e) => this.#rows(e.id)));
-  }
   /** usecases/stages/: the players, one per active entrant. */
   players(): string[] {
     const individuals = this.entrants.filter((e) => AMERICANO_ACTIVE.has(e.status))
       .sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER) || (a.id < b.id ? -1 : 1)).map((e) => e.id);
-    const gone = this.#withdrawnPersons();
-    const pairs = this.individualsOnly ? [] : this.#pairs
-      .filter((p) => this.opts.dropWithdrawnFromPlan !== true || !p.members.some((m) => gone.has(m)))
-      .map((p) => p.id);
+    const pairs = this.individualsOnly ? [] : this.#pairs.map((p) => p.id);
     return [...individuals, ...pairs].flatMap((id) => {
       const rows = this.#rows(id);
       return rows.length === 0 ? [] : [rows[rows.length - 1]];
@@ -1061,7 +1066,8 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
       planned = generateAmericano(players, { mode: "americano", courtCount, rounds });
     } else {
       const played = this.fixtures.length > 0 ? Math.max(...this.fixtures.map((f) => f.round_no ?? 0)) : 0;
-      if (this.fixtures.some((f) => f.status !== WAIT_UNLESS)) return 0;
+      // generators.ts americanoGen: `status !== "decided" && !expunged` - a fixture a withdrawal voided is settled.
+      if (this.fixtures.some((f) => f.status !== WAIT_UNLESS && (this.opts.legacyWithdrawal === true || !this.#expunged.has(f.id)))) return 0;
       if (played >= rounds) return 0;
       if (!initial && this.opts.stallAfter !== undefined && played >= this.opts.stallAfter) return 0;
       const pts = this.personalPoints();
@@ -1139,17 +1145,21 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
     const e = this.entrants.find((x) => x.id === entrantId);
     if (e === undefined) throw new RefusedCall("POST", path, 404, wireCodeFor(404), "entrant not found");
     if (e.status === "withdrawn") throw new RefusedCall("POST", path, 409, wireCodeFor(409), "entrant is already withdrawn");
+    // americanoPairsHolding: the minted pairs whose members include a person the withdrawn individual IS. The old
+    // product matched the entrant's own id alone.
+    const mine = new Set(this.#rows(entrantId));
+    const heldPairs = this.opts.legacyWithdrawal === true ? new Set<string>() : new Set(this.#pairs.filter((p) => p.members.some((m) => mine.has(m))).map((p) => p.id));
+    const theirs = (f: FakeFixture): boolean =>
+      [f.home_entrant_id, f.away_entrant_id].some((side) => side !== null && (side === entrantId || heldPairs.has(side)));
     let voided = 0;
-    for (const f of this.fixtures.filter((x) => (x.home_entrant_id === entrantId || x.away_entrant_id === entrantId) && PENDING.has(x.status))) {
+    for (const f of this.fixtures.filter((x) => theirs(x) && PENDING.has(x.status))) {
       await this.abandonFixture(f);
+      this.#expunged.add(f.id);
       voided++;
     }
     e.status = "withdrawn";
-    if (this.opts.dropWithdrawnFromPlan === true && this.mode === "americano") {
-      const gone = this.#withdrawnPersons();
-      this.fixtures = this.fixtures.filter((f) => !(PENDING.has(f.status) && [f.home_entrant_id, f.away_entrant_id].some((s) => s !== null && this.#rows(s).some((p) => gone.has(p)))));
-    }
-    return { entrant_id: entrantId, status: "withdrawn", policy: voided > 0 ? "walkover" : "none", walkovers: 0, voided, skipped_finalized: 0, walked_over_held: 0 };
+    const policy = voided === 0 ? "none" : this.opts.legacyWithdrawal === true ? "walkover" : "expunge";
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers: 0, voided, skipped_finalized: 0, walked_over_held: 0 };
   }
   /** The table folds over the stage's SIDES (engine-db/competition.ts:360-365). */
   override tableEntrants(): string[] {
@@ -1213,6 +1223,8 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   /** An entrant's persons: a pair's two, a division entrant's member rows. */
   membersOf(entrantId: string): string[] { return this.#rows(entrantId); }
   pairEntrantIds(): string[] { return this.#pairs.map((p) => p.id); }
+  /** Did a withdrawal void this fixture (an expunged abandon on its ledger)? */
+  isExpunged(fixtureId: string): boolean { return this.#expunged.has(fixtureId); }
   selfPairsIn(round: number): number { return this.#selfPairs.get(round) ?? 0; }
   /** Round r's observed repeats, from the fake's OWN rows: each person seated
    *  more than once (in two seats, or one seat with themselves) → the seats

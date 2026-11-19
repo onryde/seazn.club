@@ -13,18 +13,21 @@
 //
 // W1-driving Task 8 (D14, ruling 51): on an americano stage (either mode)
 // seed 3 holds no fixture of its own — the pair entrants the product minted
-// do — so the product answers policy "none" and those pairs play on. That is
-// a PREDICTED product red: the case carries the signature
-// r4-withdrawn-player-kept-playing (→ W7) only when its second leg is SEEN —
-// seed 3's person seated after the withdrawal round through any entrant.
+// do. The product USED to answer policy "none" and leave those pairs playing:
+// a PREDICTED product red, carried as the signature
+// r4-withdrawn-player-kept-playing (→ W7) when its second leg was SEEN — seed
+// 3's person seated after the withdrawal round through any entrant. The
+// product fixed it (withdrawal.ts, 2026-11-18): the pairs holding the person
+// have their pending games voided (policy "expunge"), so the signature no
+// longer fires on the product and the note stays as the detector of a
+// regression (a driver answering "none" with the person still seated later).
 //
-// T15-R6 (ruling 53's shape): r4-policy-reported on americano is DERIVED
-// from the games the withdrawn PLAYER had pending when the withdrawal
-// answered — through any entrant, since the pair entrants hold them; reading
-// only the entrant's own rows would copy the product's filter — and it
-// abstains by name while the second leg is unseen. Americano plans every
-// round at Start, so its later games are pending ("walkover" expected, the
-// product's "none" reds); mexicano has generated nothing yet ("none").
+// The policy is DERIVED from the games the withdrawn PLAYER had pending when
+// the withdrawal answered — through any entrant, since the pair entrants hold
+// them; reading only the entrant's own rows would copy the product's old
+// filter: "expunge" when anything was pending, else "none". Americano plans
+// every round at Start, so its later games are pending; mexicano has
+// generated nothing yet ("none").
 //
 // T15-R9: the re-seat itself is judged — r4-not-seated-later, the americano
 // sibling of r4-not-paired-later (swiss, entrant-level) and
@@ -257,16 +260,16 @@ const personsLabel = (n: number): string => `${n} ${n === 1 ? "person" : "person
 
 /** A stage row as it stood immediately before the withdrawal call. */
 export interface RowAtWithdrawal { readonly id: string; readonly home: string | null; readonly away: string | null; readonly status: string }
-export type AmericanoPolicyExpectation = { readonly want: "walkover" | "none"; readonly pending: number } | { readonly abstain: string };
+export type AmericanoPolicyExpectation = { readonly want: "expunge" | "walkover" | "none"; readonly pending: number } | { readonly abstain: string };
 
-/** T15-R6 (ruling 53's shape, withdrawal.ts:213-217): the policy an americano
- *  withdrawal owes — "walkover" when the withdrawn PLAYER had a pending game
- *  through any entrant when it answered, else "none" — or an abstain by name:
- *  while the second leg is unseen (what the withdrawal left cannot be
- *  judged), or when a pending game seats a side whose members were never
- *  recorded (it may or may not hold the player). */
+/** The policy an americano withdrawal owes (withdrawal.ts americano branch, controller's PO call 2026-11-18): "expunge"
+ *  when the withdrawn PLAYER had a pending game through any entrant when it answered - their own, or a pair entrant
+ *  holding their person (americanoPairsHolding) - else "none"; or an abstain by name when a pending game seats a side
+ *  whose members were never recorded (it may or may not hold the player). It no longer waits for a second leg: the
+ *  product now VOIDS what the player had pending, so the games are no longer seated later and "second leg unseen" is
+ *  the correct outcome, not a reason to abstain (T15-R6 abstained there while the product left the pairs playing). */
 export function americanoPolicyExpectation(w: Pick<WithdrawalObs, "entrantId" | "afterRound">, mine: readonly string[], atWithdrawal: readonly RowAtWithdrawal[], stage: Pick<ObservedStage, "fixtures" | "persons">): AmericanoPolicyExpectation {
-  if (secondLeg(w, mine, stage).length === 0) return { abstain: `second leg unseen: ${mine.join("+")} is seated in no fixture after round ${w.afterRound}, so what the withdrawal left cannot be judged (T15-R6)` };
+  if (mine.length === 0) throw new Error(`scenario: R4 on an americano stage, but the withdrawn entrant ${w.entrantId} has no linked person — the setup reads one for every entrant (personsNeeded)`);
   const persons = stage.persons ?? {};
   const pendingRows = atWithdrawal.filter((f) => PENDING_STATUSES.includes(f.status));
   for (const f of pendingRows) {
@@ -275,7 +278,7 @@ export function americanoPolicyExpectation(w: Pick<WithdrawalObs, "entrantId" | 
   }
   const holds = holdsPlayer(w.entrantId, mine, persons);
   const pending = pendingRows.filter((f) => holds(f.home) || holds(f.away)).length;
-  return { want: pending > 0 ? "walkover" : "none", pending };
+  return { want: pending > 0 ? "expunge" : "none", pending };
 }
 
 export interface NotChallengedLaterInput {
@@ -346,6 +349,22 @@ export const r4Withdrawal: Scenario = {
         if (withdrawal !== null || !R4_TRIGGER[family](round, batch, seed3)) return;
         const rows = (await ctx.driver.listFixtures(setup.division.id)).filter((f) => f.stage_id === setup.stage.id);
         atWithdrawal = rows.map((f) => ({ id: f.id, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status }));
+        // An americano's fixtures name per-round PAIR entrants minted from the individuals (the product's
+        // americanoPairsHolding): the withdrawn player's fixtures are those of any side that holds their person,
+        // found from the members the driver reads, never from the product's own filter.
+        const minePersons = setup.stage.kind === "americano" ? (setup.persons.get(seed3) ?? []) : [];
+        const heldSides = new Set<string>();
+        if (setup.stage.kind === "americano") {
+          for (const side of new Set(rows.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((x): x is string => x !== null && x !== seed3))) {
+            if ((await ctx.driver.entrantMembers(side)).some((m) => minePersons.includes(m.person_id))) heldSides.add(side);
+          }
+        }
+        const snapOf = (f: (typeof rows)[number]): FixtureSnap => snap({ id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome), declared: null });
+        // The games held only THROUGH a pair (never the entrant's own): judged by the cascade, but not the entrant's `before`
+        // (r4-withdrawn-player-kept-playing reads `before` as what the entrant itself had pending).
+        const heldBefore = rows
+          .filter((f) => f.home_entrant_id !== seed3 && f.away_entrant_id !== seed3 && ((f.home_entrant_id !== null && heldSides.has(f.home_entrant_id)) || (f.away_entrant_id !== null && heldSides.has(f.away_entrant_id))))
+          .map(snapOf);
         const before = rows
           .filter((f) => f.home_entrant_id === seed3 || f.away_entrant_id === seed3)
           .map((f) => snap({ id: f.id, stageId: f.stage_id, poolId: f.pool_id, roundNo: f.round_no, home: f.home_entrant_id, away: f.away_entrant_id, status: f.status, outcome: toObservedOutcome(f.outcome), declared: null }));
@@ -353,7 +372,7 @@ export const r4Withdrawal: Scenario = {
         rec.facts.add("withdrawn");
         rec.withdrawn.add(seed3);
         if (out.policy === "expunge") rec.facts.add("expunged");
-        withdrawal = { entrantId: seed3, afterRound: round, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedFinalized: out.skipped_finalized, before };
+        withdrawal = { entrantId: seed3, afterRound: round, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedFinalized: out.skipped_finalized, before, ...(heldBefore.length > 0 ? { heldBefore } : {}) };
         if (family === "ladder") heldAt = (await ladderOrderOf(ctx, setup.division.id, setup.stage.id)).indexOf(seed3);
       },
     });
@@ -407,6 +426,13 @@ export const r4Withdrawal: Scenario = {
           [{ ok: w.policy === (derived.want === "none" ? "walkover" : "none"), note: `policy ${w.policy}, expected ${derived.want === "none" ? "walkover" : "none"}` }],
           ctx.spec.canary,
         );
+    // An americano withdrawal reports "expunge" but voids only what was PENDING (played results stand): the cascade is judged
+    // over every game the player held - through a pair entrant too - as the pending-only model reads it (abandon: pending
+    // voided, the rest unchanged), and the canary's opposite is the strict expunge (which would abandon the played games).
+    // A "none" answer judges nothing of the pairs': they play on, so their end state is not the withdrawal's to explain.
+    const cascade = kind === "americano" && w.policy === "expunge"
+      ? { policy: "walkover" as WithdrawalObs["policy"], opposite: "expunge" as WithdrawalObs["policy"], before: [...w.before, ...(w.heldBefore ?? [])] }
+      : { policy: w.policy, opposite: opposite as WithdrawalObs["policy"], before: w.before };
     const challenged = family === "ladder"
       ? notChallengedLater({
         kind, seed3: w.entrantId, heldAt,
@@ -425,8 +451,8 @@ export const r4Withdrawal: Scenario = {
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", policyItems, policyAbstain),
         assertion("r4-cascade-consistent", withCanary(
-          [...cascadeItems(w.policy, w.entrantId, w.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(w.policy, w.before, w.skippedFinalized)],
-          [...cascadeItems(opposite, w.entrantId, w.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(opposite, w.before, w.skippedFinalized)],
+          [...cascadeItems(cascade.policy, w.entrantId, cascade.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(cascade.policy, cascade.before, w.skippedFinalized)],
+          [...cascadeItems(cascade.opposite, w.entrantId, cascade.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(cascade.opposite, cascade.before, w.skippedFinalized)],
           ctx.spec.canary,
         )),
         assertion("r4-not-paired-later",

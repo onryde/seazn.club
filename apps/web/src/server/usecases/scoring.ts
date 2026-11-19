@@ -1175,17 +1175,23 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
         ? ((fixture.outcome as { loser?: string | null }).loser ?? undefined)
         : undefined);
     if (fixture.kind === "ladder" && winner !== undefined && ladderLoser !== undefined) {
-      const cfg = fixture.stage_config as { ladder_order?: string[] };
-      const order = [...(cfg.ladder_order ?? [])];
-      const wi = order.indexOf(winner);
-      const li = order.indexOf(ladderLoser);
-      if (wi >= 0 && li >= 0 && wi > li) {
-        [order[wi], order[li]] = [order[li]!, order[wi]!];
-        // Server-side merge (design §T2) — see the rank_overrides write above.
-        await tx`
-          update stages set config = config || ${tx.json({ ladder_order: order } as never)}
-          where id = ${fixture.stage_id}`;
-      }
+      // ONE statement against the stage row's CURRENT config - never a rewrite of the `stage_config` read at the top of
+      // this transaction. A late entrant admitted while this result was being scored (usecases/ladder-late-entry.ts
+      // appends under the `division:` lock, which this hot path does not take) commits its append to the same row; a
+      // blocked UPDATE re-evaluates its SET expression against the row version that commit left, so the swap is
+      // computed from the order the newcomer is already in, and the newcomer survives it. (Taking the `division:` lock
+      // here instead would INVERT the global order `division:` -> stage seats -> `fixture:` -> `division-config:`
+      // (see the lock comment above): this hook already holds `fixture:`, while stage-graph.ts and entrants.ts take
+      // `division:` first and score or seat fixtures after it.
+      // A swap only applies when both are on the ladder and the winner is BELOW the loser.
+      await tx`
+        update stages s set config = s.config || jsonb_build_object('ladder_order', (
+          select jsonb_agg(case t.v when ${winner}::text then ${ladderLoser}::text when ${ladderLoser}::text then ${winner}::text else t.v end order by t.ord)
+          from jsonb_array_elements_text(s.config->'ladder_order') with ordinality as t(v, ord)))
+        where s.id = ${fixture.stage_id}
+          and jsonb_typeof(s.config->'ladder_order') = 'array'
+          and (select t.ord from jsonb_array_elements_text(s.config->'ladder_order') with ordinality as t(v, ord) where t.v = ${winner}::text)
+            > (select t.ord from jsonb_array_elements_text(s.config->'ladder_order') with ordinality as t(v, ord) where t.v = ${ladderLoser}::text)`;
     }
     return fixture;
   });

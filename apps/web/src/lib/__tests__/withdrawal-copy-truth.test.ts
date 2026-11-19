@@ -81,6 +81,16 @@ type Claim = {
   /** The blanket promise this replaces, as it shipped: bringing them back does not take the seat back. */
   blanketUndoWas: string;
   blanketUndo: RegExp;
+  /** The ladder/americano sentence as it shipped: one claim for both ("remaining games are voided"). False for a ladder. */
+  openFormatsWas: string;
+  /** The retired claim: a ladder and an americano named together under one "voided". */
+  ladderVoided: RegExp;
+  /** A ladder's open challenges (issued OR received) are AWARDED to the other player as walkovers (X-WD-2:
+   *  `WITHDRAWAL_WALKOVER_KINDS` holds "ladder"; withdrawal-w2b.test.ts drives it). */
+  ladderAwarded: RegExp;
+  /** An americano or mexicano: their UNPLAYED matches are voided and the points they earned stand
+   *  (withdrawal-americano.test.ts drives it). */
+  americanoVoided: RegExp;
 };
 
 const CLAIMS: Record<string, Claim> = {
@@ -98,6 +108,10 @@ const CLAIMS: Record<string, Claim> = {
     replacementStays: /replacement keeps/i,
     blanketUndoWas: "All of it rides the normal scoring ledger, so each can be undone.",
     blanketUndo: /each can be undone/i,
+    openFormatsWas: "In a ladder or americano, remaining games are voided and earned standings stand.",
+    ladderVoided: /in a ladder or americano/i,
+    ladderAwarded: /open challenges they issued or received are awarded to the other player as walkovers/i,
+    americanoVoided: /in an americano or mexicano, their matches not yet finished are voided, so the other players in those matches lose that game; the points they earned stand, and reinstating them does not bring the voided matches back/i,
   },
   es: {
     retiredBody:
@@ -113,6 +127,10 @@ const CLAIMS: Record<string, Claim> = {
     replacementStays: /sustituto conserva/i,
     blanketUndoWas: "Todo pasa por el registro de puntuación normal, así que cada uno se puede deshacer.",
     blanketUndo: /cada uno se puede deshacer/i,
+    openFormatsWas: "En una escalera o un americano, los partidos restantes se anulan y la clasificación lograda se mantiene.",
+    ladderVoided: /en una escalera o un americano/i,
+    ladderAwarded: /desafíos abiertos que lanzaron o recibieron se otorgan al otro jugador/i,
+    americanoVoided: /en un americano o un mexicano, sus partidos sin terminar se anulan, así que los demás jugadores de esos partidos pierden ese encuentro; los puntos conseguidos se mantienen y reincorporarlo no recupera los partidos anulados/i,
   },
   fr: {
     retiredBody:
@@ -128,6 +146,10 @@ const CLAIMS: Record<string, Claim> = {
     replacementStays: /remplaçant garde/i,
     blanketUndoWas: "Tout passe par le registre de scores habituel, chacun peut donc être annulé.",
     blanketUndo: /chacun peut donc être annulé/i,
+    openFormatsWas: "Dans une échelle ou un americano, les matchs restants sont invalidés et le classement acquis est conservé.",
+    ladderVoided: /dans une échelle ou un americano/i,
+    ladderAwarded: /défis ouverts qu['’]ils ont lancés ou reçus sont attribués par forfait à l['’]autre joueur/i,
+    americanoVoided: /dans un americano ou un mexicano, leurs matchs non terminés sont invalidés, donc les autres joueurs de ces matchs perdent cette rencontre ; les points acquis sont conservés, et réintégrer le joueur ne rétablit pas les matchs invalidés/i,
   },
   nl: {
     retiredBody:
@@ -143,6 +165,10 @@ const CLAIMS: Record<string, Claim> = {
     replacementStays: /houdt de vervanger/i,
     blanketUndoWas: "Alles verloopt via het normale scoreregister, dus elk kan ongedaan worden gemaakt.",
     blanketUndo: /dus elk kan ongedaan/i,
+    openFormatsWas: "In een ladder of americano worden resterende wedstrijden ongeldig verklaard en blijft de behaalde stand staan.",
+    ladderVoided: /in een ladder of americano/i,
+    ladderAwarded: /openstaande uitdagingen die ze hebben gedaan of gekregen als walk-over aan de andere speler toegekend/i,
+    americanoVoided: /in een americano of mexicano worden hun nog niet afgeronde wedstrijden ongeldig verklaard, waardoor de andere spelers in die wedstrijden die wedstrijd verliezen; de behaalde punten blijven staan en terugzetten brengt de ongeldige wedstrijden niet terug/i,
   },
 };
 
@@ -223,6 +249,18 @@ describe(`${KEY} tells the truth in every locale`, () => {
       const text = body(locale);
       expect(claim.swissRare.test(text), `${locale} ${KEY} still says Swiss voiding is rare.\n  on disk: ${text}`).toBe(false);
       expect(claim.swissNever.test(text), `${locale} ${KEY} does not say Swiss never voids.\n  on disk: ${text}`).toBe(true);
+    });
+
+    it(`${locale}: says a ladder AWARDS its open challenges as walkovers and an americano voids only what is unplayed`, () => {
+      // The retired sentence is the positive proof each pattern bites: the old claim matches the retired pattern and
+      // none of the new ones, so a regex that matches nothing anywhere is a FAULT, not a pass.
+      expect(claim.ladderVoided.test(claim.openFormatsWas), `${locale} ladderVoided matches nothing it retired`).toBe(true);
+      expect(claim.ladderAwarded.test(claim.openFormatsWas), `${locale} ladderAwarded already matched the old copy`).toBe(false);
+      expect(claim.americanoVoided.test(claim.openFormatsWas), `${locale} americanoVoided already matched the old copy`).toBe(false);
+      const text = body(locale);
+      expect(claim.ladderVoided.test(text), `${locale} ${KEY} still groups a ladder with the americano's voiding.\n  on disk: ${text}`).toBe(false);
+      expect(claim.ladderAwarded.test(text), `${locale} ${KEY} does not say a ladder awards its open challenges.\n  on disk: ${text}`).toBe(true);
+      expect(claim.americanoVoided.test(text), `${locale} ${KEY} does not say an americano voids their unplayed matches.\n  on disk: ${text}`).toBe(true);
     });
 
     it(`${locale}: covers the open formats the retired copy left out`, () => {

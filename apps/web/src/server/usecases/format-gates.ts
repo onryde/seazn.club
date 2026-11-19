@@ -1,5 +1,6 @@
 import "server-only";
 import { STAGE_TEMPLATES, buildTemplateStages } from "@/lib/format-templates";
+import { hasFeature } from "@/lib/entitlements";
 // Shared stage-format entitlement gates (doc 10 §1, Jul3/08 §8) — the single
 // definition of "does this stage kind/config need formats.double_elim /
 // formats.advanced". Split out of usecases/stages/ because `withTenant`
@@ -36,7 +37,8 @@ export interface StageFormatGateInput {
   config?: Record<string, unknown> | undefined;
 }
 
-/** Doc 10 §1: `formats.double_elim` is Pro. */
+/** Doc 10 §1: `formats.double_elim` gates the double-elimination and page-playoff kinds. Every plan has it since V393
+ *  (Community included), so today it refuses nothing a live org can reach; the gate stays for a plan row that turns it off. */
 export function stageNeedsDoubleElimGate(kind: string): boolean {
   return kind === "double_elim" || kind === "page_playoff";
 }
@@ -66,4 +68,16 @@ export function templateLocksFor(allowed: { doubleElim: boolean; advanced: boole
     else if (!allowed.advanced && stages.some((st) => stageNeedsAdvancedFormatsGate(st))) locks[tpl.key] = "formats.advanced";
   }
   return locks;
+}
+
+/** The locks the division builder shows an organisation for one competition, read from its LIVE entitlements with the same
+ *  two questions the stage writers ask (`createStages`: `formats.double_elim`, `formats.advanced`, the competition's Event
+ *  Pass counted). The one function both builder pages call (d/new/page.tsx, d/[divSlug]/page.tsx), so the badge can never
+ *  follow a static flag or a second copy of the question: builder-template-locks-live.test.ts drives THIS. */
+export async function templateLocksForOrg(orgId: string, competitionId: string): Promise<Record<string, string>> {
+  const [doubleElim, advanced] = await Promise.all([
+    hasFeature(orgId, "formats.double_elim", competitionId),
+    hasFeature(orgId, "formats.advanced", competitionId),
+  ]);
+  return templateLocksFor({ doubleElim, advanced });
 }

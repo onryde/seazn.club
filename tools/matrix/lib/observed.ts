@@ -168,6 +168,9 @@ export interface WithdrawalObs {
   skippedFinalized: number;
   /** The withdrawn entrant's fixtures as they stood immediately before the call. */
   before: FixtureSnap[];
+  /** americano: the fixtures the withdrawn PLAYER held only through minted pair entrants (a side whose members hold their
+   *  person) as they stood before the call. Never part of `before`: that is what the entrant itself had. */
+  heldBefore?: FixtureSnap[];
 }
 
 export interface ConfigEditObs {
@@ -294,7 +297,11 @@ export function isBye(f: ObservedFixture): boolean {
  *  walkover forfeit or the void of a TBD opponent; an expunge's abandon).
  *  Whether it wrote the RIGHT thing is r4-cascade-consistent's question. */
 export function cascadeWrote(f: ObservedFixture, w: WithdrawalObs | null): boolean {
-  if (w === null || (f.home !== w.entrantId && f.away !== w.entrantId)) return false;
+  if (w === null) return false;
+  // americano: a game the player held through a pair entrant, voided (the policy reads "expunge", the void is pending-only).
+  const held = w.heldBefore?.find((b) => b.id === f.id);
+  if (held !== undefined) return w.policy === "expunge" && PENDING_STATUSES.includes(held.status) && f.status === "abandoned";
+  if (f.home !== w.entrantId && f.away !== w.entrantId) return false;
   const before = w.before.find((b) => b.id === f.id);
   if (before === undefined) return false;
   if (w.policy === "walkover") return PENDING_STATUSES.includes(before.status) && (f.status === "abandoned" || f.status === "forfeited");

@@ -82,7 +82,7 @@ import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
 import { detectTemplate, templatesForSport, type StageDraft } from "@/lib/format-templates";
 import { divisionFormatOffer, OPENING_PLAN } from "@/lib/division-builder/model";
 import { formatDialogAsked, formatDialogHref, isOldFormatAddress } from "@/lib/division-format-url";
-import { templateLocksFor } from "@/server/usecases/format-gates";
+import { templateLocksForOrg } from "@/server/usecases/format-gates";
 import { redirect } from "next/navigation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
@@ -689,10 +689,9 @@ export default async function DivisionPage({
     }));
     const current = savedStages.length === 0 ? null : detectTemplate(savedStages);
     const sportKinds = effectiveEntrantModel(sportModule.entrantModel ?? null, null).kinds;
-    const [locked, doubleElimAllowed, advancedAllowed, carryAllowed] = await Promise.all([
+    const [locked, templateLocks, carryAllowed] = await Promise.all([
       divisionFormatLocked(auth, id),
-      hasFeature(auth.orgId, "formats.double_elim", competition.id),
-      hasFeature(auth.orgId, "formats.advanced", competition.id),
+      templateLocksForOrg(auth.orgId, competition.id),
       hasFeature(auth.orgId, "standings.carry_over"),
     ]);
     const clubCourts = venues
@@ -704,7 +703,7 @@ export default async function DivisionPage({
       stages: savedStages,
       offer: divisionFormatOffer(templatesForSport(division.sport_key, sportKinds, current).map((t) => t.key), entrantModel.kinds),
       entrantKinds: entrantModel.kinds,
-      templateLocks: templateLocksFor({ doubleElim: doubleElimAllowed, advanced: advancedAllowed }),
+      templateLocks,
       carryAllowed,
       viewerPlan,
       entrants: activeEntrantIds.length,

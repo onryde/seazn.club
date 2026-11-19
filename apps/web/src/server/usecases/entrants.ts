@@ -42,6 +42,8 @@ import type { LateEntryResult } from "@/server/api-v1/schemas";
 import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from "./swiss-late-entry";
 // W4 T9: and while its root knockout is drawn (X-LE-1).
 import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage } from "./knockout-late-entry";
+// A running ladder takes a late player at the bottom of its order (ladder-late-entry.ts, one owner of the rule).
+import { appendToLadderOrder } from "./ladder-late-entry";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
 import type { WithdrawCascadeOut } from "./withdrawal";
 
@@ -553,6 +555,8 @@ export async function createEntrants(
         (await admitKnockoutLateEntrant(tx, auth, divisionId, row.id, "organiser"));
       // The row as stored after admission: the first round it wrote is part of the entrant (ruling C4).
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${row.id}`;
+      // A running ladder: the newcomer joins the bottom of its order in this same transaction (a no-op for any other format).
+      await appendToLadderOrder(tx, divisionId);
       rows.push({
         ...row,
         ...(dropped > 0 ? { roster_keys_dropped: dropped } : {}),
@@ -1065,6 +1069,9 @@ export async function writeEntrantPatch(
       //
       // W4 B5a T11 (X-CH-3, plan Decision 3): the ONE exception - a finalist of a final the departures left VACANT. Their
       // seat was never taken, so the reinstate reverses the departure write itself (`reviveVacantFinal`) and nobody waits.
+      // A running ladder: a reinstated entrant who held no rung (out of the field at its first challenge) joins the bottom;
+      // one who held a rung finds it kept and nothing is written.
+      await appendToLadderOrder(tx, row.division_id);
       const revived = await reviveVacantFinal(tx, id);
       late = revived
         ? null
