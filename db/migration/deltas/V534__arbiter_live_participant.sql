@@ -1,4 +1,4 @@
--- V532: one LIVE arbiter participant per organizer per player meeting (capacity design §6.5).
+-- V534: one LIVE arbiter participant per organizer per player meeting (capacity design §6.5).
 -- Today every open minted a row, so a database may hold several live rows per (fixture, side, user): stamp all but the newest
 -- removed FIRST, then build the index. A row stamped here gets no vendor removal (SQL cannot call the vendor), so it is safe only
 -- where no vendor call is owed: on an ENDED meeting the teardown already kicked everyone and INACTIVE keeps every token out (the
@@ -17,7 +17,7 @@ begin
                     and (q.fixture_id, q.side, q.user_id) = (p.fixture_id, p.side, p.user_id)
                     and (q.created_at, q.id) > (p.created_at, p.id));
   if live_orphans > 0 then
-    raise warning 'V532: % live arbiter duplicates stamped removed without a vendor removal; they end at their meeting''s teardown', live_orphans;
+    raise warning 'V534: % live arbiter duplicates stamped removed without a vendor removal; they end at their meeting''s teardown', live_orphans;
   end if;
 end $$;
 update fixture_video_participants p set removed_at = now()

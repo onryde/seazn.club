@@ -860,10 +860,10 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       /** Anti-vacuity, per file: what each later delta that touches the three runs on the replica (kept) and leaves out
        *  (skipped). Typed from each delta's own text, never counted by the code below. V531: the two `drop not null`s, the
        *  stamp-pair check, presence_fallback_from, camera_live_first_at and its check, token_issued_at (7); its two
-       *  fixture_seat_line columns (2). V532: the one unique index (1 kept); the dedupe's `do` block (split on its own `;` line ends into
+       *  fixture_seat_line columns (2). V534: the one unique index (1 kept); the dedupe's `do` block (split on its own `;` line ends into
        *  five fragments) and its update are the 6 the replica leaves out. A new delta touching the three adds its own entry, and the keys stay in ASCENDING
        *  version order: they are compared, as a list, with the deltas in the order they replay. */
-      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V531: { kept: 7, skipped: 2 }, V532: { kept: 1, skipped: 6 } };
+      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V531: { kept: 7, skipped: 2 }, V534: { kept: 1, skipped: 6 } };
       /** Every delta numbered above 459 with at least one statement on the three, in version order, split into statements
        *  on `;` at a line end (comments stripped first: a comment's own `;` is not an end). */
       const laterDeltas = (): { version: string; kept: string[]; skipped: string[] }[] =>
@@ -892,7 +892,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         const later = laterDeltas();
         const counted = Object.fromEntries(later.map((d) => [d.version, { kept: d.kept.length, skipped: d.skipped.length }]));
         expect(Object.keys(counted), "the deltas after V459 that touch the three tables").toEqual(Object.keys(REPLAYED));
-        expect(Object.keys(counted), "the scan finds this plan's own delta").toContain("V532");
+        expect(Object.keys(counted), "the scan finds this plan's own delta").toContain("V534");
         for (const [version, want] of Object.entries(REPLAYED)) expect(counted[version], version).toEqual(want);
         for (const d of later) for (const s of d.kept) await tx.unsafe(s);
       };
@@ -1141,9 +1141,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     });
   });
 
-  // ─── V532: one LIVE arbiter participant per organizer per player meeting ────────────────────────────────────────────────
-  describe("V532: the dedupe and the live index", () => {
-    const V532 = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V532__arbiter_live_participant.sql");
+  // ─── V534: one LIVE arbiter participant per organizer per player meeting ────────────────────────────────────────────────
+  describe("V534: the dedupe and the live index", () => {
+    const V534 = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V534__arbiter_live_participant.sql");
 
     it("the dedupe keeps the NEWEST live arbiter row of each (fixture, side, user), stamps the rest (3 of 5), names the 2 on a LIVE meeting in its warning, then builds the unique index (and the index refuses a second live row, by name)", async () => {
       const notices: string[] = [];
@@ -1172,7 +1172,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
           };
           const live = [await row(fixtureId, 30), await row(fixtureId, 20), await row(fixtureId, 10)]; // oldest .. newest, LIVE meeting
           const ended = [await row(meetinglessFixtureId, 25), await row(meetinglessFixtureId, 5)]; // oldest .. newest, ENDED meeting
-          await tx.unsafe(readFileSync(V532, "utf8"));
+          await tx.unsafe(readFileSync(V534, "utf8"));
           const stamped = async (ids: string[]) =>
             (await tx<{ participant_id: string; removed: boolean }[]>`
               select participant_id, removed_at is not null as removed from fixture_video_participants where participant_id in ${tx(ids)}`)
@@ -1195,9 +1195,9 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       } finally {
         await probe.end({ timeout: 2 });
       }
-      const warnings = notices.filter((m) => m.includes("V532:"));
+      const warnings = notices.filter((m) => m.includes("V534:"));
       expect(warnings, "one warning, naming the live duplicates stamped without a vendor removal").toHaveLength(1);
-      expect(warnings[0], "2 live duplicates (the ended group's one is not counted)").toMatch(/V532: 2 live arbiter duplicates/);
+      expect(warnings[0], "2 live duplicates (the ended group's one is not counted)").toMatch(/V534: 2 live arbiter duplicates/);
     });
   });
 
