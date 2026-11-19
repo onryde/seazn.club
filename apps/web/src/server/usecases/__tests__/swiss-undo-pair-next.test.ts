@@ -81,6 +81,8 @@ const PLAN_BARRIERS = {
   swiss_rounds_changed: "SWISS_ROUNDS_CHANGE_NOT_UNDOABLE",
   seed_confirmed: "SEED_CONFIRM_NOT_UNDOABLE",
   knockout_late_entry: "KO_LATE_ENTRY_NOT_UNDOABLE",
+  // W5 app-A Task 5 (X-CU-13): the round-robin late entry's, a round-robin code (roundrobin-late-entry.test.ts drives it).
+  roundrobin_late_entry: "RR_LATE_ENTRY_NOT_UNDOABLE",
 } as const;
 
 /** The refusal a test expects, with the status the refusal table declares for it. */
@@ -189,8 +191,8 @@ describe("barrierOfRefusedStep — the barrier a results-refused Undo or Redo wo
       expect(barrierOfRefusedStep("redo", ledger, 0), `redo, ${type}`).toBe(PLAN_BARRIERS[type]);
       checked += 2;
     }
-    expect(checked, "anti-vacuity: four barrier types × two directions").toBe(Object.keys(PLAN_BARRIERS).length * 2);
-    expect(checked).toBe(8);
+    expect(checked, "anti-vacuity: five barrier types × two directions").toBe(Object.keys(PLAN_BARRIERS).length * 2);
+    expect(checked).toBe(10);
   });
 
   it("answers null — the caller then gives the engine's own refusal — when the engine has no step, or the step crosses nothing", () => {

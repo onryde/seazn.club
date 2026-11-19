@@ -146,7 +146,7 @@ describe.skipIf(!HAS_DB)("withdrawing an individual from an americano", () => {
 
     const out = await withdrawEntrantCascade(r.auth, r.ids[0]!);
 
-    expect(out).toMatchObject({ status: "withdrawn", policy: "expunge", walkovers: 0, voided: theirUnplayed.length, skipped_finalized: 0 });
+    expect(out).toMatchObject({ status: "withdrawn", policy: "expunge", walkovers: 0, voided: theirUnplayed.length, skipped_cancelled: 0 });
     const after = await fixtures(r.stageId);
     for (const f of after) {
       const was = before.find((b) => b.id === f.id)!;

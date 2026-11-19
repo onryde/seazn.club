@@ -4,6 +4,7 @@ import { fieldSizeFor } from "../field-size.ts";
 import type { ConfigEditObs } from "../observed.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { bracketDeciderExercised, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted } from "./assertions.ts";
+import { completeAgain, completeTwiceNoop } from "./complete-twice.ts";
 import { Recorder, configProbe, dateFirstRound, drawsDeclaredOnReached, playDivision, setUpDivision, snapshot } from "./common.ts";
 import type { Scenario } from "./types.ts";
 
@@ -28,6 +29,9 @@ export const lifecycle: Scenario = {
     const plays = await playDivision(ctx, rec, setup, { beforeComplete: async () => { probed = await configProbe(ctx, rec, setup); } });
     const configEdit = probed as ConfigEditObs | null;
     if (configEdit === null) throw new Error("scenario: LIFECYCLE's config probe never ran — playDivision skipped stage 1's beforeComplete");
+    // W5 T17 (X-BD-4, CS-1): a second Complete on every stage the run completed - a named case, sent before the readbacks so
+    // every check below reads the state AFTER it.
+    const repeats = await completeAgain(ctx, plays);
     const observed = await snapshot(ctx, rec, setup, plays, { configEdit, withdrawal: null });
     const pub = await ctx.driver.publicStandings({ orgSlug: ctx.orgSlug, competitionSlug: setup.competition.slug, divisionSlug: setup.division.slug });
     // T6-R3 (m-12): draws were posted on every reached stage that declares them, not the root's alone.
@@ -49,6 +53,7 @@ export const lifecycle: Scenario = {
         formatEditRefusedNamed(configEdit),
         entrantsEditAccepted(configEdit),
         stageCompleted(observed),
+        completeTwiceNoop(repeats),
         loopBounded(rec, observed),
         advanceSeededAsDeclared(plays, observed, rec.withdrawn),
         lineupsPut(rec, setup),

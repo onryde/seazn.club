@@ -214,6 +214,21 @@ describe("v1 envelope", () => {
     expect(err.stranded).toBe(2);
   });
 
+  // W5 T12 (X-BD-1, PO-1): C38's refusal carries the pool count that works, or null when none does. It must reach the JSON body: the
+  // builder-side screens (the desk, the board's Start) name the count from it, and on the EngineError's `.data` alone nobody sees it.
+  it("STAGE_NOT_READY reason=group_too_few_entrants forwards suggested: a number when one works, null when none does (X-BD-1)", async () => {
+    // differential: the forward carried groups/entrants/required only, so the desk could not name a count.
+    for (const [suggested, wire] of [[3, 3], [null, null]] as const) {
+      const res = await v1(async () => {
+        throw new EngineError("STAGE_NOT_READY", "not enough entrants", { stageId: "s1", reason: "group_too_few_entrants", groups: 4, entrants: 7, required: 8, suggested });
+      });
+      expect(res.status).toBe(422);
+      const err = (await body(res)).error as { reason?: string; groups?: number; entrants?: number; required?: number; suggested?: number | null };
+      expect(err).toMatchObject({ reason: "group_too_few_entrants", groups: 4, entrants: 7, required: 8 });
+      expect(err.suggested).toBe(wire);
+    }
+  });
+
   // An `on_complete` progression stage pressed Generate before its source
   // stage finished (usecases/stages/generate.ts generateStageFixtures' pre-flight). The desk
   // names BOTH stages in an amber notice, so the two ids have to reach the

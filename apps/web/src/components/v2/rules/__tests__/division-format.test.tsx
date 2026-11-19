@@ -9,8 +9,7 @@
 //
 // Expected copy comes from the en dictionary (filled by hand here, never through the component's own formatter), expected
 // counts from the preview the test hands the dialog, and expected stages from the templates' own builder.
-// Ported here from Settings › Format (removed by FMT5): a stored triple round robin is kept on a save, never clamped
-// (triple-rr-retired.test.tsx); a stored Swiss opens at its rounds and an unpicked one at the field's recommendation
+// Ported here from Settings › Format (removed by FMT5): a stored three-leg league is kept on a save, never clamped; a stored Swiss opens at its rounds and an unpicked one at the field's recommendation
 // (division-settings-derived-rounds.test.tsx). The bounds sweep and the stored-legs case moved with the rest of the
 // bounds, into lib/__tests__/format-bounds.test.ts.
 import { renderToStaticMarkup } from "react-dom/server";
@@ -535,7 +534,8 @@ describe("Save: the dry run, then the write (FMT5)", () => {
 
   it("a knob outside its bounds is refused before anything is sent; back inside, the save goes", async () => {
     apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
-    const { h } = mountDialog({ stages: stagesOf("league_ko") });
+    // A division as large as the widest Top N, so the field (W5 T12b: a cut the field cannot supply is refused too) is not what refuses the save.
+    const { h } = mountDialog({ stages: stagesOf("league_ko"), entrants: FORMAT_BOUNDS.qualify.max });
     type(h, "qualify", String(FORMAT_BOUNDS.qualify.max + 8));
     click(h, "division-format-save");
     await flush();
@@ -551,12 +551,69 @@ describe("Save: the dry run, then the write (FMT5)", () => {
   });
 });
 
-describe("a stored format is kept as it is, never clamped (ported from Settings › Format)", () => {
-  it("a stored triple round robin opens picked (it is in the offer only for this division) and a save keeps its 3 legs", async () => {
+describe("X-BD-1 the dialog judges the division's own field, as the builder judges its plan", () => {
+  // differential: Save accepted 4 pools for a division of 7 (only the 2..8 bounds were read); the server's first Generate then refused it.
+  it("7 entrants in 4 pools is refused before anything is sent, naming 3; 3 pools (floor(7/3)=2) saves", async () => {
     apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
-    const stored: DivisionFormatStage[] = [{ kind: "league", name: "Triple RR", config: { legs: 3 }, progression: null }];
-    const { h } = mountDialog({ stages: stored, offer: templatesForSport(SPORT, KINDS, "triple_rr").map((t) => t.key) });
-    expect(pickedTemplate(h as never)).toBe("triple_rr");
+    const { h } = mountDialog({ stages: stagesOf("groups_ko", { poolCount: 4 }), entrants: 7 });
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "nothing sent").toHaveLength(0);
+    expect(textOf(byId(h, "division-format-error")!)).toBe(say("wizard.err.poolSize", { field: say("wizard.pools"), pools: 4, required: 8, entrants: 7, suggested: 3 }));
+    type(h, "pools", "3");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls()).toHaveLength(2);
+    expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+
+  it("a division with no field yet (under 2 entrants) is not judged against it: the builder's stand-in plan is no field", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("groups_ko", { poolCount: 4 }), entrants: 0 });
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "the save goes").toHaveLength(2);
+    expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+});
+
+describe("X-BD-8 the dialog judges the division's own cut against its own field", () => {
+  // differential: Save accepted a top 8 for a division of 6 (only the 2..32 bounds were read); the server met it at Complete.
+  it("a top 8 of 6 entrants is refused before anything is sent, naming 6; 6 of 6 saves", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("league_ko"), entrants: 6 });
+    type(h, "qualify", "8");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "nothing sent").toHaveLength(0);
+    expect(textOf(byId(h, "division-format-error")!)).toBe(say("wizard.err.cutExceedsField", { field: say("wizard.qualify"), qualified: 8, entrants: 6, pools: 1, max: 6 }));
+    type(h, "qualify", "6");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls()).toHaveLength(2);
+    expect(byId(h, "division-format-error")).toBeUndefined();
+  });
+
+  it("a division with no field yet is not judged against it (the empty case)", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    const { h } = mountDialog({ stages: stagesOf("league_ko"), entrants: 0 });
+    type(h, "qualify", "8");
+    click(h, "division-format-save");
+    await flush();
+    expect(calls(), "the save goes").toHaveLength(2);
+  });
+});
+
+describe("a stored format is kept as it is, never clamped (ported from Settings › Format)", () => {
+  it("a stored three-leg league opens picked as League with its 3 legs shown (a league has no template of its own for its legs) and a save keeps them", async () => {
+    apiV1Mock.mockResolvedValueOnce(NOTHING).mockResolvedValueOnce([]);
+    // differential: today detectTemplate answered a retired template key for legs >= 3
+    const stored: DivisionFormatStage[] = [{ kind: "league", name: "League", config: { legs: 3 }, progression: null }];
+    const { h } = mountDialog({ stages: stored, offer: templatesForSport(SPORT, KINDS, "league").map((t) => t.key) });
+    expect(pickedTemplate(h as never)).toBe("league");
+    const legs = h.tree().find((e) => e.type === LegsChoice);
+    expect(legs, "the legs control is drawn").toBeTruthy();
+    expect((propsOf(legs!) as { value: number }).value, "its stored count is the one shown").toBe(3);
     click(h, "division-format-save");
     await flush();
     expect(calls()[1]!.json!.map((s) => [s.kind, (s.config as { legs?: number }).legs])).toEqual([["league", 3]]);

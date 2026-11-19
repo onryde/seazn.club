@@ -613,7 +613,7 @@ describe("isolatedTable (X-WO-1, X-DW-4, X-AB-1): a row against the rule's delta
 });
 
 describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
-  const answer = (over: Partial<WithdrawOut> = {}): WithdrawOut => ({ entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0, walked_over_held: 0, ...over });
+  const answer = (over: Partial<WithdrawOut> = {}): WithdrawOut => ({ entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_cancelled: 0, walked_over_held: 0, ...over });
   const { rows, graph } = bracket("knockout", F8);
   const lines = knockoutLines(graph, rows.filter((r) => r.round_no === 1));
   const [qf1, qf2] = lines.a.qf;
@@ -664,7 +664,7 @@ describe("WD-CASC's checks (X-WD-1..3, X-DW-2, Review Focus 1)", () => {
       ["a held line not counted", answer({ walked_over_held: 0 }), "held", /\(held\) answered policy walkover, voided 0, walked_over_held 0; wanted walkover, 0, 1/],
       ["a tie-break pending not counted", answer({ walked_over_held: 0 }), "tie-break pending", /\(tie-break pending\) answered .*walked_over_held 0; wanted walkover, 0, 1/],
       ["play under way counted held", answer({ walked_over_held: 1 }), "in play", /\(in play\) answered .*walked_over_held 1; wanted walkover, 0, 0/],
-      ["the field missing (a pre-F answer)", { entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_finalized: 0 } as WithdrawOut, "held", /\(held\) answered .*walked_over_held undefined; wanted walkover, 0, 1/],
+      ["the field missing (a pre-F answer)", { entrant_id: "x", status: "withdrawn", policy: "walkover", walkovers: 1, voided: 0, skipped_cancelled: 0 } as WithdrawOut, "held", /\(held\) answered .*walked_over_held undefined; wanted walkover, 0, 1/],
     ];
     for (const [name, a, label, why] of heldRows) {
       const got = withdrawalsWalkOver({ ...r, steps: [{ entrantId: "y", label, answer: a }] }, good);

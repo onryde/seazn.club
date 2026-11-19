@@ -128,6 +128,9 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/server/usecases/stream-sessions", () => ({
   openStreamStates: async () => ({}),
 }));
+// W5 T11's cut-drift warning (a completed league or group's fixtures tab) reads the stage row through `withTenant`, which this
+// suite stubs to answer nothing - so it is an empty double too: this test is about the seeding panel, not the drift.
+vi.mock("@/server/usecases/table-cut-drift", () => ({ getTableCutDrift: async () => null }));
 
 import DivisionPage from "../page";
 import { ProgressionPanel } from "@/components/v2/progression-panel";

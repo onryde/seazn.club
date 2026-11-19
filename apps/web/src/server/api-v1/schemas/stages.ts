@@ -17,6 +17,7 @@ import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../lib/knockout-re
 // Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS } from "../../../lib/format-bounds.ts";
+import { DEPARTED_STATUS_KEYS } from "../../../lib/departed-status-keys.ts";
 // W2c Task 13b finish-up (R-13b-1) — the deciders a stage config refuses at its top level, the engine's own set (shared
 // with the create door). RELATIVE with `.ts`; the module's only imports are the bare engine packages, which load under
 // strip-types as the engine imports above do.
@@ -244,9 +245,9 @@ export const StageConfig = z
     ...TOP_LEVEL_DECIDER_REFUSALS,
     // League / group shape.
     // Floor from FORMAT_BOUNDS (Match Day D1). The ceiling stays 8 on the server, the generator's own clamp (usecases/stages/,
-    // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01): the builder offers 1-2 only (LegsChoice), and
-    // Triple round robin is retired from the list, but a stored division with 3 or more legs keeps playing it, so the door
-    // must not refuse the value it already holds.
+    // "Jul3/08 §2: legs > 2 allowed"), by owner ruling Option A (2026-11-01) and RB5-G1: the builder offers 1-2 only
+    // (LegsChoice). The three-leg format itself is gone (ruling 287: a league with legs 3 has no template of its own and
+    // reads back as a league), but the legs VALUE is not: the door must not refuse a count a stored division already holds.
     legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
     pools: z.strictObject({ count: z.number().int().min(1) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with
@@ -289,6 +290,21 @@ export const StageConfig = z
     points: z.unknown().optional(),
     carry_deltas: z.unknown().optional(),
     rank_overrides: z.unknown().optional(),
+    // W5 T2 (FX-G21): who sits out which round of which leg - written by the server at every round-robin draw, read back through
+    // the stage's own config (a replace round-trips it). `pool` is the pool's id (null for a league or a one-pool group); `entrant_id`
+    // is an entrant's id, or the seat id (`slot:N`) of a setup stage drawn before its seeds are filled.
+    round_byes: z
+      .array(
+        z
+          .object({
+            pool: z.string().nullable(),
+            round_no: z.number().int().min(1),
+            leg: z.number().int().min(1).max(8),
+            entrant_id: z.string().min(1),
+          })
+          .strict(),
+      )
+      .optional(),
     cross_feeds: z.unknown().optional(),
     placements: z.unknown().optional(),
     // W2c Task 12 (D3): a stage's deciders are its match RULES, written at create as its kind's preset under
@@ -623,10 +639,23 @@ export const StandingsRow = z.object({
     .object({ key: TieBreakKeyS, with: z.array(z.string()), note: TieBreakNoteS.optional(), drawnAt: z.string().optional() })
     .optional(),
   level: z.boolean().optional(),
+  /** W5 T22 (ST-G28): the entrant's name, so a row stands on its own — the public entrants list drops a withdrawn or disqualified
+   *  entrant, which left its row an unresolvable id. On the public door it is the division's masked name (youth / consent), never a
+   *  raw column. Null only for a row whose entrant is no longer in the division (a delete racing the read). */
+  name: z.string().nullable().meta({ examples: ["Riverside"] }),
+  /** W5 T22: `active`, or how the entrant left (`withdrawn`, `disqualified` — the one departed vocabulary,
+   *  `lib/departed-status-keys.ts`). A departed entrant's row stays while the table counts her results. */
+  status: z.enum(["active", ...DEPARTED_STATUS_KEYS]),
+  /** W5 T22 (ST-G28): the key (`A`, `B`, …) of the pool this row's `rank` is within — what `GET /stages/{id}/pools` lists as `key`.
+   *  Null on a table that names no pool: a league, a Swiss stage, a knockout, and a group of ONE pool (it reads as a league). */
+  pool: z.string().nullable().meta({ examples: ["A"] }),
 });
 
 /** GET /stages/{id}/standings — one pool's (or the stage's) table as last folded. `computed_through_seq` is the stored
- *  snapshot's bigint watermark, served as the DB prints it (a decimal string), and 0 for a table folded on the read. */
+ *  snapshot's bigint watermark, served as the DB prints it (a decimal string), and 0 for a table folded on the read.
+ *  W5 T22 (ST-G28): asked for no `pool_id`, a stage with SEVERAL pools answers EVERY pool — `pool_id` null, `rows` the pools' rows in
+ *  pool order, each row's `pool` the key it is ranked within; its watermark is the oldest of the pools' (the point every pool is
+ *  folded through) and `updated_at` the newest. */
 export const StandingsSnapshot = z.object({
   stage_id: Uuid,
   pool_id: Uuid.nullable(),
@@ -634,6 +663,12 @@ export const StandingsSnapshot = z.object({
   computed_through_seq: z.union([z.string().regex(/^\d+$/).meta({ examples: ["42"] }), z.literal(0)]),
   updated_at: z.string().nullable(),
 });
+
+/** GET /stages/{id}/pools — the pools of a stage with SEVERAL pools, in the product's pool order (the key). `id` is what
+ *  `GET /stages/{id}/standings?pool_id=` takes; `key` is what a standings row's `pool` carries. A stage whose table names no pool
+ *  (a league, a knockout, a group of one pool) lists none. */
+export const StagePool = z.object({ id: Uuid, key: z.string(), name: z.string() });
+export const StagePools = z.object({ stage_id: Uuid, pools: z.array(StagePool) });
 
 /** GET /public/…/divisions/{divisionSlug}/standings — every published table of the division. */
 export const PublicDivisionStandings = z.object({
@@ -665,6 +700,13 @@ export const CreateFromTemplate = z
      *  the two create paths must not disagree about what an omitted
      *  visibility means. */
     visibility: Visibility.default("public"),
+    /** W5 X-BD-3: the choice an any-sport template (`super-groups`) asks for. Required, all three, for such a template and
+     *  refused by name (400 `TEMPLATE_CHOICE_REQUIRED` / `TEMPLATE_CHOICE_NOT_OFFERED`) on any other; `entrant_count` is one
+     *  of the template's own offered sizes (`TEMPLATE_COUNT_NOT_OFFERED`) and defaults to the template's. */
+    sport_key: z.string().min(1).max(64).optional(),
+    variant_key: z.string().min(1).max(64).optional(),
+    entrant_kind: z.enum(["team", "pair", "individual"]).optional(),
+    entrant_count: z.number().int().positive().optional(),
   })
   .superRefine(checkDateOrder);
 export type CreateFromTemplate = z.infer<typeof CreateFromTemplate>;

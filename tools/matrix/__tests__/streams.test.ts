@@ -416,10 +416,10 @@ describe("cricket two-innings and tie (ruling 44, D4)", () => {
     expect(got.filter((g) => g.endsWith(":unreachable"))).toEqual(["knockout:draw:unreachable"]);
   });
 
-  it("the 25 committed test-preset cases each fold every reachable outcome to the requested result — counted", () => {
+  it("the 24 committed test-preset cases each fold every reachable outcome to the requested result — counted", () => {
     let folded = 0;
     const cases = testCases();
-    expect(cases.length).toBe(25);
+    expect(cases.length).toBe(24);
     for (const vc of cases) {
       const cfg = resolveSportCfg("cricket", "test", vc.overrides);
       for (const stageKind of ["league", "knockout"] as const) {

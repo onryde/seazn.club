@@ -95,6 +95,9 @@ export function MatchCard({
   showRound = true,
 }: MatchCardProps) {
   const s0 = m.header.sides[0];
+  // W5 T23 (RB5-W2): a withdrawal's removal (`HubMatch.expunged`) — struck, no time, no score, "Abandoned": the public schedule's one
+  // presentation (27eddf373f), never a third.
+  const expunged = m.expunged === true;
   const s1 = m.header.sides[1];
 
   // `Δ = scheduledAt - now`. Within 24h either side: a relative sentence
@@ -171,7 +174,7 @@ export function MatchCard({
         key={side.entrantId || i}
         data-testid={`mh-match-side-${i}`}
         data-winner={isWinner ? "true" : undefined}
-        className={`flex items-center gap-2 ${isWinner || m.header.battingIndex === i ? "font-semibold text-ink" : "text-ink"}`}
+        className={`flex items-center gap-2 ${expunged ? "text-ink-muted" : isWinner || m.header.battingIndex === i ? "font-semibold text-ink" : "text-ink"}`}
       >
         {/* `colour` is the entrant's own, and until it was passed here it was
             an inert seam in its purest form: `Side.colour` is built for every
@@ -210,17 +213,19 @@ export function MatchCard({
         <span
           className={
             entrant
-              ? "min-w-0 flex-1 truncate text-[15px]"
+              ? `min-w-0 flex-1 truncate text-[15px]${expunged ? " line-through" : ""}`
               : "min-w-0 flex-1 break-words text-[15px] italic text-ink-muted"
           }
           title={side.name}
         >
           {side.name}
         </span>
-        <span className="shrink-0 font-display text-lg tabular-nums">
-          {m.header.scoreLines[i] ?? ""}
-          <span className="ml-1 text-xs text-ink-muted">{m.header.subLines[i] ?? ""}</span>
-        </span>
+        {expunged ? null : (
+          <span className="shrink-0 font-display text-lg tabular-nums">
+            {m.header.scoreLines[i] ?? ""}
+            <span className="ml-1 text-xs text-ink-muted">{m.header.subLines[i] ?? ""}</span>
+          </span>
+        )}
       </div>
     );
   }
@@ -233,6 +238,7 @@ export function MatchCard({
     <Link
       href={m.href}
       data-testid={`mh-match-${m.fixtureId}`}
+      data-expunged={expunged ? "true" : undefined}
       // `aria-label` on the wrapping `<a>` REPLACES everything inside it for
       // the accessible name, so this string is the whole of what a screen
       // reader announces for the card. `matchesHub.card.label` shipped as the
@@ -275,7 +281,10 @@ export function MatchCard({
           </span>
         ) : null}
         <span className="ml-auto shrink-0">
-          {m.bucket === "live" ? (
+          {expunged ? (
+            // W5 T23 (RB5-W2): a match a withdrawal removed is not "Ended" and has no time to show: the match centre's own word.
+            <span data-testid="mh-match-expunged">{t(dict, "matchCentre.status.abandoned")}</span>
+          ) : m.bucket === "live" ? (
             <span data-testid="mh-match-live" className="flex items-center gap-1 font-bold text-emerald-700">
               <span className="animate-live-pulse h-1.5 w-1.5 rounded-full bg-emerald-500" />
               {t(dict, "matchesHub.live")}
@@ -307,7 +316,7 @@ export function MatchCard({
           venue-less card keeps its result right-aligned exactly as it was. */}
       <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-xs text-ink-muted">
         <span className="min-w-0 truncate">{[m.venueName, m.courtName].filter(Boolean).join(" · ")}</span>
-        {m.forfeit ? (
+        {expunged ? null : m.forfeit ? (
           // W2b Task 13 (UI-2 option A): a credited result — a forfeit, a double walkover, an abandon with a result —
           // shows its tag, the sentence its tooltip and accessible name. An abandon keeps its result sentence beside
           // the tag ("Eagles won by 12 runs (DLS)" · "Aband. · DLS"); a forfeit's tag replaces the bare "Forfeited".

@@ -15,11 +15,12 @@ import "server-only";
 //   swiss-boards.ts    Swiss board seat locks, clearing, unseating, and un-pairing a round
 //   preview.ts         the builder's example preview (`generate()` over synthetic entrants), and the draw as structure (previewStageDraw)
 //   roster-drift.ts    roster drift, sealed-setup and attachment counts
+//   roundrobin-reconcile.ts  a root league's or group's Generate over existing lines (patch by pair and leg), round_byes, delete cleanup
 //   bracket-seats.ts   bracket seat writes: fillSlot, departed seats, seeded byes, resolveBracketSeats
 //   setup-fixtures.ts  TBD-shape fixtures for a `timing: "setup"` progression
 //   generate-tx.ts     in-transaction generate/rebuild core, root-knockout reconcile, cross feeds
 //   carry-over.ts      carry-over into the next stage: bracket losers, placement tables, seedNextStage
-//   generate.ts        public generate/rebuild doors: write, commit + revalidate, Unpublished, rebuild
+//   generate.ts        public generate/rebuild doors: write, commit + revalidate, Unpublished, rebuild (+ its shared body)
 //   seed-proposal.ts   seed proposals: compute, read, confirm
 //   seed-stale.ts      marking seed proposals stale on a source-stage or field change
 //   completion.ts      guarded completion and its progression, standings reads, rank overrides
@@ -86,6 +87,7 @@ export {
   unseatSwissRoundsSeatingEntrant,
   unpairSwissRound,
 } from "./swiss-boards";
+export { dropEntrantFromRoundRobins } from "./roundrobin-reconcile";
 export { patchKnockoutStage } from "./third-place";
 export type { PatchKnockoutStageResult } from "./third-place";
 export { previewDivisionFixtures, previewStageDraw } from "./preview";
@@ -114,6 +116,8 @@ export {
   generateStageFixturesUnpublished,
   afterGenerateCommit,
   rebuildStageFixtures,
+  // W5 B5 fix wave G1: the ONE Rebuild body, run by the card's Rebuild and the late-entry strip's prefer_rebuild.
+  rebuildStageInTx,
   // MD-1 Task 5: the Match Day Swiss approval (preview, pair, and the refusal codes it answers).
   MD_STALE_CODE,
   MD_ALREADY_CODE,
@@ -121,13 +125,15 @@ export {
   previewSwissNextRound,
   pairSwissNextRound,
 } from "./generate";
-export type { RebuildOutcome, SwissPreviewPairing, SwissRoundPreview } from "./generate";
+export type { RebuildOutcome, RebuildWrite, SwissPreviewPairing, SwissRoundPreview } from "./generate";
 export { computeSeedProposal, getSeedProposal, confirmSeedProposal } from "./seed-proposal";
 export type { SeedProposalOut, ConfirmSeedProposalOut } from "./seed-proposal";
 export {
   markDependentSeedProposalsStale,
   setupDependentsOf,
   markFieldChangeSeedProposalsStale,
+  staleConfirmedProposalsOfDeparting,
+  reproposeStaleDependents,
 } from "./seed-stale";
 export { undecidedBracketFixtures, completeStage, getStandings, overrideStandings } from "./completion";
 export type { CompleteStageResult, StandingsOut } from "./completion";

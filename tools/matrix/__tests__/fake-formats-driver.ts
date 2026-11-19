@@ -42,7 +42,7 @@ import { declaredPoints, foldStream, lineupsFor } from "../lib/fold.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import type { StreamEvent } from "../lib/streams/types.ts";
 import {
-  DriverMisuse, RefusedCall, inSquadOrder,
+  RefusedCall, inSquadOrder,
   type AmericanoViewOut, type ChallengeOut, type CompleteOut, type EntrantMember, type EntrantRow, type FixtureRow, type MemberInput, type GenerateOut, type PostedEvent, type PublicStandingsOut, type SeedConfirmOut, type SeedProposalOut, type SeedTie,
   type StageRef, type StandingsOut, type StartOut, type WithdrawOut,
 } from "../lib/driver/types.ts";
@@ -79,6 +79,16 @@ export interface FakeMultiStageOptions {
    *  STAGE_COMPLETED_SEEDING_FAILED, as a failed compute does after the
    *  commit (usecases/stages/; fix round 1, m-7). */
   readonly failSeedingOnComplete?: number;
+  /** W5 T12 (C38, X-BD-1): Start refuses a pooled first stage whose field cannot fill its pools, as the product's first group draw does -
+   *  422 STAGE_NOT_READY group_too_few_entrants naming the pool count that works (`suggested`: the largest count under the ask that
+   *  leaves every pool 2 strong, and is itself 2 or more: one pool is a League, so no count works for 3 into 2). `suggestedOverride` is a deliberately WRONG product's count (a null is "no count works"), for the
+   *  scenario's own guard test. Off by default: every existing fake draw stays as it was. */
+  readonly enforcePoolSize?: boolean | { readonly suggestedOverride: number | null };
+  /** W5 T12b (RB5-E6, X-BD-8): Start refuses a first stage whose cut into the next stage is larger than the field, BEFORE any pool is drawn -
+   *  422 RR_CUT_EXCEEDS_FIELD, "{qualified} can't qualify from this field: it can supply at most {max}." (the product's refuseFormatTooSmall
+   *  runs ahead of the group draw, so it answers first where both would refuse). The cut is the sum of the first progression's takes: a
+   *  topNPerGroup n over the pooled stage is n per pool, a rankRange is its width; the SUPPLY is the engine's all-or-nothing rank wave (the smallest pool's ranks, in every pool). `wrongMessage` is a deliberately WRONG product's text. Off by default. */
+  readonly enforceCutBeyondField?: boolean | { readonly wrongMessage: string };
 }
 
 type Side = "home" | "away";
@@ -264,6 +274,46 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     return settle(() => {
       this.log("start");
       const first = this.stages[0];
+      const cutRule = this.opts.enforceCutBeyondField;
+      if (cutRule !== undefined && cutRule !== false) {
+        const progression = this.stages[1]?.body.progression as unknown as ProgressionSpec | null | undefined;
+        const pools = first.kind === "group" ? this.#poolCount(first.body.config) : 1;
+        let qualified = 0;
+        for (const source of progression?.sources ?? []) {
+          for (const take of source.take) {
+            if (take.kind === "topNPerGroup") qualified += take.n * pools;
+            else if (take.kind === "rankRange") qualified += take.to - take.from + 1;
+          }
+        }
+        const field = this.entrants.length;
+        // What the field supplies (the product's gate, the engine's rowAtRank): a rank wave is all or nothing, so a top n of `pools`
+        // pools gives pools x min(n, the smallest pool); a rank range is its width up to the field.
+        const smallest = Math.floor(field / pools);
+        let supplied = 0;
+        for (const source of progression?.sources ?? []) {
+          for (const take of source.take) {
+            if (take.kind === "topNPerGroup") supplied += pools * Math.min(take.n, smallest);
+            else if (take.kind === "rankRange") supplied += Math.min(take.to - take.from + 1, field);
+          }
+        }
+        if (qualified > supplied) {
+          throw new RefusedCall("POST", "/api/v1/divisions/d1/start", 422, "RR_CUT_EXCEEDS_FIELD",
+            typeof cutRule === "object" ? cutRule.wrongMessage : `${qualified} can't qualify from this field: it can supply at most ${supplied}.`);
+        }
+      }
+      const enforce = this.opts.enforcePoolSize;
+      if (enforce !== undefined && enforce !== false && first.kind === "group") {
+        const groups = this.#poolCount(first.body.config);
+        const n = this.entrants.length;
+        if (groups > 1 && Math.floor(n / groups) < 2) {
+          let suggested: number | null = null;
+          for (let c = groups - 1; c >= 2 && suggested === null; c--) if (Math.floor(n / c) >= 2) suggested = c;
+          const sent = typeof enforce === "object" ? enforce.suggestedOverride : suggested;
+          throw new RefusedCall("POST", "/api/v1/divisions/d1/start", engineHttpStatus("STAGE_NOT_READY"), "STAGE_NOT_READY",
+            `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${n}, need ${groups * 2})`, null,
+            { reason: "group_too_few_entrants", groups, entrants: n, required: groups * 2, suggested: sent });
+        }
+      }
       this.#tableRows(first, this.entrants.map((e) => ({ id: e.id, seed: e.seed ?? Number.MAX_SAFE_INTEGER })), false);
       first.status = "active";
       this.stage = this.#ref(first);
@@ -473,9 +523,13 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
     return settle(() => {
       const path = `/api/v1/stages/${stageId}/complete`;
       const stage = this.#stage("POST", stageId);
-      // HttpDriver's guard (FP-4): a repeat never reaches the product.
-      if (this.completedStages.has(stageId)) throw new DriverMisuse(`driver: stage ${stageId} already completed — /complete is never repeated (design §6.4)`);
       this.log("completeStage", stageId);
+      // W5 T17 (X-BD-4): a repeat reaches the product and is a no-op that names the next stage's live draft (or null).
+      if (this.completedStages.has(stageId)) {
+        const nextStage = this.stages.find((x) => x.seq === stage.seq + 1);
+        const draft = nextStage === undefined ? undefined : this.proposals.find((q) => q.seq === nextStage.seq && q.status === "draft");
+        return { completed: false, already_complete: true, events: [], seed_proposal: draft === undefined ? null : { id: draft.id, status: draft.status } };
+      }
       const mine = this.fixtures.filter((f) => f.stage_id === stageId);
       if (mine.length === 0 || mine.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
       this.completedStages.add(stageId);
@@ -588,6 +642,8 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
         const expunge = (total === 0 ? 0 : played.length / total) < 0.5;
         policy = expunge ? "expunge" : policy === "expunge" ? "expunge" : "walkover";
         for (const f of expunge ? [...played, ...pending] : pending) plan.push({ f, walkover: !expunge, stage });
+        // W5 T8 (withdrawal.ts): a table's cancelled lines are left as they are and counted; a finalized one is expunged.
+        skipped += mine.filter((f) => f.status === "cancelled").length;
       } else if (BRACKET_WALKOVER.has(stage.kind)) {
         // loop F (C-2): a bracket withdrawal also walks a held line over — needs_decision, or an active abandon.
         const acts = mine.filter((x) => bracketWithdrawalActs(x.status, this.abandonActive(x)));
@@ -601,7 +657,6 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       }
     }
     for (const { f, walkover, stage } of plan) {
-      if (f.status === "finalized" || f.status === "cancelled") { skipped++; continue; }
       const side: Side = f.home_entrant_id === entrantId ? "home" : "away";
       const opponent = side === "home" ? f.away_entrant_id : f.home_entrant_id;
       if (walkover && BRACKET_WALKOVER.has(stage.kind)) {
@@ -624,7 +679,7 @@ export class FakeMultiStageDriver extends FakeLeagueDriver {
       voided++;
     }
     e.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_finalized: skipped, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers, voided, skipped_cancelled: skipped, walked_over_held: held };
   }
 }
 
@@ -857,11 +912,12 @@ export class FakeLadderDriver extends FakeLeagueDriver {
     e.status = "withdrawn";
     this.#withdrawals.push({ entrantId, afterStep: this.#issued.length, rawOrder: [...(this.#raw ?? [])] });
     // Ruling 53: the bracket branch's policy, as the product's text reads it (a ladder takes that branch).
-    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", inStage.length, acts.length), walkovers, voided: 0, skipped_cancelled: 0, walked_over_held: held };
   }
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
       this.log("completeStage");
+      if (this.completed) return { completed: false, already_complete: true, events: [] }; // W5 T17 (X-BD-4)
       if (this.fixtures.length === 0 || this.fixtures.some((f) => PENDING.has(f.status))) return { completed: false, events: [] };
       this.completed = true;
       return { completed: true, events: [{ type: "stage_completed", finalRanks: [...(this.#raw ?? [])] }] };
@@ -1159,7 +1215,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
     }
     e.status = "withdrawn";
     const policy = voided === 0 ? "none" : this.opts.legacyWithdrawal === true ? "walkover" : "expunge";
-    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers: 0, voided, skipped_finalized: 0, walked_over_held: 0 };
+    return { entrant_id: entrantId, status: "withdrawn", policy, walkovers: 0, voided, skipped_cancelled: 0, walked_over_held: 0 };
   }
   /** The table folds over the stage's SIDES (engine-db/competition.ts:360-365). */
   override tableEntrants(): string[] {
@@ -1180,7 +1236,7 @@ export class FakeAmericanoDriver extends FakeLeagueDriver {
   override completeStage(): Promise<CompleteOut> {
     return settle(() => {
       this.log("completeStage");
-      if (this.completed) return { completed: true, events: [] };
+      if (this.completed) return { completed: false, already_complete: true, events: [] }; // W5 T17 (X-BD-4)
       if (this.fixtures.length === 0 || this.fixtures.some((f) => !isTerminal(f.status))) return { completed: false, events: [] };
       this.completed = true;
       return { completed: true, events: [{ type: "stage_completed", finalRanks: this.#ranked() }] };

@@ -256,6 +256,8 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
     // W2c Task 15: the append path throws FIXTURE_RULES_CHANGED itself, under its rule-errors status (the code is also
     // NAMED in scoring.ts's replay lookup, which is not a throw: this branch is asked first so it is credited right).
     const appendEvent = read("src/server/engine-db/append-event.ts");
+    // W5 T8b review I1: scoring's void path runs withdrawal.ts's disqualification guard, which throws under its own constant.
+    const withdrawal = read("src/server/usecases/withdrawal.ts");
 
     for (const code of Object.keys(REFUSAL_KEY)) {
       const producer = http.includes(`return "${code}"`)
@@ -270,7 +272,11 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
               ? "pipeline.ts (client-minted)"
               : nextMatch.includes(`NEXT_MATCH_STARTED_CODE = "${code}"`) && fedSeats.includes("NEXT_MATCH_STARTED_CODE,")
                 ? "fed-seats.ts next-match refusal"
-                : null;
+                : withdrawal.includes(`export const ${code} = "${code}"`) &&
+                    new RegExp(`new HttpError\\(409, [^;]*${code}\\)`).test(withdrawal) &&
+                    scoring.includes("assertDisqualificationUndoable(")
+                  ? "withdrawal.ts disqualification-undo refusal, run by scoring's void path"
+                  : null;
       expect(producer, `${code} is minted by nothing: no status map, no usecase throw, no client path`).not.toBeNull();
     }
   });

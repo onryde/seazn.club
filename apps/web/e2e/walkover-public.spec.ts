@@ -1184,8 +1184,15 @@ async function organiserResultRows(request: APIRequestContext) {
 
   // A league whose cfg awards an abandon to the side leading (W2b D8), so an abandon leaves a winner and a tag.
   const lg = await longNameDivision(request, "league", LONG_NAMES, { abandonPolicy: "award" });
-  expect(lg.seated.length, "four seated league fixtures to settle").toBeGreaterThanOrEqual(4);
-  const [fW, fR, fD, fA] = lg.seated as [Fx, Fx, Fx, Fx];
+  expect(lg.seated.length, "three seated league fixtures to settle").toBeGreaterThanOrEqual(3);
+  const [fW, fR, fA] = lg.seated as [Fx, Fx, Fx];
+  // A knockout: one semi walked over by BOTH sides (X-DW-1: it feeds a final, so the double walkover is admitted), the other decided
+  // by a disqualification. The DQ row is a knockout's since W5 T8b (owner ruling 289): on a league line a disqualifying forfeit
+  // withdraws the side from the table, and under half played her results are removed - the line carries no award to tag. A bracket's
+  // disqualifying forfeit decides this match only, so its run-sheet row still reads "won (DQ)".
+  const ko = await longNameDivision(request, "knockout", LONG_NAMES.slice(0, 4));
+  expect(ko.seated.length, "two seated semis").toBe(2);
+  const [dw, fD] = ko.seated as [Fx, Fx];
   await post(request, fW.id, "core.forfeit", { by: fW.away_entrant_id, reason: "walkover" });
   for (const f of [fR, fD, fA]) await post(request, f.id, "core.start");
   for (const f of [fR, fA]) await post(request, f.id, "football.goal", { by: f.home_entrant_id });
@@ -1197,9 +1204,6 @@ async function organiserResultRows(request: APIRequestContext) {
     [fW, fR, fD, fA].map((f, i) => [i === 3 ? "win" : "award", f.home_entrant_id]),
   );
 
-  // A knockout semi walked over by BOTH sides (X-DW-1: it feeds a final, so the double walkover is admitted).
-  const ko = await longNameDivision(request, "knockout", LONG_NAMES.slice(0, 4));
-  const dw = ko.seated[0]!;
   await post(request, dw.id, "core.forfeit", { by: "both", reason: "walkover" });
   expect((await read(request, dw.id)).outcome, "a double walkover").toEqual({ kind: "double_walkover" });
 
@@ -1207,7 +1211,7 @@ async function organiserResultRows(request: APIRequestContext) {
   const rows = [
     { name: "walkover", div: lg.divId, f: fW, tagKey: "forfeit.tag.walkover", fullKey: "forfeit.tagFull.walkover", winner: lg.nameOf.get(fW.home_entrant_id!)! },
     { name: "retired", div: lg.divId, f: fR, tagKey: "forfeit.tag.retired", fullKey: "forfeit.tagFull.retired", winner: lg.nameOf.get(fR.home_entrant_id!)! },
-    { name: "disqualified", div: lg.divId, f: fD, tagKey: "forfeit.tag.disqualified", fullKey: "forfeit.tagFull.disqualified", winner: lg.nameOf.get(fD.home_entrant_id!)! },
+    { name: "disqualified", div: ko.divId, f: fD, tagKey: "forfeit.tag.disqualified", fullKey: "forfeit.tagFull.disqualified", winner: ko.nameOf.get(fD.home_entrant_id!)! },
     { name: "abandoned", div: lg.divId, f: fA, tagKey: "forfeit.tag.abandoned", fullKey: "forfeit.tagFull.abandoned", winner: lg.nameOf.get(fA.home_entrant_id!)! },
     { name: "double-walkover", div: ko.divId, f: dw, tagKey: "forfeit.tag.doubleWalkover", fullKey: "forfeit.tagFull.doubleWalkover", winner: null },
   ];

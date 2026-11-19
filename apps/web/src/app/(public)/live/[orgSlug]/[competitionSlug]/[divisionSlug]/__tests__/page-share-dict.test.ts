@@ -16,6 +16,13 @@ import { cloneElement, isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const getPublicDivision = vi.fn();
+// W5 T8: the page reads the departure notes' ledger (`division_events`) through loadTableWithdrawals - SQL, a real database's job
+// (table-withdrawal-retry-reinstate). Unmocked, this file reached the database. Here it answers no departures (the same importOriginal
+// partial mock as competition-hub.test.ts): the footnote is not what this file tests.
+vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
+  loadTableWithdrawals: async () => [],
+}));
 vi.mock("@/server/public-site/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/data")>()),
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),

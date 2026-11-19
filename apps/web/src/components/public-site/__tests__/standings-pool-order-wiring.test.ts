@@ -32,6 +32,9 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),
 }));
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
+// W5 T8: the departure-footnote read is a DB door like the ones above; a pool order has no departure (its wiring is
+// page-departed-entrant-status-plumbing.test.ts).
+vi.mock("@/server/public-site/table-withdrawals", () => ({ loadTableWithdrawals: async () => [] }));
 
 import type { PublicEntrant, PublicStandings } from "@/server/public-site/data";
 import enPublic from "@/dictionaries/en/public.json";

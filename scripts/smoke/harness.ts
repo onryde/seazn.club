@@ -1609,6 +1609,23 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w4a_${tag}@resend.dev`,
     // w4KnockoutBSuite's own org (W4 knockout app PR B) — its competition, division, entrants and stage cascade with it.
     `delivered+w4b_${tag}@resend.dev`,
+    // w5RoundRobinASuite's own org (W5 round-robin app PR A) — its competition, divisions, entrants and stages cascade with it.
+    `delivered+w5a_${tag}@resend.dev`,
+    // w5RoundRobinASuite's second org (Task 10b: a Swiss and a knockout division of pairs; the first org's competitions are at their caps).
+    `delivered+w5a2_${tag}@resend.dev`,
+    // w5RoundRobinASuite's own further orgs, one per check that needs room (the first and second orgs are at their competition caps):
+    // w5a3 Task 15's super-groups card; w5a4 Task 17's second-Complete check; w5a5 Task 13's rank-override check; w5a6 Task 14b's
+    // public competition for the pool winners' hub read; w5a7 Task 20's public league whose hub table marks a
+    // withdrawn and a disqualified row. The same cascade.
+    `delivered+w5a3_${tag}@resend.dev`,
+    `delivered+w5a4_${tag}@resend.dev`,
+    `delivered+w5a5_${tag}@resend.dev`,
+    `delivered+w5a6_${tag}@resend.dev`,
+    `delivered+w5a7_${tag}@resend.dev`,
+    // w5a8 Task 21's started two-pool group whose weekly digest and round recap list every pool.
+    `delivered+w5a8_${tag}@resend.dev`,
+    // w5a9 Task 23's public league whose division page lists a late arrival on the table card's waiting strip.
+    `delivered+w5a9_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

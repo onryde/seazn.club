@@ -15,6 +15,8 @@ import { fixtureBoardRef, isLegacyForfeitWin } from "./fed-seats";
 import { completionEngineStatus, hasActiveAbandonSql, rowAwaitsSettle } from "./recorded-abandon";
 import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
+import { departedRankedLast } from "@/lib/table-withdrawal";
+import { TABLE_WITHDRAWAL_ROW, TABLE_WITHDRAWAL_VOIDED_ROW, activeTableWithdrawals } from "@/lib/table-withdrawal-note";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   SETTLED_FIXTURE_STATUSES,
@@ -51,6 +53,7 @@ import { swissAbsentRounds } from "./swiss-absent-rounds";
 import { attachFeedRefs, engineRoundOf, laneDepthOf } from "./bracket-rounds";
 import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
 import { rootBracketOrder } from "./knockout-draw";
+import { locksThatFit } from "@/lib/rank-override";
 
 type Tx = postgres.TransactionSql;
 
@@ -60,7 +63,7 @@ const BRACKET_RESET_KEY = "gf-reset";
 
 // americano folds like a table stage (Jul3/08 §3): its pair fixtures feed the
 // standard standings machinery.
-const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
+export const TABLE_KINDS = new Set(["league", "group", "swiss", "americano"]);
 
 // L3/#414 pass 2 — the bracket-shaped kinds. TABLE_KINDS (4) ∪ {"ladder"} (1)
 // ∪ BRACKET_KINDS (4) = 9 = every StageKind value: completeStageIfReady's
@@ -639,8 +642,10 @@ function toTableStage(
       : {}),
     ...(Array.isArray(inputs.stage.config?.rank_overrides)
       ? {
-          rankLocks: (inputs.stage.config.rank_overrides as { entrant_id: string; rank: number }[]).map(
-            (o) => ({ entrantId: o.entrant_id, rank: o.rank }),
+          // W5 T13 fix round 1 (ST-G14): a pin waits until its pool holds enough results to place it (`locksThatFit`).
+          rankLocks: locksThatFit(
+            (inputs.stage.config.rank_overrides as { entrant_id: string; rank: number }[]).map((o) => ({ entrantId: o.entrant_id, rank: o.rank })),
+            inputs.tableFixtures,
           ),
         }
       : {}),
@@ -692,22 +697,36 @@ export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<Cros
  * delta before the digest's "biggest climber" line ever reads it. A stage
  * snapshotted for the first time has nothing to roll — `previous_rows` stays
  * null, which the digest treats as "no history yet", not an error.
+ *
+ * B5 fix wave fix round 2 (controller ruling m4, owner standing "apply rec"): WHY the table changed decides what the step is.
+ * A `"result"` refold (a decided match: `onDecided`, scoring.ts) rolls the old rows into `previous_rows` as above — the step a
+ * result made, which "Biggest climber" reads. A `"roster"` refold (a withdrawal, a Reinstate, a disqualification's cascade, a
+ * late entrant's placement, an expunge, a pin, a rules or config refold, a generate, a completion's placement write) REBASES the
+ * step instead: `previous_rows` becomes the new rows, so the move the roster made is never read as anyone's climb, and the next
+ * result's step starts from the table as it now stands. No column: the step itself records the cause (a result's, or empty).
+ * An unchanged table keeps its step whatever the cause (a same-answer rerun must not erase the real delta, as above).
+ *
+ * B5 fix wave fix round 4 (m5; controller ruling, the reviewer's option a): Pair next seating a Swiss BYE is a result too - a
+ * point awarded - and it opens its OWN step like any result (`"result"`: the table just before the bye against the table just
+ * after it), whose climber is the bye's holder (`afterGenerateCommit`, usecases/stages/generate.ts).
  */
+export type SnapshotCause = "result" | "roster";
 async function writeSnapshot(
   tx: Tx,
   stageId: string,
   poolId: string | null,
   rows: readonly StandingsRow[],
   through: number,
+  cause: SnapshotCause,
 ): Promise<void> {
   await tx`
     insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
     values (${stageId}, ${poolId}, ${tx.json(rows as never)}, ${through})
     on conflict on constraint standings_snapshots_pkey do update set
       previous_rows = case
-        when standings_snapshots.rows is distinct from excluded.rows
-        then standings_snapshots.rows
-        else standings_snapshots.previous_rows
+        when standings_snapshots.rows is not distinct from excluded.rows then standings_snapshots.previous_rows
+        when ${cause}::text = 'result' then standings_snapshots.rows
+        else excluded.rows
       end,
       rows = excluded.rows, computed_through_seq = excluded.computed_through_seq, updated_at = now()
   `;
@@ -762,7 +781,9 @@ export async function recomputeStandings(
   orgId: string,
   stageId: string,
   poolId?: string,
-  opts: { emptyFold?: "write" | "skip" | "drop" } = {},
+  // m4: `cause` is "roster" unless the caller is a decided result's refold (see `writeSnapshot`): a refold that does not say it
+  // is a result never makes a climber.
+  opts: { emptyFold?: "write" | "skip" | "drop"; cause?: SnapshotCause } = {},
 ): Promise<readonly StandingsRow[]> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -776,7 +797,7 @@ export async function recomputeStandings(
     const written: string[] = [];
     for (const pool of tables.pools) {
       if (emptyFold !== "write" && pool.rows.length === 0) continue;
-      await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
+      await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq, opts.cause ?? "roster");
       written.push(pool.pool || "");
     }
     if (emptyFold === "drop") {
@@ -850,6 +871,40 @@ export async function stageTablePoints(
  * refused, never ranked by an order nobody stored.
  */
 async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
+  const done = await rankWithStoredLotsRaw(tx, inputs);
+  if (inputs.kind !== "league" && inputs.kind !== "group") return done;
+  return withDepartedRankedLast(done, await stageTableWithdrawals(tx, inputs), inputs);
+}
+
+/** W5 T8 fix round 1 (C1): the entrants THIS stage's own withdrawal cascade settled — its active `table_withdrawal` rows
+ *  (`activeTableWithdrawals`). Read per stage, never from the division's field: an entrant who leaves later, from another
+ *  stage (a knockout after the league finished), has no row here, and the finished table she topped is not re-ranked
+ *  (RB5-L8). */
+async function stageTableWithdrawals(tx: Tx, inputs: StageInputs): Promise<ReadonlySet<string>> {
+  const ledger = await tx<{ seq: number; type: string; payload: unknown }[]>`
+    select seq::int as seq, type, payload from division_events
+     where division_id = (select division_id from stages where id = ${inputs.stage.id}) and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`;
+  return new Set(activeTableWithdrawals(ledger).filter((r) => r.stage_id === inputs.stage.id).map((r) => r.entrant_id));
+}
+
+/**
+ * W5 T8 (RB5-W1, X-WDT-7): a league's or group's departed entrants rank LAST, on every surface — the stored snapshot (every
+ * table page, the hub, the API) and the `stage_completed` places alike, so a walkover leaver who won her first matches
+ * neither tops the table she left nor heads its final order. One place, after the fold ranked and any lots were stored.
+ * A Swiss table is W3's and keeps its own order.
+ */
+function withDepartedRankedLast(done: CompletedTableStage, settled: ReadonlySet<string>, inputs: StageInputs): CompletedTableStage {
+  // Both: this stage's cascade settled her (its row), and she is still out (a Reinstate the cascade could not reverse — a
+  // table already complete — leaves the row standing with her back in the field).
+  const departed = (id: string) => settled.has(id) && !inputs.field.has(id);
+  return {
+    ...done,
+    tables: { ...done.tables, pools: done.tables.pools.map((p) => ({ ...p, rows: departedRankedLast(p.rows, departed) })) },
+    events: done.events.map((e) => (e.type === "stage_completed" ? { ...e, finalRanks: departedRankedLast(e.finalRanks, departed) } : e)),
+  };
+}
+
+async function rankWithStoredLotsRaw(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
   const stageId = inputs.stage.id;
   const first = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
   if (first.newLotsDraws.length === 0) return first;
@@ -940,6 +995,10 @@ function wireTitleOf(title: { kind: "champion"; champion: string } | { kind: "jo
 export interface CompleteResult {
   completed: boolean;
   events: WireDivisionEvent[];
+  /** W5 T17 (X-BD-4): set ONLY by the call that found the stage already complete (it writes nothing). `completeStage`
+   *  (usecases/stages/completion.ts) decides what a repeat answers; `completed` stays true for it here, which is what every
+   *  existing reader of this function's answer was written against. */
+  already_complete?: true;
 }
 
 /** engine 5.0.0 (`BracketStage.entrants`, `seeds`): the entrants the stage DREW, in the order it was drawn, so the ranks
@@ -1126,7 +1185,7 @@ export async function refreshCompletedBracketPlacementTx(tx: Tx, stageId: string
     select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
   const ranksOf = (list: readonly StandingsRow[]) => JSON.stringify(list.map((r) => [r.entrantId, r.rank]));
   if (stored !== undefined && ranksOf(stored.rows) === ranksOf(rows)) return false;
-  await writeSnapshot(tx, stageId, null, rows, inputs.division.seq);
+  await writeSnapshot(tx, stageId, null, rows, inputs.division.seq, "roster");
   return true;
 }
 
@@ -1159,7 +1218,7 @@ export async function completeStageIfReady(
     const inputs = await loadStageInputs(tx, stageId);
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
 
-    if (inputs.stage.status === "complete") return { completed: true, events: [] };
+    if (inputs.stage.status === "complete") return { completed: true, events: [], already_complete: true };
 
     const isTable = TABLE_KINDS.has(inputs.kind);
     let events: WireDivisionEvent[] = [];
@@ -1194,7 +1253,7 @@ export async function completeStageIfReady(
       const completed = await rankWithStoredLots(tx, inputs);
       events = completed.events.map((e) => toWireEvent(e));
       for (const pool of completed.tables.pools) {
-        await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
+        await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq, "roster");
       }
     } else if (inputs.kind === "ladder") {
       // Jul3/08 §6 — no table/bracket shape of its own: complete once every
@@ -1227,7 +1286,7 @@ export async function completeStageIfReady(
       events = [
         { type: "stage_completed", stageId, finalRanks: [...finalRanks], places: finalRanks.map((entrantId, i) => ({ entrantId, rank: i + 1 })) },
       ];
-      await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq);
+      await writeSnapshot(tx, stageId, null, placementTable(finalRanks).rows, inputs.division.seq, "roster");
     } else if (isBracketKind(inputs.kind)) {
       const { bracketStage, bracketFixtures } = await readBracketStage(tx, inputs, stageId);
 
@@ -1299,6 +1358,7 @@ export async function completeStageIfReady(
         null,
         placementTable(completed.finalRanks).rows,
         inputs.division.seq,
+        "roster",
       );
     } else {
       // Unreachable: TABLE_KINDS ∪ {"ladder"} ∪ BRACKET_KINDS covers every

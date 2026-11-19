@@ -286,7 +286,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     // Ruling 39: L1 runs at 1280 only, so a cell is one case — never the 462 (cells × 2) this file once froze. A cell the
     // product refuses (chess americano/mexicano, follow-up to #1027) has none.
     expect(c.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
-    expect(c.l1.value).toBe(207);
+    expect(c.l1.value).toBe(196);
     expect(c.l2.value).toBe(l2.runs.length);
     expect(c.l2.pairTargets).toBe(l2.targets.rowScenario + l2.targets.sportScenario);
     expect(c.l2.l3GapRuns).toBe(l2.runs.filter((r) => r.l3Gap !== null).length);
@@ -433,7 +433,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     // counts.json alone cannot kill a counts.ts regression (CI's matrix:catalogue check is the only other witness), so the generator is run here.
     const out = computeCounts({ l3: PLAN, l2: planL2({ variants: VARIANTS }), variants: VARIANTS, regressions: [] });
     expect(out.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
-    expect(out.l1.value).toBe(207);
+    expect(out.l1.value).toBe(196);
     expect(out.l1).toEqual(parsed<CountsFile>("counts.json").l1);
     expect(out.l1.value).not.toBe(CELLS * 2);
   });

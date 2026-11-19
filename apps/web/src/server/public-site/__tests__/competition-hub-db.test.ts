@@ -40,8 +40,8 @@ import { getPublicDivision } from "../data";
 import { divisionTitle } from "../champion";
 
 /** The single champion's entrant id of `divisionTitle` — null for no title, a joint title or a vacant one. */
-const championIdOf = (...a: Parameters<typeof divisionTitle>): string | null => {
-  const t = divisionTitle(...a);
+const championIdOf = (stages: Parameters<typeof divisionTitle>[0], fixtures: Parameters<typeof divisionTitle>[1], standings: Parameters<typeof divisionTitle>[2], pools: Parameters<typeof divisionTitle>[3] = null): string | null => {
+  const t = divisionTitle(stages, fixtures, standings, pools);
   return t?.kind === "champion" ? t.champion : null;
 };
 
@@ -382,7 +382,7 @@ describe.skipIf(!HAS_DB)("loadCompetitionHub — against real Postgres", () => {
       // reachable from this document. The division page's crown is: the same
       // `divisionChampion` call the page makes, over the same real division read.
       const detail = (await getPublicDivision(scene.orgSlug, scene.koCompSlug, "cup"))!;
-      expect(championIdOf(detail.stages, detail.fixtures, detail.standings)).toBe(south!.id);
+      expect(championIdOf(detail.stages, detail.fixtures, detail.standings, detail.pools)).toBe(south!.id);
     } finally {
       await sql`
         update fixtures

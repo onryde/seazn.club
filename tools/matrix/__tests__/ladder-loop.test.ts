@@ -426,7 +426,7 @@ describe("R4 on the ladder — D14 (rulings 51, 53)", () => {
     const expected = w.before.some((f) => PENDING.has(f.status)) ? "walkover" : "none";
     expect(expected).toBe("none");                                   // D8 decides each challenge before the next is issued
     expect(w.before.length, "seed 3's decided challenge was snapshotted").toBeGreaterThan(0);
-    expect([w.policy, w.walkovers, w.voided, w.skippedFinalized]).toEqual([expected, 0, 0, 0]);
+    expect([w.policy, w.walkovers, w.voided, w.skippedCancelled]).toEqual([expected, 0, 0, 0]);
     expect(checks.find((c) => c.id === "r4-policy-reported")?.verdict).toBe("pass");
     expect(checks.find((c) => c.id === "r4-cascade-consistent")?.verdict).toBe("pass");   // seed 3's decided challenge unchanged
     // T9-R1: I9 judges the active entrants against the raw stored order, the withdrawn entrant set aside.
@@ -733,7 +733,9 @@ describe("playLadder's guards and the fake's refusals (review m-2, m-6)", () => 
     // `entrant is already ${as}`, with `as` defaulting to "withdrawn" - the harness's withdraw never passes one, so the sentence
     // the fake answers is the template at its default.
     expect(product).toContain('const as = opts.as ?? "withdrawn";');
-    expect(product).toContain("if (entrant.status === as) {\n    throw new HttpError(409, `entrant is already ${as}`);");
+    // W5 (B3, Reinstate's reverse + the cascade lock) moved the repeat check to the departed set, read under the lock: both departed
+    // statuses answer the same codeless 409 with the status's own name, so a repeat of a withdrawal still reads "already withdrawn".
+    expect(product).toContain("if (DEPARTED_STATUSES.has(entrant.status)) {\n    throw new HttpError(409, `entrant is already ${entrant.status}`);");
     const d = new FakeLadderDriver();
     const ctx = ctxFor(d, "LIFECYCLE");
     const setup = await setUpDivision(ctx, new Recorder(), 3);

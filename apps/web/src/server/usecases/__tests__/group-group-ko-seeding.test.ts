@@ -12,6 +12,8 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
 import { EngineError } from "@seazn/engine/core";
+import { expandTake } from "@seazn/engine/competition";
+import { HttpError } from "@/lib/errors";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
@@ -185,12 +187,24 @@ describe.skipIf(!HAS_DB)("group -> group -> knockout: a pool of one is refused b
     expect((await poolsOf(ok.stages[0]!.id)).size).toBe(FIRST_POOLS);
   });
 
-  it("I2c: Rebuild of a drawn, unstarted stage after a withdrawal into the refused field is refused whole - the draw is kept", async () => {
+  it("I2c: Rebuild of a drawn, unstarted stage after a withdrawal into the refused field is refused whole, by name - the draw is kept", async () => {
     const r = await rig(8);
     await generateStageFixtures(r.auth, r.stages[0]!.id);
     const before = await fixtureIds(r.stages[0]!.id);
     await patchEntrant(r.auth, r.entrants[7]!.id, { status: "withdrawn" });
-    await expect(rebuildStageFixtures(r.auth, r.stages[0]!.id)).rejects.toSatisfy(TOO_FEW);
+    // W5 T12b (RB5-E6, X-BD-8): before Start, Rebuild asks the format's own gates first, as Start does (`refuseFormatTooSmall`), and
+    // this field fails the cut before the draw reaches the pool rule (Generate, I2b, has no cut gate at a root group and still names
+    // the pool). The numbers come from the engine and the snake, never from the gate: the take is TAKE per pool over FIRST_POOLS
+    // (the engine's `expandTake`), and 7 snaked into FIRST_POOLS leaves a smallest pool of floor(7 / FIRST_POOLS) = 1, so only the
+    // rank-1 wave fills (a wave is all-or-nothing: the engine's `rowAtRank` reads that rank in every pool).
+    const field = 7;
+    const qualified = expandTake([{ kind: "topNPerGroup", n: TAKE }], { poolKeys: ["A", "B", "C", "D"].slice(0, FIRST_POOLS) }).reduce((n, pot) => n + pot.length, 0);
+    const max = FIRST_POOLS * Math.min(TAKE, Math.floor(field / FIRST_POOLS));
+    expect([qualified, max], "premise: the cut is over the field and only the first wave fills").toEqual([8, 4]);
+    const err = await rebuildStageFixtures(r.auth, r.stages[0]!.id).then(() => null, (e: unknown) => e);
+    expect(err, "Rebuild is refused").toBeInstanceOf(HttpError);
+    expect((err as HttpError).code).toBe("RR_CUT_EXCEEDS_FIELD");
+    expect((err as HttpError).extra).toMatchObject({ qualified, max, reason: "cut_exceeds_field", stageId: r.stages[1]!.id });
     expect(await fixtureIds(r.stages[0]!.id)).toEqual(before);
   });
 

@@ -286,8 +286,9 @@ export interface FixtureRow {
 }
 
 /** A league stage generated and the division started; the fixtures come back
- *  with their sides, so a caller never assumes which pairing is first. */
-export async function leagueFixtures(request: APIRequestContext, divisionId: string): Promise<FixtureRow[]> {
+ *  with their sides, so a caller never assumes which pairing is first. `start: false` leaves the division in setup (drawn, not
+ *  started) - for a spec that still changes a pair's partners, which owner ruling 292 (W5) refuses once play has started. */
+export async function leagueFixtures(request: APIRequestContext, divisionId: string, opts: { start?: boolean } = {}): Promise<FixtureRow[]> {
   const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
     seq: 1,
     kind: "league",
@@ -296,8 +297,10 @@ export async function leagueFixtures(request: APIRequestContext, divisionId: str
   if (!stage.data) throw new Error(`stage for ${divisionId} -> ${stage.status} ${JSON.stringify(stage.error)}`);
   const gen = await apiJson(request, `/api/v1/stages/${stage.data.id}/generate`, "POST");
   if (gen.status >= 300) throw new Error(`generate ${stage.data.id} -> ${gen.status} ${JSON.stringify(gen.error)}`);
-  const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
-  if (started.status >= 300) throw new Error(`start ${divisionId} -> ${started.status} ${JSON.stringify(started.error)}`);
+  if (opts.start !== false) {
+    const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
+    if (started.status >= 300) throw new Error(`start ${divisionId} -> ${started.status} ${JSON.stringify(started.error)}`);
+  }
   const list = await apiJson<FixtureRow[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
   if (!list.data?.length) throw new Error(`fixtures for ${divisionId} -> ${list.status}`);
   return list.data;

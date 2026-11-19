@@ -7,8 +7,8 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 6178,
-  "inapplicable": 6178,
+  "total": 5936,
+  "inapplicable": 5936,
   "harnessGap": 0,
   "unscorableOnly": 0,
   "groups": [
@@ -549,7 +549,7 @@
       "scenario": "R6",
       "kind": "inapplicable",
       "reason": "single-stage row: there is no later stage (bracket or playoff) to be drawn into; a withdrawal between rounds of one stage is R4a's input",
-      "count": 108,
+      "count": 97,
       "cells": {
         "league": [
           "football",
@@ -564,7 +564,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -641,19 +641,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -877,12 +864,12 @@
       "scenario": "R9a",
       "kind": "inapplicable",
       "reason": "the sport's entrant model allows neither pairs nor teams: nothing to rename as a pair/team",
-      "count": 17,
+      "count": 16,
       "cells": {
         "league": [
           "boardgame"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame"
         ],
         "league_ko": [
@@ -921,9 +908,6 @@
         "ladder": [
           "boardgame"
         ],
-        "group_only": [
-          "boardgame"
-        ],
         "group_group_ko": [
           "boardgame"
         ],
@@ -936,7 +920,7 @@
       "scenario": "R9b",
       "kind": "inapplicable",
       "reason": "no team entrants in this sport's model: there is no lineup to change",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "boardgame",
@@ -945,7 +929,7 @@
           "tabletennis",
           "tennis"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -1042,13 +1026,6 @@
           "tennis"
         ],
         "ladder": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -1219,7 +1196,7 @@
       "scenario": "R11b",
       "kind": "inapplicable",
       "reason": "no pair entrants in this sport's model: nobody can be in two partnerships",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "football",
@@ -1228,7 +1205,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -1325,13 +1302,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -1406,7 +1376,7 @@
       "scenario": "R12a",
       "kind": "inapplicable",
       "reason": "no pair entrants in this sport's model: there is no doubles partner",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "football",
@@ -1415,7 +1385,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -1512,13 +1482,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -1593,7 +1556,7 @@
       "scenario": "R12b",
       "kind": "inapplicable",
       "reason": "no pair entrants in this sport's model: there is no pair to dissolve",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "football",
@@ -1602,7 +1565,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -1699,13 +1662,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -1923,7 +1879,7 @@
       "scenario": "R15",
       "kind": "inapplicable",
       "reason": "no round-paired stage (swiss, americano/mexicano): a league's fixtures all exist from Generate and a bracket pairs only its winners, so nobody is 'still paired next round' after their last match",
-      "count": 154,
+      "count": 143,
       "cells": {
         "league": [
           "football",
@@ -1938,7 +1894,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -2068,19 +2024,6 @@
           "icehockey",
           "hockey"
         ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
         "group_group_ko": [
           "football",
           "cricket",
@@ -2161,7 +2104,7 @@
       "scenario": "R16",
       "kind": "inapplicable",
       "reason": "no team entrants in this sport's model: no team lineup to substitute into",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "boardgame",
@@ -2170,7 +2113,7 @@
           "tabletennis",
           "tennis"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -2267,13 +2210,6 @@
           "tennis"
         ],
         "ladder": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -2588,7 +2524,7 @@
       "scenario": "M4b",
       "kind": "inapplicable",
       "reason": "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets; cricket needs DLS on with the abandon floor (minOversForResult) below the innings length, or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS) — no committed variant enables it",
-      "count": 131,
+      "count": 124,
       "cells": {
         "league": [
           "boardgame",
@@ -2599,7 +2535,7 @@
           "tabletennis",
           "tennis"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame",
           "carrom",
           "generic",
@@ -2724,15 +2660,6 @@
           "tennis"
         ],
         "ladder": [
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
           "boardgame",
           "carrom",
           "generic",
@@ -2765,7 +2692,7 @@
       "scenario": "M5",
       "kind": "inapplicable",
       "reason": "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing) — no committed variant enables it",
-      "count": 116,
+      "count": 105,
       "cells": {
         "league": [
           "football",
@@ -2780,7 +2707,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -2895,19 +2822,6 @@
           "badminton",
           "tabletennis",
           "tennis"
-        ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
         ],
         "group_group_ko": [
           "volleyball",
@@ -3023,7 +2937,7 @@
       "scenario": "M6",
       "kind": "inapplicable",
       "reason": "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — a KO tie is closed by the fixture's tie-break rung, BG-KO-1, unit-proven in apps/web settle-seating.test.ts and tools/matrix w2a-scenarios.test.ts; boardgame's M6 case is not driven end to end because that run ends in the public standings API, which next dev cannot serve — owed: W10 app PR B, a prod-build e2e), or none is switched on under this config — no committed variant enables it",
-      "count": 112,
+      "count": 106,
       "cells": {
         "league": [
           "boardgame",
@@ -3033,7 +2947,7 @@
           "tabletennis",
           "tennis"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame",
           "generic",
           "volleyball",
@@ -3144,14 +3058,6 @@
           "tennis"
         ],
         "ladder": [
-          "boardgame",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
           "boardgame",
           "generic",
           "volleyball",
@@ -3565,7 +3471,7 @@
       "scenario": "M12a",
       "kind": "inapplicable",
       "reason": "no team entrants in this sport's model: no substitute can come on for an injured player",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "boardgame",
@@ -3574,7 +3480,7 @@
           "tabletennis",
           "tennis"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -3671,13 +3577,6 @@
           "tennis"
         ],
         "ladder": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -3752,7 +3651,7 @@
       "scenario": "M12b",
       "kind": "inapplicable",
       "reason": "no team entrants in this sport's model: there is no team to play short",
-      "count": 93,
+      "count": 88,
       "cells": {
         "league": [
           "boardgame",
@@ -3761,7 +3660,7 @@
           "tabletennis",
           "tennis"
         ],
-        "triple_rr": [
+        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -3858,13 +3757,6 @@
           "tennis"
         ],
         "ladder": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
           "boardgame",
           "carrom",
           "badminton",
@@ -3987,7 +3879,7 @@
       "scenario": "M12c",
       "kind": "inapplicable",
       "reason": "the sport declares no retired-hurt event (module eventSchemas has no cricket.retire; ruling 30: cricket only)",
-      "count": 188,
+      "count": 178,
       "cells": {
         "league": [
           "football",
@@ -4001,7 +3893,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "boardgame",
           "carrom",
@@ -4168,18 +4060,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "boardgame",
           "carrom",
@@ -4317,7 +4197,7 @@
       "scenario": "F3",
       "kind": "inapplicable",
       "reason": "no knockout or double-elimination bracket in this row: nothing to size to a power of two",
-      "count": 108,
+      "count": 97,
       "cells": {
         "league": [
           "football",
@@ -4332,7 +4212,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -4433,19 +4313,6 @@
           "tennis",
           "icehockey",
           "hockey"
-        ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
         ]
       }
     },
@@ -4501,22 +4368,9 @@
       "scenario": "F4",
       "kind": "inapplicable",
       "reason": "no pooled (group) stage in this row",
-      "count": 174,
+      "count": 163,
       "cells": {
         "league": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "triple_rr": [
           "football",
           "cricket",
           "boardgame",
@@ -5299,22 +5153,9 @@
       "scenario": "F8",
       "kind": "inapplicable",
       "reason": "no seeded placement in this row: everyone meets everyone, or pairing follows standings only",
-      "count": 53,
+      "count": 42,
       "cells": {
         "league": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "triple_rr": [
           "football",
           "cricket",
           "boardgame",
@@ -5850,7 +5691,7 @@
       "scenario": "P2",
       "kind": "inapplicable",
       "reason": "no later stage fed by a points table: nothing qualifies from a table",
-      "count": 130,
+      "count": 119,
       "cells": {
         "league": [
           "football",
@@ -5865,7 +5706,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -5968,19 +5809,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -6204,7 +6032,7 @@
       "scenario": "P5b",
       "kind": "inapplicable",
       "reason": "Pair next round (and its undo, /unpair) exists only for swiss stages",
-      "count": 174,
+      "count": 163,
       "cells": {
         "league": [
           "football",
@@ -6219,7 +6047,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -6361,19 +6189,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -6514,7 +6329,7 @@
       "scenario": "P6",
       "kind": "inapplicable",
       "reason": "the sport has no best-of for a stage to override (the per-stage best-of final is for the four sets-based sports)",
-      "count": 131,
+      "count": 124,
       "cells": {
         "league": [
           "football",
@@ -6525,7 +6340,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -6650,15 +6465,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -6812,7 +6618,7 @@
       "scenario": "Q1a",
       "kind": "inapplicable",
       "reason": "no later stage fed by a points table: no qualifier is decided by lots",
-      "count": 130,
+      "count": 119,
       "cells": {
         "league": [
           "football",
@@ -6827,7 +6633,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -6930,19 +6736,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7022,7 +6815,7 @@
       "scenario": "Q1b",
       "kind": "inapplicable",
       "reason": "no later stage fed by a points table: no qualifier is decided by the organiser",
-      "count": 130,
+      "count": 119,
       "cells": {
         "league": [
           "football",
@@ -7037,7 +6830,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7140,19 +6933,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7232,7 +7012,7 @@
       "scenario": "Q2",
       "kind": "inapplicable",
       "reason": "no later stage fed by a points table: nobody qualifies from a group or table",
-      "count": 130,
+      "count": 119,
       "cells": {
         "league": [
           "football",
@@ -7247,7 +7027,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7350,19 +7130,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7442,7 +7209,7 @@
       "scenario": "Q3",
       "kind": "inapplicable",
       "reason": "no lone knockout stage in this row: no single bracket whose 3rd place the Third place choice settles",
-      "count": 185,
+      "count": 174,
       "cells": {
         "league": [
           "football",
@@ -7457,7 +7224,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7625,19 +7392,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7717,7 +7471,7 @@
       "scenario": "Q4a",
       "kind": "inapplicable",
       "reason": "no final in this row: league/swiss/rotation/ladder formats end on a table or order",
-      "count": 75,
+      "count": 64,
       "cells": {
         "league": [
           "football",
@@ -7732,7 +7486,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7783,19 +7537,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7862,7 +7603,7 @@
       "scenario": "Q4b",
       "kind": "inapplicable",
       "reason": "no table to fall back on: the final is not fed by a points-table stage",
-      "count": 130,
+      "count": 119,
       "cells": {
         "league": [
           "football",
@@ -7877,7 +7618,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -7992,19 +7733,6 @@
           "icehockey",
           "hockey"
         ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
         "knockout_third_place": [
           "football",
           "cricket",
@@ -8072,7 +7800,7 @@
       "scenario": "Q5a",
       "kind": "inapplicable",
       "reason": "no plate stage in this row",
-      "count": 196,
+      "count": 185,
       "cells": {
         "league": [
           "football",
@@ -8087,7 +7815,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -8255,19 +7983,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -8360,7 +8075,7 @@
       "scenario": "Q5b",
       "kind": "inapplicable",
       "reason": "no plate stage in this row",
-      "count": 196,
+      "count": 185,
       "cells": {
         "league": [
           "football",
@@ -8375,7 +8090,7 @@
           "icehockey",
           "hockey"
         ],
-        "triple_rr": [
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -8543,19 +8258,6 @@
           "hockey"
         ],
         "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
           "football",
           "cricket",
           "boardgame",

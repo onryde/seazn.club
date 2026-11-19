@@ -13,6 +13,7 @@ import { EVENTS } from "@/lib/analytics-events";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { TEMPLATE_CATALOG, getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate } from "@/server/templates/schema";
+import { isAnyDivision } from "@/server/templates/resolve";
 import {
   createFromTemplate,
   instantiateTemplate,
@@ -145,12 +146,18 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
   it("instantiates every catalog entry against a test org — structure, cfg snapshots, provenance", async () => {
     await seedTemplateSportCatalog();
     const { auth } = await seedOrg("pro"); // americano-night needs formats.advanced
+    let any = 0;
     for (const template of TEMPLATE_CATALOG) {
+      // X-BD-3: a template that names no sport of its own is built on the one the organiser picks (every sport and kind:
+      // template-instantiate-any.test.ts); here it must still stand up like the rest.
+      const asked = template.divisions.some(isAnyDivision);
+      if (asked) any++;
       const result = await createFromTemplate(auth, {
         template_key: template.key,
         name: `${template.key} ${randomUUID().slice(0, 6)}`,
         ends_on: "2030-12-31",
         visibility: "private",
+        ...(asked ? { sport_key: "football", variant_key: "11-a-side", entrant_kind: "team" as const } : {}),
       });
       expect(result.templateKey).toBe(template.key);
       expect(result.templateVersion).toBe(template.version);
@@ -167,6 +174,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
       // just the id, back on the response.
       expect(result.slug).toBe(row!.slug);
     }
+    expect(any, "the sweep reached the any-sport template").toBe(1);
   });
 
   it("wc32's group stage snapshots config.pools.count from its `groups` sugar; swiss11's config.rounds passes through", async () => {

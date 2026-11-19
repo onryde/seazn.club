@@ -86,8 +86,12 @@ describe("R2005 e2e wiring: the composed overlay spec runs against a server that
     expect(env.get("RELAY_IMAGE") ?? "", "an image the server admits composed sessions on").toMatch(/\S/);
   });
 
-  it("the spec is in e2e-parallel's rest slice: not serial, not heavy, not a walkthrough, not mobile", () => {
+  // Since 2026-11-19 the spec is in e2e-parallel's "mid" leg (PARALLEL_MID), carved out of "rest" for its 229s; every e2e-parallel leg runs
+  // the one Start server step above, so mid reaches the composed-session server exactly as rest did.
+  it("the spec is in e2e-parallel's mid slice: not serial, not heavy, not a walkthrough, not mobile", () => {
     const heavy = /const PARALLEL_HEAVY =\s*(\/[^\n]*\/);/.exec(PW)?.[1];
+    const mid = /const PARALLEL_MID =\s*(\/[^\n]*\/);/.exec(PW)?.[1];
+    expect(mid, "premise: playwright.config.ts declares PARALLEL_MID").toBeDefined();
     const serial = /const SERIAL_SPECS =\s*(\/[^\n]*\/);/.exec(PW)?.[1];
     expect(heavy, "premise: playwright.config.ts declares PARALLEL_HEAVY").toBeDefined();
     expect(serial, "premise: playwright.config.ts declares SERIAL_SPECS").toBeDefined();
@@ -103,6 +107,8 @@ describe("R2005 e2e wiring: the composed overlay spec runs against a server that
     }
     expect(/[\\/]e2e[\\/]walkthrough[\\/]/.test(path) || /[\\/]e2e[\\/]mobile[\\/]/.test(path), "not a walkthrough, not mobile").toBe(false);
     expect(checked, "carve-outs checked").toBe(2);
+    // The positive pair: the leg that DOES run it. Without it, a spec dropped from every carve-out passes the two negatives above.
+    expect(new RegExp(mid!.slice(1, mid!.lastIndexOf("/"))).test(path), "PARALLEL_MID selects the spec").toBe(true);
   });
 
   it("the spec still starts COMPOSED sessions, so the image is load-bearing", () => {

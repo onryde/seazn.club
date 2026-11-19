@@ -364,9 +364,9 @@ describe.skipIf(!HAS_DB)("restoring an undone generation re-inserts every row ex
     await scoreEvent(auth, played!.id, {
       expected_seq: 1,
       type: "core.forfeit",
-      // W2b: an engine FORFEIT_REASON (free-text "no-show" is refused); after a bare start that is a disqualification
-      // (D3 R4) — never `retired`, which waits for something played (ruling 113).
-      payload: { by: played!.away_entrant_id, reason: "disqualified" },
+      // W2b: an engine FORFEIT_REASON (free-text "no-show" is refused); after a bare start a disqualification (D3 R4) or a
+      // walkover (ruling 112) — never `retired`, which waits for something played (ruling 113). W5 T8b (ruling 289): a disqualification in a table stage now withdraws the entrant from it (X-WDT-10); this rig only wants one decided fixture, so a walkover after the Start (ruling 112).
+      payload: { by: played!.away_entrant_id, reason: "walkover" },
     });
     const generated = await wholeRows("stage_id", mainId);
     const walkover = generated.find((r) => r.id === played!.id)!;
@@ -628,9 +628,9 @@ async function record(auth: AuthCtx, fixtureId: string, kind: Recorded): Promise
   if (kind === "forfeited") {
     const [f] = await sql<{ away_entrant_id: string }[]>`select away_entrant_id from fixtures where id = ${fixtureId}`;
     await scoreEvent(auth, fixtureId, {
-      // W2b: an engine FORFEIT_REASON; after a bare start a disqualification (D3 R4; ruling 113: a retirement needs
-      // something played).
-      expected_seq: 1, type: "core.forfeit", payload: { by: f!.away_entrant_id, reason: "disqualified" },
+      // W2b: an engine FORFEIT_REASON; after a bare start a disqualification (D3 R4) or a walkover (ruling 112; ruling 113:
+      // a retirement needs something played). W5 T8b (ruling 289): a disqualification in a table stage now withdraws the entrant from it (X-WDT-10); this rig only wants one decided fixture, so a walkover after the Start (ruling 112).
+      expected_seq: 1, type: "core.forfeit", payload: { by: f!.away_entrant_id, reason: "walkover" },
     });
   } else if (kind === "abandoned") {
     await scoreEvent(auth, fixtureId, { expected_seq: 1, type: "core.abandon", payload: { reason: "waterlogged" } });

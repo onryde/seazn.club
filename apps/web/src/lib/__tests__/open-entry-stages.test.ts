@@ -12,7 +12,10 @@ import {
   entrantListLocked,
   isRootKnockoutStage,
   isRootSwissStage,
+  isRootTableStage,
   isRunningRootKnockout,
+  isRunningRootTable,
+  tableLateEntryOffered,
   swissLateEntryOffered,
   startClosesEntrantList,
   startEntrantsLine,
@@ -54,7 +57,10 @@ describe("open-entry stage kinds", () => {
     expect(startClosesEntrantList(stages("ladder"))).toBe(false);
     expect(startClosesEntrantList(stages("americano"))).toBe(false);
     expect(startClosesEntrantList(stages("knockout", "ladder"))).toBe(false);
-    expect(startClosesEntrantList(stages("league", "knockout"))).toBe(true);
+    // W5 (X-CU-9): a ROOT league keeps the list open now, so a league + knockout no longer closes it; a closed-field
+    // division is one with neither a root table, a root Swiss, a root knockout nor an open format.
+    expect(startClosesEntrantList(stages("league", "knockout"))).toBe(false);
+    expect(startClosesEntrantList([st("double_elim")])).toBe(true);
     // No stages at all: `exists` is false, so the list closes.
     expect(startClosesEntrantList([])).toBe(true);
   });
@@ -88,10 +94,9 @@ describe("whether the entrant list is closed right now", () => {
 
   it("is locked on a started division whose stages are all closed-field", () => {
     for (const status of ENTRANT_LIST_LOCKED_STATUSES) {
-      expect(entrantListLocked(status, stages("league")), status).toBe(true);
-      expect(entrantListLocked(status, stages("league", "knockout")), status).toBe(true);
+      expect(entrantListLocked(status, [st("double_elim")]), status).toBe(true);
       // A Swiss fed by an earlier stage has a fixed qualified field: nobody joins it late, so it exempts nothing.
-      expect(entrantListLocked(status, [st("league"), st("swiss", { progression: { from: "s1", top: 4 } })]), status).toBe(true);
+      expect(entrantListLocked(status, [st("double_elim"), st("swiss", { progression: { from: "s1", top: 4 } })]), status).toBe(true);
       expect(entrantListLocked(status, [st("swiss", { config: { qualified: ["e1", "e2"] } })]), status).toBe(true);
       // No stages: `exists` is false server-side, so the list is locked.
       expect(entrantListLocked(status, []), status).toBe(true);
@@ -148,7 +153,7 @@ describe("a running root Swiss keeps the entrant list open", () => {
   });
 
   it("the Start dialog says the list closes, stays open for the Swiss, or says nothing", () => {
-    expect(startEntrantsLine(stages("league", "knockout"))).toBe("closes");
+    expect(startEntrantsLine([st("double_elim")])).toBe("closes");
     expect(startEntrantsLine([])).toBe("closes");
     expect(startEntrantsLine(stages("swiss"))).toBe("swiss_late");
     expect(startEntrantsLine(stages("swiss", "knockout"))).toBe("swiss_late");
@@ -312,14 +317,20 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
     expect(checked).toBe(ROOT_KNOCKOUT_TEMPLATES.length * ENTRANT_LIST_LOCKED_STATUSES.length);
   });
 
-  it("X-LE-2 a fed knockout keeps it closed; swiss_knockout's Swiss says the Swiss line, not the knockout one", () => {
+  it("X-LE-2 a bracket fed from a table keeps it closed; swiss_knockout's Swiss says the Swiss line, not the knockout one", () => {
+    // W5 (X-CU-9): the TABLE in front of the fed knockout is a root table, so the division's list is now open and its
+    // Start line is the table's (`table_late`, was `closes`); the knockout itself is never the root and takes nobody.
     let checked = 0;
     for (const key of FED_ONLY) {
       const rows = rowsOf(key);
-      expect(rows.some((r) => r.kind === "knockout"), `premise: ${key} holds a knockout`).toBe(true);
-      expect(entrantListLocked("active", rows), key).toBe(true);
-      expect(startEntrantsLine(rows), key).toBe("closes");
+      const knockout = rows.filter((r) => r.kind === "knockout");
+      expect(knockout.length, `premise: ${key} holds exactly one knockout`).toBe(1);
+      expect(entrantListLocked("active", rows), `${key}: the table keeps the list open`).toBe(false);
+      expect(startEntrantsLine(rows), key).toBe("table_late");
       for (const r of rows) expect(isRootKnockoutStage(r, rows), `${key}: ${r.name}`).toBe(false);
+      // The fed bracket alone exempts nothing: with the table finished the list closes again.
+      const finished = rows.map((r) => (r.kind === "knockout" ? r : { ...r, status: "complete" }));
+      expect(entrantListLocked("active", finished), `${key}: only the fed knockout runs`).toBe(true);
       checked++;
     }
     const swissKo = rowsOf("swiss_knockout");
@@ -334,7 +345,22 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
 
   it("every template answers the lock its rulebook row names", () => {
     // Open after Start: the root knockouts (X-LE-1), the root Swiss templates (W3, X-SW-12), the open formats (Jul3/08).
-    const OPEN = new Set([...ROOT_KNOCKOUT_TEMPLATES, "swiss", "swiss_playoff", "swiss_knockout", "americano", "mexicano", "ladder"]);
+    // W5 (X-CU-9): and the six whose entry stage is a root league or group (RB5-L1, L2).
+    const OPEN = new Set([
+      ...ROOT_KNOCKOUT_TEMPLATES,
+      "swiss",
+      "swiss_playoff",
+      "swiss_knockout",
+      "americano",
+      "mexicano",
+      "ladder",
+      "league",
+      "league_ko",
+      "groups_ko",
+      "group_only",
+      "group_stepladder",
+      "group_playoffs",
+    ]);
     let checked = 0;
     for (const t of STAGE_TEMPLATES) {
       expect(entrantListLocked("active", rowsOf(t.key)), t.key).toBe(!OPEN.has(t.key));
@@ -346,14 +372,17 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
 
   it("C11 a knockout after a group stage is fed even with no progression stored (the stg census shape)", () => {
     // 65 stg knockouts sit after a league/group with progression null and fill from a seed proposal.
+    // W5: the league in front is a root table (it keeps the list open); the knockout behind it is still never the root.
     const legacy: Row[] = [st("league", { seq: 1 }), st("knockout", { seq: 2 })];
     expect(isRootKnockoutStage(legacy[1]!, legacy)).toBe(false);
-    expect(entrantListLocked("active", legacy)).toBe(true);
-    expect(startEntrantsLine(legacy)).toBe("closes");
+    expect(entrantListLocked("active", legacy)).toBe(false);
+    expect(startEntrantsLine(legacy)).toBe("table_late");
+    // With the league finished only the (fed) knockout runs and the list closes.
+    expect(entrantListLocked("active", [{ ...legacy[0]!, status: "complete" }, legacy[1]!])).toBe(true);
     // `seq`, not list order, names the entry stage.
     const reversed: Row[] = [st("knockout", { seq: 2 }), st("league", { seq: 1 })];
     expect(isRootKnockoutStage(reversed[0]!, reversed)).toBe(false);
-    expect(entrantListLocked("active", reversed)).toBe(true);
+    expect(entrantListLocked("active", reversed)).toBe(false);
     const ordered: Row[] = [st("league", { seq: 2 }), st("knockout", { seq: 1 })];
     expect(isRootKnockoutStage(ordered[1]!, ordered)).toBe(true);
     expect(entrantListLocked("active", ordered)).toBe(false);
@@ -399,5 +428,154 @@ describe("W4 T9: a root knockout keeps the entrant list open after Start", () =>
     expect(late).not.toMatch(/progression is null/);
     const entrants = src("src/server/usecases/entrants.ts");
     expect(entrants, "the Start lock exempts a root knockout").toMatch(/await hasRootKnockoutStage\(tx, divisionId\)/);
+  });
+});
+
+// W5 app-A Task 4 (X-CU-9, X-LE-2; RB5-L1, L2, L12): a ROOT league or group stage keeps the entrant list open after
+// Start — late players join its table (Task 5 places them) — and a bracket fed from a table never takes one.
+//
+// Expected values are the rulebook's (RB5-L1: a late entrant joins a started league; RB5-L2: ... or a started group
+// stage; X-LE-2: league_ko / groups_ko / group_stepladder / group_playoffs' brackets are fed), typed here; the template
+// set is pinned and counted, never derived from the predicate under test.
+describe("W5 T4: a root league or group keeps the entrant list open after Start", () => {
+  const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
+  const rowsOf = (key: string): (Row & { name: string })[] =>
+    buildTemplateStages(key, KNOBS).map((d, i) => ({ ...d, seq: i + 1, status: "active" }));
+  /** The templates whose entry stage is a league or group: pinned by name (Task 14 added `group_only`). */
+  const TABLE_TEMPLATES = ["league", "league_ko", "groups_ko", "group_only", "group_stepladder", "group_playoffs"];
+
+  it("X-CU-9 the templates whose entry stage is a table are exactly the six the rulebook names", () => {
+    const opening = STAGE_TEMPLATES.filter((t) => {
+      const [first] = buildTemplateStages(t.key, KNOBS);
+      return (first?.kind === "league" || first?.kind === "group") && first.progression === null;
+    }).map((t) => t.key);
+    expect([...opening].sort()).toEqual([...TABLE_TEMPLATES].sort());
+    expect(opening.length, "anti-vacuity").toBe(6);
+  });
+
+  it("X-CU-9 a root league or group keeps the list open after Start, and the Start dialog says so", () => {
+    let checked = 0;
+    for (const key of TABLE_TEMPLATES) {
+      const rows = rowsOf(key);
+      for (const status of ENTRANT_LIST_LOCKED_STATUSES) {
+        expect(entrantListLocked(status, rows), `${key} / ${status}`).toBe(false);
+        checked++;
+      }
+      // differential: today "closes" (open-entry-stages.ts startEntrantsLine on 110b2ccbd3)
+      expect(startEntrantsLine(rows), key).toBe("table_late");
+      expect(startClosesEntrantList(rows), key).toBe(false);
+      expect(isRootTableStage(rows[0]!, rows), `${key}: its first stage`).toBe(true);
+      expect(isRunningRootTable(rows[0]!, rows), `${key}: running`).toBe(true);
+      // The stage behind it (a fed bracket) is never a root table.
+      for (const fed of rows.slice(1)) expect(isRootTableStage(fed, rows), `${key}: ${fed.name}`).toBe(false);
+    }
+    expect(checked).toBe(TABLE_TEMPLATES.length * ENTRANT_LIST_LOCKED_STATUSES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("X-CU-9 isRootTableStage answers for each stage shape (a fed table, a stored `qualified` field, another kind)", () => {
+    // Each row is a ONE-stage division (the stage is its own entry stage), so only the stage's own shape decides.
+    const ROWS: { name: string; stage: EntryStage; root: boolean }[] = [
+      { name: "a league", stage: st("league"), root: true },
+      { name: "a group stage", stage: st("group", { config: { pools: { count: 2 } } }), root: true },
+      { name: "a group_group_ko's first tier", stage: st("group", { seq: 1 }), root: true },
+      { name: "a group_group_ko's second tier (fed)", stage: st("group", { seq: 1, progression: { sources: [] } }), root: false },
+      { name: "a league fed by an earlier stage", stage: st("league", { progression: { from: "s1", top: 4 } }), root: false },
+      { name: "a league holding a qualified field", stage: st("league", { config: { qualified: [] } }), root: false },
+      { name: "a league whose config is not an object", stage: st("league", { config: null }), root: false },
+      { name: "a swiss", stage: st("swiss"), root: false },
+      { name: "a knockout", stage: st("knockout"), root: false },
+      { name: "a ladder", stage: st("ladder"), root: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(isRootTableStage(r.stage, [r.stage]), r.name).toBe(r.root);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+    expect(ROWS.some((r) => r.root) && ROWS.some((r) => !r.root), "both answers").toBe(true);
+  });
+
+  it("X-LE-2 a fed table (a second group tier) alone keeps the list closed", () => {
+    const fedOnly: Row[] = [st("group", { seq: 2, progression: { sources: [] } }), st("knockout", { seq: 3, progression: { sources: [] } })];
+    expect(entrantListLocked("active", fedOnly)).toBe(true);
+    expect(startEntrantsLine(fedOnly)).toBe("closes");
+    // group_group_ko's shape: the first tier takes the late player, the second never does.
+    const twoTier: Row[] = [st("group", { seq: 1 }), st("group", { seq: 2, progression: { sources: [] } })];
+    expect(twoTier.filter((s) => isRootTableStage(s, twoTier)).length).toBe(1);
+    expect(entrantListLocked("active", twoTier)).toBe(false);
+  });
+
+  it("X-CU-9 only the division's ENTRY stage is a root table: two null-progression groups, seq 1 and seq 2 (stg carries no progression on a fed stage)", () => {
+    // differential: today (196da2c969) both stages are root (no entry-stage check): seq 2 would take a late entrant too.
+    const two: Row[] = [st("group", { seq: 1 }), st("group", { seq: 2 })];
+    expect(isRootTableStage(two[0]!, two), "seq 1").toBe(true);
+    expect(isRootTableStage(two[1]!, two), "seq 2").toBe(false);
+    expect(isRunningRootTable(two[1]!, two), "seq 2 running").toBe(false);
+    // `seq`, not list order, names the entry stage (the knockout's own rule).
+    const reversed: Row[] = [two[1]!, two[0]!];
+    expect(isRootTableStage(reversed[0]!, reversed), "listed first, seq 2").toBe(false);
+    expect(isRootTableStage(reversed[1]!, reversed), "listed second, seq 1").toBe(true);
+    // The stage that is not the entry one exempts nothing: a division holding only it is closed.
+    const behind: Row[] = [st("double_elim", { seq: 1 }), st("league", { seq: 2 })];
+    expect(isRootTableStage(behind[1]!, behind)).toBe(false);
+    expect(entrantListLocked("active", behind)).toBe(true);
+    expect(startEntrantsLine(behind)).toBe("closes");
+    // The same division where the league IS the entry stage opens (the positive pair).
+    const entry: Row[] = [st("league", { seq: 1 }), st("double_elim", { seq: 2 })];
+    expect(entrantListLocked("active", entry)).toBe(false);
+  });
+
+  it("a finished table closes the list again (nothing to join); before Start nothing is locked", () => {
+    const done: Row = st("league", { status: "complete" });
+    expect(isRootTableStage(done, [done]), "still the root stage").toBe(true);
+    expect(isRunningRootTable(done, [done])).toBe(false);
+    expect(entrantListLocked("completed", [done])).toBe(true);
+    expect(entrantListLocked("active", [done])).toBe(true);
+    // Pending (not yet generated) counts as running: the stage still takes entrants.
+    const pending = st("league", { status: "pending" });
+    expect(isRunningRootTable(pending, [pending])).toBe(true);
+    expect(entrantListLocked("setup", [])).toBe(false);
+  });
+
+  it("the Start line: a root Swiss or knockout says its own line first, a table says table_late, a ladder alone says nothing", () => {
+    expect(startEntrantsLine([st("swiss", { seq: 1 }), st("league", { seq: 2 })])).toBe("swiss_late");
+    expect(startEntrantsLine([st("knockout", { seq: 1 }), st("league", { seq: 2 })])).toBe("knockout_late");
+    expect(startEntrantsLine([st("league", { seq: 1 }), st("ladder", { seq: 2 })])).toBe("table_late");
+    expect(startEntrantsLine([st("ladder", { seq: 1 })])).toBeNull();
+  });
+
+  it("tableLateEntryOffered: a running root table of a started division, once its fixtures exist", () => {
+    const one = (stage: Row, divisionStatus: string, generated: boolean) => ({ stage, division: [stage], divisionStatus, generated });
+    const second = st("league", { seq: 2 });
+    const ROWS: { name: string; args: Parameters<typeof tableLateEntryOffered>[0]; offered: boolean }[] = [
+      { name: "active, generated", args: one(st("league"), "active", true), offered: true },
+      { name: "completed division, the stage still running", args: one(st("group"), "completed", true), offered: true },
+      { name: "before Start", args: one(st("league"), "scheduled", true), offered: false },
+      { name: "nothing generated", args: one(st("league"), "active", false), offered: false },
+      { name: "the table is finished", args: one(st("league", { status: "complete" }), "active", true), offered: false },
+      { name: "a fed table", args: one(st("group", { progression: { sources: [] } }), "active", true), offered: false },
+      { name: "a table that is not the entry stage", args: { stage: second, division: [st("group", { seq: 1 }), second], divisionStatus: "active", generated: true }, offered: false },
+      { name: "a swiss", args: one(st("swiss"), "active", true), offered: false },
+    ];
+    let checked = 0;
+    for (const r of ROWS) {
+      expect(tableLateEntryOffered(r.args), r.name).toBe(r.offered);
+      checked++;
+    }
+    expect(checked).toBe(ROWS.length);
+    expect(ROWS.some((r) => r.offered) && ROWS.some((r) => !r.offered)).toBe(true);
+  });
+
+  it("the server's Start lock asks the table predicate, not a SQL copy of it", () => {
+    const src = (f: string) => readFileSync(join(process.cwd(), f), "utf8");
+    const late = src("src/server/usecases/roundrobin-late-entry.ts");
+    expect(late).toMatch(/import \{[^}]*\bisRootTableStage\b[^}]*\} from "@\/lib\/open-entry-stages"/);
+    expect(late).not.toMatch(/progression is null/);
+    expect(late).not.toMatch(/config \? 'qualified'/);
+    expect(late, "the read filters the division's stages through it, whole list as the division").toMatch(/\.filter\(\(s\) => isRootTableStage\(s, stages\)\)/);
+    expect(late, "the kind test is the predicate's own (TABLE_STAGE_KINDS), not a second SQL literal").not.toMatch(/kind in \(/);
+    const entrants = src("src/server/usecases/entrants.ts");
+    expect(entrants, "the Start lock exempts a root table").toMatch(/await hasRootTableStage\(tx, divisionId\)/);
   });
 });

@@ -94,7 +94,7 @@ describe("suggested formats", () => {
   it("a format with no fixed draw (ladder) is never SHOWN in the first five ahead of four that have one", () => {
     // Review 4 (n4): the five shown (and marked data-suggested) are the picker's order over the ranking - rotation
     // formats moved behind the ladder - not the raw ranking, so that is the list this reads.
-    const offered = STAGE_TEMPLATES.filter((t) => !t.retired).map((t) => t.key);
+    const offered = STAGE_TEMPLATES.map((t) => t.key);
     expect(offered.length, "premise: more than five formats to rank").toBeGreaterThan(SUGGESTED_COUNT);
     const shown = formatPickerOrder(rankTemplates(offered, plan, KNOBS).map((r) => r.key)).slice(0, SUGGESTED_COUNT);
     expect(shown).toHaveLength(SUGGESTED_COUNT);
@@ -265,7 +265,7 @@ describe("what a division narrowed on Who plays is offered (N1: the partner-rota
     expect(pickAfterChange("americano", ["league", "knockout"])).toBeNull();
   });
 
-  it("the sequence across sports (format-templates' templateAfterSportChange, retired with n1): chess and football drop a pair pick, a retired format is never kept, an offered pick is", () => {
+  it("the sequence across sports (format-templates' templateAfterSportChange, retired with n1): chess and football drop a pair pick, a pick the offer no longer lists is never kept, an offered pick is", () => {
     const offerOf = (key: string) => {
       const model = modelOf(key);
       return divisionFormatOffer(templatesForSport(key, model.kinds).map((t) => t.key), divisionEntrantKinds(model, model.defaultKind));
@@ -274,8 +274,8 @@ describe("what a division narrowed on Who plays is offered (N1: the partner-rota
     expect(pickAfterChange("mexicano", offerOf("boardgame"))).toBeNull();
     expect(pickAfterChange("swiss", offerOf("boardgame"))).toBe("swiss");
     expect(pickAfterChange("americano", offerOf("badminton"))).toBe("americano");
-    // Retired from every sport's offer (owner ruling 2026-11-01): a builder can never be left holding it.
-    expect(pickAfterChange("triple_rr", offerOf("badminton"))).toBeNull();
+    // A key no offer lists (a removed template): a builder can never be left holding it.
+    expect(pickAfterChange("not-a-template", offerOf("badminton"))).toBeNull();
     // badminton Americano -> chess (dropped) -> badminton: the pick is not remembered.
     const onChess = pickAfterChange("americano", offerOf("boardgame"));
     expect(pickAfterChange(onChess, offerOf("badminton"))).toBeNull();

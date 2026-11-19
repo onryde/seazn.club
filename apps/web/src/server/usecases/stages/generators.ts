@@ -9,6 +9,7 @@ import { EngineError } from "@seazn/engine/core";
 import { generateRoundRobin, generateSingleElim, generateDoubleElim, generatePagePlayoff, generateStepladder, type BracketFixtureGen, type GeneratedBracket, generateAmericano, pairMexicanoRound, type AmericanoRound } from "@seazn/engine/scheduling";
 import { withdrawBracketEntrant, type BracketFixture } from "@seazn/engine/competition";
 import { byeAward } from "@/lib/fixture-bye";
+import { rrExtKey } from "@/lib/roundrobin-reconcile";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
 import { knockoutRefusal } from "../knockout-refusal";
 import { HttpError } from "@/lib/errors";
@@ -398,23 +399,68 @@ export function poolCount(cfg: Record<string, unknown>): number {
   return count;
 }
 
+/** FX-G21 (RB5-G3, RB5-P6): who sits out which round of which leg, as `stages.config.round_byes` stores it. `pool` is the
+ *  pool's id (null for a league or a one-pool group). Read from the engine's `RoundRobinRound.bye`, never derived from "who is
+ *  missing" after a roster change. */
+export interface RoundBye {
+  pool: string | null;
+  round_no: number;
+  leg: number;
+  entrant_id: string;
+}
+
 function roundRobinGen(
   entrants: ActiveEntrant[],
   legs: number,
   extPrefix = "",
   poolId?: string,
-): GenFixture[] {
+): { gen: GenFixture[]; byes: RoundBye[] } {
   const ids = entrants.map((e) => e.id);
   const seeds = new Map(entrants.filter((e) => e.seed != null).map((e) => [e.id, e.seed as number]));
   const schedule = generateRoundRobin({ entrants: ids, seeds, config: { legs } });
-  return schedule.fixtures.map((f) => ({
-    extKey: extPrefix + f.id,
-    roundNo: f.roundNo,
-    seqInRound: f.court,
-    home: f.home,
-    away: f.away,
-    ...(poolId ? { poolId } : {}),
-  }));
+  return {
+    // W5 T2 (RB5-G7): the key carries the engine's leg (`-L{leg}`), so a stored line names its leg and no reader derives it
+    // from a round number.
+    gen: schedule.fixtures.map((f) => ({
+      extKey: rrExtKey(extPrefix, f.roundNo, f.court, f.leg),
+      roundNo: f.roundNo,
+      seqInRound: f.court,
+      home: f.home,
+      away: f.away,
+      ...(poolId ? { poolId } : {}),
+    })),
+    byes: schedule.rounds.flatMap((r) =>
+      r.bye === undefined ? [] : [{ pool: poolId ?? null, round_no: r.roundNo, leg: r.leg, entrant_id: r.bye }],
+    ),
+  };
+}
+
+/**
+ * A league's or group's lines AND its recorded byes (W5 T2, FX-G21) from one engine run per pool: `generate` returns the first,
+ * the Generate write persists the second beside the lines. Seeded-snake pools, each playing its own round robin (doc 05 §1).
+ */
+export function roundRobinStagePlan(
+  kind: "league" | "group",
+  cfg: Record<string, unknown>,
+  entrants: ActiveEntrant[],
+  poolIds: Map<string, string>, // pool key ('A'…) → pools.id
+): { gen: GenFixture[]; byes: RoundBye[] } {
+  // Jul3/08 §2: legs > 2 allowed (triple/quad RR), capped at 8
+  const rawLegs = typeof cfg.legs === "number" ? Math.trunc(cfg.legs) : 1;
+  const legs = Math.min(Math.max(rawLegs, 1), 8);
+  const count = kind === "group" ? poolCount(cfg) : 1;
+  // W5 T3 (X-BD-7): a one-pool group's lines carry pool A's id, like any pool's (a league, and a group drawn before this change,
+  // have no pool row and keep the unprefixed key and no pool).
+  const only = poolIds.get(POOL_KEYS[0]!);
+  if (count === 1) return only === undefined ? roundRobinGen(entrants, legs) : roundRobinGen(entrants, legs, `p${POOL_KEYS[0]}-`, only);
+  const ordered = [...entrants].sort(
+    (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
+  );
+  const pools = snakeDistribute(ordered, count).map((poolEntrants, i) => {
+    const key = POOL_KEYS[i];
+    return roundRobinGen(poolEntrants, legs, `p${key}-`, poolIds.get(key));
+  });
+  return { gen: pools.flatMap((p) => p.gen), byes: pools.flatMap((p) => p.byes) };
 }
 
 /** `generate` for a stage the caller knows: B4 I-2 - the third-place refusal carries `stageId`, so the Start surface (which
@@ -444,21 +490,8 @@ export function generate(
   const seeds = new Map(entrants.filter((e) => e.seed != null).map((e) => [e.id, e.seed as number]));
   switch (kind) {
     case "league":
-    case "group": {
-      // Jul3/08 §2: legs > 2 allowed (triple/quad RR), capped at 8
-      const rawLegs = typeof cfg.legs === "number" ? Math.trunc(cfg.legs) : 1;
-      const legs = Math.min(Math.max(rawLegs, 1), 8);
-      const count = kind === "group" ? poolCount(cfg) : 1;
-      if (count === 1) return roundRobinGen(entrants, legs);
-      // Seeded-snake pools, each playing its own round robin (doc 05 §1).
-      const ordered = [...entrants].sort(
-        (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
-      );
-      return snakeDistribute(ordered, count).flatMap((poolEntrants, i) => {
-        const key = POOL_KEYS[i];
-        return roundRobinGen(poolEntrants, legs, `p${key}-`, poolIds.get(key));
-      });
-    }
+    case "group":
+      return roundRobinStagePlan(kind, cfg, entrants, poolIds).gen;
     case "knockout": {
       let bracket: GeneratedBracket;
       try {

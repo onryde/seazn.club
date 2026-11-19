@@ -27,6 +27,7 @@
 // this module free of any import from `./data`, which is `server-only`.
 
 import type { BracketTitle } from "@seazn/engine/competition";
+import { comparePools } from "@/lib/pool-order";
 
 /** Stage kinds whose rounds are BRACKET POSITIONS — the champion is the last
  *  round's winner rather than a table's rank 1.
@@ -185,7 +186,18 @@ export function bracketTitleOf(fixtures: readonly ChampionFixture[]): BracketTit
 export interface ChampionStandings {
   stage_id: string;
   pool_id: string | null;
-  rows: readonly { entrantId: string; rank?: number }[];
+  /** The engine's own flags on a row (`tieUnbroken`, `level`, `tieBreak`) ride along on a real snapshot. Only `level` is read, by
+   *  `rankOneOf`: who wins a table is the row ranked 1, for the champion and a pool winner alike, unless nothing counted there. */
+  rows: readonly { entrantId: string; rank?: number; level?: boolean; tieUnbroken?: boolean; tieBreak?: { key: string } }[];
+}
+
+/** A pool of a stage, as `public_pools_v` lists it: the pools a stage was CONFIGURED with (a pool row is written at
+ *  generate), which is not the same set as the standings snapshots that exist so far. */
+export interface ChampionPool {
+  id: string;
+  stage_id: string;
+  key: string;
+  name?: string | null;
 }
 
 /** A stage row with its stored progression, as `data.ts` reads it (the progression itself stays private; only the
@@ -299,12 +311,13 @@ export function decisiveStageOf<S extends ChampionStage>(stages: readonly S[]): 
  * fixtures is already decided — a fully-played stage is not always flipped to
  * `complete` — and its champion is rank 1 of the stage's overall snapshot,
  * falling back to the stage's only pool table when no overall one was
- * computed. A table never answers joint or vacant.
+ * computed (a stage of several pools and no overall table crowns nobody). A table never answers joint or vacant.
  */
 export function divisionTitle(
   stages: readonly ChampionStage[],
   fixtures: readonly ChampionFixture[],
   standings: readonly ChampionStandings[],
+  pools: readonly ChampionPool[] | null,
 ): DivisionTitle | null {
   const decisive = decisiveStageOf(stages);
   if (!decisive) return null;
@@ -324,17 +337,101 @@ export function divisionTitle(
         : { kind: "vacant" };
   }
 
+  const mine = tableStageRead(decisive, stageFixtures, standings);
+  if (!mine) return null;
+
+  // The stage's overall table, else its ONLY pool's. Two or more CONFIGURED pools and no overall table (a Groups only
+  // division, W5 T14) has no single rank 1: each pool's leader has the same claim, so nobody is crowned and the pool
+  // tables are the result (`poolWinnersOf` names each pool's). Counted from the pool list when the caller has it, never
+  // from the snapshots that exist: a second pool whose table is not written yet is still a second pool (W5 T14b).
+  // `pools` is REQUIRED (a missing list would fail open, crowning a lone snapshot of a stage that has more pools): a caller with
+  // no pool rows to hand in (a bracket-only reader) says so with an explicit `null`, and the snapshots are then all there is to count.
+  const configured = pools?.filter((p) => p.stage_id === decisive.id).length ?? 0;
+  const lone = configured > 0 ? configured === 1 : true;
+  const snap = mine.find((s) => !s.pool_id) ?? (lone && mine.length === 1 ? mine[0] : undefined);
+  if (!snap) return null;
+  const top = rankOneOf(snap.rows);
+  return top ? { kind: "champion", champion: top.entrantId } : null;
+}
+
+/** THE rule for who a table's winner is, shared by the champion and every pool winner: the row the standings fold ranked 1.
+ *  The engine ranks every row (`rank = index + 1`), so a tie its cascade could not split on the criteria (`tieUnbroken`) is ended
+ *  by stored lots or by the seed fallback and still has ONE rank 1; the champion has always been that row, `tieUnbroken` and
+ *  `tieBreak` notwithstanding, and so is a pool's winner. A table with no rank 1 row has no winner - and neither has a table with
+ *  NO counted result (every fixture voided or abandoned without an outcome): the engine's LEVEL table (`level` on every row, W2d
+ *  X-TB-6), where nobody won anything. T14b's pool rule, made the champion's too in the B4 fix wave (owner 2026-11-18). */
+function rankOneOf<R extends { entrantId: string; rank?: number; level?: boolean }>(rows: readonly R[]): R | undefined {
+  const top = rows.find((r) => r.rank === 1);
+  return top && top.level !== true ? top : undefined;
+}
+
+/** The decisive TABLE stage's snapshots once the stage is DONE (flagged complete, or every fixture decided), else null.
+ *  Shared by the champion and the pool winners so the two can never disagree on "decided". */
+function tableStageRead(
+  decisive: ChampionStage,
+  stageFixtures: readonly ChampionFixture[],
+  standings: readonly ChampionStandings[],
+): ChampionStandings[] | null {
   const finished = (f: ChampionFixture) =>
     f.status === "decided" || f.status === "finalized" || f.outcome?.winner != null;
   const stageDone =
     decisive.status === "complete" ||
     (stageFixtures.length > 0 && stageFixtures.every(finished));
   if (!stageDone) return null;
+  return standings.filter((s) => s.stage_id === decisive.id);
+}
 
-  const snap =
-    standings.find((s) => s.stage_id === decisive.id && !s.pool_id) ??
-    standings.find((s) => s.stage_id === decisive.id);
-  if (!snap) return null;
-  const top = snap.rows.find((r) => r.rank === 1);
-  return top ? { kind: "champion", champion: top.entrantId } : null;
+/** One pool's winner: its id, key, and the entrant ranked first by the pool's own cascade — or null when the pool has no
+ *  single winner (see `poolWinnersOf`). */
+export interface PoolWinner {
+  poolId: string;
+  key: string;
+  entrantId: string | null;
+}
+
+/**
+ * W5 T14b (owner 2026-11-18): each pool's winner of a FINISHED Groups only division - a lone table stage of two or more
+ * pools with no overall table, which `divisionTitle` deliberately crowns nobody for. Pools in display order
+ * (`comparePools`), one entry per CONFIGURED pool.
+ *
+ * Null (nothing to name) when: no stage decides, a bracket decides, the stage is not done (the same test as the
+ * champion's, `tableStageRead`), the stage has an overall table or fewer than two pools (a champion's case), a configured
+ * pool has no snapshot yet (a partial winners set is never published as final), or no pool has a winner at all.
+ *
+ * WHO WINS A POOL is exactly who wins a league or a one-pool Groups only division (`rankOneOf`): the row ranked 1. A tie the
+ * cascade could not split is ended by the engine itself - a stored lots draw (RB5-G9's `lots` step, `tieBreak.key` "lots") or the
+ * seed fallback ("seed") - which leaves a SOLE rank 1 carrying `tieUnbroken` on every tied row; that row is the winner, as it is the
+ * champion of a league (the owner's rulings 183 / RB5-U4: the pool's own cascade, stored lots included). So this never second-guesses
+ * the tie flags: one rule for the champion and for each pool's winner. A pool with no COUNTED result - the engine's `level` table, where
+ * every fixture was voided or abandoned without an outcome - has no winner, whatever its first-ranked row (`rankOneOf`; since the B4 fix
+ * wave the champion's rule too). Such a pool, and one whose table has no rank 1 row at all, is listed with `entrantId: null` (the UI says
+ * "No single winner"), so a reader never mistakes "Group A: X" for the whole result. A winner who has since departed is named all the
+ * same, as a champion is.
+ */
+export function poolWinnersOf(
+  stages: readonly ChampionStage[],
+  fixtures: readonly ChampionFixture[],
+  standings: readonly ChampionStandings[],
+  pools: readonly ChampionPool[],
+): PoolWinner[] | null {
+  const decisive = decisiveStageOf(stages);
+  if (!decisive || BRACKET_KINDS.has(decisive.kind)) return null;
+  const mine = tableStageRead(
+    decisive,
+    fixtures.filter((f) => f.stage_id === decisive.id),
+    standings,
+  );
+  if (!mine || mine.some((s) => !s.pool_id)) return null;
+  const configured = pools.filter((p) => p.stage_id === decisive.id).sort(comparePools);
+  if (configured.length < 2) return null;
+
+  const winners: PoolWinner[] = [];
+  for (const pool of configured) {
+    const snap = mine.find((s) => s.pool_id === pool.id);
+    if (!snap) return null; // a configured pool whose table is not written: the set is partial, so it is not final
+    // A pool with NO counted result (the engine's LEVEL table) has no winner: `rankOneOf` answers none for it, as for the champion.
+    const top = rankOneOf(snap.rows);
+    winners.push({ poolId: pool.id, key: pool.key, entrantId: top ? top.entrantId : null });
+  }
+  return winners.some((w) => w.entrantId !== null) ? winners : null;
 }

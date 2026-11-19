@@ -903,10 +903,12 @@ describe("X-SW-10 the desk warns, in the amber channel, when the next round may 
     expect(said, "it promises no Finish: nothing is known to be wrong").not.toMatch(/finish/i);
   });
 
-  it("X-SW-10 on a phone the caution closes the Stage-tools sheet so it is seen; the ordinary Pair leaves the sheet as it was", async () => {
+  it("X-SW-10 on a phone the caution closes the Stage-tools sheet so it is seen; so does the ordinary Pair (W5 T17c: every settled action)", async () => {
     // Pair next is pressed inside the sheet and the line is said outside it - a refusal closes the sheet for the same reason.
+    // Owner 2026-11-18: an ordinary Pair closes it too (its success notice is a line on the page under the scrim); it used to
+    // leave the sheet open.
     const plain = await press(PAIRED, true);
-    expect(plain.sheetOpen(), "an ordinary Pair leaves the sheet open (the empty case: nothing to say)").toBe(true);
+    expect(plain.sheetOpen(), "an ordinary Pair closes the sheet: its success notice is said outside it").toBe(false);
     for (const verdict of ["unpairable", "unknown"] as const) {
       const said = await press({ ...PAIRED, swiss_next_round: verdict, swiss_paired_round: 3 }, true);
       expect(byTestId(said.island.tree(), TESTID), `${verdict}: the line is on the desk`).toHaveLength(1);

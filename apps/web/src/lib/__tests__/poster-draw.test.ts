@@ -393,3 +393,16 @@ describe("buildDrawModel — a final and its 3rd-place playoff sharing a round s
     expect(out[0]!.pools[0]!.rounds.map((r) => r.label)).toEqual(["Finale", "Troisième place"]);
   });
 });
+
+describe("buildDrawModel — a group of ONE pool reads as a league (W5 T3 X-BD-7)", () => {
+  it("a one-pool group's single pool group heads nothing (poolName null); the same fixtures in a two-pool stage head both letters", () => {
+    const fx = [F({ id: "a1", pool_id: "pa", round_no: 1, home_entrant_id: "e1", away_entrant_id: "e2" })];
+    const one = buildDrawModel(baseInput({ pools: [{ id: "pa", stage_id: "s1", key: "A" }], fixtures: fx, entrantNames: { e1: "A", e2: "B" } }), en);
+    expect(one[0]!.pools.map((p) => p.poolName), "one pool: no letter").toEqual([null]);
+    const two = buildDrawModel(
+      baseInput({ pools: [{ id: "pa", stage_id: "s1", key: "A" }, { id: "pb", stage_id: "s1", key: "B" }], fixtures: fx, entrantNames: { e1: "A", e2: "B" } }),
+      en,
+    );
+    expect(two[0]!.pools.map((p) => p.poolName), "two pools: the pool's own letter").toEqual([enPublic["table.poolLabel"].replace("{key}", "A")]);
+  });
+});

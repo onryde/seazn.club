@@ -47,6 +47,7 @@ import {
   type PublicFixture,
 } from "@/server/public-site/data";
 import { PublicOrgLive, type PublicOrgLiveT } from "@/server/api-v1/schemas";
+import { wireStandingsRows } from "@/server/api-v1/standings-wire";
 import { loadMatchCentre, type MatchCentreLoadCtx } from "@/server/public-site/match-centre-load";
 import { variantLabel } from "@/server/public-site/variant-label";
 import { loadCompetitionHub } from "@/server/public-site/competition-hub";
@@ -583,19 +584,41 @@ export async function publicStandings(
   return cached(publicDivisionStandingsCacheKey(division.id), async () => {
     // ST-G26 (B6b review finding 6): the view has no order, so the snapshots are put in the division's — stages by
     // seq, then pools in display order — by the one helper the public division page uses.
-    const [standings, stages, pools] = await Promise.all([
-      sql<{ stage_id: string; pool_id: string | null; rows: unknown; updated_at: Date }[]>`
+    const [standings, stages, pools, entrants, [policy]] = await Promise.all([
+      sql<{ stage_id: string; pool_id: string | null; rows: { entrantId: string }[]; updated_at: Date }[]>`
         select stage_id, pool_id, rows, updated_at
         from public_standings_v where division_id = ${division.id}`,
       sql<{ id: string; seq: number }[]>`
         select id, seq from public_stages_v where division_id = ${division.id}`,
-      sql<{ id: string; key: string; name: string }[]>`
-        select p.id, p.key, p.name
+      sql<{ id: string; stage_id: string; key: string; name: string }[]>`
+        select p.id, p.stage_id, p.key, p.name
         from public_pools_v p
         join public_stages_v s on s.id = p.stage_id
         where s.division_id = ${division.id}`,
+      // W5 T22 (ST-G28): every entrant the view publishes - the withdrawn and disqualified included (V412) - so a row can name her; the
+      // entrants LIST endpoint filters them out, which left a departed entrant's row an id nothing resolved.
+      sql<{ id: string; kind: string; display_name: string; status: string }[]>`
+        select id, kind, display_name, status from public_entrants_v where division_id = ${division.id}`,
+      sql<{ youth: boolean; player_name_display: string | null }[]>`
+        select youth, player_name_display from divisions where id = ${division.id}`,
     ]);
-    return { division_id: division.id, standings: inStageThenPoolOrder(standings, stages, pools) };
+    // The same masking decision as the entrants list and the division page (`maskPublicEntrantNames`): a youth or non-consenting
+    // player's name is masked on a row as everywhere else, never printed raw because a different endpoint carries it.
+    const masked = await maskPublicEntrantNames(entrants, {
+      youth: policy?.youth ?? false,
+      player_name_display: policy?.player_name_display ?? null,
+    });
+    const named = new Map(masked.map((e) => [e.id, { name: e.display_name, status: e.status }]));
+    // A pool is named only on a stage with several (a group of one pool reads as a league, X-BD-7).
+    const poolsOfStage = new Map<string, number>();
+    for (const p of pools) poolsOfStage.set(p.stage_id, (poolsOfStage.get(p.stage_id) ?? 0) + 1);
+    const keyOf = (t: { stage_id: string; pool_id: string | null }): string | null =>
+      t.pool_id !== null && (poolsOfStage.get(t.stage_id) ?? 0) > 1 ? (pools.find((p) => p.id === t.pool_id)?.key ?? null) : null;
+    const ordered = inStageThenPoolOrder(standings, stages, pools);
+    return {
+      division_id: division.id,
+      standings: ordered.map((t) => ({ ...t, rows: wireStandingsRows(t.rows, named, keyOf(t)) })),
+    };
   });
 }
 

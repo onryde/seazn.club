@@ -295,6 +295,64 @@ describe("NeedsYou", () => {
     }
     expect(checked).toBe(2);
   });
+  // W5 T6 (X-CU-8): the same row for a running league or group (`table: true`) — the sentence says "table", never "bracket",
+  // in every locale; the action still opens the Fixtures tab.
+  it("X-CU-8 late_players_waiting on a table: 'add to the table', never 'bracket', in all four locales", () => {
+    const want = { 1: "1 late player waiting — add to the table", 3: "3 late players waiting — add to the table" } as const;
+    let checked = 0;
+    for (const count of [1, 3] as const) {
+      const d = div({ phase: "scheduled", attention: [{ kind: "late_players_waiting", count, stageName: "Table", table: true }] });
+      const [item, ...rest] = needsYouItems(en, desk(d, 1), names, "org", "comp", "en");
+      expect(rest, "one row").toEqual([]);
+      expect(item).toMatchObject({ kind: "late_players_waiting", severity: "amber", title: want[count] });
+      expect(item!.sub).toBe("Premier Division · Table: joined after Start, no fixtures yet.");
+      // W5 T23 (X-CU-8): the row lands ON the table card's waiting strip (`id="table-waiting"`), where the tap is.
+      expect(item!.action).toEqual({ label: "Open fixtures", href: "/o/org/c/comp/d/premier-division?tab=fixtures#table-waiting" });
+      checked++;
+    }
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const d = div({ phase: "scheduled", attention: [{ kind: "late_players_waiting", count: 1, stageName: "Table", table: true }] });
+      const [item] = needsYouItems(dict, desk(d, 1), names, "org", "comp", loc);
+      expect(item!.title, loc).toBe(plural(dict, "roundrobin.lateWaiting", 1, loc));
+      expect(item!.title, `${loc}: not the knockout's sentence`).not.toBe(plural(dict, "knockout.lateWaiting", 1, loc));
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+  it("X-CU-8 late_unplaced: one amber row naming the players, opening the Entrants tab, in all four locales", () => {
+    const d = div({ phase: "finished", attention: [{ kind: "late_unplaced", count: 1, stageName: "Table", names: ["Lou Late"] }] });
+    const [item, ...rest] = needsYouItems(en, desk(d, 0), names, "org", "comp", "en");
+    expect(rest, "one row").toEqual([]);
+    expect(item).toMatchObject({ kind: "late_unplaced", severity: "amber", title: "1 player arrived after the table finished, not placed" });
+    expect(item!.sub).toBe("Premier Division · Table: Lou Late. A finished table takes no one.");
+    expect(item!.action).toEqual({ label: "Open entrants", href: "/o/org/c/comp/d/premier-division?tab=entrants" });
+    let checked = 0;
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const [row] = needsYouItems(dict, desk(d, 0), names, "org", "comp", loc);
+      expect(row!.title, loc).toBe(plural(dict, "roundrobin.lateUnplaced", 1, loc));
+      expect(row!.sub, `${loc}: names the player`).toContain("Lou Late");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+  it("W5 T8b review I2 withdrawal_owed: one amber row naming who, opening the Entrants tab, in all four locales", () => {
+    const d = div({ phase: "match_day", attention: [{ kind: "withdrawal_owed", count: 2, names: ["Rae Registrant", "Sam Scorer"] }] });
+    const [item, ...rest] = needsYouItems(en, desk(d, 0), names, "org", "comp", "en");
+    expect(rest, "one row").toEqual([]);
+    expect(item).toMatchObject({ kind: "withdrawal_owed", severity: "amber", title: plural(en, "withdrawal.owed", 2, "en") });
+    expect(item!.sub, "names both").toContain("Rae Registrant");
+    expect(item!.sub).toContain("Sam Scorer");
+    expect(item!.action).toEqual({ label: "Open entrants", href: "/o/org/c/comp/d/premier-division?tab=entrants" });
+    let checked = 0;
+    for (const [loc, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const [row] = needsYouItems(dict, desk(d, 0), names, "org", "comp", loc);
+      expect(row!.title, loc).toBe(plural(dict, "withdrawal.owed", 2, loc));
+      expect(row!.title, `${loc}: translated, not the English`).not.toBe(item!.title);
+      expect(row!.sub, `${loc}: names the player`).toContain("Rae Registrant");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
   it("loop R M7(e): every Needs-you action is a 44px tap target below lg (768 and 834 are touch widths), compact only at lg", () => {
     // The desktop row (md and up) carried `py-1.5 text-xs` — 28px at 768, a touch width. Each row's two actions (the
     // phone stack and the md row) are read; every item, red and amber.

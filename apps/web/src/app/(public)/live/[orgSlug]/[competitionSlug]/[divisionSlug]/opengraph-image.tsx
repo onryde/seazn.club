@@ -43,7 +43,7 @@ export default async function Image({ params }: Props) {
   const table = data?.standings.find((s) => !isBracket(s.stage_id));
   // C16: the DECISIVE stage, off the progression graph — a Plate is stored last but never titles the division.
   const finalStage = decisiveStageOf(stages);
-  const title = data && finalStage && BRACKET_KINDS.has(finalStage.kind) ? divisionTitle(data.stages, data.fixtures, data.standings) : null;
+  const title = data && finalStage && BRACKET_KINDS.has(finalStage.kind) ? divisionTitle(data.stages, data.fixtures, data.standings, data.pools) : null;
   const rows = (table?.rows ?? []) as StandingsSnapshotRow[];
   // W2d T17: the table's own stage's rules — how its points print (RB2B-17).
   const rules = data?.stages.find((s) => s.id === table?.stage_id)?.table_rules ?? null;

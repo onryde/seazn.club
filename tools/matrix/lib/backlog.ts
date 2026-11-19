@@ -342,7 +342,7 @@ function deriveCarries(input: BacklogInput, waves: readonly DesignWave[]): Map<s
   for (const c of input.carries.carries) {
     const wave = routeOf(input.routing, c.anchor);
     if (wave === null) throw refuse("CarryWaveDisagrees", c.id, `its anchor ${c.anchor} routes to no wave`);
-    if (!waves.some((w) => w.id === wave)) throw refuse("UnknownWave", c.id, `its anchor ${c.anchor} routes to ${wave}, a wave section 8 has no backlog for`);
+    if (!waves.some((w) => w.id === familyOf(wave))) throw refuse("UnknownWave", c.id, `its anchor ${c.anchor} routes to ${wave}, a wave section 8 has no backlog for`);
     waveOf.set(c.id, wave);
   }
   const out = new Map<string, WaveCarry[]>();
@@ -400,13 +400,13 @@ function guard(input: BacklogInput, waves: readonly DesignWave[]): void {
   if (ledger.findings.length > 0) throw new BacklogRefused("LedgerHasFindings", `the ledger has ${ledger.findings.length} finding${ledger.findings.length === 1 ? "" : "s"} (an id with no outcome would drop out of every table): resolve them first`);
   if (waves.length === 0) throw new BacklogRefused("DesignRowMissing", "the design document has no section 8 wave table (numbered waves)");
   const known = new Set(waves.map((w) => w.id));
-  const unknownGap = triage.gaps.find((g) => !known.has(g.wave));
+  const unknownGap = triage.gaps.find((g) => !known.has(familyOf(g.wave)!));
   if (unknownGap !== undefined) throw new BacklogRefused("UnknownWave", `${unknownGap.gap} is keyed to ${unknownGap.wave}, a wave section 8 has no backlog for: its reds would be swallowed`);
   const strayPath = input.cases.find((c) => c.state === "no_path" && !known.has(routedWave(c.reason)));
   if (strayPath !== undefined) {
     throw new BacklogRefused("UnknownWave", `${GLYPH.no_path} case ${strayPath.caseId} (${strayPath.layer}) names no wave of section 8 in its reason (${JSON.stringify(strayPath.reason.slice(0, 60))}): its count would drop out of every wave's line`);
   }
-  const unknownId = ledger.entries.find((e) => e.wave === null || !known.has(e.wave));
+  const unknownId = ledger.entries.find((e) => e.wave === null || !known.has(familyOf(e.wave)!));
   if (unknownId !== undefined) throw new BacklogRefused("UnknownWave", `${unknownId.id} routes to ${unknownId.wave ?? "no wave"}, a wave section 8 has no backlog for: it would drop out of every table`);
 }
 
@@ -428,7 +428,12 @@ function designRowLine(ng: NewGaps["gaps"][number], input: BacklogInput, waves: 
   return `- **${ng.id} (${ng.wave}): a design row backs the wave.** Section 8's row for ${ng.wave} (${wave.name}) ${parts.join("; ")}.`;
 }
 
-const entriesOf = (ledger: Ledger, wave: string): LedgerEntry[] => ledger.entries.filter((e) => e.wave === wave);
+/** W5 app PR A Task 24 (owner ruling 288, programme ruling 183): an id the design's W2d amendment moved is routed to a SUB-wave (`W2d`), which has no
+ *  row of section 8's table - the table's wave is its numbered family (`W2`). The backlog files it under the family: it never drops out of every
+ *  table (UnknownWave), and the sub-wave stays in the route and the ledger. Any other wave is its own family. */
+export const familyOf = (wave: string | null): string | null => (wave === null ? null : wave.replace(/^(W\d+)[a-z]$/, "$1"));
+
+const entriesOf = (ledger: Ledger, wave: string): LedgerEntry[] => ledger.entries.filter((e) => familyOf(e.wave) === wave);
 
 /** What the ❌ count leaves out (T22 review m3), each as the clause the intro prints, counted from the committed layers and never typed:
  *  the ░ planned cases, the 🚫 cases with no organiser path, and the cells owner ruling 70 holds red inside `judge regression` that the
@@ -476,7 +481,7 @@ export function renderBacklog(input: BacklogInput): string {
   const dropped = LEAVES_OUT.filter((k) => !introUsed.has(k));
   if (dropped.length > 0) throw new BacklogRefused("CarryPlaceholder", `the intro never uses {${dropped.join("}, {")}}, which the layers fill: a count the section computed would not be printed`);
 
-  const gapsOf = (wave: string): TriageJson["gaps"] => triage.gaps.filter((g) => g.wave === wave);
+  const gapsOf = (wave: string): TriageJson["gaps"] => triage.gaps.filter((g) => familyOf(g.wave) === wave);
   const redsOf = (wave: string): number => gapsOf(wave).reduce((n, g) => n + g.caseIds.length, 0);
   out.push(...table(
     ["wave", "name", "gaps", "❌ cases", "audit ids", ...OUTCOMES],

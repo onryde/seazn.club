@@ -17,7 +17,7 @@ import { z } from "zod";
 import { ROW_KEYS, SPORT_KEYS, refusedCell, type RowKey } from "./catalogue.ts";
 import { requireScorable } from "./probe-set.ts";
 import { HARNESS_SCENARIO, LIFECYCLE_ID } from "./scenario-catalogue.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS, W4B_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey, type W2bScenarioKey, type W2eScenarioKey, type W4aScenarioKey, type W4bScenarioKey } from "./scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS, W4B_SCENARIO_KEYS, W5A_SCENARIO_KEYS, type CaseSpec, type ScenarioKey, type W2aScenarioKey, type W2bScenarioKey, type W2eScenarioKey, type W4aScenarioKey, type W4bScenarioKey, type W5aScenarioKey } from "./scenarios/types.ts";
 import { UnknownFilter, checkCellFilter } from "./slice.ts";
 import { scorable, type VariantCase } from "./variants.ts";
 import { w2aCells } from "./w2a-cells.ts";
@@ -25,6 +25,7 @@ import { w2bCells } from "./w2b-cells.ts";
 import { w2eCells } from "./w2e-cells.ts";
 import { w4aCells } from "./w4a-cells.ts";
 import { w4bCells } from "./w4b-cells.ts";
+import { w5aCells } from "./w5a-cells.ts";
 // Type-only: run.ts value-imports this module, and an erased import cannot cycle.
 import type { PlanCases } from "../run.ts";
 
@@ -129,7 +130,7 @@ export interface W1DrivingDeps {
   rescore?: (vc: VariantCase) => string | null;
 }
 
-type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey | W4bScenarioKey;
+type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey | W4bScenarioKey | W5aScenarioKey;
 
 interface Selection {
   readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: PlannedScenario; readonly overrides?: Readonly<Record<string, unknown>>; readonly asVariant?: string }[];
@@ -139,7 +140,7 @@ interface Selection {
 /** The four scripts, or (opt-in) one of the bracket-finish (W2a), forfeit-credit (W2b) or deciding-path (W2e)
  *  scenarios — which only an explicit `--scenario` plans. */
 const scenarioOf = (s: string): PlannedScenario => {
-  const known = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS];
+  const known = [...W1_DRIVING_SCENARIOS, ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS, ...W5A_SCENARIO_KEYS];
   const k = known.find((x) => x === s);
   if (k === undefined) throw new UnknownFilter("--scenario", s, known);
   return k;
@@ -149,6 +150,7 @@ const isW2b = (s: PlannedScenario): s is W2bScenarioKey => (W2B_SCENARIO_KEYS as
 const isW2e = (s: PlannedScenario): s is W2eScenarioKey => (W2E_SCENARIO_KEYS as readonly string[]).includes(s);
 const isW4a = (s: PlannedScenario): s is W4aScenarioKey => (W4A_SCENARIO_KEYS as readonly string[]).includes(s);
 const isW4b = (s: PlannedScenario): s is W4bScenarioKey => (W4B_SCENARIO_KEYS as readonly string[]).includes(s);
+const isW5a = (s: PlannedScenario): s is W5aScenarioKey => (W5A_SCENARIO_KEYS as readonly string[]).includes(s);
 
 /** Everything but the variant names: checked filters, the drops applied, the
  *  bound test cases re-scored — all before the DB, at planner construction. */
@@ -196,6 +198,14 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
   // W4 app PR B (Task 15): a third-place / joint-winners / plate script likewise, on w4b-cells.ts's cells.
   if (scenario !== null && isW4b(scenario)) {
     for (const c of w4bCells(scenario, (row, sport) => drops.has(atoms.LIFECYCLE, row, sport))) {
+      if (cell === null || (cell.row === c.row && cell.sport === c.sport)) cells.push({ ...c, scenario });
+    }
+    if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);
+    return { cells, tests: [] };
+  }
+  // W5 app PR A (Task 24): a round-robin script likewise, on w5a-cells.ts's cells.
+  if (scenario !== null && isW5a(scenario)) {
+    for (const c of w5aCells(scenario, (row, sport) => drops.has(atoms.LIFECYCLE, row, sport))) {
       if (cell === null || (cell.row === c.row && cell.sport === c.sport)) cells.push({ ...c, scenario });
     }
     if (cells.length === 0) throw new W1DrivingPlansNothing(filter, reasons);

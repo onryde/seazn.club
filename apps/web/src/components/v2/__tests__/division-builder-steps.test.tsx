@@ -694,7 +694,7 @@ describe("chess: online play first, and Lichess plays only its eight controls", 
 
 /**
  * The format offer as the RULINGS and the ENGINE declare it, never as templatesForSport computes it (C9 fix round 1, I5):
- * every template but the retired Triple RR (owner ruling 2026-11-01), less americano and mexicano - the pair formats,
+ * every template, less americano and mexicano - the pair formats,
  * whose stage rotates individual players into pair entrants - for chess (owner ruling 2026-10-26) and for every sport
  * whose engine entrant model holds no individuals (round 3's rule; the both-kinds check below picks the same sports,
  * since every registry sport holding individuals but chess declares pairs - format-templates.test.ts's invariant).
@@ -703,13 +703,13 @@ const PAIR_FORMATS = ["americano", "mexicano"];
 function engineOffer(sportKey: string): string[] {
   const kinds: readonly string[] = modelOf(sportKey).kinds;
   const canPlayPairs = sportKey !== "boardgame" && kinds.includes("individual") && kinds.includes("pair");
-  return STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr" && (canPlayPairs || !PAIR_FORMATS.includes(k)));
+  return STAGE_TEMPLATES.map((t) => t.key).filter((k) => canPlayPairs || !PAIR_FORMATS.includes(k));
 }
 
 describe("every builtin sport, walked from Who plays to Create (counts)", () => {
   it("empty case first: the oracle's own floor - with no pair format anywhere it still offers every other live template", () => {
     // The oracle never answers an empty offer: every sport keeps the live non-pair templates.
-    const floor = STAGE_TEMPLATES.map((t) => t.key).filter((k) => k !== "triple_rr" && !PAIR_FORMATS.includes(k));
+    const floor = STAGE_TEMPLATES.map((t) => t.key).filter((k) => !PAIR_FORMATS.includes(k));
     expect(floor.length).toBeGreaterThan(SUGGESTED_COUNT);
     for (const m of builtinModules) expect(engineOffer(m.key), m.key).toEqual(expect.arrayContaining(floor));
   });

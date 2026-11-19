@@ -37,7 +37,7 @@
 // concretely while building action-form.tsx's own list — see that file's
 // header). The React shell is covered by e2e in a later task; this file's
 // own suite proves every DECISION, not the DOM.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { EventEnvelope, LineupPair, PendingEndingSanction, SquadState } from "@seazn/engine/core";
 import {
   CORE_EVENT_SCHEMAS,
@@ -49,7 +49,8 @@ import {
   scorerMayForfeit,
 } from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { WithdrawalConsequence, type ConsequenceState } from "@/components/v2/withdrawal-consequence";
 import type { MessageKey } from "@/lib/messages";
 import { useLocalStorageItem, writeLocalStorageItem } from "@/lib/use-client-snapshot";
 import { type MsgFn } from "@/lib/scoring-vocab";
@@ -2501,6 +2502,48 @@ export function PadHostV3(props: PadHostV3Props) {
   );
   const endingPrompt = endingBusy ? null : endingModel;
 
+  // W5 T8b (X-WDT-10, owner ruling 289): on a league, group or Swiss line a disqualification recorded here withdraws the side
+  // from the stage (scoring.ts → `disqualifyFromMatch`). The sanction sheet's read-back and the pending-ending prompt say so
+  // BEFORE the Confirm — her remaining matches, her count under the 50 percent rule, the undo — read from the cascade's own
+  // decision (`GET /fixtures/{id}/withdrawal-preview`). Asked when the sanction sheet opens (both sides: which one the sheet
+  // sanctions is the tile that opened it) or the prompt appears, and kept per entrant; a bracket line asks nothing (W4).
+  const locale = useLocaleOrDefault();
+  const [dqPreviews, setDqPreviews] = useState<Readonly<Record<string, ConsequenceState>>>({});
+  const previewsDq =
+    (props.stageKind === "league" || props.stageKind === "group" || props.stageKind === "swiss") &&
+    props.transport.getWithdrawalPreview !== undefined &&
+    (props.module.sanctionEnding?.endLevels.length ?? 0) > 0;
+  const askDqPreview = useCallback(
+    (entrantIds: readonly string[]) => {
+      const ask = props.transport.getWithdrawalPreview;
+      if (!previewsDq || ask === undefined) return;
+      // Only the answer is stored: an entrant asked and not yet answered reads as loading (`dqConsequenceOf`), and an earlier
+      // answer stays on screen until the fresh one lands.
+      for (const id of entrantIds) {
+        ask(props.fixtureId, id).then(
+          (preview) => setDqPreviews((p) => ({ ...p, [id]: { kind: "ready", preview } })),
+          () => setDqPreviews((p) => ({ ...p, [id]: { kind: "failed" } })),
+        );
+      }
+    },
+    [previewsDq, props.transport, props.fixtureId],
+  );
+  const sanctionSheetOpen = openSheet?.kind === "guided" && openSheet.spec.event.endsWith(".sanction");
+  const sidesOfState = (pipeline.state as { entrants?: { home?: unknown; away?: unknown } } | null)?.entrants;
+  const homeEntrant = typeof sidesOfState?.home === "string" ? sidesOfState.home : null;
+  const awayEntrant = typeof sidesOfState?.away === "string" ? sidesOfState.away : null;
+  useEffect(() => {
+    if (sanctionSheetOpen) askDqPreview([homeEntrant, awayEntrant].filter((x): x is string => x !== null));
+  }, [sanctionSheetOpen, homeEntrant, awayEntrant, askDqPreview]);
+  const promptEntrant = endingPrompt?.by ?? null;
+  useEffect(() => {
+    if (promptEntrant !== null) askDqPreview([promptEntrant]);
+  }, [promptEntrant, askDqPreview]);
+  const dqConsequenceOf = (entrantId: unknown): ReactNode => {
+    if (!previewsDq || typeof entrantId !== "string") return null;
+    return <WithdrawalConsequence state={dqPreviews[entrantId] ?? { kind: "loading" }} t={t} locale={locale} />;
+  };
+
   /**
    * THE send. Every dispatch site in this host goes through it.
    *
@@ -3149,6 +3192,7 @@ export function PadHostV3(props: PadHostV3Props) {
             onRecord={() => void recordEnding()}
             onVoid={() => void voidSanction()}
             t={t}
+            consequence={dqConsequenceOf(endingPrompt.by)}
           />
         </div>
       )}
@@ -3314,6 +3358,7 @@ export function PadHostV3(props: PadHostV3Props) {
                 send(event.type, event.payload, { endsMatchOnConfirm: true, sideRetires: event.sideRetires === true });
               }}
               onCancel={() => setOpenSheet(null)}
+              confirmExtra={(payload) => dqConsequenceOf(payload.by)}
             />
           ) : (
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">

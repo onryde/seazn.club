@@ -30,7 +30,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { readPlayerMatchSeeds } from "@/server/public-site/public-player-matches";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { createPerson } from "../persons";
 import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
@@ -138,17 +138,20 @@ async function seedScene(c: SportCase): Promise<Scene> {
   const mine = fixtures.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && (f.home_entrant_id === pat || f.away_entrant_id === pat));
   expect(mine.length, `${key}: Pat meets each of the six opponents once`).toBe(6);
 
-  const seqOf = new Map<string, number>();
+  // The ledger's own tip: a cascade (below) appends to lines this loop has not reached.
   const post = async (fixtureId: string, type: string, payload: unknown) => {
-    const expected_seq = seqOf.get(fixtureId) ?? 0;
+    const [{ s: expected_seq }] = await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${fixtureId}`;
     await scoreEvent(auth, fixtureId, { expected_seq, type, payload } as never);
-    seqOf.set(fixtureId, expected_seq + 1);
   };
   const scenes = new Map<number, string>();
   let walkoverOpponent = "";
   let playedDqOpponent = "";
-  for (const [i, f] of mine.entries()) {
-    const n = i + 1;
+  // W5 T8b (ruling 289, X-WDT-10): a disqualification in a league withdraws the player from it — scene 4 walks her
+  // remaining line over (5 of 6 played, half or more: RB5-W3). Two disqualifications of one player in one league are
+  // reachable only through Reinstate (X-WDT-8 reverses that walkover), so scene 6 is written before scene 4, and she is
+  // reinstated between scenes 4 and 5. Scene 5's own cascade then finds nothing left to settle.
+  for (const n of [1, 2, 3, 6, 4, 5]) {
+    const f = mine[n - 1]!;
     const side: Side = f.home_entrant_id === pat ? "home" : "away";
     const opp = side === "home" ? f.away_entrant_id! : f.home_entrant_id!;
     scenes.set(n, f.id);
@@ -163,6 +166,8 @@ async function seedScene(c: SportCase): Promise<Scene> {
     } else if (n === 4) {
       await post(f.id, "core.start", {});
       await post(f.id, "core.forfeit", { by: pat, reason: "disqualified" });
+      const back = await patchEntrant(auth, pat, { status: "registered" });
+      expect(back.status, `${key}: rig: Pat reinstated after scene 4`).toBe("registered");
     } else if (n === 5) {
       await post(f.id, "core.start", {});
       const p = c.play(opp);
@@ -180,7 +185,7 @@ async function seedScene(c: SportCase): Promise<Scene> {
 
   const stored = await sql<{ id: string; status: string }[]>`select id, status from fixtures where id in ${sql([...scenes.values()])}`;
   const statusOf = new Map(stored.map((r) => [r.id, r.status]));
-  const fixtureMap = new Map([...scenes].map(([n, id]) => [n, { id, status: statusOf.get(id)! }]));
+  const fixtureMap = new Map([...scenes].sort(([a], [b]) => a - b).map(([n, id]) => [n, { id, status: statusOf.get(id)! }]));
 
   const [{ id: userId }] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified) values (${`pat-${suffix}@test.local`}, 'Pat', true) returning id`;

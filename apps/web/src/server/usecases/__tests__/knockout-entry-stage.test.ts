@@ -109,15 +109,14 @@ async function refusal(p: Promise<unknown>): Promise<HttpError> {
 }
 
 describe.skipIf(!HAS_DB)("W4 T9: the entry stage a late player can join (X-LE-1, X-LE-2)", () => {
-  it("X-LE-2 a late add to a started league_ko or groups_ko is refused and seated nowhere in the knockout", async () => {
+  it("X-LE-2 a late add to a started league_ko or groups_ko never seats the late player in the knockout (W5: the TABLE takes the add, table-entry-stage.test.ts)", async () => {
     let checked = 0;
     for (const key of ["league_ko", "groups_ko"]) {
       const rig = await template(key);
       const before = await entrantCount(rig.divisionId);
-      const err = await refusal(addLate(rig));
-      expect(err.status, key).toBe(422);
-      expect(err.message, key).toBe(LOCKED);
-      expect(await entrantCount(rig.divisionId), `${key}: nothing of the add was written`).toBe(before);
+      // differential: today (110b2ccbd3) this add is refused 422 "locked"; the league / group in front is a root table.
+      await addLate(rig);
+      expect(await entrantCount(rig.divisionId), `${key}: the table's list is open`).toBe(before + 1);
       const [{ n }] = await sql<{ n: number }[]>`
         select count(*)::int as n from fixtures f join entrants e on e.id in (f.home_entrant_id, f.away_entrant_id)
          where f.stage_id = ${rig.stageIds[1]!} and e.display_name = 'Late'`;
@@ -127,11 +126,21 @@ describe.skipIf(!HAS_DB)("W4 T9: the entry stage a late player can join (X-LE-1,
     expect(checked).toBe(2);
   });
 
-  it("C11 a knockout after a league with NO progression stored (the stg census shape) is fed: the list stays locked", async () => {
+  it("C11 a knockout after a league with NO progression stored (the stg census shape) is fed: the late player never reaches it", async () => {
+    // W5 T4: the league in front is a root table and keeps the list open; the knockout behind it is still never the entry stage.
     const rig = await started([
       { kind: "league", name: "League", config: { legs: 1 }, progression: null },
       { kind: "knockout", name: "Knockout", config: {}, progression: null },
     ]);
+    const before = await entrantCount(rig.divisionId);
+    const late = await addLate(rig);
+    expect(await entrantCount(rig.divisionId)).toBe(before + 1);
+    expect(await seatedIn(late.id), "never seated in the knockout").not.toContain(rig.stageIds[1]);
+    expect(late.late_entry?.format ?? null, "the answer is never the knockout's").not.toBe("knockout");
+  });
+
+  it("a closed-field division (no root table, Swiss, knockout or open format) still locks, with main's sentence", async () => {
+    const rig = await started([{ kind: "double_elim", name: "Double", config: {}, progression: null }]);
     const before = await entrantCount(rig.divisionId);
     const err = await refusal(addLate(rig));
     expect(err).toMatchObject({ status: 422, message: LOCKED });

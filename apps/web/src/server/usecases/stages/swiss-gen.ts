@@ -29,6 +29,7 @@ import { type SwissPairingMode, storedSwissPairing, effectiveSwissPairing, SWISS
 import { byeAward, isOneSidedAwardBye } from "@/lib/fixture-bye";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { Tx, ActiveEntrant, SwissExistingFixture, SwissGenResult } from "./types";
+import { refuseCutBeyondField } from "./cut-gate";
 import { divisionHasStarted } from "./helpers";
 import { NO_SWISS_RESHAPE, addSwissReshape, reconcileSwissRoundShells } from "./swiss-reconcile";
 
@@ -94,6 +95,7 @@ export function judgeSwissPairAt(
  * off the stored stage graph, so an API-built division is gated too. Before this a qualifying draw of three played its whole
  * qualifying stage and only then failed at Complete. Asked at the doors that draw the root: Start, Generate and Rebuild. The field
  * is the division's active entrants, as the generator reads them (`swissActiveEntrants`).
+ * W5 T12b (X-BD-8): also the cut the stored graph takes from a league, group or Swiss table (`refuseCutBeyondField`).
  */
 export async function refuseFormatTooSmall(tx: Tx, divisionId: string): Promise<void> {
   const stages = await tx<{ id: string; kind: string; progression: unknown }[]>`
@@ -102,6 +104,8 @@ export async function refuseFormatTooSmall(tx: Tx, divisionId: string): Promise<
     select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
   const gate = stageGraphSizeGate(stages, n);
   if (gate !== null) throw knockoutRefusal(gate.code, { min: gate.min });
+  // W5 T12b (X-BD-8): the same doors refuse a cut the field cannot supply (a top 8 of 6, a best-Nth no pool can fill), by name.
+  await refuseCutBeyondField(tx, divisionId);
 }
 
 /**

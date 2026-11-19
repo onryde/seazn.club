@@ -32,6 +32,10 @@ const h = vi.hoisted(() => ({
   slots: { limit: 2, left: 0 } as { limit: number; left: number } | null,
   slotsFail: false,
   slotsAsked: [] as string[],
+  /** X-BD-3: what `templateSportOptions` answers (its own suite holds it to the create), and who it was asked about. */
+  sports: [{ key: "football", name: "football", variants: [] }] as unknown[],
+  sportsFail: false,
+  sportsAsked: [] as string[],
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -45,6 +49,13 @@ vi.mock("@/server/usecases/competitions", () => ({
     h.slotsAsked.push(orgId);
     if (h.slotsFail) throw new Error("db down");
     return h.slots;
+  },
+}));
+vi.mock("@/server/usecases/template-sports", () => ({
+  templateSportOptions: async (orgId: string) => {
+    h.sportsAsked.push(orgId);
+    if (h.sportsFail) throw new Error("db down");
+    return h.sports;
   },
 }));
 vi.mock("@/server/page-auth", () => ({
@@ -88,6 +99,9 @@ beforeEach(() => {
   h.slots = { limit: 2, left: 0 };
   h.slotsFail = false;
   h.slotsAsked = [];
+  h.sports = [{ key: "football", name: "football", variants: [] }];
+  h.sportsFail = false;
+  h.sportsAsked = [];
 });
 
 describe("the create page hands the gallery the org the description editor uploads to", () => {
@@ -120,6 +134,24 @@ describe("the create page supplies the org's public slots (PB3 item 6)", () => {
     expect(props.publicSlots).toBeNull();
     expect(h.slotsAsked, "the read WAS attempted - the null is a fallback, not a skipped call").toEqual(["org1"]);
     expect(props.orgId, "the page still rendered the gallery").toBe("org1");
+  });
+});
+
+// X-BD-3: `sports` is a required prop, so a literal `[]` compiles, renders, and silently disables the super-groups card's
+// create. This is the witness that the page ASKS, for THIS org, and hands the answer down.
+describe("the create page supplies the sport catalogue for an any-sport template (X-BD-3)", () => {
+  it("asks for the signed-in org's sports and hands the answer to the gallery as-is", async () => {
+    const props = await galleryProps();
+    expect(props.sports).toBe(h.sports);
+    expect(h.sportsAsked, "asked once, about the signed-in org's id (not its slug)").toEqual(["org1"]);
+  });
+
+  it("fails soft: a read that throws renders the gallery with no sports, not an error page", async () => {
+    h.sportsFail = true;
+    const props = await galleryProps();
+    expect(props.sports).toEqual([]);
+    expect(h.sportsAsked, "the read WAS attempted").toEqual(["org1"]);
+    expect(props.orgId).toBe("org1");
   });
 });
 

@@ -1,6 +1,6 @@
 // W1d Task 3 (owner ruling 64, item 2): the FULL grid planners — `--layer L1
-// --scope grid` is one LIFECYCLE case per OFFERED catalogue cell at 1280 (207 of
-// the 231: chess americano/mexicano are refused, follow-up to #1027), and
+// --scope grid` is one LIFECYCLE case per OFFERED catalogue cell at 1280 (196 of
+// the 220: chess americano/mexicano are refused, follow-up to #1027), and
 // `--layer L2 --scope grid` is every run of the committed l2-pairs.json (1,589).
 // Every expected value comes from somewhere other than planL1Grid / planL2: the
 // catalogue's row and sport constants, the product's own catalog JSON (read as
@@ -24,7 +24,7 @@ import { offlineBuilderDefault } from "../lib/variants.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
 import { livePlan } from "./committed-plans.ts";
 import { rawCatalogTemplate } from "./fake-driver.ts";
-import { CHESS_REFUSED_CELLS, NO_ORGANISER_PATH_CELLS, PAIR_NO_PATH_CELLS, REFUSED_CELLS, RETIRED_ROW_CELLS, STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell, isRefusedCell, noPathWaveOf, offeredCells } from "./refused-cells.ts";
+import { CHESS_REFUSED_CELLS, NO_ORGANISER_PATH_CELLS, PAIR_NO_PATH_CELLS, REFUSED_CELLS, STANDALONE_REFUSED_CELLS, isNoOrganiserPathCell, isRefusedCell, noPathWaveOf, offeredCells } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** The committed pair file as plain JSON: never through layers.ts or pairs.ts. */
@@ -39,16 +39,31 @@ const OFFERED = CELLS - REFUSED_CELLS.length;
 const REFUSED_TEMPLATE_CELLS = REFUSED_CELLS.filter((c) => (TEMPLATE_ROW_KEYS as readonly string[]).includes(c.split("|")[0]!)).length;
 /** The refused API-only cells (W4 T16, ruling 269: the standalone stepladder and page playoff on every sport), which come off the 🚫 count. */
 const REFUSED_API_ONLY_CELLS = REFUSED_CELLS.filter((c) => (API_ONLY_ROWS as readonly string[]).includes(c.split("|")[0]!)).length;
-/** Every no-organiser-path cell is a BUILDER row's too (Match Day C9 review I5, option 2; the retired Triple round robin,
- *  owner ruling 2026-11-01): it comes off the driven count and onto the 🚫 one, and every L2 run on it is 🚫. */
+/** Every no-organiser-path cell is a BUILDER row's too (Match Day C9 review I5, option 2): it comes off the driven count and onto the 🚫 one, and every L2 run on it is 🚫. */
 const NO_PATH_TEMPLATE_CELLS = NO_ORGANISER_PATH_CELLS.filter((c) => (TEMPLATE_ROW_KEYS as readonly string[]).includes(c.split("|")[0]!)).length;
-/** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. */
-const TEMPLATE_CELLS = new Map(Object.entries(TEMPLATE_ROW).map(([key, row]) => {
-  const d = rawCatalogTemplate(key).divisions[0]!;
-  return [cellId(row, d.sportKey), { key, row, sport: d.sportKey, variant: d.variantKey }] as const;
-}));
+/** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. A template whose row
+ *  is a BUILDER row (box-league builds group_only since W5 T14 gave it a picker card) reaches no API-only cell, so it is not one. */
+const TEMPLATE_CELLS = (() => {
+  const cells = new Map<string, { key: string; row: string; sport: string; variant: string | null }>();
+  // W5 X-BD-3: an any-sport template (super-groups) has no sport of its own: the catalog JSON's "any" reaches the row on EVERY
+  // engine sport, the case playing variantFor's variant for its sport. A card with a sport of its own holds its cell
+  // (cricket's group_group_ko stays t20-super8), so those are placed first and an "any" card only fills the cells still free.
+  const apiOnly = Object.entries(TEMPLATE_ROW).filter(([, row]) => (API_ONLY_ROWS as readonly string[]).includes(row));
+  const byOwnSportFirst = apiOnly.sort(([a], [b]) => Number(rawCatalogTemplate(a).divisions[0]!.sportKey === "any") - Number(rawCatalogTemplate(b).divisions[0]!.sportKey === "any"));
+  for (const [key, row] of byOwnSportFirst) {
+    const d = rawCatalogTemplate(key).divisions[0]!;
+    const any = d.sportKey === "any";
+    for (const sport of any ? SPORT_KEYS : [d.sportKey]) {
+      if (!cells.has(cellId(row, sport))) cells.set(cellId(row, sport), { key, row, sport, variant: any ? null : d.variantKey });
+    }
+  }
+  return cells;
+})();
 /** Whether the run's atom has a harness script (the scenario catalogue's own declaration). */
 const hasScript = (r: L2Run): boolean => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
+/** F1 seeds an ODD field and a catalog card seeds its own, so an F1 run on a card-reached cell cannot be built from a screen (matrix truth
+ *  run 44411389618: NoFieldSize on group_group_ko|football F1): it is 🚫, W5's. Named from the premise (F1's field is odd), not from the plan. */
+const cardCannotSeat = (r: L2Run): boolean => r.scenario === "F1" && TEMPLATE_CELLS.has(cellId(r.row, r.sport));
 const driven = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec !== null);
 const planned = (cs: readonly LayerCase[]) => cs.filter((c) => c.spec === null);
 const cellOf = (c: LayerCase): string => { const i = identityOf(c); return cellId(i.row, i.sport); };
@@ -58,12 +73,12 @@ const stubVariant = (s: string): string => `v-${s}`;
 /** W4 app PR B, Task 15: knockout_third_place is a builder knob row now, so each of its non-refused cells is DRIVEN at L1 (the plan said 11; measured: every sport). */
 const KNOB_DRIVEN = API_ONLY_ROWS.filter((r) => isKnobRow(r)).length * SPORT_KEYS.length;
 
-describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered since the follow-up to #1027 and W4 T16)", () => {
+describe("the full L1 grid (ruling 64: 220 cells @1280, ruling 39; 196 offered since the follow-up to #1027 and W4 T16)", () => {
   const cases = planL1Grid(offlineBuilderDefault);
 
   it("plans one case per OFFERED cell — the count the corrected counts.json states — all at 1280, in ROW_KEYS × SPORT_KEYS order", () => {
-    expect(CELLS).toBe(231);
-    expect(OFFERED).toBe(207);
+    expect(CELLS).toBe(220);
+    expect(OFFERED).toBe(196);
     expect(COUNTS.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
     expect(cases).toHaveLength(OFFERED);
     expect(new Set(cases.map(layerCaseId)).size).toBe(OFFERED);
@@ -97,9 +112,9 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered s
     expect(REFUSED_TEMPLATE_CELLS).toBe(CHESS_REFUSED_CELLS.length);
     expect(REFUSED_API_ONLY_CELLS).toBe(STANDALONE_REFUSED_CELLS.length);
     expect(NO_PATH_TEMPLATE_CELLS).toBe(NO_ORGANISER_PATH_CELLS.length);
-    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size + KNOB_DRIVEN); // 166 (155 + the 11 knockout_third_place cells)
+    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS - NO_PATH_TEMPLATE_CELLS + TEMPLATE_CELLS.size + KNOB_DRIVEN); // 176 (unchanged by W5 T16: the deleted row's 11 cells were all no-organiser-path, so none was driven)
     const p = planned(cases);
-    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS - KNOB_DRIVEN); // 41
+    expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - REFUSED_API_ONLY_CELLS - TEMPLATE_CELLS.size + NO_PATH_TEMPLATE_CELLS - KNOB_DRIVEN); // 20 (31 before the three-leg row's 11 no-path cells left, W5 T16)
     expect(driven(cases).length + p.length).toBe(OFFERED);
     let checked = 0;
     for (const c of p) {
@@ -144,49 +159,34 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 207 offered s
     }
   });
 
-  // Owner ruling 2026-11-01: the Triple round robin is offered to no sport (STAGE_TEMPLATES marks it retired), and the
-  // builder's picker has no such radio - CI run 42356855670 timed out ticking it on all 11 sports. Nothing refuses it, so
-  // every sport's cell is 🚫 under its own id, routed to the round-robin wave that owns the triple_rr question.
-  it("the retired Triple round robin is 🚫 on EVERY sport under the driven case's own id, routed to the round-robin wave; the league row beside it is driven", () => {
-    expect(RETIRED_ROW_CELLS.length).toBe(SPORT_KEYS.length);
-    let checked = 0;
-    for (const cell of RETIRED_ROW_CELLS) {
-      const [row, sport] = cell.split("|") as [string, string];
-      const c = cases.filter((x) => cellOf(x) === cell);
-      expect(c, cell).toHaveLength(1);
-      expect(c[0]!.spec, cell).toBeNull();
-      expect(c[0]!.notRun, cell).toBeNull();
-      expect(c[0]!.noPath?.wave, cell).toBe("W5");
-      expect(c[0]!.noPath?.reason, cell).toMatch(/no organiser path[\s\S]*Triple round robin to no sport[\s\S]*retired[\s\S]*2026-11-01/);
-      expect(layerCaseId(c[0]!), cell).toBe(`${row}|${sport}|${offlineBuilderDefault(sport)}|LIFECYCLE@${L1_WIDTH}`);
-      checked++;
-    }
-    expect(checked).toBe(11);
-    // The positive pair: the league row (the same stage kind, one leg) is driven on every sport.
-    let league = 0;
-    for (const sport of SPORT_KEYS) {
-      expect(cases.find((x) => cellOf(x) === `league|${sport}`)?.spec, `league|${sport}`).not.toBeNull();
-      league++;
-    }
-    expect(league).toBe(SPORT_KEYS.length);
-  });
-
-  it("a template-reached cell carries its template and the template's OWN sport and variant (ruling 47, D11), never variantFor's", () => {
+  it("a template-reached cell carries its template; a card with a sport of its own plays its OWN sport and variant (ruling 47, D11), never variantFor's, and an any-sport card plays variantFor's variant for the cell's sport (X-BD-3)", () => {
     const t = planL1Grid(stubVariant).filter((c) => c.spec !== null && c.spec.template !== undefined);
     expect(t).toHaveLength(TEMPLATE_CELLS.size);
     let checked = 0;
+    let anyCards = 0;
+    let ownCards = 0;
     for (const c of t) {
       const want = TEMPLATE_CELLS.get(cellOf(c));
       expect(want, layerCaseId(c)).toBeDefined();
       expect(c.spec!.template).toBe(want!.key);
       expect(c.spec!.row).toBe(want!.row);
       expect(c.spec!.sport).toBe(want!.sport);
-      expect(c.spec!.variant).toBe(want!.variant);
-      // The stub's variant differs from the template's, so a variantFor leak would be seen.
-      expect(c.spec!.variant).not.toBe(stubVariant(want!.sport));
+      if (want!.variant === null) {
+        // An any-sport card names no variant: the cell's sport plays variantFor's (the stub's differs from any builder default).
+        expect(c.spec!.variant).toBe(stubVariant(want!.sport));
+        anyCards++;
+      } else {
+        expect(c.spec!.variant).toBe(want!.variant);
+        // The stub's variant differs from the template's, so a variantFor leak would be seen.
+        expect(c.spec!.variant).not.toBe(stubVariant(want!.sport));
+        ownCards++;
+      }
       checked++;
     }
     expect(checked).toBe(TEMPLATE_CELLS.size);
+    // Both halves are real: the own-sport cells (box-league badminton, t20-super8 cricket) and every other group_group_ko sport.
+    expect(ownCards).toBeGreaterThan(0);
+    expect(anyCards).toBe(SPORT_KEYS.length - 1);
     expect(planL1Grid(stubVariant).filter((c) => c.spec !== null && c.spec.template === undefined)).toHaveLength(driven(cases).length - TEMPLATE_CELLS.size);
   });
 
@@ -260,9 +260,9 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
   it("drives exactly the runs whose atom has a harness script; every other run is 🚫 (a wave owes the path) or ░ with its atom named", () => {
     // A run on a no-organiser-path cell (C9 review I5, option 2) is 🚫 whatever its atom: no screen reaches the cell.
     const onNoPath = (r: L2Run): boolean => isNoOrganiserPathCell(cellId(r.row, r.sport));
-    const wantDriven = RAW.filter((r) => !onNoPath(r) && hasScript(r));
+    const wantDriven = RAW.filter((r) => !onNoPath(r) && hasScript(r) && !cardCannotSeat(r));
     const wantSettled = RAW.filter((r) => !onNoPath(r) && !hasScript(r) && settledOf(r) !== null);
-    const wantNoPath = RAW.filter((r) => onNoPath(r) || (!hasScript(r) && settledOf(r) === null && owningWave(r) !== null));
+    const wantNoPath = RAW.filter((r) => onNoPath(r) || (!onNoPath(r) && hasScript(r) && cardCannotSeat(r)) || (!hasScript(r) && settledOf(r) === null && owningWave(r) !== null));
     const wantNotRun = RAW.filter((r) => !onNoPath(r) && !hasScript(r) && settledOf(r) === null && owningWave(r) === null);
     const d = driven(cases);
     const noPath = cases.filter((c) => c.spec === null && c.noPath !== null);
@@ -276,11 +276,10 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     expect(settled.map(layerCaseId)).toEqual(wantSettled.map(idOf));
     // W4 T24: the settled runs, by atom (the cells moved off 🚫 - counted from the committed pair file, not typed from the code).
     // Q4b -> ⛔ 11, D4b -> ⛔ 16, D4a -> ⏳ 16; the 3 D4a and 3 D4b runs on the no-organiser-path cells stay 🚫 (no screen reaches the
-    // cell): 2 each on the ten pair-format cells (C9 review I5) and 1 each on the retired triple_rr row (triple_rr|cricket).
+    // cell): 2 each on the ten pair-format cells (C9 review I5)  (the retired three-leg row's two went with it, W5 T16).
     const settledBy = (id: string) => settled.filter((c) => c.run!.scenario === id);
     expect({ Q4b: settledBy("Q4b").length, D4b: settledBy("D4b").length, D4a: settledBy("D4a").length }).toEqual({ Q4b: 11, D4b: 16, D4a: 16 });
-    expect(RAW.filter((r) => r.scenario === "D4a" || r.scenario === "D4b").filter(onNoPath).length).toBe(6);
-    expect(RAW.filter((r) => (r.scenario === "D4a" || r.scenario === "D4b") && RETIRED_ROW_CELLS.includes(cellId(r.row, r.sport))).length).toBe(2);
+    expect(RAW.filter((r) => r.scenario === "D4a" || r.scenario === "D4b").filter(onNoPath).length).toBe(4);
     for (const c of settled) expect(c.settled!.state, layerCaseId(c)).toBe(SETTLED_STATE[c.run!.scenario]);
     // W4 app PR B, Task 15: Q4a (joint winners) has an organiser path now (the W4B_Q4A opt-in script drives it, w4b-cells.ts), so it is no longer
     // 🚫 off the no-path cells: each such run is ░ naming its atom, counted against the committed pair file.
@@ -289,7 +288,7 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     expect(noPath.filter((c) => c.run!.scenario === "Q4a" && !onNoPath(c.run!)).length).toBe(0);
     expect(notRun.filter((c) => c.run!.scenario === "Q4a").length).toBe(q4aRuns);
     for (const c of d) expect(c.spec!.scenario, layerCaseId(c)).toBe(HARNESS_SCENARIO[c.run!.scenario]);
-    for (const c of noPath) expect(c.noPath!.wave, layerCaseId(c)).toBe(onNoPath(c.run!) ? noPathWaveOf(cellId(c.run!.row, c.run!.sport)) : owningWave(c.run!));
+    for (const c of noPath) expect(c.noPath!.wave, layerCaseId(c)).toBe(onNoPath(c.run!) ? noPathWaveOf(cellId(c.run!.row, c.run!.sport)) : cardCannotSeat(c.run!) ? "W5" : owningWave(c.run!));
     expect(noPath.filter((c) => !onNoPath(c.run!) && ["Q4b", "D4a", "D4b"].includes(c.run!.scenario))).toEqual([]); // a settled atom is never 🚫 off the no-path cells
     // Both sides of the no-path rule were reached: runs on the cells, and runs elsewhere that stay as they were.
     expect(RAW.filter(onNoPath).length).toBeGreaterThan(0);
@@ -301,18 +300,14 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     // 🚫 164 -> 145, ░ 1,503 -> 1,522 (cricket's and generic's one M12b run each stay 🚫: their dispositions).
     // Match Day C9 review I5, option 2: the 146 runs on the ten no-organiser-path cells are 🚫 - 6 that were driven (football
     // americano/mexicano R4a, M1, F1), 12 already 🚫 and 128 that were ░: driven 62 -> 56, 🚫 145 -> 279, ░ 1,522 -> 1,394.
-    // The retired Triple round robin (owner ruling 2026-11-01): its 77 runs are 🚫 - the 3 that were driven (CI run
-    // 42356855670's L2 harness errors: R4a@430, M1@768, F1@390), 7 already 🚫 and 67 that were ░: driven 56 -> 53,
-    // 🚫 279 -> 349, ░ 1,394 -> 1,327.
-    // W4 T16 + T24 (on the pre-triple_rr figures): the 22 refused standalone cells leave the grid (140 held runs, 5 of them driven:
-    // 56 -> 51; the pairwise cover keeps their width slots, so no other run moves), and the 45 settled runs leave 🚫: driven
-    // 56 -> 51, 🚫 279 -> 222, ░ 1,394 -> 1,271, ⛔ 28 and ⏳ 17 new.
-    // Both together (merge of main into W4 app PR A): the 77 triple_rr runs survive the standalone cut, and 2 of the 7 that were
-    // already 🚫 are W4's settled D4a@430 / D4b@768 on triple_rr|cricket, which a no-organiser-path cell keeps 🚫 - so settled
-    // 45 -> 43 (⛔ 27, ⏳ 16), driven 51 -> 48, 🚫 222 -> 222 + 3 + 67 + 2 = 294, ░ 1,271 -> 1,204, 1,589 runs in all.
-    expect(RAW.filter((r) => RETIRED_ROW_CELLS.includes(cellId(r.row, r.sport))).length, "runs on the retired row").toBe(77);
-    // W4 app PR B, Task 15: Q4a's 12 runs off the no-path cells are ░ (an atom with an organiser path and no HARNESS_SCENARIO script): 🚫 294 -> 282, ░ 1,204 -> 1,216.
-    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 48, noPath: 282, notRun: 1216, settled: 43, all: 1589 });
+    // W4 T16 + T24: the 22 refused standalone cells leave the grid (140 held runs, 5 of them driven: the pairwise cover keeps their
+    // width slots, so no other run moves), and the settled runs leave 🚫 (⛔ and ⏳ new).
+    // W5 T16 (ruling 287): the deleted three-leg template's row is gone, 76 runs with it, all 🚫 (its cells were no-organiser-path, so
+    // none was driven or settled): 🚫 282 -> 206, 1,589 -> 1,513 runs. group_only took its slot in ROW_KEYS, so every other template
+    // row keeps its index - but the counts here MOVED, and the widths with them: every committed width is now the plain rotation
+    // (pairs.ts's lap shift applied only while the rows were a multiple of 7), so these totals were re-pinned, not carried.
+    // W4 app PR B, Task 15: Q4a's 12 runs off the no-path cells are ░ (an atom with an organiser path and no HARNESS_SCENARIO script).
+    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, settled: settled.length, all: cases.length }).toEqual({ driven: 47, noPath: 207, notRun: 1216, settled: 43, all: 1513 });
     expect(settled.filter((c) => c.settled!.state === "refused").length).toBe(27);
     expect(settled.filter((c) => c.settled!.state === "later").length).toBe(16);
     console.log(`L2 grid: ${d.length} driven, ${noPath.length} no_path, ${notRun.length} not_run, ${settled.length} settled of ${cases.length}`);
@@ -334,6 +329,40 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
       }
     }
     expect(checked).toBeGreaterThanOrEqual(4);
+  });
+
+  it("a driven run on a cell a catalog card reaches is driven THROUGH that card and keeps its committed id; a driven run elsewhere carries no template (matrix truth run 44395599687: 3 football group_group_ko runs reached the browser plain and the driver refused them)", () => {
+    // differential: before, every driven run was planned plain, so group_group_ko|football R4a / M1 / F1 threw DriverMisuse in the browser.
+    const d = driven(cases);
+    let onCard = 0;
+    let elsewhere = 0;
+    for (const c of d) {
+      const cell = TEMPLATE_CELLS.get(cellId(c.run!.row, c.run!.sport));
+      if (cell === undefined) {
+        expect(c.spec!.template, layerCaseId(c)).toBeUndefined();
+        elsewhere++;
+        continue;
+      }
+      expect(c.spec!.template, layerCaseId(c)).toBe(cell.key);
+      // The run's identity is the committed atom's: the template never renames it (the judge matches a run by this id).
+      expect(c.spec!.caseId, layerCaseId(c)).toBe(`${c.run!.row}|${c.run!.sport}|${c.run!.preset}|${c.run!.scenario}`);
+      expect(c.spec!.scenario, layerCaseId(c)).toBe(HARNESS_SCENARIO[c.run!.scenario]);
+      onCard++;
+    }
+    expect(onCard, "anti-vacuity: a driven run on a card-reached cell").toBeGreaterThan(0);
+    expect(elsewhere, "anti-vacuity: a driven run off the cards").toBeGreaterThan(0);
+    expect(onCard + elsewhere).toBe(d.length);
+    // The witness the premise names: football's three group_group_ko scripts are on super-groups.
+    const football = d.filter((c) => c.run!.row === "group_group_ko" && c.run!.sport === "football");
+    expect(football.map((c) => c.run!.scenario).sort()).toEqual(["M1", "R4a"]);
+    for (const c of football) expect(c.spec!.template).toBe("super-groups");
+    // ...and its F1, which the card cannot seat (an odd field on a card's own 16), is 🚫 W5 with the field rule's reason, never driven.
+    const f1 = cases.filter((c) => c.run!.row === "group_group_ko" && c.run!.sport === "football" && c.run!.scenario === "F1");
+    expect(f1).toHaveLength(1);
+    expect(f1[0]!.spec).toBeNull();
+    expect(f1[0]!.noPath).toMatchObject({ wave: "W5" });
+    expect(f1[0]!.noPath!.reason).toMatch(/NoFieldSize|field-size: no field for group_group_ko × F1/);
+    expect(RAW.filter((r) => cardCannotSeat(r) && hasScript(r)).map((r) => `${r.row}|${r.sport}`), "anti-vacuity: the one scripted run the card cannot seat").toEqual(["group_group_ko|football"]);
   });
 
   it("declares exactly the sports its driven cases need (a planned run posts nothing), and takes no --width (each run sets its own)", () => {
@@ -371,7 +400,7 @@ describe("the grid takes no filter: the whole grid is the plan (refused by name,
 });
 
 describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare --layer is the slice (the second call: the default did not move)", () => {
-  it("--layer L1 --scope grid is the 207 offered cells (166 driven, 41 planned); --layer L1 is still the slice's 6", () => {
+  it("--layer L1 --scope grid is the 196 offered cells (176 driven, 20 planned); --layer L1 is still the slice's 6", () => {
     const grid = livePlan("--layer L1 --scope grid");
     expect(grid.plan).toBe("--layer L1 --scope grid");
     expect(grid.layered).toBe(true);
@@ -383,10 +412,10 @@ describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare -
     expect(slice.planned.size).toBe(0);
   });
 
-  it("--layer L2 --scope grid is the 1,589 runs; --layer L2 is still the slice's cells only", () => {
+  it("--layer L2 --scope grid is the 1,513 runs; --layer L2 is still the slice's cells only", () => {
     const grid = livePlan("--layer L2 --scope grid");
     expect(grid.driven.size + grid.planned.size).toBe(RAW.length);
-    expect(grid.driven.size).toBe(RAW.filter((r) => hasScript(r) && !isNoOrganiserPathCell(cellId(r.row, r.sport))).length);
+    expect(grid.driven.size).toBe(RAW.filter((r) => hasScript(r) && !isNoOrganiserPathCell(cellId(r.row, r.sport)) && !cardCannotSeat(r)).length);
     const sliceCells = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
     const slice = livePlan("--layer L2");
     expect(slice.driven.size + slice.planned.size).toBe(RAW.filter((r) => sliceCells.has(cellId(r.row, r.sport))).length);

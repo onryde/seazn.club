@@ -177,7 +177,7 @@ describe.skipIf(!HAS_DB)("withdrawal cascade (spec 05 §5)", () => {
     await decide(auth, mine[0]!.id, mine[0]!.home_entrant_id === byName.A); // A wins 1 of 3
 
     const out = await withdrawEntrantCascade(auth, byName.A!);
-    expect(out).toMatchObject({ policy: "expunge", voided: 3, walkovers: 0, skipped_finalized: 0 });
+    expect(out).toMatchObject({ policy: "expunge", voided: 3, walkovers: 0, skipped_cancelled: 0 });
     const after = await fixturesOf(division.id);
     for (const f of mine) {
       const now = after.find((x) => x.id === f.id)!;

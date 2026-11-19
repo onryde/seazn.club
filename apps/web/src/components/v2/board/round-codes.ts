@@ -81,6 +81,12 @@ export type SeatLabelFixture = Pick<
   "id" | "stage_id" | "round_no" | "seq_in_round" | "home_entrant_id" | "away_entrant_id" | "home_slot_label" | "away_slot_label"
 >;
 
+/** The chip text of a round with no bracket code: `R{n}`, led by its pool's letter when the card has one ("A·R2" - W5 T3, X-SF-5,
+ *  owner R24 pick 5). The loader sends `pool_key` only for a stage with several pools, so a one-pool group reads `R2` as a league. */
+export function plainRoundCode(f: Pick<BoardFixture, "round_no" | "pool_key">): string {
+  return f.pool_key ? `${f.pool_key}\u00B7R${f.round_no}` : `R${f.round_no}`;
+}
+
 /** The stage kinds whose rounds get a code: every bracket kind. */
 const CODED_STAGE_KINDS: ReadonlySet<string> = new Set(["knockout", "double_elim", "page_playoff", "stepladder"]);
 

@@ -50,7 +50,8 @@ const input = (over: Over = {}): RunCellInput => {
   return {
     cell: `league|${sport}`, row: "league", sport, variant,
     newDriverState: async (n) => {
-      const real = driver?.() ?? new ModelFakeDriver({ ...opts, fault879: fault879 === true });
+      // W5 T4: a table seeded by a cut keeps the roster lock after Start (a root league's list is open, which the model does not drive).
+      const real = driver?.() ?? new ModelFakeDriver({ fedTable: true, ...opts, fault879: fault879 === true });
       return { real, model: await newModelState({ driver: real, row: "league", sport, variant, entrants: 4, tag: `t${n}` }) };
     },
     runs: 40, maxCommands: 12, seed: 42, fences: true, timeLimitMs: 60_000, regressions: [],
@@ -369,15 +370,20 @@ describe("runCell", () => {
     expect(r.stepChecks["SEEDED-CHECK"]).toBe(7 * captured.length);
   });
 
-  it("Review Focus 3 — fenced: #879 present, fences ON → no failure, and the fence fired (the walk kept exploring past it)", async () => {
+  it("W5 T2 lifted the #879 fence: the fault present with fences ON is FOUND on I7 (nothing fences it), and the fence never fires", async () => {
     const r = await runCell(input({ fault879: true }));
-    expect(r.failure, JSON.stringify(r.failure)).toBeNull();
     expect(FENCES.map((f) => f.id)).toContain(FENCE_879);
-    expect(r.fenced[FENCE_879]).toBeGreaterThan(0);
-    // Exploring past the fence: every other command still ran, and nothing is vacuous.
-    for (const k of COMMAND_KINDS) expect(r.counts[k].ran, k).toBeGreaterThan(0);
-    expect(r.vacuous).toEqual([]);
+    expect(r.failure?.check, JSON.stringify(r.failure)).toBe(I7);
+    expect(r.fenced[FENCE_879] ?? 0).toBe(0);
     expect(r.fences).toBe(true);
+  });
+  it("W5 T2: a product without the fault (the reconcile by pair) runs the walk clean with fences ON - a late entry is reconciled before Start, refused by name after", async () => {
+    const r = await runCell(input());
+    expect(r.failure, JSON.stringify(r.failure)).toBeNull();
+    for (const k of COMMAND_KINDS) expect(r.counts[k].ran, k).toBeGreaterThan(0);
+    // (the after-Start refusal itself is driven deterministically in model-core.test.ts; a random walk reaches it only by chance)
+    expect(r.counts.Generate.unexpected, "no unexpected refusal").toBe(0);
+    expect(r.vacuous).toEqual([]);
   });
 
   it("fences OFF → #879 found on I7; the shrunk path is Generate, AddEntrant, Generate before any Start; seed and path logged", async () => {
@@ -595,14 +601,14 @@ describe("runCell", () => {
   it("fix round 1, I-1: a NEW check passed over under a target that outranks it (a KNOWN unexpected refusal) is still reported, with the commands it ran", async () => {
     // Seed 62 at 12 commands, probed over seeds 1-200 (the only hit): the shrink
     // follows an unexpected refusal and passes over #879's I7 on the way.
-    const r = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] }));
+    const r = await runCell(input({ driver: () => new RefusingPosts({ fault879: true, fedTable: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED)] }));
     expect(r.failure?.check).toBe(UNEXPECTED_REFUSAL);
     expect(r.failure?.known).toBe("MB-003");
     expect(r.masked[I7]).toBeGreaterThan(0);
     expect(Object.keys(r.maskedNew)).toEqual([I7]);
     expectLateEntryShape(r.maskedNew[I7] ?? []);
     // With I7 committed too, nothing passed over is new.
-    const both = await runCell(input({ driver: () => new RefusingPosts({ fault879: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED), openReg("MB-001", I7)] }));
+    const both = await runCell(input({ driver: () => new RefusingPosts({ fault879: true, fedTable: true }), fences: false, runs: 40, maxCommands: 12, seed: 62, regressions: [openReg("MB-003", UNEXPECTED_REFUSAL, POST_REFUSED), openReg("MB-001", I7)] }));
     expect(both.masked[I7]).toBeGreaterThan(0);
     expect(both.maskedNew).toEqual({});
   });

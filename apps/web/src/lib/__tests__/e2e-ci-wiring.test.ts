@@ -10,10 +10,10 @@
 //
 // WHAT CAN GO WRONG, and why each is worth a test rather than a comment:
 //
-//  1. `e2e.yml` runs the `parallel` project as FIVE jobs — one "heavy" leg
-//     naming a handful of expensive files, and four "rest" legs sharding
-//     everything else. "rest" is a CATCH-ALL by construction (it ignores
-//     PARALLEL_HEAVY and nothing else), which is the ONLY reason a new spec
+//  1. `e2e.yml` runs the `parallel` project as SIX jobs — one "heavy" leg
+//     and one "mid" leg naming a handful of expensive files each, and four
+//     "rest" legs sharding everything else. "rest" is a CATCH-ALL by
+//     construction (it ignores PARALLEL_HEAVY and PARALLEL_MID and nothing else), which is the ONLY reason a new spec
 //     file joins CI without anybody editing a list. Turn that into
 //     explicit per-leg file lists and a new spec silently runs nowhere.
 //  2. A TYPO inside PARALLEL_HEAVY costs nothing visible: the heavy leg simply
@@ -664,6 +664,7 @@ describe("e2e CI wiring", () => {
     // The three legs e2e.yml actually dispatches for `--project=parallel`,
     // plus the two projects it runs whole.
     const heavy = projectNamed(await configFor("heavy"), "parallel");
+    const mid = projectNamed(await configFor("mid"), "parallel");
     const rest = projectNamed(await configFor("rest"), "parallel");
     const unset = await configFor(undefined);
     const serial = projectNamed(unset, "serial");
@@ -679,6 +680,7 @@ describe("e2e CI wiring", () => {
     const orphans = specFiles().filter(
       (file) =>
         !selects(heavy, file) &&
+        !selects(mid, file) &&
         !selects(rest, file) &&
         !selects(serial, file) &&
         !walkthroughLegs.some((p) => selects(p, file)) &&
@@ -687,22 +689,27 @@ describe("e2e CI wiring", () => {
     expect(orphans, "a spec no CI leg selects runs nowhere and can never fail").toEqual([]);
   });
 
-  it("splits the parallel project into heavy + rest with nothing lost and nothing run twice", async () => {
+  it("splits the parallel project into heavy + mid + rest with nothing lost and nothing run twice", async () => {
     const whole = projectNamed(await configFor(undefined), "parallel");
     const heavy = projectNamed(await configFor("heavy"), "parallel");
+    const mid = projectNamed(await configFor("mid"), "parallel");
     const rest = projectNamed(await configFor("rest"), "parallel");
     const files = specFiles();
 
     const inWhole = files.filter((f) => selects(whole, f));
     const inHeavy = files.filter((f) => selects(heavy, f));
+    const inMid = files.filter((f) => selects(mid, f));
     const inRest = files.filter((f) => selects(rest, f));
 
     // The split is a PARTITION of the unsliced project: their union is it, and
     // their intersection is empty. Either half failing means CI runs something
     // twice or not at all, while a local `npm run test:e2e` still looks right.
-    expect([...inHeavy, ...inRest].sort()).toEqual(inWhole);
+    expect([...inHeavy, ...inMid, ...inRest].sort()).toEqual(inWhole);
     expect(inHeavy.filter((f) => inRest.includes(f))).toEqual([]);
+    expect(inMid.filter((f) => inRest.includes(f))).toEqual([]);
+    expect(inHeavy.filter((f) => inMid.includes(f))).toEqual([]);
     expect(inHeavy.length).toBeGreaterThan(0);
+    expect(inMid.length, "the mid leg selects no files").toBeGreaterThan(0);
 
     // The partition covers the parallel project only. The walkthrough specs
     // are ignored by all three slices and belong to their own project — if
@@ -730,7 +737,7 @@ describe("e2e CI wiring", () => {
     // twice (once at 1280, once per width) and one that no width project selected would run at no width at all. `orphans` above
     // can only see the second: a spec selected twice is not an orphan.
     const unset = await configFor(undefined);
-    const variants: { projects: ProjectLike[] }[] = [unset, await configFor("heavy"), await configFor("rest")];
+    const variants: { projects: ProjectLike[] }[] = [unset, await configFor("heavy"), await configFor("mid"), await configFor("rest")];
     for (const sl of WALKTHROUGH_SLICES) variants.push(await configFor(undefined, sl));
     const widths = unset.projects.filter((p) => /^(mobile|tablet)-/.test(p.name ?? ""));
     expect(widths.map((p) => p.name).sort(), "premise: the seven width projects").toEqual([
@@ -920,10 +927,10 @@ describe("e2e CI wiring", () => {
     ).toEqual([]);
   });
 
-  it("names only REAL files in the heavy carve-out", async () => {
-    const heavy = projectNamed(await configFor("heavy"), "parallel");
+  it.each(["heavy", "mid"] as const)("names only REAL files in the %s carve-out", async (sliceName) => {
+    const heavy = projectNamed(await configFor(sliceName), "parallel");
     const sources = asRegExps(heavy.testMatch).map((re) => re.source);
-    expect(sources, "the heavy slice must carve out by an explicit testMatch").toHaveLength(1);
+    expect(sources, `the ${sliceName} slice must carve out by an explicit testMatch`).toHaveLength(1);
 
     // `(a|b|c)\.spec\.ts` — the alternation is the hand-maintained half, so
     // this is where a typo lands. A mistyped name costs nothing visible
@@ -933,7 +940,7 @@ describe("e2e CI wiring", () => {
     const named = alternation![1]!.split("|");
     const present = specFiles();
     for (const name of named) {
-      expect(present, `PARALLEL_HEAVY names "${name}.spec.ts", which does not exist`).toContain(`${name}.spec.ts`);
+      expect(present, `the ${sliceName} carve-out names "${name}.spec.ts", which does not exist`).toContain(`${name}.spec.ts`);
     }
 
     // And the leg must actually select one file per name — a regex that parses
@@ -952,7 +959,7 @@ describe("e2e CI wiring", () => {
       .join("\n");
 
     expect(yml, "e2e.yml must still pass the slice through to the config").toContain("E2E_PARALLEL_SLICE");
-    for (const slice of ["heavy", "rest"]) {
+    for (const slice of ["heavy", "mid", "rest"]) {
       expect(yml, `e2e.yml dispatches no "${slice}" leg`).toContain(`slice: ${slice}`);
     }
     // A project declared in the config but never dispatched runs nowhere —
@@ -981,6 +988,9 @@ describe("e2e CI wiring", () => {
     const heavyArgs = legs.filter((l) => l.slice === "heavy").map((l) => l.args);
     expect(heavyArgs, "exactly one heavy leg").toHaveLength(1);
     expect(heavyArgs[0], "the heavy leg must not shard").not.toContain("--shard");
+    const midArgs = legs.filter((l) => l.slice === "mid").map((l) => l.args);
+    expect(midArgs, "exactly one mid leg").toHaveLength(1);
+    expect(midArgs[0], "the mid leg must not shard").not.toContain("--shard");
   });
 
   it("dispatches the walkthrough project as capture, stream, sponsor and a two-way rest, each exactly once", () => {
@@ -1980,7 +1990,7 @@ describe("the online-chess fixture servers' wiring", () => {
     const outside = starters.filter((f) => !selects(walkthrough, f));
     expect(outside, "premise: match-room.spec.ts's capacity block starts the RealtimeKit fixture outside the walkthrough project").toContain("match-room.spec.ts");
     const pointed = new Set(["setup", "parallel", "walkthrough"]);
-    const configs = [await configFor(undefined), await configFor("heavy"), await configFor("rest")];
+    const configs = [await configFor(undefined), await configFor("heavy"), await configFor("mid"), await configFor("rest")];
     let checked = 0;
     try {
       for (const f of outside) {

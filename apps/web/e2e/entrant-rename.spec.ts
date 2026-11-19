@@ -323,7 +323,9 @@ test("a renamed pair reads the same on the fixtures tab and the public page, str
   const pairId = await seedPair(page.request, div.id, [sankar, ritwik]);
   const controlId = await seedPair(page.request, div.id, [], `Control Pair ${TAG}`);
   await seedPair(page.request, div.id, [], `Third Pair ${TAG}`);
-  const fixtures = await leagueFixtures(page.request, div.id);
+  // Drawn, not started: owner ruling 292 (W5) refuses a substitute partner once play has started, in every format, and step 1 below
+  // is exactly that roster swap. Nothing here needs a result - the schedule names the pair from the draw.
+  const fixtures = await leagueFixtures(page.request, div.id, { start: false });
   expect(
     fixtures.filter((f) => f.home_entrant_id === pairId || f.away_entrant_id === pairId).length,
     "the pair plays at least one fixture",

@@ -231,6 +231,44 @@ describe.skipIf(!HAS_DB)("M-10: an expunged group fixture is closed for auto-adv
     // qualification ranks at all is unruled; pinning either answer here would freeze it.
   }, 120_000);
 
+  // W5 T8 (Review Focus 4; ST-G15, RB5-W2; ruling 105 / M-10): the leaver's SIGNED-OFF result is removed too, and it has to be
+  // removed through the expunge abandon — a finalized line voided without it reads as an open match and stalls the stage again.
+  // The cascade is the last write: every other line is finalized before it, so the cascade itself must ask for the advance.
+  // differential: today the finalized line is skipped (withdrawal.ts:232) and stays counted, and nothing asks for the advance
+  // after an expunge (its abandon decides nothing); the naive un-finalize without the expunge abandon leaves the stage open.
+  it("X-WDT-5 a finalized expunge still lets the stage auto-advance", async () => {
+    const r = await rig(BADMINTON, BWF);
+    const leaver = r.sides[0]![0]!;
+    const hers = r.fixtures.filter((_, i) => r.sides[i]!.includes(leaver));
+    expect(hers, "rig: the leaver has three lines").toHaveLength(3);
+    const signed = hers[0]!;
+    const signedSides = r.sides[r.fixtures.indexOf(signed)]!;
+    await playBadminton(r.auth, signed, signedSides[0] !== leaver); // the leaver loses it
+    await finalizeFixture(r.auth, signed, await tip(signed));
+    const rest = without(r, leaver);
+    const stayed = [...new Set(rest.flatMap((id) => [...r.sides[r.fixtures.indexOf(id)]!]))].filter((id): id is string => id !== null).sort();
+    const [x, y, z] = stayed as [string, string, string];
+    const beats = (w: string, l: string) => w === x || (w === y && l === z);
+    for (const id of rest) {
+      const [home, away] = r.sides[r.fixtures.indexOf(id)]!;
+      await playBadminton(r.auth, id, beats(home!, away!));
+      await finalizeFixture(r.auth, id, await tip(id));
+    }
+    expect(await advanced(r), "rig: her two unplayed lines hold the stage").toMatchObject({ koFixtures: 0, autoAdvanced: 0 });
+
+    const out = await withdrawEntrantCascade(r.auth, leaver);
+    expect(out, "1 of 3 played: under half, every line removed").toMatchObject({ policy: "expunge", voided: 3, skipped_cancelled: 0 });
+    const [s] = await sql<{ status: string; expunged: boolean }[]>`
+      select status, exists (select 1 from score_events a where a.fixture_id = f.id and a.type = 'core.abandon' and a.payload ->> 'expunge' = 'true'
+                              and not exists (select 1 from score_events v where v.voids_event_id = a.id)) as expunged
+        from fixtures f where id = ${signed}`;
+    expect([s!.status, s!.expunged], "the signed-off line is out through the expunge abandon").toEqual(["abandoned", true]);
+    expect(await advanced(r)).toEqual({ koFixtures: 1, koSeated: 1, autoAdvanced: 1, group: ["abandoned", "finalized"] });
+    const [ko] = await sql<{ home: string | null; away: string | null }[]>`
+      select home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${r.koId}`;
+    expect([ko!.home, ko!.away].sort(), "the two who won a match advance; the leaver does not").toEqual([x, y].sort());
+  }, 120_000);
+
   it("the negative pair: a plain (organiser) abandon in the same group still holds the stage", async () => {
     const r = await rig(BADMINTON, BWF);
     const [held, ...rest] = r.fixtures;

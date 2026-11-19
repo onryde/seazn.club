@@ -6,6 +6,7 @@ import "server-only";
 // same door.
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { rrLegacyExtKey } from "@/lib/roundrobin-reconcile";
 import { cacheGet, cacheSet, cacheDel, sendAfterDeleteOrBound } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -17,7 +18,7 @@ import { CRICKET_BALL_TYPES, isCricketBall } from "@/lib/cricket-wicket-void";
 import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-override";
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
 import type { CascadeWriter } from "@/server/engine-db/append-event";
-import { recomputeStandings } from "@/server/engine-db";
+import { recomputeStandings, type SnapshotCause } from "@/server/engine-db";
 import { refreshCompletedBracketPlacement } from "@/server/engine-db/competition";
 import { advancingSides, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
@@ -42,6 +43,7 @@ import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
+import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import { maybeProposePlate } from "./plate-field";
 import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
@@ -165,7 +167,12 @@ export async function scoreEvent(
   input: AppendEventRequest,
   /** Server-internal, never a request field (W2b PF-2): the withdrawal cascade names itself here, and only it may
    *  record the cascade-only events (append-event.ts `assertW2bWriteGuards`). */
-  opts: { writer?: CascadeWriter } = {},
+  opts: {
+    writer?: CascadeWriter;
+    /** B3 re-review: false holds this write's auto-advance back - a Reinstate's reverse re-records and voids line by line
+     *  and asks the stage ONCE at the end (`reinstateTableEntrant`), never part-way. */
+    autoAdvance?: boolean;
+  } = {},
 ): Promise<ScoreOutcome> {
   // A FAST PATH, no longer the guarantee (W2, design §6). Until this wave the
   // cache was the ONLY thing standing between a retry and a second write, so a
@@ -189,6 +196,19 @@ export async function scoreEvent(
   // forever. Hence a SECOND, far more generous ceiling on the replay branch
   // only; the write path below is untouched.
   const cacheKey = input.idempotency_key ? idemKey(fixtureId, input.idempotency_key) : null;
+  // W5 T8b review I2 (a): a replayed disqualifying forfeit (the write landed, its answer was lost) retries a withdrawal its
+  // first attempt did not finish — `disqualifyFromMatch` with `retry`: idempotent (a departed or reinstated entrant is left
+  // alone), and one cascade at a time under the cascade's per-entrant lock. Every replay exit below passes through it.
+  const isDqForfeit =
+    opts.writer === undefined && input.type === "core.forfeit" && (input.payload as { reason?: unknown } | null)?.reason === "disqualified";
+  const retryOwedDq = async (answer: ScoreOutcome): Promise<ScoreOutcome> => {
+    if (isDqForfeit) {
+      await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by, { retry: true });
+      // B3 fix wave (I-3): and the auto-advance the first attempt held back for the hook (a no-op once complete or not ready).
+      await autoAdvanceFixtureStage(auth, fixtureId);
+    }
+    return answer;
+  };
   if (cacheKey) {
     const replay = await cacheGet<ScoreOutcome>(cacheKey);
     if (replay) {
@@ -199,7 +219,7 @@ export async function scoreEvent(
       // Best-effort: the overlay only ENRICHES an answer the pad already has, and the cache fails open for the same reason
       // (a retry must not be refused because a backing store is down). A read that rejects keeps the cached answer.
       const now = await rulesVersionNow(auth.orgId, fixtureId).catch(() => null);
-      return now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }; // same answer, no double write
+      return retryOwedDq(now === null || now === replay.rules_version ? replay : { ...replay, rules_version: now }); // same answer, no double write
     }
   }
 
@@ -213,7 +233,7 @@ export async function scoreEvent(
   if (carriedReplay) {
     await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
     if (cacheKey) await cacheSet(cacheKey, carriedReplay, IDEM_TTL_SECONDS);
-    return carriedReplay;
+    return retryOwedDq(carriedReplay);
   }
 
   // Engine-split D15/D26/D31: a client whose fold epoch for this sport is BEHIND the server's would fold the ledger it
@@ -227,7 +247,7 @@ export async function scoreEvent(
   const answerReplay = async (replayed: ScoreOutcome): Promise<ScoreOutcome> => {
     await rateLimit(`scorereplayv1:${fixtureId}`, REPLAY_LIMIT);
     if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
-    return replayed;
+    return retryOwedDq(replayed);
   };
   const clientEpoch = input.engine_epoch;
   if (clientEpoch !== undefined && sport !== null) {
@@ -244,6 +264,9 @@ export async function scoreEvent(
       if (replayed) return answerReplay(replayed);
     }
     await assertUndoTarget(auth, fixtureId, input);
+    // W5 T8b review I1: an Undo of the forfeit that disqualified her from the table, while that disqualification stands, is
+    // refused — the withdrawal it ran is undone by Reinstate, never by voiding its trigger. A cascade's own voids are exempt.
+    if (opts.writer === undefined) await (await import("./withdrawal")).assertDisqualificationUndoable(auth, fixtureId, input.payload);
   }
 
   let result;
@@ -312,7 +335,7 @@ export async function scoreEvent(
         // effort by design: cacheSet is a no-op without Redis, and the ledger
         // answer above does not depend on it.
         if (cacheKey) await cacheSet(cacheKey, replayed, IDEM_TTL_SECONDS);
-        return replayed;
+        return retryOwedDq(replayed);
       }
     }
     // SEQ_CONFLICT is the hot recovery path and carries no ids — skip it.
@@ -369,11 +392,21 @@ export async function scoreEvent(
   // `onDecided` below seats the new winner there) — so they seed the same list,
   // and ride the same DEL and push, even if a hook below throws.
   let advanced: readonly string[] = result.released;
+  let advanceOwed = false;
   try {
     // A decision (or a void that may have erased one) moves brackets/standings.
     // W2a (spec §5.4.4): a HELD fixture (needs_decision) seats nobody, so onDecided is not called for it.
     if ((result.outcome !== null && result.status !== "needs_decision") || input.type === "core.void") {
-      const filled = await onDecided(auth, fixtureId);
+      // B3 fix wave (I-3; RB5-W5, ruling 289): a disqualifying forfeit's auto-advance waits for the DQ hook below. Run here, it
+      // completed a league whose last open line this was BEFORE the cascade ranked her last, and the cascade then skipped the
+      // complete stage (C1) - so whether a disqualified player ranked last depended on `auto_progress`.
+      // B5 fix wave fix round 2 (m4): a cascade's or a Reinstate's own write (`opts.writer`: the walkovers a withdrawal awards, the
+      // results a Reinstate re-records) is a ROSTER change, so its refold rebases the table's step; a scorer's write is a result.
+      const filled = await onDecided(auth, fixtureId, {
+        autoAdvance: !isDqForfeit && opts.autoAdvance !== false,
+        standingsCause: opts.writer !== undefined ? "roster" : "result",
+      });
+      advanceOwed = isDqForfeit;
       advanced = [...result.released, ...filled.filter((id) => !result.released.includes(id))];
       // Best-effort like refreshNews (which swallows its own): the result already stands, so a fold that throws (a dropped
       // connection, a rule set it cannot read) is logged by name and never skips the news draft or the idempotency answer.
@@ -402,6 +435,16 @@ export async function scoreEvent(
       });
     }
   }
+  // W5 T8b (X-WDT-10, X-RT-1; ruling 289): an in-match disqualification withdraws the entrant from the stage — after the forfeit
+  // committed and was published, best-effort (`disqualifyFromMatch` never throws). Never for a cascade's own write (`writer`).
+  // A dynamic import: withdrawal.ts imports this module.
+  if (isDqForfeit) {
+    await (await import("./withdrawal")).disqualifyFromMatch(auth, fixtureId, (input.payload as { by?: unknown }).by);
+  }
+  // B3 fix wave (I-3): the auto-advance `onDecided` held back for the disqualifying forfeit, now that her withdrawal has been
+  // written (the cascade asks it too for every table it settled; a no-op once complete). Asked whatever the hook did - a bracket
+  // DQ runs no cascade, and a failed one leaves the stage to the organiser like any not-ready stage.
+  if (advanceOwed) await autoAdvanceFixtureStage(auth, fixtureId);
   return out;
 }
 
@@ -1026,7 +1069,12 @@ export async function refreshNews(auth: AuthCtx, fixtureId: string): Promise<voi
 // took away. Under the lock, the void has either committed (and this reads
 // its erased or flipped outcome) or not started (and its un-fill will find
 // the name this writes and take it back).
-export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<string[]> {
+export async function onDecided(
+  auth: AuthCtx,
+  fixtureId: string,
+  /** `standingsCause` (B5 fix wave fix round 2, m4): why the table refolds - `writeSnapshot`'s cause. Default "result": a decided match. */
+  opts: { autoAdvance?: boolean; standingsCause?: SnapshotCause } = {},
+): Promise<string[]> {
   const advanced: string[] = [];
   const context = await withTenant(auth.orgId, async (tx) => {
     // Loop R I-2 / R2 N-1: a line that feeds a seat reads the seats it feeds, and the cascade below reads every feeder's
@@ -1151,7 +1199,11 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // alphabetical.
     const placements = (fixture.stage_config as { placements?: Record<string, [number, number]> })
       ?.placements;
-    const place = fixture.ext_key !== null ? placements?.[fixture.ext_key] : undefined;
+    // W5 T2: a round-robin line's key now ends `-L{leg}`; a `placements` map written against the positional id
+    // (`rr-r1-c1`, the key before the leg was stored) still names the same line - the engine's round numbers run on across legs,
+    // so the legacy key is unambiguous.
+    const place =
+      fixture.ext_key !== null ? (placements?.[fixture.ext_key] ?? placements?.[rrLegacyExtKey(fixture.ext_key)]) : undefined;
     if (place !== undefined && winner !== undefined && loser !== undefined) {
       const overrides =
         ((fixture.stage_config as { rank_overrides?: { entrant_id: string; rank: number }[] })
@@ -1201,8 +1253,10 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   // the stage's next refold: its next result or void, or its completion, which ranks it afresh from its fixtures. When this
   // result finished the stage, auto-advance below IS that completion, so it runs regardless and heals the table here.
   if (context && TABLE_KINDS.has(context.kind)) {
+    // B5 fix wave fix round 2 (m4): the refold a decided write causes - a scorer's result rolls the step "Biggest climber" reads;
+    // a cascade's or a Reinstate's write (`standingsCause: "roster"`) rebases it.
     try {
-      await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined);
+      await recomputeStandings(auth.orgId, context.stage_id, context.pool_id ?? undefined, { cause: opts.standingsCause ?? "result" });
     } catch (err) {
       log.error(
         { err, event: "standings_recompute_failed", fixtureId, stageId: context.stage_id, poolId: context.pool_id },
@@ -1215,13 +1269,29 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
     // already-COMPLETE source stage. Same best-effort contract as the
     // overrideStandings call site: never blocks a score write that already
     // committed.
-    try {
-      await markDependentSeedProposalsStale(auth, context.stage_id);
-    } catch (err) {
-      log.error(
-        { err, event: "seed_proposals_stale_mark_failed", fixtureId, stageId: context.stage_id },
-        "scoring: the stage's dependent seed proposals were not marked stale (score write unaffected)",
-      );
+    //
+    // W5 T11 (X-CUT-4 <- RB5-K6, FX-G16's table half): inside a COMPLETED league or group the proposals it seeds answer for the
+    // correction too, a confirmed one included: before the destination starts it goes stale and its seats go back (the lines they
+    // empty ride this score's push), after it the bracket stands and the desk warns (`getTableCutDrift`). Best-effort like the
+    // knockout's below: the score already committed.
+    if (TABLE_CUT_DRIFT_KINDS.has(context.kind) && context.stage_status === "complete") {
+      try {
+        advanced.push(...(await markDependentSeedProposalsStale(auth, context.stage_id, { includeConfirmed: true })));
+      } catch (err) {
+        log.error(
+          { err, event: "table_cut_drift_stale_failed", fixtureId, stageId: context.stage_id },
+          "scoring: a corrected table's proposals did not update (score write unaffected)",
+        );
+      }
+    } else {
+      try {
+        await markDependentSeedProposalsStale(auth, context.stage_id);
+      } catch (err) {
+        log.error(
+          { err, event: "seed_proposals_stale_mark_failed", fixtureId, stageId: context.stage_id },
+          "scoring: the stage's dependent seed proposals were not marked stale (score write unaffected)",
+        );
+      }
     }
   }
   // W4 T14 (FX-G16, FX-G18, X-QM-4, RB4-Q5): the same correction inside a COMPLETED knockout, which stored its ranks once at
@@ -1249,29 +1319,53 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
   // Auto-advance (Jul3/08 §5, 16 Sep): when the flag is on and the stage just
   // finished, progression fires without a button. Also after a refold that failed above: the completion never reads the
   // stored table (it ranks the stage from its fixtures and writes the table afresh), so it is that table's repair.
-  if (context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
+  // B3 fix wave (I-3): not for a disqualifying forfeit - `scoreEvent` asks AFTER its DQ hook (see there).
+  if (opts.autoAdvance !== false && context && (context.outcome as { kind?: string } | null)?.kind !== undefined) {
     await maybeAutoAdvance(auth, context.stage_id, context.division_id);
   }
   // Quick match plan 5 (D2, P5, P6): a League + Knockout moves itself on, after a decision and a void alike (a void can take
   // a finished league back, which drops a pending tie answer). After the commit, never in it, and best-effort like the hooks
   // above: the score already stands. Only the system org's writes ask, and the module is loaded on demand, so an
   // organiser's score pays one comparison and nothing else.
-  if (context && auth.orgId === QUICK_MATCH_SYSTEM_ORG_ID) {
-    try {
-      await (await import("./quick-match-advance")).afterQuickMatchScore(context.division_id);
-    } catch (err) {
-      log.error(
-        { err, event: "quick_match_advance_failed", divisionId: context.division_id },
-        "scoring: the quick match's knockout did not advance (score write unaffected)",
-      );
-    }
-  }
+  // Task 16b fix round 1 (I-1): not for a disqualifying forfeit either - its ask waits for the DQ hook, like the auto-advance above.
+  // Run here, it completed the league BEFORE the cascade ranked her last, and the cascade skips a complete stage (C1).
+  if (context && opts.autoAdvance !== false) await askQuickMatchAdvance(auth, context.division_id);
   // Only ever reached once the transaction above COMMITTED: a rollback throws
   // out of `withTenant`, so the ids of a fill that was undone never leave.
   return advanced;
 }
 
-async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
+/** Quick match plan 5 (D2, P6): move a League + Knockout on as far as it can go now. Only the system org's writes ask; best-effort,
+ *  the write that led here already stands. */
+async function askQuickMatchAdvance(auth: AuthCtx, divisionId: string): Promise<void> {
+  if (auth.orgId !== QUICK_MATCH_SYSTEM_ORG_ID) return;
+  try {
+    await (await import("./quick-match-advance")).afterQuickMatchScore(divisionId);
+  } catch (err) {
+    log.error(
+      { err, event: "quick_match_advance_failed", divisionId },
+      "scoring: the quick match's knockout did not advance (score write unaffected)",
+    );
+  }
+}
+
+/** The auto-advance a settle owes a stage, and the quick match's own advance beside it (Task 16b fix round 1): for the writes that
+ *  held both back until a withdrawal's cascade had ranked the leaver (a disqualifying forfeit) and for the cascade's own end. */
+export async function advanceAfterSettle(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
+  await maybeAutoAdvance(auth, stageId, divisionId);
+  await askQuickMatchAdvance(auth, divisionId);
+}
+
+/** B3 fix wave (I-3): `advanceAfterSettle` for the stage of `fixtureId`. */
+async function autoAdvanceFixtureStage(auth: AuthCtx, fixtureId: string): Promise<void> {
+  const [line] = await withTenant(auth.orgId, (tx) => tx<{ stage_id: string; division_id: string }[]>`
+    select stage_id, division_id from fixtures where id = ${fixtureId}`);
+  if (line) await advanceAfterSettle(auth, line.stage_id, line.division_id);
+}
+
+/** Exported for the withdrawal cascade (W5 T8, ruling 105 / M-10): an expunge ends on `core.abandon{expunge: true}`, which
+ *  decides nothing, so no score write runs this check after it; the cascade asks once, after the entrant's status is written. */
+export async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: string): Promise<void> {
   // After the score's commit, like the completion below: a read that throws is logged, never the score's failure.
   const ready = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ auto_progress: boolean }[]>`
@@ -1308,7 +1402,10 @@ async function maybeAutoAdvance(auth: AuthCtx, stageId: string, divisionId: stri
   if (!ready) return;
   const { completeStage } = await import("./stages");
   try {
-    await completeStage(auth, stageId, { publish: false });
+    const done = await completeStage(auth, stageId, { publish: false });
+    // W5 T17 (X-BD-4): a stage that completed between the `ready` read above and this call answers `already_complete` - the call
+    // did nothing, so the ledger is not told it advanced the stage.
+    if (done.already_complete === true) return;
     await withTenant(auth.orgId, async (tx) => {
       const [{ seq: last }] = await tx<{ seq: number }[]>`
         select coalesce(max(seq), 0)::int as seq from division_events

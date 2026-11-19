@@ -51,7 +51,16 @@ export type W4aScenarioKey = (typeof W4A_SCENARIO_KEYS)[number];
 export const W4B_SCENARIO_KEYS = ["W4B_Q3", "W4B_Q3_OUT", "W4B_Q4A", "W4B_Q5A", "W4B_Q5B"] as const;
 export type W4bScenarioKey = (typeof W4B_SCENARIO_KEYS)[number];
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey | W4bScenarioKey;
+/** W5 app PR A (Task 24, T5-b): the opt-in round-robin scripts - R2 (a late add into a running league or group, in each case), R4c (a
+ *  withdrawal under half played whose results include a finalized one: the total expunge), Q2 (a departed qualifier leaves a table's cut
+ *  and the next eligible entrant takes the seat), P7 (a rank pinned once per pool, and the non-table refusal), C6a (a correction after the
+ *  table stage is complete, before its cut is confirmed) and SURF (the table surfaces' API shape after a full play). F4 (unequal pools) and
+ *  C5 (adjust points) are PLANNED, NOT RUN: they wait for app PR B's engine major (`ScenarioUnsupported`, wave W5). Planned ONLY by
+ *  `--set w1-driving --scenario <key>`, as W2a's, W2b's, W2e's, W4A's and W4B's are; the files named in `w5a-cells.ts` hold them. */
+export const W5A_SCENARIO_KEYS = ["W5A_R2", "W5A_R4C", "W5A_Q2", "W5A_P7", "W5A_C6A", "W5A_SURF", "W5A_F4", "W5A_C5"] as const;
+export type W5aScenarioKey = (typeof W5A_SCENARIO_KEYS)[number];
+
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey | W4aScenarioKey | W4bScenarioKey | W5aScenarioKey;
 
 /** W2c Task 12 fix round 1 (R-T12-3): the scenarios whose premise is "a level knockout is HELD for the organiser"
  *  (BRACKET_SETTLE_LEVEL's level settle, WD-CASC's held line). Since Task 12 a new bracket stage plays its sport's
@@ -102,14 +111,22 @@ export interface Scenario {
   /** The one check a canary run must turn red; null for a scenario with no canary. */
   canaryCheck: string | null;
   /** ⛔: the case's expected state is `refused` (decideState's `mandated`). */
-  mandatedRefusal?: (spec: CaseSpec) => string;
-  /** false: the fixture invariants do not apply (no stage was ever built). Default true. */
-  evaluatesInvariants?: boolean;
+  mandatedRefusal?: (spec: CaseSpec) => string | null;
+  /** false: the fixture invariants do not apply (no stage was ever built). Default true. A function answers per case (W5 T12: F1 on a
+   *  field the product refuses to draw builds no stage, on that row alone). */
+  evaluatesInvariants?: boolean | ((spec: CaseSpec) => boolean);
   /** Which scores a browser case taps on the pad (W1c Task 7; mixed.ts
    *  PadPolicy): "first" per case (ruling 15), or "all" (PADPROOF, D3).
    *  Default "first". run.ts hands it to the case's BrowserDriver. */
   padPolicy?: "first" | "all";
   run(ctx: ScenarioContext): Promise<ScenarioOutput>;
+}
+
+/** Whether a case's fixture invariants are judged: a scenario that builds no stage opts out (`evaluatesInvariants: false`), and one that
+ *  builds none on only some cases (W5 T12) says which. Default yes. */
+export function invariantsApply(scenario: Pick<Scenario, "evaluatesInvariants">, spec: CaseSpec): boolean {
+  const e = scenario.evaluatesInvariants;
+  return typeof e === "function" ? e(spec) : e !== false;
 }
 
 /** A named deferral: the case renders ⏳ with the owning wave, never ░ or ✅. */

@@ -33,7 +33,7 @@ import { cascadeItems, expectedPolicy, policyFamilyFor, skippedItem } from "../l
 import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS, W4B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS, W4A_SCENARIO_KEYS, W4B_SCENARIO_KEYS, W5A_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
@@ -82,7 +82,7 @@ const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) 
  *  void-proof.test.ts is its suite. */
 // The slice's scripts: not the gated ones, and not the W2a bracket-finish or W2b forfeit-credit scenarios (opt-in:
 // w2a-scenarios.test.ts, w2b-scenarios.test.ts).
-const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS];
+const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS, ...W5A_SCENARIO_KEYS];
 const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !OPT_IN.includes(k));
 
 describe("assertion helper — empty first (R25)", () => {
@@ -218,7 +218,7 @@ describe("shared assertions — empty case first, then each way to go red", () =
 
   it("resultsAsPosted: only the RECORDED withdrawal's cascade explains a result the harness did not post", () => {
     const withW = (fixtures: ObservedFixture[], policy: "walkover" | "expunge", before: { id: string; status: string }[], entrantId = "b"): ObservedRun =>
-      ({ ...run([], fixtures), withdrawal: { entrantId, afterRound: 1, policy, walkovers: 0, voided: 0, skippedFinalized: 0, before: before.map((b) => ({ ...b, outcome: null })) } });
+      ({ ...run([], fixtures), withdrawal: { entrantId, afterRound: 1, policy, walkovers: 0, voided: 0, skippedCancelled: 0, before: before.map((b) => ({ ...b, outcome: null })) } });
     const wo = fx({ id: "wo", status: "forfeited", outcome: { kind: "award", winner: "a", loser: null, reason: "walkover" } });
     expect(resultsAsPosted(new Recorder(), withW([wo], "walkover", [{ id: "wo", status: "scheduled" }]))).toMatchObject({ verdict: "pass", checked: 1 });
     // Its twins fail: the fixture was already decided before the withdrawal, another entrant withdrew, no snapshot, or no withdrawal at all.
@@ -231,8 +231,10 @@ describe("shared assertions — empty case first, then each way to go red", () =
     rec.parity.push({ fixtureId: "x", local: { kind: "win", winner: "a" }, product: { kind: "win", winner: "a" }, foreign: 0, finishedBefore: null, request: "match" });
     const struck = fx({ id: "x", status: "abandoned", outcome: null });
     expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "decided" }]))).toMatchObject({ verdict: "pass", checked: 1 });
-    // ...but not when the fixture was locked before it, nor under a walkover (which leaves played results standing).
-    expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "finalized" }]))).toMatchObject({ verdict: "fail" });
+    // W5 T8 (ST-G15, RB5-W2, Task 24): a FINALIZED line is expunged like any other (it is no longer a locked status), so its void is accounted for too...
+    expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "finalized" }]))).toMatchObject({ verdict: "pass", checked: 1 });
+    // ...but not when the fixture was CANCELLED before it (the one status the cascade still leaves alone), nor under a walkover (which leaves played results standing).
+    expect(resultsAsPosted(rec, withW([struck], "expunge", [{ id: "x", status: "cancelled" }]))).toMatchObject({ verdict: "fail" });
     expect(resultsAsPosted(rec, withW([struck], "walkover", [{ id: "x", status: "decided" }]))).toMatchObject({ verdict: "fail" });
   });
 
@@ -372,7 +374,8 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(driver.calls.slice(0, firsts.length)).toEqual(firsts);
     const i = (m: string) => driver.calls.lastIndexOf(m);
     expect(i("patchDivisionConfig")).toBeLessThan(i("completeStage"));
-    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(1);
+    // W5 T17 (X-BD-4, CS-1): the stage's completion, then the named second Complete - a repeat the drivers no longer avoid.
+    expect(driver.calls.filter((c) => c === "completeStage")).toHaveLength(2);
     expect(i("publicStandings")).toBeGreaterThan(i("completeStage"));
     expect(out.observed.stages[0]!.fixtures).toHaveLength(28); // 8 entrants, single RR
     // snapshot observes the ROOT stage, so its field is the division's (W1a carry 1)…
@@ -385,6 +388,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(checks.find((c) => c.id === "life-fold-parity")!.checked).toBe(28);
     expect(checks.find((c) => c.id === "life-loop-bounded")).toMatchObject({ verdict: "pass", checked: 2 });
     expect(checks.find((c) => c.id === "life-entrants-edit-accepted")).toMatchObject({ verdict: "pass", checked: 1 });
+    expect(checks.find((c) => c.id === "life-complete-twice-noop")).toMatchObject({ verdict: "pass", checked: 1 });
   });
 
   // T12-R1: the probe saves the kinds the product's ACTIVE entrants hold
@@ -450,6 +454,112 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
     expect(r.checks.find((c) => c.id === "life-entrants-edit-accepted")!.evidence).toEqual(["entrants-only save → 409 DIVISION_FORMAT_LOCKED"]);
     // The format refusal beside it is still the expected one.
     expect(r.checks.find((c) => c.id === "life-format-edit-refused-named")).toMatchObject({ verdict: "pass" });
+  });
+
+  // W5 T17 (X-BD-4, CS-1): the named second Complete. Each negative below is a product (or a driver) that fails it a different way; only
+  // life-complete-twice-noop may go red, and on each the item names what the repeat answered.
+  describe("life-complete-twice-noop: a second Complete is judged, never steered around", () => {
+    const noop = (r: Awaited<ReturnType<typeof runOn>>) => r.checks.find((c) => c.id === "life-complete-twice-noop")!;
+    it("the product's no-op passes, once per completed stage (the empty and the second-call cases first)", async () => {
+      const r = await runOn(new FakeLeagueDriver(), "LIFECYCLE");
+      expect(noop(r)).toMatchObject({ verdict: "pass", checked: 1 });
+    });
+    it("a product that still answers completed:true with no already_complete (today's answer) reds it", async () => {
+      class OldAnswer extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          const first = this.completed;
+          const out = await super.completeStage();
+          return first ? { completed: true, events: [] } : out;
+        }
+      }
+      const r = await runOn(new OldAnswer(), "LIFECYCLE");
+      expect(failed(r.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(r).evidence[0]).toMatch(/^stage 1: repeat \/complete → completed=true already_complete=null/);
+    });
+    it("each half of the no-op answer is judged alone: completed:false without already_complete reds it, and so does already_complete beside completed:true", async () => {
+      let checked = 0;
+      for (const [answer, evidence] of [
+        [{ completed: false, events: [] }, "completed=false already_complete=null"],
+        [{ completed: true, already_complete: true, events: [] }, "completed=true already_complete=true"],
+      ] as const) {
+        class HalfAnswer extends FakeLeagueDriver {
+          override async completeStage(): Promise<CompleteOut> {
+            const first = this.completed;
+            const out = await super.completeStage();
+            return first ? { ...answer, events: [] } : out;
+          }
+        }
+        const r = await runOn(new HalfAnswer(), "LIFECYCLE");
+        expect(failed(r.checks), evidence).toEqual(["life-complete-twice-noop"]);
+        expect(noop(r).evidence[0]).toContain(evidence);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+    it("a product that completes the division again on the repeat reds it (division_completed on the second answer)", async () => {
+      class CompletesAgain extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          const first = this.completed;
+          const out = await super.completeStage();
+          return first ? { ...out, division_completed: true } : out;
+        }
+      }
+      const r = await runOn(new CompletesAgain(), "LIFECYCLE");
+      expect(failed(r.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(r).evidence[0]).toContain("division_completed=true");
+    });
+    it("a product that names a draft the first call never minted reds it", async () => {
+      class OtherDraft extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          const first = this.completed;
+          const out = await super.completeStage();
+          return first ? { ...out, seed_proposal: { id: "not-the-first-proposal", status: "draft" } } : out;
+        }
+      }
+      const r = await runOn(new OtherDraft(), "LIFECYCLE");
+      expect(failed(r.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(r).evidence[0]).toContain("seed_proposal=not-the-first-proposal draft");
+    });
+    it("a repeat the product refuses (a 409) reds it, naming the refusal; a driver that still refuses a repeat reds it too", async () => {
+      class Refuses extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          if (this.completed) throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_COMPLETED_SEEDING_FAILED", "again");
+          return super.completeStage();
+        }
+      }
+      const refused = await runOn(new Refuses(), "LIFECYCLE");
+      expect(failed(refused.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(refused).evidence).toEqual(["stage 1: the repeat /complete was 409 STAGE_COMPLETED_SEEDING_FAILED"]);
+      class Misuse extends FakeLeagueDriver {
+        override async completeStage(): Promise<CompleteOut> {
+          if (this.completed) throw new DriverMisuse("driver: already completed - /complete is never repeated (design 6.4)");
+          return super.completeStage();
+        }
+      }
+      const misused = await runOn(new Misuse(), "LIFECYCLE");
+      expect(failed(misused.checks)).toEqual(["life-complete-twice-noop"]);
+      expect(noop(misused).evidence[0]).toMatch(/^stage 1: the repeat \/complete was DriverMisuse: /);
+    });
+    it("a 5xx-shaped first progression (the completion committed, the next stage's draft was never minted) is a MISSING draft, never a clean no-op", async () => {
+      // failSeedingOnComplete: the fake's first /complete on stage 1 throws 409 STAGE_COMPLETED_SEEDING_FAILED after committing, so no
+      // draft exists. The repeat then answers `already_complete` with `seed_proposal: null` - which, before the scenario read the
+      // successor, passed as a clean no-op.
+      const r = await runOn(new FakeMultiStageDriver({ failSeedingOnComplete: 1 }), "LIFECYCLE", { row: "league_ko" });
+      expect(noop(r), "rig: the repeat of stage 1 was judged").toMatchObject({ verdict: "fail", checked: 1 });
+      expect(noop(r).evidence[0]).toContain("NO DRAFT after the first completion");
+      expect(noop(r).evidence[0]).toContain("first answered 409 STAGE_COMPLETED_SEEDING_FAILED");
+    });
+    it("...and the same repeat after a first call that DID mint a draft (the harness has since confirmed it) stays a clean no-op", async () => {
+      const r = await runOn(new FakeMultiStageDriver(), "LIFECYCLE", { row: "league_ko" });
+      expect(noop(r)).toMatchObject({ verdict: "pass", checked: 2 });
+    });
+    it("a run whose stage never completed abstains with its reason (nothing to complete twice), and is not a pass", async () => {
+      class NeverCompletes extends FakeLeagueDriver {
+        override completeStage(): Promise<CompleteOut> { return Promise.resolve({ completed: false, events: [] }); }
+      }
+      const r = await runOn(new NeverCompletes(), "LIFECYCLE");
+      expect(noop(r)).toMatchObject({ verdict: "abstain", checked: 0 });
+    });
   });
 
   it("R15: a product outcome that differs from the engine's own fold fails life-fold-parity on every fixture", async () => {
@@ -557,7 +667,7 @@ describe("LIFECYCLE on the fake league (wiring, not product truth)", () => {
 describe("each scenario's assertion set is exactly its own (dropping one is caught)", () => {
   it.each([
     // W1-driving T6: every scenario judges the seed advance and (T45-R1) the lineups owed on team fixtures.
-    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-bracket-decider-exercised", "life-reference-bracket-finish", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
+    ["LIFECYCLE", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "life-public-standings-match", "life-draw-path-exercised", "life-bracket-decider-exercised", "life-reference-bracket-finish", "life-format-edit-refused-named", "life-entrants-edit-accepted", "life-stage-completed", "life-complete-twice-noop", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["M1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "m1-walkover-recorded", "m1-winner-progresses", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["R4", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "r4-policy-reported", "r4-cascade-consistent", "r4-not-paired-later", "r4-not-challenged-later", "r4-not-seated-later", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
     ["F1", ["life-built-as-posted", "life-fold-parity", "life-results-as-posted", "f1-everyone-drawn", "f1-round-size", "f1-ladder-sweep", "life-bracket-decider-exercised", "life-stage-completed", "life-loop-bounded", "advance-seeded-as-declared", "life-lineups-put"]],
@@ -1013,15 +1123,15 @@ describe("pilots on the fake league", () => {
     expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
     expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.voided} voided, observed ${w.voided - 1}`]);
   });
-  it("R4 (m-5): a skipped_finalized count that disagrees with the fixtures the cascade had to leave fails r4-cascade-consistent, naming both", async () => {
+  it("R4 (m-5): a skipped_cancelled count that disagrees with the cancelled fixtures the cascade left fails r4-cascade-consistent, naming both", async () => {
     class MiscountsSkipped extends FakeLeagueDriver {
-      override async withdraw(id: string) { const o = await super.withdraw(id); return { ...o, skipped_finalized: o.skipped_finalized + 1 }; }
+      override async withdraw(id: string) { const o = await super.withdraw(id); return { ...o, skipped_cancelled: o.skipped_cancelled + 1 }; }
     }
     const r = await runOn(new MiscountsSkipped(), "R4");
     const w = r.out.observed.withdrawal!;
     expect(w.policy).toBe("expunge");
     expect(failed(r.checks)).toEqual(["r4-cascade-consistent"]);
-    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.skippedFinalized} locked fixture(s) skipped, observed ${w.skippedFinalized - 1}`]);
+    expect(r.checks.find((c) => c.id === "r4-cascade-consistent")!.evidence).toEqual([`reported ${w.skippedCancelled} cancelled fixture(s) skipped, observed ${w.skippedCancelled - 1}`]);
   });
   it("R4: a withdrawal the product reports as policy 'none' fails r4-policy-reported", async () => {
     class NoPolicy extends FakeLeagueDriver {
@@ -1054,7 +1164,7 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
-    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS].sort());
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS, ...W4A_SCENARIO_KEYS, ...W4B_SCENARIO_KEYS, ...W5A_SCENARIO_KEYS].sort());
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
@@ -2188,8 +2298,10 @@ describe("W3 app-B Task 6: the Swiss loop reads SWISS_NO_LEGAL_PAIRING as a refu
     expect(driver.rowsPastK, "premise: the refusal came with rows past round 1 to remove").toBeGreaterThan(0);
     expect(swiss!.finish).toEqual({ status: 200, code: null, finishedAfter: 1, shellsRemoved: driver.rowsPastK });
     expect(swiss!.exit).toBe("finished_early");
-    // Finish COMPLETED the stage: /complete is not sent again (the fake refuses a repeat), and the answer is the stage's completion.
-    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(1);
+    // Finish COMPLETED the stage, and its answer is the stage's completion (`swiss.complete` below). Two completeStage calls
+    // reach the fake: Finish's own, inside finishSwiss, and the named second Complete (W5 T17, X-BD-4), a repeat sent
+    // like any other once the product answers it as a no-op.
+    expect(driver.trace.filter((c) => c === `completeStage ${s1}`)).toHaveLength(2);
     expect(driver.commits).toEqual([s1, driver.stageIdAt(2)]);
     expect(swiss!.complete).toMatchObject({ status: 200, code: null, completed: true, seedProposal: { id: driver.proposalIssuedFor(2), status: "draft" } });
     // ...so the knockout is REACHED: seeded from the Swiss, played to a finish and completed.
@@ -2569,18 +2681,22 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
     ({ id, stageId: "s1", poolId: null, roundNo: 2, home, away, status, outcome, declared: null });
   const ok = (items: { ok: boolean }[]) => items.map((i) => i.ok);
 
-  it("expunge: every touched fixture abandons; finalized and cancelled are left as they were", () => {
+  // W5 T8 (ST-G15, RB5-W2): a finalized result is removed too; only a cancelled line is left as it was.
+  it("expunge: every touched fixture abandons, finalized included; a cancelled one is left as it was", () => {
     const before = [
       { id: "a", status: "decided", outcome: { kind: "win" as const, winner: "w" } },
       { id: "b", status: "scheduled", outcome: null },
       { id: "c", status: "finalized", outcome: { kind: "win" as const, winner: "x" } },
       { id: "d", status: "cancelled", outcome: null },
     ];
-    const good = [after("a", "abandoned", null), after("b", "abandoned", null), after("c", "finalized", { kind: "win", winner: "x" }), after("d", "cancelled", null)];
-    // The last item is the voided count (m-3): two fixtures abandoned by the cascade.
-    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2, "league"))).toEqual([true, true, true, true, true]);
-    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3, "league"))).toEqual([true, true, true, true, false]);
-    const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("c", "abandoned", null), after("d", "abandoned", null)];
+    const good = [after("a", "abandoned", null), after("b", "abandoned", null), after("c", "abandoned", null), after("d", "cancelled", null)];
+    // The last item is the voided count (m-3): three fixtures abandoned by the cascade.
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 3, "league"))).toEqual([true, true, true, true, true]);
+    expect(ok(cascadeItems("expunge", "w", before, good, 0, 2, "league"))).toEqual([true, true, true, true, false]);
+    // The pre-W5 shape — the signed-off result kept — is now the defect ST-G15 names.
+    const kept = [good[0]!, good[1]!, after("c", "finalized", { kind: "win", winner: "x" }), good[3]!];
+    expect(ok(cascadeItems("expunge", "w", before, kept, 0, 2, "league"))).toEqual([true, true, false, true, true]);
+    const bad = [after("a", "decided", { kind: "win", winner: "w" }), after("b", "forfeited", { kind: "award", winner: "x", loser: null, reason: "walkover" }), after("c", "finalized", { kind: "win", winner: "x" }), after("d", "abandoned", null)];
     expect(ok(cascadeItems("expunge", "w", before, bad, 0, 0, "league"))).toEqual([false, false, false, false, true]);
   });
 
@@ -2633,7 +2749,8 @@ describe("cascadeItems — consistency with the policy the engine CHOSE", () => 
   });
 });
 
-describe("skippedItem (m-5) — the locked fixtures withdrawal.ts reports it skipped", () => {
+// W5 T8 (ST-G15): the count is of CANCELLED lines now (`skipped_cancelled`); a finalized one is expunged, never skipped.
+describe("skippedItem (m-5) — the cancelled fixtures withdrawal.ts reports it left", () => {
   const before = [
     { id: "a", status: "finalized", outcome: { kind: "win" as const, winner: "w" } },
     { id: "b", status: "finalized", outcome: { kind: "win" as const, winner: "x" } },
@@ -2641,23 +2758,20 @@ describe("skippedItem (m-5) — the locked fixtures withdrawal.ts reports it ski
     { id: "d", status: "cancelled", outcome: null },
     { id: "e", status: "scheduled", outcome: null },
   ];
-  it("expunge plans the PLAYED fixtures, so the finalized ones with a result are the ones it must skip", () => {
-    expect(skippedItem("expunge", before, 2)).toEqual({ ok: true, note: "reported 2 locked fixture(s) skipped, observed 2" });
-    expect(skippedItem("expunge", before, 0)).toEqual({ ok: false, note: "reported 0 locked fixture(s) skipped, observed 2" });
-    expect(skippedItem("expunge", before, 3).ok).toBe(false);
+  it("a table's expunge counts its cancelled line, and no finalized one (two finalized in the scene: the pre-W5 count was 2)", () => {
+    expect(skippedItem("expunge", before, 1, "league")).toEqual({ ok: true, note: "reported 1 cancelled fixture(s) skipped, observed 1" });
+    expect(skippedItem("expunge", before, 2, "league")).toEqual({ ok: false, note: "reported 2 cancelled fixture(s) skipped, observed 1" });
+    expect(skippedItem("expunge", before, 0, "group").ok).toBe(false);
   });
-  it("a cancelled fixture has no result, so an expunge never planned it — it is not counted as skipped", () => {
-    expect(skippedItem("expunge", [before[3]!], 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
-    expect(skippedItem("expunge", [before[3]!], 1).ok).toBe(false);
+  it("a table's walkover counts it too: the line is left under either policy", () => {
+    expect(skippedItem("walkover", before, 1, "league")).toEqual({ ok: true, note: "reported 1 cancelled fixture(s) skipped, observed 1" });
+    expect(skippedItem("walkover", before, 0, "league").ok).toBe(false);
   });
-  it("a finalized fixture WITHOUT a result was never played (lib/table-withdrawal.ts), so an expunge never planned it either", () => {
-    const noResult = [{ id: "f", status: "finalized", outcome: null }];
-    expect(skippedItem("expunge", noResult, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
-    expect(skippedItem("expunge", noResult, 1).ok).toBe(false);
-  });
-  it("walkover plans pending fixtures only, and a pending fixture is never locked — it skips none", () => {
-    expect(skippedItem("walkover", before, 0)).toEqual({ ok: true, note: "reported 0 locked fixture(s) skipped, observed 0" });
-    expect(skippedItem("walkover", before, 2).ok).toBe(false);
+  it("the empty case and the non-table paths count none", () => {
+    expect(skippedItem("expunge", [], 0, "league")).toEqual({ ok: true, note: "reported 0 cancelled fixture(s) skipped, observed 0" });
+    expect(skippedItem("walkover", before, 0, "knockout")).toEqual({ ok: true, note: "reported 0 cancelled fixture(s) skipped, observed 0" });
+    expect(skippedItem("walkover", before, 1, "knockout").ok).toBe(false);
+    expect(skippedItem("none", before, 0, "league").ok).toBe(true);
   });
 });
 
@@ -2878,7 +2992,7 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     // X-WD-2: a page playoff withdrawal walks the pending fixture over to the opponent, as knockout does.
     expect(fx("pp-q2")).toMatchObject({ home: seed(2), away: seed(3), status: "forfeited", outcome: { kind: "award", winner: seed(2) } });
     const w = r.out.observed.withdrawal!;
-    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 1, voided: 0, skippedFinalized: 0 });
+    expect(w).toMatchObject({ entrantId: seed(3), afterRound: 1, policy: "walkover", walkovers: 1, voided: 0, skippedCancelled: 0 });
     expect(r.out.observed.stages[0]!.fixtures.filter((f) => f.status === "abandoned")).toEqual([]);
     // pp-final's away seat is winnerOf("pp-q2") — seed 2, by the walkover — so the final is played.
     expect(fx("pp-final")).toMatchObject({ home: seed(1), away: seed(2), status: "decided" });
@@ -2922,6 +3036,32 @@ describe("setUpDivision — the template branch (W1-driving Task 13)", () => {
     expect(setup.entrants.length).toBe(d.entrantCount);
     expect(setup.stages.map((s) => s.kind)).toEqual(d.stages.map((s) => s.kind));
     expect(setup.competition.orgId).toBe(driver.orgId);
+  });
+
+  it("X-BD-3 an any-sport card case: the sheet's choice (the case's sport, variant, its cfg's kind, the template's own field) rides createFromTemplate, and the division is built for THAT sport — on every sport", async () => {
+    // The league fake holds one stage, so the card's first stage alone is instantiated; the choice is what is under test.
+    let checked = 0;
+    for (const sport of SPORT_KEYS.filter((s) => s !== "cricket")) {
+      const driver = new FakeLeagueDriver();
+      driver.templateOverride = (raw) => ({ ...raw, divisions: [{ ...raw.divisions[0]!, stages: [raw.divisions[0]!.stages[0]!] }] });
+      // The variant the case plays is its sport's own, and the cfg is the one run.ts resolves for that sport and variant.
+      const realVariant = offlineBuilderDefault(sport);
+      const spec: CaseSpec = { caseId: `group_group_ko|${sport}|${realVariant}|LIFECYCLE`, row: "group_group_ko", sport, variant: realVariant, scenario: "LIFECYCLE", canary: false, template: "super-groups" };
+      const ctx: ScenarioContext = { driver, spec, orgSlug: "o", cfg: resolveSportCfg(sport, realVariant), tag: "t", denied: [] };
+      const sg = (JSON.parse(readFileSync(resolve(CATALOG, "super-groups.json"), "utf8")) as { divisions: { entrantCount: number }[] }).divisions[0]!.entrantCount;
+      const setup = await setUpDivision(ctx, new Recorder(), sg);
+      expect(driver.templateCalls, sport).toHaveLength(1);
+      expect(driver.templateCalls[0]!.input.choice, sport).toEqual({ sportKey: sport, variantKey: realVariant, entrantKind: entrantKindFor(sport, ctx.cfg), entrantCount: sg });
+      expect({ sport: setup.built.posted.sport, variant: setup.built.posted.variant }, sport).toEqual({ sport, variant: realVariant });
+      expect(driver.calls, sport).not.toContain("postStages");
+      checked++;
+    }
+    expect(checked).toBe(SPORT_KEYS.length - 1);
+    expect(checked).toBeGreaterThan(0);
+    // A fixed card is sent no choice at all.
+    const fixed = new FakeLeagueDriver();
+    await setUpDivision(boxCtx(fixed), new Recorder(), box.divisions[0]!.entrantCount);
+    expect(fixed.templateCalls[0]!.input).toEqual({ name: `Matrix group_only|badminton|short|LIFECYCLE`, endsOn: TEMPLATE_ENDS_ON });
   });
 
   it("a team template seats full rosters, read back per entrant, as the builder path does (D2)", async () => {

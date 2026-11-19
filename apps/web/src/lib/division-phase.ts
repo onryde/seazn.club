@@ -116,6 +116,10 @@ export interface PhaseFixture {
    *  reader of `stage_round_opens`); false for every board of a division that does not play online. Status-free —
    *  each attention arm already asks the status it needs. */
   awaitsRoundOpen: boolean;
+  /** W5 T5 (X-CU-12, RB5-L13): a late entrant's catch-up line (`isCatchUpExtKey`: `rr-cu-` / `rr-by-`), written with no time and
+   *  no court. Counted apart inside `unscheduled` — the count IS the desk's flag, so it clears as each line is given a slot.
+   *  Optional: absent reads as no catch-up line. */
+  catchUp?: boolean;
 }
 
 /** W2a — a fixture HELD for the organiser's settle: `needs_decision` (a level bracket result), or a recorded abandon
@@ -219,7 +223,18 @@ export interface PhaseInput {
    *  registration, a waitlist promotion, an import, a Reinstate) the app never places — one entry per stage with any,
    *  its count of waiting entrants still in the field. The caller counts `entrants.knockout_waiting_stage_id` on stages
    *  not complete; empty for every other division. */
-  lateWaiting: readonly { stageName: string; count: number }[];
+  lateWaiting: readonly { stageName: string; count: number; table?: true }[];
+  /** W5 T6 fix round 1 (RB5-L8, L10): players still in the field who hold NO fixture in the division's COMPLETE root league or
+   *  group — an automatic arrival (a paid registration, an import, a Reinstate) after the table finished, which takes no one and
+   *  marks no one. DERIVED on read, never stored: placing them (any fixture of the stage) or their leaving the field clears it.
+   *  One entry per such stage (at most one: the entry stage), its players' names in arrival order. The caller reads it;
+   *  absent reads as none. */
+  lateUnplaced?: readonly { stageName: string; names: readonly string[] }[];
+  /** W5 T8b review I2 (b): entrants owed a withdrawal that did not finish — their registration was withdrawn after Start, or a
+   *  disqualifying forfeit stands on a table match of theirs, yet they are still in the field and no cascade trace follows the
+   *  trigger. DERIVED on read (`competition-desk.ts`); the organiser's Withdraw (or a retry) finishing it clears it. Names in
+   *  the order read; absent reads as none. */
+  withdrawalOwed?: readonly string[];
 }
 
 /** WHICH control the seed-proposal panel is showing for a stage that owes
@@ -264,7 +279,8 @@ export type Attention =
   // 2026-09-03 and are pinned by the action-label sweep
   // (`competition-desk-actions.spec.ts`).
   | { kind: "needs_fixtures"; stageName: string }
-  | { kind: "unscheduled"; count: number }
+  /** `catchUp` (W5 T5, X-CU-12): how many of the `count` are late entrants' catch-up lines — present only when any are. */
+  | { kind: "unscheduled"; count: number; catchUp?: number }
   // F3 fix (final review, Important): used to be one row PER FIXTURE — a
   // division with 6 overdue fixtures produced 6 identical "Needs you" rows.
   // Aggregated per division now, the same way `unscheduled` already was;
@@ -294,7 +310,14 @@ export type Attention =
   | { kind: "bans_waiting"; count: number }
   // W4 T11 (X-LE-10, ruling 271): late players waiting to join a started knockout's bracket — the organiser's one tap
   // places each (the bye, a withdrawn slot). Raised per stage, only after Start (the marker is written only then).
-  | { kind: "late_players_waiting"; count: number; stageName: string };
+  // W5 T6 (X-CU-8): `table: true` when they wait to join a running root league or group (`table_waiting_stage_id`) — the
+  // same tap, the copy says "table" instead of "bracket". Absent for a knockout.
+  | { kind: "late_players_waiting"; count: number; stageName: string; table?: true }
+  // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the division's root table FINISHED — in the field, in no fixture
+  // of it. A finished table takes no one, so there is no tap: the row names them for the organiser to place elsewhere or refund.
+  | { kind: "late_unplaced"; count: number; stageName: string; names: readonly string[] }
+  // W5 T8b review I2 (b): a withdrawal or an in-match disqualification whose cascade failed — the entrant is still seated.
+  | { kind: "withdrawal_owed"; count: number; names: readonly string[] };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -328,6 +351,10 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   // AMBER: the player is owed a place before round 1 runs out of slots, but every match already drawn can be played —
   // it never blocks the bracket the way the stage-blocking reds do.
   late_players_waiting: "amber",
+  // AMBER, as late_players_waiting: a person is owed a decision, but nothing drawn is blocked by it.
+  late_unplaced: "amber",
+  // AMBER: her remaining matches are still drawn against her and can be played meanwhile; the organiser's Withdraw finishes it.
+  withdrawal_owed: "amber",
   registrations_waiting: "slate",
 };
 
@@ -419,6 +446,10 @@ const KIND_ORDER: Attention["kind"][] = [
   // W4 T11: after the match ambers — it is about people, not a match — and before bans: a late player's bye or slot
   // closes as round 1 is played, so this one runs on the bracket's clock.
   "late_players_waiting",
+  // W5 T6 fix round 1: beside the waiting players — the same people-not-matches row, for a table that has finished.
+  "late_unplaced",
+  // W5 T8b review I2 (b): beside them — a person the organiser owes an action, on the same Entrants tab.
+  "withdrawal_owed",
   // Last of the ambers: the three above are about MATCHES (a live one unrecorded, one undated, one without a result);
   // this one is about a person and is reviewed from a different tab.
   "bans_waiting",
@@ -881,8 +912,9 @@ export function resolveAttention(input: PhaseInput): Attention[] {
     // one.
     out.push({ kind: "needs_fixtures", stageName: blocked.name });
   }
-  const unscheduled = input.fixtures.filter(isUnscheduledFixture).length;
-  if (unscheduled > 0) out.push({ kind: "unscheduled", count: unscheduled });
+  const unscheduledRows = input.fixtures.filter(isUnscheduledFixture);
+  const catchUp = unscheduledRows.filter((f) => f.catchUp === true).length;
+  if (unscheduledRows.length > 0) out.push({ kind: "unscheduled", count: unscheduledRows.length, ...(catchUp > 0 ? { catchUp } : {}) });
   // F3+F4 fix (final review, Important): both aggregated per division below,
   // the same way `unscheduled` already is above — collected here, pushed once.
   const noScorer: { id: string; since: number | null }[] = [];
@@ -1040,8 +1072,15 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   // that somehow carried one would be asking the organiser to place a player into a bracket that has not been drawn.
   if (input.divisionStatus !== "setup") {
     for (const w of input.lateWaiting) {
-      if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName });
+      if (w.count > 0) out.push({ kind: "late_players_waiting", count: w.count, stageName: w.stageName, ...(w.table ? { table: true as const } : {}) });
     }
+    // W5 T6 fix round 1: the empty case first — no entry, or an entry naming nobody, raises nothing.
+    for (const u of input.lateUnplaced ?? []) {
+      if (u.names.length > 0) out.push({ kind: "late_unplaced", count: u.names.length, stageName: u.stageName, names: u.names });
+    }
+    // W5 T8b review I2 (b): the empty case first — none owed raises nothing.
+    const owed = input.withdrawalOwed ?? [];
+    if (owed.length > 0) out.push({ kind: "withdrawal_owed", count: owed.length, names: owed });
   }
   return out.sort(
     (a, b) =>

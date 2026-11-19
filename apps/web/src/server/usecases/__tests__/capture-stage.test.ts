@@ -745,6 +745,8 @@ describe.skipIf(!HAS_DB)("the stage on EVERY descriptor shape (W28)", () => {
     await sql`update organizations set default_locale = 'es' where id = ${r.auth.orgId}`;
     const [{ stage_id }] = await sql<{ stage_id: string }[]>`select stage_id from fixtures where id = ${r.fixtureId}`;
     const [{ id: poolId }] = await sql<{ id: string }[]>`insert into pools (stage_id, key, name) values (${stage_id}, 'A', 'Pool A') returning id`;
+    // W5 T3 (X-BD-7): a stage of ONE pool reads as a league and names no pool, so the pool is named only beside a second one.
+    await sql`insert into pools (stage_id, key, name) values (${stage_id}, 'B', 'Pool B')`;
     await sql`update fixtures set pool_id = ${poolId} where id = ${r.fixtureId}`;
     const want = { code: "R1", role: { kind: "plain_round", n: 1 }, pool: "A", label: labelOf("es", { division: "Open", pool: "A", round: roundWordOf("es", 1) }) };
     expect(want.label, "PREMISE: the Spanish words").toBe("Open · Grupo A · Ronda 1");

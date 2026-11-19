@@ -1700,6 +1700,7 @@ export function scoringErrorText(
   const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
   if (engine !== null) return engine;
   if (code === "UNDO_WICKET_NOT_LATEST") return m("scorepad.refusal.undoWicketNotLatest");
+  if (code === "UNDO_DQ_USE_REINSTATE") return m("scorepad.refusal.undoDqUseReinstate");
   if (code === NEXT_MATCH_STARTED_CODE) {
     const ref = nextMatchRefOf(extra);
     return ref

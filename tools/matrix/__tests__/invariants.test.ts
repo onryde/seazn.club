@@ -558,7 +558,7 @@ describe("I3 table-points-equal-declared", () => {
     });
     it("a walkover the RECORDED cascade wrote (pending before it, forfeited to the opponent after) is skipped and counted", () => {
       const wo = fx({ id: "wo", home: "a", away: "b", status: "forfeited", outcome: { kind: "award", winner: "b", loser: null, reason: "walkover" }, declared: null });
-      const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 1, voided: 0, skippedFinalized: 0, before: [{ id: "wo", status: "scheduled", outcome: null }] };
+      const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 1, voided: 0, skippedCancelled: 0, before: [{ id: "wo", status: "scheduled", outcome: null }] };
       const r = evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [wo, ca()], standings: table(0, 3, 3) })], { facts: facts("withdrawn"), withdrawal: w }));
       expect(r).toMatchObject({ verdict: "pass", checked: 1 });
       expect(r.evidence).toEqual(["skipped 2 entrant(s) whose results a bye or the recorded cascade wrote"]);
@@ -589,7 +589,7 @@ describe("I3 table-points-equal-declared", () => {
     });
     it("a walkover cascade's void of a TBD opponent (one-sided, abandoned, pending before) is the cascade's, skipped", () => {
       const tbd = fx({ id: "tbd", home: "a", away: null, status: "abandoned", outcome: { kind: "no_result" }, declared: null });
-      const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 0, voided: 1, skippedFinalized: 0, before: [{ id: "tbd", status: "scheduled", outcome: null }] };
+      const w = { entrantId: "a", afterRound: 1, policy: "walkover" as const, walkovers: 0, voided: 1, skippedCancelled: 0, before: [{ id: "tbd", status: "scheduled", outcome: null }] };
       expect(evaluateInvariant(I3, run([stage({ field: ["a", "b", "c"], fixtures: [tbd, ca()], standings: table(0, 0, 3) })], { withdrawal: w })))
         .toMatchObject({ verdict: "pass", checked: 2, evidence: ["skipped 1 entrant(s) whose results a bye or the recorded cascade wrote"] });
     });
@@ -622,7 +622,7 @@ describe("I3 table-points-equal-declared", () => {
       { entrantId: "a", rank: 1, points: a }, { entrantId: "d", rank: 2, points: d }, { entrantId: "c", rank: 3, points: c }, { entrantId: "b", rank: 4, points: 0 },
     ] }];
     const s = (a: number, c: number, d: number) => stage({ field: ["a", "b", "c", "d"], fixtures: [struckAB, struckBC, lockedBD, playedAC], standings: table(a, c, d) });
-    const withdrawal = (policy: "expunge" | "walkover", entrantId = "b") => ({ entrantId, afterRound: 1, policy, walkovers: 0, voided: 2, skippedFinalized: 1, before: [] });
+    const withdrawal = (policy: "expunge" | "walkover", entrantId = "b") => ({ entrantId, afterRound: 1, policy, walkovers: 0, voided: 2, skippedCancelled: 1, before: [] });
     const expunged = (st: ObservedStage, entrantId = "b") => run([st], { facts: facts("withdrawn", "expunged"), withdrawal: withdrawal("expunge", entrantId) });
 
     it("positive: every entrant is judged — the struck no_result rows count 0, the locked result still counts", () => {
@@ -1229,7 +1229,7 @@ describe("I9 ladder", () => {
     kind: "ladder", field: ["a", "b", "c", "d"], config: order === undefined ? {} : { ladder_order: order }, fixtures,
     complete: done(finalRanks),
   });
-  const withdrawn = (entrantId: string): WithdrawalObs => ({ entrantId, afterRound: 3, policy: "none", walkovers: 0, voided: 0, skippedFinalized: 0, before: [] });
+  const withdrawn = (entrantId: string): WithdrawalObs => ({ entrantId, afterRound: 3, policy: "none", walkovers: 0, voided: 0, skippedCancelled: 0, before: [] });
   it("empty cases first: no stage abstains; a ladder stage with no decided challenge fails, checked counted; an incomplete ladder abstains", () => {
     expect(evaluateInvariant(I9, run([]))).toMatchObject({ verdict: "abstain", checked: 0 });
     const r = evaluateInvariant(I9, run([ladder(["a", "b", "d", "c"], ["a", "b", "d", "c"], [])]));

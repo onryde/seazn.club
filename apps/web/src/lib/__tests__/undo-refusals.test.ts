@@ -3,6 +3,7 @@
 // swept; the expected key is each table's own row, the source of truth the dispatch must route to.
 import { describe, expect, it } from "vitest";
 import { KNOCKOUT_REFUSALS, type KnockoutRefusalCode } from "@/lib/knockout-refusals";
+import { ROUND_ROBIN_REFUSALS, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import { SWISS_REFUSALS, type SwissRefusalCode } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalKey, undoRefusalText } from "@/lib/undo-refusals";
 import { msg } from "@/lib/messages";
@@ -25,6 +26,20 @@ describe("undoRefusalKey — a refusal of either family to its own sentence key"
     }
     expect(checked, "anti-vacuity: both tables swept").toBe(swiss.length + knockout.length);
     expect(knockout, "the seed confirm's barrier is a knockout code").toContain("SEED_CONFIRM_NOT_UNDOABLE");
+  });
+
+  // W5 T5 (X-CU-13): the round-robin late entry's barrier is a third family — routed to its own table, never Swiss's.
+  it("routes every round-robin code to its own table's key", () => {
+    const rr = Object.keys(ROUND_ROBIN_REFUSALS) as RoundRobinRefusalCode[];
+    let checked = 0;
+    for (const code of rr) {
+      expect(isUndoRefusalCode(code), code).toBe(true);
+      expect(undoRefusalKey(code), code).toBe(ROUND_ROBIN_REFUSALS[code].key);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the table swept").toBe(rr.length);
+    expect(checked).toBeGreaterThan(0);
+    expect(rr, "the late entry's barrier is a round-robin code").toContain("RR_LATE_ENTRY_NOT_UNDOABLE");
   });
 
   it("answers no for anything that is not a code of either table — prototype names included", () => {
@@ -55,6 +70,18 @@ describe("undoRefusalText — a refusal of either family said in full, its field
     expect(checked, "anti-vacuity: both tables swept").toBe(swiss.length + knockout.length);
     // The two sentences that name something today; a third reds here, and its test belongs beside them.
     expect(named.sort(), "the codes whose sentence has a hole to fill").toEqual(["KO_LATE_ENTRY_FED_STAGE", "QUALIFYING_MAIN_TOO_FEW"]);
+  });
+
+  it("says a round-robin code in full, its fields filled from the envelope (W5 T5)", () => {
+    const rr = Object.keys(ROUND_ROBIN_REFUSALS) as RoundRobinRefusalCode[];
+    let checked = 0;
+    for (const code of rr) {
+      expect(undoRefusalText(code, { qualified: 6, max: 4, nested: { no: 1 } }, msg), code).not.toMatch(HOLE);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(rr.length);
+    expect(undoRefusalText("RR_LATE_ENTRY_NOT_UNDOABLE", undefined, msg)).toBe("Adding a late player can't be undone. Withdraw the player instead.");
+    expect(undoRefusalText("RR_CUT_EXCEEDS_FIELD", { qualified: 6, max: 4 }, msg)).toBe("6 can't qualify from this field: it can supply at most 4.");
   });
 
   it("says each sentence with the field the envelope carried", () => {

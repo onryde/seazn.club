@@ -73,6 +73,13 @@ export const CreateEntrant = z
     // roster (explicit members / copy_roster / squad-seed) would otherwise
     // hard-block on. See `EligibilityOverride`'s own comment above.
     eligibility_override: EligibilityOverride.optional(),
+    // W5 T5 (X-CU-11, RB5-L9): a late player added to a started GROUP stage joins this pool (its letter); omitted, the smallest
+    // pool (ties: where the seed snake puts the next seed). A letter that is no pool of the stage is refused by name
+    // (RR_LATE_ENTRY_UNKNOWN_POOL). Read only by a late add to a running root league or group.
+    late_entry_pool: z.string().min(1).max(2).optional(),
+    // W5 T5 (X-CU-7, RB5-L7): when nothing in the stage has started, redraw it with the late player in it (Rebuild's own body)
+    // instead of writing catch-up fixtures. Ignored once play has started (catch-up is then the only way in).
+    prefer_rebuild: z.boolean().optional(),
   })
   .refine((e) => e.display_name != null || e.team_id != null, {
     message: "display_name is required unless team_id is provided",
@@ -147,7 +154,9 @@ export const WithdrawCascadeReport = z.object({
   policy: z.enum(["none", "walkover", "expunge"]),
   walkovers: z.number().int(),
   voided: z.number().int(),
-  skipped_finalized: z.number().int(),
+  /** W5 T8 (ST-G15): her CANCELLED fixtures, left as they are. Was `skipped_finalized`: a finalized fixture is no longer
+   *  skipped — under the expunge its result is removed like any other (RB5-W2). */
+  skipped_cancelled: z.number().int(),
   walked_over_held: z.number().int(),
   /** Fixtures the cascade wrote nothing to, each still the organiser's to void or settle (an abandoned Swiss board
    *  holds the next round until it is settled, X-AB-5). */
@@ -204,10 +213,68 @@ export const KnockoutLateEntryResult = z.object({
 });
 export type KnockoutLateEntryResult = z.infer<typeof KnockoutLateEntryResult>;
 
-/** A late add's answer, by the entry stage's FORMAT: a running root Swiss (W3) or a drawn root knockout (W4). Every
- *  reader narrows on `format` before it reads a case. */
-export const LateEntryResult = z.discriminatedUnion("format", [SwissLateEntryResult, KnockoutLateEntryResult]);
+/** W5 app-A Task 4 (X-CU-7, X-CU-9; RB5-L3…L16, design 2026-11-05 §4.1): what "Add late player" did with an entrant added
+ *  to a division whose root LEAGUE or GROUP stage is running. `format` names the stage's kind. `catch_up` — the newcomer
+ *  was seated against every member they owed a match (`fixtures`: a started-round-free bye slot, or an appended catch-up
+ *  round; `appended_rounds` counts the appended ones); `waiting` — an automatic arrival (registration, import,
+ *  Reinstate) is held for one organiser tap (the tap answers `catch_up` with `source: "organiser"`); `rebuild_offered`
+ *  — nothing has started, so a Rebuild is offered beside the catch-up; `refused` — nothing to join or add (`reason`: the
+ *  `RR_LATE_ENTRY_*` code). `pool_key`: the pool a group newcomer joined. `fixtures[].scheduled`: the new line found a
+ *  free slot (else it is unscheduled and flagged to the desk, X-CU-12; Task 5 writes every catch-up line unscheduled, RB5-L13).
+ *  `reason: "rebuilt"` on `rebuild_offered`: the add asked to rebuild (`prefer_rebuild`) and the stage was redrawn with the
+ *  newcomer in it, so no catch-up fixtures were written. */
+export const TableLateEntryResult = z.object({
+  format: z.enum(["league", "group"]),
+  entrant_id: Uuid,
+  stage_id: Uuid,
+  case: z.enum(["catch_up", "rebuild_offered", "refused", "waiting"]),
+  source: z.enum(["organiser", "automatic"]),
+  pool_key: z.string().optional(),
+  fixtures: z
+    .array(
+      z.object({
+        fixture_id: Uuid,
+        round_no: z.number().int(),
+        placement: z.enum(["bye_slot", "catch_up_round"]),
+        scheduled: z.boolean(),
+      }),
+    )
+    .optional(),
+  appended_rounds: z.number().int().optional(),
+  reason: z.string().optional(),
+  /** B5 fix wave G1 (m2), with `reason: "rebuilt"` only: every player the redraw drew in — the one pressed first, then every
+   *  other player who was waiting on the stage (a redraw seats them all), in listed order. */
+  drawn_in: z.array(Uuid).optional(),
+  /** B5 fix wave G1 (I1), with `reason: "rebuilt"` only: how many manual ranks the redraw dropped — every pin of a pool whose
+   *  membership changed, as the stage card's Rebuild reports it (`RebuildOutcome.pins_cleared`). Absent when none was. */
+  pins_cleared: z.number().int().optional(),
+});
+export type TableLateEntryResult = z.infer<typeof TableLateEntryResult>;
+
+/** A late add's answer, by the entry stage's FORMAT: a running root Swiss (W3), a drawn root knockout (W4) or a running
+ *  root league or group (W5). Every reader narrows on `format` before it reads a case. */
+export const LateEntryResult = z.discriminatedUnion("format", [
+  SwissLateEntryResult,
+  KnockoutLateEntryResult,
+  TableLateEntryResult,
+]);
 export type LateEntryResult = z.infer<typeof LateEntryResult>;
+
+/** W5 T6 (X-CU-8): the organiser's tap on a waiting late player (`POST /stages/{id}/late-entrants/{entrantId}/place`). An
+ *  optional body: `pool_key` names the pool of a running group the player joins (else the smallest, ties by the seed snake);
+ *  ignored on a league and on a knockout. */
+export const PlaceLateEntrantInput = z.object({
+  pool_key: z.string().min(1).max(2).optional(),
+  /** Fix round 1 I1: a running league or group whose stage has nothing started is drawn again with the player in it (Rebuild's
+   *  own body; answer `rebuild_offered` with reason `rebuilt`); refused 409 STAGE_HAS_RESULTS once a match has started. A knockout
+   *  ignores it. */
+  prefer_rebuild: z.boolean().optional(),
+});
+export type PlaceLateEntrantInput = z.infer<typeof PlaceLateEntrantInput>;
+
+/** The tap's answer, by the stage's FORMAT: a knockout (W4 T11) or a league / group (W5 T6). */
+export const PlacedLateEntrantResult = z.discriminatedUnion("format", [KnockoutLateEntryResult, TableLateEntryResult]);
+export type PlacedLateEntrantResult = z.infer<typeof PlacedLateEntrantResult>;
 
 /** `PATCH /entrants/{id}`'s reply: the entrant, plus `cascade` when the patch disqualified an entrant still in the field
  *  (the withdrawal's fixture surgery ran, W3 T15). */
@@ -217,6 +284,16 @@ export const PatchedEntrant = Entrant.extend({
    *  the player rejoins it (a knockout: `waiting` for the organiser's Add to bracket, or `refused` with
    *  KO_LATE_ENTRY_PLAYED_ON when their place has been played on). Absent on every other patch. */
   late_entry: LateEntryResult.optional(),
+  /** W5 B3 fix wave (m-1): a REINSTATE that reversed a league or group withdrawal (RB5-W6) — how many cascade events it took
+   *  back and results it re-recorded, and `not_restored`: the lines whose removed result could not be put back (rescored
+   *  since, or refused by the engine), left as they are for the organiser. Absent on every other patch. */
+  reinstate: z
+    .object({
+      voided: z.number().int().nonnegative(),
+      rerecorded: z.number().int().nonnegative(),
+      not_restored: z.array(z.string().uuid()),
+    })
+    .optional(),
 });
 
 /** POST /divisions/{id}/entrants response row: the entrant, plus `late_entry` when it joined a running Swiss or a

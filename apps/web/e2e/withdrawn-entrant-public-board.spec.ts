@@ -22,7 +22,7 @@
 //
 // TWO departures, not one. `inTheField` treats `withdrawn` and `disqualified`
 // alike, but a spectator must not: one entrant LEFT, the other was REMOVED, and
-// the board says which. `DEPARTED_STATUS_CHIPS` (standings-table.tsx) is the
+// the board says which. `DEPARTED_STATUS_CHIPS` (src/lib/departed-status-chips.ts) is the
 // single place that decides, with a per-status testid precisely so a count here
 // cannot be blind to the two being confused. So this file seeds both into ONE
 // division and asserts they are told apart — different label, different paint —
@@ -80,7 +80,7 @@ const STAYERS = [`Bo Stayer ${TAG}`, `Cy Stayer ${TAG}`, `Di Stayer ${TAG}`];
 const FIELD = [QUITTER, EXPELLED, ...STAYERS];
 /** Which seeded name wears which chip. The STATUS strings are the product's
  *  (`EntrantStatus`), and `departedChips()` below reads the label and the paint
- *  for each straight out of the component. */
+ *  for each straight out of the vocabulary module. */
 const DEPARTURES = [
   { name: QUITTER, status: "withdrawn" },
   { name: EXPELLED, status: "disqualified" },
@@ -89,7 +89,7 @@ const DEPARTURES = [
 /** The word a spectator must READ for each status, and the dictionary key it
  *  comes from — both named HERE, on purpose.
  *
- *  `departedChips()` below reads the label key out of the component, which is
+ *  `departedChips()` below reads the label key out of the vocabulary module, which is
  *  right for "a new departure is covered automatically" and WRONG as the
  *  oracle for which word goes with which status: swap the two `label` keys in
  *  `DEPARTED_STATUS_CHIPS` and the expectation swaps with them, so this spec
@@ -126,7 +126,8 @@ const STANDINGS_ROWS = '[role="region"] > table > tbody > tr';
 const STANDINGS_NAMES = `${STANDINGS_ROWS} > th[scope="row"]`;
 
 /**
- * `DEPARTED_STATUS_CHIPS`, out of `standings-table.tsx`'s own source.
+ * `DEPARTED_STATUS_CHIPS`, out of `src/lib/departed-status-chips.ts`'s own source (its home since W5 T20; `standings-table.tsx` only
+ * re-exports it, so reading THAT file finds no literal).
  *
  * READ rather than imported, the same choice `spectator-w2-kit.ts` records for
  * the product's clocks: importing the component pulls React, the dictionaries
@@ -140,11 +141,11 @@ const STANDINGS_NAMES = `${STANDINGS_ROWS} > th[scope="row"]`;
  */
 function departedChips(): Record<string, { label: string; classes: string[] }> {
   const src = readFileSync(
-    fileURLToPath(new URL("../src/components/public-site/standings-table.tsx", import.meta.url)),
+    fileURLToPath(new URL("../src/lib/departed-status-chips.ts", import.meta.url)),
     "utf8",
   );
   const block = /export const DEPARTED_STATUS_CHIPS = \{([\s\S]*?)\n\} as const/.exec(src)?.[1];
-  if (!block) throw new Error("DEPARTED_STATUS_CHIPS is no longer a literal in standings-table.tsx");
+  if (!block) throw new Error("DEPARTED_STATUS_CHIPS is no longer a literal in src/lib/departed-status-chips.ts");
   const out: Record<string, { label: string; classes: string[] }> = {};
   for (const m of block.matchAll(/(\w+):\s*\{\s*label:\s*"([^"]+)",\s*className:\s*"([^"]+)"/g)) {
     out[m[1]!] = { label: m[2]!, classes: m[3]!.split(/\s+/).filter(Boolean) };

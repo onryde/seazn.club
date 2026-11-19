@@ -47,12 +47,12 @@ export interface BracketDependent {
 }
 
 /** The part of a stored proposal these reads compare. */
-interface Slate {
+export interface Slate {
   qualifiers: readonly { rank: number; entrantId: string; source: { stageId: string } }[];
 }
 
 /** The slate's people from `sourceStageId`, in seed order (a stored qualifier's `rank` is its seed). */
-const onSource = (slate: Slate, sourceStageId: string) =>
+export const onSource = (slate: Slate, sourceStageId: string) =>
   slate.qualifiers
     .filter((q) => q.source.stageId === sourceStageId)
     .sort((a, b) => a.rank - b.rank)

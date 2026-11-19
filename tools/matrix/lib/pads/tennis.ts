@@ -22,6 +22,7 @@
 // sets each side has won, so - like the cricket pad - the adapter keeps one record per fixture (the entrant pair), reset by
 // core.start, in a per-adapter closure (never module state: a second adapter or a second replay in a process shares nothing).
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
+import { JUDGED_OK, asRecord, show } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
 /** tennis.tsx `buildTiles`' setScore tile id (text-pinned in pad-adapters.test.ts). */
@@ -105,17 +106,52 @@ function summarySteps(payload: unknown, ctx: TapAdapterContext, taken: Map<strin
   ];
 }
 
+/** tennis.toss, the event the Start's "Who serves first?" answer writes before core.start (skins/tennis.tsx TOSS_TYPE). */
+export const TENNIS_TOSS = "tennis.toss";
+/** The dock chip the adapter answers the toss with: the home chip (`startTossQuestion`, tennis.tsx:1228, ids "home" and "away"),
+ *  the serve order every tennis spec was written against (apps/web/e2e/helpers/start-toss.ts `answerStartToss` default). */
+export const TENNIS_TOSS_CHIP = "home";
+
 /** One adapter, with its own record of the sets each fixture has banked since core.start. */
 export function makeTennisPad(): MatrixPadAdapter {
   const taken = new Map<string, Taken>();
+  // The home entrant of each fixture this adapter has started, KEYED BY FIXTURE (the entrant pair): what that fixture's toss row's
+  // `serving` must name. The replay hands the judge the fixture's ctx, so a toss naming ANOTHER fixture's home entrant (a set
+  // shared across fixtures would accept it) or a fixture this adapter never started is refused.
+  const homes = new Map<string, string>();
   return {
     sport: "tennis",
     emits: ["core.start", TENNIS_SUMMARY],
-    fallbacks: [],
+    // TN-TS-1 (S2-7): a tennis Start asks "Who serves first?" and its answer posts tennis.toss and then core.start at
+    // consecutive seqs (start-match-control.tsx -> lib/start-with-toss.ts runTossThenStart), so core.start is TWO rows, and the
+    // toss is the pad's own choice (`serving` is the entrant behind the chip), never a generated key.
+    fallbacks: [
+      {
+        eventType: "core.start",
+        writes: [TENNIS_TOSS, "core.start"],
+        why: "start-match-control.tsx:93 - a tennis Start asks \"Who serves first?\" (startTossQuestion, tennis.tsx:1228) and its answer posts the toss and then core.start (runTossThenStart, lib/start-with-toss.ts:15): a tennis.toss row {serving: the chosen entrant} and an empty core.start row",
+        rowsFor: () => 2,
+        judge(_event, stored, ctx) {
+          const [toss, start] = stored;
+          if (stored.length !== 2 || toss === undefined || start === undefined) return { ok: false, note: `${stored.length} rows, where a tennis Start writes the toss and core.start` };
+          if (toss.type !== TENNIS_TOSS) return { ok: false, note: `the first row is ${toss.type}, not ${TENNIS_TOSS} (the toss is written before the Start)` };
+          if (start.type !== "core.start") return { ok: false, note: `the second row is ${start.type}, not core.start` };
+          const tossKeys = Object.keys(asRecord(toss.payload));
+          const serving = asRecord(toss.payload).serving;
+          const home = ctx === undefined ? undefined : homes.get(fixtureOf(ctx));
+          if (tossKeys.length !== 1 || typeof serving !== "string" || home === undefined || serving !== home) {
+            return { ok: false, note: `${TENNIS_TOSS} ${show(toss.payload)}: the pad answers the home chip, so the payload is {serving: <the home entrant>} alone` };
+          }
+          if (Object.keys(asRecord(start.payload)).length !== 0) return { ok: false, note: `core.start carries ${show(start.payload)}, not an empty payload` };
+          return JUDGED_OK;
+        },
+      },
+    ],
     stepsFor(event, ctx) {
       if (event.type === "core.start") {
         taken.set(fixtureOf(ctx), { home: 0, away: 0 });
-        return [{ kind: "testid", testid: START_MATCH_TESTID }];
+        homes.set(fixtureOf(ctx), ctx.entrants.home);
+        return [{ kind: "testid", testid: START_MATCH_TESTID }, { kind: "chip", chipId: TENNIS_TOSS_CHIP }];
       }
       if (event.type === TENNIS_SUMMARY) return summarySteps(event.payload, ctx, taken);
       throw new Error(`tennisPad: no tap route for ${event.type} (a generator emitting it owes a route here)`);

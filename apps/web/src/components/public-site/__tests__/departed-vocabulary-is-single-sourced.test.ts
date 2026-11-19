@@ -4,7 +4,7 @@
 //   - `DEPARTED_STATUSES` (server/usecases/entrants.ts) — the PREDICATE half.
 //     Who has left. Used to decide who a ladder <select> must not offer and
 //     who a bracket must not seed.
-//   - `DEPARTED_STATUS_CHIPS` (components/public-site/standings-table.tsx) —
+//   - `DEPARTED_STATUS_CHIPS` (lib/departed-status-chips.ts, re-exported by components/public-site/standings-table.tsx) —
 //     the PRESENTATION half. What word and colour a departed row wears.
 //
 // Two halves is the right shape: one is a server predicate, the other is a

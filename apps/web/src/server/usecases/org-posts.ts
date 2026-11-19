@@ -29,15 +29,21 @@ import { loadLineupPair } from "@/server/engine-db/lineups";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { getDictionary } from "@/lib/i18n";
+import { poolLabel } from "@/lib/pool-label";
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
+import { t } from "@/lib/i18n-runtime";
 import { isLevelTable, pointsText } from "@seazn/engine/competition";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
 import { QUICK_MATCH_SYSTEM_ORG_ID } from "@/lib/quick-match-constants";
 import { playerStatsWithoutWaiting } from "./player-stats";
+import { readFixtureTable, readPoolTables, readSingleTableSnapshot } from "./stage-table-snapshot";
 import { creditsNobody, forfeitLedgerOfReason } from "@/lib/forfeit-tag";
 import { outcomeTagWords } from "@/lib/outcome-text";
 import {
+  markedName,
   resultDraft,
   roundRecapDraft,
   weeklyDigestDraft,
@@ -414,6 +420,9 @@ export interface FixtureCtx {
   division_id: string;
   competition_id: string;
   stage_id: string;
+  /** W5 T21 fix 1: the fixture's own pool (`fixtures.pool_id`), so its movement reads its own pool's table. Optional: a hand-built ctx
+   *  without it reads the stage's single table, as before. */
+  pool_id?: string | null;
   stage_kind: string;
   round_no: number | null;
   status: string;
@@ -464,7 +473,7 @@ export async function draftPostsForDecidedFixture(
   // with a blank venue line regardless of what venue it was actually played
   // at (draftResult below renders `venue` verbatim into the post body).
   const [fx] = await tx<(FixtureCtx & CreditedCtx)[]>`
-    select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id,
+    select f.id as fixture_id, f.org_id, f.division_id, d.competition_id, f.stage_id, f.pool_id,
            st.kind as stage_kind, f.round_no, f.status, f.outcome,
            ${activeAbandonReasonSql(tx, "f")} as abandon_reason,
            f.home_entrant_id, f.away_entrant_id,
@@ -559,12 +568,14 @@ async function draftResult(tx: Tx, fx: FixtureCtx & CreditedCtx, locale: Locale)
     : null;
   const enrichment = await assembleResultEnrichment(tx, fx, scorers);
   const enriched = Object.keys(enrichment).length > 0;
+  // B5 fix wave G3 (m3, RB5-W1 "marked on every surface"): a side who has left the field is named with her table chip's word.
+  const named = await leaverNamer(tx, locale, [fx.home_entrant_id, fx.away_entrant_id]);
 
   const { title, bodyMd } = resultDraft({
     locale,
     // Unreachable: this only runs on an fx whose status just became DECIDED via appendEvent, which throws WRONG_PHASE on a null entrant (append-event.ts) — a decided fx never has a TBD side.
-    homeName: fx.home_name ?? "TBD",
-    awayName: fx.away_name ?? "TBD",
+    homeName: fx.home_name === null ? "TBD" : named(fx.home_entrant_id, fx.home_name),
+    awayName: fx.away_name === null ? "TBD" : named(fx.away_entrant_id, fx.away_name),
     homeScore: sideLine(state?.summary, fx.home_entrant_id),
     awayScore: sideLine(state?.summary, fx.away_entrant_id),
     competitionName: fx.competition_name,
@@ -606,9 +617,17 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
   if (open > 0) return null; // round not complete yet
 
   const resultRows = await tx<
-    ({ home_name: string | null; away_name: string | null; home_id: string | null; away_id: string | null; summary: unknown } & CreditedCtx)[]
+    ({
+      home_name: string | null;
+      away_name: string | null;
+      home_status: string | null;
+      away_status: string | null;
+      home_id: string | null;
+      away_id: string | null;
+      summary: unknown;
+    } & CreditedCtx)[]
   >`
-    select h.display_name as home_name, a.display_name as away_name,
+    select h.display_name as home_name, a.display_name as away_name, h.status as home_status, a.status as away_status,
            f.home_entrant_id as home_id, f.away_entrant_id as away_id, m.summary,
            f.outcome, ${activeAbandonReasonSql(tx, "f")} as abandon_reason
     from fixtures f
@@ -618,10 +637,12 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     where f.division_id = ${fx.division_id} and f.stage_id = ${fx.stage_id} and f.round_no = ${roundNo}
       and f.status in ${tx([...DECIDED])}
     order by f.fixture_no nulls last, f.id`;
+  // RB5-W1: a leaver in a result line carries the hub chip's word in the org's language (B5 fix wave G3, m3)
+  const wordFor = await leaverWords(locale);
   const results = resultRows.map((r) => ({
     // Unreachable: every row here is a DECIDED/FINALIZED/FORFEITED TABLE_KINDS (league/group/swiss) fixture, and those never get a null entrant — round-robin/swiss generation and addFixture always seat both sides, and appendEvent refuses to decide a fixture with one still null.
-    homeName: r.home_name ?? "TBD",
-    awayName: r.away_name ?? "TBD",
+    homeName: r.home_name === null ? "TBD" : leaverMarked(wordFor, r.home_name, r.home_status),
+    awayName: r.away_name === null ? "TBD" : leaverMarked(wordFor, r.away_name, r.away_status),
     homeScore: sideLine(r.summary, r.home_id),
     awayScore: sideLine(r.summary, r.away_id),
     // Loop R M-11: a credited line says which; a double walkover's tag stands in its 0–0's place.
@@ -629,7 +650,10 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     creditsNobody: creditsNobody(r.outcome),
   }));
 
-  const standings = await topStandings(tx, fx.stage_id);
+  // RB5-W1: a leaver listed in a short table carries the hub chip's word in the org's language
+  const mark = <R extends { status?: DepartedStatus }>(row: R) => (row.status ? { ...row, departed: wordFor(row.status) } : row);
+  const standings = (await topStandings(tx, fx.stage_id)).map(mark);
+  const poolStandings = (await topPoolStandings(tx, fx.stage_id, locale)).map((p) => ({ ...p, rows: p.rows.map(mark) }));
   const enrichment = await assembleRecapEnrichment(tx, fx, results);
   const enriched = Object.keys(enrichment).length > 0;
 
@@ -640,6 +664,7 @@ async function maybeDraftRecap(tx: Tx, fx: FixtureCtx, locale: Locale): Promise<
     roundNo,
     results,
     standings,
+    ...(poolStandings.length > 0 ? { poolStandings } : {}),
     ...(enriched ? { enrichment } : {}),
   });
   const autoSource = {
@@ -970,12 +995,14 @@ export async function assembleResultEnrichment(
           select outcome from fixtures where id = ${fx.fixture_id}`;
         const outcome = row?.outcome as { kind?: string; winner?: string } | null;
         if (outcome && (outcome.kind === "win" || outcome.kind === "award") && outcome.winner) {
-          const [entrant] = await sp<{ display_name: string }[]>`
-            select display_name from entrants where id = ${outcome.winner}`;
+          const [entrant] = await sp<{ display_name: string; status: string }[]>`
+            select display_name, status from entrants where id = ${outcome.winner}`;
           const recent = await entrantRecentOutcomes(sp, fx.division_id, fx.stage_id, outcome.winner, 10);
           const streak = computeStreak(recent);
           if (streak && entrant) {
-            out.streak = { entrantName: entrant.display_name, kind: streak.kind, length: streak.length };
+            // B5 fix wave G3 (m3, RB5-W1): a winner who has since left is named with her table chip's word.
+            const entrantName = leaverMarked(await leaverWords(toLocale(fx.default_locale)), entrant.display_name, entrant.status);
+            out.streak = { entrantName, kind: streak.kind, length: streak.length };
           }
         }
       });
@@ -1051,15 +1078,16 @@ export async function assembleRecapEnrichment(
     // reaching the second query below is a genuine SQL-level risk the
     // savepoint now covers too.
     await tx.savepoint(async (sp) => {
-      const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
-        select rows, previous_rows from standings_snapshots
-        where stage_id = ${fx.stage_id} and pool_id is null`;
+      const snap = await readFixtureTable<RankedEntrantRow[]>(sp, fx.stage_id, fx.pool_id);
       if (snap) {
         const climber = biggestClimber(snap.rows, snap.previous_rows);
         if (climber) {
-          const [entrant] = await sp<{ display_name: string }[]>`
-            select display_name from entrants where id = ${climber.entrantId}`;
-          if (entrant) out.standingsMoves = [{ entrantName: entrant.display_name, from: climber.from, to: climber.to }];
+          const [entrant] = await sp<{ display_name: string; status: string }[]>`
+            select display_name, status from entrants where id = ${climber.entrantId}`;
+          // B5 fix wave G3 (m3): marked like every other line naming a leaver. After n1 a leaver no longer climbs (her place is set by
+          // her departure, not by a result: `biggestClimber`), so this is the format kept in step, not a line expected to print.
+          const entrantName = entrant ? leaverMarked(await leaverWords(toLocale(fx.default_locale)), entrant.display_name, entrant.status) : null;
+          if (entrantName !== null) out.standingsMoves = [{ entrantName, from: climber.from, to: climber.to }];
         }
       }
     });
@@ -1074,7 +1102,7 @@ export async function assembleRecapEnrichment(
 }
 
 /** The just-won entrant's current table position, for the "moves up to Nth"
- *  line (league stages only; best-effort).
+ *  line: a league's or Swiss stage's table, or - for a pooled fixture - its own pool's (W5 T21, `fx.pool_id`); best-effort.
  *
  *  Unplanned fix (found via the P3 review finding 3 investigation, same
  *  root cause as the savepoints added throughout this file): pre-existing
@@ -1099,11 +1127,15 @@ async function winnerMovement(
       if (!outcome || (outcome.kind !== "win" && outcome.kind !== "award") || !outcome.winner) {
         return null;
       }
-      const rows = await topStandings(sp, fx.stage_id, Number.MAX_SAFE_INTEGER);
-      const [row] = await sp<{ display_name: string }[]>`
-        select display_name from entrants where id = ${outcome.winner}`;
+      const rows = await topStandings(sp, fx.stage_id, Number.MAX_SAFE_INTEGER, fx.pool_id);
+      const [row] = await sp<{ display_name: string; status: string }[]>`
+        select display_name, status from entrants where id = ${outcome.winner}`;
       const idx = rows.findIndex((r) => r.entrantId === outcome.winner);
       if (idx < 0 || !row) return null;
+      // B5 fix wave G3 (controller ruling n1): "moves up" is a move a RESULT made. A winner who has since left the field stands where
+      // her departure put her (RB5-W1: ranked last), so no movement line is said for her - a marked "X (Withdrawn) moves up to 4th"
+      // would still tell the reader something false.
+      if (departedOf(row.status) !== undefined) return null;
       return { team: row.display_name, position: rows[idx]!.position };
     });
   } catch {
@@ -1118,6 +1150,39 @@ interface StandingRow {
   played: number;
   /** As the public table prints it (`pointsText` under the stage's unit): chess's half-points read "1½" (RB2B-17). */
   points: string;
+  /** RB5-W1: set only for a withdrawn or disqualified entrant (`DEPARTED_STATUS_CHIPS` decides which statuses count). */
+  status?: DepartedStatus;
+}
+
+/** A departed status, or undefined for any status that still competes - `DEPARTED_STATUS_CHIPS` is the one vocabulary. */
+function departedOf(status: string | null | undefined): DepartedStatus | undefined {
+  return status && Object.hasOwn(DEPARTED_STATUS_CHIPS, status) ? (status as DepartedStatus) : undefined;
+}
+
+/**
+ * RB5-W1 (owner fix-now 2026-11-18, "marked on every surface"): a post's standings line for a withdrawn or disqualified entrant carries
+ * the word her table chip prints (`DEPARTED_STATUS_CHIPS` labels, read from the public dictionary of the post's locale) - no new words.
+ * A competing row carries no status and so no word.
+ */
+async function leaverWords(locale: Locale): Promise<(status: DepartedStatus) => string> {
+  const dict = await getDictionary(locale, "public");
+  return (status) => t(dict, DEPARTED_STATUS_CHIPS[status].label);
+}
+
+/** B5 fix wave G3 (m3, RB5-W1 "marked on every surface"): a name a post prints, "Ann (Withdrawn)" for a leaver - the standings rows'
+ *  own format (`markedName`) and her table chip's word (`leaverWords`); a competing entrant's name is bare. */
+function leaverMarked(wordFor: (status: DepartedStatus) => string, name: string, status: string | null | undefined): string {
+  const departed = departedOf(status);
+  return markedName(departed === undefined ? { name } : { name, departed: wordFor(departed) });
+}
+
+/** `leaverMarked` for the sides of one fixture: their statuses read once. */
+async function leaverNamer(tx: Tx, locale: Locale, ids: readonly (string | null)[]): Promise<(id: string | null, name: string) => string> {
+  const present = ids.filter((id): id is string => id !== null);
+  const rows = present.length === 0 ? [] : await tx<{ id: string; status: string }[]>`select id, status from entrants where id = any(${present})`;
+  const statusOf = new Map(rows.map((r) => [r.id, r.status]));
+  const wordFor = await leaverWords(locale);
+  return (id, name) => leaverMarked(wordFor, name, id === null ? undefined : statusOf.get(id));
 }
 
 /** The unit a stage's stored points print in — the public table's own (`tableLayoutFor` over the one loader's rules). */
@@ -1129,31 +1194,64 @@ async function pointsUnitOf(tx: Tx, stageId: string) {
  *  resolved, ranked by the engine's `rank` (falls back to array order). A LEVEL
  *  table (started, nothing counted — X-TB-6) has no top: its order is the seed
  *  list, so it is no table at all here (anti-goal 3: nobody reads as first). */
-async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP): Promise<StandingRow[]> {
-  const rows = await tx<
-    { rows: { entrantId: string; played: number; points: number; rank?: number; level?: boolean }[] }[]
-  >`
-    select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
-  const table = rows[0]?.rows;
+async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP, poolId: string | null = null): Promise<StandingRow[]> {
+  const snap = await readFixtureTable<StoredRow[]>(tx, stageId, poolId);
+  return topOfTable(tx, stageId, snap?.rows, top);
+}
+
+type StoredRow = { entrantId: string; played: number; points: number; rank?: number; level?: boolean };
+
+/** The top `top` rows of one stored table, ranked and named, as `topStandings` returns them. Shared by the single table and every pool's. */
+async function topOfTable(
+  tx: Tx,
+  stageId: string,
+  table: StoredRow[] | undefined,
+  top: number,
+  /** The stage's points unit when the caller already read it (one fact for every pool of a stage). */
+  knownUnit?: Awaited<ReturnType<typeof pointsUnitOf>>,
+): Promise<StandingRow[]> {
   if (!table || table.length === 0 || isLevelTable(table)) return [];
-  const unit = await pointsUnitOf(tx, stageId);
+  const unit = knownUnit ?? (await pointsUnitOf(tx, stageId));
   const sorted = [...table].sort(
     (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
   );
   const wanted = sorted.slice(0, top);
-  const names = new Map(
+  const named = new Map(
     (
-      await tx<{ id: string; display_name: string }[]>`
-        select id, display_name from entrants where id = any(${wanted.map((r) => r.entrantId)})`
-    ).map((e) => [e.id, e.display_name]),
+      await tx<{ id: string; display_name: string; status: string }[]>`
+        select id, display_name, status from entrants where id = any(${wanted.map((r) => r.entrantId)})`
+    ).map((e) => [e.id, e]),
   );
-  return wanted.map((r, i) => ({
-    entrantId: r.entrantId,
-    position: r.rank ?? i + 1,
-    name: names.get(r.entrantId) ?? "—",
-    played: r.played,
-    points: pointsText(r.points, unit),
-  }));
+  return wanted.map((r, i) => {
+    const status = departedOf(named.get(r.entrantId)?.status);
+    return {
+      entrantId: r.entrantId,
+      position: r.rank ?? i + 1,
+      name: named.get(r.entrantId)?.display_name ?? "—",
+      played: r.played,
+      points: pointsText(r.points, unit),
+      ...(status ? { status } : {}),
+    };
+  });
+}
+
+/**
+ * W5 app PR A, Task 21 (X-SF-2; ST-G6): the top of EVERY pool's table of a stage with several pools, in the stage's pool order, each
+ * headed by the public pool label in `locale` (`poolLabel` over the public dictionary - never `pools.name`, which is English).
+ * Empty for a league, a Swiss stage and a one-pool group (their table is `topStandings`'). A pool with nothing counted, or a level
+ * table, has no top and so no block (anti-goal 3: nobody reads as first).
+ */
+async function topPoolStandings(tx: Tx, stageId: string, locale: Locale): Promise<{ label: string; rows: StandingRow[] }[]> {
+  const tables = await readPoolTables<StoredRow[]>(tx, stageId);
+  if (tables.length === 0) return [];
+  const dict = await getDictionary(locale, "public");
+  const unit = await pointsUnitOf(tx, stageId);
+  const out: { label: string; rows: StandingRow[] }[] = [];
+  for (const t of tables) {
+    const rows = await topOfTable(tx, stageId, t.rows, RECAP_STANDINGS_TOP, unit);
+    if (rows.length > 0) out.push({ label: poolLabel(dict, t.key), rows });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1298,6 +1396,8 @@ async function activeTableStagesInWindow(
 export async function assembleDigestStandings(
   tx: Tx,
   stages: readonly ActiveTableStage[],
+  // The org's copy locale (`digestForOrg` threads it, as for `assembleDigestUpcoming`): only a pooled stage's pool heading reads it.
+  locale: Locale = "en",
 ): Promise<DigestStandingsSection[]> {
   const out: DigestStandingsSection[] = [];
   for (const stage of stages) {
@@ -1318,39 +1418,56 @@ export async function assembleDigestStandings(
       // away from `invalid input syntax for type uuid` — that is the exact
       // trigger org-posts-digest.test.ts now reproduces.
       await tx.savepoint(async (sp) => {
-        const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
-          select rows, previous_rows from standings_snapshots
-          where stage_id = ${stage.stage_id} and pool_id is null`;
-        // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
-        if (!snap || snap.rows.length === 0 || isLevelTable(snap.rows)) return;
+        // W5 T21 (X-SF-2): a stage with SEVERAL pools has no single table - each pool is one, so one section per pool in the stage's
+        // pool order, headed by the pool. Any other stage keeps its one un-headed section.
+        const pooled = await readPoolTables<RankedEntrantRow[]>(sp, stage.stage_id);
+        const single = pooled.length === 0 ? await readSingleTableSnapshot<RankedEntrantRow[]>(sp, stage.stage_id) : undefined;
+        const tables: { snap: { rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }; key?: string }[] = pooled.length > 0
+          ? pooled.map((t) => ({ snap: t, key: t.key }))
+          : single ? [{ snap: single }] : [];
+        const dict = pooled.length > 0 ? await getDictionary(locale, "public") : null;
+        // RB5-W1: a leaver in a top 3 is marked with her table chip's word
+        const wordFor = await leaverWords(locale);
+        // the stage's points unit is one fact for every pool of it
+        if (tables.length === 0) return;
         const unit = await pointsUnitOf(sp, stage.stage_id);
-        const sorted = [...snap.rows].sort(
-          (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
-        );
-        const top3 = sorted.slice(0, 3);
-        if (top3.length === 0) return;
-        const names = new Map(
-          (
-            await sp<{ id: string; display_name: string }[]>`
-              select id, display_name from entrants where id = any(${top3.map((r) => r.entrantId)})`
-          ).map((e) => [e.id, e.display_name]),
-        );
-        let climberOut: DigestStandingsSection["climber"];
-        const climber = biggestClimber(snap.rows, snap.previous_rows);
-        if (climber) {
-          const [entrant] = await sp<{ display_name: string }[]>`
-            select display_name from entrants where id = ${climber.entrantId}`;
-          if (entrant) climberOut = { entrantName: entrant.display_name, from: climber.from, to: climber.to };
+        for (const { snap, key } of tables) {
+          // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
+          if (snap.rows.length === 0 || isLevelTable(snap.rows)) continue;
+          const sorted = [...snap.rows].sort(
+            (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
+          );
+          const top3 = sorted.slice(0, 3);
+          if (top3.length === 0) continue;
+          const named = new Map(
+            (
+              await sp<{ id: string; display_name: string; status: string }[]>`
+                select id, display_name, status from entrants where id = any(${top3.map((r) => r.entrantId)})`
+            ).map((e) => [e.id, e]),
+          );
+          let climberOut: DigestStandingsSection["climber"];
+          const climber = biggestClimber(snap.rows, snap.previous_rows);
+          if (climber) {
+            const [entrant] = await sp<{ display_name: string; status: string }[]>`
+              select display_name, status from entrants where id = ${climber.entrantId}`;
+            // B5 fix wave G3 (m3): marked as the top 3 is (and, after n1, unreachable for a leaver - see the recap's climber).
+            if (entrant) climberOut = { entrantName: leaverMarked(wordFor, entrant.display_name, entrant.status), from: climber.from, to: climber.to };
+          }
+          out.push({
+            divisionName: stage.division_name,
+            ...(dict && key !== undefined ? { poolLabel: poolLabel(dict, key) } : {}),
+            top3: top3.map((r, i) => {
+              const row = {
+                position: r.rank ?? i + 1,
+                name: named.get(r.entrantId)?.display_name ?? "—",
+                points: pointsText(r.points, unit),
+              };
+              const status = departedOf(named.get(r.entrantId)?.status);
+              return status ? { ...row, departed: wordFor(status) } : row;
+            }),
+            ...(climberOut ? { climber: climberOut } : {}),
+          });
         }
-        out.push({
-          divisionName: stage.division_name,
-          top3: top3.map((r, i) => ({
-            position: r.rank ?? i + 1,
-            name: names.get(r.entrantId) ?? "—",
-            points: pointsText(r.points, unit),
-          })),
-          ...(climberOut ? { climber: climberOut } : {}),
-        });
       });
     } catch (err) {
       log.warn(
@@ -1621,7 +1738,7 @@ async function digestForOrg(
 
   let standings: DigestStandingsSection[] = [];
   try {
-    standings = await assembleDigestStandings(tx, stages);
+    standings = await assembleDigestStandings(tx, stages, locale);
   } catch (err) {
     log.warn({ orgId, source: "digestStandings", err: String(err) }, "news enrichment: source failed, dropping section");
   }

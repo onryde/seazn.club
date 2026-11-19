@@ -16,6 +16,7 @@ export {
   completeStageIfReady,
   appendDivisionEvent,
   type CompleteResult,
+  type SnapshotCause,
 } from "./competition";
 export { resolveModule, resolveLatestModule } from "./registry";
 export type { FoldedFixture } from "./fold";

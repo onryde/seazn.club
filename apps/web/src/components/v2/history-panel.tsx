@@ -19,6 +19,8 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { undoRefusalText } from "@/lib/undo-refusals";
 import type { MessageKey } from "@/lib/messages";
 
 interface HistoryRow {
@@ -80,6 +82,12 @@ const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   seed_confirmed: "history.event.seedConfirmed",
   // W4 T10 (X-LE-13; D2): "Add late player" into a drawn knockout is an undo barrier, listed (not undoable).
   knockout_late_entry: "history.event.knockoutLateEntry",
+  // W5 T5 (X-CU-13): "Add late player" into a started league or group is an undo barrier, listed (not undoable).
+  roundrobin_late_entry: "history.event.roundrobinLateEntry",
+  // W5 T8 (RB5-W7): a league or group withdrawal's settle and its Reinstate — one line each, not undoable (Reinstate is the
+  // undo). Their per-line write-ahead rows are internal and never listed (`divisionHistory` leaves them out).
+  table_withdrawal: "history.event.tableWithdrawal",
+  table_withdrawal_voided: "history.event.tableWithdrawalReversed",
 };
 
 export function HistoryPanel({
@@ -199,6 +207,10 @@ export function HistoryPanel({
         // like the Swiss barriers above — never the server's English sentence. Through `knockoutRefusalText` so a sentence that
         // names something ({min}, {stage}) takes it from the envelope (T15 review), never a bare hole.
         setError(knockoutRefusalText(err.code, err.extra, msg));
+      } else if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
+        // W5 T5 (X-CU-13): an Undo, Redo or Restore across a late player added to a started league or group
+        // (RR_LATE_ENTRY_NOT_UNDOABLE), said off the code in the reader's language, its fields filled from the envelope.
+        setError(undoRefusalText(err.code, err.extra, msg));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated

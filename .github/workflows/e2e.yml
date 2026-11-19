@@ -366,6 +366,47 @@ jobs:
     # Raising it would have hidden this: 2/3 had been 14.7-20+ min on every
     # main push since 07:45 that morning before one lost to it.
     #
+    # RE-CUT 2026-11-19: a fifth "rest" shard was the obvious move and does not
+    # work; a SIXTH LEG, "mid", does. W5 PR #1262 (run 44526752695, attempts 1
+    # and 2, HEAD cc5feedc9d) had `parallel 2/4` CANCELLED at the 20-minute cap
+    # twice with nothing failing: attempt 2 reached test 370/376 at 20m18s
+    # (job 135581234707, setup 170s, Playwright step from 13:17:53 to the
+    # cancel at 13:35:14 = 1041s and still running). Main's same shard was
+    # already 17.9-19.1 min (runs 44513831815, 44511838223); W5's new specs
+    # pushed it over. Measured on that run, attempt 2, Playwright step / job:
+    #
+    #   parallel 1/4  454s / 604s    2/4  >=1024s / cancelled at 1218s
+    #   parallel 3/4  587s / 753s    4/4  571s / 716s    heavy  676s / 856s
+    #
+    # Every shard held 374-376 tests (count sharding), so the spread is cost:
+    # start-to-next-start attribution over 2/4's log gives match-room 263s (53
+    # tests), overlay-compositor 229s (16), marketing-product 108s (78),
+    # quick-match-home 105s (20), match-day 58s, quick-match 47s. Replaying
+    # that over the real `--list --shard=K/N` membership (the model reproduced
+    # the measured 4-way as 464 / 1013 / 593 / 571s) for count-only cuts:
+    #
+    #   /5  379 / 819 / 454 / 488 / 500s   (2/5 still holds both big files)
+    #   /6  335 / 390 / 753 / 407 / 284 / 472s     /7 max 714s     /8 max 531s
+    #
+    # i.e. a fifth shard still leaves a ~16.5-min leg, and only /8 gets under
+    # 12 min, paying setup (~170s) eight times. match-room and overlay-compositor
+    # are a quarter of the project's cost between them and count shards cannot
+    # place them, so they get a leg of their own (PARALLEL_MID in
+    # playwright.config.ts, slice "mid"): replayed 492s of step, ~677s of job
+    # (11.3 min), and "rest" stays four-way over what is left: 441 / 584 / 570 /
+    # 553s of step, ~626 / 769 / 755 / 738s of job (10.4 / 12.8 / 12.6 / 12.3
+    # min), at the ~185s of setup and teardown measured here; the real
+    # `--list` selection (69 + 4 x 357 = 1497 tests, the same total as before)
+    # was checked against the model. Same number of jobs as a fifth shard
+    # (six), 2/4's cost drops from >1041s to 584s, and the slowest leg of the
+    # run is now `parallel heavy` at 676s / 856s (14.3 min), which this change
+    # does not touch. Move that leg's smaller files into "mid" if heavy ever
+    # becomes the one that is cancelled. Re-list `E2E_PARALLEL_SLICE=rest
+    # npx playwright test --list --project=parallel --shard=2/4` after any
+    # large spec growth, as the forecast-risk paragraph above says: the
+    # clumping that cost this leg is a property of alphabetical order, and a
+    # new file can re-create it.
+    #
     # THE LEG THAT WAS NEXT TO BE CANCELLED, outside this split: walkthrough
     # 1/3 ran 1000-1147s on main pushes of 10-19 (19.1 min on run
     # 39288837798, 18.8 on 39320198519) and 3/3 850-1083s, under the same cap.
@@ -402,6 +443,11 @@ jobs:
             slug: parallel-heavy
             project: parallel
             slice: heavy
+            args: ""
+          - group: parallel mid
+            slug: parallel-mid
+            project: parallel
+            slice: mid
             args: ""
           # Whole matches played by hand, through the decider — the suite's
           # product-level proofs (#667, #670). Its own project so a failure

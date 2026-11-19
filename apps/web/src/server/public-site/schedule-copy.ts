@@ -12,6 +12,8 @@
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { ScheduleCopy, ScheduleWatchCopy } from "@/components/public-site/schedule";
+import { DEPARTED_STATUS_CHIPS } from "@/components/public-site/standings-table";
+import { sitsOutByRound, sitsOutByesOf } from "@/lib/sits-out";
 
 /**
  * @param dict the PUBLIC dictionary, in the org's locale.
@@ -27,6 +29,10 @@ export function publicScheduleCopy(dict: Dict, ui: (key: "schedule.tbd") => stri
     // W2a: the SAME words the match centre's status line uses for a held fixture (Task 7), so the bracket card and the
     // page it opens cannot describe one match two ways.
     held: t(dict, "matchCentre.status.needs_decision"),
+    // B5 (RB5-W2): a match a withdrawal removed - the match centre's own word for it, so the row and the page it opens agree.
+    abandoned: t(dict, "matchCentre.status.abandoned"),
+    // W5 T23 (X-CU-7): the round view's tag on a late player's catch-up round.
+    catchUp: t(dict, "division.catchUp"),
     tbd: ui("schedule.tbd"),
     filterLabel: t(dict, "division.filter.showFor"),
     viewLabel: t(dict, "division.view.label"),
@@ -61,4 +67,26 @@ export function publicWatchCopy(
     notOpened: ui("externalPlay.watch.list.notOpened"),
     starting: ui("externalPlay.watch.list.starting"),
   };
+}
+
+/**
+ * W5 T3 (X-SF-4): the fixtures list's "Sits out: Eve" line for every round of every stage that records a bye, keyed
+ * `${stageId}:${round_no}` and already in the org's locale (the Schedule is a client component and loads no dictionary).
+ * Who has left is the table's own vocabulary (`DEPARTED_STATUS_CHIPS`), never a pair of statuses typed here; an entrant the page
+ * holds no status for counts as in the field.
+ */
+export function publicSitsOutLines(
+  dict: Dict,
+  stages: readonly { id: string; round_byes?: unknown }[],
+  entrantNames: Readonly<Record<string, string>>,
+  entrantStatuses: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const departed = new Set(Object.entries(entrantStatuses).filter(([, status]) => status in DEPARTED_STATUS_CHIPS).map(([id]) => id));
+  const out: Record<string, string> = {};
+  for (const st of stages) {
+    for (const [round, names] of sitsOutByRound(sitsOutByesOf({ round_byes: st.round_byes }), entrantNames, departed)) {
+      out[`${st.id}:${round}`] = t(dict, "division.sitsOut", { names: names.join(", ") });
+    }
+  }
+  return out;
 }

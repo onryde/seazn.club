@@ -6,6 +6,8 @@
 // Pure: the picker's state lives in the screen (`useFormatKnobs`), the derivations here.
 import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
 import { stageGraphSizeGate, type SizeRefusal } from "@/lib/format-size-gates";
+import { cutIssue, type CutReason } from "@/lib/field-cut-gate";
+import { MIN_POOL_SIZE, poolSizeIssue } from "@/lib/pool-size-gate";
 import {
   applyStandingsCarry,
   buildTemplateStages,
@@ -50,9 +52,9 @@ export interface FormatKnobsShown {
 export function formatKnobsShown(template: string): FormatKnobsShown {
   return {
     secondStage: template === "league_ko" || template === "groups_ko" || template === "group_stepladder" || template === "swiss_knockout",
-    pools: template === "groups_ko",
+    pools: template === "groups_ko" || template === "group_only",
     rounds: template === "swiss" || template === "swiss_playoff" || template === "swiss_knockout",
-    legs: template === "league" || template === "league_ko" || template === "groups_ko" || template === "group_stepladder",
+    legs: template === "league" || template === "league_ko" || template === "groups_ko" || template === "group_only" || template === "group_stepladder",
     carry: templateHasProgression(template),
     thirdPlace: hasKnockoutStage(template),
   };
@@ -92,12 +94,34 @@ export function thirdPlaceOffer(template: string, knobs: Pick<FormatKnobValues, 
   return { offered: smallest === null || thirdPlaceOffered(smallest), entrants: smallest };
 }
 
+/** What a format knob refused: the knob, the label the picker shows it under and its bounds, plus - for the pools knob that fits its
+ *  bounds but not the field (W5 T12, X-BD-1) - the pool-size verdict. `poolSize` is absent on a plain out-of-bounds number. */
+export interface FormatBoundIssue {
+  field: FormatBoundKey;
+  label: MessageKey;
+  min: number;
+  max: number;
+  poolSize?: { entrants: number; pools: number; size: number; suggested: number | null };
+  /** W5 T12b (X-BD-8): the Top N that fits its bounds but not the field - more than the field holds, or a best-Nth cut no pool can
+   *  supply - with the largest cut the field and pools can. `pools` is the plan's pool count (1 for a format with no pool knob). */
+  cut?: { entrants: number; pools: number; qualified: number; max: number; reason: CutReason };
+}
+
 /** The first VISIBLE number knob outside FORMAT_BOUNDS (pools, rounds, then Top N), with the label the picker shows it
- *  under, or null. The builder's Next and the dialog's Save both refuse on it before anything is sent. */
+ *  under, or null. The builder's Next and the dialog's Save both refuse on it before anything is sent.
+ *
+ *  W5 T12 (X-BD-1, PO-1): with `entrants` (the plan's field, or the division's own) a pools knob inside its bounds is also judged
+ *  against the field by `poolSizeIssue` - the ONE rule C38's server refusal reads (generate-tx.ts) - so the builder refuses 7 into 4
+ *  with the same numbers the server would, and offers the count that works. Without `entrants` (no field to judge) only the bounds apply.
+ *
+ *  W5 T12b (X-BD-8, RB5-E6): the Top N is judged against the field the same way, by `cutIssue` - the ONE rule the server's Start and
+ *  resolve doors read (lib/field-cut-gate.ts) - so a top 8 of 6, or a best-Nth cut no pool can supply, is refused here with the
+ *  largest cut that works. The pools knob is judged first, and only a pool count that fits the field is a shape to cut from. */
 export function formatBoundIssue(
   template: string,
   knobs: Pick<FormatKnobValues, "qualified" | "swissRounds" | "poolCount">,
-): { field: FormatBoundKey; label: MessageKey; min: number; max: number } | null {
+  entrants?: number,
+): FormatBoundIssue | null {
   const shown = formatKnobsShown(template);
   const asked: [FormatBoundKey, number, MessageKey][] = [];
   if (shown.pools) asked.push(["pools", knobs.poolCount, "wizard.pools"]);
@@ -105,8 +129,36 @@ export function formatBoundIssue(
   if (shown.secondStage) asked.push(["qualify", knobs.qualified, "wizard.qualify"]);
   for (const [field, value, label] of asked) {
     if (!withinFormatBounds(field, value)) return { field, label, ...FORMAT_BOUNDS[field] };
+    if (field === "pools" && entrants !== undefined) {
+      const issue = poolSizeIssue(entrants, value);
+      if (issue !== null) return { field, label, ...FORMAT_BOUNDS[field], poolSize: { entrants, pools: value, size: issue.size, suggested: issue.suggested } };
+    }
+    if (field === "qualify" && entrants !== undefined) {
+      const pools = shown.pools ? knobs.poolCount : 1;
+      const issue = cutIssue(entrants, pools, value, template);
+      if (issue !== null) return { field, label, ...FORMAT_BOUNDS[field], cut: { entrants, pools, qualified: issue.qualified, max: issue.max, reason: issue.reason } };
+    }
   }
   return null;
+}
+
+/** The sentence a refused format knob is shown as, in the reader's language: the bounds line, or (a pools knob the field cannot fill)
+ *  the pool-size line naming the count that works. A suggestion under the pools bound (one pool is a League, not a pool knob) is no
+ *  suggestion, so that line says to add entrants. A Top N the field cannot supply (W5 T12b) names the largest cut that works. The
+ *  builder's Next and the dialog's Save both say it through here. */
+export function formatBoundText(issue: FormatBoundIssue, msg: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
+  const field = msg(issue.label);
+  const c = issue.cut;
+  if (c !== undefined) {
+    const vars = { field, qualified: c.qualified, entrants: c.entrants, pools: c.pools, max: c.max };
+    return msg(c.reason === "cut_exceeds_field" ? "wizard.err.cutExceedsField" : "wizard.err.cutBestNth", vars);
+  }
+  const p = issue.poolSize;
+  if (p === undefined) return msg("wizard.err.formatBound", { field, min: issue.min, max: issue.max });
+  const vars = { field, entrants: p.entrants, pools: p.pools, required: p.pools * MIN_POOL_SIZE };
+  return p.suggested !== null && p.suggested >= FORMAT_BOUNDS.pools.min
+    ? msg("wizard.err.poolSize", { ...vars, suggested: p.suggested })
+    : msg("wizard.err.poolSizeNone", vars);
 }
 
 /** The stage drafts a format sends. A cleared knob reads as Number("") === 0, so every number knob goes through the one

@@ -205,6 +205,17 @@ const REST = [
   "src/server/public-site/__tests__/match-centre-super-over.test.ts",
   // W4 app B (X-CH-6): the match centre's joint-winners line. Begins with "m", so it belongs here rather than in C_GLOBBED.
   "src/server/public-site/__tests__/match-centre-joint-winners.test.ts",
+  // W5 round-robin app PR A: the hub's departed chip, the expunged card, the Joined
+  // marker, the pool leaver footnote and the pool winners. None begins with "c", so all five belong here rather than in C_GLOBBED
+  // - and this gate reddened the moment they landed (found at the Task 26 branch gate, which the apps/web run cannot see).
+  "src/server/public-site/__tests__/hub-departed-chip-db.test.ts",
+  "src/server/public-site/__tests__/hub-expunged-card-db.test.ts",
+  "src/server/public-site/__tests__/joined-round-marker.test.ts",
+  "src/server/public-site/__tests__/pool-leaver-footnote-db.test.ts",
+  "src/server/public-site/__tests__/pool-winners-db.test.ts",
+  // W5 app PR A whole-PR review I1: a departed entrant's public row carries no stale tie note. Begins with "t", so it belongs here
+  // rather than in C_GLOBBED; this gate reddened on it in the PR's CI (listed=77 vs 76).
+  "src/server/public-site/__tests__/table-withdrawal-tie-notes-db.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

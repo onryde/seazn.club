@@ -34,7 +34,9 @@ import { bracketAwaitsCompletion } from "@/server/engine-db/stage-finals";
 import type { ProgressionSpec } from "@seazn/engine/competition";
 import { cardStatsCountsPlayed, listDivisionCardStats, type NextFixture } from "./card-stats";
 import { DEPARTED_STATUSES } from "./entrants";
+import { pairDissolveOwedCandidates, withdrawalOwedSince } from "./withdrawal";
 import { countsAsMatch } from "@/lib/run-sheet-groups";
+import { isCatchUpExtKey } from "@/lib/roundrobin-late-entry";
 import { listDivisions } from "./divisions";
 
 /** The desk's own "next" fact (`resolveDivisionNext` below) is a SEPARATE
@@ -343,7 +345,7 @@ export async function getCompetitionDesk(
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
   const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting } = await withTenant(auth.orgId, async (tx) => {
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -501,18 +503,83 @@ export async function getCompetitionDesk(
     const fixturesToday = await countFixturesToday(tx, competitionId, now);
     // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
     // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
+    // W5 T6 (X-CU-8): and those waiting to join a running root league or group (`table_waiting_stage_id`, V535) — `table`
+    // says which, so the row reads "add to the table", not "add to bracket". An entrant waits on one stage at most (a
+    // division's entry stage is one kind), so the two markers never count one entrant twice.
     const lateWaiting = ids.length
-      ? await tx<{ division_id: string; stage_name: string; count: number }[]>`
-          select e.division_id, s.name as stage_name, count(*)::int as count
+      ? await tx<{ division_id: string; stage_name: string; count: number; is_table: boolean }[]>`
+          select e.division_id, s.name as stage_name, count(*)::int as count, s.kind in ('league', 'group') as is_table
             from entrants e
-            join stages s on s.id = e.knockout_waiting_stage_id
+            join stages s on s.id = coalesce(e.knockout_waiting_stage_id, e.table_waiting_stage_id)
            where e.division_id = any(${ids})
              and s.status <> 'complete'
              and e.status not in ${tx([...DEPARTED_STATUSES])}
-           group by e.division_id, s.id, s.name, s.seq
+           group by e.division_id, s.id, s.name, s.seq, s.kind
            order by s.seq`
       : [];
-    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting };
+    // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the division's root league or group FINISHED. A finished table
+    // takes no one and marks no one (`markTableWaiting`), so this is DERIVED, never stored: the entry stage (lowest seq; a league
+    // or group drawing from the live roster — `isRootTableStage` spelt in SQL, as V535 spells it), complete, and drawn; every
+    // entrant still in the field seated in none of its fixtures. Placing them anywhere in it, or their leaving, clears it.
+    const lateUnplaced = ids.length
+      ? await tx<{ division_id: string; stage_name: string; names: string[] }[]>`
+          select s.division_id, s.name as stage_name,
+                 array_agg(e.display_name order by e.created_at, e.id) as names
+            from stages s
+            join entrants e on e.division_id = s.division_id
+           where s.division_id = any(${ids})
+             and s.kind in ('league', 'group')
+             and s.progression is null
+             and not (s.config ? 'qualified')
+             and s.status = 'complete'
+             and s.seq = (select min(s2.seq) from stages s2 where s2.division_id = s.division_id)
+             and exists (select 1 from fixtures f where f.stage_id = s.id)
+             and e.status not in ${tx([...DEPARTED_STATUSES])}
+             and not exists (select 1 from fixtures f where f.stage_id = s.id and e.id in (f.home_entrant_id, f.away_entrant_id))
+           group by s.division_id, s.id, s.name`
+      : [];
+    // W5 T8b review I2 (b): a withdrawal owed and not finished — DERIVED, never stored. The trigger is the entrant's registration
+    // withdrawn AFTER Start (`division_started`; before it the withdrawal is a bare flip), or a disqualifying forfeit by her that
+    // still stands on a league, group or Swiss match — the LATEST of these (re-review: a disqualification after a Reinstate is a
+    // new withdrawal owed). Owed while `withdrawalOwedSince` says so — the one reading the retries use: done is her departed
+    // status, the cascade's last write, and a Reinstate since the trigger is not owed. Candidates here, the reading per candidate.
+    const owedCandidates = ids.length
+      ? await tx<{ id: string; division_id: string; name: string; at: Date }[]>`
+          with started as (
+            select division_id, max(created_at) as at from division_events
+             where division_id = any(${ids}) and type = 'division_started' group by division_id
+          ), trig as (
+            select e.id, e.division_id, e.display_name, e.created_at,
+                   greatest(
+                     (select max(r.withdrawn_at) from registrations r
+                       where r.entrant_id = e.id and r.status = 'withdrawn' and r.withdrawn_at >= st.at),
+                     (select max(ev.recorded_at) from score_events ev
+                        join fixtures f on f.id = ev.fixture_id join stages s on s.id = f.stage_id
+                       where f.division_id = e.division_id and s.kind in ('league', 'group', 'swiss') and ev.type = 'core.forfeit'
+                         and ev.payload ->> 'reason' = 'disqualified' and ev.payload ->> 'by' = e.id::text
+                         and not exists (select 1 from score_events v where v.fixture_id = ev.fixture_id and v.voids_event_id = ev.id))
+                   ) as at
+              from entrants e join started st on st.division_id = e.division_id
+             where e.status not in ${tx([...DEPARTED_STATUSES])}
+          )
+          select trig.id, trig.division_id, trig.display_name as name, trig.at from trig
+           where trig.at is not null
+           order by trig.created_at, trig.id`
+      : [];
+    // W5 T10 fix round 2 (I-1): and the pairs a released placed solo left a partner short whose dissolve did not finish - their
+    // trigger is the durable `pair_dissolve_owed` marker (the placement row that linked solo to pair is deleted by the release),
+    // read through the same `withdrawalOwedSince`. A pair both ways (her own withdrawal AND a marker) is one name.
+    const pairCandidates = await pairDissolveOwedCandidates(tx, ids);
+    const withdrawalOwed: { division_id: string; name: string }[] = [];
+    const seenOwed = new Set<string>();
+    for (const c of [...owedCandidates, ...pairCandidates]) {
+      if (seenOwed.has(c.id)) continue;
+      if (await withdrawalOwedSince(tx, c.division_id, c.id, c.at)) {
+        seenOwed.add(c.id);
+        withdrawalOwed.push({ division_id: c.division_id, name: c.name });
+      }
+    }
+    return { orgTz: resolveVenueTz(null, org?.timezone), stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed };
   });
   const fixturesWithScorer = new Set([...fixturesWithOfficial, ...fixturesWithLink].map((a) => a.fixture_id));
   // T16 fix round 1, R4 (D12): which online rounds are open. stage_round_opens is SEALED (no app_user grant), so it is
@@ -626,6 +693,8 @@ export async function getCompetitionDesk(
       awaitsSettle: fixtureAwaitsSettle(stageKindById.get(x.stage_id), x),
       awaitsRoundOpen:
         onlineIds.has(d.id) && x.round_no !== null && !openedRounds.has(roundKey(x.stage_id, x.round_no)),
+      // W5 T5 (X-CU-12): a late entrant's catch-up line, counted apart in `unscheduled` while it has no slot.
+      catchUp: isCatchUpExtKey(x.ext_key),
     }));
     const input = {
       divisionStatus: d.status as DivisionStatus,
@@ -638,7 +707,11 @@ export async function getCompetitionDesk(
       // any sport, and without a model there is no Discipline tab for "Review" to open. The module is resolved only for
       // a division with something to show.
       bansToReview: disciplineEntitled && (s?.bans_to_review ?? 0) > 0 && hasDisciplineTab(d) ? s!.bans_to_review : 0,
-      lateWaiting: lateWaiting.filter((w) => w.division_id === d.id).map((w) => ({ stageName: w.stage_name, count: w.count })),
+      lateWaiting: lateWaiting
+        .filter((w) => w.division_id === d.id)
+        .map((w) => ({ stageName: w.stage_name, count: w.count, ...(w.is_table ? { table: true as const } : {}) })),
+      lateUnplaced: lateUnplaced.filter((u) => u.division_id === d.id).map((u) => ({ stageName: u.stage_name, names: u.names })),
+      withdrawalOwed: withdrawalOwed.filter((w) => w.division_id === d.id).map((w) => w.name),
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");

@@ -4,6 +4,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { entryPriceCents, isTerminalRegistrationStatus, ownPaymentRefundedCents } from "@/lib/registration-status";
 import { entryReferenceOf } from "@/lib/ref-code";
+import { WITHDRAWAL_PENDING_STATUSES } from "@/lib/table-withdrawal";
 import { resolveVenueTz } from "@/lib/tz";
 import type { RegistrationSettingsRow, RegistrationRow, RegistrationGroupRow } from "./types";
 import { loadSettings, DUMMY_ACCESS_HASH, tokenMatchesHash, typedReference, GROUP_ID_RE } from "./lookups";
@@ -85,6 +86,12 @@ export interface GroupEntryView {
    *  (`promotionSkippedAtSql`, registrations/waitlist.ts), in its current wait (ISO); null otherwise. The status card says why and offers
    *  the Link step. */
   promotion_skipped_at: string | null;
+  /** W5 T8b (X-WDT-9, ruling 288; R24 pick): a WITHDRAWN entry whose player held matches in the event, every one of them now
+   *  settled (none scheduled or in play) — the withdrawal after Start went through the event's rules (the table withdrawal:
+   *  removed, or walked over). False before Start (nothing was settled; the field regenerates), for a player who never held a
+   *  match (a late arrival still waiting), and while any of her matches is still to play (a withdrawal the organiser has yet to
+   *  finish), so the card never claims a settlement that has not happened. */
+  matches_settled: boolean;
   /** V378/RS007: this entry's OWN pay-by deadline when it was promoted out
    *  of the waitlist — null for a never-promoted entry, whose deadline is
    *  the CART's own `GroupStatusView.expires_at` instead (see
@@ -308,6 +315,13 @@ async function buildGroupStatusView(
            d.youth as division_youth, d.player_name_display as division_player_name_display,
            ${waitlistPositionSql(sql, "r")} as waitlist_position,
            ${promotionSkippedAtSql(sql, "r")} as promotion_skipped_at,
+           -- W5 T8b: withdrawn, held a match here, and none of them is still to play (GroupEntryView.matches_settled).
+           (r.status = 'withdrawn' and r.entrant_id is not null
+             and exists (select 1 from fixtures f
+                          where f.division_id = r.division_id and r.entrant_id in (f.home_entrant_id, f.away_entrant_id))
+             and not exists (select 1 from fixtures f
+                              where f.division_id = r.division_id and r.entrant_id in (f.home_entrant_id, f.away_entrant_id)
+                                and f.status = any(${[...WITHDRAWAL_PENDING_STATUSES]}))) as matches_settled,
            -- RS009: the team an organiser placed this solo sign-up on, or
            -- null while they are still in the pool. free_agent records how
            -- the entry was MADE and never flips back, so it cannot answer

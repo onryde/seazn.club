@@ -12,7 +12,9 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { publicThemeStyle } from "@/lib/public-theme";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
@@ -26,7 +28,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { msgFor } from "@/lib/messages-i18n";
 import { publicRoundNamer } from "@/server/public-site/feeder-slot-label";
 import { byPoolOrder } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { routes } from "@/lib/routes";
 
 export const revalidate = 30;
@@ -87,6 +89,10 @@ export default async function EmbedWidgetPage({ params }: Props) {
   // `patchEntrant` accepts it, so a disqualified entrant reached the standings
   // ranked among the competing and styled exactly like them.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
+  const lateJoins = await loadRrLateJoins(division.id, fixtures);
+  // W5 T8 (RB5-W7): the league/group departure notes under each table.
+  const tableWithdrawals = await loadTableWithdrawals(division.id);
   // PROMPT-60: the entrant's own badge_url wins over the team logo.
   const entrantLogos = Object.fromEntries(
     entrants.map((e) => [
@@ -99,7 +105,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
   );
   // A pool is named from its KEY in the org's locale, never by its stored
   // English name (`lib/pool-label.ts`).
-  const poolKey = new Map(pools.map((p) => [p.id, p.key]));
+  const poolKey = poolNaming(pools);
   const publicPath = routes.publicHub(org.slug, competition.slug, division.slug);
 
   // P6 fix round 1, finding #2 (CRITICAL) — same treatment as the public
@@ -240,15 +246,12 @@ export default async function EmbedWidgetPage({ params }: Props) {
               entrantNames={entrantNames}
               entrantLogos={entrantLogos}
               entrantStatuses={entrantStatuses}
-              caption={
-                snap.pool_id
-                  ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
-                  : stage.name
-              }
+              caption={poolCaption(dict, stage.name, snap.pool_id, poolKey)}
               dict={dict}
               qualification={qualificationFor(stage, snap)}
               rules={stage.table_rules}
-              swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+              swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
+              withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, snap.pool_id ?? null)}
               stageKind={stage.kind}
               locale={orgLocale}
               tz={tz}

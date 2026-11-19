@@ -7,11 +7,12 @@ import { deferred } from "@/lib/deferred";
 import { dispatchNow } from "@/server/email-outbox";
 import { resolveVenueTz } from "@/lib/tz";
 import { log } from "@/server/logger";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 // The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
 // own hook cannot fire — this is what refreshes a seeding draft that still
 // names the registrant (review finding F3).
-import { markFieldChangeSeedProposalsStale } from "../stages";
+import { divisionHasStarted, markFieldChangeSeedProposalsStale } from "../stages";
 import { audit } from "../audit";
 import type { Tx, RegistrationWithGroupRow } from "./types";
 import { regGroupCols, loadSettings, divisionCtx, fallbackOrigin } from "./lookups";
@@ -68,6 +69,10 @@ import { refundEntryUnderLock, resolveRefundPolicy } from "./refunds";
 export async function releaseSoloSignUpPlacement(
   tx: Tx,
   registrationId: string,
+  /** W5 T10 fix round 1 (R12): where a PAIR of a started division (any format, ruling 292) that loses this person is reported (its entrant id), for
+   *  the caller to dissolve through the withdrawal cascade AFTER its transaction commits (the cascade is many transactions).
+   *  A caller that passes none cannot run the cascade, so such a release is refused instead (`RR_SUBSTITUTE_PARTNER_REFUSED`). */
+  pairLosses?: string[],
 ): Promise<string | null> {
   // BOTH directions, because a registration can be either end of a
   // placement:
@@ -90,12 +95,32 @@ export async function releaseSoloSignUpPlacement(
 
   let releasedFrom: string | null = null;
   for (const placement of placements) {
-    const [target] = await tx<{ entrant_id: string | null }[]>`
-      select entrant_id from registrations where id = ${placement.registration_id} for update`;
+    const [target] = await tx<{ entrant_id: string | null; division_id: string }[]>`
+      select entrant_id, division_id from registrations where id = ${placement.registration_id} for update`;
     if (target?.entrant_id && placement.person_id) {
-      await tx`
-        delete from entrant_members
-        where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
+      // W5 T10 fix round 1 (R12; RB5-R2): a placed solo who leaves is a partner LEAVING. On a pair of a started division (any format, ruling 292)
+      // the member row is kept (the pair is the entrant; its record stands) and the pair withdraws instead - reported to the
+      // caller, which runs the cascade after the commit. A departed pair's roster is frozen the same way (nothing to dissolve).
+      const members = (await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${target.entrant_id}`)
+        .map((m) => m.person_id)
+        .filter((id) => id !== placement.person_id);
+      // A dynamic import, as this file's other reads of entrants.ts: that module reaches the stages graph this one is imported from.
+      const { pairRosterVerdictTx } = await import("../entrants");
+      const verdict = await pairRosterVerdictTx(tx, target.entrant_id, members);
+      if (verdict === "none") {
+        await tx`
+          delete from entrant_members
+          where entrant_id = ${target.entrant_id} and person_id = ${placement.person_id}`;
+      } else if (verdict === "dissolve") {
+        if (pairLosses === undefined) throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
+        if (!pairLosses.includes(target.entrant_id)) {
+          pairLosses.push(target.entrant_id);
+          // I-1 (fix round 2): the dissolve runs after the commit and may fail; this row, written with the release, is what the
+          // desk and the retries find the pair by once the placement row below is gone.
+          const { recordPairDissolveOwed } = await import("../withdrawal");
+          await recordPairDissolveOwed(tx, target.division_id, target.entrant_id, registrationId);
+        }
+      }
     }
     await tx`delete from registration_players where id = ${placement.id}`;
     // The source-side answer is the interesting one for the audit trail —
@@ -106,12 +131,109 @@ export async function releaseSoloSignUpPlacement(
   return releasedFrom;
 }
 
+/**
+ * W5 T8b (X-WDT-9; rulings 111, 288): the entrant of a registration withdrawn after Start leaves through the table withdrawal
+ * (`withdrawEntrantCascade`) — the same rule an organiser's Withdraw applies, one door. It runs after the registration has
+ * committed, under the org's own server authority (`cascadeAuthFor`: the registrant has no staff user), and its ledger rows
+ * name the registrant (`actor`).
+ *
+ * A cascade that throws is logged and swallowed. The registration (and its refund, below) stands — telling the registrant it
+ * failed would be false. The entrant is left IN THE FIELD (the cascade writes her status last, so a failure never leaves a
+ * departed entrant over seated lines), which is the recoverable state: the organiser's Withdraw on the Entrants tab runs the
+ * cascade again from the rows as they stand.
+ */
+async function settleStartedWithdrawal(
+  orgId: string,
+  registrationId: string,
+  entrantId: string,
+  by: WithdrawnBy,
+  actorId: string | null,
+): Promise<void> {
+  const { cascadeAuthFor, withdrawEntrantCascade } = await import("../withdrawal");
+  try {
+    // An organiser's own withdrawal of the registration keeps the organiser on the events and the row (`actorId`, as their
+    // Withdraw button does); the registrant's names no staff user.
+    await withdrawEntrantCascade(cascadeAuthFor(orgId, by === "organiser" ? actorId : null), entrantId, {
+      ...(by === "registrant" ? { actor: { kind: "registrant" as const, registration_id: registrationId } } : {}),
+    });
+  } catch (err) {
+    // Re-review: a run that waited behind another (the cascade's lock) and found her already gone — done, nothing failed.
+    const [now] = await sql<{ status: string }[]>`select status from entrants where id = ${entrantId}`;
+    if (now !== undefined && (await import("../entrants")).DEPARTED_STATUSES.has(now.status)) return;
+    log.error(
+      { err, registrationId, entrantId, orgId },
+      "registration: withdrawn after Start, but the table withdrawal failed — the entrant is still in the field; the organiser's Withdraw finishes it",
+    );
+  }
+}
+
+/**
+ * W5 T10 fix round 1 (R12; RB5-R2): the pairs of a started division (any format, ruling 292) that a released solo placement left a partner short
+ * (`releaseSoloSignUpPlacement`'s `pairLosses`) withdraw through the same cascade as any other withdrawal, once the releasing
+ * transaction has committed. Failure handling is `settleStartedWithdrawal`'s: logged, the pair left in the field - and, I-1 (fix round 2),
+ * SHOWN: the release wrote a durable `pair_dissolve_owed` row with it (`recordPairDissolveOwed`), so the desk's "withdrawal did
+ * not finish" item names the pair, the solo's re-POST (`retryOwedWithdrawal`) retries it, and so does the organiser's Withdraw on
+ * the pair (the same lock-guarded cascade). Shared by the withdrawal, a rejection and the expiry sweep.
+ *
+ * The expiry sweep's call of this is wired and UNTESTED: it cannot be reached today (assign refuses an unpaid solo and expiry
+ * takes only `pending` ones, so a placed solo never expires) - m-1, accepted; the release it shares is covered by the other two.
+ */
+export async function dissolvePairsAfterRelease(
+  orgId: string,
+  registrationId: string,
+  entrantIds: readonly string[],
+  by: WithdrawnBy,
+  actorId: string | null,
+): Promise<void> {
+  for (const entrantId of entrantIds) await settleStartedWithdrawal(orgId, registrationId, entrantId, by, actorId);
+}
+
+/**
+ * W5 T8b review I2 (a): a withdrawal POSTed again (the registrant's retry, the organiser's) for a registration already
+ * withdrawn after Start runs the table withdrawal its first attempt did not finish — the entrant still in the field, and not
+ * reinstated since (`withdrawalOwedSince`). Re-review: no window — the cascade holds a per-entrant lock, so a double POST
+ * racing the first run waits for it and then finds her gone. Anything else is the idempotent no-op it always was.
+ */
+async function retryOwedWithdrawal(regId: string, divisionId: string, actorId: string | null, by: WithdrawnBy): Promise<void> {
+  const [{ withdrawalOwedSince }, { DEPARTED_STATUSES }] = await Promise.all([import("../withdrawal"), import("../entrants")]);
+  const [row] = await sql<{ entrant_id: string; withdrawn_at: Date | null; entrant_status: string }[]>`
+    select r.entrant_id, r.withdrawn_at, e.status as entrant_status
+      from registrations r join entrants e on e.id = r.entrant_id
+     where r.id = ${regId} and r.status = 'withdrawn'`;
+  if (row !== undefined && row.withdrawn_at !== null && !DEPARTED_STATUSES.has(row.entrant_status)) {
+    const at = row.withdrawn_at;
+    const entrantId = row.entrant_id;
+    // Started, and still owed (a Reinstate since her withdrawal stands: the organiser's last word).
+    const owed = await sql.begin(async (tx) => (await divisionHasStarted(tx, divisionId)) && (await withdrawalOwedSince(tx, divisionId, entrantId, at)));
+    if (owed) {
+      const ctx = await divisionCtx(sql, divisionId);
+      await settleStartedWithdrawal(ctx.org_id, regId, row.entrant_id, by, actorId);
+    }
+  }
+  // Her own entrant's state is no bar to the pairs below (a placed solo has none, or it departed long ago).
+  await retryOwedPairDissolves(regId, by, actorId);
+}
+
+/**
+ * W5 T10 fix round 2 (I-1): the pairs a registration's release left a partner short whose dissolve did not finish (a
+ * `pair_dissolve_owed` marker, the pair still in the field and not reinstated since) run the cascade again. Reached by the solo's
+ * withdrawal POSTed again and by a rejection POSTed again; the organiser's Withdraw on the pair is the third door, the same
+ * lock-guarded cascade. Nothing owed is the no-op it always was.
+ */
+export async function retryOwedPairDissolves(regId: string, by: WithdrawnBy, actorId: string | null): Promise<void> {
+  const { owedPairsOfRegistration } = await import("../withdrawal");
+  for (const pair of await sql.begin((tx) => owedPairsOfRegistration(tx, regId))) {
+    const ctx = await divisionCtx(sql, pair.divisionId);
+    await settleStartedWithdrawal(ctx.org_id, regId, pair.entrantId, by, actorId);
+  }
+}
+
 /** WHO withdrew is an explicit fact, never inferred from `actorId`: an organiser acting through an API key has NO user id (api-v1/auth.ts),
  *  and reading that as "the registrant" sent no mail and labelled the audit row wrongly. `actorId` is only the audit's actor column. */
 export type WithdrawnBy = "organiser" | "registrant";
 
 export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | null, by: WithdrawnBy): Promise<void> {
-  if (reg.status === "withdrawn") return; // idempotent
+  if (reg.status === "withdrawn") return retryOwedWithdrawal(reg.id, reg.division_id, actorId, by); // idempotent, bar an owed cascade
   // RULING A (RS002 W5 review, MAJOR): rejected is terminal from every
   // writer — reachable here from BOTH withdrawRegistrationOrganiser and the
   // public token-only withdrawRegistrationByRef. Without this, a rejected
@@ -146,15 +268,26 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
       update registrations
       set status = 'withdrawn', withdrawn_at = now(), updated_at = now()
       where id = ${reg.id}`;
-    // A withdrawn entrant that was already materialised marks withdrawn too —
-    // fixtures/standings handle entrant withdrawal by the existing rules.
-    if (locked.entrant_id) {
-      await tx`update entrants set status = 'withdrawn' where id = ${locked.entrant_id}`;
+    // W5 T8b (X-WDT-9, ruling 111 joins the withdrawal door, ruling 288): once the division has started, the entrant leaves
+    // through the table withdrawal — the cascade, after this commits (below), which writes her status LAST. Before Start it is
+    // the bare flip it always was (the field regenerates). "Started" is the cascade's own predicate (`divisionHasStarted`, T9's
+    // one reading, C17), read here under the registration's lock: were the two to disagree, a bare flip after Start would leave
+    // her lines seated against a departed entrant.
+    const cascadeOwed = locked.entrant_id !== null && (await divisionHasStarted(tx, reg.division_id));
+    if (locked.entrant_id && !cascadeOwed) {
+      // W5 T6 review m2: a player waiting for a table place (`table_waiting_stage_id`) stops waiting as they leave — this write
+      // never reaches `writeEntrantPatch`, which clears it on every other departure.
+      // B3 fix wave (I-2): never over a departure already written - a disqualified entrant stays disqualified (the first
+      // departure governs, RB3-17); the registration itself still withdraws by its own rules above and below.
+      const { DEPARTED_STATUSES } = await import("../entrants");
+      await tx`update entrants set status = 'withdrawn', table_waiting_stage_id = null
+                where id = ${locked.entrant_id} and status not in ${tx([...DEPARTED_STATUSES])}`;
     }
     // RS009: if this entry is a solo sign-up placed on someone else's team,
     // withdrawing must take them OFF that roster. Marking their own entrant
     // withdrawn (above) does not touch it — that is a different entrant.
-    const releasedFrom = await releaseSoloSignUpPlacement(tx, reg.id);
+    const pairLosses: string[] = [];
+    const releasedFrom = await releaseSoloSignUpPlacement(tx, reg.id, pairLosses);
     // RS002 W5 whole-branch review MAJOR: withdrawing the cart's LAST
     // `pending` entry used to leave `registration_groups.expires_at` stale
     // forever — only `materialise`'s confirm path ever cleared it. Safe to
@@ -180,15 +313,24 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     // Polish wave P2 (W11): the ORGANISER's withdrawal is news to the registrant; their own is not (the status page and the reference page,
     // which refund and receipt on their own). Queued with the fact, so the two commit together.
     const mailIds = by === "organiser" ? await queueRegistrationWithdrawnMails(tx, { reg: locked }) : [];
-    return { locked, promoted, mailIds };
+    return { locked, promoted, mailIds, cascadeOwed, pairLosses };
   })) as unknown as
-    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailIds: string[] }
+    | { locked: RegistrationWithGroupRow; promoted: RegistrationWithGroupRow | null; mailIds: string[]; cascadeOwed: boolean; pairLosses: string[] }
     | null;
-  if (!outcome) return;
+  // Idempotent: only the call whose transaction moved the row to `withdrawn` (under its `for update`) gets here, so a double
+  // POST or a retry runs no second cascade.
+  if (!outcome) return retryOwedWithdrawal(reg.id, reg.division_id, actorId, by);
   log.info(
     { registrationId: reg.id, orgId: ctx.org_id, by },
     "registration: withdrawn",
   );
+
+  if (outcome.cascadeOwed && outcome.locked.entrant_id) {
+    await settleStartedWithdrawal(ctx.org_id, reg.id, outcome.locked.entrant_id, by, actorId);
+  }
+  // W5 T10 fix round 1 (R12): the pairs this placed solo's leaving left a partner short withdraw too (the entrant's own pair, when
+  // she was a team's target, was settled just above).
+  await dissolvePairsAfterRelease(ctx.org_id, reg.id, outcome.pairLosses.filter((e) => e !== outcome.locked.entrant_id), by, actorId);
 
   // A registrant who cancels their own entry is a FIELD CHANGE, exactly like
   // an organiser's `PATCH /entrants/{id} {status:"withdrawn"}` — but the

@@ -29,9 +29,13 @@ import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
 import { listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
+import { listTableWaiting, readTableLatePools } from "@/server/usecases/table-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
+import { listNamedPools } from "@/server/usecases/stage-table-snapshot";
 import { getKnockoutCutDrift } from "@/server/usecases/knockout-cut-drift";
 import { knockoutCutDriftStageIds } from "@/lib/knockout-cut-drift";
+import { getTableCutDrift } from "@/server/usecases/table-cut-drift";
+import { TABLE_CUT_DRIFT_KINDS, tableCutDriftStageIds } from "@/lib/table-cut-drift";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
 // From the DB-free module, not through the server-only usecase above: this
 // page's tests mock `@/server/usecases/stages` wholesale, and a mocked
@@ -62,7 +66,7 @@ import { findCourtHref } from "@/lib/match-day/view";
 import { needsYouHome } from "@/components/v2/desk/needs-you";
 import { DeskOpenMenu, type DeskOpenItem } from "@/components/v2/desk/desk-open-menu";
 import { comparePools } from "@/lib/pool-order";
-import { poolLabel, poolLabelsInOrder } from "@/lib/pool-label";
+import { poolNaming, poolCaption, poolLabelsInOrder } from "@/lib/pool-label";
 import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
@@ -87,7 +91,7 @@ import { redirect } from "next/navigation";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { EntrantsPanel } from "@/components/v2/entrants-panel";
 import { EntrantKindsSettings } from "@/components/v2/entrant-kinds-settings";
-import { ROOT_KNOCKOUT_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
+import { ROOT_KNOCKOUT_KINDS, TABLE_STAGE_KINDS, divisionTakesKnockoutLateEntry, divisionTakesSwissLateEntry, entrantListLocked } from "@/lib/open-entry-stages";
 import { roundOpensOfDivisions } from "@/server/external-play/round-open";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { ArbiterEntryCard } from "@/components/v2/arbiter-entry-card";
@@ -124,7 +128,9 @@ import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
 import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
-import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
@@ -266,6 +272,10 @@ export default async function DivisionPage({
   // ranked among the competing and styled exactly like them.
   // `listEntrants` already selects `status`, so this costs no extra query.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
+  const lateJoins = await loadRrLateJoins(division.id, fixtures);
+  // W5 T8 (RB5-W7): the league/group departure notes under each table.
+  const tableWithdrawals = await loadTableWithdrawals(division.id);
   // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
   // delete, so these ids are still in `entrantNames` and in a ladder's
   // persisted order — which is exactly how a <select> came to offer a choice
@@ -425,12 +435,30 @@ export default async function DivisionPage({
         ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
       : [],
   );
+  // W5 T11 (X-CUT-4 <- RB5-K6): the same warning on a COMPLETED league or group whose correction moved its cut after the stage it
+  // feeds started. Absent from the map until then, and read on the same tab, for the same reader.
+  const tableCutDrift = Object.fromEntries(
+    tab === "fixtures" && editable
+      ? (
+          await Promise.all(
+            stages
+              .filter((s) => TABLE_CUT_DRIFT_KINDS.has(s.kind) && s.status === "complete")
+              .map(async (s) => [s.id, await getTableCutDrift(auth, s.id)] as const),
+          )
+        ).flatMap(([stageId, drift]) => (drift === null ? [] : [[stageId, drift] as const]))
+      : [],
+  );
   // W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after a knockout's draw and wait to join it — the stage card's
   // "Waiting to join the bracket" strip. An organiser's control, read on this tab only, and only when the division holds a
   // knockout kind a late player can wait on (`ROOT_KNOCKOUT_KINDS` is the server's own gate; the read itself answers none
   // for a division nobody waits in).
   const knockoutWaiting =
     tab === "fixtures" && editable && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listKnockoutWaiting(auth, id) : [];
+  // W5 T23 (X-CU-8; Task 6 ruling I2): the same for a running root league or group — the card's "Waiting to join the table" strip,
+  // and (a group of several pools) the pools its Group field offers. Read only where a table stage exists and somebody waits.
+  const tableWaiting =
+    tab === "fixtures" && editable && stages.some((s) => TABLE_STAGE_KINDS.includes(s.kind)) ? await listTableWaiting(auth, id) : [];
+  const tableWaitingPools = tableWaiting.length > 0 ? await readTableLatePools(auth, id, division.status) : null;
   // W4 T20 (K5 "shown"; R24 pick 3A): the seed each knockout stage's newest Generate drew with, shown under its header as "Random draw · #…".
   // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
   const drawSeeds =
@@ -519,10 +547,9 @@ export default async function DivisionPage({
     tab === "fixtures" && fixturesPublicDict !== undefined && groupStageIds.length > 0
       ? poolLabelsInOrder(
           fixturesPublicDict,
-          await withTenant(auth.orgId, (tx) =>
-            tx<{ id: string; key: string; name: string }[]>`
-              select id, key, name from pools where stage_id in ${tx(groupStageIds)}`,
-          ),
+          // W5 T3 (X-BD-7): a group of ONE pool has a pool row now, but reads as a league: no "Pool A" chip on its rows
+          // (owner R24: a one-pool division shows no letter). Only a stage with several pools names its pools.
+          await withTenant(auth.orgId, (tx) => listNamedPools(tx, groupStageIds)),
         )
       : undefined;
 
@@ -540,13 +567,15 @@ export default async function DivisionPage({
                   select id, key, name from pools where stage_id = ${stage.id}`,
               )),
             ].sort(comparePools);
+            // A stage of ONE pool is headed by its name alone (`poolNaming`, X-BD-7).
+            const named = poolNaming(pools);
             const tables =
               pools.length > 0
                 ? await Promise.all(
                     pools.map(async (p) => ({
                       // From the pool's KEY in the viewer's locale, never
                       // its stored English name (`lib/pool-label.ts`).
-                      caption: `${stage.name} — ${poolLabel(publicDict, p.key)}`,
+                      caption: poolCaption(publicDict, stage.name, p.id, named),
                       poolId: p.id as string | null,
                       snap: await getStandings(auth, stage.id, p.id),
                     })),
@@ -649,6 +678,10 @@ export default async function DivisionPage({
   // W4 T19 (X-LE-3): and on a started division whose entry stage is a root knockout still running, an add takes a free place
   // in round 1 or is refused by name — the same form says so (`divisionTakesKnockoutLateEntry`, the rail's own rule).
   const knockoutLateEntry = tab === "entrants" && editable && divisionTakesKnockoutLateEntry(division.status, stages);
+  // W5 T23 (X-CU-7, X-CU-11): and on a started division whose entry stage is a root league or group still running with its fixtures
+  // drawn, an add plays catch-up matches — the form says so, and a group of several pools offers its Group field.
+  const tableLateEntry =
+    tab === "entrants" && editable && stages.some((s) => TABLE_STAGE_KINDS.includes(s.kind)) ? await readTableLatePools(auth, id, division.status) : null;
   // T20: the controls that START online chess (turning it on, the camera policy) render only while the club is
   // offered it (the PostHog flag `online-chess`). Asked only where one of them can render: a chess division's settings
   // here, and (above) the fixtures tab's entry into the panel of a division that plays online.
@@ -975,6 +1008,7 @@ export default async function DivisionPage({
               divisionStatus={division.status}
               swissLateEntry={swissLateEntry}
               knockoutLateEntry={knockoutLateEntry}
+              tableLateEntry={tableLateEntry}
             />
           </div>
         )}
@@ -1115,14 +1149,17 @@ export default async function DivisionPage({
               swissRoundControls={swissRoundControls}
               swissCutDrift={swissCutDrift}
               knockoutWaiting={knockoutWaiting}
+              tableWaiting={tableWaiting}
+              tableLatePools={tableWaitingPools}
               drawSeeds={drawSeeds}
               thirdPlaceDropped={thirdPlaceDropped}
               startedKnockoutStageIds={startedKnockoutStageIds}
               knockoutCutDrift={knockoutCutDrift}
+              tableCutDrift={tableCutDrift}
               // Match Day PB1 x W3 T17: a COMPLETED stage's card starts as one line, and the cut-drift warning lives on a completed
               // Swiss (W4 T14: or knockout) - so the cards that carry it are listed here and start open. Each list reads the SAME
               // predicate the card draws its notice from, so the two cannot disagree.
-              attentionStageIds={[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift)]}
+              attentionStageIds={[...swissCutDriftStageIds(stages, editable, swissCutDrift), ...knockoutCutDriftStageIds(stages, editable, knockoutCutDrift), ...tableCutDriftStageIds(stages, editable, tableCutDrift)]}
               matchDayHref={matchDayHref}
               rulesStrip={{
                 divisionId: id,
@@ -1196,7 +1233,8 @@ export default async function DivisionPage({
                         dict={publicDict}
                         qualification={qualification}
                         rules={stageOrder(stage.id)}
-                        swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                        swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
+                        withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, poolId)}
                         stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}

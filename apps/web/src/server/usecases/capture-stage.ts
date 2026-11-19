@@ -20,6 +20,7 @@ import "server-only";
 // ONE builder, `buildCaptureStage`, returns `{code, role, pool?, label?}`.
 import type { RoundRole } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
+import { inSeveralPoolsSql } from "./stage-table-snapshot";
 import { getDictionary, toLocale } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/messages";
 import { msgFor } from "@/lib/messages-i18n";
@@ -152,7 +153,7 @@ type StageRow = RoundCodeFixture & { kind: string; pool_key: string | null; divi
 export async function captureStageOf(orgId: string, fixtureId: string): Promise<CaptureStage | null> {
   const rows = await sql<StageRow[]>`
     select f.id, f.stage_id, f.round_no, f.seq_in_round, f.ext_key, f.lane, f.is_final, f.third_place, f.conditional,
-           s.kind, p.key as pool_key, d.name as division_name, o.default_locale
+           s.kind, case when ${inSeveralPoolsSql(sql, "p")} then p.key end as pool_key, d.name as division_name, o.default_locale
       from fixtures t
       join divisions d on d.id = t.division_id
       join organizations o on o.id = d.org_id

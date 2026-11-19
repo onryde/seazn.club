@@ -101,7 +101,7 @@ import {
 // CSS, so the behaviour comes from the same place the look did.
 import { FOCUSABLE_SELECTOR, nextTrapFocus } from "@/components/modal";
 import Link from "@/components/ui/console-link";
-import { knockoutLateEntryOffered, swissLateEntryOffered, type EntryStage } from "@/lib/open-entry-stages";
+import { knockoutLateEntryOffered, swissLateEntryOffered, tableLateEntryOffered, type EntryStage } from "@/lib/open-entry-stages";
 // W3 T12 Phase 2: the rounds chip (with its edit dialog) and the More menu's "Add a round" — their own file, so this
 // rail only mounts them.
 import { SwissAddRoundMenuItem, SwissRoundsChip, type SwissRoundsRail } from "./swiss-rounds-dialog";
@@ -282,9 +282,15 @@ export function StageRail({
       divisionStatus: lateEntry.divisionStatus,
       generated: fixtureCount > 0,
     });
+  // W5 T23 (X-CU-7): a started ROOT league or group offers "Add late player" too (`tableLateEntryOffered`, the rule the server's
+  // admission reads), once its fixtures exist and until it is finished; a fed table never does.
+  const tableLateOffered =
+    lateEntry?.division !== undefined &&
+    tableLateEntryOffered({ stage, division: lateEntry.division, divisionStatus: lateEntry.divisionStatus, generated: fixtureCount > 0 });
   const lateEntryOffered =
     lateEntry !== undefined &&
     (knockoutLateOffered ||
+      tableLateOffered ||
       swissLateEntryOffered({ stage, divisionStatus: lateEntry.divisionStatus, roundSeated: lateEntry.roundSeated }));
   // Derived, not `useId()`: `stage.id` is already unique and already a prop
   // — see this file's own header for why this component gains no hook

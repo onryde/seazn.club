@@ -42,18 +42,26 @@ const WITHDRAW_ON_TBD_KINDS: readonly string[] = Object.freeze(["knockout", "ste
 const GENERATE_AFTER_ADDED_KINDS: readonly string[] = Object.freeze(["double_elim"]);
 const GENERATE_AFTER_WITHDRAWN_KINDS: readonly string[] = Object.freeze(["double_elim"]);
 
+/** late-entry-then-generate's stage kinds (#879; MB-001). LIFTED by W5 app PR A Task 2 (X-CU-6): a root league's or group's
+ *  Generate over existing lines no longer inserts by position (`rr-r{round}-c{court}`) - it reconciles by (pair, leg, pool), so an
+ *  entrant added before Start gets exactly the pairs it owes and nothing twice, and after Start an arrival is refused by name
+ *  (RR_GENERATE_AFTER_START - commands.ts Generate expects that refusal). MB-001 is `fixed`. The fence stays DECLARED (the
+ *  committed case names it, and parseRegressions holds a case's `fence` to a declared one) but guards no kind. */
+const LATE_ENTRY_GENERATE_KINDS: readonly string[] = Object.freeze([]);
+/** Fences a product fix lifted: still declared (a committed `fixed` case names one), applying to no kind. scenario-catalogue.test.ts
+ *  holds each to a fixed witness and an empty kind list, so a lifted fence is never mistaken for a live one. */
+export const LIFTED_FENCES: readonly string[] = Object.freeze(["late-entry-then-generate"]);
+
 export const FENCES: readonly Fence[] = Object.freeze([
   {
     id: "late-entry-then-generate",
     issue: "#879",
     blocks: "Generate",
-    // Round-robin stages only (usecases/schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS). An entrant
-    // added while the stage already has fixtures — before Start, since the
-    // roster locks at Start — then Generate: the reconcile keys on POSITION
-    // (rr-r{round}-c{court}), so it duplicates pairs and misses others (issue
-    // #879; ruling C-1 supersedes R-PF8's post-Start add). Lifted once an
-    // accepted Rebuild or Generate re-seats the grown field.
-    applies: (m: ModelState) => m.lateEntry && (m.stageKind === "league" || m.stageKind === "group"),
+    // Was: round-robin stages (usecases/schedule/rounds.ts ROUND_ROBIN_STAGE_KINDS) with an entrant added while the stage
+    // already had fixtures - before Start, since the roster locks at Start - then Generate: the reconcile keyed on POSITION
+    // (rr-r{round}-c{court}), so it duplicated pairs and missed others (issue #879; ruling C-1 supersedes R-PF8's post-Start add).
+    // Lifted - see LATE_ENTRY_GENERATE_KINDS.
+    applies: (m: ModelState) => m.lateEntry && LATE_ENTRY_GENERATE_KINDS.includes(m.stageKind),
   },
   {
     id: "ko-withdraw-waiting-on-tbd",

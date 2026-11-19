@@ -22,11 +22,11 @@ vi.mock("next/cache", () => ({
 
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { embedDivisionData } from "@/server/embed-data";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, overrideStandings } from "@/server/usecases/stages";
+import { embedDivisionData } from "@/server/embed-data";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import { parseStoredPointsRule, pointsRuleBounds } from "@seazn/engine/competition";
 import { resolveLatestModule } from "@/server/engine-db";
@@ -524,6 +524,24 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     // The engine reads an EMPTY array as no locks at all (`rankLocks: []`).
     await sql`update stages set config = config || '{"rank_overrides": []}'::jsonb where id = ${stage!.id}`;
     expect((await view(d.divisionId)).map((r) => r.has_rank_overrides)).toEqual([false]);
+  });
+
+  // differential: today the flag fires on a bracket whose placement games wrote pins nothing there reads
+  it("X-PO-4 (RB5-P7): the public readers report no override on a stage with no table, though the stored pins (a placement game's) are there", async () => {
+    const d = await division();
+    const [league, ko] = await createStages(d.auth, d.divisionId, [
+      { seq: 1, kind: "league", name: "League", config: {} },
+      { seq: 2, kind: "knockout", name: "Finals", config: {} },
+    ] as never);
+    const pins = sql.json([{ entrant_id: randomUUID(), rank: 3 }] as never);
+    await sql`update stages set config = config || jsonb_build_object('rank_overrides', ${pins}::jsonb) where id in (${league!.id}, ${ko!.id})`;
+    // premise: the view's column still reads the stored list, for both
+    expect((await view(d.divisionId)).map((r) => r.has_rank_overrides)).toEqual([true, true]);
+    const rows = await sql<Parameters<typeof stageQualMeta>[0][]>`select * from public_stages_v where division_id = ${d.divisionId} order by seq`;
+    expect(rows.map((r) => stageQualMeta(r).hasRankOverrides), "the qualification meta: the league's, not the bracket's").toEqual([true, false]);
+    const embed = await embedDivisionData(d.divisionId);
+    expect(embed.ok).toBe(true);
+    if (embed.ok) expect(embed.data.stages.map((s) => s.has_rank_overrides), "the embed's stage rows").toEqual([true, false]);
   });
 
   // Spec-review F4: the view feeds the division page, the hub and the embed.

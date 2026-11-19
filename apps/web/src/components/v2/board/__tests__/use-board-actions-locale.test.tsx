@@ -173,3 +173,22 @@ describe("useBoardActions — fail()'s knockout refusal", () => {
     expect(actions().error).toBe(spanish);
   });
 });
+
+// W5 T12b (X-BD-8): Start refuses a cut the roster cannot supply (RR_CUT_EXCEEDS_FIELD, a round-robin refusal). The board says it in the
+// reader's language, from the round-robin table's own key with the two numbers the server sends beside the code - never the English.
+describe("useBoardActions - fail()'s cut refusal", () => {
+  it("RR_CUT_EXCEEDS_FIELD reads the round-robin copy in this org's locale, with its two numbers filled", async () => {
+    const { ROUND_ROBIN_REFUSALS } = await import("@/lib/roundrobin-refusals");
+    const row = ROUND_ROBIN_REFUSALS.RR_CUT_EXCEEDS_FIELD;
+    net.reject = () => Promise.reject(new ApiV1Error(row.en.replace("{qualified}", "8").replace("{max}", "6"), row.status, "RR_CUT_EXCEEDS_FIELD", { qualified: 8, max: 6, reason: "cut_exceeds_field" }));
+
+    const actions = driveHook();
+    await actions().moveCard(TBD_ID, "2026-09-01T10:00:00.000Z", "Court 1");
+
+    const { msgFor } = await import("@/lib/messages-i18n");
+    const spanish = msgFor("es", row.key, { qualified: 8, max: 6 });
+    expect(spanish, "premise: the Spanish copy differs from the English").not.toBe(row.en.replace("{qualified}", "8").replace("{max}", "6"));
+    expect(spanish, "premise: both numbers are in the sentence").toMatch(/8[\s\S]*6/);
+    expect(actions().error).toBe(spanish);
+  });
+});

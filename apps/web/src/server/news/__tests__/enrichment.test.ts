@@ -138,6 +138,18 @@ describe("biggestClimber", () => {
     expect(biggestClimber(current, ranked(previous))).toEqual({ entrantId: "d", from: 4, to: 1 });
   });
 
+  // B5 fix wave fix round 2 (controller ruling m4; the B5 re-review's pure probe): the step is a result's by construction (the
+  // writer rebases it on every roster refold), so a row NEW in the current table - B beat C, C's first counted match in a pool
+  // table that lists only entrants with a result - neither climbs nor hides the climb of the rows both tables share.
+  // differential: at 36eff19653 a row-count rule (`stepIsAResult`) answered null here.
+  it("m4: a newcomer's first result adds a row; the shared rows still name their climber (B 2 -> 1)", () => {
+    const previous = [row("a", 1, 1), row("b", 2, 1)];
+    const current = [row("b", 1, 4), row("a", 2, 1), row("c", 3, 0)];
+    expect(biggestClimber(current, previous)).toEqual({ entrantId: "b", from: 2, to: 1 });
+    // its pair: the newcomer entering ABOVE a shared row pushes it down, which is no climb for anyone
+    expect(biggestClimber([row("c", 1, 3), row("a", 2, 1), row("b", 3, 1)], previous)).toBeNull();
+  });
+
   it("W2d: into a LEVEL current table (a void re-levelled it) nobody climbs either", () => {
     const previous = [row("a", 1, 3), row("b", 2, 0), row("c", 3, 0)];
     const current = [level("c", 1), level("b", 2), level("a", 3)];

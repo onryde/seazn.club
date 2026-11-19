@@ -28,6 +28,7 @@ import { NEXT_MATCH_STARTED_CODE, nextMatchRefOf } from "../../../lib/next-match
 import { isLevelResultReason } from "../../../lib/level-result-reason";
 import { isSettleRefusalReason } from "../../../lib/settle-refusal-reason";
 import { isDivisionGateReason } from "../../../lib/division-phase";
+import type { WithdrawalPreview } from "@/lib/withdrawal-consequence";
 
 // Review finding 1: listEventsSince previously cast the ledger JSON straight
 // to LedgerSlotEvent[] with no runtime validation, so an OMITTED
@@ -161,6 +162,10 @@ export interface PadTransport extends ScoringTransport {
    *  of the `Date` header on the `/events` calls (`server-offset.ts`), null until one is taken. The server's now is
    *  `Date.now() + (offset ?? 0)`. Optional so a hand-rolled test transport need not grow one. */
   serverOffsetMs?(): number | null;
+  /** W5 T8b (X-WDT-10, ruling 289) — what a disqualification recorded in this match would do to `entrantId` (the cascade's
+   *  own decision, read-only), shown on the sanction ending before its Confirm. Optional so a hand-rolled test transport
+   *  need not grow one; a pad whose transport lacks it shows the read-back alone, as before. */
+  getWithdrawalPreview?(fixtureId: string, entrantId: string): Promise<WithdrawalPreview>;
 }
 
 interface V1Envelope<T> {
@@ -292,6 +297,9 @@ export const TERMINAL_CONFLICT_CODES: ReadonlySet<string> = new Set([
   "UNDO_NOT_UNDOABLE",
   // 2026-11-10: a cricket wicket with a later ball behind it. Only voiding the balls after it first changes the answer.
   "UNDO_WICKET_NOT_LATEST",
+  // W5 T8b review I1: the Undo of a forfeit whose disqualification withdrew her from the table (`usecases/withdrawal.ts`).
+  // Only Reinstate changes the answer.
+  "UNDO_DQ_USE_REINSTATE",
   NEXT_MATCH_STARTED_CODE,
   // W2a (review M-1): the engine's 409s about the write's CONTENT — a generic draw or a finalize the bracket refuses
   // (LEVEL_RESULT_IN_BRACKET), a settle or a tie-break that does not apply. A resend is refused identically; as a
@@ -539,6 +547,11 @@ function makeTransport(auth: PadAuthMode, init: TransportInit = {}): PadTranspor
     async getRules(fixtureId: string): Promise<FixtureRulesResult> {
       const res = await doFetch(`/api/v1/fixtures/${fixtureId}/rules`, { headers });
       return readV1Envelope<FixtureRulesResult>(res);
+    },
+
+    async getWithdrawalPreview(fixtureId: string, entrantId: string): Promise<WithdrawalPreview> {
+      const res = await doFetch(`/api/v1/fixtures/${fixtureId}/withdrawal-preview?entrant=${encodeURIComponent(entrantId)}`, { headers });
+      return readV1Envelope<WithdrawalPreview>(res);
     },
 
     serverOffsetMs: () => offset.offsetMs(),

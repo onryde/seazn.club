@@ -51,6 +51,10 @@ export interface FromTemplateAnswer {
   templateVersion: number;
 }
 /** What one template instantiation built, read back from the product. */
+/** W5 X-BD-3: what an any-sport template (super-groups) asks for in the sheet, and the POST carries (sport_key, variant_key,
+ *  entrant_kind, entrant_count). A fixed template takes none: its input has no `choice`. */
+export interface TemplateChoiceInput { readonly sportKey: string; readonly variantKey: string; readonly entrantKind: EntrantKind; readonly entrantCount: number }
+export interface TemplateCreateInput { readonly name: string; readonly endsOn: string; readonly choice?: TemplateChoiceInput }
 export interface FromTemplateOut { readonly competition: CompetitionRef; readonly division: DivisionRef; readonly stages: readonly StageRef[] }
 /** `kind` (W1-driving Task 8): the product serves it (entrants.ts COLS) and
  *  lists EVERY entrant of the division, the `pair` entrants an americano
@@ -67,6 +71,10 @@ export interface EntrantRow {
 export interface LateEntryWire {
   format: string; case: string; entrant_id?: string; stage_id?: string;
   fixture_id?: string; opponent_id?: string; withdrawn_id?: string; scheduled?: boolean; reason?: string;
+  /** W5 T24 (api-v1/schemas/entrants.ts TableLateEntryResult - a league or group's answer, `format` "league" | "group"): who placed the newcomer, the pool
+   *  a group newcomer joined, the lines written (`placement` `bye_slot` | `catch_up_round`), how many catch-up rounds were appended. */
+  source?: string; pool_key?: string; appended_rounds?: number;
+  fixtures?: { fixture_id: string; round_no: number; placement: string; scheduled: boolean }[];
 }
 /** W4 T24: Reinstate's answer - the entrant's stored status, and how it rejoined a started knockout (`late_entry`, K13). */
 export interface ReinstateOut { entrant_id: string; status: string; late_entry: LateEntryWire | null }
@@ -95,7 +103,9 @@ export interface StartOut { division_id: string; status: string; started: boolea
 export interface SeedProposalRef { readonly id: string; readonly status: string }
 /** W4 T3: a `stage_completed` event as the wire serves it - `places` (`{entrantId, rank}`, level entrants share a rank) and, for a bracket, `title`. */
 export interface CompleteEventWire { type: string; finalRanks?: string[]; places?: { entrantId: string; rank: number }[]; title?: ObservedTitle }
-export interface CompleteOut { completed: boolean; events: CompleteEventWire[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null }
+/** `already_complete` (W5 T17, X-BD-4): present, and true, only on a /complete of a stage that was ALREADY complete - a no-op that
+ *  answers `completed: false` and the next stage's existing draft (or null), so a second /complete is safe to send. */
+export interface CompleteOut { completed: boolean; events: CompleteEventWire[]; division_completed?: boolean; seed_proposal?: SeedProposalRef | null; already_complete?: boolean }
 /** W3 app-B Task 6: POST /stages/{id}/swiss/finish (usecases/swiss-rounds-admin.ts finishSwissNow, FinishSwissResult) - the
  *  stage's completion answer, which Finish performs itself, plus k (`finished_after`: the round whose standings became final),
  *  the rows past it deleted and how many held a laid-out slot. */
@@ -114,7 +124,7 @@ export interface SeedConfirmOut { readonly proposalId: string; readonly filled: 
  *  would re-run the progression, so the drivers record it as a completion.
  *  Pinned against the product's text by http-driver.test.ts. */
 export const SEEDING_FAILED_AFTER_COMMIT = "STAGE_COMPLETED_SEEDING_FAILED";
-export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_finalized: number;
+export interface WithdrawOut { entrant_id: string; status: string; policy: "none" | "walkover" | "expunge"; walkovers: number; voided: number; skipped_cancelled: number;
   /** W2b (loop F, the plan's N1): of `walkovers`, the lines that were HELD when the entrant withdrew — a held level
    *  result, a tie-break owed, an active abandon — each of which used to wait for the organiser's settle. */
   walked_over_held: number }
@@ -133,8 +143,12 @@ export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; rea
  *  StandingsRow) — what the forfeit-credit scenarios isolate a match's credit from. Optional: a fake may omit them.
  *  `rank` (W2e Task 27, D11 b): null on every row of a LEVEL table (`level: true`, no counted result) — the API serves
  *  no position nobody has earned; the product still orders the rows by seed, then id. */
-export interface StandingsRowWire { entrantId: string; rank: number | null; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
+export interface StandingsRowWire { entrantId: string; rank: number | null; /** W5 T22: `active`, else how the entrant left (`withdrawn`, `disqualified`); the pool key the rank is within (null: a league / one pool); a pinned rank. Absent from the fakes' rows. */ status?: string; pool?: string | null; rankLocked?: boolean; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
+/** W5 T24: GET /stages/:id/pools (api-v1/schemas/stages.ts StagePools) - a stage with SEVERAL pools lists them in the product's order; a league, a knockout and a one-pool group list none. */
+export interface StagePoolsOut { stage_id: string; pools: { id: string; key: string; name: string }[] }
+/** W5 T24: POST /stages/:id/standings/override's rows (the OverrideStandings schema, exported by api-v1/schemas/index.ts): a rank pinned for an entrant, with the organiser's reason. */
+export interface RankOverrideRow { entrant_id: string; rank: number; reason: string }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
 /** GET /fixtures/:id/state (usecases/fixtures.ts getFixtureState): the status, the ledger head, the engine's outcome, and — W2e
  *  Task 21 — the stored `summary` (the engine's `summary(state)` the scoreboards print) and `state` (the fold itself), both
@@ -219,7 +233,7 @@ export interface OrganiserDriver {
   /** W1-driving Task 13 (ruling 47): ONE organiser act builds a catalog
    *  template's competition, division and stages — and no entrant
    *  (usecases/templates.ts). The answer is the product's, read back. */
-  createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut>;
+  createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut>;
   createDivision(competitionId: string, input: { name: string; slug: string; sportKey: string; variantKey: string; config?: Record<string, unknown> }): Promise<DivisionRef>;
   getDivision(divisionId: string): Promise<DivisionRef>;
   postStages(divisionId: string, stages: readonly StagePostBody[]): Promise<StageRef[]>;
@@ -320,6 +334,11 @@ export interface OrganiserDriver {
    *  as `reinstate`: the HTTP driver has them, a layer that does not drive the path (and the fakes) does not. A 409 / 422 refusal throws RefusedCall. */
   declareJointWinners?(fixtureId: string): Promise<JointWinnersOut>;
   undoJointWinners?(fixtureId: string): Promise<JointWinnersUndoOut>;
+  /** W5 T24 (P7, SURF; RB5-P5, RB5-P7): the stage's pools (GET /stages/:id/pools). Optional, as `reinstate`: the HTTP driver has it. */
+  stagePools?(stageId: string): Promise<StagePoolsOut>;
+  /** W5 T24 (P7; RB5-P5, RB5-P7): pins ranks (POST /stages/:id/standings/override). A refusal (RR_RANK_OVERRIDE_POOL, RR_RANK_OVERRIDE_NOT_TABLE,
+   *  RR_RANK_OVERRIDE_UNDRAWN_POOLS) throws RefusedCall. Optional, as `reinstate`. */
+  overrideRanks?(stageId: string, rows: readonly RankOverrideRow[]): Promise<unknown>;
   readonly callCount: number;
 }
 

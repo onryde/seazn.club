@@ -28,6 +28,8 @@ import { rulesWriteErrorText } from "@/lib/config-issue-copy";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
 import { swissRoundsWarnNotice, type SwissRoundsNotice } from "@/lib/swiss-rounds";
@@ -126,6 +128,7 @@ import { swissLegendRound, swissStageLegend, swissLegendText } from "@/lib/swiss
 import { lateEntryNoticeText, swissLatecomerCounts, swissLatecomerLines } from "@/lib/swiss-late-entry-notice";
 import { swissCutDriftOf, swissCutDriftText, type SwissCutDrift } from "@/lib/swiss-cut-drift";
 import { knockoutCutDriftOf, knockoutCutDriftText, type KnockoutCutDrift } from "@/lib/knockout-cut-drift";
+import { tableCutDriftOf, tableCutDriftText, type TableCutDrift } from "@/lib/table-cut-drift";
 // Swiss round-1 pairing (spec 2026-09-22-swiss-round-one-pairing, "UI") — the
 // split button's menu. Client-safe leaves only: never the
 // `@seazn/engine/scheduling` barrel (the whole solver; `@seazn/scheduler` is the grpc side).
@@ -148,13 +151,21 @@ import { RUN_SHEET_FILTER_LABEL, RunSheet, RunSheetFilterBar, runSheetHasRows, t
 import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
 import { isOnlineGameExists } from "@/lib/open-round";
 import { venueNoun } from "@/lib/venue";
+import { sitsOutByRound, sitsOutByesOf } from "@/lib/sits-out";
+import { adhocRoundPlan, chosenAdhocRound, type AdhocRoundRow } from "@/lib/adhoc-round";
+import { AddMatchRoundSelect } from "@/components/v2/add-match-round-select";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 // Competition Desk W3 (Task 2) — the stage rail takes the three header
 // action controls (Generate/Complete/Delete). See stage-rail.tsx's own
 // header for why it stays presentational (props only, no data hook).
 import { StageRail, stageRailActions } from "@/components/v2/desk/stage-rail";
 import { KnockoutWaitingStrip } from "@/components/v2/desk/knockout-waiting-strip";
+import { TableWaitingStrip } from "@/components/v2/desk/table-waiting-strip";
+// W5 T23 fix round 2: moved verbatim to a lib module so the waiting strip's Rebuild confirm says the SAME sentence (no copy).
+import { attachmentWarning } from "@/lib/rebuild-attachment-warning";
+export { attachmentWarning };
 import type { KnockoutWaitingEntrant } from "@/server/usecases/knockout-desk";
+import type { TableLatePools } from "@/server/usecases/table-desk";
 import type { SwissRoundsRefusal } from "@/components/v2/desk/swiss-rounds-dialog";
 import type { SwissRoundControl } from "@/lib/swiss-rounds-edit";
 import { StageThirdPlace } from "@/components/v2/stage-third-place";
@@ -226,6 +237,9 @@ interface FixtureRow {
   officials?: unknown[];
   status: string;
   outcome: unknown;
+  /** W5 T3 (X-BD-6): a withdrawal EXPUNGED this match (`listDivisionFixtures`'s `expunged`), so it no longer seats its sides in its round.
+   *  Optional: hand-built test props predate it. */
+  expunged?: boolean;
   /** F1 (2026-08-17) — the engine's bracket-position role, persisted on
    *  fixtures (V368) and selected by usecases/stages/types.ts's FIXTURE_COLS.
    *  Optional here for the same reason it's optional on the shared
@@ -493,6 +507,9 @@ interface Props {
   /** W4 T14 (RB4-Q5, X-QM-4): who a correction inside a completed knockout moved across its cut, by stage id, once the stage
    *  it feeds has started (`getKnockoutCutDrift`). Absent, or no entry: no notice. */
   knockoutCutDrift?: Readonly<Record<string, KnockoutCutDrift>>;
+  /** W5 T11 (X-CUT-4 <- RB5-K6): the same for a completed league or group, by stage id (`getTableCutDrift`). Absent, or no entry:
+   *  no notice. */
+  tableCutDrift?: Readonly<Record<string, TableCutDrift>>;
   /** Match Day B2 (spec 2026-10-31 §9): Match Day's address, handed down ONLY on a match day to an organiser who can edit (the
    *  division page asks the one `needsYouHome` rule the competition page's Open Match Day asks). The run sheet's unscheduled
    *  rows then carry "Find a court" (the word follows `sportKey`: pitch, table, board, rink). null/absent ⇒ not a match day: no link. */
@@ -504,6 +521,11 @@ interface Props {
    *  division page for an organiser on this tab): each stage card lists its own in a "Waiting to join the bracket" strip with
    *  one "Add to bracket" tap. Optional: absent ⇒ no strip (a viewer; the pre-existing panel tests). */
   knockoutWaiting?: readonly KnockoutWaitingEntrant[];
+  /** W5 T23 (X-CU-8; Task 6 ruling I2): the players waiting to join the division's running root league or group
+   *  (`listTableWaiting`) — the table card's "Waiting to join the table" strip, one "Add to the table" each. */
+  tableWaiting?: readonly KnockoutWaitingEntrant[];
+  /** W5 T23 (X-CU-11): the running root group's pools (`readTableLatePools`), for the strip's Group field. */
+  tableLatePools?: TableLatePools | null;
   /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
    *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
   drawSeeds?: Readonly<Record<string, number>>;
@@ -628,7 +650,42 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, knockoutWaiting = [], drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+/** The sticky site header's bottom edge, in viewport px (0 with no header). */
+function headerBottom(): number {
+  const header = document.querySelector("header");
+  return header ? Math.max(0, header.getBoundingClientRect().bottom) : 0;
+}
+
+/** Bring `el` into view just under the sticky site header (its bottom edge + 8px), smooth unless the reader prefers reduced motion.
+ *  Phone widths: the line goes to the top, under the header. */
+function scrollUnderHeader(el: HTMLElement) {
+  const under = headerBottom();
+  el.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+}
+
+/** B5 fix wave fix round 1 (controller ruling: the organiser SEES the outcome at every width): from `md` up, bring `el` into view
+ *  only when it is not fully visible between the sticky header and the bottom of the window, and then by the least scroll
+ *  (`block: "nearest"`, clearing the header by 8px). A line already in view never moves the page (T17c's "no needless scroll"). */
+/** How long after an outcome is said the refreshed data may still re-check it (W5 e2e fix round 1): long enough for a slow
+ *  router.refresh() to land, short enough that a later live update never moves the page. */
+const OUTCOME_RECHECK_MS = 15_000;
+
+function scrollIntoViewIfHidden(el: HTMLElement) {
+  const under = headerBottom();
+  const r = el.getBoundingClientRect();
+  if (r.top >= under && r.bottom <= window.innerHeight) return;
+  el.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
+  // W5 e2e fix round 1: a line brought up from BELOW the fold is aligned to the window's bottom edge, and on a fractional layout
+  // (top 492.39 at 320) that left it 0.39px past the fold - "not fully visible" by this function's own test. Clear the bottom by
+  // the same 8px as the header.
+  el.style.scrollMarginBottom = "8px";
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
+}
+
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -717,6 +774,64 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // sheet can usefully be open at a time, since a second open sheet would be
   // a second `position:fixed` overlay stacked on the first.
   const [openRailFor, setOpenRailFor] = useState<string | null>(null);
+  // W5 T17c (owner 2026-11-18): below `md` a stage action is pressed inside the Stage tools sheet, and every line the action
+  // says (notice, caution, refusal, paywall) is said at the top of the PAGE, under the sheet's scrim. So the sheet closes when
+  // the action SETTLES - landed, a no-op or refused - never on the tap, and only if it is THIS stage's sheet that is open (a
+  // late answer must not close a sheet the organiser has since opened on another stage). Closing runs the rail's effect
+  // cleanup, which hands focus back to the trigger that opened it. At `md` and up there is no sheet and this changes nothing.
+  // Fix round 1+2 (controller, same day): closing the sheet uncovers the line but leaves the page scrolled down at the card, with
+  // the line - at the top of the page - above the sticky header. So EVERY settle of `act` / `swissStageWrite` at a phone width
+  // bumps `outcomeScroll`, whether or not the sheet was still open (Finish and the Rounds chip close it themselves before their
+  // confirm / dialog, and their success notice needs the same scroll), and the effect below brings the first outcome line
+  // ([data-outcome-line]: notice, cautions, red line, paywall gate, online-game notice) into view under the header. At `md` and up
+  // (B5 fix wave fix round 1) only a line that is off screen is brought into view, by the least scroll. Focus is NOT moved to the line: it returns to the trigger that opened the sheet (the rail's contract), and
+  // the lines announce themselves (role="status" / "alert").
+  const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches;
+  const [outcomeScroll, setOutcomeScroll] = useState(0);
+  // Until when the refreshed data re-checks the outcome line (W5 e2e fix round 1, the effect below the scroll's own).
+  const recheckOutcomeUntil = useRef(0);
+  // B5 fix wave G2 (batch review I2): the same scroll for every outcome said OUTSIDE `act` / `swissStageWrite` — the waiting strips'
+  // place, Rebuild and handed-over refusal, and the card's own Rebuild — whose line also lands at the top of the page.
+  // Fix round 1: every width bumps; the effect decides how far to move (a phone: to the top; `md` up: only an off-screen line).
+  const bumpOutcomeScroll = () => {
+    setOutcomeScroll((n) => n + 1);
+  };
+  const closeRailSheet = (stageId: string) => {
+    bumpOutcomeScroll();
+    setOpenRailFor((cur) => (cur === stageId ? null : cur));
+  };
+  useEffect(() => {
+    // No document: the node-rendered unit harness (a browser always has one).
+    if (outcomeScroll === 0 || typeof document === "undefined") return;
+    const line = document.querySelector<HTMLElement>("[data-outcome-line]");
+    if (!line) return;
+    if (isPhone()) scrollUnderHeader(line);
+    else scrollIntoViewIfHidden(line);
+    recheckOutcomeUntil.current = Date.now() + OUTCOME_RECHECK_MS;
+  }, [outcomeScroll]);
+  // W5 e2e fix round 1 (CI, B5 G2 at 768; controller ruling): the scroll above runs as the outcome is SAID, before the
+  // router.refresh() that follows each of these actions lands, so a reflow while that refresh is in flight can carry the line under
+  // the sticky header or below the fold. When the refreshed data arrives, the same check runs ONCE more, at every width: into view
+  // only if hidden, by the least scroll. Bounded by OUTCOME_RECHECK_MS so a later, unrelated refresh (a live update) never pulls the
+  // reader back to an old line.
+  useEffect(() => {
+    if (recheckOutcomeUntil.current === 0 || typeof document === "undefined") return;
+    const due = Date.now() <= recheckOutcomeUntil.current;
+    recheckOutcomeUntil.current = 0;
+    if (!due) return;
+    const line = document.querySelector<HTMLElement>("[data-outcome-line]");
+    if (line) scrollIntoViewIfHidden(line);
+    // Keyed on the two props every refresh re-sends and nothing else changes (`tableWaiting` / `knockoutWaiting` default to a new
+    // `[]` each render, which would fire this in the bump's own commit and spend the re-check before the refresh lands).
+  }, [fixtures, stages]);
+  // m2 (fix round 2): the sheet's Add match opens its form inside the card, behind the scrim - on a phone it closes the sheet and
+  // brings the form into view the same way.
+  const [addMatchScroll, setAddMatchScroll] = useState(0);
+  useEffect(() => {
+    if (addMatchScroll === 0) return;
+    const form = document.querySelector<HTMLElement>('[data-testid="stage-add-match-form"]');
+    if (form) scrollUnderHeader(form);
+  }, [addMatchScroll]);
   // Board slots for the fixture "When" / add-match "When" fields (quarter-
   // hour-time-select design). This panel doesn't otherwise hold the
   // division's schedule config, so it's fetched once here; a failed fetch or
@@ -839,6 +954,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       return refusal;
     } finally {
       setBusy(null);
+      closeRailSheet(stageId);
     }
   }
 
@@ -924,11 +1040,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // W3 T11 review m1: a caution, not a success — the amber channel.
         setWarning(generateWarningText(out, msgPlural));
         // W3 app-B T7 (X-SW-10): and the look-ahead's caution, in its own line. Pair next is pressed inside the phone's
-        // Stage-tools sheet and the line is said outside it, so - as a refusal does - a caution closes the sheet to be
-        // seen; the ordinary Pair leaves it as it was.
-        const next = nextRoundNoticeOf(out);
-        setNextRound(next);
-        if (next !== null) setOpenRailFor(null);
+        // Stage-tools sheet and the line is said outside it; since W5 T17c every settled action closes the sheet (`finally`).
+        setNextRound(nextRoundNoticeOf(out));
       } else if (action === "unpair") {
         const out = await apiV1<{ cleared: number; round: number }>(
           `/api/v1/stages/${stageId}/unpair`,
@@ -938,12 +1051,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       } else {
         const out = await apiV1<{
           completed: boolean;
+          already_complete?: boolean;
           qualified?: { entrants: string[] };
           next_stage_fixtures?: number;
           division_completed?: boolean;
         }>(`/api/v1/stages/${stageId}/complete`, { method: "POST", json: {} });
         setNotice(
-          !out.completed
+          // W5 T17 (X-BD-4): a second Complete (another tab, a double tap) is not "not ready" - it says it was done already.
+          out.already_complete === true
+            ? msg("schedule.notice.alreadyComplete")
+            : !out.completed
             ? msg("schedule.notice.notReady")
             : out.division_completed
               ? msg("schedule.notice.divisionFinished")
@@ -1010,6 +1127,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       return false;
     } finally {
       setBusy(null);
+      closeRailSheet(stageId);
     }
   }
 
@@ -1020,7 +1138,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   async function rebuildStage(stageId: string) {
     const ok = await confirmDialog({
       title: msg("progression.rosterDrift.confirmTitle"),
-      body: [msg("progression.rosterDrift.confirmBody"), attachmentWarning(rosterDrift[stageId], msg, locale)]
+      body: [
+        msg("progression.rosterDrift.confirmBody"),
+        // W5 T23 (B2 batch M4): the confirm states the real number of fixtures the Rebuild deletes — this stage's own lines as the
+        // desk holds them (a late player's catch-up lines included) — never only the generic sentence. What it draws in their place
+        // is the server's to say, after: `rebuiltNotice`.
+        rebuildConfirmCount(fixtures.filter((f) => f.stage_id === stageId).length, msgPlural),
+        attachmentWarning(rosterDrift[stageId], msg, locale),
+      ]
         .filter(Boolean)
         .join(" "),
       confirmLabel: msg("progression.rosterDrift.confirmLabel"),
@@ -1042,28 +1167,35 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         `/api/v1/stages/${stageId}/rebuild`,
         { method: "POST", json: {} },
       );
-      setNotice(rebuiltNotice(out, msg));
+      setNotice(rebuiltNotice(out, msg, msgPlural));
       router.refresh();
     } catch (err) {
-      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
-        setPaywallFeature(String(err.extra.feature_key ?? ""));
-      } else {
-        // 409 STAGE_HAS_RESULTS (hard constraint 1): a ghost can be reported
-        // by getStageRosterDrift even when its fixture already has a result
-        // — the signal and the guard are independent (plan, required test
-        // coverage) — so this is a real, reachable outcome, not just a
-        // defence-in-depth 422 the UI never offers a button for.
-        const blocked = rebuildBlockedMessage(err, msg);
-        if (isOnlineGameExists(err)) {
-          setGameExists(true);
-        } else if (blocked) {
-          setWarning(blocked);
-        } else {
-          setError(rebuildErrorText(err, msg, msgPlural));
-        }
-      }
+      showRebuildRefusal(err);
     } finally {
       setBusy(null);
+      bumpOutcomeScroll();
+    }
+  }
+
+  /** A Rebuild's refusal, said as the stage card says it — the card's own Rebuild and the table waiting strip's (W5 T23 fix
+   *  round 2: one classifier, so a refusal such as ONLINE_GAME_EXISTS reads the same from either button). */
+  function showRebuildRefusal(err: unknown) {
+    if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+      setPaywallFeature(String(err.extra.feature_key ?? ""));
+    } else {
+      // 409 STAGE_HAS_RESULTS (hard constraint 1): a ghost can be reported
+      // by getStageRosterDrift even when its fixture already has a result
+      // — the signal and the guard are independent (plan, required test
+      // coverage) — so this is a real, reachable outcome, not just a
+      // defence-in-depth 422 the UI never offers a button for.
+      const blocked = rebuildBlockedMessage(err, msg);
+      if (isOnlineGameExists(err)) {
+        setGameExists(true);
+      } else if (blocked) {
+        setWarning(blocked);
+      } else {
+        setError(rebuildErrorText(err, msg, msgPlural));
+      }
     }
   }
 
@@ -1083,6 +1215,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // A2/3). C3 mounts it once PER STAGE (`RunSheet embedded`, narrowed to the stage, inside that stage's card) under ONE filter bar
   // above the cards. `nowMs` is the panel's ticking `useNow` clock (C5), never a module-scope `Date.now()`.
   const runSheetBlocks = buildRunSheet({ fixtures: fixtures.map(toRunSheetFixture), stages, tz, nowMs });
+  // W5 T3 (X-SF-4): who has left the field, for each round bar's "Sits out" line: every named entrant the page does not hold in the
+  // field (`activeEntrantIds`, the complement of its DEPARTED_STATUSES). With no roster the panel cannot tell, so it names no one.
+  const sitsOutDeparted = (() => {
+    if (activeEntrantIds === undefined) return null;
+    const active = new Set(activeEntrantIds);
+    return new Set(Object.keys(entrantNames).filter((id) => !active.has(id)));
+  })();
   const runSheetProps = {
     blocks: runSheetBlocks,
     stages,
@@ -1137,7 +1276,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     <div className="space-y-6">
       {rulesStrip !== undefined && <DivisionRulesStrip {...rulesStrip} />}
       {notice && (
-        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+        <p className="flex items-center gap-2 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-700" role="status" data-outcome-line data-testid="schedule-notice">
           {notice}
           {undoable && (
             <button
@@ -1151,12 +1290,16 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           )}
         </p>
       )}
-      {paywallFeature && <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />}
+      {paywallFeature && (
+        <div data-outcome-line>
+          <UpgradeGate feature={paywallFeature} viewerPlan={viewerPlan} />
+        </div>
+      )}
       {/* Precondition-not-met (amber, actionable) — never the green success
           banner: "Générer les matchs" did nothing because the entrants can't
           fill the configured groups yet, not because it was already done. */}
       {warning && (
-        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="schedule-warning">
+        <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status" data-outcome-line data-testid="schedule-warning">
           {warning}
         </p>
       )}
@@ -1164,7 +1307,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           own beside the caution above; no button - the way out (Finish after the round just paired) is said in the sentence,
           and the rail offers it once that round is decided. */}
       {nextRound && (
-        <p role="status" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-testid="swiss-next-round-warning">
+        <p role="status" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" data-outcome-line data-testid="swiss-next-round-warning">
           {nextRoundText(nextRound, msg)}
         </p>
       )}
@@ -1174,6 +1317,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       {pairingRefusal && (
         <div
           role="status"
+          data-outcome-line
           data-testid="schedule-pairing-refusal"
           className="flex flex-col gap-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800"
         >
@@ -1193,9 +1337,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           )}
         </div>
       )}
-      {gameExists && <OnlineGameExistsNotice arbiterHref={arbiterHref} />}
+      {gameExists && (
+        <div data-outcome-line>
+          <OnlineGameExistsNotice arbiterHref={arbiterHref} />
+        </div>
+      )}
       {error && (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" data-testid="schedule-error">
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600" role="alert" data-outcome-line data-testid="schedule-error">
           {error}
         </p>
       )}
@@ -1578,15 +1726,17 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         // `attentionStageIds` is built from too, so the card that has the notice is the card that starts open.
         const cutDrift = swissCutDriftOf(stage, canEdit, swissCutDrift);
         const knockoutDrift = knockoutCutDriftOf(stage, canEdit, knockoutCutDrift);
+        const tableDrift = tableCutDriftOf(stage, canEdit, tableCutDrift);
         // W4 T19: this card's waiting players (`listKnockoutWaiting` already leaves out a finished stage and a departed player).
         const waitingHere = knockoutWaiting.filter((w) => w.stageId === stage.id);
+        const tableWaitingHere = tableWaiting.filter((w) => w.stageId === stage.id);
         // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
         const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages/roster-drift.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
         // no-op read for the common case.
-        const drift = rosterDrift[stage.id];
+        const drift = withoutTableWaiting(rosterDrift[stage.id], tableWaitingHere);
         // W4 B2 fix round 2 (item 1): an empty first-round place (a deleted entrant) is drift too — `rosterDriftShown` is the
         // one test, read by the banner below and by Update draw's offer.
         const hasDrift = rosterDriftShown(drift);
@@ -1660,7 +1810,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               })();
             }}
             addingTo={addingTo}
-            onToggleAddMatch={(stageId) => setAddingTo(addingTo === stageId ? null : stageId)}
+            onToggleAddMatch={(stageId) => {
+              const opening = addingTo !== stageId;
+              setAddingTo(opening ? stageId : null);
+              if (opening && isPhone()) {
+                setOpenRailFor((cur) => (cur === stageId ? null : cur));
+                setAddMatchScroll((n) => n + 1);
+              }
+            }}
             open={openRailFor === stage.id}
             onToggleOpen={(stageId) => setOpenRailFor(openRailFor === stageId ? null : stageId)}
             adhoc={ADHOC_STAGE_KINDS.has(stage.kind)}
@@ -1852,6 +2009,34 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 {/* W4 T19 (X-LE-10; R24 pick 1A): the players who arrived after the draw and wait to join this knockout, each with
                     one "Add to bracket". An organiser's strip, drawn only while someone waits here; a tap that seats them says so in
                     the panel's own notice line (it outlives the strip), one that cannot leaves its reason and exits in the row. */}
+                {/* W5 T23 (X-CU-8): the same strip for a running root league or group — "Add to the table", with the Group field
+                    on a group of several pools. A tap that places them says so in the panel's own notice lines. */}
+                {canEdit && tableWaitingHere.length > 0 && (
+                  <TableWaitingStrip
+                    stageId={stage.id}
+                    waiting={tableWaitingHere}
+                    names={entrantNames}
+                    pools={tableLatePools?.stageId === stage.id ? tableLatePools.pools : undefined}
+                    defaultPool={tableLatePools?.stageId === stage.id ? tableLatePools.defaultKey : null}
+                    rebuildable={tableLatePools?.stageId === stage.id && tableLatePools.rebuildable}
+                    fixtureCount={stageFixtures.length}
+                    rebuildAttachments={rosterDrift[stage.id]?.attachments}
+                    onRebuildRefused={(err) => {
+                      setNotice(null);
+                      setWarning(null);
+                      setGameExists(false);
+                      showRebuildRefusal(err);
+                      bumpOutcomeScroll();
+                    }}
+                    registrationsHref={routes.competitionRegistration(orgSlug, compSlug, "registrants", divisionId)}
+                    onPlaced={(said) => {
+                      setError(null);
+                      setNotice(said.done.length > 0 ? said.done.join(" ") : null);
+                      setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                      bumpOutcomeScroll();
+                    }}
+                  />
+                )}
                 {canEdit && waitingHere.length > 0 && (
                   <KnockoutWaitingStrip
                     stageId={stage.id}
@@ -1863,6 +2048,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                       setError(null);
                       setNotice(said.done.length > 0 ? said.done.join(" ") : null);
                       setWarning(said.todo.length > 0 ? said.todo.join(" ") : null);
+                      bumpOutcomeScroll();
                     }}
                   />
                 )}
@@ -1893,6 +2079,19 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                   >
                     <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
                       {knockoutCutDriftText(knockoutDrift, entrantNames, locale, msgPlural)}
+                    </p>
+                  </div>
+                )}
+                {/* W5 T11 (X-CUT-4 <- RB5-K6): the same notice for a corrected league or group, whose bracket stands once the stage it
+                    feeds has started (before that, the correction re-proposes it). Same treatment, same place, same fold rule. */}
+                {tableDrift && (
+                  <div
+                    role="status"
+                    data-testid="table-cut-drift-warning"
+                    className="border-b border-dashed border-amber-200 bg-amber-50 px-4 py-3"
+                  >
+                    <p className="min-w-0 break-words text-xs font-medium leading-relaxed text-amber-900">
+                      {tableCutDriftText(tableDrift, entrantNames, locale, msgPlural)}
                     </p>
                   </div>
                 )}
@@ -2007,6 +2206,14 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     msg={msg}
                     stageId={stage.id}
                     entrantNames={entrantNames}
+                    // W5 T3 (X-BD-6): the stage's lines as the round planner reads them. A line seats its sides unless it was voided
+                    // ("Not played", `cancelled`) or a withdrawal expunged it - the server's own `seats` rule (`addFixture`).
+                    roundRows={stageFixtures.map((f) => ({
+                      round_no: f.round_no,
+                      home: f.home_entrant_id,
+                      away: f.away_entrant_id,
+                      seats: f.status !== "cancelled" && f.expunged !== true,
+                    }))}
                     boardSlotOptions={boardSlotOptions}
                     onDone={() => {
                       setAddingTo(null);
@@ -2173,6 +2380,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     embedded
                     quietEmpty={!anyRowsKept}
                     stageId={stage.id}
+                    sitsOut={sitsOutDeparted === null ? undefined : sitsOutByRound(sitsOutByesOf(stage.config), entrantNames, sitsOutDeparted)}
                     endsCard={false /* something always follows the sheet in the card: an editor's rail, a viewer's court-tags line (review m3) */}
                   />
                 )}
@@ -2411,43 +2619,6 @@ export function AddStageForm({
  * STAGE_NOT_ROOT this panel's own gating never triggers) falls through to
  * the caller's generic handling, same as generatePreconditionMessage's null.
  */
-/**
- * F3 ultrareview finding 5 — the sentence appended to the rebuild confirm
- * dialog naming the organiser SETUP the rebuild clears along with the
- * fixtures: referee appointments, team sheets, paired scoring devices. All
- * three CASCADE off `delete from fixtures` and none of them blocks the
- * rebuild (a result does; see rebuildStageFixtures' guard) — so without this
- * the dialog said "every fixture is deleted and regenerated" while silently
- * also dropping a Saturday's worth of appointments.
- *
- * Returns "" when there is nothing attached, so the common case adds no
- * boilerplate to click through — only non-zero pieces are listed. Joined
- * with `Intl.ListFormat` on the caller's own locale rather than a hardcoded
- * ", " and " and ": the conjunction and the separator differ per language,
- * and this repo's four dictionaries would otherwise need two more keys that
- * exist only to spell out punctuation. Exported (pure) for the same reason
- * rebuildBlockedMessage is: testable without a jsdom harness.
- */
-export function attachmentWarning(drift: RosterDrift | undefined, msg: Msg, locale: string): string {
-  const a = drift?.attachments;
-  if (!a) return "";
-  const parts = [
-    a.officials > 0 ? msg("progression.rosterDrift.alsoOfficials", { count: a.officials }) : null,
-    a.lineups > 0 ? msg("progression.rosterDrift.alsoLineups", { count: a.lineups }) : null,
-    a.deviceLinks > 0 ? msg("progression.rosterDrift.alsoDevices", { count: a.deviceLinks }) : null,
-    // W4 B2 fix round 2 (item 5): the rest of the setup a match can carry before Start, each a cascade of the delete.
-    a.streams > 0 ? msg("progression.rosterDrift.alsoStreams", { count: a.streams }) : null,
-    a.youtubeBroadcasts > 0 ? msg("progression.rosterDrift.alsoBroadcasts", { count: a.youtubeBroadcasts }) : null,
-    a.availability > 0 ? msg("progression.rosterDrift.alsoAvailability", { count: a.availability }) : null,
-    a.calls > 0 ? msg("progression.rosterDrift.alsoCalls", { count: a.calls }) : null,
-  ].filter((p): p is string => p !== null);
-  if (parts.length === 0) return "";
-  const items = new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(parts);
-  const cleared = msg("progression.rosterDrift.alsoCleared", { items });
-  // Owner ruling Q4 (2026-09-23): the cascade takes every printed QR on this
-  // stage with it — say so in the one dialog that precedes it.
-  return a.deviceLinks > 0 ? `${cleared} ${msg("progression.rosterDrift.sheetsStop")}` : cleared;
-}
 
 /** POST /stages/{id}/generate's answer, as far as the desk's notice reads it (`GenerateResult`). */
 export type GenerateNoticeWire = {
@@ -2467,6 +2638,17 @@ export type GenerateNoticeWire = {
     /** Every seat emptied, a deleted entrant's included (no id to list) — fix round 1, I2. */
     vacated_seats: number;
     slots?: { kept: number; freed: number; unscheduled: number };
+    /** W5 T2 fix round 3: a no-op that is NOT "up to date" - a group below what its pools need keeps its draw. */
+    reason?: "pools_below_minimum";
+    groups?: number;
+    entrants?: number;
+    required?: number;
+    /** W5 T12 (X-BD-1): the pool count that works, null when none does. */
+    suggested?: number | null;
+    /** W5 T2 fix round 3: an in-place patch took lines that carried setup with it - the rows, and whose fixtures they were. */
+    setups_removed?: { count: number; names: string[] };
+    /** W5 T13 fix round 1: a `regenerated` redraw dropped this many manual ranks (their pool changed). Absent at zero. */
+    pins_cleared?: number;
   };
 };
 
@@ -2498,7 +2680,16 @@ export function generateNoticeText(out: GenerateNoticeWire, msg: Msg, msgPlural:
  * and the departed taken out, each clause dropped at zero.
  */
 export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg: Msg, msgPlural: MsgPlural): string | null {
-  if (reconcile === undefined || reconcile.kind === "noop") return null;
+  if (reconcile === undefined) return null;
+  if (reconcile.kind === "noop") {
+    // W5 T2 fix round 3: the one no-op that is not "up to date" - a group whose live field is below its pools' minimum cannot be
+    // snaked again, so nothing was done and the organiser is told why (the same sentence a first Generate's refusal uses).
+    if (reconcile.reason !== "pools_below_minimum") return null;
+    return [
+      tooFewGroupEntrantsText({ groups: reconcile.groups, entrants: reconcile.entrants, required: reconcile.required, suggested: reconcile.suggested }, msg),
+      msg("schedule.notice.reconcileDrawStands"),
+    ].join(" ");
+  }
   if (reconcile.kind === "regenerated") {
     // B2 fix round 1 (I1): a redraw deletes every line and draws new ones, so it says what became of the slots (Rebuild's
     // own line, dropped for a bracket nobody laid out — the server then reports 0/0/0) and that printed sheets, which name
@@ -2509,6 +2700,8 @@ export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg:
       slots && slots.kept + slots.freed + slots.unscheduled > 0
         ? msg("progression.rosterDrift.rebuiltSlots", { kept: slots.kept, freed: slots.freed, unscheduled: slots.unscheduled })
         : null,
+      // W5 T23 (Task 18 review): the redraw's dropped manual ranks — on the wire since W5 T13, said nowhere until now.
+      pinsClearedText(reconcile.pins_cleared, msgPlural),
       msg("progression.rosterDrift.sheetsStop"),
     ]
       .filter((c): c is string => c !== null)
@@ -2518,6 +2711,10 @@ export function reconcileNotice(reconcile: GenerateNoticeWire["reconcile"], msg:
     reconcile.placed.length > 0 ? msgPlural("schedule.notice.reconcilePlaced", reconcile.placed.length) : null,
     // The SEATS emptied, not the ids listed: a deleted entrant's seat has no id left (fix round 1, I2).
     reconcile.vacated_seats > 0 ? msgPlural("schedule.notice.reconcileVacated", reconcile.vacated_seats) : null,
+    // The setup (officials, team sheets, devices, availability, calls) that went with the removed lines is said, never silent.
+    reconcile.setups_removed !== undefined && reconcile.setups_removed.count > 0
+      ? msgPlural("schedule.notice.reconcileSetupsRemoved", reconcile.setups_removed.count, { names: reconcile.setups_removed.names.join(", ") })
+      : null,
   ].filter((c): c is string => c !== null);
   return clauses.length > 0 ? clauses.join(" ") : null;
 }
@@ -2595,6 +2792,38 @@ export function reshapeNotice(
 export interface RebuiltOutcome {
   removed: number;
   slots: { kept: number; freed: number; unscheduled: number };
+  /** The fixtures the Rebuild drew (GenerateResult's own `created`). Absent in a hand-built outcome: then only "replaced" is said. */
+  created?: number;
+  /** W5 T23 (Task 18 review): how many manual ranks the Rebuild dropped because their pool's membership changed. Absent at zero. */
+  pins_cleared?: number;
+}
+
+/**
+ * W5 T23 (X-CU-8; product-owner ruling, Task 23): a player WAITING to join a started table is not roster drift to fix by Rebuild —
+ * the card's waiting strip names them with the one tap that places them ("Add to the table"), and Rebuild after Start would redraw
+ * a running stage. So the banner's "not on a fixture yet" list leaves out whoever the strip lists; a banner left with nothing to say
+ * is not drawn (`rosterDriftShown`). A ghost, a vacant line, or an unplaced player who is NOT waiting still shows, as before.
+ */
+export function withoutTableWaiting<D extends { unplaced: readonly { id: string }[] }>(
+  drift: D | undefined,
+  waiting: readonly { entrantId: string }[],
+): D | undefined {
+  if (drift === undefined || waiting.length === 0) return drift;
+  const ids = new Set(waiting.map((w) => w.entrantId));
+  return { ...drift, unplaced: drift.unplaced.filter((e) => !ids.has(e.id)) };
+}
+
+/** W5 T23 (B2 batch M4): the Rebuild confirm's count of the fixtures it deletes; nothing for a stage with none (nothing to count). */
+export function rebuildConfirmCount(fixtureCount: number, msgPlural: MsgPlural): string | null {
+  return fixtureCount > 0 ? msgPlural("progression.rosterDrift.confirmCount", fixtureCount) : null;
+}
+
+/** W5 T23 (Task 18 review): the clause that names the manual ranks a redraw dropped (Rebuild's, and Generate's own redraw). */
+function pinsClearedText(pinsCleared: number | undefined, msgPlural: MsgPlural | undefined): string | null {
+  if (pinsCleared === undefined || pinsCleared === 0) return null;
+  // A count the server reported is never dropped silently for want of the plural reader.
+  if (msgPlural === undefined) throw new Error("pinsClearedText: a cleared-pins count needs msgPlural");
+  return msgPlural("progression.rosterDrift.pinsCleared", pinsCleared);
 }
 
 /**
@@ -2608,11 +2837,17 @@ export interface RebuiltOutcome {
  * layout (`carrySlots`), so it reports 0/0/0. Exported pure, like the
  * classifiers below.
  */
-export function rebuiltNotice(out: RebuiltOutcome, msg: Msg): string {
-  const head = msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed });
+export function rebuiltNotice(out: RebuiltOutcome, msg: Msg, msgPlural?: MsgPlural): string {
   const { kept, freed, unscheduled } = out.slots;
-  if (freed + unscheduled === 0) return head;
-  return `${head} ${msg("progression.rosterDrift.rebuiltSlots", { kept, freed, unscheduled })}`;
+  return [
+    msg("progression.rosterDrift.rebuiltNotice", { removed: out.removed }),
+    // W5 T23 (B2 batch M4): a Rebuild that drew a different number than it removed (a late player joined, or left) says how many.
+    out.created !== undefined && out.created !== out.removed ? msg("progression.rosterDrift.rebuiltCreated", { created: out.created }) : null,
+    freed + unscheduled === 0 ? null : msg("progression.rosterDrift.rebuiltSlots", { kept, freed, unscheduled }),
+    pinsClearedText(out.pins_cleared, msgPlural),
+  ]
+    .filter((c): c is string => c !== null)
+    .join(" ");
 }
 
 export function rebuildBlockedMessage(err: unknown, msg: Msg): string | null {
@@ -2652,13 +2887,10 @@ export function classifyActError(
   // complete and the organiser has one concrete thing to fix — and a refresh,
   // because otherwise the board keeps showing a completed stage as active and
   // the next click lands on an already-complete stage.
-  if (err instanceof ApiV1Error && err.code === "STAGE_COMPLETED_SEEDING_FAILED") {
-    return {
-      tone: "warning",
-      text: msg("schedule.error.completedSeedingFailed", { reason: err.message }),
-      refresh: true,
-    };
-  }
+  // B4 fix wave (12b m1): a cut the field cannot supply rides inside the wrap by name with its numbers - said in the reader's
+  // language by the one home of this sentence, which the open-stages warning shares (B5 n1).
+  const completedBut = completedSeedingFailedText(err, msg);
+  if (completedBut !== null) return { tone: "warning", text: completedBut, refresh: true };
   // Swiss round-1 pairing, review ruling R4 — the server refused the pick
   // (the round moved on under the desk, or the stage is not Swiss). Its
   // `*_MESSAGE` is English wire text and must never reach the desk, so the
@@ -2684,6 +2916,20 @@ export function classifyActError(
   // envelope's fields, which the server sends beside the code (`knockoutRefusal(code, details)` → `err.extra`).
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
     return { tone: "warning", text: knockoutRefusalText(err.code, err.extra, msg), refresh: false };
+  }
+  // W5 T12b (X-BD-8, RB5-E6): a cut the field cannot supply, refused at Generate before Start or at an on_complete completion, says so
+  // in the reader's language, naming the largest cut that works. Amber: the stage stands, the format or the field is what to mend. A
+  // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED, carrying the code as `cause`
+  // (B4 fix wave), and is said by the wrap's branch above.
+  if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+  }
+  // W5 T23 (B2 batch M2): every other round-robin refusal a stage action meets — Generate after Start (RR_GENERATE_AFTER_START, which
+  // points at the waiting strip's "Add to the table"), a redraw that would clear setup or drop an Add match row — in the reader's
+  // language, never the server's English. Amber: the stage stands; the sentence says what to do. A refresh: the strip it points at
+  // may hold someone the desk's last read did not.
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
@@ -2962,6 +3208,7 @@ function AddMatchForm({
   msg,
   stageId,
   entrantNames,
+  roundRows,
   boardSlotOptions,
   onDone,
   onCancel,
@@ -2969,6 +3216,8 @@ function AddMatchForm({
   msg: Msg;
   stageId: string;
   entrantNames: Record<string, string>;
+  /** W5 T3 (X-BD-6): the stage's lines, for the Round select. */
+  roundRows: AdhocRoundRow[];
   /** Board slots for the "When" field — see `boardSlotOptionsFor` above.
    *  `undefined` lets `DateTimeField` fall back to quarter hours. */
   boardSlotOptions?: string[];
@@ -2978,6 +3227,7 @@ function AddMatchForm({
   const options = Object.entries(entrantNames).sort((a, b) => a[1].localeCompare(b[1]));
   const [home, setHome] = useState("");
   const [away, setAway] = useState("");
+  const [roundPick, setRoundPick] = useState<number | null>(null);
   const [when, setWhen] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2986,11 +3236,15 @@ function AddMatchForm({
     setSaving(true);
     setError(null);
     try {
+      // The round on screen is the round sent (W5 T3, X-BD-6): the server defaults the same way when none is named, but a form that
+      // shows "Round 3" must write round 3, not whatever a second planner says later.
+      const round = chosenAdhocRound(adhocRoundPlan(roundRows, home, away), roundPick);
       await apiV1(`/api/v1/stages/${stageId}/fixtures`, {
         method: "POST",
         json: {
           home_entrant_id: home,
           away_entrant_id: away,
+          round_no: round,
           ...(when !== "" ? { scheduled_at: new Date(when).toISOString() } : {}),
         },
       });
@@ -3003,7 +3257,7 @@ function AddMatchForm({
   }
 
   return (
-    <div className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
+    <div data-testid="stage-add-match-form" className="border-b border-dashed border-slate-200 bg-slate-50/60 px-4 py-3">
       <div className="flex flex-wrap items-end gap-3">
         <label className="label flex flex-col gap-1 text-xs">
           {msg("stage.addMatch.home")}
@@ -3027,6 +3281,15 @@ function AddMatchForm({
             ))}
           </select>
         </label>
+        <AddMatchRoundSelect
+          msg={msg}
+          rows={roundRows}
+          home={home}
+          away={away}
+          entrantNames={entrantNames}
+          pick={roundPick}
+          onPick={setRoundPick}
+        />
         <DateTimeField
           kind="datetime-local"
           label={msg("stage.addMatch.when")}

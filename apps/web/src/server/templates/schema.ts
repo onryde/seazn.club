@@ -62,8 +62,13 @@ export const TemplateStageProgression = ProgressionSchema.refine(
 );
 export type TemplateStageProgression = z.infer<typeof TemplateStageProgression>;
 
-export const TemplateEntrantKind = z.enum(["team", "pair", "individual"]);
+/** `"any"` (W5 X-BD-3, NEW-W1d-5): the template names no entrant kind of its own — and, with `sportKey`/`variantKey` both
+ *  `"any"`, no sport — so the organiser chooses them when they use it (`resolve.ts`). */
+export const TemplateEntrantKind = z.enum(["team", "pair", "individual", "any"]);
 export type TemplateEntrantKind = z.infer<typeof TemplateEntrantKind>;
+
+/** The word a template's sport, variant and entrant kind carry when the organiser chooses them (see TemplateEntrantKind). */
+export const ANY_CHOICE = "any";
 
 /** Catalog i18n keys only — dictionary keys, never literal English strings
  *  (ruling 4: templates carry i18n keys, precedent apps/web/src/config/
@@ -110,6 +115,10 @@ export const TemplateStage = z.object({
    *  applied first, so an explicit `config.pools` here can still override
    *  the sugar. */
   config: z.record(z.string(), z.unknown()).optional(),
+  /** W5 X-BD-3: a `group` stage whose pool count follows the field — `entrantCount / poolSize` pools (so the card can offer
+   *  several field sizes, `TemplateDivision.entrantCountOptions`). Resolved into `groups` before a create
+   *  (`resolve.ts`); never beside `groups`. */
+  poolSize: z.number().int().min(2).optional(),
   scheduleDefaults: ScheduleDefaults.optional(),
   /** Cross-stage progression wiring (P7, D4's StageSeeding; unified onto one
    *  field by F2) for a stage that qualifies from an EARLIER stage in the
@@ -141,9 +150,44 @@ export const TemplateDivision = z.object({
    *  level (CreateDivision carries no entrantKind field either). */
   entrantKind: TemplateEntrantKind,
   entrantCount: z.number().int().positive(),
+  /** W5 X-BD-3: the field sizes the card offers (the default, `entrantCount`, is one of them), ascending. Absent: the one
+   *  size is `entrantCount`, as every template before W5. */
+  entrantCountOptions: z.array(z.number().int().positive()).min(1).optional(),
   stages: z.array(TemplateStage).min(1),
 });
 export type TemplateDivision = z.infer<typeof TemplateDivision>;
+
+/** The arithmetic a division must agree with itself on, so a catalog edit that breaks it fails at module init and not at
+ *  a create (the loader parses every entry at import). Issues are located on the division. */
+function checkDivision(d: TemplateDivision, ctx: z.RefinementCtx, at: (string | number)[]): void {
+  const issue = (message: string, path: (string | number)[] = []) => ctx.addIssue({ code: "custom", message, path: [...at, ...path] });
+  const anys = [d.sportKey, d.variantKey, d.entrantKind].filter((v) => v === ANY_CHOICE).length;
+  if (anys !== 0 && anys !== 3) {
+    issue(`sportKey, variantKey and entrantKind are all "${ANY_CHOICE}" or none of them is (a template chooses its sport, variant and kind together)`);
+  }
+  if (anys === 3) {
+    // A rule or an order is a sport's; a template with no sport has none to give.
+    if (d.cfgOverrides !== undefined) issue(`an "${ANY_CHOICE}" division carries no cfgOverrides: its sport is chosen later`, ["cfgOverrides"]);
+    if (d.tiebreakers !== undefined) issue(`an "${ANY_CHOICE}" division carries no tiebreakers: its sport is chosen later`, ["tiebreakers"]);
+  }
+  const options = d.entrantCountOptions;
+  if (options !== undefined) {
+    if (!options.includes(d.entrantCount)) issue("entrantCountOptions must hold the default entrantCount", ["entrantCountOptions"]);
+    if (options.some((n, i) => i > 0 && n <= options[i - 1]!)) {
+      issue("entrantCountOptions must be strictly ascending (and so unique)", ["entrantCountOptions"]);
+    }
+  }
+  const counts = options ?? [d.entrantCount];
+  d.stages.forEach((st, si) => {
+    if (st.poolSize === undefined) return;
+    if (st.kind !== "group") issue("poolSize is for a group stage", ["stages", si, "poolSize"]);
+    if (st.groups !== undefined) issue("poolSize and groups both set: the pool count is one or the other", ["stages", si, "poolSize"]);
+    const off = counts.filter((n) => n % st.poolSize! !== 0);
+    if (off.length > 0) {
+      issue(`poolSize ${st.poolSize} does not divide ${off.join(", ")} entrants into whole pools`, ["stages", si, "poolSize"]);
+    }
+  });
+}
 
 export const CompetitionTemplate = z.object({
   key: z.string().min(1),
@@ -153,5 +197,5 @@ export const CompetitionTemplate = z.object({
   version: z.number().int().positive(),
   i18n: TemplateI18n,
   divisions: z.array(TemplateDivision).min(1),
-});
+}).superRefine((t, ctx) => t.divisions.forEach((d, di) => checkDivision(d, ctx, ["divisions", di])));
 export type CompetitionTemplate = z.infer<typeof CompetitionTemplate>;

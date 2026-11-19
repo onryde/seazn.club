@@ -1,4 +1,5 @@
 import "server-only";
+import { inTheField } from "@/lib/entrant-field";
 // Entrant use-cases (doc 08 §3): registration (single + bulk), withdraw/seed/
 // member management. Cross-org person references die at the RLS boundary — a
 // person the tenant can't see doesn't exist.
@@ -27,11 +28,14 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // One-way edge (stages/ does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
-import { markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { divisionHasStarted, dropEntrantFromRoundRobins, markFieldChangeSeedProposalsStale, refoldStageTable, reproposeStaleDependents, staleConfirmedProposalsOfDeparting, unseatSwissRoundsSeatingEntrant } from "./stages";
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { log } from "@/server/logger";
+import { recomputeStandings } from "@/server/engine-db";
+import { dropPinsOfEntrant } from "./rank-override";
+import { afterScheduleWrite } from "./schedule/after-write";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
@@ -44,8 +48,11 @@ import { admitSwissLateEntrant, afterSwissLateEntry, hasRootSwissStage } from ".
 import { admitKnockoutLateEntrant, afterKnockoutLateEntry, hasRootKnockoutStage } from "./knockout-late-entry";
 // A running ladder takes a late player at the bottom of its order (ladder-late-entry.ts, one owner of the rule).
 import { appendToLadderOrder } from "./ladder-late-entry";
+import { admitTableLateEntrant, afterTableLateEntry, hasRootTableStage, type TableAdmission } from "./roundrobin-late-entry";
+import { classifyPairRosterChange } from "@/lib/pair-roster-change";
+import { roundRobinRefusal } from "./roundrobin-refusal";
 // Type-only: withdrawal.ts imports this module, so its value is reached by a dynamic import (`patchEntrant`).
-import type { WithdrawCascadeOut } from "./withdrawal";
+import type { ReinstateTableOut, WithdrawCascadeOut } from "./withdrawal";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -402,7 +409,7 @@ export async function createEntrants(
       linkStates = await lichessLinkStatesByPerson(ptx, auth.orgId, namedPersonIds);
     }
   };
-  const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {
+  const { rows, competitionId, tableAdmissions } = await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<
       {
         status: string;
@@ -423,7 +430,8 @@ export async function createEntrants(
     // takes a late player (W3 T9, ruling 250 — `admitSwissLateEntrant` below
     // decides how, or refuses by name when no round is left or it is over),
     // and so does a drawn ROOT knockout, into its round 1 (W4 T9, X-LE-1 —
-    // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2).
+    // `isRootKnockoutStage`; a fed knockout never takes one, X-LE-2), and so does a ROOT league or group stage (W5 T4,
+    // X-CU-9 — `isRootTableStage`; the catch-up placement is `admitTableLateEntrant`, W5 T5).
     // Withdrawals stay available in every state.
     if (division.status === "active" || division.status === "completed") {
       const [openFormat] = await tx`
@@ -433,7 +441,8 @@ export async function createEntrants(
       if (
         !openFormat &&
         !(await hasRootSwissStage(tx, divisionId)) &&
-        !(await hasRootKnockoutStage(tx, divisionId))
+        !(await hasRootKnockoutStage(tx, divisionId)) &&
+        !(await hasRootTableStage(tx, divisionId))
       ) {
         throw new HttpError(
           422,
@@ -464,6 +473,7 @@ export async function createEntrants(
     }
 
     const rows: CreatedEntrant[] = [];
+    const tableAdmissions: TableAdmission[] = [];
     for (const input of inputs) {
       // Snapshot the name from the team so a later rename never rewrites
       // historical standings (which read entrants.display_name / snapshots).
@@ -550,9 +560,21 @@ export async function createEntrants(
       // W4 T10: or its drawn root knockout — the bye, a withdrawn slot, or no slot (X-LE-3…X-LE-6): unstarted, the entrant is
       // kept waiting and the answer is `rebuild_offered` (RB4-L6); started, KO_LATE_ENTRY_NO_SLOT refuses. A division's
       // entry stage is one or the other, so at most one of the two answers.
-      const late =
+      // W5 T5: or its running root league or group — catch-up fixtures, Rebuild offered (or done, `prefer_rebuild`), or a named
+      // refusal that rolls the batch back (the entrant row with it). Its answer also carries what the after-commit publishes.
+      let late: LateEntryResult | null =
         (await admitSwissLateEntrant(tx, auth, divisionId, row.id, "organiser")) ??
         (await admitKnockoutLateEntrant(tx, auth, divisionId, row.id, "organiser"));
+      if (late === null) {
+        const table = await admitTableLateEntrant(tx, auth, divisionId, row.id, "organiser", {
+          poolKey: input.late_entry_pool,
+          preferRebuild: input.prefer_rebuild,
+        });
+        if (table !== null) {
+          tableAdmissions.push(table);
+          late = table.result;
+        }
+      }
       // The row as stored after admission: the first round it wrote is part of the entrant (ruling C4).
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${row.id}`;
       // A running ladder: the newcomer joins the bottom of its order in this same transaction (a no-op for any other format).
@@ -564,7 +586,7 @@ export async function createEntrants(
         ...(late ? { late_entry: late } : {}),
       });
     }
-    return { rows, competitionId: division.competition_id };
+    return { rows, competitionId: division.competition_id, tableAdmissions };
   }, onlineChessOn === false ? {} : { privilegedPrelude: readLinkStates });
   // A new entrant sits in no fixture yet; its name joins the division's lists.
   refreshEntrantPublicPages(
@@ -575,6 +597,8 @@ export async function createEntrants(
   await afterSwissLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
   // W4 T10: a late player seated in the knockout moved a line (and the next line's seat): told as a schedule write.
   await afterKnockoutLateEntry(auth.orgId, divisionId, competitionId, rows.map((r) => r.late_entry));
+  // W5 T5: a late player's catch-up lines are told as a schedule write and the table refolds; a rebuild publishes as Rebuild does.
+  await afterTableLateEntry(auth, divisionId, competitionId, tableAdmissions);
   return rows;
 }
 
@@ -658,8 +682,12 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
     }
     await unseatSwissRoundsSeatingEntrant(tx, id);
     // Read BEFORE the delete: `on delete set null` leaves nothing to find the
-    // fixtures this entrant sat in by afterwards.
+    // fixtures this entrant sat in by afterwards. And before the round-robin cleanup below, which deletes those fixtures: the
+    // public refresh must still name them, or their match-centre documents would be left on the CDN.
     const where = await entrantPublicScope(tx, row);
+    // #837 / ruling 288 (G7): a league's or group's lines the entrant sat in go with it, and its recorded byes - the FK alone left
+    // a half-filled line no button could repair. Same lock, same transaction, read while the seats are still filled.
+    await dropEntrantFromRoundRobins(tx, row.division_id, id);
     // The division's stages that have a table to refresh (W2d concern 2, review
     // I1): any with fixtures (the generate stored a table) or a stored table
     // (one an undo left behind).
@@ -688,7 +716,7 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  here rather than restating the pair: three pages each spelling it out, and
  *  each getting half of it, is precisely the C1 defect that left a
  *  disqualified entrant unmarked in the public standings. The presentation
- *  half lives in `DEPARTED_STATUS_CHIPS` (standings-table.tsx) and is pinned
+ *  half lives in `DEPARTED_STATUS_CHIPS` (lib/departed-status-chips.ts) and is pinned
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
 
@@ -963,6 +991,48 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
 }
 
 /**
+ * W5 T10 + T10b (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12; rulings 282, 290, 292): what a roster edit of a PAIR means once its
+ * division has started (`divisionHasStarted`, the late-entry door's own "running" reading) - in ANY format (ruling 292, owner
+ * 2026-11-17: "same rule for everywhere"): a league or group, a Swiss, a knockout, a mixed template. Each format's own withdrawal
+ * rule then applies, through the cascade.
+ * - `refuse`: anyone joining a pair in the field (R12a, a substitute partner - a lineup matter, deferred); and ANY change to
+ *   the roster of a departed pair (fix round 1, I1: a withdrawn pair's record is FROZEN - were it editable, a plain Reinstate
+ *   would put a one-partner or substitute pair back into the started division). Nothing is written.
+ * - `dissolve`: a partner leaving a pair in the field with nobody joining (R12b): the pair withdraws as the entrant.
+ * - `none`: everything else - before Start, a team or an individual, a roster that names the same people.
+ * A Reinstate is a `status`-only patch, which never reaches here (no `members`), so the refusal cannot block one.
+ * Shared by every door that rewrites or adds to a roster: `patchEntrant`, the squad sync, the import's `roster.add` and a
+ * placed solo sign-up's release.
+ */
+export type PairRosterVerdict = "none" | "refuse" | "dissolve";
+
+/** The pair entrant `id` when its division has started, whatever the format; null for anything else (a team, an individual, a
+ *  pair before Start, an unknown id). Ruling 292: no longer gated on a root league or group (`hasRootTableStage`). */
+export async function startedPair(tx: Tx, id: string): Promise<{ status: string; division_id: string } | null> {
+  const [e] = await tx<{ kind: string; status: string; division_id: string }[]>`
+    select kind, status, division_id from entrants where id = ${id}`;
+  if (e === undefined || e.kind !== "pair") return null;
+  if (!(await divisionHasStarted(tx, e.division_id))) return null;
+  return { status: e.status, division_id: e.division_id };
+}
+
+export async function pairRosterVerdictTx(tx: Tx, id: string, next: readonly string[]): Promise<PairRosterVerdict> {
+  const e = await startedPair(tx, id);
+  if (e === null) return "none";
+  const current = (await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`).map((m) => m.person_id);
+  const change = classifyPairRosterChange(current, next);
+  if (change === "same") return "none";
+  if (!inTheField(e)) return "refuse";
+  return change === "substitutes" ? "refuse" : "dissolve";
+}
+
+async function pairRosterVerdict(auth: AuthCtx, id: string, patch: PatchEntrant): Promise<PairRosterVerdict> {
+  if (patch.members === undefined) return "none";
+  const next = patch.members.map((m) => m.person_id);
+  return withTenant(auth.orgId, (tx) => pairRosterVerdictTx(tx, id, next));
+}
+
+/**
  * `PATCH /entrants/{id}`. W3 T15 (RB3-17, X-SW-23): a disqualification is "withdrawal from that moment" (rulebook §12),
  * so `status: "disqualified"` for an entrant still in the field goes through the withdrawal cascade
  * (`withdrawEntrantCascade(…, { as: "disqualified" })`): their owed boards are settled as a withdrawal settles them, then
@@ -972,14 +1042,33 @@ function refreshEntrantPublicPages(scope: EntrantPublicScope, context: Record<st
  * `disqualified`, or a withdrawn entrant later disqualified — and takes the plain write (controller ruling C6: the cascade
  * writes through `writeEntrantPatch`, which never routes back). Any other field of the same patch is written BEFORE the
  * cascade (T15 review m4), so a refused field leaves the status, the boards and the ledger untouched. A
- * `status: "withdrawn"` patch stays the bare flip it has always been (ruling 111's self-withdrawal); the
- * Withdraw button is `POST /entrants/{id}/withdraw`.
+ * `status: "withdrawn"` patch stays the bare flip it has always been; the Withdraw button is
+ * `POST /entrants/{id}/withdraw`, and a registrant's own withdrawal after Start runs the same cascade (W5 T8b, ruling 288:
+ * `registrations/withdraw.ts`).
  */
 export async function patchEntrant(
   auth: AuthCtx,
   id: string,
   patch: PatchEntrant,
-): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut; late_entry?: LateEntryResult }> {
+): Promise<EntrantWithMembers & { cascade?: WithdrawCascadeOut; late_entry?: LateEntryResult; reinstate?: ReinstateTableOut }> {
+  // W5 T10 (X-RP-2, X-RP-3; RB5-R2, RB5-R3, R12): judged FIRST, before any write and before the disqualification door below —
+  // a roster smuggled in beside `status: "disqualified"` would otherwise be written by that door's own "rest of the patch".
+  const pair = await pairRosterVerdict(auth, id, patch);
+  if (pair === "refuse") throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
+  if (pair === "dissolve") {
+    // The pair IS the entrant: a partner who leaves with nobody joining dissolves it, and it withdraws (or is disqualified, when
+    // that is what the patch said) through the ONE after-Start door, the cascade. The roster itself is not rewritten — the
+    // pair's record stands as it was, and the remaining player enters a new pair with a fresh record (RB5-R2). The rest of the
+    // patch lands first (T15 review m4), so a refused field changes nothing before any fixture surgery.
+    const { withdrawEntrantCascade } = await import("./withdrawal");
+    const rest: PatchEntrant = { ...patch };
+    delete rest.members;
+    delete rest.eligibility_override; // request metadata for the roster this patch no longer writes
+    delete rest.status; // written by the cascade
+    if (Object.keys(rest).length > 0) await writeEntrantPatch(auth, id, rest);
+    const cascade = await withdrawEntrantCascade(auth, id, { as: patch.status === "disqualified" ? "disqualified" : "withdrawn" });
+    return { ...(await getEntrant(auth, id)), cascade };
+  }
   if (patch.status === "disqualified") {
     const [current] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
     if (current !== undefined && !DEPARTED_STATUSES.has(current.status)) {
@@ -997,7 +1086,48 @@ export async function patchEntrant(
       return { ...(await getEntrant(auth, id)), cascade };
     }
   }
-  return writeEntrantPatch(auth, id, patch);
+  // W5 T8 (RB5-W6, X-WDT-8): a Reinstate — a departed entrant back in the field — reverses her league or group withdrawal
+  // AFTER the status write commits (her lines still exist, so Task 6's door in `writeEntrantPatch` never makes her wait).
+  // The reverse is many score writes (each its own transaction, as the cascade's are), so it cannot share the status write's
+  // transaction.
+  //
+  // B3 fix wave (I-1): ONLY a patch that carries a status into the field over a DEPARTED prior status is a Reinstate, and the
+  // whole of it — the prior-status read, the status write and the reverse — runs under the per-entrant cascade lock
+  // (`withCascadeLock`), the one a live withdrawal holds. Any other write (a rename, a seed, the Withdrawn card's Save) asks
+  // nothing: asked of every write, the reverse ran beside a live cascade and undid its expunges, after which the cascade wrote
+  // her departed over restored lines. A Reinstate sent during a cascade waits for it, then reads her as it left her.
+  if (patch.status === undefined || !inTheField({ status: patch.status })) return writeEntrantPatch(auth, id, patch);
+  const [home] = await withTenant(auth.orgId, (tx) => tx<{ division_id: string }[]>`select division_id from entrants where id = ${id}`);
+  if (home === undefined) return writeEntrantPatch(auth, id, patch); // its own 404
+  const { withCascadeLock, reinstateTableEntrant, tableReinstateOwed } = await import("./withdrawal");
+  return withCascadeLock(auth.orgId, home.division_id, id, async () => {
+    const [prior] = await withTenant(auth.orgId, (tx) => tx<{ status: string }[]>`select status from entrants where id = ${id}`);
+    const out = await writeEntrantPatch(auth, id, patch);
+    if (prior === undefined || !DEPARTED_STATUSES.has(prior.status) || !inTheField(out)) return out;
+    if (!(await tableReinstateOwed(auth, id, out.division_id))) return out;
+    // B3 m-3: a reverse cut off part-way is FINISHED, never left half-done. It is idempotent (a void already written is not
+    // active, a re-record already written is matched as a prefix), so a failed run is retried once in this request; a run that
+    // fails again puts the status this PATCH changed BACK, and the organiser's next Reinstate (prior status departed again)
+    // finishes the same reverse. A partial reverse cannot be rolled back instead: each write is its own transaction and a void
+    // is not voidable (B3 fix-wave false premise, recorded).
+    let reinstate: ReinstateTableOut;
+    try {
+      reinstate = await reinstateTableEntrant(auth, id);
+    } catch (first) {
+      log.warn({ err: String(first), entrantId: id }, "reinstate: the reverse failed part-way - retrying it once");
+      try {
+        reinstate = await reinstateTableEntrant(auth, id);
+      } catch (err) {
+        await writeEntrantPatch(auth, id, { status: prior.status as PatchEntrant["status"] });
+        throw err;
+      }
+    }
+    // B3 m-1: a line whose removed result could not be put back is the organiser's to look at - said in the reply, as `cascade` is.
+    if (reinstate.not_restored.length > 0) {
+      log.warn({ entrantId: id, not_restored: reinstate.not_restored }, "reinstate: some removed results could not be re-recorded");
+    }
+    return { ...out, reinstate };
+  });
 }
 
 /** The entrant write itself — every field of a patch, in one transaction, with no routing. `patchEntrant` is the door;
@@ -1016,7 +1146,7 @@ export async function writeEntrantPatch(
     patch.members && home
       ? await openRosterSeatGate(auth, { divisionId: home.division_id, personIds: patch.members.map((m) => m.person_id) })
       : undefined;
-  const { out, fieldChanged, refresh } = await withTenant(auth.orgId, async (tx) => {
+  const { out, fieldChanged, departed, pinsDroppedIn, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
     // it never reaches the `update entrants set ...` below.
@@ -1031,7 +1161,11 @@ export async function writeEntrantPatch(
     // like every other Swiss write (the lock order `division:` → rows).
     const reinstating =
       prior !== undefined && DEPARTED_STATUSES.has(prior.status) && fields.status !== undefined && !DEPARTED_STATUSES.has(fields.status);
-    if (reinstating) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior.division_id}))`;
+    // W5 T13 fix round 1 (G7): a departure also drops her rank pins (below), which are a division write - the same lock, taken before the
+    // row's update for the same order (`division:` -> rows).
+    const departing =
+      prior !== undefined && !DEPARTED_STATUSES.has(prior.status) && fields.status !== undefined && DEPARTED_STATUSES.has(fields.status);
+    if (reinstating || departing) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior!.division_id}))`;
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);
@@ -1046,6 +1180,12 @@ export async function writeEntrantPatch(
     // again (`heldMemberships`, the roster write's own predicate) — a player who joined another entrant of the division
     // while this one was away is refused by name, and the transaction writes nothing. A patch that also replaces the
     // roster is asked by `insertMembers` over the NEW roster instead (below), never over the one it replaces.
+    // W5 T10b (ruling 292): a Reinstate leaves a durable trace in EVERY format, in this transaction - Swiss and knockout cascades write
+    // no `table_withdrawal` row, so nothing else would tell `withdrawalOwedSince` that her withdrawal was taken back.
+    if (reinstating && !DEPARTED_STATUSES.has(row.status)) {
+      const { recordWithdrawalReinstated } = await import("./withdrawal");
+      await recordWithdrawalReinstated(tx, row.division_id, id, auth.userId);
+    }
     if (reinstating && !DEPARTED_STATUSES.has(row.status) && !members) {
       const mine = await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${id}`;
       const held =
@@ -1058,6 +1198,15 @@ export async function writeEntrantPatch(
     // statuses, or between two active ones, is not.
     const fieldChanged =
       prior !== undefined && DEPARTED_STATUSES.has(prior.status) !== DEPARTED_STATUSES.has(row.status);
+    // W5 T6 (X-CU-8; ruling 288's cleanup, storage table G7): an entrant LEAVING the field stops waiting for a table place, in the
+    // transaction that writes the status — the withdrawal cascade's own final write (C6) and a bare status flip alike. A waiting
+    // entrant holds no line, so this is all the cascade owes them; the desk count and the tap then forget them.
+    if (fieldChanged && DEPARTED_STATUSES.has(row.status)) {
+      await tx`update entrants set table_waiting_stage_id = null where id = ${id} and table_waiting_stage_id is not null`;
+    }
+    // W5 T13 fix round 1 (X-PO-3, G7): and her rank pins go with her - the bare status flip an organiser's PATCH `withdrawn` is runs no
+    // cascade, and a pin would keep her above the field in an open table. Open leagues and groups only (`dropPinsOfEntrant`).
+    const pinsDroppedIn = fieldChanged && DEPARTED_STATUSES.has(row.status) ? await dropPinsOfEntrant(tx, row.division_id, id) : [];
     // W4 T19 (K13): how a reinstated player rejoins the division's running entry stage — the reply carries it, so the
     // desk can say "waiting to join the bracket" or "their place has been played on" instead of a silent flip.
     let late: LateEntryResult | null = null;
@@ -1076,7 +1225,10 @@ export async function writeEntrantPatch(
       late = revived
         ? null
         : (await admitSwissLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
-          (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate"));
+          (await admitKnockoutLateEntrant(tx, auth, row.division_id, id, "reinstate")) ??
+          // W5 T6 (X-CU-8): a running root league or group — a reinstated entrant whose lines still exist keeps them and
+          // never waits; one with no fixture in the stage waits for the organiser's tap. Never refused.
+          ((await admitTableLateEntrant(tx, auth, row.division_id, id, "reinstate"))?.result ?? null);
       if (late) [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     }
     if (members) {
@@ -1139,6 +1291,9 @@ export async function writeEntrantPatch(
     return {
       out: { ...(await withMembers(tx, row)), ...(late ? { late_entry: late } : {}) },
       fieldChanged,
+      // W5 T11: this write took her OUT of the field (the other direction of `fieldChanged` is a Reinstate).
+      departed: fieldChanged && DEPARTED_STATUSES.has(row.status),
+      pinsDroppedIn,
       refresh: await entrantPublicScope(tx, row),
     };
   }, seatGate?.tenant);
@@ -1146,6 +1301,15 @@ export async function writeEntrantPatch(
   // seed, status or badge edit) reached the public pages only when their 30s
   // cache ran out.
   refreshEntrantPublicPages(refresh, { entrantId: id });
+  // W5 T13 fix round 1: a table whose pin went with her reads its pins again (the stored snapshot still holds her pinned place).
+  // Best-effort: the status write has committed, and the next result recomputes it anyway.
+  for (const stageId of pinsDroppedIn) {
+    try {
+      await recomputeStandings(auth.orgId, stageId);
+    } catch (err) {
+      log.warn({ event: "standings_not_recomputed_after_pin_drop", entrantId: id, stageId, err: String(err) }, "standings_not_recomputed_after_pin_drop");
+    }
+  }
   // AFTER the transaction commits: the recompute opens its own transaction
   // and takes the division advisory lock, which would deadlock against the
   // one above. Best-effort — a proposal that cannot be recomputed is left
@@ -1161,6 +1325,27 @@ export async function writeEntrantPatch(
       await markFieldChangeSeedProposalsStale(auth.orgId, refresh.divisionId);
     } catch {
       // see above
+    }
+  }
+  // W5 T11 (X-CUT-4 <- RB5-K6, FX-G16's table half): a departure also takes a CONFIRMED proposal of a completed league or group
+  // with her, while its destination has not started: stale, the seats back, a re-proposal that reads her as out. Asked of every
+  // write that took her out of the field - the bare status flip an organiser's PATCH `withdrawn` is (it settles no line, so
+  // nothing has started in the destination) as well as the cascade's own final write (which already asked BEFORE it settled her
+  // lines, where a walkover over her seat would have been a start, and so finds nothing left to do). Own try/catch, same reason as
+  // above: the status write has committed.
+  //
+  // The other direction too (Reinstate, review I-2): a confirmed proposal made while she was out names the entrant who took her
+  // place, and nothing else would re-judge it once she is back - her seat would be left to the one who stood in, and after the start
+  // the desk would say a result was corrected. Judged with no `departing`: the cut as it reads today against what was confirmed.
+  if (fieldChanged) {
+    try {
+      const cut = await staleConfirmedProposalsOfDeparting(auth.orgId, refresh.divisionId, departed ? id : undefined);
+      if (cut.unfilled.length > 0 && refresh.competitionId !== null) {
+        afterScheduleWrite(refresh.divisionId, refresh.competitionId, "schedule", cut.unfilled);
+      }
+      await reproposeStaleDependents(auth, cut.recompute);
+    } catch (err) {
+      log.warn({ event: "confirmed_cut_not_staled_after_departure", entrantId: id, err: String(err) }, "confirmed_cut_not_staled_after_departure");
     }
   }
   return out;
@@ -1198,6 +1383,12 @@ export async function syncEntrantRosterFromSquad(
     );
     const eff = await loadEntrantShape(tx, row.division_id);
     assertRosterFits(eff, row.kind, members.length);
+    // W5 T10 (R12): a squad sync rewrites the roster whole, so a started pair's partner cannot change through it either — the
+    // squad that now names someone else, or fewer, is the same edit `patchEntrant` judges. A sync never withdraws a pair on its
+    // own: the organiser withdraws it (the pointer in the refusal), so `dissolve` is a refusal here too.
+    if ((await pairRosterVerdictTx(tx, id, members.map((m) => m.person_id))) !== "none") {
+      throw roundRobinRefusal("RR_SUBSTITUTE_PARTNER_REFUSED");
+    }
     await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));
     await tx`delete from entrant_members where entrant_id = ${id}`;
     const warnings = await insertMembers(tx, id, members, {

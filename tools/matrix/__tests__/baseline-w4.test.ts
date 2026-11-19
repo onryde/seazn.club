@@ -1,5 +1,6 @@
-// W4 knockout app B, Task 17 (T8-d): the committed L3 baseline is the W4 truth run (truth-runs/w4-final, CI 42992170592), and the 33
-// W4 baseline reds of the W3 run are retired in it, counted by id:
+// W4 knockout app B, Task 17 (T8-d): the W4 truth run (truth-runs/w4-final, CI 42992170592) was the committed L3 baseline, and the 33
+// W4 baseline reds of the W3 run are retired in it, counted by id (since W5 Task 25 the baseline is the W5 run: baseline-w5.test.ts; this
+// file reads the W4 run by its own directory, so its record of what W4 retired stays a pin and moves with nothing):
 //   - ko_plate F1 x11 (the plate model, RB4-P*): works.
 //   - stepladder_only R4 x11 and page_playoff_only R4 x11: no longer cases. The product refuses a standalone stepladder or page
 //     playoff (owner ruling 269, RB4-S6), so no layer plans them: the refusal is read from the engine's own declaration
@@ -9,7 +10,6 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, SPORT_KEYS, STANDALONE_REFUSED_REASON, refusedCell, type RowKey } from "../lib/catalogue.ts";
-import { baselineL3Path } from "../lib/pr-sample.ts";
 import { REPO, TRUTH_RUNS } from "./committed-plans.ts";
 
 interface Case { caseId: string; row: string; state: string; scenario: string }
@@ -17,16 +17,15 @@ const cases = (dir: string, layer: string): Case[] =>
   (JSON.parse(readFileSync(resolve(REPO, TRUTH_RUNS, dir, "ci", layer, "results.json"), "utf8")) as { cases: Case[] }).cases;
 
 const W3 = cases("w3-final", "L3");
-const BASELINE = JSON.parse(readFileSync(resolve(REPO, baselineL3Path()), "utf8")) as { runId: string; cases: Case[] };
+const BASELINE = JSON.parse(readFileSync(resolve(REPO, TRUTH_RUNS, "w4-final", "ci", "L3", "results.json"), "utf8")) as { runId: string; cases: Case[] };
 const NOW = new Map(BASELINE.cases.map((c) => [c.caseId, c]));
 
 /** The W3 reds this task retires, measured from the W3 run itself. */
 const KO_PLATE_F1 = W3.filter((c) => c.row === "ko_plate" && c.scenario === "F1" && c.state === "red").map((c) => c.caseId);
 const STANDALONE_R4 = W3.filter((c) => (c.row === "stepladder_only" || c.row === "page_playoff_only") && c.scenario === "R4" && c.state === "red").map((c) => c.caseId);
 
-describe("W4 T17: the committed L3 baseline is the W4 truth run", () => {
-  it("baseline.json names truth-runs/w4-final/ci/L3, and the run it holds is the W4 run, not W3's", () => {
-    expect(baselineL3Path()).toBe(resolve(REPO, TRUTH_RUNS, "w4-final", "ci", "L3", "results.json"));
+describe("W4 T17: the W4 truth run (once the committed L3 baseline) holds what W4 retired", () => {
+  it("truth-runs/w4-final/ci/L3 is the W4 run, not W3's", () => {
     expect(BASELINE.runId).toBe("ci-42992170592-1-l3");
     expect(BASELINE.cases.length, "anti-vacuity: the baseline holds cases").toBeGreaterThan(800);
   });
@@ -39,7 +38,7 @@ describe("W4 T17: the committed L3 baseline is the W4 truth run", () => {
     expect(new Set(KO_PLATE_F1.map((id) => id.split("|")[1])).size, "one ko_plate F1 per sport").toBe(11);
   });
 
-  it("the committed baseline holds no ko_plate F1 red: every one of the 11 ids is works (counted by id)", () => {
+  it("the W4 run holds no ko_plate F1 red: every one of the 11 ids is works (counted by id)", () => {
     let checked = 0;
     for (const id of KO_PLATE_F1) {
       expect(NOW.get(id)?.state, id).toBe("works");
@@ -65,7 +64,7 @@ describe("W4 T17: the committed L3 baseline is the W4 truth run", () => {
     // the whole row is gone, every scenario, so no sibling cell kept the red alive
     expect(BASELINE.cases.filter((c) => c.row === "stepladder_only" || c.row === "page_playoff_only")).toEqual([]);
     // the pair: the other API-only rows are still offered where they were
-    expect(API_ONLY_ROWS.filter((r) => SPORT_KEYS.some((s) => refusedCell(r, s) === null)).sort()).toEqual(["group_group_ko", "group_only", "knockout_third_place"]);
+    expect(API_ONLY_ROWS.filter((r) => SPORT_KEYS.some((s) => refusedCell(r, s) === null)).sort()).toEqual(["group_group_ko", "knockout_third_place"]); // group_only left the list: the picker has its card (W5 T14, X-BD-2)
   });
 
   it("nothing ELSE the W3 baseline held works went red in W4 (the judge's regression, counted over the whole L3)", () => {

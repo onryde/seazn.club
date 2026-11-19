@@ -34,8 +34,8 @@ describe("the w1b-probe set", () => {
   it("API-only LIFECYCLE: exactly the single-stage API-only rows, gated or not, on generic (multi-stage stays deferred to W1-driving)", () => {
     // single-sport: the rows' shapes are sport-independent; generic is the cheapest sport to drive.
     const want = API_ONLY_ROWS.filter((r) => stagesForRow(r).length === 1);
-    // Fix round 1, I-1: group_only, knockout_third_place, page_playoff_only, stepladder_only.
-    expect(want.length).toBe(4);
+    // Fix round 1, I-1: group_only, knockout_third_place, page_playoff_only, stepladder_only; W5 T14: group_only is a template row now.
+    expect(want.length).toBe(3);
     // The filter has something to drop: a multi-stage API-only row.
     expect(API_ONLY_ROWS.some((r) => stagesForRow(r).length > 1)).toBe(true);
     expect([...probeRows().api]).toEqual(want);
@@ -117,7 +117,7 @@ describe("pickProbeVariant — the selection rule, empty case first", () => {
     ["an empty override", { overrides: {} }],
     ["a recorded unscorable reason", { scorable: "win-home: EngineError: nope" }],
     ["an API-only row", { row: "group_only" }],
-    ["a template row outside the slice", { row: "triple_rr" }],
+    ["a template row outside the slice", { row: "league_ko" }],
   ])("a case with %s alone does not qualify", (_what, over) => {
     expect(() => pickProbeVariant("generic", [{ ...base, ...over }])).toThrow(NoProbeVariant);
   });

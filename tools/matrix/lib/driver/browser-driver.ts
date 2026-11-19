@@ -65,7 +65,7 @@ import { MixedLedger, type ActionType, type FillerName, type PadPolicy } from ".
 import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, requireVoidTarget,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FinishSwissOut, type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateOut, type GenerateOut, type TemplateCreateInput, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
   type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StandingsRowWire, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
@@ -502,7 +502,7 @@ export class BrowserDriver implements OrganiserDriver {
   /** The builder's answer, until the harness's one postStages for that division consumes it. */
   #built: { divisionId: string; stages: StageOut[]; door: DoorDivision } | null = null;
   #uiPathJudged = false;
-  /** Stages completed, or whose complete ended unknown: never completed again (design §6.4). */
+  /** Stages completed, or whose complete ended unknown: their finalRanks and title are kept for a repeat's answer (X-BD-4). */
   readonly #completed = new Set<string>();
   /** stage id → the finalRanks its completion answered (null: none). */
   readonly #finalRanks = new Map<string, readonly string[] | null>();
@@ -656,7 +656,7 @@ export class BrowserDriver implements OrganiserDriver {
    *  stage is ever posted. The product's answer is read back over http (org,
    *  visibility, division, stages — HttpDriver.readBackTemplate); only what
    *  held is registered for the page objects. */
-  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
+  async createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut> {
     if (this.#spec.template !== key) {
       throw new DriverMisuse(`browser: case ${this.#spec.caseId} carries template ${this.#spec.template ?? "none"}; createFromTemplate(${key}) would build another shape under its name`);
     }
@@ -699,6 +699,11 @@ export class BrowserDriver implements OrganiserDriver {
     const compSlug = this.#competitions.get(competitionId);
     if (compSlug === undefined) throw new DriverMisuse(`browser: competition ${competitionId} was not created by this driver, or was refused — there is no slug to build a division in`);
     const row = this.#spec.row;
+    // A template case's division is its card's, on ANY row: group_only left the API-only rows when the picker gained its own card (W5 T14),
+    // so the API-only guard below no longer stands between box-league's case and a second division built through the blank wizard.
+    if (this.#spec.template !== undefined) {
+      throw new DriverMisuse(`browser: ${row}|${this.#spec.sport} is built through catalog template ${this.#spec.template} — its division is the card's (createFromTemplate), never a createDivision`);
+    }
     const apiOnly = isApiOnly(row);
     if (apiOnly || !this.#wants("createDivision")) {
       // Judged first: a refused path records no invocation.
@@ -1161,9 +1166,9 @@ export class BrowserDriver implements OrganiserDriver {
   }
 
   async completeStage(stageId: string): Promise<CompleteOut> {
-    if (this.#completed.has(stageId)) {
-      throw new DriverMisuse(`browser: stage ${stageId} already completed, or its complete ended unknown — /complete is never repeated (design §6.4)`);
-    }
+    // W5 T17 (X-BD-4, CS-1): a repeat /complete is no longer avoided (it threw DriverMisuse here) - the product answers
+    // `already_complete` and writes nothing. It goes over http: the page's turn (`#wants`, `#completeTried`) is once per type, and
+    // a repeat's answer has `completed: false`, so the finalRanks and title the FIRST completion answered are kept below.
     // W1d item 22: the type's first completion is the browser's, as ever, AND so is the LAST stage's: without it a
     // multi-stage case's knockout completed over http and its picture (08-completed) was never taken.
     // A last stage the page already had its turn at is not offered it again: a retry after a refused attempt is
@@ -1177,7 +1182,7 @@ export class BrowserDriver implements OrganiserDriver {
       out = await this.#write(() => where === null ? this.#http.completeStage(stageId) : this.#ui((p) => p.completeStageUi(this.#ctx, where, stageId, position ?? undefined, this.#railHooks(where))));
     } catch (e) {
       // As HttpDriver: a named 4xx committed nothing and stays retryable; any
-      // other ending may follow a committed completion, so it is never repeated
+      // other ending may follow a committed completion, so it is recorded as one
       // — and STAGE_COMPLETED_SEEDING_FAILED says it DID commit (W1-driving T6, FP-3).
       if (!(e instanceof RefusedCall && e.status < 500 && e.code !== SEEDING_FAILED_AFTER_COMMIT)) this.#completed.add(stageId);
       throw e;

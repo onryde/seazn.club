@@ -40,7 +40,7 @@ import { stageTableRulesDocs, tableOrderOf } from "@/server/engine-db/table-rule
 import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { standingsTableSections } from "./exports-standings";
 import { byPoolOrder } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { getDictionary } from "@/lib/i18n";
 import { t } from "@/lib/i18n-runtime";
 import { anyOptedOutByRegistration } from "./registrations";
@@ -492,7 +492,7 @@ export async function buildDivisionDocModel(
         // played yet, or its only result voided) as its header row, a level one with no place on any row (`LEVEL_RANK`).
         const pools = await tx<{ id: string; key: string; name: string }[]>`
           select id, key, name from pools where stage_id = ${snapshot.stage_id}`;
-        const poolKey = new Map(pools.map((p) => [p.id, p.key]));
+        const poolKey = poolNaming(pools.map((p) => ({ ...p, stage_id: snapshot.stage_id })));
         const stageTables = snapshots.filter((s) => s.stage_id === snapshot.stage_id).sort(byPoolOrder(pools));
         const names = await tx<{ id: string; display_name: string; badge_url: string | null }[]>`
           select id, display_name, badge_url from entrants where division_id = ${divisionId}`;
@@ -537,7 +537,8 @@ export async function buildDivisionDocModel(
             badgeOf: (id) => badgeById.get(id),
             msg: (k, v) => t(publicDict, k, v),
           });
-          const heading = table.pool_id === null ? undefined : `${table.stage_name} — ${poolLabel(publicDict, poolKey.get(table.pool_id))}`;
+          // A one-pool stage has no heading (`poolNaming`, X-BD-7), as a league has none.
+          const heading = table.pool_id === null || poolKey.get(table.pool_id) === null ? undefined : poolCaption(publicDict, table.stage_name, table.pool_id, poolKey);
           return sections.map((s) => (heading === undefined ? s : { heading, ...s }));
         });
         // One document: its chrome (title, description, meta, branding, page breaks) is `common`'s, the same for every

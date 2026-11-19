@@ -19,7 +19,7 @@
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { EngineError, forbidsLevelResult, isLevelOutcome, playRecorded, type StageKind } from "@seazn/engine/core";
 import { nextMatchFixtureId, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type OrganiserDriver, type RefusedCall } from "../driver/types.ts";
-import { isRootKnockoutStage, isRunningRootSwiss } from "../../../../apps/web/src/lib/open-entry-stages.ts";
+import { isRootKnockoutStage, isRootTableStage, isRunningRootSwiss } from "../../../../apps/web/src/lib/open-entry-stages.ts";
 import { stagesForRow, type RowKey, type StagePostBody } from "../catalogue.ts";
 import { unplayedBoard } from "../fold.ts";
 import { evaluateStepInvariants } from "../invariants.ts";
@@ -207,14 +207,17 @@ export const LINEUP_LOCKED_FINDING = "model-lineup-past-scheduled";
  *  swiss-late-entry.ts admits a late player into while it RUNS and refuses by
  *  name (SWISS_OVER) once it is complete, or — W4 T9 (X-LE-1, ruling 263) — a
  *  root knockout (`rootKnockout`: `hasRootKnockoutStage`), whose late player
- *  knockout-late-entry.ts places, parks or refuses by name. Pinned against
- *  entrants.ts's text by model-core.test.ts, so a product change turns the pin
- *  red. */
-export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[]; readonly rootSwiss: boolean; readonly rootKnockout: boolean } = Object.freeze({
+ *  knockout-late-entry.ts places, parks or refuses by name, or — W5 T4 (X-CU-9,
+ *  RB5-L1, L2) — a root league or group (`rootTable`: `hasRootTableStage`),
+ *  which the round-robin late entry (Task 5) seats with catch-up fixtures.
+ *  Pinned against entrants.ts's text by model-core.test.ts, so a product change
+ *  turns the pin red. */
+export const ROSTER_LOCK: { readonly status: number; readonly openKinds: readonly string[]; readonly rootSwiss: boolean; readonly rootKnockout: boolean; readonly rootTable: boolean } = Object.freeze({
   status: 422,
   openKinds: Object.freeze(["ladder", "americano"]),
   rootSwiss: true,
   rootKnockout: true,
+  rootTable: true,
 });
 
 /** The model's one stage as the product's predicates read a stage row: no progression source, the config the model
@@ -231,17 +234,29 @@ export function modelHoldsRootKnockout(m: ModelState): boolean {
   return ROSTER_LOCK.rootKnockout && isRootKnockoutStage(stage, [stage]);
 }
 
+/** W5 T4 (X-CU-9): the model's stage is the division's ONLY stage, so a league or group here is a ROOT table in the
+ *  product's own sense (open-entry-stages.ts `isRootTableStage`) — the roster lock does not apply to it, at any status,
+ *  as `hasRootTableStage` reads no status. The late-entry placement (catch-up fixtures, Rebuild offered, named refusals)
+ *  is outcomes this model does not simulate, so it does not offer the add there; the late-entry door is driven by the
+ *  W5 scripts (Task 24, lib/scenarios/r2-late-entry.ts). */
+export function modelHoldsRootTable(m: ModelState): boolean {
+  const stage = modelStage(m);
+  return ROSTER_LOCK.rootTable && isRootTableStage(stage, [stage]);
+}
+
 /** The product refuses an entrant here. The model's single stage is the
  *  division's only stage, and Start is what moves the division to `active`.
  *  A running root Swiss keeps the list open (ruling 250) — the product's own
  *  predicate (open-entry-stages.ts `isRunningRootSwiss`, T10 I1) over the
  *  model's one stage: no progression (modelRowRefusal admits single-stage rows
  *  only), the config the model posted, and `complete` once Complete answered
- *  completed. A root knockout keeps it open too (W4 T9, `modelHoldsRootKnockout`).
+ *  completed. A root knockout keeps it open too (W4 T9, `modelHoldsRootKnockout`), and so does a root league or group
+ *  (W5 T4, `modelHoldsRootTable`).
  *  A complete Swiss and every other kind stay locked. */
 export function rosterLocked(m: ModelState): boolean {
   if (!m.started || ROSTER_LOCK.openKinds.includes(m.stageKind)) return false;
   if (modelHoldsRootKnockout(m)) return false;
+  if (modelHoldsRootTable(m)) return false;
   return !(ROSTER_LOCK.rootSwiss && isRunningRootSwiss(modelStage(m)));
 }
 

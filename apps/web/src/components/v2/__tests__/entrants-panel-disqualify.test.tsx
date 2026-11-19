@@ -10,7 +10,8 @@
 // locales, which rows carry the control) is `entrants-panel-row-i18n.test.tsx`.
 // single-sport: none - the Entrants panel reads no sport; what varies is the entrant's kind and status, swept below.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactElement } from "react";
+import { createElement, type ReactElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { EntrantsPanel, type EntrantsPanelEligibility } from "@/components/v2/entrants-panel";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -24,7 +25,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMo
 vi.mock("@/lib/entrant-badge", () => ({ resolveEntrantBadge: () => null }));
 
 type Call = { url: string; options?: { method?: string; json?: unknown } };
-const wire = vi.hoisted(() => ({ calls: [] as unknown[], reject: null as null | Error }));
+const wire = vi.hoisted(() => ({ calls: [] as unknown[], reject: null as null | Error, previewReject: null as null | Error }));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
@@ -32,6 +33,13 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     apiV1: vi.fn(async (url: string, options?: { method?: string; json?: unknown }) => {
       wire.calls.push({ url, options });
       if (wire.reject && options?.method !== undefined) throw wire.reject;
+      if (url.includes("/withdrawal-preview")) {
+        if (wire.previewReject) throw wire.previewReject;
+        const id = url.split("/")[4]!;
+        return { entrant_id: id, name: id === "e2" ? "Asha Rao" : "Rohan Nair", as: "disqualified", started: true, cascade: true, stages: [
+          { stage_id: "s1", stage_kind: "league", mode: "award", played: 3, scheduled: 4, pending: [{ fixture_id: "f4", opponent: "Asha Rao", round_no: 4 }], undo: "restores" },
+        ] };
+      }
       return { items: [], nextCursor: null };
     }),
   };
@@ -88,16 +96,27 @@ function mount(entrants: ReturnType<typeof entrant>[], over: Record<string, unkn
 beforeEach(() => {
   wire.calls.length = 0;
   wire.reject = null;
+  wire.previewReject = null;
   confirmMock.mockReset();
   confirmMock.mockImplementation(async () => false);
 });
 
 // Ruling 260 (orchestrator, applying ruling 259: a disqualification is the same cascade as a withdrawal): the confirm is as
-// truthful as Withdraw's. The LEAD is the ruling's sentence, typed here; the rest is Withdraw's own body, read from ITS key -
-// never retyped into this test, so a change to Withdraw's policy copy moves both confirms (one authority per fact).
+// truthful as Withdraw's. The LEAD is the ruling's sentence, typed here. W5 T8b Part 3 (ruling 289's condition): under it THIS
+// entrant's consequence, read before the confirm opens from `GET /entrants/{id}/withdrawal-preview` (the cascade's own
+// decision) - typed here as the brief words it. Withdraw's general body, read from ITS key, stands in only when the preview
+// cannot be read, so the confirmation is never less truthful than ruling 260's.
 const SIGNED_LEAD = "They are marked disqualified rather than withdrawn; the effect on their matches is the same as a withdrawal:";
 const WITHDRAW_BODY = (en as Record<string, string>)["confirm.withdrawEntrant.body"]!;
-const DQ_BODY = `${SIGNED_LEAD} ${WITHDRAW_BODY}`;
+const DQ_LINES = [
+  "This remaining match will be withdrawn: Asha Rao (round 4).",
+  "Rohan Nair has played 3 of 4. Under the 50% rule their results stand and the remaining matches are walked over.",
+  "The organiser can undo this with Reinstate while the stage is running.",
+];
+/** The confirm's body as text: the dialog renders it, so it is read the way the organiser reads it. */
+const bodyText = (body: unknown) => renderToStaticMarkup(createElement("div", null, body as ReactNode)).replace(/<\/(p|li)>/g, "$& ").replace(/<[^>]+>/g, "").replaceAll("&#x27;", "'").replace(/\s+/g, " ").trim();
+const linesOf = (body: unknown) =>
+  [...renderToStaticMarkup(createElement("div", null, body as ReactNode)).matchAll(/<li data-testid="withdrawal-consequence-line">([^<]*)<\/li>/g)].map((m) => m[1]!);
 
 describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () => {
   it("the button asks first, in the signed words, with the destructive tone - and a cancelled confirm sends nothing", async () => {
@@ -109,14 +128,16 @@ describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () 
 
     await (propsOf(btn[0]!).onClick as () => Promise<void>)();
     expect(confirmMock, "one confirm").toHaveBeenCalledTimes(1);
-    expect(confirmMock.mock.calls[0]![0]).toEqual({
-      title: "Disqualify Rohan Nair?",
-      body: DQ_BODY,
-      confirmLabel: "Disqualify",
-      tone: "danger",
-    });
+    const opts = confirmMock.mock.calls[0]![0] as { body: unknown };
+    expect({ ...opts, body: undefined }).toEqual({ title: "Disqualify Rohan Nair?", body: undefined, confirmLabel: "Disqualify", tone: "danger" });
+    expect(calls().filter((c) => c.url.includes("withdrawal-preview")).map((c) => c.url), "the consequence is read for THIS entrant before the confirm").toEqual([
+      "/api/v1/entrants/e1/withdrawal-preview?as=disqualified",
+    ]);
+    expect(bodyText(opts.body).startsWith(SIGNED_LEAD), "the lead first").toBe(true);
+    expect(linesOf(opts.body), "then her own consequence (ruling 289)").toEqual(DQ_LINES);
+    expect(bodyText(opts.body), "the per-entrant copy replaces the general body").not.toContain(WITHDRAW_BODY.slice(0, 60));
     // The inaccurate sentences the first draft carried ("Results already played stand" is false in a league under half played).
-    expect((confirmMock.mock.calls[0]![0] as { body: string }).body).not.toContain("Results already played stand");
+    expect(bodyText(opts.body)).not.toContain("Results already played stand");
     expect(writes(), "the organiser said no: nothing is written").toEqual([]);
   });
 
@@ -138,13 +159,19 @@ describe("Entrants row: Disqualify sends the disqualification (ruling 258)", () 
     await (propsOf(byTestid(row, "entrant-row-withdraw")[0]!).onClick as () => Promise<void>)();
     expect(writes()).toEqual([{ url: "/api/v1/entrants/e1/withdraw", options: { method: "POST", json: {} } }]);
     expect(confirmMock.mock.calls[0]![0]).toMatchObject({ title: "Withdraw Rohan Nair?" });
-    // The two confirms say the same thing about the matches: Disqualify's body CONTAINS the body Withdraw sent (one key).
+    // When the consequence cannot be read, the two confirms say the same thing about the matches: Disqualify's body CONTAINS
+    // the body Withdraw sent (one key), under the "could not be read" notice.
     const withdrawBody = (confirmMock.mock.calls[0]![0] as { body: string }).body;
     expect(withdrawBody, "premise: Withdraw sent its own long body").toBe(WITHDRAW_BODY);
     expect(WITHDRAW_BODY.length, "premise: the policy paragraph is long, not a stub").toBeGreaterThan(200);
     confirmMock.mockClear();
+    confirmMock.mockImplementation(async () => false);
+    wire.previewReject = new Error("preview unavailable");
     await (propsOf(byTestid(rowOf("e1").tree(), "entrant-row-disqualify")[0]!).onClick as () => Promise<void>)();
-    expect((confirmMock.mock.calls[0]![0] as { body: string }).body, "the DQ confirm contains Withdraw's body, taken from the same key").toContain(withdrawBody);
+    const failed = (confirmMock.mock.calls[0]![0] as { body: unknown }).body;
+    expect(bodyText(failed), "the DQ confirm falls back to Withdraw's body, taken from the same key").toContain(withdrawBody);
+    expect(bodyText(failed)).toContain((en as Record<string, string>)["withdrawal.consequence.failed"]!);
+    expect(linesOf(failed), "and claims no per-entrant numbers it could not read").toEqual([]);
   });
 
   it("a refused PATCH shows its message on the panel (and the row stays offered)", async () => {

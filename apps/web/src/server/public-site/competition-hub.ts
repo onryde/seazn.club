@@ -84,19 +84,22 @@ import {
 } from "./data";
 import { statusOf } from "./match-centre";
 import { byPoolOrder } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { isSwissByeShellExtKey } from "@/lib/swiss-shell";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import { swissRoundState, type SwissRoundState } from "@/lib/swiss-round-state";
 import { readEveryPublicDivision } from "./read-every-division";
 import type { MatchCentreHeaderT, SideT } from "./match-centre-schema";
 import { buildTableView } from "./standings-view";
-import { swissRowFactsFor } from "./swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "./table-row-facts";
+import { loadTableWithdrawals } from "./table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { cachedIfFound } from "./cache-found";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
 import { readLeaderRows } from "./public-leaders";
-import { BRACKET_KINDS, BRACKET_SETTLED, bracketTitleOf, divisionTitle, titleEntrantIds, type BracketTitleRead } from "./champion";
+import { BRACKET_KINDS, BRACKET_SETTLED, bracketTitleOf, divisionTitle, poolWinnersOf, titleEntrantIds, type BracketTitleRead } from "./champion";
+import { poolWinnerLines } from "./pool-winners";
 import { describeFormat } from "./describe-format";
 import { stageFormatLines } from "./stage-format-lines";
 import type {
@@ -109,6 +112,7 @@ import type {
   KnockoutViewT,
   LeaderBoardT,
   TableViewT,
+  HubPoolWinnersT,
   TeamCardT,
   DivisionTitleWireT,
 } from "./competition-hub-schema";
@@ -797,6 +801,7 @@ export async function loadCompetitionHub(
   const matches: HubMatchT[] = [];
   const tables: TableViewT[] = [];
   const knockouts: KnockoutViewT[] = [];
+  const poolWinners: HubPoolWinnersT[] = [];
   const teams: TeamCardT[] = [];
   const hubDivisions: HubDivisionT[] = [];
   const venues = new Set<string>();
@@ -926,6 +931,8 @@ export async function loadCompetitionHub(
         href: `${divHref}/fixtures/${f.id}`,
         header: hubHeader(f, sides, d.sport_key, generatedAt),
         byeSides: hubByeSides(f),
+        // W5 T23 (RB5-W2): a withdrawal's removal, struck on the card as on the public schedule. Absent unless true.
+        ...(f.expunged === true ? { expunged: true } : {}),
         winnerIndex:
           winner === null
             ? null
@@ -968,10 +975,21 @@ export async function loadCompetitionHub(
     }
 
     // W4: a joint title flags BOTH finalists' rows; a vacant one flags nobody (`titleEntrantIds`).
-    const championIds = titleEntrantIds(divisionTitle(stages, fixtures, standings));
+    const championIds = titleEntrantIds(divisionTitle(stages, fixtures, standings, pools));
+    // W5 T14b (owner 2026-11-18): a finished multi-pool Groups only division names each pool's winner instead (the champion above is
+    // null for it): the Table tab prints one strip per division, as it does for a champion.
+    const poolWinnerRead = poolWinnersOf(stages, fixtures, standings, pools);
+    if (poolWinnerRead) {
+      const lines = poolWinnerLines(poolWinnerRead, dict, (id) => names[id] ?? "—");
+      poolWinners.push({
+        divisionId: d.id,
+        divisionSlug: d.slug,
+        pools: lines.map((l, i) => ({ poolId: l.poolId, label: l.label, entrantId: poolWinnerRead[i]!.entrantId, name: l.name })),
+      });
+    }
     // A pool is named from its KEY in the org's locale, never by its stored
     // English name (`lib/pool-label.ts`).
-    const poolKey = new Map(pools.map((p) => [p.id, p.key]));
+    const poolKey = poolNaming(pools);
     // Live stage first — the same "relevance" order the division page already
     // sorts its standings panel by, so the two agree about which table reads
     // first.
@@ -985,6 +1003,12 @@ export async function loadCompetitionHub(
     // a forfeit is scored by are each STAGE's (W2d Task 9: `stage.table_rules`,
     // the one loader's). Called per table with that table's own snapshot,
     // which carries its pool.
+    // W5 T5b (X-CU-10): the late entrants of a league or group still catching up, read once per division (no read at all when no
+    // catch-up line exists), and every entrant's status so a departed one is never marked.
+    const lateJoins = await loadRrLateJoins(d.id, fixtures);
+    const rowFactStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+    // W5 T8 (RB5-W7): the departure notes' rows, read only for a division with a league or group stage.
+    const tableWithdrawals = stages.some((s) => s.kind === "league" || s.kind === "group") ? await loadTableWithdrawals(d.id) : [];
     const qualificationFor = divisionQualification({
       module_,
       division: d,
@@ -1007,9 +1031,7 @@ export async function loadCompetitionHub(
           buildTableView({
             id: `${d.slug}-${stage.id}-${snap.pool_id ?? "overall"}`,
             division: { id: d.id, slug: d.slug, name: d.name },
-            caption: snap.pool_id
-              ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
-              : stage.name,
+            caption: poolCaption(dict, stage.name, snap.pool_id, poolKey),
             fullHref: `${divHref}?tab=standings`,
             rows: snap.rows,
             metricSpecs: module_?.metrics ?? [],
@@ -1026,10 +1048,16 @@ export async function loadCompetitionHub(
             rules: stage.table_rules ?? null,
             dateOf: (iso) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" }),
             swissRound,
-            // W3 app-B T3 (owner Q2): the bye / late-join marks of a Swiss table, from this stage's real fixtures.
-            swissFacts: swissRowFactsFor(stage, fixtures, snap.rows),
+            // W3 app-B T3 (owner Q2): the bye / late-join marks of a Swiss table, from this stage's real fixtures; W5 T5b: a
+            // league's or group's "Joined round N" while catch-up lines remain.
+            swissFacts: rowFactsFor(stage, fixtures, snap.rows, lateJoins, rowFactStatuses),
             // owner Q2 is the Swiss table: only a Swiss stage's ladders are spelled in the table's points format
             stageKind: stage.kind,
+            // W5 T8 (RB5-W7): this table's departures, in its own row order (a pool names only its pool)
+            withdrawalNotes: withdrawalNotesFor(stage.id, (snap.rows as { entrantId: string }[]).map((r) => r.entrantId), tableWithdrawals, rowFactStatuses, names, snap.pool_id ?? null),
+            // W5 T20 (ST-G20, X-SF-1): every entrant's own status, so a withdrawn or disqualified row wears its chip on the hub as it
+            // does on the division page. Handed over whole: who counts as departed is `DEPARTED_STATUS_CHIPS`' call, not this site's.
+            statuses: rowFactStatuses,
           }),
         );
       }
@@ -1126,6 +1154,7 @@ export async function loadCompetitionHub(
     matches: sorted,
     tables,
     knockouts,
+    ...(poolWinners.length > 0 ? { poolWinners } : {}),
     leaders,
     teams,
     info: {

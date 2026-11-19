@@ -21,7 +21,9 @@ import {
   type ActiveEntrant,
   type GenerateWrite,
 } from "./types";
-import { POOL_KEYS, poolCount, generateForStage } from "./generators";
+import { POOL_KEYS, poolCount, generateForStage, roundRobinStagePlan } from "./generators";
+import { RR_MAX_LEG, rrLegOfExtKey } from "@/lib/roundrobin-reconcile";
+import { writeRoundByes } from "./roundrobin-reconcile";
 
 // ---------------------------------------------------------------------------
 // D4a (P5) / F2 — TBD-shape generation for a `timing: "setup"` progression.
@@ -264,6 +266,16 @@ export async function writeProgressionSetupFixtures(
 
   const byKey = new Map<string, string>();
   for (const f of existing) if (f.ext_key) byKey.set(f.ext_key, f.id);
+  // W5 T2: a round robin's line now carries its leg (`-L{leg}`); one drawn before that holds the bare `rr-r{n}-c{m}`. The engine's
+  // round numbers run on across legs, so the bare key names exactly one line: every leg's spelling of it is the same row, and
+  // a re-Generate over a stage drawn before the change writes nothing twice.
+  if (stage.kind === "league" || stage.kind === "group") {
+    for (const f of existing) {
+      if (f.ext_key && rrLegOfExtKey(f.ext_key) === null) {
+        for (let leg = 1; leg <= RR_MAX_LEG; leg++) byKey.set(`${f.ext_key}-L${leg}`, f.id);
+      }
+    }
+  }
 
   const newRows = gen
     .filter((g) => !byKey.has(g.extKey))
@@ -291,6 +303,11 @@ export async function writeProgressionSetupFixtures(
   for (const r of newRows) byKey.set(r.ext_key, r.id);
   const created = newRows.length;
   const createdIds = newRows.map((r) => r.id);
+  // FX-G21: a setup round robin records its byes like every other draw. It is drawn over the SEATS (`slot:N`), not entrants, so
+  // an entry names the seat that sits out; Task 5's slot consumer reads it by seat until a seed fills it.
+  if (stage.kind === "league" || stage.kind === "group") {
+    await writeRoundByes(tx, stageId, roundRobinStagePlan(stage.kind, config, entrants, poolIds).byes);
+  }
 
   // Labels via a direct per-row update with tx.json() (the pattern proven
   // everywhere else in this file, e.g. wireCrossFeeds/config writes) —

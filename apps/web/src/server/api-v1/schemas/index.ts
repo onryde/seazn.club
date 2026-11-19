@@ -74,7 +74,8 @@ export {
 export {
   PersonLane, EntrantMemberInput, NewPersonMemberInput, CreateEntrantMemberInput, CreateEntrant, CreateEntrants,
   CreateTeam, SetTeamSquad, SyncEntrantRoster, PatchEntrant, Entrant, WithdrawCascadeReport, SwissLateEntryResult,
-  KnockoutLateEntryResult, LateEntryResult, PatchedEntrant, CreatedEntrant,
+  KnockoutLateEntryResult, TableLateEntryResult, LateEntryResult, PlaceLateEntrantInput, PlacedLateEntrantResult, PatchedEntrant,
+  CreatedEntrant,
 } from "./entrants.ts";
 export {
   Consent, CreatePerson, PatchPerson, MergePersons, ReverseMerge, PutProfile, Person, CreateClaimInvite, PersonClaim,
@@ -99,7 +100,7 @@ export {
   STAGE_DECIDER_MOVED, StageConfig, CreateStage, CreateStages, StageRoundCourtTags, PutStageCourtTags, StageCourtTags,
   PutStageRules, StageRules, PutFixtureRules, FixtureRulesResult, FixtureCurrentRules, DeviceLinkBootstrap,
   RealtimeTokenOut, AddFixture, Stage, TableRulesSourceS, OutcomeKeyS, StageTableRules, StageWithTableRules,
-  FormatChangePreview, TieBreakKeyS, TieBreakNoteS, StandingsRow, StandingsSnapshot, PublicDivisionStandings,
+  FormatChangePreview, TieBreakKeyS, TieBreakNoteS, StandingsRow, StandingsSnapshot, PublicDivisionStandings, StagePool, StagePools,
   CreateFromTemplate, FromTemplateResult,
 } from "./stages.ts";
 export {
@@ -123,7 +124,7 @@ export {
 export {
   SlotLabelRef, Fixture, DeskInPlayFixture, DeskNextFixture, CompetitionDesk, LineupSlotInput, PutLineup,
   AppendEventRequest, EventImportRequest, EventImportReport, ScoreEvent, AppendEventResponse, FixtureState,
-  StandingsRowOut, CreateApiKey, ApiKey, CreatedApiKey, CreateDeviceLink, DeviceLink, CreatedDeviceLink,
+  CreateApiKey, ApiKey, CreatedApiKey, CreateDeviceLink, DeviceLink, CreatedDeviceLink,
   ScorerSheetsRequest, MatchDayCodeScope, CreateMatchDayCode, MatchDayCode,
 } from "./scoring.ts";
 export {

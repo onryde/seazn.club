@@ -5,8 +5,9 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
-import { recomputeStandings } from "@/server/engine-db";
+import { recomputeStandings, type SnapshotCause } from "@/server/engine-db";
 import { log } from "@/server/logger";
+import { readStageRoundByes, snapshotFixtures } from "../fixture-snapshot";
 import { REAL_TABLE_KINDS, type Tx } from "./types";
 
 /**
@@ -91,10 +92,12 @@ export async function refoldStageTable(
   orgId: string,
   stage: { id: string; kind: string },
   emptyFold: "skip" | "drop",
+  /** B5 fix wave fix round 2/3 (m4, m5): why the table refolds - a roster change unless the caller says a bye was awarded. */
+  cause: SnapshotCause = "roster",
 ): Promise<void> {
   if (!REAL_TABLE_KINDS.has(stage.kind)) return;
   try {
-    await recomputeStandings(orgId, stage.id, undefined, { emptyFold });
+    await recomputeStandings(orgId, stage.id, undefined, { emptyFold, cause });
   } catch (err) {
     log.error({ err, event: "stage_table_refold_failed", stageId: stage.id, emptyFold }, "stage_table_refold_failed");
   }
@@ -119,4 +122,40 @@ export async function departedEntrantIds(tx: Tx, divisionId: string): Promise<Se
     select id from entrants
     where division_id = ${divisionId} and status in ('withdrawn','disqualified')`;
   return new Set(rows.map((r) => r.id));
+}
+
+/**
+ * Undoable generation (Jul3/03 §3): the ledger row a pass appends so Undo can walk it back, and the watermark put at the head
+ * (a Redo waiting on the old board is gone). `fixtures_generated`'s `payload.fixture_ids` IS the Undo contract - Undo DELETEs
+ * every id in it. Verbatim from `generateStageFixturesTx`'s own write, which calls this; the W5 T2 round-robin reconcile
+ * (`roundrobin-reconcile.ts`) is the second writer. The caller holds the division lock.
+ */
+async function appendDivisionEvent(tx: Tx, divisionId: string, type: string, payload: Record<string, unknown>): Promise<void> {
+  const [{ seq: last }] = await tx<{ seq: number }[]>`
+    select coalesce(max(seq), 0)::int as seq from division_events
+    where division_id = ${divisionId}`;
+  await tx`
+    insert into division_events (division_id, seq, type, payload)
+    values (${divisionId}, ${last + 1}, ${type}, ${tx.json(payload as never)})`;
+  await tx`update divisions set seq = ${last + 1}, edit_watermark = null
+           where id = ${divisionId}`;
+}
+
+export function appendFixturesGenerated(tx: Tx, divisionId: string, payload: Record<string, unknown>): Promise<void> {
+  return appendDivisionEvent(tx, divisionId, "fixtures_generated", payload);
+}
+
+/**
+ * W5 T2 fix round 1 (undo ruling): a round-robin Generate that is about to DELETE lines first records them - a `fixtures_cleared`
+ * row carrying `snapshotFixtures`' rows, the same row history.ts writes when it deletes - so Undo, which inverts a cleared row into
+ * a restore, puts the removed lines (with their times and courts) back. Appended BEFORE the delete and BEFORE the
+ * `fixtures_generated` row of the lines the same pass inserts: Undo walks them newest first (the inserted lines go, then the
+ * removed ones return). No ids, no row. The caller holds the division lock and deletes `ids` straight after.
+ */
+export async function recordFixturesCleared(tx: Tx, divisionId: string, stageId: string, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const fixtures = await snapshotFixtures(tx, { ids });
+  // The stage's byes ride with the snapshot: a redraw rewrites `config.round_byes`, and the engine's inverse keeps only the rows.
+  const round_byes = await readStageRoundByes(tx, stageId);
+  await appendDivisionEvent(tx, divisionId, "fixtures_cleared", { stage_id: stageId, fixture_ids: [...ids], fixtures, round_byes });
 }

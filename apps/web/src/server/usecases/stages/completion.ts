@@ -21,7 +21,14 @@ import { seedNextStage, type SeededStage } from "./carry-over";
 import { generateStageFixturesUnpublished } from "./generate";
 import { computeSeedProposal } from "./seed-proposal";
 import { markDependentSeedProposalsStale } from "./seed-stale";
+import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import { isFirstLossProgression, maybeProposePlate } from "../plate-field";
+import { onlyPoolOf } from "../stage-table-snapshot";
+import { RANK_OVERRIDE_TABLE_KINDS, planRankOverride } from "@/lib/rank-override";
+import { readStagePins, readStageSeating } from "../rank-override";
+import { inTheField } from "@/lib/entrant-field";
+import { roundRobinRefusal } from "../roundrobin-refusal";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -95,7 +102,7 @@ export interface CompleteStageResult extends CompleteResult {
    *  `timing: "setup"` next stage's progression. Propose + confirm, never
    *  fully automatic (owner ruling): unlike `qualified` above, this never
    *  fills anything by itself. */
-  seed_proposal?: { id: string; status: string };
+  seed_proposal?: { id: string; status: string } | null;
 }
 
 /**
@@ -133,12 +140,20 @@ export async function completeStage(
   // says a bracket is complete (every final settled) — so a final not yet settled keeps the soft `{completed: false}`
   // (controller ruling C4), and a bracket with a third-place line, or any other line, still owed a result is refused by
   // name instead of completing around it.
-  const result = await completeStageIfReady(auth.orgId, stageId, {
+  let result = await completeStageIfReady(auth.orgId, stageId, {
     beforeBracketComplete: async (tx) => {
       const owed = await undecidedBracketFixtures(tx, stageId);
       if (owed.length > 0) throw knockoutRefusal("STAGE_HAS_UNDECIDED_FIXTURES", { fixture_ids: owed });
     },
   });
+  if (result.already_complete === true) {
+    // W5 T17 (X-BD-4 <- RB5-S4): a second Complete says so and does nothing more - no proposal computed or staled, no
+    // draw, no division completion, no publish (nothing was written, so there is nothing for a hub to refetch).
+    if (!(await nextStageOwesItsDraw(auth, current))) return alreadyCompleteAnswer(auth, current);
+    // The one thing a repeat still owes (R10h, schedule-slot-writes-cache-keys.test.ts): a draw the division's FREEZE
+    // refused at the first Complete. Falls through to the progression below, which draws it; the answer is what it was.
+    result = { completed: result.completed, events: result.events };
+  }
   if (!result.completed) return result;
 
   // R10g (review-r10f m2): from here the stage is complete (its completion
@@ -158,6 +173,37 @@ export async function completeStage(
       afterScheduleWrite(current.division_id, current.competition_id, "schedule", []);
     }
   }
+}
+
+/** W5 T17: the stage after `current` still has its draw to take - an `on_complete` progression with no fixtures. A first
+ *  Complete that the division's schedule freeze refused the draw leaves exactly this (the completion committed, the
+ *  generation was skipped), and a repeat after the freeze lifts is that draw's retry (R10h). A `setup` progression is never
+ *  owed one: its proposals are the organiser's (Recompute is the explicit door), and its bracket is drawn on day one. */
+async function nextStageOwesItsDraw(auth: AuthCtx, current: { division_id: string; seq: number }): Promise<boolean> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [next] = await tx<{ id: string; progression: { timing?: string } | null }[]>`
+      select id, progression from stages
+      where division_id = ${current.division_id} and seq > ${current.seq}
+      order by seq limit 1`;
+    if (next === undefined || next.progression?.timing !== "on_complete") return false;
+    const [{ n }] = await tx<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${next.id}`;
+    return n === 0;
+  });
+}
+
+/** W5 T17: the answer of a Complete on a stage that is already complete and owes nothing: `completed: false` (this call
+ *  completed nothing), `already_complete: true`, and the next stage's live DRAFT proposal when it has one (null for a
+ *  confirmed or stale latest row, or none - the draft is the only one an organiser still has to act on). One read. */
+async function alreadyCompleteAnswer(auth: AuthCtx, current: { division_id: string; seq: number }): Promise<CompleteStageResult> {
+  const draft = await withTenant(auth.orgId, async (tx) => {
+    const [next] = await tx<{ id: string }[]>`
+      select id from stages where division_id = ${current.division_id} and seq > ${current.seq} order by seq limit 1`;
+    if (next === undefined) return null;
+    const [latest] = await tx<{ id: string; status: string }[]>`
+      select id, status from stage_seed_proposals where stage_id = ${next.id} order by created_at desc, id desc limit 1`;
+    return latest !== undefined && latest.status === "draft" ? { id: latest.id, status: latest.status } : null;
+  });
+  return { completed: false, already_complete: true, events: [], seed_proposal: draft };
 }
 
 /** What a complete stage does next (see `completeStage`): seed and draw the
@@ -187,7 +233,10 @@ async function progressCompletedStage(
   const plateNext = nextProgression?.timing === "setup" && isFirstLossProgression(nextProgression);
   if (plateNext) {
     // The completion above has ALREADY committed: a failure of the plate's trigger is said aloud, never reported as a failed
-    // completion (the sibling branch's F3 finding-4 rule). The plate is proposed again by the next result or withdrawal.
+    // completion (the sibling branch's F3 finding-4 rule). It is proposed again by the next decided result in the source or a
+    // withdrawal (both call the trigger), or by the organiser's Recompute: POST /stages/{id}/seed-proposal on the plate reaches
+    // `computeSeedProposal`, which draws a firstLosses plate's lines at its field's size (seed-proposal.ts, `firstLossPlate`).
+    // (Whether the desk offers that button on a plate with no proposal is not read here: the route is.)
     try {
       await maybeProposePlate(auth, stageId);
     } catch (err) {
@@ -245,11 +294,14 @@ async function progressCompletedStage(
           { event: "seed_proposal_compute_failed", stageId, nextStageId: next!.id, err: String(err) },
           "stage completed, but computing the next stage's seed proposal failed",
         );
+        // B4 fix wave (12b m1): a round-robin refusal (RR_CUT_EXCEEDS_FIELD) rides inside the wrap by name with its own fields, so the
+        // desk says that sentence in the reader's language instead of the server's English reason.
+        const cause = err instanceof HttpError && err.code !== undefined && isRoundRobinRefusalCode(err.code) ? { ...err.extra, cause: err.code } : {};
         throw new HttpError(
           409,
           err instanceof Error ? err.message : String(err),
           "STAGE_COMPLETED_SEEDING_FAILED",
-          { stageId, nextStageId: next!.id },
+          { ...cause, stageId, nextStageId: next!.id },
         );
       }
       if (!(err instanceof HttpError && err.code === "SEEDING_SOURCE_INCOMPLETE")) throw err;
@@ -383,10 +435,14 @@ export interface StandingsOut {
 }
 
 /** Standings snapshot for a stage (recomputed on demand when absent). */
-export async function getStandings(auth: AuthCtx, stageId: string, poolId?: string): Promise<StandingsOut> {
+export async function getStandings(auth: AuthCtx, stageId: string, requestedPoolId?: string): Promise<StandingsOut> {
+  let poolId = requestedPoolId;
   const snapshot = await withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx`select 1 from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
+    // W5 T3 (X-BD-7): asked for no pool, a stage with ONE pool answers that pool's table (a group of one is a league to a caller
+    // that never heard of pools); a stage with none, or several, has no pool to default to and answers as before.
+    if (poolId === undefined) poolId = (await onlyPoolOf(tx, stageId)) ?? undefined;
     const [snap] = await tx<StandingsOut[]>`
       select stage_id, pool_id, rows, computed_through_seq, updated_at
       from standings_snapshots
@@ -416,28 +472,48 @@ export async function overrideStandings(
   input: { rows: { entrant_id: string; rank: number; reason: string }[] },
 ): Promise<{ overridden: number }> {
   await requireFeature(auth.orgId, "tiebreakers.custom");
+  const seen: { stage?: { division_id: string; competition_id: string; kind: string; status: string } } = {};
   const out = await withTenant(auth.orgId, async (tx) => {
-    const [stage] = await tx<{ division_id: string; config: Record<string, unknown> }[]>`
-      select division_id, config from stages where id = ${stageId}`;
+    const [stage] = await tx<{ division_id: string; competition_id: string; kind: string; status: string; config: Record<string, unknown> }[]>`
+      select s.division_id, d.competition_id, s.kind, s.status, s.config
+        from stages s join divisions d on d.id = s.division_id where s.id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
+    seen.stage = stage;
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+    // W5 T13 (X-PO-4 <- RB5-P7, ruling 288): a stage with no table has no place to pin an entrant in.
+    if (!RANK_OVERRIDE_TABLE_KINDS.has(stage.kind)) throw roundRobinRefusal("RR_RANK_OVERRIDE_NOT_TABLE", { kind: stage.kind });
     const ids = input.rows.map((r) => r.entrant_id);
-    const known = await tx<{ id: string }[]>`
-      select id from entrants where id in ${tx(ids)} and division_id = ${stage.division_id}`;
+    const known = await tx<{ id: string; status: string }[]>`
+      select id, status from entrants where id in ${tx(ids)} and division_id = ${stage.division_id}`;
     if (known.length !== ids.length) {
       throw new HttpError(422, "override references an entrant outside this division");
     }
-    const ranks = new Set(input.rows.map((r) => r.rank));
-    if (ranks.size !== input.rows.length) throw new HttpError(422, "duplicate ranks in override");
+    // W5 T13 fix round 1 (X-PO-3): an OPEN table takes no pin for an entrant who has left it - a departure drops her pins, so one written
+    // after it would sit there ranking her above the field. A finished table stands as it finished (RB5-L8) and keeps what it is given.
+    if (stage.status !== "complete" && known.some((e) => !inTheField(e))) {
+      throw new HttpError(422, "override references an entrant who is no longer in the field");
+    }
+    // W5 T13 (X-PO-3 <- RB5-P5, ST-G14): the body is checked PER POOL, against the pool's size, here - the engine would throw a rank above
+    // it at the next recompute, after the write. A second override replaces only the pools it names.
+    const seating = await readStageSeating(tx, stageId);
+    const plan = planRankOverride(await readStagePins(tx, stageId), input.rows, seating);
+    if (!plan.ok) {
+      if (plan.reason === "unseated") throw new HttpError(422, "override references an entrant with no place in this stage's table");
+      if (plan.reason === "undrawn_pools") throw roundRobinRefusal("RR_RANK_OVERRIDE_UNDRAWN_POOLS");
+      throw roundRobinRefusal("RR_RANK_OVERRIDE_POOL", {
+        reason: plan.reason,
+        rank: plan.rank,
+        pool_id: plan.pool_id,
+        ...(plan.reason === "above_size" ? { size: plan.size } : {}),
+      });
+    }
 
     // Server-side merge (design §T2). `stage.config` was read BEFORE the
     // advisory lock above, so a writer that committed while this transaction
     // waited is already invisible to it; spreading that stale object back
     // reverts the other writer's key with no error.
     await tx`
-      update stages set config = config || ${tx.json({
-        rank_overrides: input.rows.map((r) => ({ entrant_id: r.entrant_id, rank: r.rank })),
-      } as never)}
+      update stages set config = config || ${tx.json({ rank_overrides: plan.pins } as never)}
       where id = ${stageId}`;
 
     // audit (actor + reason, hash-chained per the 011 pattern)
@@ -453,8 +529,29 @@ export async function overrideStandings(
   });
   // pinned ranks land in the snapshots immediately
   await recomputeStandings(auth.orgId, stageId);
+  // B4 fix wave (m3): and on the public pages - the division and competition tags a result write clears (the pool winners banner and
+  // the table read the recomputed snapshots). Best-effort: the pin is written.
+  // B5 fix wave G3 (m1): the Redis copies too - the hub document the hub poll reads (15 s) and the division's public documents the
+  // standings API serves (`standings-v3`, 30 s), or the poll paints the old order back over the fresh page. `afterScheduleWrite` is
+  // the one helper that DELs both and fires the same tags (no fixture moved: no fixture key, no fixture push).
+  const pinned = seen.stage;
+  if (pinned !== undefined) afterScheduleWrite(pinned.division_id, pinned.competition_id, "schedule", []);
+  else await fireStageRevalidate(auth.orgId, stageId);
   // D4a (P5): a correction here invalidates any dependent `timing:"setup"`
   // stage's draft proposal — mark it stale and recompute a fresh one.
-  await markDependentSeedProposalsStale(auth, stageId);
+  //
+  // W5 T11 (X-CUT-4 <- RB5-K6): pinning a place inside a COMPLETED league or group moves its cut like a corrected result does, so
+  // a confirmed proposal goes stale too and its seats go back before the destination starts. Best-effort: the pin is written.
+  const complete = seen.stage;
+  if (complete !== undefined && complete.status === "complete" && TABLE_CUT_DRIFT_KINDS.has(complete.kind)) {
+    try {
+      const unfilled = await markDependentSeedProposalsStale(auth, stageId, { includeConfirmed: true });
+      if (unfilled.length > 0) afterScheduleWrite(complete.division_id, complete.competition_id, "schedule", unfilled);
+    } catch (err) {
+      log.error({ err, stageId }, "overrideStandings: a pinned table's proposals did not update (the pin is written)");
+    }
+  } else {
+    await markDependentSeedProposalsStale(auth, stageId);
+  }
   return out;
 }

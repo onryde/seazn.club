@@ -37,6 +37,7 @@ import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
 import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w3SwissASuite } from "./suites/w3SwissA.ts";
+import { w5RoundRobinASuite } from "./suites/w5RoundRobinA.ts";
 import { w4KnockoutASuite } from "./suites/w4KnockoutA.ts";
 import { w4KnockoutBSuite } from "./suites/w4KnockoutB.ts";
 import { w3SwissBSuite } from "./suites/w3SwissB.ts";
@@ -1314,6 +1315,10 @@ export async function main() {
   // Format matrix W4 knockout app PR B: one counted check per task that owes one (B1: T3, the places/title wire, X-FR-4).
   // Own fresh owner; keyless; every read and write a v1 route. After w4KnockoutA.
   await suite("w4KnockoutB", () => w4KnockoutBSuite());
+  // Format matrix W5 round-robin app PR A: counted checks for the tasks that owe one (T2: a league grown 4 -> 6 before Start holds
+  // each pair once, X-CU-6; a five-team league stores its byes, FX-G21); the suite's own header lists each. After w4KnockoutB.
+  // Own fresh owner; keyless; every read and write a v1 route.
+  await suite("w5RoundRobinA", () => w5RoundRobinASuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {

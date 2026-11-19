@@ -10,7 +10,7 @@ import "server-only";
 // generation/proposal flows) goes through this file rather than querying
 // `pools`/`standings_snapshots`/`fixtures` directly, so the two callers can
 // never drift apart.
-import { refuseFirstLossesFromDoubleElim } from "./stored-progression";
+import { refuseFirstLossesFromDoubleElim, resolveStoredProgression } from "./stored-progression";
 import { createHash } from "node:crypto";
 import type postgres from "postgres";
 import {
@@ -38,6 +38,7 @@ import { HttpError } from "@/lib/errors";
 import { isWholeRoundCut } from "@/lib/format-size-gates";
 import { luckyLoserOrder } from "@/lib/lucky-loser";
 import { swissDrawSeed } from "@/lib/swiss-draw";
+import { TABLE_CUT_DRIFT_KINDS } from "@/lib/table-cut-drift";
 import { CUT_SKIPS_DEPARTED_KINDS } from "@/lib/table-withdrawal";
 import { bracketStageIsDecided, loadCrossGroupRules } from "@/server/engine-db/competition";
 import { persistLotsDraws } from "@/server/engine-db/table-rules";
@@ -413,11 +414,15 @@ export async function sourceStandingsTables(tx: Tx, source: { id: string }): Pro
  *  exactly — same condition, same helper, now shared rather than forked. */
 export async function sourcesToTables(
   tx: Tx,
-  target: { id: string; division_id: string; seq: number },
+  target: { id: string; division_id: string; seq: number; kind?: string; progression?: unknown },
   sources: readonly ProgressionSource[],
   /** Read a knockout's cut as its results make it, with no lucky loser in a departed qualifier's rank: who a CORRECTION moved
-   *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. */
-  opts: { withoutLuckyLoser?: boolean } = {},
+   *  (`getKnockoutCutDrift`), where a withdrawal is not a correction. `withoutDepartureBackfill` is the same read for a league's
+   *  or a group's cut (W5 T11, `getTableCutDrift`): a departed entrant keeps the place her results earned, so the next eligible
+   *  entrant is not read as moved across the line by a withdrawal. `alsoDeparted` reads the cut as if these entrants were already
+   *  out of the field (W5 T11: the withdrawal cascade asks before it writes her status, to learn whether anyone is left to take
+   *  her place). */
+  opts: { withoutLuckyLoser?: boolean; withoutDepartureBackfill?: boolean; alsoDeparted?: ReadonlySet<string> } = {},
 ): Promise<{
   shapes: SourceShape[];
   tables: SourceTables[];
@@ -426,6 +431,8 @@ export async function sourcesToTables(
   const shapes: SourceShape[] = [];
   const tables: SourceTables[] = [];
   const resolved: { id: string; kind: string; status: string }[] = [];
+  /** Each source's table as its results made it, parallel to `tables` (undefined where the cut is not a departed-skipping one). */
+  const earned: (readonly PoolTableRows[] | undefined)[] = [];
   for (const s of sources) {
     const source = await resolveProgressionSource(tx, target, s.stage);
     // W4 T8 (X-PL-5, C4+): a source read ONLY for its first losses is proposable when its first-loss FIELD is complete (round
@@ -443,6 +450,7 @@ export async function sourcesToTables(
       // The hash is over the field itself (who, in what order of first loss), so a corrected result that moves it stales a draft.
       const rows = field.losers.map((l, i) => ({ entrantId: l.entrantId, rank: i + 1 })) as unknown as StandingsRow[];
       tables.push({ pools: [{ pool: "first_loss", rows }] as never, bracket: await loadBracketFixtures(tx, source.id) });
+      earned.push(undefined);
       continue;
     }
     // W4 T14 (X-QM-4): a completed knockout with a decision taken back still reads `complete` (nothing reopens a stage), and
@@ -467,18 +475,67 @@ export async function sourcesToTables(
     // W4 T13 a league's or a group's (RB4-V6). A knockout source's departed qualifier takes a lucky loser in her place
     // (RB4-V2, `luckyLoserCut`). The hash the proposal stores is over these tables, so a departure or a return after a
     // draft stales it.
-    const departed = await departedEntrantIds(tx, target.division_id);
+    const departed = new Set([...(await departedEntrantIds(tx, target.division_id)), ...(opts.alsoDeparted ?? [])]);
     const cut = LUCKY_LOSER_SOURCE_KINDS.has(source.kind) && opts.withoutLuckyLoser !== true ? rankCutOf(s.take) : null;
     const pools =
       cut === null
-        ? cutEligiblePools(source.kind, read, departed)
+        ? opts.withoutDepartureBackfill === true
+          ? [...read]
+          : cutEligiblePools(source.kind, read, departed)
         : luckyLoserCut(read, cut, departed, await luckyLoserOrderFor(tx, source.id, target.id, read, cut));
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
     // W2d T12 (spec §5.9, X-TB-7): the source's pinned cross-group order and stored draws — as tablesForCompletedStage.
     const crossGroup = REAL_TABLE_KINDS.has(source.kind) ? await loadCrossGroupRules(tx, source.id) : undefined;
     tables.push({ pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) });
+    earned.push(cut === null && opts.withoutDepartureBackfill !== true && TABLE_CUT_DRIFT_KINDS.has(source.kind) ? read : undefined);
   }
+  keepExhaustedSeatsDead(target, tables, shapes, resolved, earned, await departedEntrantIds(tx, target.division_id), opts.alsoDeparted);
   return { shapes, tables, resolved };
+}
+
+/** W5 T11 review round 3 (RB5-K6 + RB4-E7/R6): a table cut with NOBODY left to take a departed qualifier's place keeps her seat where
+ *  her results earned it. `cutEligiblePools` closes the pool up and keeps her row at the BOTTOM, so a cut that runs out of eligible
+ *  entrants (fewer than it takes) offers the survivors the seats above hers: a middle seat's departure would shift every seed below
+ *  it and draw a short cut (a bye on a page playoff, RB4-S2). Here a pool whose eligible cut still reaches a departed qualifier - the
+ *  engine's own answer to "is anyone left" - is read as its results made it instead, so the departed qualifier holds her earned rank,
+ *  the proposal offers nobody at it, and the confirm leaves her seat to the walkover. A pool with a backfill is untouched (RB5-K1/K2),
+ *  and so is a source whose cut a lucky loser or `withoutDepartureBackfill` already answers, and a Swiss source, whose shortfall
+ *  keeps its W3 shape: the eligible in table order, the departed below them (`earned` is undefined for each). Writes
+ *  into `tables` in place: the proposal's hash is over what it returns. */
+function keepExhaustedSeatsDead(
+  target: { kind?: string; progression?: unknown },
+  tables: SourceTables[],
+  shapes: readonly SourceShape[],
+  resolved: readonly { kind: string }[],
+  earned: readonly (readonly PoolTableRows[] | undefined)[],
+  departedNow: ReadonlySet<string>,
+  alsoDeparted: ReadonlySet<string> | undefined,
+): void {
+  if (target.progression === undefined || target.progression === null || target.kind === undefined) return;
+  if (!earned.some((e) => e !== undefined)) return;
+  const departed = new Set([...departedNow, ...(alsoDeparted ?? [])]);
+  if (departed.size === 0) return;
+  let today: ReturnType<typeof resolveStoredProgression>;
+  try {
+    today = resolveStoredProgression(
+      target.progression as ProgressionSpec,
+      shapes,
+      departedLoseBestNth(tables, resolved, departed),
+      target.kind,
+      resolved.map((r) => r.kind),
+    );
+  } catch {
+    return; // the caller resolves the same tables and raises the same refusal
+  }
+  for (const q of today.qualifiers) {
+    const read = earned[q.sourceIndex];
+    if (read === undefined || !departed.has(q.entrantId)) continue;
+    const table = tables[q.sourceIndex]!;
+    tables[q.sourceIndex] = {
+      ...table,
+      pools: table.pools.map((p, i) => (p.rows.some((r) => r.entrantId === q.entrantId) ? (read[i] as never) : p)),
+    };
+  }
 }
 
 /** The source's losers below its cut, in lucky-loser order with the destination's draw seed (RB4-V5); `luckyLoserCut`

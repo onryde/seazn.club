@@ -260,7 +260,27 @@ async function cachedJustBefore(): Promise<number> {
   await sleep(3);
   const at = Date.now();
   await sleep(3);
+  // B5 fix wave G4 (the pre-existing flake): on a loaded machine the write under test could land in the SAME millisecond as `at`,
+  // and a tie is not "after" the cached entry. Leave `at` behind for certain before returning.
+  while (Date.now() <= at) await sleep(1);
   return at;
+}
+
+/** B5 fix wave fix round 2 (I3, the load flake, cause proven): Next stamps a tag's expiry with the wall clock, an integer
+ *  `Date.now()` (file-system-cache.js `revalidateTag`), but `areTagsExpired` compares it with its own clock,
+ *  `performance.timeOrigin + performance.now()` (tags-manifest.external.js), a fraction of a millisecond away from the wall clock in
+ *  either direction (measured -0.68 to +0.25 ms). A red run logged `expired` 0.014 ms ahead of Next's clock: an expiry stamped NOW
+ *  read as not yet due, for under a millisecond. The next public read happens after the flush, at a wall-clock instant; this waits
+ *  until Next's own clock has reached the wall clock's "now" and no further, so an immediate expiry (`expire: 0`) reads expired
+ *  and a future one (the competition tag's `max`) still does not - nothing the assertions prove is loosened. A wait past 50 ms
+ *  would be no clock skew at all, so it fails instead of hiding it. */
+async function readOnNextsClock(): Promise<void> {
+  const wall = Date.now();
+  const startedAt = performance.now();
+  while (performance.timeOrigin + performance.now() < wall) {
+    if (performance.now() - startedAt > 50) throw new Error("Next's clock is more than 50 ms behind the wall clock: not a skew");
+    await new Promise((r) => setImmediate(r));
+  }
 }
 
 async function competitionOf(divisionId: string): Promise<string> {
@@ -360,6 +380,7 @@ describe("fireScoreRevalidate through Next's real flush and tag manifest", () =>
       if (maxLands === "after") fireDivisionRevalidate(`div-${id}`, `comp-${id}`);
       return 201;
     });
+    await readOnNextsClock();
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsExpired([comp], cachedAt)).toBe(false);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
@@ -396,6 +417,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
       // division tag, so an expired tag makes them a miss rebuilt with the
       // score — not the previous render served again while it rebuilds. The
       // competition tag keeps SWR.
+      await readOnNextsClock();
       expect(areTagsExpired([div], cachedAt), `${write.type}: division entry is a miss`).toBe(true);
       expect(areTagsExpired([comp, div], cachedAt), write.type).toBe(true);
       expect(areTagsExpired([comp], cachedAt), write.type).toBe(false);
@@ -413,7 +435,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
           `pub:v1:hub:${competitionId}`,
           `pub:v1:player-matches-gen:${competitionId}`,
           `pub:v1:div:${divisionId}:schedule`,
-          `pub:v1:div:${divisionId}:standings-v2`,
+          `pub:v1:div:${divisionId}:standings-v3`,
           `pub:v1:div:${divisionId}:entrants-v2`,
         ]),
       );
@@ -455,7 +477,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     // Review r2-m4: the division's documents by name, where a SCAN used to be.
     const divisionKeys = [
       `pub:v1:div:${divisionId}:schedule`,
-      `pub:v1:div:${divisionId}:standings-v2`,
+      `pub:v1:div:${divisionId}:standings-v3`,
       `pub:v1:div:${divisionId}:entrants-v2`,
     ];
     const unhandled: unknown[] = [];
@@ -515,6 +537,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     expect(result.results[0]!.status).toBe("imported");
 
     expect(calls).toContainEqual({ tags: [div], durations: { expire: 0 } });
+    await readOnNextsClock();
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsExpired([comp], cachedAt)).toBe(false);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
@@ -600,6 +623,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
     // The invalidation ran anyway, in time for the flush.
     expect(calls, "a throwing hook skipped the tag").toContainEqual({ tags: [div], durations: { expire: 0 } });
+    await readOnNextsClock();
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
     expect(targetsOf("del")).toEqual(
@@ -665,6 +689,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
 
     // And the invalidation ran anyway, in time for the flush.
     expect(calls).toContainEqual({ tags: [div], durations: { expire: 0 } });
+    await readOnNextsClock();
     expect(areTagsExpired([div], cachedAt), "division entry is a miss").toBe(true);
     expect(areTagsStale([comp], cachedAt)).toBe(true);
     expect(targetsOf("del")).toContain(`pub:v1:hub:${competitionId}`);

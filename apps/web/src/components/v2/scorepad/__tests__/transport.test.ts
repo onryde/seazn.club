@@ -624,6 +624,13 @@ describe("409 classification", () => {
     const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
     const thrown = new Set([...read("src/server/usecases/scoring.ts").matchAll(/"(UNDO_[A-Z_]+)"/g)].map((m) => m[1]!));
     expect(thrown.size).toBeGreaterThan(0);
+    // W5 T8b review I1: scoreEvent's void path also runs withdrawal.ts's disqualification guard, which throws its own code.
+    const withdrawal = read("src/server/usecases/withdrawal.ts");
+    const dq = /export const (UNDO_[A-Z_]+) = "(UNDO_[A-Z_]+)";/.exec(withdrawal);
+    expect(dq?.[1], "withdrawal.ts declares the disqualification undo refusal").toBe(dq?.[2]);
+    expect(withdrawal, "and throws it as a 409").toMatch(new RegExp(`new HttpError\\(409, [^;]*${dq![1]}\\)`));
+    expect(read("src/server/usecases/scoring.ts"), "scoring's void path calls the guard").toMatch(/assertDisqualificationUndoable\(/);
+    thrown.add(dq![2]!);
     const fedSeats = read("src/server/engine-db/fed-seats.ts");
     expect(fedSeats, "fed-seats.ts throws its refusal as a 409 under the shared code").toMatch(
       /new HttpError\(409, [^;]*NEXT_MATCH_STARTED_CODE/,

@@ -6,7 +6,7 @@ import type { SwissRefusalCode } from "../../../../apps/web/src/lib/swiss-refusa
 import { EngineError, SETTLE_METHODS, forbidsLevelResult, playRecorded, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";
-import { templateBodies, templateField, templateRow } from "../templates.ts";
+import { templateBodies, templateChoiceFor, templateField, templateRow } from "../templates.ts";
 import {
   DriverMisuse, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, SetupRefused, VOID_EVENT, type CompetitionRef, type DivisionRef, type EntrantKind, type EntrantMember, type EntrantRow, type FixtureRow, type FixtureStateOut, type MemberInput, type PostedEvent, type StageRef,
 } from "../driver/types.ts";
@@ -348,7 +348,9 @@ export async function setUpDivision(ctx: ScenarioContext, rec: Recorder, entrant
   if (template !== undefined) {
     // ONE organiser act: the card. It creates no entrant (templates.ts:351-366),
     // and its stages are never posted.
-    ({ competition, division } = await inSetup(() => ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON })));
+    // W5 X-BD-3: an any-sport card is told the case's sport, variant, kind and field (the sheet's choice); a fixed card, nothing.
+    const choice = templateChoiceFor(template, ctx.spec, kind);
+    ({ competition, division } = await inSetup(() => ctx.driver.createFromTemplate(template, { name: `Matrix ${ctx.spec.caseId}`, endsOn: TEMPLATE_ENDS_ON, ...(choice ? { choice } : {}) })));
   } else {
     const slug = `m-${ctx.tag.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`.slice(0, 60).replace(/-+$/, "");
     competition = await inSetup(() => ctx.driver.createCompetition({ name: `Matrix ${ctx.spec.caseId}`, slug }));
@@ -429,11 +431,12 @@ function templateCase(ctx: ScenarioContext, kind: EntrantKind, key: string, entr
   if (overrides.length > 0) throw new Error(`scenario: catalog template ${key} takes no overrides (its card sets no rule); case ${ctx.spec.caseId} carries ${overrides.join(", ")}`);
   const builds = templateRow(key);
   if (builds !== ctx.spec.row) throw new Error(`scenario: catalog template ${key} builds ${builds}, not ${ctx.spec.row} (case ${ctx.spec.caseId})`);
-  const t = templateField(key);
+  // An any-sport card builds the case's own sport and variant (the case sends them as the choice); a fixed card's are its own.
+  const t = templateField(key, undefined, { sport: ctx.spec.sport, variant: ctx.spec.variant });
   if (t.sport !== ctx.spec.sport || t.variant !== ctx.spec.variant) {
     throw new Error(`scenario: catalog template ${key} builds ${t.sport}/${t.variant}; case ${ctx.spec.caseId} runs ${ctx.spec.sport}/${ctx.spec.variant} — its cfg would score another variant`);
   }
-  if (t.entrantKind !== kind) throw new Error(`scenario: catalog template ${key} seeds ${t.entrantKind} entrants; case ${ctx.spec.caseId}'s cfg plays ${kind}`);
+  if (t.entrantKind !== "any" && t.entrantKind !== kind) throw new Error(`scenario: catalog template ${key} seeds ${t.entrantKind} entrants; case ${ctx.spec.caseId}'s cfg plays ${kind}`);
   if (entrantCount !== t.entrantCount) throw new Error(`scenario: catalog template ${key} seats ${t.entrantCount} entrants (D11); case ${ctx.spec.caseId} asked for ${entrantCount}`);
   return templateBodies(key);
 }
@@ -934,7 +937,7 @@ const worstExit = (exits: readonly (LoopExit | null)[]): LoopExit | null => {
  *  after a commit. */
 export async function playDivision(
   ctx: ScenarioContext, rec: Recorder, setup: DivisionSetup,
-  hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void> } = {},
+  hooks: RoundHooks & { beforeComplete?: (stage: StageRef) => Promise<void>; afterAdvance?: (stage: StageRef, advance: AdvanceObs) => Promise<void> } = {},
 ): Promise<StagePlay[]> {
   // W4 B3 (X-PL-2, owner ruling G2): a firstLosses plate has NO day-one lines - its field is open until every first match is decided, so a
   // Generate before then answers an empty list by design. It is generated (and proposed) where the product draws it, below.
@@ -993,6 +996,9 @@ export async function playDivision(
         continue;
       }
     }
+    // W5 T24 (C6a): the SECOND stage's seats are confirmed and nothing of it is played yet - the window a correction in the completed source
+    // lands in (RB5-K6: "before the destination starts: re-propose and re-confirm"). Stage 2 only, the one the first stage feeds.
+    if (i === 1 && advance !== null) await hooks.afterAdvance?.(stage, advance);
     // D12: the round hooks run on stage 1 only; the bracket pick is the scenario's rule for every bracket match, so it
     // goes to each stage (a later stage it does not apply to — a table — never asks it).
     await playStage(ctx, rec, setup, i === 0 ? hooks : hooks.bracketPick === undefined ? {} : { bracketPick: hooks.bracketPick }, stage);

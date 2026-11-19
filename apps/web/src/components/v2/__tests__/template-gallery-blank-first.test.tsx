@@ -32,6 +32,7 @@ function gallery() {
         orgSlug="org"
         orgId="org-1"
         templates={TEMPLATES}
+        sports={[]}
         publicDashboardUpgrade={null}
         publicSlots={null}
         viewerPlan="community"

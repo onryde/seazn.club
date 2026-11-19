@@ -49,8 +49,9 @@ import type { Scenario } from "./types.ts";
 /** The scenario's default field. The call site asks fieldSizeFor, which
  *  answers the FORMAT's field (a page playoff seeds 4; W1-driving Task 2). */
 const ENTRANTS = 8;
-/** withdrawal.ts applyUpdate: these are reported as skipped, never touched. */
-const LOCKED = new Set(["finalized", "cancelled"]);
+/** withdrawal.ts: the lines a withdrawal leaves as they are and reports as skipped. W5 T8 (ST-G15, RB5-W2): a finalized
+ *  line is no longer one — under the expunge its result is removed like any other. */
+const LOCKED = new Set(["cancelled"]);
 
 /** One pending fixture judged under a walkover: its item, and whether it is one of the cascade's own walkovers
  *  (`forfeited`: a forfeit, or — loop F — a TBD seat it departed) or it voided (abandoned) it. */
@@ -137,15 +138,12 @@ export function cascadeItems(policy: WithdrawalObs["policy"], w: string, before:
   return items;
 }
 
-/** m-5: the reported count of LOCKED fixtures the cascade skipped.
- *  withdrawal.ts applyUpdate counts a PLANNED fixture that is finalized or
- *  cancelled. Only an expunge plans played fixtures — a played status with a
- *  result (lib/table-withdrawal.ts) — so it is the finalized ones with a
- *  result; a walkover plans pending ones only, and a pending fixture is never
- *  locked. */
-export function skippedItem(policy: WithdrawalObs["policy"], before: readonly FixtureSnap[], reported: number): Item {
-  const observed = policy === "expunge" ? before.filter((b) => b.status === "finalized" && b.outcome !== null).length : 0;
-  return { ok: reported === observed, note: `reported ${reported} locked fixture(s) skipped, observed ${observed}` };
+/** m-5: the reported count of the fixtures the cascade left as they are. W5 T8 (ST-G15): withdrawal.ts counts the
+ *  entrant's CANCELLED lines of a TABLE stage, under either policy (a finalized one is expunged like any result, RB5-W2); the
+ *  bracket and open-format paths plan pending lines only and count none. `kind`: the stage kind the fixtures belong to. */
+export function skippedItem(policy: WithdrawalObs["policy"], before: readonly FixtureSnap[], reported: number, kind: string): Item {
+  const observed = policy === "none" || policyFamilyFor(kind) !== "table" ? 0 : before.filter((b) => b.status === "cancelled").length;
+  return { ok: reported === observed, note: `reported ${reported} cancelled fixture(s) skipped, observed ${observed}` };
 }
 
 /** R4's family: the ladder's timing and policy (D14) differ from every other kind's. */
@@ -372,7 +370,7 @@ export const r4Withdrawal: Scenario = {
         rec.facts.add("withdrawn");
         rec.withdrawn.add(seed3);
         if (out.policy === "expunge") rec.facts.add("expunged");
-        withdrawal = { entrantId: seed3, afterRound: round, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedFinalized: out.skipped_finalized, before, ...(heldBefore.length > 0 ? { heldBefore } : {}) };
+        withdrawal = { entrantId: seed3, afterRound: round, policy: out.policy, walkovers: out.walkovers, voided: out.voided, skippedCancelled: out.skipped_cancelled, before, ...(heldBefore.length > 0 ? { heldBefore } : {}) };
         if (family === "ladder") heldAt = (await ladderOrderOf(ctx, setup.division.id, setup.stage.id)).indexOf(seed3);
       },
     });
@@ -451,8 +449,8 @@ export const r4Withdrawal: Scenario = {
         resultsAsPosted(rec, observed),
         assertion("r4-policy-reported", policyItems, policyAbstain),
         assertion("r4-cascade-consistent", withCanary(
-          [...cascadeItems(cascade.policy, w.entrantId, cascade.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(cascade.policy, cascade.before, w.skippedFinalized)],
-          [...cascadeItems(cascade.opposite, w.entrantId, cascade.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(cascade.opposite, cascade.before, w.skippedFinalized)],
+          [...cascadeItems(cascade.policy, w.entrantId, cascade.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(cascade.policy, cascade.before, w.skippedCancelled, kind)],
+          [...cascadeItems(cascade.opposite, w.entrantId, cascade.before, stageRows, w.walkovers, w.voided, kind, tbd), skippedItem(cascade.opposite, cascade.before, w.skippedCancelled, kind)],
           ctx.spec.canary,
         )),
         assertion("r4-not-paired-later",

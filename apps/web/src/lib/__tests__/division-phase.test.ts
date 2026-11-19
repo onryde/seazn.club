@@ -483,6 +483,22 @@ describe("resolveAttention", () => {
     const fixtures = [fx({ id: "a", scheduledAt: null }), fx({ id: "b", scheduledAt: null, status: "decided" }), fx({ id: "c" })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({ kind: "unscheduled", count: 1 });
   });
+  // W5 T5 (X-CU-12, RB5-L13): a late entrant's catch-up lines are counted apart inside `unscheduled`; the count IS the flag.
+  it("unscheduled carries the catch-up count only for catch-up lines still without a time", () => {
+    const fixtures = [
+      fx({ id: "a", scheduledAt: null }),
+      fx({ id: "cu1", scheduledAt: null, catchUp: true }),
+      fx({ id: "cu2", scheduledAt: null, catchUp: true }),
+      fx({ id: "cu3", catchUp: true }), // scheduled: no longer flagged
+      fx({ id: "cu4", scheduledAt: null, catchUp: true, status: "decided" }), // not a scheduled-status row
+    ];
+    expect(resolveAttention(input({ fixtures })).find((a) => a.kind === "unscheduled")).toEqual({ kind: "unscheduled", count: 3, catchUp: 2 });
+  });
+  it("unscheduled carries no catch-up field when no catch-up line is unscheduled (empty case first)", () => {
+    expect(resolveAttention(input({ fixtures: [fx({ id: "a", scheduledAt: null }), fx({ id: "cu", catchUp: true })] }))
+      .find((a) => a.kind === "unscheduled")).toEqual({ kind: "unscheduled", count: 1 });
+    expect(resolveAttention(input({ fixtures: [fx({ id: "cu", catchUp: true })] })).some((a) => a.kind === "unscheduled")).toBe(false);
+  });
   it("no_scorer: in play with zero events, minutes since kickoff from scheduledAt", () => {
     const fixtures = [fx({ id: "p", status: "in_play", scheduledAt: "2026-09-05T09:30:00Z", eventCount: 0 })];
     expect(resolveAttention(input({ fixtures }))).toContainEqual({
@@ -807,6 +823,38 @@ describe("resolveAttention", () => {
         count: 1,
         stageName: "Main",
       });
+    });
+    it("X-CU-8 a table's waiting list carries `table: true` onto the row; a knockout's carries nothing", () => {
+      expect(resolveAttention(input({ lateWaiting: [{ stageName: "Table", count: 2, table: true }] }))).toContainEqual({
+        kind: "late_players_waiting",
+        count: 2,
+        stageName: "Table",
+        table: true,
+      });
+      const ko = resolveAttention(input({ lateWaiting: [{ stageName: "Cup", count: 1 }] })).find((a) => a.kind === "late_players_waiting");
+      expect(ko).toEqual({ kind: "late_players_waiting", count: 1, stageName: "Cup" });
+    });
+    it("X-CU-8 late_unplaced (fix round 1): the empty case first, then one row per finished table naming its players; never before Start", () => {
+      expect(resolveAttention(input({})).some((a) => a.kind === "late_unplaced"), "absent").toBe(false);
+      expect(resolveAttention(input({ lateUnplaced: [] })).some((a) => a.kind === "late_unplaced"), "empty").toBe(false);
+      expect(resolveAttention(input({ lateUnplaced: [{ stageName: "Table", names: [] }] })).some((a) => a.kind === "late_unplaced"), "nobody").toBe(false);
+      expect(resolveAttention(input({ lateUnplaced: [{ stageName: "Table", names: ["Lou", "Max"] }] }))).toContainEqual({
+        kind: "late_unplaced",
+        count: 2,
+        stageName: "Table",
+        names: ["Lou", "Max"],
+      });
+      expect(ATTENTION_SEVERITY.late_unplaced).toBe("amber");
+      expect(resolveAttention(input({ divisionStatus: "setup", lateUnplaced: [{ stageName: "Table", names: ["Lou"] }] })).some((a) => a.kind === "late_unplaced")).toBe(false);
+      expect(resolvePhase(input({ lateUnplaced: [{ stageName: "Table", names: ["Lou"] }] })), "orthogonal to phase").toBe(resolvePhase(input({})));
+    });
+    it("W5 T8b review I2 withdrawal_owed: the empty case first, then one amber row naming who; never before Start; orthogonal to phase", () => {
+      expect(resolveAttention(input({})).some((a) => a.kind === "withdrawal_owed"), "absent").toBe(false);
+      expect(resolveAttention(input({ withdrawalOwed: [] })).some((a) => a.kind === "withdrawal_owed"), "empty").toBe(false);
+      expect(resolveAttention(input({ withdrawalOwed: ["Rae", "Sam"] }))).toContainEqual({ kind: "withdrawal_owed", count: 2, names: ["Rae", "Sam"] });
+      expect(ATTENTION_SEVERITY.withdrawal_owed).toBe("amber");
+      expect(resolveAttention(input({ divisionStatus: "setup", withdrawalOwed: ["Rae"] })).some((a) => a.kind === "withdrawal_owed"), "before Start").toBe(false);
+      expect(resolvePhase(input({ withdrawalOwed: ["Rae"] })), "orthogonal to phase").toBe(resolvePhase(input({})));
     });
     it("is AMBER — the player is owed a place, but every match already drawn can be played", () => {
       expect(ATTENTION_SEVERITY.late_players_waiting).toBe("amber");

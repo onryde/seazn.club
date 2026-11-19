@@ -19,7 +19,7 @@ import type { MessageKey } from "@/lib/messages";
 import { laneRoundRank, roundRoleFor, roundRoleShort } from "@/lib/round-role-label";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
-import { boardRoundCodes, roundLegendEntries, withRoundCodeRefs } from "../round-codes";
+import { boardRoundCodes, plainRoundCode, roundLegendEntries, withRoundCodeRefs } from "../round-codes";
 import { cardTitle, type BoardFixture } from "../types";
 
 const en = (key: MessageKey, vars?: Record<string, string | number>) => msgFor("en", key, vars);
@@ -811,5 +811,28 @@ describe("roundLegendEntries — page playoff and stepladder", () => {
       F,
       en("bracket.roundShort.thirdPlace"),
     ]);
+  });
+});
+
+// W5 app PR A, Task 3 (X-SF-5, FX-G19; owner R24 pick 5 option A): a pool letter leads the round code on a multi-pool card, "A·R2".
+// A league, a Swiss stage and a one-pool group send no letter (the loader sends `pool_key` only when the stage has several pools),
+// so their chip stays the plain `R{n}`.
+describe("plainRoundCode (pool letter on a round-robin card)", () => {
+  const base = { round_no: 2 };
+
+  it("a card with no pool letter keeps R{n}: a league, Swiss, one-pool group", () => {
+    expect(plainRoundCode({ ...base })).toBe("R2");
+    expect(plainRoundCode({ ...base, pool_key: null })).toBe("R2");
+  });
+
+  it("a pooled card leads with its pool letter: A·R2, B·R2 (differential: main read R2 for both)", () => {
+    expect(plainRoundCode({ ...base, pool_key: "A" })).toBe("A\u00B7R2");
+    expect(plainRoundCode({ ...base, pool_key: "B" })).toBe("B\u00B7R2");
+  });
+
+  it("anti-vacuity: every pool of a 3-pool group, every round, is told apart", () => {
+    const seen = new Set<string>();
+    for (const pool_key of ["A", "B", "C"]) for (const round_no of [1, 2, 3]) seen.add(plainRoundCode({ round_no, pool_key }));
+    expect(seen.size).toBe(9);
   });
 });

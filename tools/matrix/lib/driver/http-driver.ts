@@ -1,12 +1,14 @@
 // The organiser, over the real v1 API (design §6.1). Every write that can race
-// a server-side cascade reads its sequence first; /complete is never repeated
-// once it has completed (design §6.4).
+// a server-side cascade reads its sequence first.
 //
-// Why never repeat /complete: on an already-complete stage the product answers
-// `{completed:true, events:[]}` again (engine-db/competition.ts:575) and then
-// re-runs the next-stage progression (usecases/stages/completion.ts completeStage →
-// progressCompletedStage), which computes a NEW draft seed proposal and marks
-// the previous draft stale (usecases/stages/).
+// W5 T17 (X-BD-4, CS-1): /complete MAY now be repeated. It used to be avoided: on an
+// already-complete stage the product answered `{completed:true, events:[]}` and re-ran
+// the next-stage progression (usecases/stages/completion.ts completeStage →
+// progressCompletedStage), computing a NEW draft seed proposal. A second /complete now
+// answers `{completed:false, already_complete:true}` and writes nothing, so a repeat -
+// after a completion, a 5xx or no answer - is sent like any call, and the case judges
+// the answer (scenarios/complete-twice.ts). Finish (swiss/finish) keeps its guard: it is
+// not what X-BD-4 made idempotent.
 import { newSession, raw as benchRaw, type RawResult, type Session } from "../../../bench/lib/http.ts";
 import { fetchFixtureLedger, type LedgerRow } from "../../../bench/lib/ledger.ts";
 import type { StagePostBody } from "../catalogue.ts";
@@ -16,8 +18,8 @@ import { errorOf, is2xx, unwrapEnvelope } from "./envelope.ts";
 import {
   DESK_PHASES, DriverMisuse, LineupUnchecked, OrgMismatch, RefusedCall, RequestTimedOut, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, idempotencyKey, inSquadOrder, requireVoidTarget, retryKey,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
-  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type GenerateOut, type JointWinnersOut, type JointWinnersUndoOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
+  type FinishSwissOut, type FixtureStateOut, type FromTemplateAnswer, type FromTemplateOut, type TemplateCreateInput, type GenerateOut, type JointWinnersOut, type JointWinnersUndoOut, type LateEntryWire, type LineupChecked, type LineupSlotWire, type MemberInput, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
+  type PublicStandingsOut, type RankOverrideRow, type ReinstateOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StagePoolsOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
 export interface Transport {
@@ -118,8 +120,13 @@ export class HttpDriver implements OrganiserDriver {
   /** W1-driving Task 13: the card's POST, then the read-back. The body is the
    *  gallery's (template-gallery.tsx submit) less its optional version guard
    *  and start date: no visibility, so the product's default applies. */
-  async createFromTemplate(key: string, input: { name: string; endsOn: string }): Promise<FromTemplateOut> {
-    const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", { template_key: key, name: input.name, ends_on: input.endsOn });
+  async createFromTemplate(key: string, input: TemplateCreateInput): Promise<FromTemplateOut> {
+    const c = input.choice;
+    // W5 X-BD-3: an any-sport template's choice rides the body, as the sheet's POST sends it (template-choice.ts choiceBody).
+    const answer = await this.#call<FromTemplateAnswer>("/api/v1/competitions/from-template", "POST", {
+      template_key: key, name: input.name, ends_on: input.endsOn,
+      ...(c ? { sport_key: c.sportKey, variant_key: c.variantKey, entrant_kind: c.entrantKind, entrant_count: c.entrantCount } : {}),
+    });
     return this.readBackTemplate(answer, key);
   }
 
@@ -371,19 +378,19 @@ export class HttpDriver implements OrganiserDriver {
   /** The one place a completion is sent and recorded (completeStage, finishSwiss). */
   async #commitsCompletion<T extends CompleteOut>(stageId: string, path: string, what: string): Promise<T> {
     const first = this.#completed.get(stageId);
-    if (first !== undefined) {
+    // X-BD-4: a /complete is never refused by the driver; only a Finish still is (a Finish after a completion is the
+    // product's SWISS_OVER, and its own guard is not what this wave moved).
+    if (first !== undefined && what !== "/complete") {
       // Names the call that completed the stage or ended unknown (a Finish is not a /complete), and the one now refused.
-      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it (design §6.4)`);
+      throw new DriverMisuse(`driver: stage ${stageId} already completed, or its ${first} ended unknown (5xx or no answer) — ${what} is never sent after it`);
     }
-    // Parked Task 6 (a): completeStage COMMITS the completion and then runs
-    // progressCompletedStage (usecases/stages/completion.ts), which can throw —
-    // so a 5xx, or a request that never answered, may follow a committed
-    // completion. Its outcome is unknown, and a repeat would re-run the
-    // progression; it is recorded like a completion. A 4xx (a named
-    // refusal) committed nothing and stays retryable — except W1-driving T6's
-    // FP-3: 409 STAGE_COMPLETED_SEEDING_FAILED is the product saying the
-    // completion DID commit and only the next stage's seed proposal failed
-    // (:4239-4252), so it is recorded like a completion too.
+    // completeStage COMMITS the completion and then runs progressCompletedStage
+    // (usecases/stages/completion.ts), which can throw - so a 5xx, or a request that never
+    // answered, may follow a committed completion. Its outcome is unknown, so it is recorded like
+    // a completion: a Finish is not sent after it (a /complete still is, X-BD-4). A 4xx (a named
+    // refusal) committed nothing and stays retryable - except 409 STAGE_COMPLETED_SEEDING_FAILED,
+    // the product saying the completion DID commit and only the next stage's seed proposal failed,
+    // so it is recorded like a completion too.
     let r: RawResult;
     try {
       r = await this.#send(path, "POST", {});
@@ -442,6 +449,14 @@ export class HttpDriver implements OrganiserDriver {
 
   async standings(stageId: string, poolId: string | null): Promise<StandingsOut> {
     return this.#call(`/api/v1/stages/${stageId}/standings${poolId === null ? "" : `?pool_id=${encodeURIComponent(poolId)}`}`);
+  }
+
+  async stagePools(stageId: string): Promise<StagePoolsOut> {
+    return this.#call(`/api/v1/stages/${stageId}/pools`);
+  }
+
+  async overrideRanks(stageId: string, rows: readonly RankOverrideRow[]): Promise<unknown> {
+    return this.#call(`/api/v1/stages/${stageId}/standings/override`, "POST", { rows });
   }
 
   async publicStandings(ref: { orgSlug: string; competitionSlug: string; divisionSlug: string }): Promise<PublicStandingsOut> {

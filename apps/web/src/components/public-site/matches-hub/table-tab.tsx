@@ -139,6 +139,9 @@ export function TableTab({ doc, dict, initialDivision }: TableTabProps) {
               .map((r) => [r.entrantId, r] as const),
           ).values(),
         ];
+        // W5 T14b (owner 2026-11-18): a finished multi-pool Groups only division has no champion, so no strip above; its
+        // POOL winners take the champion strip's place, one line per pool.
+        const poolWinners = doc.poolWinners?.find((w) => w.divisionId === first.divisionId);
         return (
           <section key={first.divisionId} className="space-y-3">
             <div className="space-y-2">
@@ -185,6 +188,33 @@ export function TableTab({ doc, dict, initialDivision }: TableTabProps) {
                       : champions[0]!.name}
                   </span>
                 </p>
+              ) : null}
+              {poolWinners ? (
+                <div
+                  data-testid={`mh-table-pool-winners-${first.divisionSlug}`}
+                  className="min-w-0 rounded-lg bg-amber-50/60 px-3 py-2"
+                >
+                  <p className="flex items-center gap-2">
+                    <span aria-hidden className="shrink-0 text-base leading-none">
+                      🏆
+                    </span>
+                    <span className="min-w-0 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+                      {t(dict, "title.poolWinners")}
+                    </span>
+                  </p>
+                  <ul role="list" className="mt-1 grid min-w-0 grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+                    {poolWinners.pools.map((p) => (
+                      <li key={p.poolId} data-testid="mh-table-pool-winner" className="flex min-w-0 items-baseline gap-2 text-sm">
+                        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700">{p.label}</span>
+                        <span
+                          className={`min-w-0 font-display font-semibold [overflow-wrap:anywhere] ${p.name === null ? "text-ink-muted" : "text-ink"}`}
+                        >
+                          {p.name ?? t(dict, "title.poolWinnerNone")}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ) : null}
             </div>
             {/* Two-up from `md` only when there IS a second table: a lone

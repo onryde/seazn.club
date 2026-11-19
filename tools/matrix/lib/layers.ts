@@ -32,6 +32,11 @@
 //    controller's Task 12 ruling). No builder control reaches these rows, so
 //    the browser layer records them without running them — never a silent
 //    pass, never an error red.
+//    Empty since W5 T14 + X-BD-3 (every API-only row now has an organiser
+//    path or is refused): kept, not retired, as the named door a future
+//    API-only row lands in — run.ts refuses the empty plan by name
+//    (NothingPlanned, exit 2; pinned in run-cli.test.ts), so it never passes
+//    silently on zero cases.
 //  - `--set w1-driving-l1` (W1-driving Task 13, ruling 47, D11, D13): one L1
 //    cell per capability W1-driving added (team rosters, the seed advance, the
 //    ladder, americano, mexicano), then the two template-only cells, each
@@ -47,7 +52,9 @@
 // the leaf api-only-ui.ts, never from browser-driver.ts.
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, isKnobRow, noOrganiserPathCell, refusedCell, type ApiOnlyRowKey, type KnobRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
-import { onTemplate, templateField, templateRow } from "./templates.ts";
+import { NoFieldSize, fieldSizeFor } from "./field-size.ts";
+import { routeTo } from "./routing.ts";
+import { onTemplate, routeViaTemplate, templateField, templateFor, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
 import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor, type AtomicScenario, type Settled } from "./scenario-catalogue.ts";
@@ -153,6 +160,9 @@ const noPathReason = (a: AtomicScenario): string => (a.knownNoPath !== null
   ? `no organiser path, known at design time (design §4): ${a.title}`
   : `the HTTP route exists and no screen sends it (design §4, ruling 30): ${a.title}`);
 
+/** Where a scenario a catalog card cannot seat is routed: W5 owns the card-built group_group_ko rows (X-BD-3), and the odd-field F1 is judged over HTTP. */
+const CARD_FIELD_ROUTE = routeTo("W5", "no organiser path: the catalog card seeds its own field, so a scenario that needs a different one (F1's odd field) cannot be built from a screen; the refusal F1 owes (RB5-E4/E6) is judged at L3");
+
 /** L2: the committed runs in `cells`, in file order, each exactly as committed. */
 export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: ReadonlySet<string>): LayerCase[] {
   const out: LayerCase[] = [];
@@ -172,7 +182,23 @@ export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: Readon
     const script = scriptFor(run.scenario);
     if (script !== null) {
       if (run.bound !== null) throw new L2BoundRun(run);
-      out.push({ ...base, spec: { ...identity, scenario: script, canary: false }, noPath: null, notRun: null });
+      // W5 X-BD-3 (matrix truth run 44395599687): a cell a catalog card reaches (super-groups builds group_group_ko on any sport) is
+      // driven through that card, as the grid's L1 case is; planned plain, the browser driver refused it (DriverMisuse, 3 football
+      // cells). The case keeps its L2 id: the committed run's identity is the atom's, not the template's.
+      const routed = routeViaTemplate({ ...identity, scenario: script, canary: false });
+      // Matrix truth run 44411389618: F1 seeds an ODD field, and a catalog card seeds its own (super-groups' 16), so the case could not be
+      // built (NoFieldSize, a harness fault on group_group_ko|football F1). The harness's own field rule says whether the card can seat the
+      // scenario; where it cannot, no screen reaches it - 🚫, never driven - and the refusal F1 owes is the L3 case's (refused).
+      if (routed.template !== undefined) {
+        try {
+          fieldSizeFor(routed.row, routed.scenario, routed.template);
+        } catch (e) {
+          if (!(e instanceof NoFieldSize)) throw e;
+          out.push({ ...base, spec: null, identity, noPath: { wave: CARD_FIELD_ROUTE.wave, reason: `${CARD_FIELD_ROUTE.why} (${e.message})` }, notRun: null });
+          continue;
+        }
+      }
+      out.push({ ...base, spec: { ...routed, caseId: identity.caseId }, noPath: null, notRun: null });
       continue;
     }
     // W4 app PR A Task 24: an atom the W4 rulebook settled is recorded as ⛔ or ⏳, never 🚫 (scenario-catalogue.ts SETTLED).
@@ -269,7 +295,7 @@ export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
       return at({ ...identity, canary: false });
     }
     const p = apiOnlyUiPath(row, sport);
-    if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template));
+    if (p.reachable) return at(onTemplate({ row, sport, scenario: LIFECYCLE, canary: false }, p.template, variantFor(sport)));
     const variant = variantFor(sport);
     return {
       spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
@@ -353,7 +379,10 @@ export const apiOnlyBrowserPlanner: PlanLayers = (cli: PlannerCli) => {
       const variant = variantFor(sport);
       // A row the product refuses (catalogue.ts refusedCell: the standalone stepladder and page playoff, W4 T16) owes no
       // organiser path, so it is not planned 🚫 either.
-      return API_ONLY_ROWS.filter((row) => !isKnobRow(row) && refusedCell(row, sport) === null).map((row): PlannedLayerCase => ({
+      // W5 X-BD-3: a row a catalog card reaches on this sport has an organiser path, so it is driven (planL1Grid), never planned
+      // 🚫 here: super-groups reaches group_group_ko on generic, and group_only left the API-only rows (W5 T14's picker card), so
+      // since the B4 merge no row is left and the set plans nothing.
+      return API_ONLY_ROWS.filter((row) => !isKnobRow(row) && refusedCell(row, sport) === null && templateFor(row, sport) === null).map((row): PlannedLayerCase => ({
         spec: null, identity: { caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE },
         layer: "L1", width: L1_WIDTH, noPath: apiOnlyNoPath(row, sport), notRun: null, run: null,
       }));

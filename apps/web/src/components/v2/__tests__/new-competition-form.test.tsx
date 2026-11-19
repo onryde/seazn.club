@@ -734,6 +734,7 @@ describe("TemplateGallery hands the wizard the org id the editor uploads to", ()
       orgSlug: "riverside",
       orgId: "org-1",
       templates: [],
+      sports: [],
       publicDashboardUpgrade: null,
       publicSlots: { limit: 2, left: 0 },
       viewerPlan: "community" as const,

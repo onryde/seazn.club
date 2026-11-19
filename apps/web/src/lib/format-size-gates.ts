@@ -46,7 +46,7 @@ interface SourceShape {
 }
 
 /** The stage a progression source names, in `stages` (seq order): the one before for `previous`, else by id. */
-function sourceOf(stages: readonly StageGraphStage[], at: number, stage: unknown): StageGraphStage | undefined {
+export function sourceOf(stages: readonly StageGraphStage[], at: number, stage: unknown): StageGraphStage | undefined {
   if (stage === "previous") return stages[at - 1];
   const id = (stage as { stageId?: unknown } | null | undefined)?.stageId;
   return typeof id === "string" ? stages.find((s) => s.id === id) : undefined;

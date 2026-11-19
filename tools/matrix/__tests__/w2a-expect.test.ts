@@ -112,10 +112,18 @@ describe("expect-77.json - every id is a current plan id (R-2)", () => {
     // never the planner. Every OTHER id must still be in a current plan, and no id on an offered cell may be missing.
     const missing = WANT.filter((id) => !planned.has(noVariant(id)));
     const cellOf = (id: string): string => id.split("|").slice(0, 2).join("|");
-    expect(missing.length, "ids no current plan holds").toBe(7);
-    expect(missing.filter((id) => !isRefusedCell(cellOf(id))), "an id on an OFFERED cell that no plan holds").toEqual([]);
-    expect(WANT.filter((id) => isRefusedCell(cellOf(id))), "every id on a refused cell is among the missing").toEqual(missing);
-    expect(WANT.length - missing.length).toBe(70);
+    //
+    // W5 T16 (ruling 287) deleted a template row: the width rotation (run n at width (n - 1) % 7) moved, and one layered id of the 77 now sits at
+    // another width - league_ko|boardgame|blitz|R4a@768 is @834 in today's plan (the same cell, the same atom). Evidence stays as recorded
+    // (the CI verdicts below judge the committed runs by these ids); that one id is set aside the same way, counted, and the plan is shown to
+    // hold its cell at another width. Oracle: the id's own cell and atom, never the planner's order.
+    const reWidthed = missing.filter((id) => !isRefusedCell(cellOf(id)));
+    expect(missing.length, "ids no current plan holds: 7 on refused cells + 1 re-widthed").toBe(8);
+    expect(reWidthed, "an id on an OFFERED cell that no plan holds: only the re-widthed one").toEqual(["league_ko|boardgame|blitz|R4a@768"]);
+    expect(planned.has("league_ko|boardgame|R4a@834"), "its cell is still planned, at the width the rotation gives it now").toBe(true);
+    expect(planned.has("league_ko|boardgame|R4a@768"), "and no longer at the old one").toBe(false);
+    expect(WANT.filter((id) => isRefusedCell(cellOf(id))), "every id on a refused cell is among the missing").toEqual(missing.filter((id) => isRefusedCell(cellOf(id))));
+    expect(WANT.length - missing.length).toBe(69);
   });
 
   it("the id the plan re-widthed is keyed to the width the plan has now (league_ko|boardgame|blitz|F1: @430, not @834), and the other 14 layered ids keep theirs", () => {
@@ -133,8 +141,16 @@ describe("w2a-local-selection.json - the L1/L2 stripes hold the 77's grid cells 
 
   it("each layer's listed stripes are exactly the stripes the layered ids of the 77 fall in, and the L2 plan is the size the note names", () => {
     expect([SELECTION.browserShards.of, SELECTION.browserShards.scope]).toEqual([SHARDS, "grid"]);
-    const layered = WANT.filter((id) => /@\d+$/.test(id)).map(noVariant);
+    // The one id the rotation re-widthed (see the first describe) is read at the width its cell has in today's plan: the cell is the 77's.
+    const everyKey = new Set(["L1", "L2"].flatMap((L) => order(L as "L1" | "L2")));
+    const atToday = (k: string): string => {
+      if (everyKey.has(k)) return k;
+      const now = [...everyKey].filter((x) => x.replace(/@\d+$/, "") === k.replace(/@\d+$/, ""));
+      return now.length === 1 ? now[0]! : k;
+    };
+    const layered = WANT.filter((id) => /@\d+$/.test(id)).map(noVariant).map(atToday);
     expect(layered).toHaveLength(15);
+    expect(layered.filter((k, i) => k !== noVariant(WANT.filter((id) => /@\d+$/.test(id))[i]!)), "only the re-widthed id moved").toHaveLength(1);
     let placed = 0;
     for (const L of ["L1", "L2"] as const) {
       const plan = order(L);

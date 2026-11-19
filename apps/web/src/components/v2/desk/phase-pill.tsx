@@ -40,6 +40,8 @@ export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   bans_waiting: null,
   // Amber (W4 T11): the Needs-you row says it; the pill keeps the phase.
   late_players_waiting: null,
+  late_unplaced: null,
+  withdrawal_owed: null,
   registrations_waiting: null,
 };
 

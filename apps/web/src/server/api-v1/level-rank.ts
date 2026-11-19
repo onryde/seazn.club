@@ -22,3 +22,16 @@ export function serialiseLevelRanks<R extends LevelRankRow>(
   if (!isLevelTable(rows)) return rows as unknown as (Omit<R, "rank"> & { rank: number | null | undefined })[];
   return rows.map((row) => ({ ...row, rank: null }));
 }
+
+/** W5 T22: `serialiseLevelRanks` over a table-per-pool answer that comes as ONE row list (`GET /stages/{id}/standings` with no
+ *  `pool_id` on a several-pool stage): each pool's rows — grouped by their `pool` key — are judged level on their own, so a pool
+ *  nobody has played in serves `rank: null` while its sibling, already decided, keeps its places. Row order is kept. A list of one
+ *  pool (every `pool` the same, null included) is `serialiseLevelRanks`' answer exactly. */
+export function serialiseLevelRanksPerPool<R extends LevelRankRow & { pool: string | null }>(
+  rows: readonly R[],
+): (Omit<R, "rank"> & { rank: number | null | undefined })[] {
+  const byPool = new Map<string | null, R[]>();
+  for (const row of rows) byPool.set(row.pool, [...(byPool.get(row.pool) ?? []), row]);
+  const level = new Set<string | null>([...byPool].filter(([, group]) => isLevelTable(group)).map(([pool]) => pool));
+  return rows.map((row) => (level.has(row.pool) ? { ...row, rank: null } : row)) as (Omit<R, "rank"> & { rank: number | null | undefined })[];
+}

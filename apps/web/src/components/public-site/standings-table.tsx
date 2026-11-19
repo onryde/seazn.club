@@ -38,39 +38,17 @@ import type { QualificationView } from "@/server/public-site/qualification-view"
 import type { QualRowT } from "@/server/public-site/competition-hub-schema";
 import { bracketPlaceLabels, isBracketPlacement } from "@/lib/bracket-places";
 import { SHARED_PLACE_MSG_KEY } from "@/server/public-site/standings-view";
+import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
+import { WithdrawalFootnotes } from "./withdrawal-footnotes";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
 
-/**
- * Every way OUT of a competing field, and the chip each one prints.
- *
- * The two are deliberately NOT collapsed into one "Withdrawn" chip. They are
- * different facts — one entrant left, the other was removed — and the product
- * already draws that distinction elsewhere: `entrantStatusStyle` in
- * `components/v2/entrants-panel.tsx` paints a withdrawal grey and a
- * disqualification red in the roster editor. Labelling a disqualified entrant
- * "Withdrawn" on the public board would be worse than the gap it replaced,
- * because it would be wrong rather than merely silent.
- *
- * This is the ONE place that decides which statuses count as departed. The
- * call sites hand over raw statuses and nothing else, so adding a fifth status
- * to the product is an edit here plus a dictionary key — not three page edits
- * that can each be half-done. `standings-withdrawn-and-tiebreak-layer` checks
- * this table against `EntrantStatus` minus `FIELD_ENTRANT_STATUSES`, so a new
- * departure reds there rather than shipping an unmarked row.
- *
- * The test id is per status (`standings-withdrawn`, `standings-disqualified`):
- * one testid for both would make an e2e count blind to exactly the confusion
- * this table exists to prevent.
- */
-export const DEPARTED_STATUS_CHIPS = {
-  withdrawn: { label: "table.withdrawn", className: "bg-zinc-100 text-zinc-600" },
-  disqualified: { label: "table.disqualified", className: "bg-red-100 text-red-600" },
-} as const satisfies Record<string, { label: TKey; className: string }>;
-
-type DepartedStatus = keyof typeof DEPARTED_STATUS_CHIPS;
+// The departed vocabulary (which statuses mean "left the field" and the chip each wears) lives in `@/lib/departed-status-chips` since
+// W5 T20, so the hub's client table can read it too; re-exported here for every existing importer.
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
+export { DEPARTED_STATUS_CHIPS };
 
 interface Props {
   rows: StandingsRow[];
@@ -119,6 +97,9 @@ interface Props {
    *  public page and the embed, the viewer's in the console. Absent: en, UTC. */
   locale?: string;
   tz?: string;
+  /** W5 T8 (RB5-W7; owner R24 pick 11 A): THIS table's departure notes (`withdrawalNotesFor`, its stage and its rows), one line
+   *  each under the table naming the rule applied. Absent or empty: nothing renders. */
+  withdrawalNotes?: readonly WithdrawalNote[];
 }
 
 export function StandingsTable({
@@ -136,6 +117,7 @@ export function StandingsTable({
   stageKind,
   locale = "en",
   tz = "UTC",
+  withdrawalNotes,
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
   const layout = tableLayoutFor(rules, stageKind);
@@ -440,13 +422,20 @@ export function StandingsTable({
     </div>
   );
 
-  if (!qualification) return region;
+  // W5 T8: the departure notes sit under the box (and under the legend), outside its sideways scroll, so a long name wraps
+  // to the page's width rather than the table's.
+  const notes = (withdrawalNotes ?? []).map((n) => withdrawalNoteText(n, msg));
+  if (!qualification && notes.length === 0) return region;
   // The legend sits under the box, outside its sideways scroll, so it wraps
   // to the page's width rather than the table's.
   return (
     <div>
       {region}
-      <QualLegend legend={qualification.table.legend} />
+      {/* One slot for both, as the hub's view: a further sibling would renumber every `useId` in the region above. */}
+      <>
+        {qualification ? <QualLegend legend={qualification.table.legend} /> : null}
+        <WithdrawalFootnotes items={notes} />
+      </>
     </div>
   );
 }

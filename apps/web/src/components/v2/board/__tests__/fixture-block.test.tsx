@@ -198,6 +198,15 @@ describe("FixtureBlock", () => {
     expect(html).not.toContain(">R1<");
   });
 
+  // W5 T3 (X-SF-5): the pool letter leads the plain round code, in the same chip and the same plain ink (no fill, no heavier weight).
+  it("a card in a pool leads its round code with the pool letter; one with no letter keeps R{n}", () => {
+    const pooled = renderToStaticMarkup(<FixtureBlock {...baseProps} fixture={{ ...fixture, round_no: 2, pool_key: "B" }} />);
+    expect(chipText(pooled)).toBe("B\u00B7R2");
+    expect(/data-testid="board-round-code"[^>]*data-round-code-chip="plain"|data-round-code-chip="plain"[^>]*data-testid="board-round-code"/.test(pooled)).toBe(true);
+    const plain = renderToStaticMarkup(<FixtureBlock {...baseProps} fixture={{ ...fixture, round_no: 2 }} />);
+    expect(chipText(plain)).toBe("R2");
+  });
+
   it("a card with no code keeps R{round_no} — and no tooltip", () => {
     const html = renderToStaticMarkup(<FixtureBlock {...baseProps} fixture={{ ...fixture, round_no: 2 }} />);
     expect(chipText(html)).toBe("R2");

@@ -12,7 +12,7 @@
 //   PATCH /divisions/{id}                            → `stagesKeptPinned` after activation;
 //   both standings endpoints (W2e Task 27, D11 b)     → `rank: null` on every row of a LEVEL table, at the route only: the
 //                                                      stored snapshot and `getStandings` keep the places 1..n (E24), the
-//                                                      public route's Redis entry is `standings-v2`.
+//                                                      public route's Redis entry is `standings-v3`.
 //
 // Carried from PR A (orchestrator rulings): N2 (a flat rule over a split sport is refused naming the split; fix round 1 I1:
 // its premise — that some flat rule pays a split sport as the sport does — is false, a retirement after play always pays
@@ -612,15 +612,17 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect(rows, "three entrants on two endpoints per sport").toBe(sports * 6);
   }, 300_000);
 
-  it("D11b the public route serves the new shape through the cache: read twice, held under standings-v2, the old key never asked, a storage-shaped entry served null", async () => {
+  it("D11b the public route serves the new shape through the cache: read twice, held under standings-v3, the old keys never asked, a storage-shaped entry served null", async () => {
     const s = as(await tableScene({ entrants: 3 }));
     const stageId = s.stageIds[0]!;
     await generateStageFixtures(s.auth, stageId);
     const slugs = await publish(s.divisionId);
     const OLD = `pub:v1:div:${s.divisionId}:standings`;
-    const NEW = `pub:v1:div:${s.divisionId}:standings-v2`;
-    // The previous build's entry, left under the key this build used to read: it must never be served.
+    const NEW = `pub:v1:div:${s.divisionId}:standings-v3`;
+    const PREVIOUS = `pub:v1:div:${s.divisionId}:standings-v2`;
+    // The previous builds' entries, left under the keys they used to read (the row without name/status/pool): never served.
     redis.docs.set(OLD, JSON.stringify({ division_id: s.divisionId, standings: [{ stage_id: stageId, pool_id: null, rows: [], updated_at: "previous-build" }] }));
+    redis.docs.set(PREVIOUS, JSON.stringify({ division_id: s.divisionId, standings: [{ stage_id: stageId, pool_id: null, rows: [], updated_at: "previous-build-v2" }] }));
     redis.docs.delete(NEW);
     const setsBefore = redis.sets.filter((k) => k === NEW).length;
 
@@ -637,6 +639,7 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     const mine = (t: WireTable[]) => t.filter((x) => x.stage_id === stageId);
     expect(expectRankNull(mine(first)[0]!.rows, 3, "the miss") + expectRankNull(mine(second)[0]!.rows, 3, "the hit")).toBe(6);
     expect(redis.gets.get(OLD), "the old key is never asked for").toBeUndefined();
+    expect(redis.gets.get(PREVIOUS), "nor the previous build's -v2 key (the row it held has no name/status/pool)").toBeUndefined();
     expect(first.map((t) => t.stage_id), "the real table, not the old key's entry").toEqual([stageId]);
 
     // The write that drops the entry (a score) drops the new key, and the next read is level -> decided: the places.
@@ -811,6 +814,8 @@ describe("W2d T13 the documented standings row and the retired code", () => {
       entrantId: "e1", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: { won_ot: 1 },
       tieBreak: { key: "fewest_played", with: ["e2"], note: "h2h_incomplete", drawnAt: "2026-10-27T10:00:00.000000+00:00" },
       level: true,
+      // W5 T22: the row's own three fields (name, status, pool) are declared, so a fixture row carries them
+      name: "Ann", status: "active", pool: null,
     };
     expect(S.StandingsRow.parse(row)).toEqual(row);
     expect(S.StandingsRow.parse({ ...row, tieBreak: { key: "lots", with: [], note: "h2h_two_not_applicable" } }).tieBreak?.note).toBe("h2h_two_not_applicable");
@@ -938,7 +943,7 @@ describe("D11b serialiseLevelRanks (W2e Task 27)", () => {
   });
 
   it("D11b the documented row takes rank null, a number or none, and nothing else, in the schema and in both generated JSONs", () => {
-    const row = { entrantId: "a", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, level: true };
+    const row = { entrantId: "a", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, level: true, name: "Ann", status: "active", pool: null };
     expect(S.StandingsRow.safeParse({ ...row, rank: null }).success, "null").toBe(true);
     expect(S.StandingsRow.safeParse({ ...row, rank: 3 }).success, "a place").toBe(true);
     expect(S.StandingsRow.safeParse(row).success, "none").toBe(true);

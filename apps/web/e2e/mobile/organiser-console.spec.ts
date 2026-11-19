@@ -1,7 +1,7 @@
 // Split out of the former e2e/mobile.spec.ts (2026-11-13, verbatim move): organiser console chrome: the overflow control, settings org card, competition desk (division row, tool row), division header Open menu, decider consoles, Directory tab strip, dual-role header, page smokes, publish gate sheet, lineup editor, z3 schedule actions.
 // Runs ONLY in the seven width projects (mobile-320/360/se/14/430, tablet-768/834 — MOBILE_SPECS in playwright.config.ts).
 
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import {
   TAG,
   apiJson,
@@ -20,6 +20,7 @@ import {
   setFixtureScheduledAtSql,
   setFixtureStatusSql,
   setStageStatusSql,
+  expectInViewUnderHeader,
 } from "../helpers";
 import { HIT_TARGET_FLOOR_PX, dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openConsolePanel } from "../helpers/console-panels";
@@ -1395,4 +1396,146 @@ test("z3 schedule actions + result strip hold at phone width", async ({ page, re
   expect(clipped, "result strip content is clipped at this width").toEqual([]);
 
   await expectNoHorizontalScroll(page);
+});
+
+// W5 app-A Task 23 (X-CU-8, X-CU-11; R24 picks 1A, 3A): at every width project, the table card's "Waiting to join the table" strip
+// and the Entrants tab's Group field. A group of two pools, started; a late arrival with a realistic long name waits. The strip names
+// them, its Group field and its "Add to the table" tap are on screen at the tap floor, and the page never scrolls sideways; the tap
+// places them and the panel says so. Then the add form's Group field, same bar. One DOM: the same controls at every width, stacked
+// below `sm`. Not serial: it reads nothing another test writes.
+test("X-CU-8 / X-CU-11 the waiting strip and the Group field fit every width; the tap places the player", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/table-late-entry-kit");
+  const t = await kit.seedStartedTable(request, { label: `Strip ${width}`, n: 8, pools: 2 });
+  const who = `Riverside Rovers Community Football Club ${TAG}`;
+  const lateId = await kit.registerLateArrival(request, t, who);
+
+  await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("table-waiting");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await expect(strip.getByTestId("table-waiting-row")).toContainText(who);
+  const controls = [strip.getByTestId("table-waiting-pool"), strip.getByTestId("table-waiting-place")];
+  let checked = 0;
+  for (const c of controls) {
+    await expect(c).toBeVisible();
+    const box = await c.boundingBox();
+    expect(box, "the control has a box").toBeTruthy();
+    expect(box!.height, `${width}: at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+    expect(box!.x + box!.width, `${width}: inside the viewport`).toBeLessThanOrEqual(width + 0.5);
+    checked++;
+  }
+  expect(checked).toBe(2);
+  await expectNoHorizontalScroll(page);
+
+  await strip.getByTestId("table-waiting-place").click();
+  await expect(page.getByTestId("schedule-notice")).toContainText(`${who} joined Group`, { timeout: 20_000 });
+  // B5 fix wave G2 (batch review I2): the line that tells the organiser what to tell the player is said at the top of the panel; on a
+  // phone the page was opened down at the strip, so it is brought into view under the sticky header - measured, not its text.
+  await expectOutcomeInView(page, page.getByTestId("schedule-notice"), width, "the place's notice");
+  await expect(page.getByTestId("table-waiting")).toHaveCount(0, { timeout: 20_000 });
+  const placed = await apiJson<{ id: string; home_entrant_id: string | null; away_entrant_id: string | null; stage_id: string }[]>(request, `/api/v1/divisions/${t.divisionId}/fixtures`);
+  expect((placed.data ?? []).filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId).length, "placed: four catch-up lines").toBe(4);
+  await expectNoHorizontalScroll(page);
+
+  await page.goto(await divisionPath(request, t.divisionId, "?tab=entrants"), { waitUntil: "load" });
+  const pool = page.locator("#add-entrant").getByTestId("entrants-late-pool");
+  await expect(pool).toBeVisible({ timeout: 20_000 });
+  const box = await pool.boundingBox();
+  expect(box!.height, `${width}: the Group field at the tap floor`).toBeGreaterThanOrEqual(HIT_TARGET_FLOOR_PX);
+  expect(box!.x + box!.width, `${width}: the Group field inside the viewport`).toBeLessThanOrEqual(width + 0.5);
+  await expectNoHorizontalScroll(page);
+});
+
+/** B5 fix wave G2 + fix round 1 (controller ruling: the organiser SEES the outcome at every width): the line is in view under the
+ *  sticky header and a hit test lands on it - below `md` because the page brings it to the top, from `md` up because an off-screen
+ *  line is brought into view (nearest) and an on-screen one stays. Returns true once the proof ran, so a caller can count it. */
+async function expectOutcomeInView(page: Page, line: Locator, width: number, what: string): Promise<boolean> {
+  await expectInViewUnderHeader(page, line, `${what} at ${width}`);
+  return true;
+}
+
+// B5 fix wave G2 (batch review I2): the strip's Rebuild exit at every width project. Nothing in the stage has started, so the strip
+// offers "Rebuild fixtures"; the confirm fits; the redraw's line ("... is in: the stage was drawn again ...") is said at the top of the
+// panel and, on a phone, brought into view - before this fix it was drawn at y=-332 on a 320 screen and the strip just vanished. Then a
+// STALE press (a line started since the strip was drawn): Rebuild's own refusal is said under the row, in view, and the player waits.
+test("B5 G2 the waiting strip's Rebuild: its outcome comes into view on a phone; a stale press is refused in place", async ({ page, request }) => {
+  test.setTimeout(240_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("../support/table-late-entry-kit");
+  let inView = 0;
+
+  const t = await kit.seedStartedTable(request, { label: `Redraw ${width}`, n: 8, pools: 2, play: false });
+  const who = `Riverside Rovers Community Football Club ${TAG}`;
+  await kit.registerLateArrival(request, t, who);
+  await page.goto(await divisionPath(request, t.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const strip = page.getByTestId("table-waiting");
+  await expect(strip).toBeVisible({ timeout: 20_000 });
+  await strip.getByTestId("table-waiting-rebuild").click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("It deletes 12 fixtures.");
+  await expectNoHorizontalScroll(page);
+  // Fix round 1 (CI red at 768: the notice was in view, then a hit test on it landed on something else). The notice is said and
+  // scrolled to BEFORE the redraw's router.refresh() lands, so a reflow while that refresh is in flight can carry the line off the
+  // screen. The refresh is held here, the page above the line grows meanwhile, and once the refresh lands the line must be back in
+  // view - the panel re-checks it then. Only the RSC re-read is held, never the Rebuild's own POST.
+  let releaseRefresh: () => void = () => undefined;
+  const refreshHeld = new Promise<void>((r) => (releaseRefresh = r));
+  let heldReads = 0;
+  await page.route("**/*", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET" && req.headers()["rsc"] === "1") {
+      heldReads++;
+      await refreshHeld;
+    }
+    await route.fallback();
+  });
+  await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
+  const notice = page.getByTestId("schedule-notice");
+  await expect(notice).toContainText(`${who} is in: the stage was drawn again with them in it.`, { timeout: 20_000 });
+  if (await expectOutcomeInView(page, notice, width, "the Rebuild's notice")) inView++;
+  await expect.poll(() => heldReads, { message: "the redraw re-reads the page (router.refresh)", timeout: 20_000 }).toBeGreaterThan(0);
+  // The reflow: everything above the line grows by more than a screen (a style on <main>, which React does not manage).
+  const shiftPx = vp!.height + 400;
+  await page.evaluate((px) => {
+    const main = document.querySelector("main");
+    if (main) main.style.paddingTop = `${px}px`;
+  }, shiftPx);
+  await expect.poll(() => notice.evaluate((el) => el.getBoundingClientRect().top > window.innerHeight), {
+    message: "premise: the reflow carried the notice below the fold",
+  }).toBe(true);
+  releaseRefresh();
+  await expect(page.getByTestId("table-waiting"), "drawn in: the strip goes").toHaveCount(0, { timeout: 20_000 });
+  if (await expectOutcomeInView(page, notice, width, "the Rebuild's notice, once the refresh has landed")) inView++;
+  await page.unroute("**/*");
+  await page.evaluate(() => {
+    const main = document.querySelector("main");
+    if (main) main.style.paddingTop = "";
+  });
+  await expectNoHorizontalScroll(page);
+
+  const stale = await kit.seedStartedTable(request, { label: `Stale ${width}`, n: 5, play: false });
+  const late = `Stale Riverside Rovers Community Club ${TAG}`;
+  await kit.registerLateArrival(request, stale, late);
+  await page.goto(await divisionPath(request, stale.divisionId, "?tab=fixtures#table-waiting"), { waitUntil: "load" });
+  await expect(page.getByTestId("table-waiting-rebuild")).toBeVisible({ timeout: 20_000 });
+  // A scorer starts round 1 after the strip was drawn: the press is stale.
+  const first = (await kit.tableLines(request, stale.divisionId, stale.stageId)).find((f) => f.round_no === 1)!;
+  const ev = await apiJson(request, `/api/v1/fixtures/${first.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(ev.status, JSON.stringify(ev.error)).toBe(201);
+  await page.getByTestId("table-waiting-rebuild").click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Rebuild", exact: true }).click();
+  const refusal = page.getByTestId("table-waiting-outcome");
+  await expect(refusal).toContainText(late, { timeout: 20_000 });
+  if (await expectOutcomeInView(page, refusal, width, "the stale Rebuild's refusal")) inView++;
+  await expect(page.getByTestId("table-waiting-row"), "she still waits").toHaveCount(1);
+  await expectNoHorizontalScroll(page);
+  // Anti-vacuity: all three in-view proofs ran, at every width (fix round 1; the after-refresh one, e2e fix round 1).
+  expect(inView, `in-view proofs at ${width}`).toBe(3);
 });

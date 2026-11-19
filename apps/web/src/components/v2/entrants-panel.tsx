@@ -35,6 +35,8 @@ import {
 // violation shape.
 import { requiresDob, requiresGender, type EligibilityIssue } from "@/lib/registration-rules";
 import { EligibilityOverrideDialog } from "@/components/v2/eligibility-override-dialog";
+import { disqualifyConfirmBody, type ConsequenceState } from "@/components/v2/withdrawal-consequence";
+import type { WithdrawalPreview } from "@/lib/withdrawal-consequence";
 import { swissDoorRefusalText } from "@/lib/swiss-door-refusal";
 import {
   swissFinishConfirm,
@@ -44,9 +46,13 @@ import {
   type SwissFinishAnswer,
   type SwissFinishPlan,
 } from "@/lib/swiss-finish-plan";
-import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
+import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, reinstateReplyNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import { knockoutRefusalText } from "@/lib/knockout-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { undoRefusalText } from "@/lib/undo-refusals";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
+import type { TableLatePools } from "@/server/usecases/table-desk";
+import { poolPickerShown, TableLatePoolSelect } from "@/components/v2/table-late-pool-select";
 
 /** RS007/V380 — the division columns this panel badges above the roster.
  *  Replaces the retired jsonb `eligibility` array (a `Record<string,
@@ -193,6 +199,10 @@ interface Props {
    *  knockout still running: an entrant added here takes a free place in round 1 (a bye or a withdrawn player's place) or
    *  is refused by name, so the form says so. The same add form and the same notice as a Swiss's — never a second form. */
   knockoutLateEntry?: boolean;
+  /** W5 T23 (X-CU-7, X-CU-11; R24 pick 1A) — set when the division has started and its entry stage is a root league or group still
+   *  running with its fixtures drawn (`readTableLatePools`): an entrant added here joins it late and plays catch-up matches, so the
+   *  form says so; a group of several pools adds the Group field (default the smallest), sent as `late_entry_pool`. */
+  tableLateEntry?: Pick<TableLatePools, "kind" | "pools" | "defaultKey"> | null;
 }
 
 /** The late-entry answers on a create's response: the POST answers one row for an object body, an array for a batch. */
@@ -244,6 +254,7 @@ export function EntrantsPanel({
   divisionStatus,
   swissLateEntry,
   knockoutLateEntry = false,
+  tableLateEntry = null,
 }: Props) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
@@ -256,6 +267,11 @@ export function EntrantsPanel({
   const [busy, setBusy] = useState(false);
   // W3 T10 — the late-entry notice for the LAST add (replaced by the next one, cleared by a refusal).
   const [lateNotice, setLateNotice] = useState<LateEntryNoticeLine[]>([]);
+  // W5 T23 (X-CU-11): the Group a late add joins — the organiser's pick, else the server's own default (the smallest pool).
+  const [latePool, setLatePool] = useState<string | null>(null);
+  const latePools = tableLateEntry?.pools;
+  const pooledLateEntry = poolPickerShown(latePools);
+  const latePoolValue = latePool !== null && latePools?.some((p) => p.key === latePool) ? latePool : (tableLateEntry?.defaultKey ?? latePools?.[0]?.key ?? "");
   // W4 T19 — what the LAST Reinstate / Withdraw / Disqualify did to a started knockout (how a reinstated player rejoins it;
   // the lucky loser who took a withdrawn qualifier's seat). Its own line, drawn whether or not the add form is: a lucky
   // loser seats in a FED knockout, whose division's roster is locked and has no add form at all.
@@ -391,6 +407,12 @@ export function EntrantsPanel({
         setError(knockout);
         return;
       }
+      // W5 T10 (R12): a round-robin refusal — a pair's partner changed after play has started (RR_SUBSTITUTE_PARTNER_REFUSED) — said by
+      // its code in the organiser's language, the pointer to Withdraw included, never the server's English.
+      if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
+        setError(undoRefusalText(err.code, err.extra, msg));
+        return;
+      }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English
       // only, so the code is said in the organiser's language, naming the people the payload names.
       const lichess =
@@ -521,6 +543,7 @@ export function EntrantsPanel({
         lateEntryNotice(results, { ...known, ...names }, {
           locale,
           onlineRoundOpen: (stageId, round) => openRounds.has(`${stageId}:${round}`),
+          pooled: pooledLateEntry,
         }),
       );
     } catch (err) {
@@ -534,13 +557,12 @@ export function EntrantsPanel({
   /** The division's entrants by id — what the late-entry and departure notices name. */
   const namesById = Object.fromEntries(entrants.map((e) => [e.id, e.display_name]));
 
-  /** W4 T19 (K13): a Reinstate's reply, said. Only a KNOCKOUT answer (`late_entry.format`) is read here; any other reply (an
-   *  ordinary reinstate, a Swiss one) says nothing, as it always did. A notice that cannot be said truthfully is an error. */
+  /** W4 T19 (K13): a Reinstate's reply, said. Of `late_entry` only a KNOCKOUT answer (`late_entry.format`) is read here; any other
+   *  reply (an ordinary reinstate, a Swiss one) says nothing, as it always did - except a league or group Reinstate's
+   *  `reinstate.not_restored` (final fix wave m3). A notice that cannot be said truthfully is an error. */
   function sayReinstated(entrantId: string, reply: unknown) {
-    const late = (reply as { late_entry?: LateEntryResult } | null)?.late_entry;
-    if (late === undefined || late.format !== "knockout") return;
     try {
-      setDepartureNotice(lateEntryNotice([late], { ...namesById, [entrantId]: namesById[entrantId] ?? "?" }, { locale }));
+      setDepartureNotice(reinstateReplyNotice(reply, entrantId, namesById, { locale }));
     } catch (err) {
       fail(err);
     }
@@ -586,6 +608,14 @@ export function EntrantsPanel({
               {msg("entrants.knockoutLate.note")}
             </p>
           )}
+          {tableLateEntry && (
+            <p
+              data-testid="entrants-table-late-note"
+              className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2 text-sm text-purple-800"
+            >
+              {msg(tableLateEntry.kind === "group" ? "entrants.tableLate.noteGroup" : "entrants.tableLate.noteLeague")}
+            </p>
+          )}
           <AddEntrantForm
             persons={persons}
             personsReady={personsLoad === "ready"}
@@ -599,11 +629,33 @@ export function EntrantsPanel({
             heldBy={heldBy}
             entrantModel={entrantModel}
             busy={busy}
+            poolField={
+              pooledLateEntry ? (
+                <div data-testid="entrants-late-pool-field" className="space-y-1">
+                  <TableLatePoolSelect
+                    id="entrants-late-pool"
+                    testId="entrants-late-pool"
+                    pools={latePools}
+                    value={latePoolValue}
+                    onChange={setLatePool}
+                    disabled={busy}
+                  />
+                  <p className="text-xs text-slate-500">{msg("entrants.tableLate.poolHint")}</p>
+                </div>
+              ) : null
+            }
             onSubmit={(payload) =>
               addEntrants((override) =>
                 apiV1<{ roster_keys_dropped?: number }>(
                   `/api/v1/divisions/${divisionId}/entrants`,
-                  { method: "POST", json: withOverride(payload, override) },
+                  {
+                    method: "POST",
+                    // W5 T23 (X-CU-11): the Group field rides the one add as `late_entry_pool` (the server refuses a letter that is no
+                    // pool of the stage by name). A CSV batch sends none: each of its rows joins the smallest pool at that moment.
+                    // Fix round 1 m1: only a pool the organiser PICKED is named; left at the default the server's own `choosePool`
+                    // decides at the add (the field's read may be stale by then — another late player may have joined).
+                    json: withOverride(pooledLateEntry && latePool !== null && latePoolValue === latePool ? { ...payload, late_entry_pool: latePool } : payload, override),
+                  },
                 ),
               )
             }
@@ -877,6 +929,7 @@ export function EntrantsPanel({
                   // W4 T19 (K13): a REINSTATE into a started knockout answers how the player rejoins it — waiting for the
                   // organiser's Add to bracket, or back on the list with their place played on. Said, never a silent flip.
                   if (res !== undefined && patch.status === "registered") sayReinstated(e.id, res);
+                  return res;
                 }}
                 onWithdraw={async () => {
                   // Withdrawal mid-tournament does fixture surgery (spec 05
@@ -900,12 +953,19 @@ export function EntrantsPanel({
                   // DIFFERENT door - `PATCH /entrants/{id}` with `status: "disqualified"` (`patchEntrant`), not
                   // `POST .../withdraw`. Ruling 259: no reason or notes field. Before Start the server does the bare
                   // status flip, so there is no started-ness branch here.
+                  // W5 T8b (X-WDT-10, ruling 289): the confirmation names THIS entrant's consequence before the write — her
+                  // remaining matches, her played count under the 50 percent rule, and the undo — read from the cascade's own
+                  // decision (`GET .../withdrawal-preview`). Ruling 260's general body stands in only when it cannot be read.
+                  let consequence: ConsequenceState;
+                  try {
+                    const preview = await apiV1<WithdrawalPreview>(`/api/v1/entrants/${e.id}/withdrawal-preview?as=disqualified`);
+                    consequence = { kind: "ready", preview };
+                  } catch {
+                    consequence = { kind: "failed" };
+                  }
                   const ok = await confirmDialog({
                     title: msg("confirm.disqualifyEntrant.title", { name: e.display_name }),
-                    // Ruling 260: a disqualification runs the SAME cascade as a withdrawal, so its confirm is as truthful as
-                    // Withdraw's - one lead sentence, then Withdraw's own body (one authority per fact: the per-format policy
-                    // is spelled out once, in `confirm.withdrawEntrant.body`).
-                    body: `${msg("confirm.disqualifyEntrant.lead")} ${msg("confirm.withdrawEntrant.body")}`,
+                    body: disqualifyConfirmBody(consequence, msg as (k: string, v?: Record<string, string | number>) => string, locale),
                     confirmLabel: msg("confirm.disqualifyEntrant.label"),
                     tone: "danger",
                   });
@@ -1018,6 +1078,7 @@ function AddEntrantForm({
   busy,
   onSubmit,
   importControls,
+  poolField,
 }: {
   persons: Person[];
   /** Players has finished loading, so New player's duplicate check sees the whole directory. */
@@ -1038,6 +1099,8 @@ function AddEntrantForm({
   ) => Promise<{ roster_keys_dropped?: number } | undefined>;
   /** Inline CSV-import controls rendered in the footer row. */
   importControls?: React.ReactNode;
+  /** W5 T23 (X-CU-11): the late add's Group field, under the form's title, above whichever mode's fields. */
+  poolField?: React.ReactNode;
 }) {
   // "Existing team" mode enrolls a whole team, so it only makes sense when this
   // division actually accepts a team kind AND the org has teams (created by
@@ -1076,6 +1139,7 @@ function AddEntrantForm({
         )}
       </div>
 
+      {poolField}
       {mode === "existing" && canExisting ? (
         <ExistingTeamFields
           teams={teams}
@@ -1966,7 +2030,9 @@ export function EntrantTableRow({
   deletable: boolean;
   /** The Name field's save: its own request, never the panel-wide busy. */
   onRename: (next: string) => Promise<void>;
-  onPatch: (patch: Record<string, unknown>) => void;
+  /** Resolves to the entrant the server answered with (its `members` are what a saved roster re-seeds the editor from), or
+   *  undefined when the write was refused. */
+  onPatch: (patch: Record<string, unknown>) => void | Promise<unknown>;
   /** Withdraw with fixture surgery (spec 05 §5) — confirm handled upstream. */
   onWithdraw: () => void;
   /** Disqualify (ruling 258) - confirm handled upstream; sends `PATCH /entrants/{id}` `{ status: "disqualified" }`. */
@@ -2187,15 +2253,17 @@ export function EntrantTableRow({
                 persons={persons}
                 positionGroups={positionGroups}
                 roles={roles}
-                canEdit={canEdit}
+                // W5 T10 fix round 1 (R12, I1): a departed PAIR's roster is frozen once play has started (the server refuses any
+                // change), so its card shows the roster read-only - Reinstate first.
+                canEdit={canEdit && !(withdrawn && entrant.kind === "pair")}
                 busy={busy}
                 allowCaptain={entrantModel.captain}
                 allowSquadNumbers={entrantModel.squadNumbers}
                 entrantModel={entrantModel}
                 eligibility={eligibility}
                 conflictsFor={(personId) => otherTeamsFor(personId, entrant.id)}
-                onSave={(next) =>
-                  onPatch({
+                onSave={async (next) => {
+                  const res = await onPatch({
                     members: next.map((m) => ({
                       person_id: m.person_id,
                       squad_number: m.squad_number,
@@ -2203,8 +2271,15 @@ export function EntrantTableRow({
                       is_captain: m.is_captain,
                       roles: m.roles,
                     })),
-                  })
-                }
+                  });
+                  // Re-seed from the server's own answer: a pair that LOST a partner is withdrawn with its roster kept as it was
+                  // (R12b), so the editor must not go on showing the staged one-partner roster.
+                  const saved = (res as { members?: Member[] } | undefined)?.members;
+                  if (Array.isArray(saved)) {
+                    setMembers(saved);
+                    setRosterVersion((v) => v + 1);
+                  }
+                }}
               />
             )}
           </td>

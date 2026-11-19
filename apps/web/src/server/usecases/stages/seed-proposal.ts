@@ -11,6 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
 import { afterScheduleWrite, validateSchedule, courtNamesById } from "../schedule";
 import { departedLoseBestNth, descriptorKey, destinationSlotsBySeed, sourcesToTables, persistCrossGroupDraws, standingsHash, poolTableRowsAcrossSources, type SlotDescriptor } from "../stage-seeding";
+import { refuseCutBeyondTables } from "./cut-gate";
 import { STAGE_COLS, type StageRow, type FixtureRow } from "./types";
 import { fireStageRevalidate, refoldStageTable, departedEntrantIds } from "./helpers";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
@@ -86,7 +87,15 @@ function seedProposalKey(sourceIndex: number, d: SlotDescriptor): string {
  * a downstream stage a finishing order rather than a points table, i.e. any
  * kind outside REAL_TABLE_KINDS).
  */
-export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promise<SeedProposalOut> {
+export async function computeSeedProposal(
+  auth: AuthCtx,
+  stageId: string,
+  /** B3 fix wave (m-6): a re-proposal the system makes after a source moved (`seed-stale.ts`), never the organiser's Recompute.
+   *  When the live draft already names the SAME slate (qualifiers, ties, the third-place note) - only the standings it was read
+   *  from moved, as on each intermediate write of a correction - that draft is refreshed in place (its `standingsHash`, so the
+   *  confirm's freshness check reads it current) instead of being staled for an identical new row. */
+  opts: { refreshSameSlate?: boolean } = {},
+): Promise<SeedProposalOut> {
   return withTenant(auth.orgId, async (tx) => {
     const [stage] = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
     if (!stage) throw new HttpError(404, "stage not found");
@@ -135,6 +144,8 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
         });
       }
     }
+    // W5 T12b (X-BD-8, RB5-E6): a cut the finished tables cannot supply is refused by name before the engine resolves it.
+    refuseCutBeyondTables(progression.sources, shapes, tables, resolved);
     // A2 (round-4 review) — `stage` here IS the progression's own target
     // (computeSeedProposal proposes seeds INTO it), so `stage.kind` is the
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
@@ -278,6 +289,15 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
       ...(firstLossPlate && stage.config.thirdPlace === true && resolvedProgression.qualifiers.length < 4 ? { thirdPlaceDropped: true as const } : {}),
     };
 
+    if (opts.refreshSameSlate) {
+      const [draft] = await tx<{ id: string; computed: SeedProposalOut["computed"] }[]>`
+        select id, computed from stage_seed_proposals where stage_id = ${stageId} and status = 'draft'
+         order by created_at desc, id limit 1`;
+      if (draft !== undefined && sameSlate(draft.computed, computed)) {
+        await tx`update stage_seed_proposals set computed = ${tx.json(computed as never)} where id = ${draft.id}`;
+        return { id: draft.id, stageId, status: "draft", computed };
+      }
+    }
     await tx`update stage_seed_proposals set status = 'stale' where stage_id = ${stageId} and status = 'draft'`;
     const [row] = await tx<{ id: string }[]>`
       insert into stage_seed_proposals (org_id, stage_id, computed, status)
@@ -286,6 +306,25 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
 
     return { id: row!.id, stageId, status: "draft", computed };
   });
+}
+
+/** B3 m-6: do two proposals offer the same slate? Everything the organiser confirms - who sits where, the ties to resolve, the
+ *  third-place note - compared key-order-blind (a stored jsonb reads its keys back in its own order); the hash is left out. */
+function sameSlate(a: SeedProposalOut["computed"], b: SeedProposalOut["computed"]): boolean {
+  return stableJson({ ...a, standingsHash: undefined }) === stableJson({ ...b, standingsHash: undefined });
+}
+
+function stableJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o)
+      .filter((k) => o[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableJson(o[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(v);
 }
 
 /**

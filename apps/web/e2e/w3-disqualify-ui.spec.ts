@@ -95,9 +95,15 @@ async function disqualifyThroughTheScreen(page: Page, request: APIRequestContext
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible({ timeout: STEP_MS });
   await expect(dialog, "the confirm names the entrant").toContainText(fill("confirm.disqualifyEntrant.title", { name }));
-  // Ruling 260: the lead, then WITHDRAW's own body (the same cascade, said once) - read from the dictionary, never retyped here.
+  // Ruling 260: the lead (the same cascade as a withdrawal) - read from the dictionary, never retyped here. W5 T8b (ruling 289):
+  // under it THIS entrant's consequence, read from the cascade's own decision before the write (its sentences are pinned in
+  // w5-round-robin-app-a.spec.ts and the unit suites); Withdraw's general body stands in only when that cannot be read.
   await expect(dialog, "and says it is the withdrawal's effect on their matches").toContainText(uiEn["confirm.disqualifyEntrant.lead"]!);
-  await expect(dialog, "in Withdraw's own words").toContainText(uiEn["confirm.withdrawEntrant.body"]!);
+  const consequence = dialog.getByTestId("withdrawal-consequence");
+  await expect(consequence, "ruling 289: the consequence, before confirming").toHaveAttribute("data-state", "ready", { timeout: STEP_MS });
+  const undo = await consequence.getByTestId("withdrawal-consequence-line").last().textContent();
+  expect([uiEn["withdrawal.consequence.undo.reinstate"], uiEn["withdrawal.consequence.undo.rejoin"]], "it says how it is undone").toContain(undo);
+  await expect(dialog, "the per-entrant copy replaces the general body").not.toContainText(uiEn["confirm.withdrawEntrant.body"]!);
   await expect(dialog, "and not the first draft's untrue promise").not.toContainText("Results already played stand");
   const go = dialog.getByRole("button", { name: uiEn["confirm.disqualifyEntrant.label"]!, exact: true });
   await expect(go).toBeEnabled({ timeout: STEP_MS });
@@ -291,6 +297,43 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
     await expect(dqTag(page.locator(`li[data-fixture-no="${theirs[0]!.fixture_no}"]`)), "a match that does not involve her").toHaveCount(0);
   });
 
+  // W5 T8b (owner ruling 289, RB5-W2/W4): a disqualification recorded IN a league match withdraws her from the league. Her lines
+  // count this match as played (RB5-W4): one of three, under half, so every result of hers is removed and the rest voided (RB5-W2)
+  // - the match she was disqualified in included, so it carries no disqualification tag and names no winner. Expected values
+  // from the rulebook's arithmetic, not read off the screen. One sport (generic): the cascade is sport-blind.
+  test("a league, disqualified in her first match: under half played, her results are removed and her lines read abandoned, with no disqualification tag (RB5-W2)", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const d = await division(request, "DQ In Match", 4);
+    const { stageId } = await createStageAndGenerate(request, d.divisionId, { kind: "league", name: "League" });
+    const started = await apiJson(request, `/api/v1/divisions/${d.divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const victim = d.ids[1]!;
+    const all0 = (await divisionFixtures(request, d.divisionId)).filter((f) => f.stage_id === stageId);
+    const mine = all0.filter((f) => f.home_entrant_id === victim || f.away_entrant_id === victim);
+    const theirs = all0.filter((f) => f.home_entrant_id !== victim && f.away_entrant_id !== victim);
+    expect(mine.length, "premise: she plays each of the other three once").toBe(3);
+    const board = mine[0]!;
+    const begun = await apiJson(request, `/api/v1/fixtures/${board.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    expect(begun.status, JSON.stringify(begun.error)).toBe(201);
+    const dq = await apiJson(request, `/api/v1/fixtures/${board.id}/events`, "POST", { expected_seq: 1, type: "core.forfeit", payload: { by: victim, reason: "disqualified" } });
+    expect(dq.status, JSON.stringify(dq.error)).toBe(201);
+
+    const mineNow = async () => (await divisionFixtures(request, d.divisionId)).filter((f) => mine.some((m) => m.id === f.id));
+    await expect.poll(async () => (await mineNow()).map((f) => f.status), { timeout: STEP_MS, message: "her three lines are expunged" }).toEqual(["abandoned", "abandoned", "abandoned"]);
+    const after = await mineNow();
+    expect(after.filter((f) => f.outcome?.kind === "award"), "no award survives on her lines, the disqualification's included").toEqual([]);
+    expect((await divisionFixtures(request, d.divisionId)).filter((f) => theirs.some((t) => t.id === f.id)).map((f) => f.status), "lines without her stand").toEqual(theirs.map(() => "scheduled"));
+
+    await page.goto(await divisionPath(request, d.divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    const line = page.locator(`li[data-fixture-no="${board.fixture_no}"]`);
+    await expect(line).toBeVisible({ timeout: STEP_MS });
+    await expect(line, "the line she was disqualified in reads abandoned").toContainText(uiEn["schedule.fstatus.abandoned"]!);
+    await expect(dqTag(line), "and carries no disqualification tag: its result was removed").toHaveCount(0);
+    const other = page.locator(`li[data-fixture-no="${theirs[0]!.fixture_no}"]`);
+    await expect(other, "a line without her does not").not.toContainText(uiEn["schedule.fstatus.abandoned"]!);
+  });
+
   // Ruling 261: Disqualify is offered only once the division has STARTED (the flag that hides Delete). Before the start a
   // disqualification is a bare flip that Delete and Withdraw already cover, and the third button pushed Delete under the scroll
   // fade at 768. So a setup division's row is Withdraw + Delete, a started one's is Withdraw + Disqualify.
@@ -311,40 +354,80 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
     expect(tapped, "controls proven tappable (2 per width x 3 widths)").toBe(6);
   });
 
-  test("the forfeit dialog's disqualified reason says it decides this match only, at 1280 and 320; the walkover reason does not", async ({ page, request }) => {
-    test.setTimeout(240_000);
+  // Ruling 258's hint now holds on a BRACKET only. W5 T8b (owner ruling 289): on a table stage (league, group, Swiss) a disqualifying
+  // forfeit withdraws the side from the stage, so "this match only" would be false there - the dialog shows the withdrawal's own
+  // consequence (`withdrawal-consequence`, the cascade's preview) in the hint's place. Both are pinned, each on its own kind of stage.
+  test("the forfeit dialog's disqualified reason says it decides this match only on a knockout, and names the withdrawal on a Swiss (ruling 289), at 1280 and 320; the walkover reason says neither", async ({ page, request }) => {
+    test.setTimeout(300_000);
     const sw = await startedSwiss(request, "DQ Hint", 4, 2);
-    const board = (await sw.boards(1))[0]!;
-    const started = await apiJson(request, `/api/v1/fixtures/${board.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
-    expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+    const swissBoard = (await sw.boards(1))[0]!;
+    const ko = await division(request, "DQ Hint KO", 4);
+    const koStage = await createStageAndGenerate(request, ko.divisionId, { kind: "knockout", name: "Cup" });
+    const koStarted = await apiJson(request, `/api/v1/divisions/${ko.divisionId}/start`, "POST");
+    expect(koStarted.status, JSON.stringify(koStarted.error)).toBeLessThan(300);
+    const koBoard = (await divisionFixtures(request, ko.divisionId)).find((f) => f.stage_id === koStage.stageId && f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    expect(koBoard, "premise: a seated knockout semi").toBeTruthy();
+    const surfaces = [
+      { kind: "knockout", divisionId: ko.divisionId, board: koBoard },
+      { kind: "swiss", divisionId: sw.divisionId, board: swissBoard },
+    ] as const;
+    for (const s of surfaces) {
+      const started = await apiJson(request, `/api/v1/fixtures/${s.board.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+      expect(started.status, `${s.kind}: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    }
     let checked = 0;
     for (const width of [1280, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(await fixturePath(request, board.id));
-      await dismissCookieBanner(page);
-      await openMatchActions(page);
-      await page.getByTestId("score-forfeit").click({ timeout: STEP_MS });
-      const d = page.getByTestId("forfeit-dialog");
-      await expect(d).toBeVisible({ timeout: 10_000 });
-      const hint = d.getByTestId("forfeit-dq-scope-hint");
-      await expect(hint, `${width}: no side chosen, no hint`).toHaveCount(0);
-      await d.getByTestId("forfeit-who-home").click();
-      await expect(hint, `${width}: a side chosen, no reason yet`).toHaveCount(0);
-      await d.getByTestId("forfeit-why-walkover").check();
-      await expect(hint, `${width}: the walkover is not a disqualification`).toHaveCount(0);
-      await d.getByTestId("forfeit-why-disqualified").check();
-      await expect(hint, `${width}: the disqualification names its scope`).toHaveText(uiEn["forfeitDialog.dqScopeHint"]!);
-      await expect(hint, `${width}: and it is on screen`).toBeInViewport();
-      await expectNoHorizontalScroll(page);
-      await d.getByTestId("forfeit-why-walkover").check();
-      await expect(hint, `${width}: moving the choice off the disqualification takes it away`).toHaveCount(0);
-      // Leave without recording: the match stays open (Cancel closes the dialog).
-      await page.keyboard.press("Escape");
-      await expect(d).toBeHidden();
-      checked++;
+      for (const s of surfaces) {
+        const at = `${width} ${s.kind}`;
+        await page.goto(await fixturePath(request, s.board.id));
+        await dismissCookieBanner(page);
+        await openMatchActions(page);
+        await page.getByTestId("score-forfeit").click({ timeout: STEP_MS });
+        const d = page.getByTestId("forfeit-dialog");
+        await expect(d).toBeVisible({ timeout: 10_000 });
+        const hint = d.getByTestId("forfeit-dq-scope-hint");
+        const consequence = d.getByTestId("withdrawal-consequence");
+        await expect(hint, `${at}: no side chosen, no hint`).toHaveCount(0);
+        await d.getByTestId("forfeit-who-home").click();
+        await expect(hint, `${at}: a side chosen, no reason yet`).toHaveCount(0);
+        await d.getByTestId("forfeit-why-walkover").check();
+        await expect(hint, `${at}: the walkover is not a disqualification`).toHaveCount(0);
+        await expect(consequence, `${at}: nor does a walkover withdraw anyone`).toHaveCount(0);
+        await d.getByTestId("forfeit-why-disqualified").check();
+        if (s.kind === "knockout") {
+          await expect(hint, `${at}: the disqualification names its scope`).toHaveText(uiEn["forfeitDialog.dqScopeHint"]!);
+          await expect(hint, `${at}: and it is on screen`).toBeInViewport();
+          await expect(consequence, `${at}: a bracket's disqualification withdraws nobody`).toHaveCount(0);
+        } else {
+          await expect(hint, `${at}: "this match only" is not said where it is not true`).toHaveCount(0);
+          await expect(consequence, `${at}: the withdrawal it runs, read from the preview`).toHaveAttribute("data-state", "ready", { timeout: STEP_MS });
+          // RB5-W11: the copy's numbers are the cascade's own. Round 1 of a two-round Swiss: her only seated line is this board, and
+          // an in-match disqualification counts its own match as played (RB5-W4) - one played, none left (round 2 is not paired).
+          // A Swiss result stands and a reinstated player rejoins from the next round (W3 T9, ruling 251). One sport (generic): the
+          // copy is sport-blind; league and group are pinned by the T8b unit renders (withdrawal-consequence-render.test.tsx).
+          const homeName = sw.nameOf.get(s.board.home_entrant_id!)!;
+          await expect(consequence.getByTestId("withdrawal-consequence-line"), `${at}: the Swiss consequence, line by line`).toHaveText([
+            fill("withdrawal.consequence.noRemaining", { name: homeName }),
+            fill("withdrawal.consequence.swiss", { name: homeName, played: 1 }),
+            fill("withdrawal.consequence.undo.rejoin"),
+          ]);
+          await expect(consequence, `${at}: and it is on screen`).toBeInViewport();
+        }
+        await expectNoHorizontalScroll(page);
+        await d.getByTestId("forfeit-why-walkover").check();
+        await expect(hint, `${at}: moving the choice off the disqualification takes it away`).toHaveCount(0);
+        await expect(consequence, `${at}: the consequence too`).toHaveCount(0);
+        // Leave without recording: the match stays open (Cancel closes the dialog).
+        await page.keyboard.press("Escape");
+        await expect(d).toBeHidden();
+        checked++;
+      }
     }
-    expect(checked).toBe(2);
-    const after = (await divisionFixtures(request, sw.divisionId)).find((f) => f.id === board.id)!;
-    expect(after.status, "nothing was recorded: the dialog only explained").toBe("in_play");
+    expect(checked, "2 widths x 2 kinds of stage").toBe(4);
+    for (const s of surfaces) {
+      const after = (await divisionFixtures(request, s.divisionId)).find((f) => f.id === s.board.id)!;
+      expect(after.status, `${s.kind}: nothing was recorded: the dialog only explained`).toBe("in_play");
+    }
   });
 });

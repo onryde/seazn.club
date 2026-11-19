@@ -144,7 +144,12 @@ async function ledger(request: APIRequestContext, fixtureId: string): Promise<Le
 const typesOf = async (request: APIRequestContext, fixtureId: string) =>
   (await ledger(request, fixtureId)).map((e) => e.type);
 
-async function seed(request: APIRequestContext, sportKey: string, surface: string): Promise<RosteredFixture> {
+async function seed(
+  request: APIRequestContext,
+  sportKey: string,
+  surface: string,
+  stage: { kind: string; name: string } = { kind: "knockout", name: "Cup" },
+): Promise<RosteredFixture> {
   return seedRosteredFixture(request, {
     label: `V3 Ending ${sportKey} ${surface} ${TAG}`,
     sportKey,
@@ -155,6 +160,11 @@ async function seed(request: APIRequestContext, sportKey: string, surface: strin
     // No fixture lineup: nobody to ask "which player" in the sanction sheet (and the tennis skin's own rosterless fallback).
     skipLineups: sportKey === "tennis",
     emitCoreStart: true,
+    // A knockout final, not a league line: every flow here VOIDS the ending, and since W5 T8b (owner ruling 289; review I1) a
+    // disqualifying forfeit on a table stage withdraws the side from it, so its void is refused (409 UNDO_DQ_USE_REINSTATE - Reinstate
+    // is that undo). A bracket's disqualifying forfeit decides this match only and voids as before, which is the path under test.
+    // The league's refusal has its own test below ("on a league line ...").
+    stage,
   });
 }
 
@@ -452,6 +462,59 @@ test("badminton v3 official scorer: the disqualification asks, sends the pair, a
   } finally {
     await official.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// A league line: the disqualification's void is refused until Reinstate (W5 T8b I1, owner ruling 289, RB5-W6)
+// ---------------------------------------------------------------------------
+
+test("badminton v3 console: on a league line the disqualification's void is refused in the scorer's words and writes nothing; after Reinstate the same void goes through", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  // single-sport: the refusal is the write path's (assertDisqualificationUndoable) and its copy the chassis's own, both
+  // sport-blind; badminton is the declaring sport the console tests above seed.
+  const sport = SPORTS.find((s) => s.key === "badminton")!;
+  expect(sport, "badminton must declare an end level").toBeDefined();
+  const fx = await seed(request, sport.key, "LeagueDQ", { kind: "league", name: "League" });
+  const homeStatus = async () =>
+    (await apiJson<{ id: string; status: string }[]>(request, `/api/v1/divisions/${fx.divisionId}/entrants`)).data?.find(
+      (e) => e.id === fx.homeEntrantId,
+    )?.status;
+  expect(await homeStatus(), "premise: the home side is in the field").toBe("registered");
+  await page.goto(await fixturePath(page.request, fx.fixtureId));
+  await expect(pad(page)).toBeVisible({ timeout: 20_000 });
+
+  // The disqualification, through the pad: on a table stage it withdraws the side from the stage (ruling 289).
+  await sanctionHomeUpToConfirm(page, sport);
+  await confirmEnding(page);
+  await expect.poll(async () => (await typesOf(request, fx.fixtureId)).length, { timeout: DRAIN_MS }).toBe(3);
+  expect((await ledger(request, fx.fixtureId)).at(-1)!.payload).toEqual({ by: fx.homeEntrantId, reason: "disqualified" });
+  await expect.poll(homeStatus, { timeout: 30_000, message: "the cascade withdrew her from the stage" }).toBe("disqualified");
+  const before = await ledger(request, fx.fixtureId);
+
+  // The void of the ending, from the activity row: refused, said in the scorer's words, and nothing is written.
+  const newestRow = page.locator('[data-role="v3-activity-row"]').first();
+  const endingId = before.at(-1)!.id;
+  await expect(newestRow, "the activity panel's newest row is the ending").toHaveAttribute("data-event-id", endingId, { timeout: 30_000 });
+  await newestRow.locator('[data-role="v3-activity-void"]').click();
+  await newestRow.locator('[data-role="v3-activity-void-confirm"]').click();
+  await expect(page.getByText(EN["scorepad.refusal.undoDqUseReinstate"]!), "the refusal names Reinstate").toBeVisible({ timeout: 30_000 });
+  expect((await ledger(request, fx.fixtureId)).map((e) => e.id), "the refused void wrote nothing").toEqual(before.map((e) => e.id));
+  expect(await homeStatus(), "and she is still disqualified").toBe("disqualified");
+
+  // Reinstate (the organiser's undo, RB5-W6), then the same void goes through and the ending prompt is back.
+  const back = await apiJson<{ status: string }>(request, `/api/v1/entrants/${fx.homeEntrantId}`, "PATCH", { status: "registered" });
+  expect([back.status, back.data?.status], `reinstate: ${JSON.stringify(back.error)}`).toEqual([200, "registered"]);
+  // The same pad, no reload: a reload of a decided match opens its result view, not the pad.
+  const row = page.locator('[data-role="v3-activity-row"]').first();
+  await expect(row, "the ending is still the newest row").toHaveAttribute("data-event-id", endingId, { timeout: 30_000 });
+  await row.locator('[data-role="v3-activity-void"]').click();
+  await row.locator('[data-role="v3-activity-void-confirm"]').click();
+  await expect.poll(async () => (await typesOf(request, fx.fixtureId)).at(-1), { timeout: 30_000 }).toBe("core.void");
+  expect((await ledger(request, fx.fixtureId)).at(-1)!.payload, "the void names the ending").toMatchObject({ event_id: endingId });
+  await expect(prompt(page), "voiding the ending brings the prompt back").toBeVisible({ timeout: 30_000 });
 });
 
 // ---------------------------------------------------------------------------

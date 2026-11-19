@@ -8,13 +8,13 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { API_ONLY_ROWS, cellId, isKnobRow, type ApiOnlyRowKey } from "../lib/catalogue.ts";
+import { API_ONLY_ROWS, SPORT_KEYS, cellId, isKnobRow, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import {
-  API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, TemplateReachable, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
+  API_ONLY_BROWSER_SET, L1_WIDTH, LAYER_GRID_PLANNERS, LAYER_PLANNERS, L2BoundRun, NoLayerForWidth, L2TakesNoScenario, UnknownL2Atom, W1_DRIVING_L1_SET, WIDTH_SWEEP_SET, apiOnlyBrowserPlanner, apiOnlyNoPath, identityOf, l1Planner, l2Planner,
   layerCaseId, layerOfWidth, planL1, planL2, planW1DrivingL1, w1DrivingL1Planner, widthSweepPlanner, type LayerCase,
 } from "../lib/layers.ts";
 import { NotApiOnlyRow, RefusedApiOnlyRow, apiOnlyUiPath, apiOnlyUiRoute } from "../lib/api-only-ui.ts";
-import { templateField } from "../lib/templates.ts";
+import { templateField, templateFor } from "../lib/templates.ts";
 import { loadL2Pairs, parseL2Pairs, type L2Run } from "../lib/pairs.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
@@ -28,8 +28,8 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const RAW = JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: L2Run[] };
 /** The slice's cells, from its declared rows × sports (never a typed list). */
 const SLICE_CELLS: ReadonlySet<string> = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => cellId(r, s))));
-/** The slice's committed L2 runs, in file order — 70 today (65 swiss|badminton,
- *  2 swiss|generic, 1 knockout|generic, 2 knockout|badminton). Only this filter's own length is
+/** The slice's committed L2 runs, in file order — 69 today (65 swiss|badminton,
+ *  1 swiss|generic, 1 knockout|generic, 2 knockout|badminton). Only this filter's own length is
  *  asserted, so a regenerated catalogue moves the test, not the plan. */
 const SLICE_RUNS = RAW.runs.filter((r) => SLICE_CELLS.has(cellId(r.row, r.sport)));
 const ATOM = new Map(ATOMIC.map((a) => [a.id, a]));
@@ -100,12 +100,16 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(checked).toBeGreaterThan(0);
     // File order; none dropped, none added.
     expect(cases.map((c) => c.run!.n)).toEqual(SLICE_RUNS.map((r) => r.n));
-    // Witness: the committed widths are NOT the plain (n - 1) % 7 rotation for some
-    // slice run, so a planner that re-derived widths could not pass the loop above.
-    expect(SLICE_RUNS.some((r) => r.width !== L2_WIDTHS[(r.n - 1) % L2_WIDTHS.length])).toBe(true);
+    // Witness: a planner that re-derived widths from (n - 1) % 7 could not pass the loop above. Since W5 T16 (the row count is no
+    // longer a multiple of 7, so pairs.ts's lap shift no longer applies) every committed width IS the plain rotation, so the
+    // witness is built: one committed run's width is moved off the rotation in memory and the planner must hand back THAT width.
+    const moved = SLICE_RUNS[0]!;
+    const off = L2_WIDTHS.find((w) => w !== L2_WIDTHS[(moved.n - 1) % L2_WIDTHS.length])!;
+    const planned = planL2({ runs: SLICE_RUNS.map((r) => (r === moved ? { ...r, width: off } : r)) }, SLICE_CELLS);
+    expect(planned.find((c) => c.run!.n === moved.n)!.width, "the committed width, not the rotation's").toBe(off);
   });
 
-  it("slice L2 = 70 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
+  it("slice L2 = 69 runs: 3 executed, and the rest carry 🚫 or ░ with a reason", () => {
     const cases = planL2(committed, SLICE_CELLS);
     expect(cases).toHaveLength(SLICE_RUNS.length);
     // The expected split, from the catalogue's own declarations.
@@ -164,7 +168,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // `?? atom.l2NoPath` arm and its reason are reached from the cells outside it.
   it("the l2NoPath arm: every committed run whose atom has l2NoPath (and no knownNoPath) is planned 🚫 naming that wave, with the route-exists reason", () => {
     // A run on a cell the builder does not offer is the CELL arm (layers.ts: the cell's route outranks the atom's;
-    // layers-grid.test.ts proves every such run): the retired Triple round robin's M12b runs route to its wave, not W2.
+    // layers-grid.test.ts proves every such run): the pair formats' M12b runs on those cells route to W7, not W2.
     const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && l2NoPathFor(a, r.sport) !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario) && !isNoOrganiserPathCell(cellId(r.row, r.sport)); };
     const gapRuns = RAW.runs.filter(isL2Gap);
     const cells = new Set(gapRuns.map((r) => cellId(r.row, r.sport)));
@@ -187,8 +191,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // W2e Task 32 (B2-3): the committed M12b runs, planned per sport. The four sports whose pad gained the control are no
   // longer 🚫 ("no screen sends it" is false for them); they are ░ until a scenario script drives the control. Cricket and
   // generic keep 🚫 W2 (dispositions CK-DV-3, GN-DV-1). Match Day C9 review I5, option 2: a run on a cell the builder does
-  // not offer (americano/mexicano on those sports: W7; the retired Triple round robin on every sport, owner ruling
-  // 2026-11-01: W5) is 🚫 whatever its atom - the cell has no organiser path at all.
+  // not offer (americano/mexicano on those sports: W7) is 🚫 whatever its atom - the cell has no organiser path at all.
   it("W2e T32: M12b is ░ in football, volleyball, hockey and ice hockey and still 🚫 W2 in every other sport, run by committed run", () => {
     const m12b = RAW.runs.filter((r) => r.scenario === "M12b");
     const cells = new Set(m12b.map((r) => cellId(r.row, r.sport)));
@@ -376,7 +379,9 @@ describe("the layered sets", () => {
 
   it("api-only browser set: one case per API_ONLY row, in catalogue order — each planned 🚫 naming its owning wave (D7 as ruled), never driven", () => {
     // Design §8 via plan D7, restated here rather than read from the harness.
-    const WAVE: Readonly<Record<string, string>> = { group_only: "W5", group_group_ko: "W5" };
+    // W5 T14 (X-BD-2): group_only left the API-only rows; W5 X-BD-3: group_group_ko is reachable on generic through the super-groups
+    // card, so it is driven (layers-grid), not 🚫. B4 merge: together, no API-only row is left without an organiser control on generic.
+    const WAVE: Readonly<Record<string, string>> = { group_group_ko: "W5" };
     // W4 T16 (ruling 269): the standalone stepladder and page playoff are refused, so no wave owes them a control and the set holds no case for them.
     const REFUSED_ROWS = [...new Set(STANDALONE_REFUSED_CELLS.map((c) => c.split("|")[0]!))];
     expect(REFUSED_ROWS.sort()).toEqual(["page_playoff_only", "stepladder_only"]);
@@ -388,8 +393,12 @@ describe("the layered sets", () => {
     expect(KNOB).toEqual(["knockout_third_place"]);
     const owed = API_ONLY_ROWS.filter((r) => !REFUSED_ROWS.includes(r) && !isKnobRow(r));
     expect(owed.length).toBe(API_ONLY_ROWS.length - 2 - 1);
-    expect(owed).toEqual(["group_only", "group_group_ko"]);
-    expect(cases.map((c) => identityOf(c).row)).toEqual([...owed]);
+    expect(owed, "group_only left the list: the picker has its card (W5 T14, X-BD-2)").toEqual(["group_group_ko"]);
+    // The rows with no organiser control on generic: group_group_ko has one now (super-groups), so the set is EMPTY (B4 merge of T14 + X-BD-3).
+    const noControl = owed.filter((r) => templateFor(r, "generic") === null);
+    expect(noControl).toEqual([]);
+    expect(templateFor("group_group_ko", "generic")).toBe("super-groups");
+    expect(cases.map((c) => identityOf(c).row)).toEqual(noControl);
     let checked = 0;
     for (const c of cases) {
       const id = identityOf(c);
@@ -401,17 +410,29 @@ describe("the layered sets", () => {
       expect(decideState({ checks: [], deferred: null, error: null, noPath: c.noPath, notRun: c.notRun })).toEqual({ state: "no_path", reason: `${WAVE[id.row]}: no organiser control builds ${id.row}` });
       checked++;
     }
-    expect(checked).toBe(owed.length);
+    expect(checked).toBe(noControl.length);
+    // B4 merge (W5 T14 + X-BD-3): the set is EMPTY - its empty case, stated. The derivation is not vacuous: it judged every owed row.
+    expect(checked).toBe(0);
+    expect(cases).toHaveLength(0);
+    expect(owed.length).toBeGreaterThan(0);
     expect({ sports: p.sports, layer: p.layer, acceptsWidth: p.acceptsWidth }).toEqual({ sports: ["generic"], layer: "L1", acceptsWidth: 1280 });
     for (const cli of [{ only: "league|generic" }, { scenario: "LIFECYCLE" }, { canary: "M1" }]) expect(() => apiOnlyBrowserPlanner(cli), JSON.stringify(cli)).toThrow(SetTakesNoFilter);
   });
 
-  it("W1-driving Task 13: the two API-only cells a catalog template reaches are REACHABLE through its card — no wave owes them; every other API-only cell still names its row's wave", () => {
-    const cells: [ApiOnlyRowKey, string, string][] = [["group_only", "badminton", "box-league"], ["group_group_ko", "cricket", "t20-super8"]];
+  it("W1-driving Task 13: every API-only cell a catalog template reaches is REACHABLE through its card — no wave owes it; a cell no card reaches still names its row's wave", () => {
+    // B4 merge: t20-super8 holds cricket's group_group_ko, and the any-sport super-groups (X-BD-3) every other engine sport's.
+    const cells: [ApiOnlyRowKey, string, string][] = [["group_group_ko", "cricket", "t20-super8"], ...SPORT_KEYS.filter((s) => s !== "cricket").map((s): [ApiOnlyRowKey, string, string] => ["group_group_ko", s, "super-groups"])];
+    let checked = 0;
     for (const [row, sport, template] of cells) {
-      expect(apiOnlyUiPath(row, sport)).toEqual({ reachable: true, wave: null, template, reason: `built through catalog template ${template} (template-card-${template})` });
+      expect(apiOnlyUiPath(row, sport), `${row}|${sport}`).toEqual({ reachable: true, wave: null, template, reason: `built through catalog template ${template} (template-card-${template})` });
+      checked++;
     }
-    expect(apiOnlyUiPath("group_only", "generic")).toEqual({ reachable: false, wave: "W5", template: null, reason: "no organiser control builds group_only" });
+    expect(checked).toBe(SPORT_KEYS.length);
+    // No engine sport is left without a card, so the unreached path is witnessed on a sport no card names (the any-sport card
+    // reaches engine sports only): the row's wave is still the one named.
+    expect(apiOnlyUiPath("group_group_ko", "no-such-sport")).toEqual({ reachable: false, wave: "W5", template: null, reason: "no organiser control builds group_group_ko" });
+    // X-BD-2: group_only has the picker's own card now - it is no API-only row, so asking for its route is refused by name.
+    expect(() => apiOnlyUiPath("group_only" as ApiOnlyRowKey, "generic")).toThrow(NotApiOnlyRow);
     // A row the builder does build is refused by name, never answered `undefined` (strip-types runs no tsc).
     for (const row of ["league", "toString", "__proto__"]) expect(() => apiOnlyUiPath(row as ApiOnlyRowKey, "generic"), row).toThrow(NotApiOnlyRow);
   });
@@ -443,8 +464,10 @@ describe("the layered sets", () => {
   });
 
   it("guard: a 🚫 is never planned for a cell a template reaches — apiOnlyNoPath refuses it by name (the api-only set plans generic only, so only this reaches it)", () => {
-    expect(apiOnlyNoPath("group_only", "generic")).toEqual({ wave: "W5", reason: "no organiser control builds group_only" });
-    expect(() => apiOnlyNoPath("group_only", "badminton")).toThrow(TemplateReachable);
+    // B4 merge: super-groups reaches generic's group_group_ko now (X-BD-3), so generic is refused too; the positive pair is a sport
+    // no card reaches (the any-sport card reaches engine sports only).
+    expect(apiOnlyNoPath("group_group_ko", "no-such-sport")).toEqual({ wave: "W5", reason: "no organiser control builds group_group_ko" });
+    expect(() => apiOnlyNoPath("group_group_ko", "generic")).toThrow(/super-groups/);
     expect(() => apiOnlyNoPath("group_group_ko", "cricket")).toThrow(/t20-super8/);
   });
 
@@ -456,6 +479,8 @@ describe("the layered sets", () => {
     ];
     let checked = 0;
     for (const [name, cases] of plans) {
+      // B4 merge: the api-only set is empty since W5 T14 + X-BD-3 (no API-only row lacks a control on generic) - its empty case.
+      if (name === "api-only") { expect(cases, name).toHaveLength(0); continue; }
       expect(cases.length, name).toBeGreaterThan(0);
       expect(new Set(cases.map(layerCaseId)).size, name).toBe(cases.length);
       checked += cases.length;

@@ -295,12 +295,8 @@ export const FixtureState = z.object({
     ),
 });
 
-export const StandingsRowOut = z.object({
-  entrantId: z.string(),
-  rank: z.number().int(),
-  played: z.number().optional(),
-  points: z.number().optional(),
-});
+// (W5 T22, ST-G23: the unused `StandingsRowOut` that stood here - rank a required int, no W/D/L, no metrics - is gone. The standings
+// wire row is `StandingsRow` in ./stages.ts, the one the OpenAPI document and both routes' tests read.)
 
 // ---------------------------------------------------------------------------
 // API keys

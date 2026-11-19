@@ -35,6 +35,7 @@ import { deriveHubTabs } from "../../lib/matches-hub.ts";
 import { SWISS_ROUND_STATES } from "../../lib/swiss-round-state-names.ts";
 // The camera-policy vocabulary, from its import-free leaf (same `.ts`-extension reason as above).
 import { CAMERA_POLICIES } from "../../lib/camera-policy.ts";
+import { DEPARTED_STATUS_KEYS } from "../../lib/departed-status-keys.ts";
 
 /** The three lists the Matches hub can show. Restated here as zod because
  *  `lib/matches-hub.ts` — which owns the same vocabulary as a client-safe
@@ -189,6 +190,11 @@ export const HubMatch = z.object({
    *  Optional because a hub document cached before the field existed (Redis
    *  15s, ISR 30s) reaches the client without it — absent reads as "no bye". */
   byeSides: z.tuple([z.boolean(), z.boolean()]).optional(),
+  /** W5 T23 (RB5-W2; B5 merge finding, owner "fix now"): a withdrawal under half EXPUNGED this match (`PublicFixture.expunged`): it
+   *  will not be played and any result it had no longer counts. The card says so as the public schedule does (27eddf373f): both
+   *  names struck, no time and no score, "Abandoned" in the status slot — never "Ended". Optional: a document cached before the
+   *  field existed reads as not expunged. */
+  expunged: z.boolean().optional(),
   /** W2b Task 13 (UI-2 option A): a credited result's short tag ("w/o", "ret.", "2× w/o", "Aband. · DLS") and the
    *  full sentence that is its tooltip and accessible name, pre-resolved in the org's locale by `hubForfeit`
    *  (lib/forfeit-tag.ts is the one reader). `kind` is the reader's own (`ForfeitTagKind`). Null for a played result
@@ -280,6 +286,11 @@ export const TableRow = z.object({
    *  because a hub document cached before the field existed (Redis 15s, ISR 30s) reaches the client without it - absent reads
    *  as "nothing to mark", as `cellNotes` above does. */
   markers: z.array(RowMarkerView).optional(),
+  /** W5 T20 (ST-G20): the entrant has left the field - `withdrawn` or `disqualified` (the table's one departed vocabulary,
+   *  `DEPARTED_STATUS_KEYS`) - so the row wears its chip. Only a departed row carries the key; absent = still competing, and a hub
+   *  document cached before the field existed (Redis 15s, ISR 30s) reaches the client without it, as `markers` above does. The
+   *  chip's WORD is the client's (`table.withdrawn` / `table.disqualified` in the page's dictionary), not a string on the wire. */
+  status: z.enum(DEPARTED_STATUS_KEYS).optional(),
 });
 /** W3 T16 (SW-L11): where a Swiss stage stands - `swissRoundState`'s verdict, published as data (the renderer fills the
  *  sentence from the org's dictionary, `swissRoundKey`). `of` is the stage's CURRENT round count. */
@@ -302,6 +313,10 @@ export const TableView = z.object({
    *  nothing paired yet. Optional because a hub document cached before the field existed (Redis 15s, ISR 30s) reaches
    *  the client without it - absent reads as "no chip", as `TableRow.cellNotes` does. */
   swissRound: SwissRoundView.nullable().optional(),
+  /** W5 T8 (RB5-W7; owner R24 pick 11 A): one resolved line per departed entrant of this table, naming the rule its departure
+   *  applied ("P1 (withdrawn):" + "left after 2 of 5, ..."), in the org's language. Optional for the same cached-document
+   *  reason as `swissRound`: absent reads as "no note". Empty for a table nobody left. */
+  withdrawalNotes: z.array(z.object({ entrantId: z.string(), lead: z.string(), body: z.string() })).optional(),
   updatedAt: z.string(),
   fullHref: z.string(),
 });
@@ -478,6 +493,16 @@ export const HubInfo = z.object({
  * comment. The trade was made deliberately: enforcing the tab invariant is
  * worth more than schema-surgery ergonomics.
  */
+/** W5 T14b (owner 2026-11-18): the pool winners of ONE finished multi-pool Groups only division, pools in display order. `label` is
+ *  the pool's name in the org's locale (`poolLabel`); `name` is the winner's (already masked), null for a pool with no single winner
+ *  (a tie its cascade could not settle). Only a division that has them is listed, and the one champion stays null for it. */
+export const HubPoolWinners = z.object({
+  divisionId: z.string(),
+  divisionSlug: z.string(),
+  pools: z.array(z.object({ poolId: z.string(), label: z.string(), entrantId: z.string().nullable(), name: z.string().nullable() })).min(2),
+});
+export type HubPoolWinnersT = z.infer<typeof HubPoolWinners>;
+
 export const CompetitionHubDoc = z.object({
   competitionId: z.string(),
   orgSlug: z.string(),
@@ -495,6 +520,10 @@ export const CompetitionHubDoc = z.object({
   tables: z.array(TableView),
   /** One per bracket stage with fixtures, division order then stage `seq`. */
   knockouts: z.array(KnockoutView),
+  /** W5 T14b: each finished multi-pool Groups only division's pool winners, in division order. OPTIONAL, for the reason
+   *  `HubDivision.description` is: the hub API answers from an edge cache, so a new bundle can read a document built before the
+   *  field existed; absent reads as "no pool winners". */
+  poolWinners: z.array(HubPoolWinners).optional(),
   leaders: z.array(LeaderBoard),
   teams: z.array(TeamCard),
   info: HubInfo,

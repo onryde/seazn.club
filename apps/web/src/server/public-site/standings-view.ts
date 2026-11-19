@@ -50,6 +50,8 @@ import type { SwissRoundState } from "@/lib/swiss-round-state";
 import type { RowMarkerT, TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 import type { SwissRowFacts } from "./swiss-row-facts";
+import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
+import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
 
 /** The columns a phone shows without asking: played, won, lost, points.
  *  Everything else — draws, the sport's own metrics, the cascade's derived
@@ -609,6 +611,13 @@ export interface TableViewInput {
   /** The stage's kind (`stages.kind`): "swiss" spells the Swiss ladders in the table's points format (`tableLayoutFor`). Absent
    *  or any other kind: the engine's text. */
   stageKind?: string;
+  /** W5 T8 (RB5-W7): THIS table's departure notes (`withdrawalNotesFor`), resolved here in the org's language like every
+   *  other string the builder emits. Absent or empty: the view carries none. */
+  withdrawalNotes?: readonly WithdrawalNote[];
+  /** W5 T20 (ST-G20, X-SF-1): EVERY entrant's own `status` (`entrant_id` -> status), as `StandingsTable`'s `entrantStatuses` is - not a
+   *  pre-filtered list of the departed. Which statuses count as left is decided once, by `DEPARTED_STATUS_CHIPS`; a departed row's
+   *  view carries `status` and the client prints its chip. Absent or all-competing: no row carries the key. */
+  statuses?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -626,11 +635,20 @@ export function rowMarkers(
   if (facts.joinedRound !== null) {
     const last = facts.joinedRound - 1;
     const missed = last <= 1 ? "1" : `1\u2013${last}`;
-    out.push({
-      kind: "late",
-      text: msg("table.marker.late", { round: facts.joinedRound }),
-      title: msg("table.marker.lateTitle", { round: facts.joinedRound, missed }),
-    });
+    // W5 T5b (X-CU-10, owner R24 pick 2 A): a round-robin late entrant's rounds are caught up, not unplayed - its own words.
+    out.push(
+      facts.catchUp === true
+        ? {
+            kind: "late",
+            text: msg("table.marker.joined", { round: facts.joinedRound }),
+            title: msg("table.marker.joinedTitle", { round: facts.joinedRound }),
+          }
+        : {
+            kind: "late",
+            text: msg("table.marker.late", { round: facts.joinedRound }),
+            title: msg("table.marker.lateTitle", { round: facts.joinedRound, missed }),
+          },
+    );
   }
   if (facts.byeRounds.length > 0) {
     const rounds = facts.byeRounds.join("/");
@@ -653,6 +671,13 @@ export function buildTableView(input: TableViewInput): TableViewT {
   const markersOf = (entrantId: string): { markers?: RowMarkerT[] } => {
     const markers = rowMarkers(input.swissFacts?.[entrantId], input.msg);
     return markers.length > 0 ? { markers } : {};
+  };
+
+  // W5 T20: only a DEPARTED row carries a status (a cached document and a competing row are one shape: the key absent). `Object.hasOwn`
+  // so an entrant id that happens to spell a prototype key never reads one; an unknown or competing status is not a chip.
+  const statusOf = (entrantId: string): { status?: DepartedStatus } => {
+    const s = input.statuses !== undefined && Object.hasOwn(input.statuses, entrantId) ? input.statuses[entrantId] : undefined;
+    return s !== undefined && Object.hasOwn(DEPARTED_STATUS_CHIPS, s) ? { status: s as DepartedStatus } : {};
   };
 
   return {
@@ -689,8 +714,13 @@ export function buildTableView(input: TableViewInput): TableViewT {
       champion: !level && input.championIds.includes(r.entrantId),
       // Only a marked row carries the key (a cached document and a plain table are one shape: absent = nothing to mark).
       ...markersOf(r.entrantId),
+      ...statusOf(r.entrantId),
     })),
     qualification: qual?.table ?? null,
     swissRound: input.swissRound ?? null,
+    // Only a table someone left carries the key (absent = no note, as a cached document reads it).
+    ...((input.withdrawalNotes ?? []).length > 0
+      ? { withdrawalNotes: input.withdrawalNotes!.map((n) => withdrawalNoteText(n, input.msg)) }
+      : {}),
   };
 }

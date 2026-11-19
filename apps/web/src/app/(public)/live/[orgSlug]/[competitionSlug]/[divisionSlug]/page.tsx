@@ -10,7 +10,9 @@ import { tableOrderOf } from "@/server/engine-db/table-rules";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { getPublicDivision } from "@/server/public-site/data";
 import { DivisionTitleBanner } from "@/components/public-site/division-title-banner";
-import { BRACKET_KINDS, divisionTitle } from "@/server/public-site/champion";
+import { BRACKET_KINDS, divisionTitle, poolWinnersOf } from "@/server/public-site/champion";
+import { poolWinnerLines } from "@/server/public-site/pool-winners";
+import { PoolWinnersBanner } from "@/components/public-site/pool-winners-banner";
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { sharedRenameTarget } from "@/server/slug-resolve";
 import { publicThemeStyle } from "@/lib/public-theme";
@@ -20,11 +22,13 @@ import { ShareButton } from "@/components/share-button";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { Tabs } from "@/components/public-site/tabs";
 import { Schedule } from "@/components/public-site/schedule";
-import { publicScheduleCopy, publicWatchCopy } from "@/server/public-site/schedule-copy";
+import { publicScheduleCopy, publicSitsOutLines, publicWatchCopy } from "@/server/public-site/schedule-copy";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
 import { loadDivisionWatch } from "@/server/usecases/external-play-read";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { swissRowFactsFor } from "@/server/public-site/swiss-row-facts";
+import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
+import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
 import { ResultsMatrix } from "@/components/public-site/results-matrix";
@@ -33,7 +37,7 @@ import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { playerLinkId } from "@/lib/name-display";
 import { byPoolOrder } from "@/lib/pool-order";
-import { poolLabel } from "@/lib/pool-label";
+import { poolNaming, poolCaption } from "@/lib/pool-label";
 import { toLocale } from "@/lib/i18n-constants";
 import { getDictionary, t } from "@/lib/i18n";
 import { forfeitCopyOf } from "@/lib/forfeit-tag";
@@ -119,6 +123,10 @@ export default async function DivisionHomePage({ params }: Props) {
   // `inTheField` filter on the entrants tab below: this page now holds
   // EVERYONE, and each consumer says which question it is asking.
   const entrantStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
+  // W5 T5b (X-CU-10): a late entrant's "Joined round N" while her catch-up lines remain (no read when the division has none).
+  const lateJoins = await loadRrLateJoins(division.id, fixtures);
+  // W5 T8 (RB5-W7): the league/group departure notes under each table.
+  const tableWithdrawals = await loadTableWithdrawals(division.id);
   // Badge chips (v3/03 §5 + PROMPT-60): the entrant's own badge_url wins,
   // then team → club logo resolved by the view.
   const entrantLogos = Object.fromEntries(
@@ -133,7 +141,7 @@ export default async function DivisionHomePage({ params }: Props) {
   const basePath = routes.publicHub(org.slug, competition.slug, division.slug);
   // A pool is named from its KEY in the org's locale, never by its stored
   // English name (`lib/pool-label.ts`).
-  const poolKey = new Map(pools.map((p) => [p.id, p.key]));
+  const poolKey = poolNaming(pools);
   const stageById = new Map(stages.map((s) => [s.id, s]));
 
   // P6 fix round 1, finding #2 (CRITICAL): slot-label copy for a spectator
@@ -249,13 +257,17 @@ export default async function DivisionHomePage({ params }: Props) {
   // Both rules live in that file — the competition hub crowns the same entrants
   // on every table and in its knockout view, and two copies would be two
   // crowns that agree only until one of them moves.
-  const title = divisionTitle(stages, fixtures, standings);
+  // The pool list is handed in so a stage is counted by the pools it was CONFIGURED with, not by the tables written so far.
+  const title = divisionTitle(stages, fixtures, standings, pools);
   const nameOf = (id: string) => entrantNames[id] ?? "—";
 
   // Rendered at the very top of the division page (above the tabs) so the
   // winner is visible on Schedule/Standings/Entrants alike — v1 parity.
   // R24 pick 3A: "Joint winners: X and Y" under ONE trophy; "Title vacant" is a muted line, with no trophy.
   const championBanner = <DivisionTitleBanner title={title} nameOf={nameOf} dict={dict} />;
+  // W5 T14b (owner 2026-11-18): a finished Groups only division of several pools has no champion, and names each pool's winner
+  // where the champion banner sits (`poolWinnersOf` - null for every other shape, so the two never show together).
+  const poolWinnersBanner = <PoolWinnersBanner lines={poolWinnerLines(poolWinnersOf(stages, fixtures, standings, pools), dict, nameOf)} dict={dict} />;
 
   const standingsPanel = (
     <div className="space-y-8">
@@ -323,15 +335,12 @@ export default async function DivisionHomePage({ params }: Props) {
                     entrantNames={entrantNames}
                     entrantLogos={entrantLogos}
                     entrantStatuses={entrantStatuses}
-                    caption={
-                      snap.pool_id
-                        ? `${stage.name} — ${poolLabel(dict, poolKey.get(snap.pool_id))}`
-                        : stage.name
-                    }
+                    caption={poolCaption(dict, stage.name, snap.pool_id, poolKey)}
                     dict={dict}
                     qualification={qualification}
                     rules={stage.table_rules}
-                    swissFacts={swissRowFactsFor(stage, fixtures, snap.rows as StandingsRow[])}
+                    swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
+                    withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, snap.pool_id ?? null)}
                     stageKind={stage.kind}
                     locale={orgLocale}
                     tz={tz}
@@ -523,6 +532,7 @@ export default async function DivisionHomePage({ params }: Props) {
         </p>
 
         {championBanner}
+        {poolWinnersBanner}
 
         {division.description ? (
           <section className="mb-6">
@@ -557,6 +567,7 @@ export default async function DivisionHomePage({ params }: Props) {
               roundLabels={roundLabels}
               stageOrder={stageOrder}
               stageNames={stageNames}
+              sitsOut={publicSitsOutLines(dict, stages, entrantNames, entrantStatuses)}
               copy={scheduleCopy}
               locale={orgLocale}
               {...(watch ? { watch } : {})}

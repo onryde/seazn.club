@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { classifyActError, generatePreconditionMessage, matchNamerFor } from "@/components/v2/stages-panel";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg } from "@/lib/messages";
+import { t as tRuntime } from "@/lib/i18n-runtime";
+import type { Dict } from "@/lib/i18n-constants";
+import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 
 // Regression (design/fix-ui/03-console-division.md "Group-stage 'Générer les
 // matchs' gives a misleading success message when it generates nothing"): a
@@ -29,6 +35,86 @@ describe("generatePreconditionMessage — StagesPanel generate-click classifier"
     expect(text).toContain("8");
     expect(text).toContain("2");
     expect(text).not.toBe(msg("schedule.notice.nothingNew"));
+  });
+
+  // W5 T12 (X-BD-1, PO-1): the refusal names the pool count that works, in the reader's language - or says to add entrants when none does.
+  it("names the group count that works when the server sends one, in every locale, and says to add entrants when none does", () => {
+    const send = (suggested: number | null) =>
+      new ApiV1Error("not enough entrants", 422, "STAGE_NOT_READY", { reason: "group_too_few_entrants", groups: 4, entrants: 7, required: 8, suggested });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      // RB5-E4: floor(7/3)=2, so 3 groups work; the numbers 4, 8 and 7 stay in the sentence.
+      const named = generatePreconditionMessage(send(3), say)!;
+      expect(named, locale).toMatch(/\b3\b/);
+      expect(named, `${locale}: carries 4, 8 and 7`).toMatch(/\b4\b[\s\S]*\b8\b[\s\S]*\b7\b/);
+      expect(named, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      const none = generatePreconditionMessage(send(null), say)!;
+      expect(none, `${locale}: no count offered when none works`).not.toMatch(/\b3\b/);
+      expect(none, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      expect(none, locale).not.toBe(named);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // T12 review m-1: a suggestion under the pools bound (one pool is a League) is no suggestion - "set groups to 1" was the wrong advice.
+  it("a suggested count of 1 says to add entrants, exactly as null does, in every locale", () => {
+    const send = (suggested: number | null) =>
+      new ApiV1Error("not enough entrants", 422, "STAGE_NOT_READY", { reason: "group_too_few_entrants", groups: 2, entrants: 3, required: 4, suggested });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      expect(generatePreconditionMessage(send(1), say), locale).toBe(generatePreconditionMessage(send(null), say));
+      expect(generatePreconditionMessage(send(1), say), locale).not.toBe(generatePreconditionMessage(send(2), say));
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  // W5 T12b (X-BD-8): Generate before Start, or the completion whose seeding tripped, is refused for a cut the field cannot supply: said in
+  // the reader's language with both numbers, amber, and the board refreshes (the completion stood).
+  // B4 fix wave (12b m1): a setup-timing completion whose proposal trips the cut arrives WRAPPED (the stage completed): the organiser
+  // reads the cut's own sentence inside the "completed, but" line, in her language - never the server's English reason.
+  // differential: today the wrap's `{reason}` is the server's English message.
+  it("STAGE_COMPLETED_SEEDING_FAILED caused by RR_CUT_EXCEEDS_FIELD says the cut's sentence in every locale; another cause keeps the reason", () => {
+    const wire = "7 can't qualify from this field: it can supply at most 6.";
+    const err = new ApiV1Error(wire, 409, "STAGE_COMPLETED_SEEDING_FAILED", { cause: "RR_CUT_EXCEEDS_FIELD", qualified: 7, max: 6, reason: "bestnth_unsuppliable", stageId: "s1", nextStageId: "s2" });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      const out = classifyActError(err, say, "en");
+      const cutSentence = tRuntime(dict, "roundrobin.refusal.RR_CUT_EXCEEDS_FIELD", { qualified: 7, max: 6 });
+      expect(out, locale).toEqual({ tone: "warning", refresh: true, text: tRuntime(dict, "schedule.error.completedSeedingFailed", { reason: cutSentence }) });
+      if (locale !== "en") expect(out.text, `${locale}: not the server's English`).not.toContain(wire);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    // the pair: a wrap with no named cause keeps the server's reason, as before
+    const plain = new ApiV1Error("boom", 409, "STAGE_COMPLETED_SEEDING_FAILED", { stageId: "s1", nextStageId: "s2" });
+    expect(classifyActError(plain, msg, "en").text).toContain("boom");
+  });
+
+  it("RR_CUT_EXCEEDS_FIELD is said in every locale with its two numbers, never the server's English", () => {
+    const wire = "8 can't qualify from this field: it can supply at most 6.";
+    const err = new ApiV1Error(wire, 422, "RR_CUT_EXCEEDS_FIELD", { qualified: 8, max: 6, reason: "cut_exceeds_field", stageId: "s2" });
+    const dicts: Record<string, Dict> = { en: en as Dict, es: es as Dict, fr: fr as Dict, nl: nl as Dict };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const say = ((key: string, vars?: Record<string, string | number>) => tRuntime(dict, key, vars)) as typeof msg;
+      const out = classifyActError(err, say, "en");
+      expect(out.tone, locale).toBe("warning");
+      expect(out.refresh, `${locale}: the board is re-read`).toBe(true);
+      expect(out.text, `${locale}: both numbers`).toMatch(/\b8\b[\s\S]*\b6\b/);
+      expect(out.text, `${locale}: no unfilled placeholder`).not.toMatch(/\{\w+\}/);
+      if (locale === "en") expect(out.text).toBe(wire);
+      else expect(out.text, `${locale}: not the server's English`).not.toBe(wire);
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 
   // F2a (P7 follow-up): the seeded-path analogue — a `.seeding` group stage

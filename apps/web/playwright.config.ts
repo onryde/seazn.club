@@ -31,7 +31,7 @@ const AUTH_STATE = "e2e/.auth/pro.json";
 const SERIAL_SPECS =
   /(journey-pro|journey-community|org-management|billing|billing-states|billing-groups|billing-groups-journey|members-roles|scorer|device-links|division-delete|pricing-v3|player-accounts|fixture-config-snapshot|public-dashboards)\.spec\.ts/;
 
-// --- how e2e.yml splits the `parallel` project across five jobs -------------
+// --- how e2e.yml splits the `parallel` project across six jobs -------------
 //
 // Playwright's own `--shard` splits by TEST COUNT over a CONTIGUOUS run of
 // test groups in file order (`filterForShard` in the runner: it sums
@@ -50,7 +50,8 @@ const SERIAL_SPECS =
 // E2E_PARALLEL_SLICE moves the expensive files into a leg of their own and
 // lets the others shard the remainder:
 //   "heavy"  -> only PARALLEL_HEAVY
-//   "rest"   -> everything except PARALLEL_HEAVY, then --shard=N/4
+//   "mid"    -> only PARALLEL_MID (added 2026-11-19, see its comment below)
+//   "rest"   -> everything except PARALLEL_HEAVY and PARALLEL_MID, then --shard=N/4
 //   unset    -> the whole project, unchanged — every local run, and
 //               `npm run test:e2e`, take this path
 //
@@ -139,6 +140,19 @@ const SERIAL_SPECS =
 // and proves every file named here is real — a typo would otherwise give the
 // heavy leg fewer tests than it thinks and go green while they run nowhere.
 const PARALLEL_HEAVY = /(scorepad-v3-cricket|marketing-ai-demo|board-v3|online-chess-desk|overlay-gallery|player-stats-stale-version)\.spec\.ts/;
+// THE "mid" LEG, 2026-11-19. W5 PR #1262 (run 44526752695, attempts 1 and 2) had rest 2/4 CANCELLED at the 20-minute cap with
+// every test green: it reached test 370/376 at 20m18s. Playwright shards by COUNT, so all four legs held 374-376 tests, and
+// the cost was 454s / 1024+s / 587s / 571s of step (job 600s / >1200s / 753s / 716s; setup ~170s). Attributing each start-to-
+// next-start gap to the file that started it (the method above) puts 2/4's 1024s in four files: match-room 263s (53 tests),
+// overlay-compositor 229s (16), marketing-product 108s, quick-match-home 105s. A fifth count shard does NOT fix that: the same
+// replay (it reproduced 454 / 1013 / 593 / 571 as 464 / 1013 / 593 / 571, and the real `--shard=2/5` listing's 819s) puts
+// match-room and overlay-compositor together again, 819s / ~16.5-min job; /6 is 753s, /7 714s, /8 531s. Count shards cannot be
+// told where two files that cost a quarter of the project each sit — only a named carve-out can. So match-room and
+// overlay-compositor leave "rest" for a leg of their own: replayed step 492s (job ~11.3 min), and rest, still four-way, becomes
+// 441 / 584 / 570 / 553s (job ~12.8 min at worst). `parallel heavy` is untouched at 676s of step / 856s of job.
+// overlay-compositor-e2e-wiring.test.ts pins that this spec runs in an e2e-parallel leg that starts the composed-session
+// server; every e2e-parallel leg shares that one Start server step, so "mid" satisfies it as "rest" did.
+const PARALLEL_MID = /(match-room|overlay-compositor)\.spec\.ts/;
 const PARALLEL_SLICE = process.env.E2E_PARALLEL_SLICE;
 
 // --- the walkthrough leg ---------------------------------------------------
@@ -260,12 +274,13 @@ export default defineConfig({
       // "rest" slices leave the key ABSENT and keep Playwright's default
       // testMatch, instead of handing it an explicit undefined.
       ...(PARALLEL_SLICE === "heavy" ? { testMatch: PARALLEL_HEAVY } : {}),
+      ...(PARALLEL_SLICE === "mid" ? { testMatch: PARALLEL_MID } : {}),
       testIgnore: [
         SERIAL_SPECS,
         MOBILE_SPECS,
         // The walkthrough leg runs these; without this they would run TWICE.
         WALKTHROUGH,
-        ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY] : []),
+        ...(PARALLEL_SLICE === "rest" ? [PARALLEL_HEAVY, PARALLEL_MID] : []),
       ],
       use: { ...devices["Desktop Chrome"], storageState: AUTH_STATE },
       dependencies: ["setup"],

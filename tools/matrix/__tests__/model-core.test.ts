@@ -19,7 +19,7 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { engineFixtureStatus } from "../../../apps/web/src/lib/fixture-engine-status.ts";
 import { KNOCKOUT_REFUSALS } from "../../../apps/web/src/lib/knockout-refusals.ts";
-import { ROOT_KNOCKOUT_KINDS } from "../../../apps/web/src/lib/open-entry-stages.ts";
+import { ROOT_KNOCKOUT_KINDS, TABLE_STAGE_KINDS } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { resolvePositions, validateLineup } from "@seazn/engine/sport";
 import { BUILDER_DEFAULT_KNOBS, ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey, type StagePostBody } from "../lib/catalogue.ts";
 import { RefusedCall, RequestTimedOut, nextMatchFixtureId, type EntrantInput, type EntrantRow, type FixtureRow, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type StartOut, type WithdrawOut } from "../lib/driver/types.ts";
@@ -31,7 +31,7 @@ import { foldLedger, liveEntries, type LedgerEntry } from "../lib/model/ledger-f
 import {
   LINEUP_LOCKED_FINDING, LINEUP_SIDE_SIZE_FINDING, LINEUP_WARNED_CHECK, LINEUPS_CHECK, MODEL_FAMILY_ROUTE, ModelUnsupported,
   NEXT_MATCH_CHECK, NEXT_MATCH_LOCK, NEXT_MATCH_UNHELD_FINDING, ORIENTATION_CHECK, ORIENTATION_STAGE_KINDS, REFUSAL_NAMED, ROSTER_LOCK, ROSTER_LOCK_CHECK, ROSTER_LOCK_FINDING, UNEXPECTED_REFUSAL, VACUITY_CHECK, VOID_STATUSES,
-  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelHoldsRootKnockout, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
+  absorbFixtures, ensureModelLineups, fedCandidates, fedMatchStarted, informativeSteps, modelHoldsRootKnockout, modelHoldsRootTable, modelRowRefusal, orientationBound, rosterLocked, type FixtureModel,
 } from "../lib/model/state.ts";
 import { PENDING_STATUSES, TERMINAL_STATUSES, isNamedRefusal, sameOutcome, toObservedOutcome } from "../lib/observed.ts";
 import { NotAWave } from "../lib/routing.ts";
@@ -78,11 +78,32 @@ async function fresh(opts: ModelFakeOpts = {}, over: Setup = {}, driver?: ModelF
 /** A hand-written command sequence: each step must be runnable, then runs. */
 async function play(m: ModelState, d: ModelFakeDriver, steps: [CommandKind, number, number?][], fences = true): Promise<void> {
   for (const [kind, k, w] of steps) {
-    const c = commandOf(kind, k, w ?? 0, fences);
-    expect(c.check(m), `${kind} should be runnable`).toBe(true);
-    await c.run(m, d);
+    // W5 T4 (X-CU-9): after Start the product keeps a ROOT league or group's list open (its late-entry door answers) and the
+    // model does not offer the add there. The roster-lock command these sequences exercise therefore runs against a
+    // closed-field kind (double_elim: no root table, Swiss, knockout or open format), swapped in for that one step and put
+    // back, so every later step still runs the league the cell is about.
+    const closed = kind === "AddEntrant" && m.started && modelHoldsRootTable(m);
+    const was = { model: m.stageKind, fake: d.stage?.kind };
+    // `stageKind` is read-only to the model's own code; this one test seam swaps it for a step and puts it back.
+    const writable = m as { stageKind: string };
+    if (closed) {
+      writable.stageKind = CLOSED_FIELD_KIND;
+      if (d.stage !== null) d.stage.kind = CLOSED_FIELD_KIND;
+    }
+    try {
+      const c = commandOf(kind, k, w ?? 0, fences);
+      expect(c.check(m), `${kind} should be runnable`).toBe(true);
+      await c.run(m, d);
+    } finally {
+      if (closed) {
+        writable.stageKind = was.model;
+        if (d.stage !== null && was.fake !== undefined) d.stage.kind = was.fake;
+      }
+    }
   }
 }
+/** A stage kind no exemption of entrants.ts's roster lock reads: not an open-window format, a root Swiss, knockout or table. */
+const CLOSED_FIELD_KIND = "double_elim";
 const violation = async (p: Promise<unknown>): Promise<ModelViolation> => {
   const e = await p.then(() => null, (x: unknown) => x);
   expect(e).toBeInstanceOf(ModelViolation);
@@ -226,8 +247,9 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     expect([...ROSTER_LOCK.openKinds]).toEqual(lock.openKinds);
     expect(ROSTER_LOCK.rootSwiss, "W3 ruling 250: a root Swiss exempts the division (hasRootSwissStage)").toBe(lock.rootSwiss);
     expect(ROSTER_LOCK.rootKnockout, "W4 T9 (X-LE-1): a root knockout exempts the division (hasRootKnockoutStage)").toBe(lock.rootKnockout);
-    // Anti-vacuity: the text really carries both exemptions, so the two equalities above are not null == null.
-    expect([lock.rootSwiss, lock.rootKnockout]).toEqual([true, true]);
+    expect(ROSTER_LOCK.rootTable, "W5 T4 (X-CU-9): a root league or group exempts the division (hasRootTableStage)").toBe(lock.rootTable);
+    // Anti-vacuity: the text really carries all three exemptions, so the equalities above are not null == null.
+    expect([lock.rootSwiss, lock.rootKnockout, lock.rootTable]).toEqual([true, true, true]);
     expect(ROSTER_LOCK.status).toBe(lock.status);
     expect(lock.openKinds.length).toBeGreaterThan(0);
     // RR-2 tripwire: without it, a product fix silently moves the finding count to 0 and the register never hears.
@@ -312,7 +334,7 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     const { m, d } = await fresh();
     await play(m, d, [["Start", 0]]);
     const at = (over: Partial<ModelState>) => rosterLocked({ ...m, ...over });
-    expect(at({}), "premise: a started league is locked").toBe(true);
+    expect(at({ stageKind: CLOSED_FIELD_KIND }), "premise: a started closed-field stage is locked").toBe(true);
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 } }), "a running root Swiss").toBe(false);
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3 }, completed: true }), "a complete Swiss").toBe(true);
     expect(at({ stageKind: "swiss", stageConfig: { rounds: 3, qualified: [] } }), "a Swiss seeded by a cut is not a root Swiss").toBe(true);
@@ -340,8 +362,9 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     expect(modelHoldsRootKnockout(fed)).toBe(false);
     expect(rosterLocked(fed)).toBe(true);
     expect(commandOf("AddEntrant", 0, 0, true).check(fed)).toBe(true);
-    // A league, a double elimination and a complete Swiss stay locked, and the add stays offered (to be refused).
-    for (const kind of ["league", "double_elim"]) {
+    // A double elimination stays locked, and the add stays offered (to be refused). (A league is a root TABLE since W5 T4:
+    // its own test below.)
+    for (const kind of ["double_elim"]) {
       expect(ROOT_KNOCKOUT_KINDS, `premise: ${kind} is no root knockout kind`).not.toContain(kind);
       const s = at({ stageKind: kind });
       expect(modelHoldsRootKnockout(s), kind).toBe(false);
@@ -355,6 +378,44 @@ describe("the roster lock after Start (entrants.ts) — an EXPECTED refusal, nev
     await play(m, d, [["Start", 0]]);
     if (d.stage === null) throw new Error("test: no stage");
     d.stage.kind = "knockout";
+    const before = (await d.listEntrants()).length;
+    await expect(d.addEntrants(m.divisionId, [{ displayName: "Late Player", seed: 99, kind: "individual" }])).rejects.toThrow(/late-entry door/);
+    expect((await d.listEntrants()).length, "the refused add changed nothing").toBe(before);
+    expect(before).toBeGreaterThan(0);
+  });
+});
+
+describe("W5 T4 (X-CU-9): a started ROOT league or group is not roster-locked", () => {
+  it("is not locked, is not offered the add, and the fake refuses loudly if a test posts one; fed, closed and unstarted stages are unchanged", async () => {
+    // single-sport: the lock reads stage kinds and the stage's state, not a sport.
+    const { m, d } = await fresh();
+    await play(m, d, [["Start", 0]]);
+    const at = (over: Partial<ModelState>) => ({ ...m, ...over });
+    // The product's own list of table kinds, not a copy of it.
+    expect(TABLE_STAGE_KINDS.length, "anti-vacuity: the product declares table kinds").toBeGreaterThan(0);
+    let checked = 0;
+    for (const kind of TABLE_STAGE_KINDS) {
+      const s = at({ stageKind: kind });
+      expect(modelHoldsRootTable(s), kind).toBe(true);
+      expect(rosterLocked(s), `${kind}: a started root table is not roster-locked`).toBe(false);
+      expect(commandOf("AddEntrant", 0, 0, true).check(s), `${kind}: the model does not offer the add (late-entry outcomes are not modelled)`).toBe(false);
+      expect(rosterLocked(at({ stageKind: kind, started: false })), `${kind}: before Start nothing is locked`).toBe(false);
+      // Before Start the add is the ordinary one: offered.
+      expect(commandOf("AddEntrant", 0, 0, true).check(at({ stageKind: kind, started: false })), `${kind}: before Start`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(TABLE_STAGE_KINDS.length);
+    // A table seeded by a cut (X-LE-2's reading for tables) is not a root: locked, and offered to be refused.
+    const fed = at({ stageKind: "league", stageConfig: { qualified: [] } });
+    expect(modelHoldsRootTable(fed)).toBe(false);
+    expect(rosterLocked(fed)).toBe(true);
+    expect(commandOf("AddEntrant", 0, 0, true).check(fed)).toBe(true);
+    // A closed-field kind is no table: locked, and the add is offered.
+    expect(TABLE_STAGE_KINDS).not.toContain(CLOSED_FIELD_KIND);
+    expect(modelHoldsRootTable(at({ stageKind: CLOSED_FIELD_KIND }))).toBe(false);
+    expect(rosterLocked(at({ stageKind: CLOSED_FIELD_KIND }))).toBe(true);
+    // The fake: loud, not a seatless entrant.
+    if (d.stage === null) throw new Error("test: no stage");
     const before = (await d.listEntrants()).length;
     await expect(d.addEntrants(m.divisionId, [{ displayName: "Late Player", seed: 99, kind: "individual" }])).rejects.toThrow(/late-entry door/);
     expect((await d.listEntrants()).length, "the refused add changed nothing").toBe(before);
@@ -387,16 +448,32 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
     expect((await d.generate()).created).toBeGreaterThan(0);
     expect((await d.generate()).created).toBe(0);
   });
-  it("with fences ON, Generate is withheld after a late entry — through Start — and the fence is counted", async () => {
+  it("W5 T2 lifted the fence: with fences ON, Generate is offered after a late entry - before Start and after it - and nothing is counted", async () => {
     // single-sport: as above.
     const { m, d } = await fresh({ fault879: true });
     await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);
-    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(false);
+    expect(m.lateEntry).toBe(true);
+    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(true);
     await play(m, d, [["Start", 0]]);
-    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(false);
-    expect(m.fenced.get("late-entry-then-generate")).toBe(2);
-    expect(fenceBlocking(m, "Generate", true)?.issue).toBe("#879");
-    expect(fenceBlocking(m, "Generate", false)).toBeNull();
+    expect(commandOf("Generate", 0, 0, true).check(m)).toBe(true);
+    expect(m.fenced.get("late-entry-then-generate") ?? 0).toBe(0);
+    expect(fenceBlocking(m, "Generate", true)).toBeNull();
+    expect(FENCES.find((f) => f.id === "late-entry-then-generate")?.issue, "still declared, for MB-001's fixed case").toBe("#879");
+  });
+  it("W5 T2: after Start the fake refuses a late-entry Generate by name (RR_GENERATE_AFTER_START) and the model expects exactly that - another code is a violation", async () => {
+    // single-sport: the refusal is sport-blind.
+    const { m, d } = await fresh();
+    await play(m, d, [["Generate", 0], ["AddEntrant", 0], ["Start", 0]], false);
+    expect(m.started).toBe(true);
+    expect(m.lateEntry).toBe(true);
+    const expects = (commandOf("Generate", 0, 0, true) as unknown as { expectsRefusal(x: ModelState): boolean }).expectsRefusal(m);
+    expect(expects).toBe(true);
+    await play(m, d, [["Generate", 0]], false);
+    expect(m.counts.Generate.expected).toBe(1);
+    const other = { generate: () => Promise.reject(new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "STAGE_NOT_READY", "refused")) } as unknown as OrganiserDriver;
+    const out = await commandOf("Generate", 0, 0, true).run({ ...m, counts: structuredClone(m.counts) }, other as never).then(() => null, (x: unknown) => x);
+    expect(out).toBeInstanceOf(ModelViolation);
+    expect((out as ModelViolation).check).toBe("model-expected-refusal");
   });
   it("the late entry clears on the event that resolves it: an accepted Rebuild re-seats the grown field, and Generate is offered again and duplicates nothing", async () => {
     // single-sport: as above.
@@ -424,7 +501,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
     expect(m.counts.Rebuild).toEqual(counts(1, { refused: 1 }));
     expect(m.lateEntry).toBe(true);
   });
-  it("the #879 fence is for the product's round-robin kinds only (schedule.ts ROUND_ROBIN_STAGE_KINDS): a late entry on a swiss stage leaves Generate offered (a knockout's is MB-005's fence, below)", async () => {
+  it("the #879 fence is lifted on every kind, round robins included (schedule.ts ROUND_ROBIN_STAGE_KINDS): a late entry never withholds Generate under its id", async () => {
     // single-sport: the fence reads stage kinds.
     const { m, d } = await fresh();
     await play(m, d, [["Generate", 0], ["AddEntrant", 0]]);
@@ -432,7 +509,7 @@ describe("#879 — roster growth while fixtures exist, BEFORE Start (issue #879;
     let checked = 0;
     for (const stageKind of [...rr, "knockout", "swiss"]) {
       const s: ModelState = { ...m, stageKind };
-      expect(fenceBlocking(s, "Generate", true)?.id === "late-entry-then-generate", stageKind).toBe(rr.includes(stageKind));
+      expect(fenceBlocking(s, "Generate", true)?.id === "late-entry-then-generate", stageKind).toBe(false);
       checked++;
     }
     expect(checked).toBe(rr.length + 2);
@@ -648,7 +725,7 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
     expect(fencedOn, "knockout's case is fixed: nothing open witnesses the fence there").not.toContain("knockout");
     let checked = 0;
     for (const stageKind of [...BRACKET_STAGE_KINDS, "swiss", ...rr]) {
-      const want = rr.includes(stageKind) ? "late-entry-then-generate" : fencedOn.includes(stageKind) ? KO_GEN : null;
+      const want = fencedOn.includes(stageKind) ? KO_GEN : null;
       expect(fenceBlocking({ ...s, stageKind }, "Generate", true)?.id ?? null, stageKind).toBe(want);
       checked++;
     }
@@ -668,7 +745,11 @@ describe("final batch F-1(b), widened by G-1: the bracket fences steer the walk 
       ["not started, added", { ...s, started: false, lateEntry: true }, false],
       ["started, added, no lines", { ...s, lateEntry: true, fixtures: new Map() }, false],
       ["double elim, started, added", { ...s, stageKind: "double_elim", lateEntry: true }, false],
-      ["league, started, added", { ...s, stageKind: "league", lateEntry: true }, false],
+      ["league, started, added (W5 T2: RR_GENERATE_AFTER_START)", { ...s, stageKind: "league", lateEntry: true }, true],
+      ["group, started, added (W5 T2)", { ...s, stageKind: "group", lateEntry: true }, true],
+      ["league, started, withdrawn only", { ...s, stageKind: "league", withdrawn: new Set([e2]) }, false],
+      ["league, not started, added", { ...s, stageKind: "league", started: false, lateEntry: true }, false],
+      ["swiss, started, added", { ...s, stageKind: "swiss", lateEntry: true }, false],
     ];
     let checked = 0;
     for (const [label, m, want] of TABLE) {

@@ -1,4 +1,5 @@
 import "server-only";
+import { reportsRankOverrides } from "@/lib/rank-override";
 // Standings qualification status — the ONE builder behind every standings
 // surface (division page, embed, organiser console, competition hub). Spec
 // docs/superpowers/specs/2026-09-22-standings-qualification-status-design.md
@@ -66,6 +67,8 @@ export interface StageQualMeta {
 /** snake→camel for `stage_qualification_meta`'s columns — the public view row
  *  and the console usecase row both come through here. */
 export function stageQualMeta(row: {
+  /** W5 T13 (RB5-P7): the pins are reported only for a stage that has a table. */
+  kind: string;
   qualify_count: number | null;
   qualify_per_group: boolean | null;
   next_stage_name: string | null;
@@ -79,7 +82,7 @@ export function stageQualMeta(row: {
     nextStageName: row.next_stage_name,
     swissRounds: row.swiss_rounds,
     pointsRule: row.points_rule ?? null,
-    hasRankOverrides: row.has_rank_overrides === true,
+    hasRankOverrides: reportsRankOverrides(row.kind, row.has_rank_overrides),
     // the loader's, set by `divisionQualification` — never a column of the row (T9 review m3)
     tablePointsRule: null,
   };

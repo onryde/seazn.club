@@ -17,7 +17,7 @@
 //
 // Scope (owner 2026-11-09, T26c brief's SCOPE RULING): double_elim belongs to W6 and americano / mexicano / ladder to W7;
 // each is excluded BY KEY with its wave named, and the exclusion's size is pinned so a new template cannot slip into it.
-// A `retired` template is left out by the product's own flag. Combos the builder's size gate refuses (`stageGraphSizeGate`)
+// Combos the builder's size gate refuses (`stageGraphSizeGate`)
 // are not placed - the server's own refusal is asserted to be the gate's named code instead: a root knockout a field of 3
 // cannot fill (ko_plate, qualifying_main) and a page playoff fed by fewer entrants than its size (group_playoffs,
 // swiss_playoff - T26c fix round 1, I1: its "Rank 4" seat could never be filled, yet it got a court and a time).
@@ -99,7 +99,7 @@ const EXCLUDED: Readonly<Record<string, string>> = {
 /** How many keys the exclusion holds. A fifth key is a ruling, not an edit: this pin is what makes it one. */
 const EXCLUDED_COUNT = 4;
 
-const IN_SCOPE = STAGE_TEMPLATES.filter((t) => t.retired !== true && !(t.key in EXCLUDED)).map((t) => t.key);
+const IN_SCOPE = STAGE_TEMPLATES.filter((t) => !(t.key in EXCLUDED)).map((t) => t.key);
 
 /** The fields: a bye semi (3), byes in round 1 (5), no byes (8). */
 const FIELDS = [3, 5, 8] as const;
@@ -646,12 +646,13 @@ describe("the sweep's line-fate oracle (no database)", () => {
     for (const key of Object.keys(EXCLUDED)) {
       const t = STAGE_TEMPLATES.find((x) => x.key === key);
       expect(t, `${key} is a STAGE_TEMPLATES entry`).toBeDefined();
-      expect(t!.retired, `${key} is offered (not retired), so its exclusion is a ruling`).toBeUndefined();
     }
     expect(Object.keys(EXCLUDED), "the excluded keys").toHaveLength(EXCLUDED_COUNT);
-    // The catalogue's size, as a literal (16, retired included): a template added or removed is a scope decision this
-    // sweep must take, not one it absorbs into IN_SCOPE unseen.
-    expect(STAGE_TEMPLATES.map((t) => t.key), "the STAGE_TEMPLATES catalogue, retired included").toHaveLength(16);
+    // The catalogue's size, as a literal (16): a template added or removed is a scope decision this
+    // sweep must take, not one it absorbs into IN_SCOPE unseen. W5 T14 added group_only (a group stage drawn and placed like
+    // groups_ko's first stage): IN SCOPE, so the sweep generates and places it at every field, sport and kind.
+    expect(STAGE_TEMPLATES.map((t) => t.key), "the STAGE_TEMPLATES catalogue").toHaveLength(16);
+    expect(IN_SCOPE, "group_only is swept").toContain("group_only");
     expect(IN_SCOPE.length, "anti-vacuity: templates in scope").toBeGreaterThan(0);
     expect(SPORTS.length, "two or more sports (one per declared default entrant kind)").toBeGreaterThanOrEqual(2);
     expect(new Set(SPORTS.map((s) => s.kind)).size, "the sports differ in entrant model").toBe(SPORTS.length);

@@ -412,7 +412,9 @@ test("publishing, then Start: the confirmation states its four consequences, and
   await expect(
     confirm.getByTestId("start-confirm-consequences").getByRole("listitem"),
   ).toHaveText([
-    L["launch.confirm.entrants"],
+    // W5 T4 (X-CU-9): league_ko's entry stage is a root league, which keeps the list open after Start, so the dialog says
+    // so (it said "Entrant list closes" before).
+    L["launch.confirm.entrantsTable"],
     L["launch.confirm.competition"],
     L["launch.confirm.formatOpen"],
     L["launch.confirm.rules"],
@@ -420,8 +422,8 @@ test("publishing, then Start: the confirmation states its four consequences, and
   // And each conditional line is the one its own testid claims: the two above
   // are rendered only when they are TRUE of this division, so binding the text
   // to the testid is what stops a future reorder from swapping their meanings.
-  await expect(confirm.getByTestId("start-confirm-entrants")).toHaveText(
-    L["launch.confirm.entrants"],
+  await expect(confirm.getByTestId("start-confirm-entrants-table")).toHaveText(
+    L["launch.confirm.entrantsTable"],
   );
   await expect(confirm.getByTestId("start-confirm-competition")).toHaveText(
     L["launch.confirm.competition"],

@@ -246,6 +246,7 @@ const renderSheet = (template: CompetitionTemplate, dict: Dict = enUi as Dict, l
       <TemplateDetailSheet
         orgSlug="acme"
         template={template}
+        sports={[]}
         onClose={() => {}}
         publicDashboardUpgrade={null}
         viewerPlan="community"

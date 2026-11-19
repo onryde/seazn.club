@@ -17,11 +17,12 @@ export function publicDivisionScheduleCacheKey(divisionId: string): string {
   return `pub:v1:div:${divisionId}:schedule`;
 }
 
-/** `-v2` (W2e D11 b, 2026-10-28): the standings routes now serve `rank: null` on a level table. The entry is still the
- *  stored shape (the routes null it on the way out); the key moves with the document's contract all the same, so an entry
- *  the previous build left in Redis is never read as this build's. */
+/** `-v3` (W5 T22, 2026-11-18): every row carries `name`, `status` and `pool` (a withdrawn entrant's row names her, a pooled table
+ *  names its pool). `-v2` (W2e D11 b, 2026-10-28) moved it for `rank: null` on a level table (the entry is still the stored shape; the
+ *  routes null it on the way out). The key moves with the document's contract, so an entry the previous build left in Redis is never
+ *  read as this build's. */
 export function publicDivisionStandingsCacheKey(divisionId: string): string {
-  return `pub:v1:div:${divisionId}:standings-v2`;
+  return `pub:v1:div:${divisionId}:standings-v3`;
 }
 
 /** `-v2` (privacy hotfix, 2026-09-16): a masked member carries no

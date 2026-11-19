@@ -57,7 +57,12 @@ export const GenerateResult = z.object({
    *  bye, each in `vacated` left and their opponent now holds a bye; no line was inserted or deleted. `regenerated`: the
    *  field crossed a power of two (or a change in place could not express the departures), so the bracket was drawn again,
    *  slots carried by bracket role (`slots`, as Rebuild reports them) — refused 409 KO_REDRAW_WOULD_CLEAR_SETUP when its
-   *  lines carry any match setup (usecases/stages/roster-drift.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START. */
+   *  lines carry any match setup (usecases/stages/roster-drift.ts `stageAttachmentCounts`). After Start an arrival is refused 409 KO_GENERATE_AFTER_START.
+   *  W5 T2 (X-CU-6): a ROOT league's or group's Generate over existing lines reports the same shape, ABSENT on a first Generate.
+   *  `noop`: nothing changed. `in_place`: the pairs the newcomers owe were inserted and the departed's removed, every other line
+   *  untouched (`placed` = newcomers, `vacated` = departed). `regenerated`: a pool changed parity or a group re-snaked, so the
+   *  stage was drawn again in this transaction with each PAIR's time and court carried (`slots`). After Start an arrival is refused
+   *  409 RR_GENERATE_AFTER_START and anything else is `noop`. */
   reconcile: z
     .object({
       kind: z.enum(["noop", "in_place", "regenerated"]),
@@ -66,6 +71,18 @@ export const GenerateResult = z.object({
       /** Every seat emptied: a departed entrant's, and one whose entrant was deleted (no id left to list). */
       vacated_seats: z.number().int(),
       slots: z.object({ kept: z.number().int(), freed: z.number().int(), unscheduled: z.number().int() }).optional(),
+      /** W5 T2 fix round 3: a `noop` that is not "up to date" - a group whose live field is below what its pools need cannot be
+       *  snaked again, so its draw stands. `groups` x 2 is `required`; `entrants` is the live field. Absent on every other answer. */
+      reason: z.literal("pools_below_minimum").optional(),
+      groups: z.number().int().optional(),
+      entrants: z.number().int().optional(),
+      required: z.number().int().optional(),
+      /** W5 T12 (X-BD-1, PO-1): the largest pool count that leaves every pool 2 strong, null when none does. Present with `reason`. */
+      suggested: z.number().int().nullable().optional(),
+      /** W5 T2 fix round 3: an `in_place` patch dropped lines that carried setup; the rows removed and whose fixtures they were. */
+      setups_removed: z.object({ count: z.number().int(), names: z.array(z.string()) }).optional(),
+      /** W5 T13 fix round 1: a `regenerated` redraw dropped this many rank pins (their pool's membership changed). Absent when none. */
+      pins_cleared: z.number().int().optional(),
     })
     .optional(),
 });
@@ -89,6 +106,9 @@ export const RebuildResult = GenerateResult.extend({
     freed: z.number().int(),
     unscheduled: z.number().int(),
   }),
+  /** W5 T23 (Task 18 review): the manual ranks (rank overrides) this Rebuild dropped because their pool's membership changed.
+   *  Absent when none was — the same field Generate's redraw reports as `reconcile.pins_cleared`. */
+  pins_cleared: z.number().int().optional(),
 });
 
 /** POST /stages/{id}/unpair — clears the latest seated Swiss round onto kept shells. */
@@ -218,4 +238,10 @@ export const CompleteResult = z.object({
   events: z.array(z.record(z.string(), z.unknown())),
   /** Set when completion resolved the next stage's progression rules. */
   qualified: z.object({ stage_id: Uuid, entrants: z.array(Uuid) }).optional(),
+  /** W5 T17 (X-BD-4): present, and true, only on a Complete of a stage that was ALREADY complete (with `completed: false`:
+   *  this call completed nothing). Such a call is a no-op: no proposal computed or staled, nothing drawn, nothing published. */
+  already_complete: z.boolean().optional(),
+  /** The next stage's draft seed proposal: computed by the completion that has just committed, or - on an
+   *  `already_complete` answer - the existing draft, `null` when the latest proposal is confirmed or stale, or none. */
+  seed_proposal: z.object({ id: Uuid, status: z.string() }).nullable().optional(),
 });

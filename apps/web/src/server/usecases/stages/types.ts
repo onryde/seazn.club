@@ -102,6 +102,8 @@ export type BoardFixtureRow = Omit<
   /** W3 T3 (X-SW-29), W4 T3 (X-SD-5): a bye line (`byeLineSql` — a Swiss bye shell, a bracket's system bye, or a
    *  pre-award bye line), which no board write places. Sent only when true. */
   bye_line?: true;
+  /** W5 T3 (X-SF-5): the pool letter, sent only for a stage with several pools. */
+  pool_key?: string;
 };
 
 export const BOARD_FIXTURE_COLS = [
@@ -338,7 +340,11 @@ export interface GenerateOutcome {
   /** W4 T8 (FX-G2): a root knockout's Generate over a bracket that already has lines — ABSENT on a first Generate and on
    *  every other kind. `noop`: nothing changed (the desk's "up to date"); `in_place`: newcomers `placed` in byes and the
    *  departed `vacated` (their opponents now hold byes), no line inserted or deleted; `regenerated`: the bracket crossed a
-   *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says). */
+   *  power of two, so it was drawn again in this transaction with its slots carried by role (`slots`, as Rebuild says).
+   *  W5 T2 (X-CU-6): a root league's or group's Generate over existing lines answers the same three kinds: `in_place` inserted the
+   *  newcomers' pairs and removed the departed's (no other line moved), `regenerated` carried each PAIR's slot (a parity flip, a
+   *  re-snake, or a patch that would stretch the rounds past a fresh draw's with no setup on the lines to lose). A redraw that would
+   *  clear setup beyond slots is refused instead (409 RR_REGENERATE_WOULD_CLEAR_SETUP), so `in_place` is also what keeps setup. */
   reconcile?: ReconcileOutcome;
 }
 
@@ -350,6 +356,19 @@ export interface ReconcileOutcome {
   /** B2 fix round 1 (I2): every seat emptied — a departed entrant's, and one whose entrant was deleted (in no list). */
   vacated_seats: number;
   slots?: { kept: number; freed: number; unscheduled: number };
+  /** W5 T2 fix round 3: a `noop` that is not "up to date" - a group below what its pools need keeps its draw, and says why. */
+  reason?: "pools_below_minimum";
+  groups?: number;
+  entrants?: number;
+  required?: number;
+  /** W5 T12 (X-BD-1): the pool count that works (null: none does). Present with `reason`. */
+  suggested?: number | null;
+  /** W5 T2 fix round 3: an in-place patch dropped lines that carried setup (officials, sheets, devices, availability, calls); how
+   *  many rows, and the entrants whose fixtures they were. */
+  setups_removed?: { count: number; names: string[] };
+  /** W5 T13 fix round 1 (X-PO-3, G7): a `regenerated` redraw of a league or group moved entrants between pools and dropped this many
+   *  rank pins with them. ABSENT when none were dropped. */
+  pins_cleared?: number;
 }
 
 /** A generate's committed write (R10e): the wire outcome, plus the division
@@ -366,6 +385,9 @@ export interface GenerateWrite {
   /** W4 T8 (FX-G2): the fixtures a knockout reconcile changed in place, or deleted to regenerate — the publish names
    *  them so their match centres refetch. Absent on every other write (a plain Generate changes no existing fixture). */
   changedFixtureIds?: string[];
+  /** B5 fix wave fix round 4 (m5): Swiss only - the rows THIS pass seated (Pair next updates shells in place, so `outcome.fixtures`,
+   *  every fixture of the stage, cannot say which). Server-internal, never on the wire. */
+  swissSeatedIds?: string[];
 }
 
 /** What a Generate press may ask for beyond "generate". */

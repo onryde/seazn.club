@@ -92,11 +92,13 @@ import { useState, type CSSProperties } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
+import { DEPARTED_STATUS_CHIPS } from "@/lib/departed-status-chips";
 import { swissRoundKey, type SwissRoundStateName } from "@/lib/swiss-round-state";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
 import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
+import { WithdrawalFootnotes } from "./withdrawal-footnotes";
 
 export interface StandingsTableViewProps {
   view: TableViewT;
@@ -645,7 +647,17 @@ export function StandingsTableView({
                       </span>
                       {/* W3 app-B T3 (owner Q2): a Swiss bye / late join, on a line of its own under the name (words resolved by the
                           builder, `rowMarkers`). Nothing for an unmarked row, so every other table's markup is the one it was. */}
-                      <StandingsRowMarkers markers={r.markers} testid={`${testid}-marker-${r.entrantId}`} indented />
+                      {/* W5 T20 (ST-G20): a departed row's chip rides the same line, first. Its word is this page's dictionary's. */}
+                      <StandingsRowMarkers
+                        markers={r.markers}
+                        departed={
+                          r.status === undefined
+                            ? undefined
+                            : { status: r.status, label: t(dict, DEPARTED_STATUS_CHIPS[r.status].label), testid: `${testid}-${r.status}-${r.entrantId}` }
+                        }
+                        testid={`${testid}-marker-${r.entrantId}`}
+                        indented
+                      />
                     </th>
                     {view.columns.map((c, i) => {
                       // `cellNotes[i]` pairs with `cells[i]` exactly as the
@@ -695,8 +707,13 @@ export function StandingsTableView({
               card's width. The full table only: the Overview's preview is a
               teaser beside a "Full division" link, and keeps its markers and
               line without the key to them (controller ruling OQ3). */}
-          {view.qualification && preview === undefined ? (
-            <QualLegend legend={view.qualification.legend} />
+          {/* W5 T8 (RB5-W7; R24 pick 11 A): under the legend, who left and which rule applied — the full table only, as the
+              legend. ONE child slot for both: a further sibling here would renumber every `useId` above it (the no-cut golden). */}
+          {preview === undefined && (view.qualification || (view.withdrawalNotes ?? []).length > 0) ? (
+            <>
+              {view.qualification ? <QualLegend legend={view.qualification.legend} /> : null}
+              <WithdrawalFootnotes items={view.withdrawalNotes ?? []} />
+            </>
           ) : null}
 
           {hasLongTail ? (

@@ -543,8 +543,8 @@
     {
       "id": "ST-G4",
       "outcome": "not-exercised",
-      "evidence": "Cross-pool best-Nth comparison ignores the sport's cascade: F4 (unequal pools) and P2 (group to knockout with a tie unresolved) have no script, and no check reads which runner-up is chosen.",
-      "wave": "W5"
+      "evidence": "Owned by W2d, not W5 (programme ruling 183, design section 8's W2d amendment: W2d built it; W5 app PR A Task 24 re-routed it, owner ruling 288). Cross-pool best-Nth comparison ignores the sport's cascade: F4 (unequal pools) and P2 (group to knockout with a tie unresolved) have no script, and no check reads which runner-up is chosen.",
+      "wave": "W2d"
     },
     {
       "id": "ST-G6",
@@ -585,14 +585,14 @@
     {
       "id": "ST-G12",
       "outcome": "not-exercised",
-      "evidence": "h2h mini-table from a partial tie group: F5b (three-or-more-way tie) has no script.",
-      "wave": "W5"
+      "evidence": "Owned by W2d, not W5 (programme ruling 183, design section 8's W2d amendment: W2d built it; W5 app PR A Task 24 re-routed it, owner ruling 288). h2h mini-table from a partial tie group: F5b (three-or-more-way tie) has no script.",
+      "wave": "W2d"
     },
     {
       "id": "ST-G13",
       "outcome": "not-exercised",
-      "evidence": "Residual ties ordered by seed then UUID: F7 (tie falling through to lots) has no script, and no check reads an order that ties leave to the cascade's end.",
-      "wave": "W5"
+      "evidence": "Owned by W2d, not W5 (programme ruling 183, design section 8's W2d amendment: W2d built it; W5 app PR A Task 24 re-routed it, owner ruling 288). Residual ties ordered by seed then UUID: F7 (tie falling through to lots) has no script, and no check reads an order that ties leave to the cascade's end.",
+      "wave": "W2d"
     },
     {
       "id": "ST-G14",

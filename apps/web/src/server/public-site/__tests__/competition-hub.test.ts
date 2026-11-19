@@ -87,6 +87,14 @@ vi.mock("@/server/usecases/player-stats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/player-stats")>()),
   fixturesStatsReading: statsReadingMock,
 }));
+// W5 T8: the departure notes' ledger read (`division_events`) is SQL too - a real database's job (`table-withdrawal-retry-reinstate`,
+// `hub-departed-chip-db.test.ts`). It was unmocked here from T8 on, so this file read "DATABASE_URL is not set" in the unit job, which has
+// no database (found by W5 T20, whose step 4 runs this file). Here it answers no departures: the footnote is not what this file tests.
+const tableWithdrawalsMock = vi.hoisted(() => vi.fn(async (): Promise<never[]> => []));
+vi.mock("../table-withdrawals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../table-withdrawals")>()),
+  loadTableWithdrawals: tableWithdrawalsMock,
+}));
 // Observed, not silenced for its own sake: a read the hub swallows must still
 // leave a warning behind, or a broken discipline query reads as "no bans".
 const logMock = vi.hoisted(() => ({
@@ -130,8 +138,8 @@ import { CompetitionHubDoc } from "../competition-hub-schema";
 import { divisionTitle } from "../champion";
 
 /** The single champion's entrant id of `divisionTitle` — null for no title, a joint title or a vacant one. */
-const championIdOf = (...a: Parameters<typeof divisionTitle>): string | null => {
-  const t = divisionTitle(...a);
+const championIdOf = (stages: Parameters<typeof divisionTitle>[0], fixtures: Parameters<typeof divisionTitle>[1], standings: Parameters<typeof divisionTitle>[2], pools: Parameters<typeof divisionTitle>[3] = null): string | null => {
+  const t = divisionTitle(stages, fixtures, standings, pools);
   return t?.kind === "champion" ? t.champion : null;
 };
 
@@ -875,6 +883,7 @@ beforeEach(() => {
   hasFeatureMock.mockResolvedValue(true);
   readLeaderRowsMock.mockResolvedValue([]);
   suspensionEntriesMock.mockResolvedValue([]);
+  tableWithdrawalsMock.mockResolvedValue([]);
   memberRefsMock.mockResolvedValue({});
   registrationMock.mockResolvedValue({
     competition: { id: COMP.id, name: COMP.name, slug: COMP.slug, starts_on: null, ends_on: null },
@@ -1321,6 +1330,24 @@ describe("loadCompetitionHub — divisions, tables and teams", () => {
     });
     expect(doc.tables[0]!.rows.map((r) => r.name)).toEqual(["Blue Blazers", "Red Rockets"]);
     expect(doc.tables[0]!.rows.every((r) => r.champion === false)).toBe(true);
+  });
+
+  it("X-SF-1 a departed entrant's row carries her status, handed over from the division's own entrants (W5 T20)", async () => {
+    // differential: today (b6f93160a8) no hub row carries a status. e1 is withdrawn, e2 stays in the field: only e1's row says so.
+    getPublicDivisionMock.mockResolvedValue(
+      divisionDetail({ entrants: ENTRANTS.map((e) => (e.id === "e1" ? { ...e, status: "withdrawn" } : e)) }),
+    );
+    const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(doc.tables).toHaveLength(1);
+    expect(doc.tables[0]!.rows.map((r) => [r.entrantId, r.status ?? null])).toEqual([
+      ["e1", "withdrawn"],
+      ["e2", null],
+    ]);
+    expect(CompetitionHubDoc.safeParse(doc).success).toBe(true);
+    // the same table, nobody left: no row carries the key
+    getPublicDivisionMock.mockResolvedValue(divisionDetail());
+    const calm = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+    expect(calm.tables[0]!.rows.some((r) => "status" in r)).toBe(false);
   });
 
   it("pool A reads above pool B — never in pool-id order (lib/pool-order.ts)", async () => {

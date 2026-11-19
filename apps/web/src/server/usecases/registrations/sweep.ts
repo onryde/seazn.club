@@ -14,7 +14,7 @@ import { paymentReminderMessage } from "./mail";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { refundEntryUnderLock } from "./refunds";
 import { queueRegistrationExpiredMails, queueRegistrationPromotionLapsedMails } from "./lifecycle-mail";
-import { releaseSoloSignUpPlacement } from "./withdraw";
+import { dissolvePairsAfterRelease, releaseSoloSignUpPlacement } from "./withdraw";
 import { effectivePoolDeadline } from "./list";
 
 // ---------------------------------------------------------------------------
@@ -289,7 +289,9 @@ export async function sweepRegistrations(
       // RS009 — same reason withdrawCore does it: expiry is a status change,
       // so V388's cascade never fires and the placement would outlive the
       // entry that created it.
-      await releaseSoloSignUpPlacement(tx, id);
+      // W5 T10 fix round 1 (R12): a pair of a started division (any format, ruling 292) that loses its placed solo withdraws, after the commit.
+      const pairLosses: string[] = [];
+      await releaseSoloSignUpPlacement(tx, id, pairLosses);
       // RS002 W5 whole-branch review MAJOR: expiring the cart's LAST
       // `pending` entry used to leave `expires_at` stale forever — same gap
       // as withdrawCore, same fix.
@@ -318,14 +320,17 @@ export async function sweepRegistrations(
       // Polish wave P2 (W10): tell the registrant their unpaid place was released, in the transaction that releases it. The sweep has no
       // response to defer behind, so the retry worker makes the first attempt.
       await queueRegistrationExpiredMails(tx, { reg: locked, origin });
-      return { promoted, settings, competitionId: div.competition_id };
+      return { promoted, settings, competitionId: div.competition_id, orgId: div.org_id, pairLosses };
     })) as unknown as {
       promoted: RegistrationWithGroupRow | null;
       settings: RegistrationSettingsRow | null;
       competitionId: string;
+      orgId: string;
+      pairLosses: string[];
     } | null;
     if (!outcome) continue;
     expired++;
+    await dissolvePairsAfterRelease(outcome.orgId, id, outcome.pairLosses, "organiser", null);
     fireDivisionRevalidate(division_id, outcome.competitionId);
     if (outcome.promoted) {
       promotedCount++;

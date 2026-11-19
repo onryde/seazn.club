@@ -12,6 +12,7 @@ import { sql } from "@/lib/db";
 import { featurePlan } from "@/lib/feature-copy";
 import { planLabel } from "@/lib/plan-label";
 import { orgPlanKey } from "@/lib/entitlements";
+import { templateSportOptions } from "@/server/usecases/template-sports";
 import { publicSlotsLeft } from "@/server/usecases/competitions";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import {
@@ -61,6 +62,9 @@ export default async function NewCompetitionPage({
   // nothing about a cap, which is today's form.
   const publicSlots = await publicSlotsLeft(auth.orgId).catch(() => null);
   const viewerPlan = viewerPlanFrom(await orgPlanKey(auth.orgId));
+  // X-BD-3: an any-sport template (super-groups) asks for a sport, a variant and an entrant kind in its sheet. Fails soft,
+  // like the reads above: an empty list takes only that template's create away (its sheet disables it), never the page.
+  const sports = await templateSportOptions(auth.orgId).catch(() => []);
 
   return (
     // The template gallery is a centred 4xl column. The blank form, and the two
@@ -85,6 +89,7 @@ export default async function NewCompetitionPage({
         orgSlug={orgSlug}
         orgId={auth.orgId}
         templates={TEMPLATE_CATALOG}
+        sports={sports}
         publicDashboardUpgrade={upgrade}
         publicSlots={publicSlots}
         viewerPlan={viewerPlan}

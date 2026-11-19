@@ -113,9 +113,9 @@ const reviewRow = (page: Page, id: string) => page.locator(`[data-review-row="${
 /** The owner's popular sports, in his order (C9 R2 brief, 2026-11-03). */
 const POPULAR = ["football", "cricket", "badminton", "tennis", "tabletennis"];
 const REGISTRY = builtinModules.map((m) => m.key);
-/** The partner-rotation formats by the declarations: the live templates whose stages mint pairs. */
+/** The partner-rotation formats by the declarations: the templates whose stages mint pairs. */
 const MINTING = STAGE_TEMPLATES.filter(
-  (t) => !t.retired && t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 }).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind)),
+  (t) => t.build({ qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 }).some((s) => PAIR_MINTING_STAGE_KINDS.includes(s.kind)),
 ).map((t) => t.key);
 
 /** Every sport tile, in the picker's (DOM) order, folded or not. */

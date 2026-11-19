@@ -577,7 +577,7 @@
           "wave": "W5"
         }
       ],
-      "note": "ST-G5's mechanism in its worst shape: a pool's members are the entrants with a result or award (entrantsOfPool, stage.ts), so 7 entrants snaked into 4 pools leave pool A holding seed 1 alone, with no fixture and so no member. Its table is empty, seed 1 stands in no pool (I1 'in no pool', f1-everyone-drawn, life-built-as-posted), and stage 1's /complete answers 409 STAGE_COMPLETED_SEEDING_FAILED. The audit's own shape is the day-one table (a seated member who has not played is missing)."
+      "note": "ST-G5's mechanism in its worst shape: a pool's members are the entrants with a result or award (entrantsOfPool, stage.ts), so 7 entrants snaked into 4 pools leave pool A holding seed 1 alone, with no fixture and so no member. Its table is empty, seed 1 stands in no pool (I1 'in no pool', f1-everyone-drawn, life-built-as-posted), and stage 1's /complete answers 409 STAGE_COMPLETED_SEEDING_FAILED. The audit's own shape is the day-one table (a seated member who has not played is missing). Since W5 T12 (X-BD-1) the L3 case no longer reds here: Start refuses 7 into 4 by name and offers 3 (C38), so the harness renders the cell refused (f1-pool-of-one-refused); this rule keys the pre-T12 baseline and retires with the W5 baseline re-point."
     },
     {
       "id": "no-builder-knockout-third-place",

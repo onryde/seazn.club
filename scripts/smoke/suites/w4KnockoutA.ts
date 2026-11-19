@@ -70,7 +70,7 @@ import { w4KnockoutAPublicStandingsOrderSmoke } from "./w4KnockoutA-public-check
  * qualifier once (RB4-R1: a permutation of the five; the sixth finisher in none). group_playoffs
  * (badminton, a league of five into a top four): Q1 = 1 v 2, E = 3 v 4, Q2 = Q1's loser v E's winner, Final = Q1's winner
  * v Q2's winner, and the stage ranks the four qualifiers once. In all three a second Complete is a no-op that emits no second
- * `stage_completed`, and the entrant that did not qualify is ranked in no finals. Ranks are read from the Complete answer (the
+ * `stage_completed` and says so (`already_complete`, W5 CS-1), and the entrant that did not qualify is ranked in no finals. Ranks are read from the Complete answer (the
  * one place `finalRanks` crosses the wire) and from the stage's standings, which must cover the same entrants. The rank ORDER of
  * a stepladder or a page playoff is NOT asserted (controller ruling: rank proofs beyond seating are app-B's, carry C19); the
  * qualifying stage's order of the top four IS, because the main draw is seated from it. No withdrawal here: the finals'
@@ -880,7 +880,7 @@ export async function w4KnockoutASuite(): Promise<void> {
       outcome: { kind?: string; winner?: string; loser?: string } | null;
     };
     type Sport = "badminton" | "generic";
-    type Done = { completed?: boolean; events?: { type: string; finalRanks?: string[] }[]; division_completed?: boolean };
+    type Done = { completed?: boolean; already_complete?: boolean; events?: { type: string; finalRanks?: string[] }[]; division_completed?: boolean };
     const errorCode = (r: { json?: unknown }) => (r.json as { error?: { code?: string } } | undefined)?.error?.code;
     const pairKey = (a: string | null | undefined, b: string | null | undefined) => [a ?? "-", b ?? "-"].sort().join("|");
     const holds = (f: Line, id: string | undefined) => id !== undefined && (f.home_entrant_id === id || f.away_entrant_id === id);
@@ -970,6 +970,9 @@ export async function w4KnockoutASuite(): Promise<void> {
         ranks: data?.events?.find((e) => e.type === "stage_completed")?.finalRanks ?? [],
         events: data?.events?.length ?? -1,
         divisionCompleted: data?.division_completed === true,
+        // W5 CS-1 (X-BD-4, the /stages/{id}/complete contract in api-v1/openapi.ts): a repeat Complete of a complete stage answers
+        // `{completed: false, already_complete: true, events: []}` - a no-op that says so.
+        alreadyComplete: data?.already_complete === true,
       };
     };
     /** The entrants of a stage's standings, best rank first (what a customer reads; it must agree with the Complete answer). */
@@ -1073,11 +1076,11 @@ export async function w4KnockoutASuite(): Promise<void> {
         doneMain.ranks.length === 4 && new Set(doneMain.ranks).size === 4 && doneMain.ranks.every((id) => seatedInMain.has(id)) &&
         [...(await standingsOrder(mainId))].sort().join() === [...doneMain.ranks].sort().join() &&
         (await stageStatus(divId, qualId)) === "complete" && (await stageStatus(divId, mainId)) === "complete" &&
-        // the second call: nothing more is emitted
-        again.status === 200 && again.completed && again.events === 0;
+        // the second call: nothing more is emitted, and it says so (W5 CS-1)
+        again.status === 200 && !again.completed && again.alreadyComplete && again.events === 0;
       w4Check(
         "w4a T25 qualifying_main: three are refused by name; eight qualify four by their qualifying rank, the shared 3rd is refused until resolved (better original seed takes seed 3), seated 1 v 4 and 2 v 3, and the main draw completes the division" +
-          (ok ? "" : ` — small ${smallStages.status}/${refusedGenerate.status} ${errorCode(refusedGenerate)}/${refusedStart.status} ${errorCode(refusedStart)}/${smallLines} lines; stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}, day-one ${mainDayOne.length}; qualifying played ${qualPlayed.played}/${qualPlayed.missed}, quarters ${quarters.length}, semis ${semis.length}, final ${qFinal?.outcome?.winner === ids[0]}/${qFinal?.outcome?.loser === upset}; complete ${doneQual.status} ranks ${ranks.map((id) => seedOf.get(id)).join(",")}; bare ${bareConfirm?.status} ${errorCode(bareConfirm ?? {})} ${refusedIds.length} seated-after ${seatedAfterRefusal}; confirm ${confirmed.status}/${confirmed.ties}; main round 1 ${mainOne.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}, seated ${seatedInMain.size}; main played ${mainPlayed.played}/${mainPlayed.missed}, complete ${doneMain.status} ${doneMain.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneMain.divisionCompleted}; again ${again.status}/${again.events}`),
+          (ok ? "" : ` — small ${smallStages.status}/${refusedGenerate.status} ${errorCode(refusedGenerate)}/${refusedStart.status} ${errorCode(refusedStart)}/${smallLines} lines; stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}, day-one ${mainDayOne.length}; qualifying played ${qualPlayed.played}/${qualPlayed.missed}, quarters ${quarters.length}, semis ${semis.length}, final ${qFinal?.outcome?.winner === ids[0]}/${qFinal?.outcome?.loser === upset}; complete ${doneQual.status} ranks ${ranks.map((id) => seedOf.get(id)).join(",")}; bare ${bareConfirm?.status} ${errorCode(bareConfirm ?? {})} ${refusedIds.length} seated-after ${seatedAfterRefusal}; confirm ${confirmed.status}/${confirmed.ties}; main round 1 ${mainOne.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}, seated ${seatedInMain.size}; main played ${mainPlayed.played}/${mainPlayed.missed}, complete ${doneMain.status} ${doneMain.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneMain.divisionCompleted}; again ${again.status}/${again.completed}/${again.alreadyComplete}/${again.events}`),
         ok,
       );
     }
@@ -1127,10 +1130,10 @@ export async function w4KnockoutASuite(): Promise<void> {
         !doneLadder.ranks.includes(ids[5]) &&
         [...(await standingsOrder(ladderId))].sort().join() === [...doneLadder.ranks].sort().join() &&
         (await stageStatus(divId, ladderId)) === "complete" &&
-        again.status === 200 && again.completed && again.events === 0;
+        again.status === 200 && !again.completed && again.alreadyComplete && again.events === 0;
       w4Check(
         "w4a T25 stepladder: a league of six into a top five seats the lowest two seeds first and one climber a rung, and the stage ranks every qualifier once" +
-          (ok ? "" : ` — stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}; league ${leaguePlayed.played}/${leaguePlayed.missed} complete ${doneLeague.status} ranks ${doneLeague.ranks.map((id) => seedOf.get(id)).join(",")}; confirm ${confirmed.status}/${confirmed.ties}; rungs ${rungs.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}; ladder ${ladderPlayed.played}/${ladderPlayed.missed}, played ${played.map((f) => `${f.status} ${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}; complete ${doneLadder.status} ${doneLadder.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneLadder.divisionCompleted}; again ${again.status}/${again.events}`),
+          (ok ? "" : ` — stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}; league ${leaguePlayed.played}/${leaguePlayed.missed} complete ${doneLeague.status} ranks ${doneLeague.ranks.map((id) => seedOf.get(id)).join(",")}; confirm ${confirmed.status}/${confirmed.ties}; rungs ${rungs.map((f) => `${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}; ladder ${ladderPlayed.played}/${ladderPlayed.missed}, played ${played.map((f) => `${f.status} ${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}; complete ${doneLadder.status} ${doneLadder.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneLadder.divisionCompleted}; again ${again.status}/${again.completed}/${again.alreadyComplete}/${again.events}`),
         ok,
       );
     }
@@ -1190,10 +1193,10 @@ export async function w4KnockoutASuite(): Promise<void> {
         !doneFinals.ranks.includes(ids[4]) &&
         [...(await standingsOrder(pageId))].sort().join() === [...doneFinals.ranks].sort().join() &&
         (await stageStatus(divId, pageId)) === "complete" &&
-        again.status === 200 && again.completed && again.events === 0;
+        again.status === 200 && !again.completed && again.alreadyComplete && again.events === 0;
       w4Check(
         "w4a T25 page playoff: a league of five into a top four seats Q1 = 1 v 2 and E = 3 v 4, then Q2 = Q1's loser v E's winner and the Final = Q1's winner v Q2's winner, and ranks the four once" +
-          (ok ? "" : ` — stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}; league ${leaguePlayed.played}/${leaguePlayed.missed} complete ${doneLeague.status} ranks ${doneLeague.ranks.map((id) => seedOf.get(id)).join(",")}; confirm ${confirmed.status}/${confirmed.ties}; seated ${seated.map((f) => `r${f.round_no} ${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}; round one ${roundOne.played}/${roundOne.missed}, Q2 ${seedOf.get(q2Seated?.home_entrant_id ?? "")}v${seedOf.get(q2Seated?.away_entrant_id ?? "")}, final waits ${seedOf.get(finalWaiting?.home_entrant_id ?? "")}v${seedOf.get(finalWaiting?.away_entrant_id ?? "")}; rest ${rest.played}/${rest.missed}, final ${seedOf.get(final?.home_entrant_id ?? "")}v${seedOf.get(final?.away_entrant_id ?? "")}; complete ${doneFinals.status} ${doneFinals.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneFinals.divisionCompleted}; again ${again.status}/${again.events}`),
+          (ok ? "" : ` — stages ${stages.status}, gen ${generated.map((g) => g.status).join(",")}, start ${started.status}; league ${leaguePlayed.played}/${leaguePlayed.missed} complete ${doneLeague.status} ranks ${doneLeague.ranks.map((id) => seedOf.get(id)).join(",")}; confirm ${confirmed.status}/${confirmed.ties}; seated ${seated.map((f) => `r${f.round_no} ${seedOf.get(f.home_entrant_id ?? "")}v${seedOf.get(f.away_entrant_id ?? "")}`).join(",")}; round one ${roundOne.played}/${roundOne.missed}, Q2 ${seedOf.get(q2Seated?.home_entrant_id ?? "")}v${seedOf.get(q2Seated?.away_entrant_id ?? "")}, final waits ${seedOf.get(finalWaiting?.home_entrant_id ?? "")}v${seedOf.get(finalWaiting?.away_entrant_id ?? "")}; rest ${rest.played}/${rest.missed}, final ${seedOf.get(final?.home_entrant_id ?? "")}v${seedOf.get(final?.away_entrant_id ?? "")}; complete ${doneFinals.status} ${doneFinals.ranks.map((id) => seedOf.get(id)).join(",")} division ${doneFinals.divisionCompleted}; again ${again.status}/${again.completed}/${again.alreadyComplete}/${again.events}`),
         ok,
       );
     }

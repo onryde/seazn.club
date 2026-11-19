@@ -36,7 +36,7 @@ describe("the fixed sample's own arithmetic (anti-vacuity: the sets it is built 
     expect(SLICE_ROWS.length * SLICE_SPORTS.length * SCENARIO_KEYS.length).toBe(24);
     expect(OTHER_SPORTS).toHaveLength(SPORT_KEYS.length - SLICE_SPORTS.length);
     expect(OTHER_SPORTS.length).toBe(9);
-    expect(ROW_KEYS.length).toBe(21);
+    expect(ROW_KEYS.length).toBe(20);
   });
 });
 
@@ -57,7 +57,7 @@ describe("parseRows (R27): what follows `Matrix rows:`", () => {
     expect(parseRows(text)).toEqual(want);
   });
 
-  it("every catalogue row is accepted by name, one at a time (anti-vacuity: 21 rows)", () => {
+  it("every catalogue row is accepted by name, one at a time (anti-vacuity: 20 rows)", () => {
     let checked = 0;
     for (const row of ROW_KEYS) {
       expect(parseRows(row), row).toEqual([row]);
@@ -75,7 +75,7 @@ describe("parseRows (R27): what follows `Matrix rows:`", () => {
     expect((thrown as Error).name).toBe("UnknownRow");
     expect(msg).toMatch(/leage/);
     expect(msg).toContain(ROW_KEYS.join(", "));
-    expect(ROW_KEYS.length).toBe(21);
+    expect(ROW_KEYS.length).toBe(20);
   });
 
   it.each([
@@ -234,7 +234,7 @@ describe("planPrSample", () => {
     const committed = all.filter((c) => !isRefusedCell(`${c.row}|cricket`));
     expect(all.length - committed.length, "the held cricket test cases on a refused row").toBe(2);
     const rowsWithTests = [...new Set(committed.map((c) => c.row))];
-    expect(committed.length).toBe(23);
+    expect(committed.length).toBe(22);
     expect(rowsWithTests).toContain("league");
     let checked = 0;
     for (const row of ROW_KEYS) {
@@ -349,10 +349,20 @@ describe("the sample against the real baseline (review C3c)", () => {
 
   it("every case the sample plans for ANY declaration has a baseline twin, so no PR reports a case absent by construction", () => {
     const have = new Set(baseline().cases.map((c) => c.caseId));
+    // W5 T16 (ruling 287): the pairwise cover that seats the cricket `test` cases on rows ran again without the deleted row, so 7 sat on
+    // a row the W4 baseline did not seat them on. W5 T25 re-baselined on a run planned without the deleted row: none is absent now.
+    // The W4 run is read by its own directory, so the 7 stay counted as the history this re-baseline closed (every one a cricket test case).
+    const w4 = new Set((JSON.parse(readFileSync(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w4-final/ci/L3/results.json"), "utf8")) as { cases: { caseId: string }[] }).cases.map((c) => c.caseId));
+    const lackedByW4 = ids(planPrSample("all", offlineBuilderDefault)).filter((id) => !w4.has(id));
+    expect(lackedByW4.length, "the sample cases the W4 baseline lacked").toBe(7);
+    expect(lackedByW4.every((id) => /^[a-z_]+\|cricket\|test\|LIFECYCLE\|/.test(id))).toBe(true);
+    const reseated = ids(planPrSample("all", offlineBuilderDefault)).filter((id) => !have.has(id));
+    expect(reseated, "cricket test cases seated on a row the baseline does not have them on").toEqual([]);
     let checked = 0;
     for (const rows of ["all", ...ROW_KEYS.map((r) => [r])] as const) {
       const missing = ids(planPrSample(rows, offlineBuilderDefault)).filter((id) => !have.has(id));
-      expect(missing, formatRows(rows)).toEqual([]);
+      const mine = rows === "all" ? reseated : reseated.filter((id) => id.startsWith(`${rows[0]}|`));
+      expect(missing, formatRows(rows)).toEqual(mine);
       checked++;
     }
     expect(checked).toBe(ROW_KEYS.length + 1);
@@ -372,9 +382,9 @@ describe("baselineL3Path (catalogue/baseline.json names the committed L3 baselin
     return { catalogue: join(repo, "catalogue"), repo };
   };
 
-  it("the real one names the committed baseline's L3 run (PR-B, Task 21; re-baselined to the W2e truth run's CI L3 by Task 35, then to the W3 truth run's by W3 Task 12, then to the W4 truth run's by W4 Task 17), resolved against the repo root, and that file exists", () => {
+  it("the real one names the committed baseline's L3 run (PR-B, Task 21; re-baselined to the W2e truth run's CI L3 by Task 35, then to the W3 truth run's by W3 Task 12, then to the W4 truth run's by W4 Task 17, then to the W5 app A truth run's by W5 Task 25), resolved against the repo root, and that file exists", () => {
     const p = baselineL3Path();
-    expect(p).toBe(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w4-final/ci/L3/results.json"));
+    expect(p).toBe(resolve(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs/w5-app-a/ci/L3/results.json"));
     expect(readFileSync(p, "utf8").length).toBeGreaterThan(1000);
   });
 

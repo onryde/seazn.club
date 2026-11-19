@@ -49,7 +49,7 @@ import { BRACKET_STAGE_KINDS, swissDrawFactsOf } from "@seazn/engine/competition
 import { EngineError, playRecorded, type StageKind } from "@seazn/engine/core";
 import { generateRoundRobin, pairKey as swissPairKey, pairRound, type SwissStanding } from "@seazn/engine/scheduling";
 import { feedsNextMatch } from "../../../apps/web/src/lib/bracket-next-match.ts";
-import { isRootKnockoutStage, isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
+import { isRootKnockoutStage, isRootTableStage, isRunningRootSwiss } from "../../../apps/web/src/lib/open-entry-stages.ts";
 import { engineHttpStatus } from "../lib/driver/engine-http.ts";
 import { envelopes, tableContribution, unplayedBoard } from "../lib/fold.ts";
 import { sportModule, stageCfg } from "../lib/sport-cfg.ts";
@@ -76,6 +76,12 @@ export interface ModelFakeOpts {
    *  entrants.ts does; "named" refuses with a domain code; "open" lets the
    *  latecomer in. */
   rosterLock?: "product" | "named" | "open";
+  /** W5 T4 (X-CU-9): the stage is a table SEEDED BY A CUT — its config carries a `qualified` field, the product's
+   *  reading of a fed league or group (X-LE-2 for tables), which keeps the roster lock after Start where a ROOT league or
+   *  group does not (`isRootTableStage`). The model reads the stage back from the driver, so it holds a closed table and
+   *  offers (and expects refused) the post-Start add as it did before a root table opened the list. The runner suites
+   *  that exercise the roster-lock path through a league run on this. */
+  fedTable?: boolean;
   /** Every posted event is answered as landing on the SEQ_CONFLICT retry. */
   retriedPosts?: boolean;
   /** A faulty fed-seat release: "always" refuses a take-back whether or not
@@ -201,11 +207,21 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       this.#killSeat(f, home ? 1 : 2, true);
     }
     entrant.status = "withdrawn";
-    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_finalized: 0, walked_over_held: held };
+    return { entrant_id: entrantId, status: "withdrawn", policy: bracketWithdrawalPolicy("none", mine.length, acts.length), walkovers, voided: 0, skipped_cancelled: 0, walked_over_held: held };
   }
   /** The table folds each fixture's LIVE ledger (voids resolved), as the product's standings read it. */
   override tableEvents(f: FakeFixture): readonly StreamEvent[] {
     return liveEntries(this.ledgers.get(f.id) ?? []).map((e) => ({ type: e.type, payload: e.payload }));
+  }
+  /** `fedTable`: the posted stage carries the cut's `qualified` field (see the option). */
+  override postStages(d: string, stages: Parameters<FakeLeagueDriver["postStages"]>[1]): ReturnType<FakeLeagueDriver["postStages"]> {
+    return super.postStages(d, stages).then((refs) => {
+      if (this.opts.fedTable === true && this.stage !== null) {
+        this.stage.config = { ...this.stage.config, qualified: [] };
+        return [this.stage];
+      }
+      return refs;
+    });
   }
   /** One driver may serve every property run of a cell, as HttpDriver does: a
    *  new division starts empty. Fixture ids keep counting (minted). */
@@ -242,6 +258,9 @@ export class ModelFakeDriver extends FakeLeagueDriver {
       const rootKnockout = LOCK.rootKnockout && only !== null && isRootKnockoutStage(only, [only]);
       const started = LOCK.statuses.includes(this.#divisionStatus);
       if (started && rootKnockout) throw new Error(`fake: a late add into a started ${this.stage?.kind ?? "knockout"} is the product's late-entry door, which this fake does not simulate (the model never offers it — commands.ts AddEntrant.ready)`);
+      // W5 T4 (X-CU-9): and a ROOT league or group is exempt too — same loud refusal to simulate it.
+      const rootTable = LOCK.rootTable && only !== null && isRootTableStage(only, [only]);
+      if (started && rootTable) throw new Error(`fake: a late add into a started ${this.stage?.kind ?? "league"} is the product's late-entry door, which this fake does not simulate (the model never offers it — commands.ts AddEntrant.ready)`);
       const locked = started && !LOCK.openKinds.includes(this.stage?.kind ?? "") && !runningSwiss;
       if (locked && this.opts.rosterLock !== "open") {
         const code = this.opts.rosterLock === "named" ? "ROSTER_LOCKED" : LOCK.wireCode;
@@ -279,6 +298,11 @@ export class ModelFakeDriver extends FakeLeagueDriver {
     return Promise.resolve().then(() => {
       this.log("generate");
       if (this.stage === null) throw new Error("fake: generate before postStages");
+      // W5 T2 (X-CU-6): after Start a league's Generate never reshapes - an entrant added since its lines were drawn is refused by
+      // name (usecases/stages/roundrobin-reconcile.ts, RR_GENERATE_AFTER_START). Swiss has its own path, below.
+      if (!this.#swiss && this.#divisionStatus === "active" && this.#lateEntrant && this.fixtures.length > 0) {
+        throw new RefusedCall("POST", "/api/v1/stages/s1/generate", 409, "RR_GENERATE_AFTER_START", "Play has started, so Generate won't change the fixtures. Players waiting to join are listed on this stage: use Add to the table.");
+      }
       // usecases/stages/: a pending stage goes active on its first generate, Start or not.
       if (this.stage.status === "pending") this.stage.status = "active";
       if (this.opts.emptyGenerate === true) return { created: 0, existing: 0, fixtures: [] };

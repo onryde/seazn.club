@@ -1266,6 +1266,8 @@ const ONE_OF_EACH: { [K in Attention["kind"]]: Extract<Attention, { kind: K }> }
   result_missing: { kind: "result_missing", count: 3, fixtureIds: ["f-r1", "f-r2", "f-r3"] },
   bans_waiting: { kind: "bans_waiting", count: 1 },
   late_players_waiting: { kind: "late_players_waiting", count: 2, stageName: "Cup" },
+  late_unplaced: { kind: "late_unplaced", count: 1, stageName: "League", names: ["Lou Late"] },
+  withdrawal_owed: { kind: "withdrawal_owed", count: 1, names: ["Rae Registrant"] },
   registrations_waiting: { kind: "registrations_waiting", count: 4 },
 };
 /** The kinds, from the desk's own declaration (`ATTENTION_SEVERITY` is a Record over every kind), never a list typed here. */

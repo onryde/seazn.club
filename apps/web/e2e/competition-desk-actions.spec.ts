@@ -1,6 +1,6 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
 import {
-  TAG, apiJson, activeOrg, addEntrantsViaApi, scoreFixture, createStageAndGenerate,
+  TAG, apiJson, activeOrg, addEntrantsViaApi, competitionPath, scoreFixture, createStageAndGenerate,
   setFixtureStatusSql,
   assignFixtureOfficialSql, setFixtureScheduledAtSql, seedBareRegistrationSql,
 } from "./helpers";
@@ -218,6 +218,11 @@ const E2E_UNREACHABLE: Record<string, string> = {
   // competition-desk.test.ts's "a STALE proposal makes the action point at
   // the panel's 'recompute' door".
   "needs_draw/recompute": "competition-desk.test.ts pins the recompute door against a real DB",
+  // W5 T8b review I2 (b): a withdrawal whose cascade did NOT finish. No product door leaves one half-done on purpose - the state
+  // needs the cascade to throw part-way, which only a test double can make it do. Pinned instead: in-match-dq-cascade.test.ts and
+  // self-withdraw-after-start.test.ts force the throw against a real DB and read the desk's row; desk-ssr.test.tsx pins its action
+  // ("Open entrants", the Entrants tab) in all four locales.
+  withdrawal_owed: "in-match-dq-cascade.test.ts raises it against a real DB; desk-ssr.test.tsx pins its Entrants door",
 };
 
 type Row = {
@@ -524,6 +529,42 @@ const ROWS: Row[] = [
       // The answer is said in the panel's notice line (the strip has gone by then) and the strip is gone.
       await expect(page.getByText(/is back in their place against/), "the tap says what it did").toBeVisible({ timeout: 20_000 });
       await expect(page.locator('[data-testid="knockout-waiting"]'), "the waiting strip goes once they are placed").toHaveCount(0, { timeout: 20_000 });
+    },
+  },
+  {
+    // W5 T6 fix round 1 (RB5-L8, L10): a player who arrived after the division's root league FINISHED - a finished table takes no
+    // one, so they are named with no tap; "Open entrants" lands where the organiser moves, withdraws or refunds them.
+    id: "late_unplaced",
+    kind: "late_unplaced",
+    label: en["roundrobin.lateUnplaced.action"],
+    build: async (request) => {
+      const rig = await leagueOfFour(request, "unplaced");
+      expect((await apiJson(request, `/api/v1/divisions/${rig.div.id}/start`, "POST")).status, "Start").toBe(200);
+      await scoreInSeedOrder(request, rig.fixtures, rig.entrantIds);
+      const done = await apiJson(request, `/api/v1/stages/${rig.leagueId}/complete`, "POST");
+      expect(done.status, `complete the league: ${JSON.stringify(done.error)}`).toBe(200);
+      // The arrival is a registration confirmed after the table finished: an automatic arrival is never refused (the organiser's
+      // own Add after the finish is - RR_LATE_ENTRY_STAGE_COMPLETE), so it lands in the field with no line and no waiting mark.
+      const name = `Late Comer ${TAG} ${Math.random().toString(36).slice(2, 6)}`;
+      const settings = await apiJson(request, `/api/v1/divisions/${rig.div.id}/registration-settings`, "PUT", {
+        enabled: true, entrant_kind: "individual", fee_cents: 0, payment_method: "offline", form_fields: [], approval: "auto",
+      });
+      expect(settings.status, `open registration: ${JSON.stringify(settings.error)}`).toBeLessThan(300);
+      const [, orgSlug] = /^\/o\/([^/]+)\//.exec(await competitionPath(request, rig.comp.id))!;
+      const sent = await apiJson<{ entries: { status: string }[] }>(request,
+        `/api/v1/public/orgs/${orgSlug}/competitions/${rig.comp.slug}/register`, "POST", {
+          contact: { name, email: `delivered+unplaced-${Math.random().toString(36).slice(2, 10)}@resend.dev` },
+          privacy_consent: true,
+          entries: [{ division_id: rig.div.id, entrant_kind: "individual", players: [{ full_name: name }], answers: {} }],
+        });
+      expect(sent.status, `register after the finish: ${JSON.stringify(sent.error)}`).toBe(201);
+      expect(sent.data!.entries[0]!.status, "premise: confirmed at once").toBe("confirmed");
+      return { compSlug: rig.comp.slug, divSlug: rig.div.slug, landText: name };
+    },
+    land: async (page) => {
+      await expect(page).toHaveURL(/tab=entrants/);
+      // The work the row names - withdraw or move them - is on the player's own row.
+      await assertUsable(page, '[data-testid="entrant-row-withdraw"]', "the entrants tab offers Withdraw on the rows");
     },
   },
 ];

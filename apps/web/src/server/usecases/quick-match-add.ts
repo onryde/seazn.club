@@ -94,6 +94,8 @@ export async function addQuickMatchDecider(row: QuickMatchRow, pick: AddMatchPic
   if ((await adhocCount(stageId)) >= QUICK_MATCH_MAX_ADHOC) {
     throw new HttpError(422, `a quick match takes at most ${QUICK_MATCH_MAX_ADHOC} extra matches`, QUICK_MATCH_ERRORS.ADHOC_LIMIT);
   }
-  const added = await addFixture(systemAuth(), stageId, { home_entrant_id: pick.home, away_entrant_id: pick.away });
+  // `append`: the decider's own rule is a NEW round at max(round) + 1 (header above), never the latest free round - a Not played
+  // match (`cancelled`) leaves its round free, and an extra match is not a replacement for it.
+  const added = await addFixture(systemAuth(), stageId, { home_entrant_id: pick.home, away_entrant_id: pick.away }, { roundDefault: "append" });
   return { fixtureId: added.fixture_id };
 }

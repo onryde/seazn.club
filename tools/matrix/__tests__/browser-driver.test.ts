@@ -29,7 +29,7 @@ import {
   BrowserDriver, EMPTY_PADS, FINALIZE_EVENT, FORFEIT_DIALOG_ROUTE, NEITHER_WITHHELD_ROUTE, NeitherWithheldButAccepted, NoOrganiserRoute, ORGANISER_TABLE_KINDS, isLosersFedOnly, FINISH_SWISS_ROUTE, OVERRIDE_ROUTE, OrganiserWriteUnproven, PUBLIC_BRACKET_KINDS, PUBLIC_DATA_REVALIDATE_S, PUBLIC_REVALIDATE_S,
   compareTables, publicFreshnessMs, type BrowserPages, type Clock, type HttpSide, type PadRegistry, type Replay,
 } from "../lib/driver/browser-driver.ts";
-import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
+import { DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VisibilityDegraded, type DivisionRef, type FixtureRow, type FixtureStateOut, type FromTemplateAnswer, type GenerateOut, type OrganiserDriver, type StageRef } from "../lib/driver/types.ts";
 import { fieldSizeFor } from "../lib/field-size.ts";
 import { builtAsPosted } from "../lib/scenarios/assertions.ts";
 import { Recorder, TEMPLATE_ENDS_ON, playStage, setUpDivision } from "../lib/scenarios/common.ts";
@@ -105,7 +105,7 @@ function fakePages(over: Partial<BrowserPages> = {}): FakePages {
       stages: builtFrom(input.row),
     }),
     addEntrantsUi: async (_c, _w, es) => es.map((e, i) => ({ id: `e${i + 1}`, display_name: e.displayName, seed: e.seed, status: "registered", kind: e.kind })),
-    withdrawUi: async (_c, _w, e) => ({ entrant_id: e.id, status: "withdrawn", policy: "none", walkovers: 0, voided: 0, skipped_finalized: 0, walked_over_held: 0 }),
+    withdrawUi: async (_c, _w, e) => ({ entrant_id: e.id, status: "withdrawn", policy: "none", walkovers: 0, voided: 0, skipped_cancelled: 0, walked_over_held: 0 }),
     startUi: async (_c, w) => ({ division_id: w.divisionId, status: "active", started: true, generated: 0 }),
     generateUi: async () => ({ created: 0, existing: 0, fixtures: [] }),
     completeStageUi: async () => ({ completed: true, events: [] }),
@@ -330,16 +330,20 @@ describe("BrowserDriver — the mixed path", () => {
     expect(driver.callCount).toBe(4);
   });
 
-  it("completeStage twice → DriverMisuse, as HttpDriver: the second never reaches the page or the http side", async () => {
+  // W5 T17 (X-BD-4, CS-1): a second Complete is no longer refused. It is sent over http (the page's button is gone on a complete
+  // stage), never through the page again, and answers what the product answers.
+  it("completeStage twice (X-BD-4): the second is SENT over http, never the page again, and is not a DriverMisuse", async () => {
     const { driver, http, pageCalls } = league();
     await built(driver, spec("league"));
     expect(await driver.completeStage("s1")).toEqual({ completed: true, events: [] });
-    await expect(driver.completeStage("s1")).rejects.toThrow(DriverMisuse);
+    expect(http.calls, "premise: the first went through the page").not.toContain("completeStage");
+    // differential: today this second call is DriverMisuse and reaches neither side.
+    await expect(driver.completeStage("s1")).resolves.toBeDefined();
     expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(1);
-    expect(http.calls).not.toContain("completeStage");
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
   });
 
-  it("completeStage: a named 4xx refusal committed nothing and stays retryable (over http); an unknown ending is never repeated", async () => {
+  it("completeStage: a named 4xx refusal committed nothing and stays retryable (over http); an unknown ending is repeated over http, as a no-op the product answers (X-BD-4)", async () => {
     const refused = league({ pages: { completeStageUi: async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, "STAGE_NOT_READY", "not ready"); } } });
     await built(refused.driver, spec("league"));
     await expect(refused.driver.completeStage("s1")).rejects.toThrow(RefusedCall);
@@ -350,18 +354,19 @@ describe("BrowserDriver — the mixed path", () => {
       const unknown = league({ pages: { completeStageUi: async () => { throw thrown; } } });
       await built(unknown.driver, spec("league"));
       await expect(unknown.driver.completeStage("s1")).rejects.toBe(thrown);
-      await expect(unknown.driver.completeStage("s1"), thrown.message).rejects.toThrow(DriverMisuse);
-      expect(unknown.http.calls).not.toContain("completeStage");
+      await expect(unknown.driver.completeStage("s1"), thrown.message).resolves.toBeDefined();
+      expect(unknown.http.calls, thrown.message).toContain("completeStage");
+      expect(unknown.pageCalls.filter((c) => c === "completeStageUi"), "never through the page again").toHaveLength(1);
     }
   });
 
-  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED followed a COMMITTED completion, so it is never repeated (over the page or http)", async () => {
+  it("W1-driving T6 (FP-3): a 409 STAGE_COMPLETED_SEEDING_FAILED followed a COMMITTED completion: the repeat goes over http, once, and is the no-op (X-BD-4)", async () => {
     const committed = league({ pages: { completeStageUi: async () => { throw new RefusedCall("POST", "/api/v1/stages/s1/complete", 409, SEEDING_FAILED_AFTER_COMMIT, "no TBD rows"); } } });
     await built(committed.driver, spec("league"));
     await expect(committed.driver.completeStage("s1")).rejects.toThrow(RefusedCall);
-    await expect(committed.driver.completeStage("s1")).rejects.toThrow(DriverMisuse);
+    await expect(committed.driver.completeStage("s1")).resolves.toBeDefined();
     expect(committed.pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(1);
-    expect(committed.http.calls).not.toContain("completeStage");
+    expect(committed.http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
   });
 
   it("guards: an action on a competition, division, stage, entrant or fixture this driver never built is refused by name before any page is touched, and is not recorded", async () => {
@@ -516,24 +521,21 @@ describe("BrowserDriver — creation, from the product's answers (ruling B)", ()
     expect(c.evidence).toEqual(["stage[1].config.rngSeed: built 8, harness 7"]);
   });
 
-  // The brief's example (bodies say legs 3, the builder posts 1) is a false
-  // premise: the bodies ARE the builder's code (catalogue.ts builderStages →
-  // buildTemplateStages), which overwrites every league stage's legs with the
-  // legs knob (format-templates.ts buildTemplateStages), so both sides say
-  // the same thing and this check cannot see triple_rr's hypothesis (W5 owns
-  // it). The shape is kept: the builder posting a legs the bodies do not say.
+  // The bodies ARE the builder's code (catalogue.ts builderStages → buildTemplateStages), which overwrites every league
+  // stage's legs with the legs knob, so both sides normally say the same thing. The shape tested: the builder posting a
+  // legs the bodies do not say.
   it("builder output that differs from the bodies in one config value fails naming the path, and postStages answers what the organiser really got", async () => {
-    const bodies = stagesForRow("triple_rr");
+    const bodies = stagesForRow("league");
     const harnessLegs = bodies[0]!.config.legs as number;
     const builtLegs = harnessLegs + 2;
     const { driver, http } = league({
-      spec: spec("triple_rr"),
+      spec: spec("league"),
       pages: { createDivisionUi: async (_c, _s, compId, i) => ({
         division: { id: "d1", competition_id: compId, name: i.name, slug: PRODUCT_DIV_SLUG, sport_key: i.sportKey, variant_key: i.variantKey, config: {}, status: "draft" },
-        stages: builtFrom("triple_rr").map((s) => ({ ...s, config: { ...s.config, legs: builtLegs } })),
+        stages: builtFrom("league").map((s) => ({ ...s, config: { ...s.config, legs: builtLegs } })),
       }) },
     });
-    const { divId } = await built(driver, spec("triple_rr"));
+    const { divId } = await built(driver, spec("league"));
     const out = await driver.postStages(divId, bodies);
     expect(out[0]!.config.legs).toBe(builtLegs);
     expect(http.calls).not.toContain("postStages");
@@ -577,7 +579,7 @@ function designScopes(): Map<string, string[]> {
 }
 /** D7 as the plan restates it: the stage shape that makes each API-only row. */
 const API_ONLY_SHAPE: Readonly<Record<(typeof API_ONLY_ROWS)[number], string>> = {
-  knockout_third_place: "third place", page_playoff_only: "page_playoff", stepladder_only: "stepladder", group_only: "group", group_group_ko: "group",
+  knockout_third_place: "third place", page_playoff_only: "page_playoff", stepladder_only: "stepladder", group_group_ko: "group",
 };
 /** The wave whose §8 scope names the row's shape — exactly one must. */
 function waveFor(row: (typeof API_ONLY_ROWS)[number], scopes: Map<string, string[]>): string {
@@ -601,6 +603,9 @@ function templateOnlyCells(): Record<string, string> {
     const t = JSON.parse(readFileSync(join(dir, f), "utf8")) as { key: string; divisions: { sportKey: string; stages: CatalogStage[] }[] };
     templates++;
     for (const d of t.divisions) {
+      // W5 X-BD-3: an any-sport template names no sport: it reaches the row on every engine sport, unless a card with the
+      // sport of its own already holds the cell (cricket's group_group_ko is t20-super8).
+      const sports = d.sportKey === "any" ? SPORT_KEYS : [d.sportKey];
       for (const row of API_ONLY_ROWS) {
         const want = stagesForRow(row);
         if (kinds(d.stages) !== kinds(want)) continue;
@@ -610,7 +615,10 @@ function templateOnlyCells(): Record<string, string> {
           return Object.entries(w.config).every(([k, v]) => JSON.stringify(other[k]) === JSON.stringify(v)
             || JSON.stringify(d.stages[i]!.config?.[k] ?? d.stages[i]![k]) === JSON.stringify(v));
         }));
-        if (tellsApart) out[`${row}|${d.sportKey}`] = t.key;
+        if (!tellsApart) continue;
+        // A card with a sport of its own holds its cell; an "any" card fills the cells still free (files are read in name order,
+        // super-groups before t20-super8, so the own-sport card overwrites).
+        for (const sport of sports) if (d.sportKey !== "any" || out[`${row}|${sport}`] === undefined) out[`${row}|${sport}`] = t.key;
       }
     }
   }
@@ -619,10 +627,16 @@ function templateOnlyCells(): Record<string, string> {
 }
 
 describe("BrowserDriver — API-only rows (D7)", () => {
-  it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, and coverage exempts createDivision — while the two template-only cells are refused by name unless the case carries its template (Task 13)", async () => {
+  it("every API-only row × sport: created over http, organiser-ui-path fails naming the wave design §8 gives it, and coverage exempts createDivision — while the one template-only cell is refused by name unless the case carries its template (Task 13)", async () => {
     const scopes = designScopes();
     const cells = templateOnlyCells();
-    expect(cells).toEqual({ "group_only|badminton": "box-league", "group_group_ko|cricket": "t20-super8" });
+    // The cells a card reaches: t20-super8 on cricket holds its own; the any-sport super-groups reaches group_group_ko on every
+    // other engine sport (W5 X-BD-3). differential: box-league's group_only|badminton was a second template-only cell until the
+    // picker gained its Groups only card (W5 T14, X-BD-2).
+    expect(cells).toEqual({
+      "group_group_ko|cricket": "t20-super8",
+      ...Object.fromEntries(SPORT_KEYS.filter((s) => s !== "cricket").map((s) => [`group_group_ko|${s}`, "super-groups"])),
+    });
     let checked = 0;
     let refused = 0;
     let refusedRows = 0;
@@ -2012,19 +2026,37 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
   });
 
   it("a division the harness built over http: the places come from the stages it posted, and from the stages it listed", async () => {
-    // An API-only row: its division is the harness's own, over http. Generic's `score` variant is a real one.
-    const gk = spec("group_group_ko", "generic", { variant: "score", caseId: "group_group_ko|generic|score|LIFECYCLE" });
-    const posted = new StagedHttp(ORG);
+    // B4 merge: no API-only row is left that the harness builds over http on an engine sport - group_only has the picker's card
+    // (W5 T14) and group_group_ko the super-groups card on every sport (X-BD-3). So the division over http is the case's SECOND
+    // one: the first went through the builder, and the mixed ledger's first-only rule sends every later createDivision over http.
+    // The stages posted are three-stage bodies: the places are taken from what is posted, whatever the row.
+    const gk = spec("league", "generic", { variant: "score", caseId: "league|generic|score|LIFECYCLE" });
+    // Its own id: the fake page's builder division is "d1" too, and the driver must not mistake one for the other.
+    const posted = new (class extends StagedHttp {
+      override createDivision(c: string, i: Parameters<StagedHttp["createDivision"]>[1]): Promise<DivisionRef> {
+        return super.createDivision(c, i).then((d) => ({ ...d, id: "d-http" }));
+      }
+    })(ORG);
     const a = make({ http: posted, spec: gk });
-    const { divId } = await built(a.driver, gk);
+    const first = await built(a.driver, gk);
+    const second = await a.driver.createDivision(first.compId, { name: "Matrix generic 2", slug: "d2", sportKey: "generic", variantKey: "score", config: {} });
+    expect(posted.calls.filter((c) => c === "createDivision"), "the second division went over http").toHaveLength(1);
+    const divId = second.id;
+    expect(divId).not.toBe(first.divId);
     await a.driver.postStages(divId, stagesForRow("group_group_ko"));
     await a.driver.completeStage("h1");
     await a.driver.completeStage("h3");
     expect(places(a.pageArgs)).toEqual([{ stage: "h1", at: { ordinal: 1, last: false } }, { stage: "h3", at: { ordinal: 3, last: true } }]);
     // Stages only LISTED: the fake product holds them, the driver learns them from the read.
-    const listed = new StagedHttp(ORG);
+    // The same second division over http (its own id), so the builder's stages of the first never share its places.
+    const listed = new (class extends StagedHttp {
+      override createDivision(c: string, i: Parameters<StagedHttp["createDivision"]>[1]): Promise<DivisionRef> {
+        return super.createDivision(c, i).then((d) => ({ ...d, id: "d-http" }));
+      }
+    })(ORG);
     const b = make({ http: listed, spec: gk });
-    const made = await built(b.driver, gk);
+    const builder = await built(b.driver, gk);
+    const made = { divId: (await b.driver.createDivision(builder.compId, { name: "Matrix generic 2", slug: "d2", sportKey: "generic", variantKey: "score", config: {} })).id };
     // Listed in REVERSE seq order: a place is by seq, never by the order the stages were learned in.
     listed.stages = stagesForRow("group_group_ko").map((x, i) => ({ id: `l${i + 1}`, seq: x.seq, kind: x.kind, config: {}, status: "pending" })).reverse();
     expect((await b.driver.listStages(made.divId)).map((x) => x.id)).toEqual(["l3", "l2", "l1"]);
@@ -2051,7 +2083,7 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
     expect(pageCalls.filter((c) => c === "completeStageUi")).toEqual([]);
   });
 
-  it("a last stage the page already had its turn at is not offered it again: a refused attempt retries over http, as for every type, and a repeat after a completion is still refused", async () => {
+  it("a last stage the page already had its turn at is not offered it again: a refused attempt retries over http, as for every type, and a repeat after a completion is sent over http (X-BD-4)", async () => {
     const refusing = { completeStageUi: async (_c: unknown, _w: unknown, id: unknown): Promise<{ completed: boolean; events: never[] }> => {
       if (id === "s2") throw new RefusedCall("POST", "/api/v1/stages/s2/complete", 409, "STAGE_NOT_READY", "not ready");
       return { completed: true, events: [] };
@@ -2063,7 +2095,9 @@ describe("BrowserDriver — completeStage names the stage's place and shoots the
     expect(await driver.completeStage("s2")).toMatchObject({ completed: true });
     expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
     expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(1);
-    await expect(driver.completeStage("s2")).rejects.toThrow(DriverMisuse);
+    await expect(driver.completeStage("s2")).resolves.toBeDefined();
+    expect(http.calls.filter((c) => c === "completeStage")).toHaveLength(2);
+    expect(pageCalls.filter((c) => c === "completeStageUi")).toHaveLength(2);
   });
 });
 

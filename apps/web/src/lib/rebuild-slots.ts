@@ -228,3 +228,21 @@ export function carrySlots<B extends CarryBeforeRow, A extends CarryAfterRow>(
   for (const slot of free.values()) if (holdsSlot(slot)) freed.push(slot);
   return { assign, freed, unscheduled };
 }
+
+/** A row keyed by what it IS, for `carrySlotsByPair`: a round-robin line's `rrKey` (W5 T2). */
+type PairKeyed = { key: string };
+
+/**
+ * W5 T2 (RB5-G7, RB5-L17): the slots of a round robin carried by PAIR, not by position. A Generate that draws a league or a group
+ * again before Start (a field that changed parity, a group that re-snaked) moves every pair to another `(round, seq)`, so the
+ * positional carry would hand a pair's time to whoever now sits in its place; a pair keeps its own time and court wherever
+ * the regenerate put it, and a pair that did not exist before starts unscheduled. Same bookkeeping as `carrySlots` (claimed
+ * once, freed and unscheduled counted), keyed on `key`: `rrKey(home, away, leg, pool)`, which names the unordered pair, so a
+ * mirrored home/away carries too. `carrySlots` stays positional for Rebuild (X-RB-1).
+ */
+export function carrySlotsByPair<B extends CarryBeforeRow & PairKeyed, A extends CarryAfterRow & PairKeyed>(
+  before: readonly B[],
+  after: readonly A[],
+): CarrySlotsResult {
+  return carrySlots(before, after, { before: (row) => row.key, after: (row) => row.key });
+}

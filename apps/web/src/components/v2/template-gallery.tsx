@@ -38,6 +38,14 @@ import { routes } from "@/lib/routes";
 import { useT } from "@/components/i18n/dict-provider";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
 import { templateEntrantTotal } from "@/server/templates/summary";
+import { isAnyDivision, resolveTemplate, stageShapes } from "@/server/templates/resolve";
+import type { SportOption } from "@/components/v2/division-builder";
+import { CATCH_ALL_SPORT } from "@/lib/division-builder/model";
+import { sportLabel } from "@/lib/scoring-vocab";
+import { variantOptionLabel } from "@/lib/variant-label-keys";
+import {
+  choosableSports, initialChoice, pickCount, pickKind, pickSport, pickVariantKey, templateRequestBody, toChoice, type ChoiceState,
+} from "@/lib/template-choice";
 
 // useT() (not useMsg()) throughout this file, deliberately: every key here
 // is resolved off DATA (template.i18n.nameKey, a stage's kind) rather than
@@ -223,6 +231,130 @@ export function paywallFromError(
   return { feature, reason: doubleElimFormatReason(gatedStage?.kind ?? "double_elim") };
 }
 
+/** What a stage is for the chosen field: "3 pools of 4", or "4 entrants" for a bracket; empty when the declaration does not
+ *  give it by plain arithmetic (`stageShapes`). */
+export function stageShapeText(msg: Msg, shape: ReturnType<typeof stageShapes>[number]): string {
+  if (shape.pools !== undefined && shape.perPool !== undefined) {
+    return msg("templates.detail.shape.pools", { count: shape.pools, size: shape.perPool });
+  }
+  if (shape.entrants !== undefined) return msg("templates.gallery.entrantCount", { count: shape.entrants });
+  return "";
+}
+
+/** An any-sport template's stages, one line each, with what each is for the chosen field ("Group Stage · 3 pools of 4"). */
+function StageShapeList({ msg, division }: { msg: Msg; division: CompetitionTemplate["divisions"][number] }) {
+  const shapes = stageShapes(division);
+  return (
+    <ul className="mt-1 space-y-0.5" data-testid="template-detail-stages">
+      {division.stages.map((stage, si) => {
+        const text = stageShapeText(msg, shapes[si]!);
+        return (
+          <li key={si} className="min-w-0 break-words">
+            <span className="font-medium text-slate-700">{msg(stage.i18nNameKey)}</span>
+            {text ? ` · ${text}` : ""}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** The sport, variant, entrant kind and field size an any-sport template asks for (X-BD-3). Native selects, as the sheet's
+ *  other inputs are plain fields; the sport and variant words are the ones the division builder prints. */
+function TemplateChoiceFields({
+  msg,
+  division,
+  template,
+  sports,
+  choice,
+  onChange,
+}: {
+  msg: Msg;
+  division: CompetitionTemplate["divisions"][number];
+  template: CompetitionTemplate;
+  sports: SportOption[];
+  choice: ChoiceState;
+  onChange: (next: ChoiceState) => void;
+}) {
+  const offered = choosableSports(sports);
+  const sport = offered.find((s) => s.key === choice.sportKey);
+  const kinds = sport?.entrants?.kinds ?? [];
+  const counts = division.entrantCountOptions ?? [division.entrantCount];
+  /** "12 entrants · 3 pools of 4": the option says what the size makes, from the one resolver. */
+  const countLabel = (n: number): string => {
+    const r = resolveTemplate(template, { ...toChoice(choice), entrantCount: n });
+    const first = r.ok ? stageShapes(r.template.divisions[0]!)[0] : undefined;
+    const shape = first ? stageShapeText(msg, first) : "";
+    return `${msg("templates.gallery.entrantCount", { count: n })}${shape ? ` · ${shape}` : ""}`;
+  };
+  return (
+    <div className="grid min-w-0 gap-4 sm:grid-cols-2" data-testid="template-choice">
+      <label className="block min-w-0">
+        <span className="label">{msg("wizard.sport")}</span>
+        <select
+          value={choice.sportKey}
+          onChange={(e) => onChange(pickSport(choice, e.target.value, sports))}
+          data-testid="template-choice-sport"
+          className="input min-h-11"
+        >
+          {offered.map((s) => (
+            <option key={s.key} value={s.key}>
+              {s.key === CATCH_ALL_SPORT ? msg("divBuilder.sport.generic") : sportLabel(s.key, msg)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block min-w-0">
+        <span className="label">{msg("divset.variant")}</span>
+        <select
+          value={choice.variantKey}
+          onChange={(e) => onChange(pickVariantKey(choice, e.target.value))}
+          data-testid="template-choice-variant"
+          className="input min-h-11"
+        >
+          {(sport?.variants ?? []).map((v) => (
+            <option key={v.key} value={v.key}>
+              {variantOptionLabel(choice.sportKey, v, msg)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block min-w-0">
+        <span className="label">{msg("divBuilder.entrants.label")}</span>
+        <select
+          value={choice.kind}
+          onChange={(e) => onChange(pickKind(choice, e.target.value as ChoiceState["kind"]))}
+          disabled={kinds.length < 2}
+          data-testid="template-choice-kind"
+          className="input min-h-11"
+        >
+          {kinds.map((k) => (
+            <option key={k} value={k}>
+              {msg(`divBuilder.entrants.kind.${k}`)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block min-w-0">
+        <span className="label">{msg("templates.detail.count.label")}</span>
+        <select
+          value={choice.count}
+          onChange={(e) => onChange(pickCount(choice, Number(e.target.value)))}
+          data-testid="template-choice-count"
+          className="input min-h-11"
+        >
+          {counts.map((n) => (
+            <option key={n} value={n}>
+              {countLabel(n)}
+            </option>
+          ))}
+        </select>
+        <span className="mt-1 block text-xs text-slate-500">{msg("templates.detail.count.hint")}</span>
+      </label>
+    </div>
+  );
+}
+
 export function TemplateCard({
   template,
   msg,
@@ -249,7 +381,10 @@ export function TemplateCard({
       <span className="text-base font-semibold text-purple-900">{msg(template.i18n.nameKey)}</span>
       <span className="text-sm text-slate-500">{msg(template.i18n.descriptionKey)}</span>
       <span className="mt-1 text-xs font-medium text-purple-600">
-        {structure} · {msg("templates.gallery.entrantCount", { count: templateEntrantTotal(template) })}
+        {/* A template that names no field of its own (X-BD-3) has no entrant total to state: the sheet asks for it. */}
+        {template.divisions.some(isAnyDivision)
+          ? structure
+          : `${structure} · ${msg("templates.gallery.entrantCount", { count: templateEntrantTotal(template) })}`}
       </span>
       <span className="text-xs font-medium text-purple-500 underline underline-offset-2">
         {msg("templates.gallery.cta")}
@@ -264,9 +399,13 @@ export function TemplateDetailSheet({
   onClose,
   publicDashboardUpgrade,
   viewerPlan,
+  sports,
 }: {
   orgSlug: string;
   template: CompetitionTemplate;
+  /** The sports an any-sport template (X-BD-3) can be built on, with their variants and entrant models: the page reads them
+   *  as the new-division page does. Unused by a template with a sport of its own. */
+  sports: SportOption[];
   onClose: () => void;
   /** What the next plan up hosts for `dashboard.public.max` — see the blank
    *  wizard's own prop for why this is required and handed down rather than
@@ -289,7 +428,14 @@ export function TemplateDetailSheet({
     { name: string; slug: string; limit: number | null } | null
   >(null);
   const [busy, setBusy] = useState(false);
-  const progressionLines = templateProgressionLines(msg, template);
+  // X-BD-3: a template that names no sport of its own asks for one here. `choice` is null for every other template, so
+  // their sheet and their POST are exactly what they were.
+  const anyDivision = template.divisions.find(isAnyDivision);
+  const [choice, setChoice] = useState<ChoiceState | null>(() => (anyDivision ? initialChoice(anyDivision, sports) : null));
+  // What the sheet describes is what the create builds: the same resolveTemplate the server runs.
+  const resolved = choice ? resolveTemplate(template, toChoice(choice)) : null;
+  const shown = resolved?.ok ? resolved.template : template;
+  const progressionLines = templateProgressionLines(msg, shown);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -319,13 +465,7 @@ export function TemplateDetailSheet({
         public_quota_degraded?: { feature_key: string; limit: number | null };
       }>("/api/v1/competitions/from-template", {
         method: "POST",
-        json: {
-          template_key: template.key,
-          template_version: template.version,
-          name,
-          starts_on: startsOn || null,
-          ends_on: endsOn,
-        },
+        json: templateRequestBody({ template, name, startsOn, endsOn, choice }),
       });
       // ONE signal, the explicit one. Diffing `visibility` against the request
       // would be a second guard covering for the first, and two guards covering
@@ -421,7 +561,7 @@ export function TemplateDetailSheet({
           <button
             type="submit"
             form="template-detail-form"
-            disabled={busy || !name.trim()}
+            disabled={busy || !name.trim() || (anyDivision !== undefined && choice === null)}
             data-testid="template-detail-submit"
             className="btn btn-primary min-h-11"
           >
@@ -467,26 +607,48 @@ export function TemplateDetailSheet({
           />
         </div>
 
+        {anyDivision && choice && (
+          <TemplateChoiceFields msg={msg} division={anyDivision} template={template} sports={sports} choice={choice} onChange={setChoice} />
+        )}
+        {anyDivision && choice === null && (
+          // The page could not read any sport to build on (a failed read is soft): say so, rather than show an empty
+          // Structure list and a Submit that stays disabled with no word why.
+          <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800" role="status" data-testid="template-choice-empty">
+            {msg("templates.detail.noSports")}
+          </p>
+        )}
+
         <p>{msg(template.i18n.descriptionKey)}</p>
 
+        {!(anyDivision && choice === null) && (
         <div>
           <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
             {msg("templates.detail.structureTitle")}
           </h4>
           <ul className="space-y-1 text-sm text-slate-600" data-testid="template-detail-structure">
-            {template.divisions.map((division) => (
-              <li key={division.i18nNameKey}>
-                <span className="font-medium text-slate-700">{msg(division.i18nNameKey)}</span>
-                {" — "}
-                {templateStructureChain(msg, division)}
-                {" · "}
-                {msg("templates.gallery.entrantCount", { count: division.entrantCount })}
-              </li>
-            ))}
+            {shown.divisions.map((division) =>
+              isAnyDivision(division) ? null : anyDivision ? (
+                <li key={division.i18nNameKey} className="min-w-0">
+                  <span className="font-medium text-slate-700">{msg(division.i18nNameKey)}</span>
+                  {" — "}
+                  {msg("templates.gallery.entrantCount", { count: division.entrantCount })}
+                  <StageShapeList msg={msg} division={division} />
+                </li>
+              ) : (
+                <li key={division.i18nNameKey}>
+                  <span className="font-medium text-slate-700">{msg(division.i18nNameKey)}</span>
+                  {" — "}
+                  {templateStructureChain(msg, division)}
+                  {" · "}
+                  {msg("templates.gallery.entrantCount", { count: division.entrantCount })}
+                </li>
+              ),
+            )}
           </ul>
         </div>
+        )}
 
-        {progressionLines.length > 0 && (
+        {progressionLines.length > 0 && !(anyDivision && choice === null) && (
           <div>
             <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
               {msg("templates.detail.progressionTitle")}
@@ -523,10 +685,13 @@ export function TemplateGallery({
   publicDashboardUpgrade,
   publicSlots,
   viewerPlan,
+  sports,
 }: {
   orgSlug: string;
   /** The org the blank form's description editor uploads images to. */
   orgId: string;
+  /** The sport catalogue for an any-sport template's sheet (X-BD-3), as the new-division page reads it. */
+  sports: SportOption[];
   /** The catalog, passed down from the Server Component page — see the
    *  module header for why this can't be a direct catalog.ts import here. */
   templates: CompetitionTemplate[];
@@ -596,6 +761,7 @@ export function TemplateGallery({
         <TemplateDetailSheet
           orgSlug={orgSlug}
           template={selected}
+          sports={sports}
           onClose={() => setDetailKey(null)}
           publicDashboardUpgrade={publicDashboardUpgrade}
           viewerPlan={viewerPlan}

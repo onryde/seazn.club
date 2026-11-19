@@ -1061,6 +1061,29 @@
                       "unlisted",
                       "public"
                     ]
+                  },
+                  "sport_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "variant_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "entrant_kind": {
+                    "type": "string",
+                    "enum": [
+                      "team",
+                      "pair",
+                      "individual"
+                    ]
+                  },
+                  "entrant_count": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
                   }
                 },
                 "required": [
@@ -10297,6 +10320,14 @@
                           "reason"
                         ],
                         "additionalProperties": false
+                      },
+                      "late_entry_pool": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 2
+                      },
+                      "prefer_rebuild": {
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -10537,6 +10568,14 @@
                             "reason"
                           ],
                           "additionalProperties": false
+                        },
+                        "late_entry_pool": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 2
+                        },
+                        "prefer_rebuild": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -10812,6 +10851,111 @@
                                     "case"
                                   ],
                                   "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "format": {
+                                      "type": "string",
+                                      "enum": [
+                                        "league",
+                                        "group"
+                                      ]
+                                    },
+                                    "entrant_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "stage_id": {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                    },
+                                    "case": {
+                                      "type": "string",
+                                      "enum": [
+                                        "catch_up",
+                                        "rebuild_offered",
+                                        "refused",
+                                        "waiting"
+                                      ]
+                                    },
+                                    "source": {
+                                      "type": "string",
+                                      "enum": [
+                                        "organiser",
+                                        "automatic"
+                                      ]
+                                    },
+                                    "pool_key": {
+                                      "type": "string"
+                                    },
+                                    "fixtures": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "fixture_id": {
+                                            "type": "string",
+                                            "format": "uuid",
+                                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                          },
+                                          "round_no": {
+                                            "type": "integer",
+                                            "minimum": -9007199254740991,
+                                            "maximum": 9007199254740991
+                                          },
+                                          "placement": {
+                                            "type": "string",
+                                            "enum": [
+                                              "bye_slot",
+                                              "catch_up_round"
+                                            ]
+                                          },
+                                          "scheduled": {
+                                            "type": "boolean"
+                                          }
+                                        },
+                                        "required": [
+                                          "fixture_id",
+                                          "round_no",
+                                          "placement",
+                                          "scheduled"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "appended_rounds": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    },
+                                    "drawn_in": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      }
+                                    },
+                                    "pins_cleared": {
+                                      "type": "integer",
+                                      "minimum": -9007199254740991,
+                                      "maximum": 9007199254740991
+                                    }
+                                  },
+                                  "required": [
+                                    "format",
+                                    "entrant_id",
+                                    "stage_id",
+                                    "case",
+                                    "source"
+                                  ],
+                                  "additionalProperties": false
                                 }
                               ]
                             }
@@ -11056,6 +11200,111 @@
                                       "entrant_id",
                                       "stage_id",
                                       "case"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "format": {
+                                        "type": "string",
+                                        "enum": [
+                                          "league",
+                                          "group"
+                                        ]
+                                      },
+                                      "entrant_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "stage_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "case": {
+                                        "type": "string",
+                                        "enum": [
+                                          "catch_up",
+                                          "rebuild_offered",
+                                          "refused",
+                                          "waiting"
+                                        ]
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "organiser",
+                                          "automatic"
+                                        ]
+                                      },
+                                      "pool_key": {
+                                        "type": "string"
+                                      },
+                                      "fixtures": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "fixture_id": {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                            },
+                                            "round_no": {
+                                              "type": "integer",
+                                              "minimum": -9007199254740991,
+                                              "maximum": 9007199254740991
+                                            },
+                                            "placement": {
+                                              "type": "string",
+                                              "enum": [
+                                                "bye_slot",
+                                                "catch_up_round"
+                                              ]
+                                            },
+                                            "scheduled": {
+                                              "type": "boolean"
+                                            }
+                                          },
+                                          "required": [
+                                            "fixture_id",
+                                            "round_no",
+                                            "placement",
+                                            "scheduled"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "appended_rounds": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "reason": {
+                                        "type": "string"
+                                      },
+                                      "drawn_in": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        }
+                                      },
+                                      "pins_cleared": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      }
+                                    },
+                                    "required": [
+                                      "format",
+                                      "entrant_id",
+                                      "stage_id",
+                                      "case",
+                                      "source"
                                     ],
                                     "additionalProperties": false
                                   }
@@ -11918,7 +12167,7 @@
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
                             },
-                            "skipped_finalized": {
+                            "skipped_cancelled": {
                               "type": "integer",
                               "minimum": -9007199254740991,
                               "maximum": 9007199254740991
@@ -11970,7 +12219,7 @@
                             "policy",
                             "walkovers",
                             "voided",
-                            "skipped_finalized",
+                            "skipped_cancelled",
                             "walked_over_held",
                             "left_to_organiser",
                             "lucky_loser"
@@ -12119,8 +12368,142 @@
                                 "case"
                               ],
                               "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "format": {
+                                  "type": "string",
+                                  "enum": [
+                                    "league",
+                                    "group"
+                                  ]
+                                },
+                                "entrant_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "stage_id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "case": {
+                                  "type": "string",
+                                  "enum": [
+                                    "catch_up",
+                                    "rebuild_offered",
+                                    "refused",
+                                    "waiting"
+                                  ]
+                                },
+                                "source": {
+                                  "type": "string",
+                                  "enum": [
+                                    "organiser",
+                                    "automatic"
+                                  ]
+                                },
+                                "pool_key": {
+                                  "type": "string"
+                                },
+                                "fixtures": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "fixture_id": {
+                                        "type": "string",
+                                        "format": "uuid",
+                                        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                      },
+                                      "round_no": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "placement": {
+                                        "type": "string",
+                                        "enum": [
+                                          "bye_slot",
+                                          "catch_up_round"
+                                        ]
+                                      },
+                                      "scheduled": {
+                                        "type": "boolean"
+                                      }
+                                    },
+                                    "required": [
+                                      "fixture_id",
+                                      "round_no",
+                                      "placement",
+                                      "scheduled"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "appended_rounds": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "reason": {
+                                  "type": "string"
+                                },
+                                "drawn_in": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  }
+                                },
+                                "pins_cleared": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "format",
+                                "entrant_id",
+                                "stage_id",
+                                "case",
+                                "source"
+                              ],
+                              "additionalProperties": false
                             }
                           ]
+                        },
+                        "reinstate": {
+                          "type": "object",
+                          "properties": {
+                            "voided": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "rerecorded": {
+                              "type": "integer",
+                              "minimum": 0,
+                              "maximum": 9007199254740991
+                            },
+                            "not_restored": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              }
+                            }
+                          },
+                          "required": [
+                            "voided",
+                            "rerecorded",
+                            "not_restored"
+                          ],
+                          "additionalProperties": false
                         }
                       },
                       "required": [
@@ -12810,6 +13193,255 @@
           },
           "409": {
             "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/entrants/{id}/withdrawal-preview": {
+      "get": {
+        "summary": "What withdrawing or disqualifying this entrant WOULD do, read-only (W5, owner ruling 289): `cascade` false when nothing beyond a status is settled (she has already left); `started` false before Start (a plain status flip, no match touched); else one row per stage she plays in — a league or group: `mode` `expunge` (under half of her scheduled matches played: every result removed, the rest void) or `award` (half or more: results stand, the rest walk over), with her `played` and `scheduled` counts; a Swiss: always `award`; a bracket: `bracket_walkover` — with `pending` (the matches still to play: id, opponent name or null for an open seat, round) and `undo` (`restores`: Reinstate reverses it; `rejoins`: a Swiss Reinstate rejoins her; `waits`: a knockout Reinstate waits for the organiser to place her). The counts are the withdrawal's own decision, so the write then acts on them. A finished league or group is not listed. 422 when `as` is neither withdrawn nor disqualified",
+        "tags": [
+          "entrants"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "withdrawn",
+                "disqualified"
+              ]
+            },
+            "description": "The departure previewed"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -17335,6 +17967,45 @@
                           "points": {},
                           "carry_deltas": {},
                           "rank_overrides": {},
+                          "round_byes": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pool": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "round_no": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "leg": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 8
+                                },
+                                "entrant_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "pool",
+                                "round_no",
+                                "leg",
+                                "entrant_id"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "cross_feeds": {},
                           "placements": {},
                           "rules": {
@@ -17780,6 +18451,45 @@
                             "points": {},
                             "carry_deltas": {},
                             "rank_overrides": {},
+                            "round_byes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pool": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "leg": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 8
+                                  },
+                                  "entrant_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "pool",
+                                  "round_no",
+                                  "leg",
+                                  "entrant_id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "cross_feeds": {},
                             "placements": {},
                             "rules": {
@@ -18761,6 +19471,45 @@
                           "points": {},
                           "carry_deltas": {},
                           "rank_overrides": {},
+                          "round_byes": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "pool": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "round_no": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 9007199254740991
+                                },
+                                "leg": {
+                                  "type": "integer",
+                                  "minimum": 1,
+                                  "maximum": 8
+                                },
+                                "entrant_id": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "required": [
+                                "pool",
+                                "round_no",
+                                "leg",
+                                "entrant_id"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
                           "cross_feeds": {},
                           "placements": {},
                           "rules": {
@@ -19206,6 +19955,45 @@
                             "points": {},
                             "carry_deltas": {},
                             "rank_overrides": {},
+                            "round_byes": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "pool": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "leg": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 8
+                                  },
+                                  "entrant_id": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "required": [
+                                  "pool",
+                                  "round_no",
+                                  "leg",
+                                  "entrant_id"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "cross_feeds": {},
                             "placements": {},
                             "rules": {
@@ -20512,6 +21300,63 @@
                                 "unscheduled"
                               ],
                               "additionalProperties": false
+                            },
+                            "reason": {
+                              "type": "string",
+                              "const": "pools_below_minimum"
+                            },
+                            "groups": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "entrants": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "required": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "suggested": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "setups_removed": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "names": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "names"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pins_cleared": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             }
                           },
                           "required": [
@@ -22523,6 +23368,63 @@
                                 "unscheduled"
                               ],
                               "additionalProperties": false
+                            },
+                            "reason": {
+                              "type": "string",
+                              "const": "pools_below_minimum"
+                            },
+                            "groups": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "entrants": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "required": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "suggested": {
+                              "anyOf": [
+                                {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "setups_removed": {
+                              "type": "object",
+                              "properties": {
+                                "count": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "names": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "count",
+                                "names"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "pins_cleared": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
                             }
                           },
                           "required": [
@@ -22563,6 +23465,11 @@
                             "unscheduled"
                           ],
                           "additionalProperties": false
+                        },
+                        "pins_cleared": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         }
                       },
                       "required": [
@@ -22870,7 +23777,7 @@
     },
     "/api/v1/stages/{id}/late-entrants/{entrantId}/place": {
       "post": {
-        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). No body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on",
+        "summary": "W4 T11 (X-LE-10, ruling 271) — the organiser's one tap on a late player WAITING to join a started root knockout: an automatic arrival (a confirmed or paid registration, a waitlist promotion, an import, a Reinstate) is never placed by the app — it waits, flagged on the desk (late_players_waiting). A knockout reads no body. Runs the cases Add late player runs: the lowest-seeded holder's bye (case 'bye'), else a withdrawn entrant's seat with the walkover reversed (case 'withdrawn_slot'); a reinstated player only gets their own walked-over seat back. Placed: the marker clears and an undo barrier is written. No slot: 200 with case 'refused', or 'rebuild_offered' when nothing in the stage has started, reason KO_LATE_ENTRY_NO_SLOT — the player keeps waiting; with nothing started but the division's schedule frozen, case 'refused' with reason KO_LATE_ENTRY_SCHEDULE_FROZEN (Rebuild refuses a frozen schedule: unfreeze first) — the player keeps waiting. 409 KO_LATE_ENTRY_NOT_WAITING when the entrant does not wait on this stage; 422 KO_LATE_ENTRY_FED_STAGE when this knockout is filled from the stage the player waits on. W5 T6 (X-CU-8): on a running root LEAGUE or GROUP the same tap places a player waiting there (table_waiting_stage_id): the catch-up lines Add late player writes (case 'catch_up', or 'rebuild_offered' when nothing in the stage has started — the lines are written either way), unscheduled, with an undo barrier; the marker clears. Optional body pool_key: the group pool to join (else the smallest). Optional body prefer_rebuild (fix round 1 I1): when nothing in the stage has started, the stage is drawn again with the player in it (Rebuild's own body; case 'rebuild_offered', reason 'rebuilt', no catch-up line); 409 STAGE_HAS_RESULTS, nothing moved, once a match has started. 409 RR_LATE_ENTRY_ALREADY_PLACED when the player already holds a line of the stage (a second tap); 409 RR_LATE_ENTRY_NOT_WAITING when they do not wait on it; 422 RR_LATE_ENTRY_UNKNOWN_POOL / RR_LATE_ENTRY_STAGE_COMPLETE / RR_LATE_ENTRY_NOTHING_TO_ADD — the player keeps waiting",
         "tags": [
           "stages"
         ],
@@ -22895,6 +23802,31 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pool_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2
+                  },
+                  "prefer_rebuild": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "pool_key": "ex",
+                "prefer_rebuild": true
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -22912,65 +23844,174 @@
                       "const": true
                     },
                     "data": {
-                      "type": "object",
-                      "properties": {
-                        "format": {
-                          "type": "string",
-                          "const": "knockout"
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "format": {
+                              "type": "string",
+                              "const": "knockout"
+                            },
+                            "entrant_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "stage_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "case": {
+                              "type": "string",
+                              "enum": [
+                                "bye",
+                                "withdrawn_slot",
+                                "waiting",
+                                "refused",
+                                "rebuild_offered"
+                              ]
+                            },
+                            "fixture_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "opponent_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "withdrawn_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "scheduled": {
+                              "type": "boolean"
+                            },
+                            "schedule_frozen": {
+                              "type": "boolean",
+                              "const": true
+                            },
+                            "reason": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "format",
+                            "entrant_id",
+                            "stage_id",
+                            "case"
+                          ],
+                          "additionalProperties": false
                         },
-                        "entrant_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "stage_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "case": {
-                          "type": "string",
-                          "enum": [
-                            "bye",
-                            "withdrawn_slot",
-                            "waiting",
-                            "refused",
-                            "rebuild_offered"
-                          ]
-                        },
-                        "fixture_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "opponent_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "withdrawn_id": {
-                          "type": "string",
-                          "format": "uuid",
-                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                        },
-                        "scheduled": {
-                          "type": "boolean"
-                        },
-                        "schedule_frozen": {
-                          "type": "boolean",
-                          "const": true
-                        },
-                        "reason": {
-                          "type": "string"
+                        {
+                          "type": "object",
+                          "properties": {
+                            "format": {
+                              "type": "string",
+                              "enum": [
+                                "league",
+                                "group"
+                              ]
+                            },
+                            "entrant_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "stage_id": {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            "case": {
+                              "type": "string",
+                              "enum": [
+                                "catch_up",
+                                "rebuild_offered",
+                                "refused",
+                                "waiting"
+                              ]
+                            },
+                            "source": {
+                              "type": "string",
+                              "enum": [
+                                "organiser",
+                                "automatic"
+                              ]
+                            },
+                            "pool_key": {
+                              "type": "string"
+                            },
+                            "fixtures": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "fixture_id": {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  "round_no": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "placement": {
+                                    "type": "string",
+                                    "enum": [
+                                      "bye_slot",
+                                      "catch_up_round"
+                                    ]
+                                  },
+                                  "scheduled": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "fixture_id",
+                                  "round_no",
+                                  "placement",
+                                  "scheduled"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "appended_rounds": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "drawn_in": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              }
+                            },
+                            "pins_cleared": {
+                              "type": "integer",
+                              "minimum": -9007199254740991,
+                              "maximum": 9007199254740991
+                            }
+                          },
+                          "required": [
+                            "format",
+                            "entrant_id",
+                            "stage_id",
+                            "case",
+                            "source"
+                          ],
+                          "additionalProperties": false
                         }
-                      },
-                      "required": [
-                        "format",
-                        "entrant_id",
-                        "stage_id",
-                        "case"
-                      ],
-                      "additionalProperties": false
+                      ]
                     },
                     "requestId": {
                       "type": "string",
@@ -23224,7 +24265,7 @@
     },
     "/api/v1/stages/{id}/complete": {
       "post": {
-        "summary": "Guarded stage completion / progression. A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before. A completed stage's `stage_completed` event carries `finalRanks` (entrant ids in rank order), `places` (`{entrantId, rank}`; level entrants share a rank, e.g. 1, 2, 3, 3 for a knockout without a third-place match) and, for a bracket, `title` (`champion`, `joint` or `vacant`, with the finalists of a vacant title)",
+        "summary": "Guarded stage completion / progression. A stage that is ALREADY complete answers `{completed: false, already_complete: true, events: [], seed_proposal}` (W5 T17, X-BD-4): a no-op that computes no proposal, stales none, draws nothing and publishes nothing, so a second Complete is safe to send; `seed_proposal` is the next stage's existing draft or `null`. (An `on_complete` next stage that was never drawn, a draw the schedule freeze refused, is still drawn by the repeat, and that answer is the first one's shape.) A bracket stage whose final is settled but which still owes another line — a third-place match, or a bracket reset the losers' champion earned — that is scheduled, in play, or abandoned and held for its settle is refused 409 STAGE_HAS_UNDECIDED_FIXTURES with `fixture_ids` (W4 T6, AN-2) and nothing is written; a bye line, a cancelled line and a reset nobody owes are never owed. A bracket whose final is not yet settled answers `{completed: false}` as before. A completed stage's `stage_completed` event carries `finalRanks` (entrant ids in rank order), `places` (`{entrantId, rank}`; level entrants share a rank, e.g. 1, 2, 3, 3 for a knockout without a third-place match) and, for a bracket, `title` (`champion`, `joint` or `vacant`, with the finalists of a vacant title)",
         "tags": [
           "stages"
         ],
@@ -23294,6 +24335,34 @@
                             "entrants"
                           ],
                           "additionalProperties": false
+                        },
+                        "already_complete": {
+                          "type": "boolean"
+                        },
+                        "seed_proposal": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                },
+                                "status": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "id",
+                                "status"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -23320,7 +24389,8 @@
                       "entrants": [
                         "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                       ]
-                    }
+                    },
+                    "already_complete": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -23560,7 +24630,7 @@
     },
     "/api/v1/stages/{id}/standings": {
       "get": {
-        "summary": "Standings snapshot: one pool's table (`pool_id`; the stage's own table without it) as last folded. Each row carries the sport's ledger in `metrics` — with `won_ot`, `won_so`, `lost_ot`, `lost_so` (W2d spec §5.7: the wins and losses decided in overtime or a shoot-out, whatever the points rule paid for them) — and `tieBreak` naming the step that split it from the rows it was tied with (`key`, the rows it was tied `with`; `note` `h2h_two_not_applicable` / `h2h_incomplete` when a conditional step could not split a residual tie; `drawnAt`, the date a stored drawing of lots was made). `level: true` is on every row of a table with no counted fixture (no leader, nobody first), and `rank` is then `null` on every row (2026-10-28: the place 1..n otherwise; an older client that reads `rank` as a number must handle null)",
+        "summary": "Standings snapshot: one pool's table (`pool_id`) as last folded; without it, the stage's own table — and on a stage with SEVERAL pools EVERY pool (W5: `pool_id` null, `rows` the pools' rows in pool order, each row's `rank` within its own `pool`; list the pools with `GET /stages/{id}/pools`). Every row also names its entrant (`name`) and says whether she is still competing (`status`: `active`, or `withdrawn` / `disqualified` — a departed entrant's row stays while the table counts her results) and which pool its rank is within (`pool`, the pool's `key`; null on a table that names none: a league, a group of one pool). Each row carries the sport's ledger in `metrics` — with `won_ot`, `won_so`, `lost_ot`, `lost_so` (W2d spec §5.7: the wins and losses decided in overtime or a shoot-out, whatever the points rule paid for them) — and `tieBreak` naming the step that split it from the rows it was tied with (`key`, the rows it was tied `with`; `note` `h2h_two_not_applicable` / `h2h_incomplete` when a conditional step could not split a residual tie; `drawnAt`, the date a stored drawing of lots was made). `level: true` is on every row of a table with no counted fixture (no leader, nobody first), and `rank` is then `null` on every row (2026-10-28: the place 1..n otherwise; an older client that reads `rank` as a number must handle null)",
         "tags": [
           "stages"
         ],
@@ -23744,6 +24814,40 @@
                               },
                               "level": {
                                 "type": "boolean"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "examples": [
+                                  "Riverside"
+                                ]
+                              },
+                              "status": {
+                                "type": "string",
+                                "enum": [
+                                  "active",
+                                  "withdrawn",
+                                  "disqualified"
+                                ]
+                              },
+                              "pool": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "examples": [
+                                  "A"
+                                ]
                               }
                             },
                             "required": [
@@ -23753,7 +24857,10 @@
                               "drawn",
                               "lost",
                               "points",
-                              "metrics"
+                              "metrics",
+                              "name",
+                              "status",
+                              "pool"
                             ],
                             "additionalProperties": false
                           }
@@ -23817,11 +24924,254 @@
                           "won_so": 1,
                           "lost_ot": 1,
                           "lost_so": 1
-                        }
+                        },
+                        "name": "Riverside",
+                        "status": "active",
+                        "pool": "A"
                       }
                     ],
                     "computed_through_seq": "42",
                     "updated_at": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/stages/{id}/pools": {
+      "get": {
+        "summary": "The pools of a stage with SEVERAL pools, in pool order (W5, ST-G28): `id` is what `GET /stages/{id}/standings?pool_id=` takes, `key` is what a standings row's `pool` carries. A stage whose table names no pool (a league, a knockout, a group of one pool) lists none",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "pools": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "key": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "key",
+                              "name"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "stage_id",
+                        "pools"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "pools": [
+                      {
+                        "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "key": "example",
+                        "name": "example"
+                      }
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -44704,6 +46054,252 @@
         ]
       }
     },
+    "/api/v1/fixtures/{id}/withdrawal-preview": {
+      "get": {
+        "summary": "What a disqualification recorded IN this match would do to `entrant` (W5, owner ruling 289): the body of /entrants/{id}/withdrawal-preview with this match counted as played, read before the pad's sanction ending is confirmed. Any actor who may score the fixture (an organiser, an accepted official, its device link). `cascade` false on a bracket fixture (its disqualification is that match's forfeit, nothing more). 404 when `entrant` does not sit on this fixture; 422 without `entrant`",
+        "tags": [
+          "scoring"
+        ],
+        "x-required-scope": "score",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "entrant",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The side being disqualified"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {},
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {},
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/fixtures/{id}/finalize": {
       "post": {
         "summary": "Lock the ledger (core.finalize)",
@@ -49898,6 +51494,9 @@
                                   }
                                 ]
                               },
+                              "expunged": {
+                                "type": "boolean"
+                              },
                               "forfeit": {
                                 "anyOf": [
                                   {
@@ -50168,6 +51767,13 @@
                                         ],
                                         "additionalProperties": false
                                       }
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "withdrawn",
+                                        "disqualified"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -50270,6 +51876,29 @@
                                     "type": "null"
                                   }
                                 ]
+                              },
+                              "withdrawalNotes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrantId": {
+                                      "type": "string"
+                                    },
+                                    "lead": {
+                                      "type": "string"
+                                    },
+                                    "body": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "entrantId",
+                                    "lead",
+                                    "body"
+                                  ],
+                                  "additionalProperties": false
+                                }
                               },
                               "updatedAt": {
                                 "type": "string"
@@ -50461,6 +52090,68 @@
                               "drawable",
                               "championFixtureId",
                               "title"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "poolWinners": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "divisionId": {
+                                "type": "string"
+                              },
+                              "divisionSlug": {
+                                "type": "string"
+                              },
+                              "pools": {
+                                "minItems": 2,
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "poolId": {
+                                      "type": "string"
+                                    },
+                                    "label": {
+                                      "type": "string"
+                                    },
+                                    "entrantId": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "name": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "poolId",
+                                    "label",
+                                    "entrantId",
+                                    "name"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "divisionId",
+                              "divisionSlug",
+                              "pools"
                             ],
                             "additionalProperties": false
                           }
@@ -51571,7 +53262,7 @@
     },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings": {
       "get": {
-        "summary": "Public standings: every published table of the division, each row as `GET /stages/{id}/standings` serves it (`won_ot`/`won_so`/`lost_ot`/`lost_so` in `metrics`, `tieBreak` with its `note` and `drawnAt`, `level` on a table with no counted fixture, whose rows carry `rank: null`; each table is judged on its own rows)",
+        "summary": "Public standings: every published table of the division, each row as `GET /stages/{id}/standings` serves it, `name`, `status` and `pool` included — a withdrawn or disqualified entrant's row names her here, though the public entrants list drops her (`won_ot`/`won_so`/`lost_ot`/`lost_so` in `metrics`, `tieBreak` with its `note` and `drawnAt`, `level` on a table with no counted fixture, whose rows carry `rank: null`; each table is judged on its own rows)",
         "tags": [
           "public"
         ],
@@ -51770,6 +53461,40 @@
                                     },
                                     "level": {
                                       "type": "boolean"
+                                    },
+                                    "name": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "examples": [
+                                        "Riverside"
+                                      ]
+                                    },
+                                    "status": {
+                                      "type": "string",
+                                      "enum": [
+                                        "active",
+                                        "withdrawn",
+                                        "disqualified"
+                                      ]
+                                    },
+                                    "pool": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "examples": [
+                                        "A"
+                                      ]
                                     }
                                   },
                                   "required": [
@@ -51779,7 +53504,10 @@
                                     "drawn",
                                     "lost",
                                     "points",
-                                    "metrics"
+                                    "metrics",
+                                    "name",
+                                    "status",
+                                    "pool"
                                   ],
                                   "additionalProperties": false
                                 }
@@ -51838,7 +53566,10 @@
                               "won_so": 1,
                               "lost_ot": 1,
                               "lost_so": 1
-                            }
+                            },
+                            "name": "Riverside",
+                            "status": "active",
+                            "pool": "A"
                           }
                         ],
                         "updated_at": "example"

@@ -774,8 +774,8 @@ async function walkoverForHome(auth: AuthCtx, id: string): Promise<void> {
   const r = await fixtureRow(id);
   await post(auth, id, "core.start");
   // W2b D3 (X-RS-1): after the Start with nothing played a forfeit is a disqualification (or a walkover, ruling 112) —
-  // never a retirement (ruling 113: nobody retires from a match never played).
-  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "disqualified" });
+  // never a retirement (ruling 113: nobody retires from a match never played). W5 T8b (ruling 289): a disqualification in a table stage now withdraws the entrant from it (X-WDT-10); this rig only wants one decided fixture, so a walkover after the Start (ruling 112).
+  await post(auth, id, "core.forfeit", { by: r.away_entrant_id, reason: "walkover" });
 }
 
 /** Decide a chess game for home over the board: a real `win` with a LOSER (a forfeit's award seats no loser). */
@@ -1509,9 +1509,11 @@ describe.skipIf(!HAS_DB)("ruling D-G3, answered by W2b (spec §5.4), and the tab
     const ch = await fixtureRow(l.challengeId);
     expect([ch.status, ch.outcome]).toEqual(["forfeited", { kind: "award", winner: challenger, loser: holder, reason: "withdrew" }]);
     // Jul3/08 §6: the challenger taking the game takes the position — the departed holder drops one place. Twice.
-    // The second call is the idempotent one: completed, no second stage_completed event.
+    // The second call is the idempotent one. Since W5 X-BD-4 (RB5-S4) a repeat Complete is a NAMED no-op: it completes nothing
+    // (`completed: false`), says `already_complete: true`, and writes no second stage_completed event.
     expect(await completionOrRefusal(l.auth, l.stageId), "first").toEqual({ completed: true, ranks: [challenger, holder, l3, l4] });
-    expect(await completionOrRefusal(l.auth, l.stageId), "second").toEqual({ completed: true, ranks: null });
+    const second = await completeStage(l.auth, l.stageId);
+    expect([second.completed, second.already_complete, second.events], "second").toEqual([false, true, []]);
   });
 
   it("table stages: a scorer's abandon HOLDS completion until the organiser settles it, a withdrawal's EXPUNGE never does (X-AB-5; ruling 105)", async () => {

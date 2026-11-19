@@ -113,6 +113,7 @@ const mountSheet = (upgrade: PublicDashboardUpgrade | null) =>
   renderIsland(TemplateDetailSheet, {
     orgSlug: "riverside",
     template: leaguePlayoff,
+    sports: [],
     onClose: () => {},
     publicDashboardUpgrade: upgrade,
     viewerPlan: "community",

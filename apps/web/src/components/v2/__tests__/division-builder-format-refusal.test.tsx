@@ -141,6 +141,125 @@ describe("division builder - a format refusal goes when the knob it names change
   });
 });
 
+// W5 Task 12 (X-BD-1, PO-1): a pool count the plan's field cannot fill is refused at Next, naming the count that works - the same numbers
+// the server's first Generate refuses with (C38). The sentence is typed from the copy decision (RB5-E4: floor(7/3)=2, so 3 pools).
+describe("division builder - a pool count the plan cannot fill (X-BD-1)", () => {
+  const GROUPS_KO = "Groups + Knockout";
+  const setPlanEntrants = (h: H, value: string) => {
+    const el = h.tree().find((e) => e.type === "input" && propsOf(e)["data-testid"] === "division-builder-plan-entrants");
+    if (!el) throw new Error("no plan entrants box on screen");
+    (propsOf(el).onChange as (e: unknown) => void)({ target: { value } });
+  };
+  const poolRefusal = "Pools: 4 pools need at least 8 entrants in total, 2 per pool (have 7). Choose 3 pools, or add entrants.";
+  function onPools(plan: string, pools: string): H {
+    const h = mount();
+    setName(h, "Cup");
+    setPlanEntrants(h, plan);
+    pickFormat(h, GROUPS_KO);
+    press(h, UI["wizard.tab.format"]!);
+    setKnob(h, "pools", pools);
+    return h;
+  }
+
+  it("X-BD-1 Next refuses 7 into 4 naming 3, goes when the pool box or the plan changes, and 7 into 3 passes", () => {
+    // differential: the builder judged only the pool count's bounds (2..8) before, so 4 pools passed for a plan of 7.
+    const h = onPools("7", "4");
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "premise: the refusal is on screen").toContain(poolRefusal);
+    expect(h.text(), "the same sentence the dictionary holds for the pool-size refusal").toContain(UI["wizard.err.poolSize"]!.replace("{field}", "Pools").replace("{pools}", "4").replace("{required}", "8").replace("{entrants}", "7").replace("{suggested}", "3"));
+    expect(apiV1Mock).not.toHaveBeenCalled();
+
+    setKnob(h, "pools", "3");
+    expect(h.text(), "mended by the count it offered").not.toContain(poolRefusal);
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "and 7 into 3 passes Next").not.toContain("Pools:");
+
+    setKnob(h, "pools", "4");
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "4 refused again").toContain(poolRefusal);
+    setPlanEntrants(h, "8");
+    expect(h.text(), "a plan of 8 fills 4 pools: the refusal goes with the number it named").not.toContain(poolRefusal);
+  });
+
+  it("X-BD-1 Show example refuses the same field before drawing anything", () => {
+    const h = onPools("7", "4");
+    press(h, UI["wizard.showExample"]!);
+    expect(h.text()).toContain(poolRefusal);
+    expect(apiV1Mock, "nothing was drawn").not.toHaveBeenCalled();
+  });
+
+  it("X-BD-1 a plan too small for any pool count says to add entrants and names no count", () => {
+    const h = onPools("3", "2");
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text()).toContain("Pools: 2 pools need at least 4 entrants in total, 2 per pool (have 3). Add entrants.");
+  });
+});
+
+// W5 Task 12b (X-BD-8, RB5-E6): a Top N the plan's field cannot supply is refused at Next, naming the largest cut that works - the same
+// numbers the server's Start and resolve doors refuse with (RR_CUT_EXCEEDS_FIELD). The sentences are typed from the copy decision.
+describe("division builder - a Top N the plan cannot supply (X-BD-8)", () => {
+  const setPlanEntrants = (h: H, value: string) => {
+    const el = h.tree().find((e) => e.type === "input" && propsOf(e)["data-testid"] === "division-builder-plan-entrants");
+    if (!el) throw new Error("no plan entrants box on screen");
+    (propsOf(el).onChange as (e: unknown) => void)({ target: { value } });
+  };
+  const exceeds = "Qualify to finals: 8 can't qualify from 6 entrants. Choose 6 or fewer, or add entrants.";
+  const bestNth = "Qualify to finals: 2 pools of this size can supply at most 6 qualifiers, not 7. Choose 6 or fewer, or add entrants.";
+
+  it("X-BD-8 Swiss Knockout: a top 8 of a plan of 6 is refused naming 6, goes when the box or the plan changes, and 6 of 6 passes", () => {
+    // differential: the builder judged only the Top N's bounds (2..32), so a top 8 of 6 passed and the server met it at Complete.
+    const h = mount();
+    setName(h, "Cup");
+    setPlanEntrants(h, "6");
+    pickFormat(h, SWISS_KO);
+    press(h, UI["wizard.tab.format"]!);
+    setKnob(h, "qualify", "8");
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "premise: the refusal is on screen").toContain(exceeds);
+    expect(apiV1Mock).not.toHaveBeenCalled();
+
+    setKnob(h, "qualify", "6");
+    expect(h.text(), "mended by the number it named").not.toContain(exceeds);
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "and a cut equal to the field passes Next (the off-by-one pin)").not.toContain("can't qualify");
+
+    setKnob(h, "qualify", "8");
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "8 refused again").toContain(exceeds);
+    setPlanEntrants(h, "8");
+    expect(h.text(), "a plan of 8 can supply 8: the refusal goes with the number it named").not.toContain(exceeds);
+  });
+
+  it("X-BD-8 Groups + Knockout: a best-Nth cut no pool can supply is refused with the pool shape's own maximum", () => {
+    const h = mount();
+    setName(h, "Cup");
+    setPlanEntrants(h, "7");
+    pickFormat(h, "Groups + Knockout");
+    press(h, UI["wizard.tab.format"]!);
+    setKnob(h, "pools", "2");
+    setKnob(h, "qualify", "7");
+    press(h, UI["divBuilder.step.review"]!);
+    // 7 into pools of 4 and 3: the best 4th would need a 4th in the 3-pool.
+    expect(h.text()).toContain(bestNth);
+    setKnob(h, "qualify", "6");
+    press(h, UI["divBuilder.step.review"]!);
+    expect(h.text(), "6 (three per pool) is supplied").not.toContain("can't qualify");
+    expect(h.text()).not.toContain(bestNth);
+  });
+
+  it("X-BD-8 Show example refuses the same cut before drawing anything", () => {
+    const h = mount();
+    setName(h, "Cup");
+    setPlanEntrants(h, "6");
+    pickFormat(h, SWISS_KO);
+    press(h, UI["wizard.tab.format"]!);
+    setKnob(h, "qualify", "8");
+    press(h, UI["wizard.showExample"]!);
+    expect(h.text()).toContain(exceeds);
+    expect(apiV1Mock, "nothing was drawn").not.toHaveBeenCalled();
+  });
+});
+
 // D1's other half: the builder's number inputs measured 42px and Next / Back 38px, under the house 44px tap floor (`min-h-11`). The painted
 // height is `mobile.spec.ts`'s; this pins the class on EVERY number input the builder draws (every tab's, shown or hidden) and on every
 // button of the Cancel / Back / Next / Create row, so a new knob or a restyled button cannot slip back under it.

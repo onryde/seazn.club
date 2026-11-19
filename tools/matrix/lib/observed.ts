@@ -165,7 +165,7 @@ export interface WithdrawalObs {
   policy: "none" | "walkover" | "expunge";
   walkovers: number;
   voided: number;
-  skippedFinalized: number;
+  skippedCancelled: number;
   /** The withdrawn entrant's fixtures as they stood immediately before the call. */
   before: FixtureSnap[];
   /** americano: the fixtures the withdrawn PLAYER held only through minted pair entrants (a side whose members hold their
@@ -268,8 +268,9 @@ export function snap(f: ObservedFixture): FixtureSnap {
 
 /** Pending, in the product's reading (lib/table-withdrawal.ts). */
 export const PENDING_STATUSES: readonly string[] = Object.freeze(["scheduled", "in_play"]);
-/** Locked: the cascade reports these and never touches them (withdrawal.ts:102). */
-export const LOCKED_STATUSES: readonly string[] = Object.freeze(["finalized", "cancelled"]);
+/** Locked: the cascade reports these and never touches them (withdrawal.ts). W5 T8 (ST-G15, RB5-W2): a FINALIZED line is no longer one - the
+ *  expunge reopens its finalize and removes its result like any other - so only a cancelled line is left as it is. */
+export const LOCKED_STATUSES: readonly string[] = Object.freeze(["cancelled"]);
 /** W1-driving Task 7 (false premise 16): the stage kinds whose withdrawal
  *  walkover FORFEITS each pending fixture to the opponent — the withdrawal
  *  module's TABLE_KINDS (withdrawal.ts:37) ∪ BRACKET_WALKOVER_KINDS

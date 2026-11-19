@@ -98,8 +98,6 @@ interface Row {
 const NO_SLOT = "Round 1 complete; no slot left.";
 const NOT_WAITING = "This player isn't waiting to join this bracket.";
 const NOT_UNDOABLE = "Adding a late player can't be undone. Withdraw the player instead.";
-/** Main's Start-lock sentence (entrants.ts), typed here: what a table-fed knockout's list answers a late add. */
-const LOCKED = "This tournament has started — the entrant list is locked. Withdrawing entrants still works.";
 
 // ─── What is enumerated ────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -110,13 +108,13 @@ const KNOBS = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
  *  pin below rather than slip past the matrix. */
 const ENTRY_TEMPLATES = STAGE_TEMPLATES.filter((t) => {
   const first = t.build(KNOBS)[0];
-  return !t.retired && first?.kind === "knockout" && first.progression === null;
+  return first?.kind === "knockout" && first.progression === null;
 }).map((t) => t.key);
 
 /** Every template that carries a knockout AFTER its first stage: the knockout is fed, so it is no entry stage (RB4-L2). */
 const FED_TEMPLATES = STAGE_TEMPLATES.filter((t) => {
   const stages = t.build(KNOBS);
-  return !t.retired && stages[0]?.kind !== "knockout" && stages.slice(1).some((s) => s.kind === "knockout");
+  return stages[0]?.kind !== "knockout" && stages.slice(1).some((s) => s.kind === "knockout");
 }).map((t) => t.key);
 
 /** A PLAYED win for `winner` after `core.start`, through the scorer's own events — each sport's own vocabulary. The set of
@@ -902,11 +900,12 @@ describe.runIf(HAS_DB)("X-LE-3 X-LE-4 X-LE-5 X-LE-6 X-LE-7 X-LE-10 X-LE-11 X-LE-
 
 // ─── Fed tails: the knockout a table feeds never seats a late entrant (RB4-L2, X-LE-2) ──────────────────────────────────
 
-/** What a late add to each fed template does, from the rulebook (RB4-L2): league and groups have no late-entry rule yet (W5),
- *  so the add is the Start lock's refusal; a Swiss takes the entrant itself (ruling 250), never its knockout. */
-const FED_OUTCOME: Record<string, "locked" | "joins_swiss"> = {
-  league_ko: "locked",
-  groups_ko: "locked",
+/** What a late add to each fed template does, from the rulebook (RB4-L2; W5 RB5-L1, L2): a table keeps the list OPEN after
+ *  Start (W5 T4: the add is accepted into the league or group, Task 5 seats it — it was the Start lock's refusal before
+ *  W5), a Swiss takes the entrant itself (ruling 250); NEITHER ever seats it in the knockout they feed. */
+const FED_OUTCOME: Record<string, "table_open" | "joins_swiss"> = {
+  league_ko: "table_open",
+  groups_ko: "table_open",
   swiss_knockout: "joins_swiss",
 };
 
@@ -917,7 +916,7 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
   });
 
   const checked = new Set<string>();
-  const refused = new Set<string>();
+  const opened = new Set<string>();
   const joined = new Set<string>();
   for (const template of FED_TEMPLATES) {
     for (const kind of KINDS) {
@@ -929,13 +928,13 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
         expect(tailBefore.length, "premise: the knockout's day-one bracket is laid out").toBeGreaterThan(0);
         const [tail] = await sql<{ kind: string }[]>`select kind from stages where id = ${knockoutId}`;
         expect(tail!.kind, "premise: the second stage is the fed knockout").toBe("knockout");
-        const snap = await snapshot(rig);
 
-        if (FED_OUTCOME[template] === "locked") {
-          const err = await refusal(addLate(rig, "Late"));
-          expect(err, "the table-fed list is locked").toMatchObject({ status: 422, message: LOCKED });
-          await expectNothingWritten(rig, snap, `${template}: a refused add`);
-          refused.add(`${template}|${kind}`);
+        if (FED_OUTCOME[template] === "table_open") {
+          // differential: today (110b2ccbd3) the add is refused 422 "the entrant list is locked".
+          const [late] = await createEntrants(rig.auth, rig.divisionId, [entrantInput(kind, "Late")]);
+          expect(late!.display_name, "the table's list is open: the add is accepted").toBe("Late");
+          expect(await seatedIn(late!.id), "never seated in the fed knockout").not.toContain(knockoutId);
+          opened.add(`${template}|${kind}`);
         } else {
           const [late] = await createEntrants(rig.auth, rig.divisionId, [entrantInput(kind, "Late")]);
           expect(late!.late_entry, "the answer is the Swiss's, by format").toMatchObject({ format: "swiss", stage_id: rig.rootId });
@@ -947,7 +946,18 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
         // An automatic arrival: never a waiting flag on a fed knockout (it is no entry stage), seated nowhere in it.
         const arrival = await registerAndConfirm(rig, "Arrival");
         expect(await waitingOn(arrival), "RB4-L2: no flag points at a fed knockout").toBeNull();
-        expect(await deskLate(rig), "the desk raises no late-player row").toEqual([]);
+        // W5 X-CU-8 (RB5-L10, V535): on a running ROOT table the arrival waits on the TABLE, flagged on the desk with
+        // `table: true` and the table's name; a Swiss root takes no flag (it seats the arrival itself). Never the knockout.
+        const [tw] = await sql<{ w: string | null }[]>`select table_waiting_stage_id as w from entrants where id = ${arrival}`;
+        if (FED_OUTCOME[template] === "table_open") {
+          expect(tw!.w, "RB5-L10: the arrival waits on the root table, never on the fed knockout").toBe(rig.rootId);
+          expect(await deskLate(rig), "the desk raises the TABLE's late-player row, one").toEqual([
+            { kind: "late_players_waiting", count: 1, stageName: rig.rootName, table: true },
+          ]);
+        } else {
+          expect(tw!.w, "a Swiss root flags no table wait").toBeNull();
+          expect(await deskLate(rig), "the desk raises no late-player row").toEqual([]);
+        }
         expect(await tailRowsOf(rig), "the knockout still stands").toEqual(tailBefore);
         expect(await seatedIn(arrival), "never seated in the knockout").not.toContain(knockoutId);
         checked.add(`${template}|${kind}`);
@@ -958,9 +968,9 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
   it("anti-vacuity: every fed template × kind was checked, and the outcome split is the declared one", () => {
     expect(checked.size, "cells checked").toBeGreaterThan(0);
     expect(checked.size, "templates × kinds").toBe(FED_TEMPLATES.length * KINDS.length);
-    expect(refused.size, "league_ko and groups_ko refuse").toBe(KINDS.length * Object.values(FED_OUTCOME).filter((o) => o === "locked").length);
+    expect(opened.size, "league_ko and groups_ko keep their table's list open").toBe(KINDS.length * Object.values(FED_OUTCOME).filter((o) => o === "table_open").length);
     expect(joined.size, "swiss_knockout joins its Swiss").toBe(KINDS.length * Object.values(FED_OUTCOME).filter((o) => o === "joins_swiss").length);
-    expect(refused.size + joined.size, "every cell fell in exactly one bucket").toBe(checked.size);
+    expect(opened.size + joined.size, "every cell fell in exactly one bucket").toBe(checked.size);
   });
 });
 

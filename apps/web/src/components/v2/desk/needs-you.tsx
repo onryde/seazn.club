@@ -104,7 +104,12 @@ export function needsYouItems(
             // — "1 fixtures unscheduled" on the common end-of-scheduling
             // case. `plural()` picks the `.one`/`.other` form.
             title: plural(dict, "desk.needsYou.unscheduled", a.count, locale, { division: d.name }),
-            sub: t(dict, "desk.needsYou.unscheduled.sub"),
+            // W5 T23 (X-CU-12; R24 pick 3A): when some of them are a late player's catch-up matches (written unscheduled, RB5-L13),
+            // the row says how many — the count IS the flag and clears as each gets a slot (Task 5).
+            sub:
+              a.catchUp !== undefined && a.catchUp > 0
+                ? `${t(dict, "desk.needsYou.unscheduled.sub")} ${plural(dict, "desk.needsYou.unscheduled.catchUp", a.catchUp, locale)}`
+                : t(dict, "desk.needsYou.unscheduled.sub"),
             action: { label: t(dict, "desk.needsYou.unscheduled.action"), href: routes.divisionSchedule(org, comp, d.slug) },
           });
           break;
@@ -205,12 +210,38 @@ export function needsYouItems(
         }
         // W4 T11 (X-LE-10; R24 pick 1A): late players waiting to join a started knockout — one row per division, its
         // stage named; "Open bracket" lands on the Fixtures tab, where the stage card offers Add to bracket per player.
+        // W5 T6 (X-CU-8): the same row for a running league or group (`a.table`), its copy saying "table".
         case "late_players_waiting":
           items.push({
             key: needsYouKey(d.id, "late_players_waiting"), severity: sev, kind: a.kind,
-            title: plural(dict, "knockout.lateWaiting", a.count, locale),
-            sub: t(dict, "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
-            action: { label: t(dict, "knockout.lateWaiting.action"), href: routes.division(org, comp, d.slug, "fixtures") },
+            title: a.table ? plural(dict, "roundrobin.lateWaiting", a.count, locale) : plural(dict, "knockout.lateWaiting", a.count, locale),
+            sub: t(dict, a.table ? "roundrobin.lateWaiting.sub" : "knockout.lateWaiting.sub", { division: d.name, stage: a.stageName }),
+            // W5 T23 (X-CU-8; Task 6 ruling I2): a table's row lands ON the "Waiting to join the table" strip (`#table-waiting`, the
+            // stage card's strip — one root table per division), where its tap is.
+            action: {
+              label: t(dict, a.table ? "roundrobin.lateWaiting.action" : "knockout.lateWaiting.action"),
+              href: a.table ? `${routes.division(org, comp, d.slug, "fixtures")}#table-waiting` : routes.division(org, comp, d.slug, "fixtures"),
+            },
+          });
+          break;
+        // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the table finished — named, no tap (a finished table takes
+        // no one); "Open entrants" lands where the organiser moves, withdraws or refunds them.
+        case "late_unplaced":
+          items.push({
+            key: needsYouKey(d.id, "late_unplaced"), severity: sev, kind: a.kind,
+            title: plural(dict, "roundrobin.lateUnplaced", a.count, locale),
+            sub: t(dict, "roundrobin.lateUnplaced.sub", { division: d.name, stage: a.stageName, names: a.names.join(", ") }),
+            action: { label: t(dict, "roundrobin.lateUnplaced.action"), href: routes.division(org, comp, d.slug, "entrants") },
+          });
+          break;
+        // W5 T8b review I2 (b): a withdrawal that did not finish — named; "Open entrants" lands on the row whose Withdraw
+        // (or Disqualify) runs the cascade again from the lines as they stand.
+        case "withdrawal_owed":
+          items.push({
+            key: needsYouKey(d.id, "withdrawal_owed"), severity: sev, kind: a.kind,
+            title: plural(dict, "withdrawal.owed", a.count, locale),
+            sub: t(dict, "withdrawal.owed.sub", { division: d.name, names: a.names.join(", ") }),
+            action: { label: t(dict, "withdrawal.owed.action"), href: routes.division(org, comp, d.slug, "entrants") },
           });
           break;
         // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own

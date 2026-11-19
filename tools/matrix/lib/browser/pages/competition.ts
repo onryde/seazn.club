@@ -17,7 +17,7 @@
 //    division" and "Later" are links; Later (`first-division-later`) goes to
 //    routes.competition(org, created.slug) (first-division-prompt.tsx). Before
 //    C8 the wizard router.push()ed straight to the competition.
-import type { FromTemplateAnswer } from "../../driver/types.ts";
+import type { FromTemplateAnswer, TemplateCreateInput } from "../../driver/types.ts";
 import { actAndAwait } from "../respond.ts";
 import { DATA, NAME, TESTID, templateCardTestid } from "../selectors.ts";
 import { actBudget, awaitScreen, navBudget, shoot, visit, type PageCtx } from "./ctx.ts";
@@ -82,7 +82,7 @@ export async function createCompetitionUi(c: PageCtx, input: { name: string }): 
  *    (:323-330) — so there is no landing to wait for, and the driver's
  *    read-back refuses the visibility (HttpDriver.readBackTemplate).
  *  The answer is the product's own (FromTemplateResult). */
-export async function createFromTemplateUi(c: PageCtx, key: string, input: { name: string; endsOn: string }): Promise<FromTemplateAnswer> {
+export async function createFromTemplateUi(c: PageCtx, key: string, input: TemplateCreateInput): Promise<FromTemplateAnswer> {
   // Refuses an unknown or unsafe key by name before any navigation.
   const cardId = templateCardTestid(key);
   const { page } = c;
@@ -92,6 +92,24 @@ export async function createFromTemplateUi(c: PageCtx, key: string, input: { nam
   await card.click({ timeout: t });
   const form = page.locator(DATA.templateDetailForm.selector);
   await form.getByLabel(NAME.templateName.text, { exact: true }).fill(input.name, { timeout: t });
+  // W5 X-BD-3: an any-sport template asks for its sport, variant, entrant kind and field in the sheet. The sport first: choosing
+  // one resets the variant and the kind to that sport's own, so the three after it are the organiser's override of those.
+  if (input.choice) {
+    const ch = input.choice;
+    await page.getByTestId(TESTID.templateChoiceSport.id).selectOption(ch.sportKey, { timeout: t });
+    await page.getByTestId(TESTID.templateChoiceVariant.id).selectOption(ch.variantKey, { timeout: t });
+    // The sheet DISABLES this select for a sport that plays one kind (template-gallery.tsx `disabled={kinds.length < 2}`: football,
+    // cricket, hockey, ice hockey, board game): Playwright would wait for it to be enabled and time out. There is nothing to
+    // choose, so read what it shows and refuse a case whose kind is not the one the sport is fixed to.
+    const kind = page.getByTestId(TESTID.templateChoiceKind.id);
+    if (await kind.isEnabled({ timeout: t })) {
+      await kind.selectOption(ch.entrantKind, { timeout: t });
+    } else {
+      const fixed = await kind.inputValue({ timeout: t });
+      if (fixed !== ch.entrantKind) throw new Error(`the sheet fixes ${ch.sportKey}'s entrants to "${fixed}" (its kind select is disabled), but the case asks for "${ch.entrantKind}"`);
+    }
+    await page.getByTestId(TESTID.templateChoiceCount.id).selectOption(String(ch.entrantCount), { timeout: t });
+  }
   await form.getByLabel(NAME.templateEndsOn.text, { exact: true }).fill(input.endsOn, { timeout: t });
   const before = await shoot(c, "01-competition-from-template-before");
   const { data } = await actAndAwait<FromTemplateAnswer>(page, { method: "POST", path: /^\/api\/v1\/competitions\/from-template$/ },

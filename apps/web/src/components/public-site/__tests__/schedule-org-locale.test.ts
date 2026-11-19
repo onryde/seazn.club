@@ -27,6 +27,13 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),
 }));
 vi.mock("@/server/usecases/discipline", () => ({ publicSuspensions: async () => [] }));
+// W5 T8: both pages read the departure notes' ledger (`loadTableWithdrawals`, SQL) - unmocked here since T8, so this file read an
+// invalid uuid ("d1") against a local database and "DATABASE_URL is not set" in the unit job. It answers no departures: the
+// footnote is not what this file tests (the page-* suites mock it the same way).
+vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
+  loadTableWithdrawals: async () => [],
+}));
 
 import { getDictionary } from "@/lib/i18n";
 import { LOCALES } from "@/lib/i18n-constants";

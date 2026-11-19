@@ -211,7 +211,8 @@ describe.skipIf(!HAS_DB)("a stage write resolves only after the revalidation it 
 
     for (const r of rows) {
       await scoreEvent(s.auth, r.id, { expected_seq: await tip(r.id), type: "core.start", payload: {} } as never);
-      await scoreEvent(s.auth, r.id, { expected_seq: await tip(r.id), type: "core.forfeit", payload: { by: r.away, reason: "disqualified" } } as never);
+      // W5 T8b (ruling 289): a disqualification in a table stage now withdraws the entrant from it (X-WDT-10); this rig only wants one decided fixture, so a walkover after the Start (ruling 112).
+      await scoreEvent(s.auth, r.id, { expected_seq: await tip(r.id), type: "core.forfeit", payload: { by: r.away, reason: "walkover" } } as never);
     }
     const done = await observe(s.divisionId, () => completeStage(s.auth, s.stageId));
     expect(done.outcome).toBe("resolved");

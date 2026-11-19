@@ -112,7 +112,7 @@ describe.skipIf(!HAS_DB)("W4 B5a T11: both finalists out leaves the title vacant
     await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
     const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
     expect(data, "the public division reads").not.toBeNull();
-    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings)).toMatchObject({ kind: "vacant" });
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools)).toMatchObject({ kind: "vacant" });
   });
 
   it("X-CH-3 a disqualification counts as out", async () => {
@@ -416,7 +416,10 @@ describe.skipIf(!HAS_DB)("W4 T16 fix 1: two sequential Withdraws of both finalis
     const ledger = async () => (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${final.id}`)[0]!.n;
     const rows = await ledger();
     expect(rows, "premise: the first Withdraw wrote its forfeit").toBeGreaterThan(0);
-    await withdrawEntrantCascade(s.auth, a, { as: "disqualified" });
+    // B3 fix wave (I-2, RB3-17): a departed entrant entering the door again is refused and nothing is written - the first
+    // departure governs (her status stays `withdrawn`).
+    await expect(withdrawEntrantCascade(s.auth, a, { as: "disqualified" })).rejects.toMatchObject({ status: 409 });
+    expect((await sql<{ status: string }[]>`select status from entrants where id = ${a}`)[0]!.status).toBe("withdrawn");
     expect(await ledger(), "the walkover is not voided and re-written: b is still in").toBe(rows);
     expect((await fixtureRow(final.id)).outcome, "b still holds the walkover").toMatchObject({ kind: "award", winner: b, reason: "withdrew" });
     checked++;
@@ -442,7 +445,7 @@ describe.skipIf(!HAS_DB)("W4 T16 fix 1: two sequential Withdraws of both finalis
         join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id where d.id = ${s.divisionId}`;
     await sql`update competitions set visibility = 'public' where id = ${s.competitionId}`;
     const data = await getPublicDivision(slugs!.org, slugs!.comp, slugs!.div);
-    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings), "the public title agrees").toMatchObject({ kind: "champion" });
+    expect(divisionTitle(data!.stages, data!.fixtures, data!.standings, data!.pools), "the public title agrees").toMatchObject({ kind: "champion" });
     checked++;
   });
 

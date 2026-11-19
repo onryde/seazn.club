@@ -143,6 +143,12 @@ export interface Climber {
  * W2d concern 2 (spec §5.7, anti-goal 3): a LEVEL table on either side -> null. Its `rank` is the seed order, not a
  * place, so there is nothing to climb from or to — and since the generate writes a table stage's level table, every
  * first result rolls one into `previous`.
+ *
+ * B5 fix wave fix round 2 (controller ruling m4, owner standing "apply rec"): a climber is a move a RESULT caused, so `previous`
+ * is the table before the last RESULT's refold (`writeSnapshot`'s cause, engine-db/competition.ts): a roster refold — a withdrawal,
+ * a Reinstate, a disqualification's cascade, a late entrant's placement, an expunge, a pin — rebases `previous` onto the new table,
+ * so its moves are never a step here. The step is then measured over the rows both tables share: a row new in `current` (a pool
+ * member's first counted match, a late entrant's first result) neither climbs nor stops the others from climbing.
  */
 export function biggestClimber(
   current: readonly RankedEntrantRow[],

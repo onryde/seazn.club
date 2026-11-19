@@ -54,6 +54,7 @@ const stub = vi.hoisted(() => ({
   getPublicPlayerUpcoming: vi.fn<typeof getPublicPlayerUpcoming>(),
   readEntrantMemberRefs: vi.fn(),
   readLeaderRows: vi.fn(),
+  loadTableWithdrawals: vi.fn(),
   publicRegistrationInfo: vi.fn(),
   activePublicSuspensionEntries: vi.fn(),
   resolveSponsors: vi.fn(),
@@ -109,6 +110,12 @@ vi.mock("@/server/public-site/data", async (importOriginal) => ({
 vi.mock("@/server/public-site/public-leaders", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/public-leaders")>()),
   readLeaderRows: stub.readLeaderRows,
+}));
+// W5 T8 (RB5-W7): the hub's departure-notes read (`division_events` rows of a league or group). The sweep has no database, so the
+// read is data handed in here: ZERO rows, the answer for a division where nobody has withdrawn.
+vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
+  loadTableWithdrawals: stub.loadTableWithdrawals,
 }));
 vi.mock("@/server/usecases/registrations", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/usecases/registrations")>()),
@@ -585,6 +592,7 @@ function seedHub(mode: HubMode) {
   stub.activePublicSuspensionEntries.mockResolvedValue([
     { divisionId: "d-a", personId: "p-a0-1", entrantId: "a1", name: "1zqplayer 9zqone", remaining: 2 },
   ]);
+  stub.loadTableWithdrawals.mockResolvedValue([]);
   stub.readLeaderRows.mockResolvedValue(
     [1, 2, 3, 4, 5, 6].map((i) => ({
       divisionId: "d-a",

@@ -25,6 +25,7 @@ import {
   type GenerateOptions,
   type SealedSetupCounts,
 } from "./types";
+import { refuseCutBeyondField } from "./cut-gate";
 import { fireStageRevalidate, refoldStageTable } from "./helpers";
 import { refuseFormatTooSmall, swissActiveEntrants, swissPairRanksTable } from "./swiss-gen";
 import { rankedStageStandings } from "@/server/engine-db/competition";
@@ -32,6 +33,7 @@ import { sealedStageSetupCounts } from "./roster-drift";
 import { generateProgressionSetupFixtures } from "./setup-fixtures";
 import { generateStageFixturesTx, regenerateStageInTx } from "./generate-tx";
 import { seedNextStage } from "./carry-over";
+import { dropPinsOfChangedPools, readPoolMembers, readStagePins } from "../rank-override";
 
 /** R10e (review-r10d m1): generate a stage's fixtures and publish the write.
  *  New fixtures change the hub (their kick-offs and courts), so the hub key
@@ -100,8 +102,9 @@ async function generateStageFixturesWrite(
       // T26c (I1, round-trip budget): whether the division holds a FED page playoff - the one size gate a non-knockout root
       // answers to - and the division's status, read in this same statement, so a root whose division has no page playoff
       // pays no extra round trip for the gate below (generate-roundtrips.test.ts pins the budget).
-      const [stage] = await tx<(StageRow & { fed_page_playoff: boolean; division_status: string | null })[]>`
+      const [stage] = await tx<(StageRow & { fed_page_playoff: boolean; division_status: string | null; has_lines: boolean })[]>`
         select ${tx(STAGE_COLS)},
+               exists (select 1 from fixtures x where x.stage_id = stages.id) as has_lines,
                exists (select 1 from stages p
                         where p.division_id = stages.division_id and p.kind = 'page_playoff' and p.progression is not null)
                  as fed_page_playoff,
@@ -144,6 +147,12 @@ async function generateStageFixturesWrite(
       const rootKnockout = stage.kind === "knockout" && stage.progression === null;
       const drawn = rootKnockout && (await tx`select 1 from fixtures where stage_id = ${stageId} limit 1`).length > 0;
       readsSealedSetup = drawn && !Array.isArray(stage.config.qualified);
+      // W5 T2 fix round 1: a root league or group that already holds its lines can be redrawn by this Generate too
+      // (`reconcileRoundRobinGenerate`), and refuses over setup the same way, so it reads the sealed counts as well. Only the
+      // lines-already-drawn case pays the read, as the knockout's does.
+      if (!readsSealedSetup && (stage.kind === "league" || stage.kind === "group") && stage.progression === null && !Array.isArray(stage.config.qualified)) {
+        readsSealedSetup = stage.has_lines;
+      }
       // W4 T15 (X-PL-1, X-QM-5): a root knockout about to be drawn, or redrawn before Start, on a field its format cannot play. A
       // bracket drawn and started is left out: after Start a withdrawal is the bracket's to settle, and this Generate reshapes nothing.
       if (rootKnockout) {
@@ -159,7 +168,12 @@ async function generateStageFixturesWrite(
       }
       if (!stage.progression) return null;
       const progression = stage.progression as unknown as ProgressionSpec & { timing: "setup" | "on_complete" };
-      if (progression.timing === "setup") return { seeded: true as const };
+      // W5 T12b (X-BD-8): a `timing: "setup"` stage is drawn off the shape of the cut it takes, so a cut the roster cannot supply is
+      // refused here by name, before a placeholder line is written (`refuseCutBeyondField` holds only before Start).
+      if (progression.timing === "setup") {
+        await refuseCutBeyondField(tx, stage.division_id);
+        return { seeded: true as const };
+      }
       if (Array.isArray(stage.config.qualified)) return null;
       const [prev] = await tx<{ id: string; status: string }[]>`
         select id, status from stages
@@ -212,6 +226,17 @@ async function generateStageFixturesWrite(
   return write;
 }
 
+/** m5: whether the rows a Swiss pass seated (`seatedIds`) include a bye - one side seated, the other none. No seated ids (any other
+ *  kind, or a pass that seated nothing): no. */
+export function seatedABye(
+  fixtures: readonly { id: string; home_entrant_id: string | null; away_entrant_id: string | null }[],
+  seatedIds: readonly string[] | undefined,
+): boolean {
+  if (seatedIds === undefined || seatedIds.length === 0) return false;
+  const seated = new Set(seatedIds);
+  return fixtures.some((f) => seated.has(f.id) && (f.home_entrant_id === null) !== (f.away_entrant_id === null));
+}
+
 /** What follows a committed generate, outside its transaction: the table refold, the public-page revalidation and the
  *  activation event. Shared by `generateStageFixturesWrite` and `rebuildStageFixtures`, which commits its own
  *  delete-and-regenerate in one transaction and then does exactly this (W3 T1, X-RB-1). */
@@ -222,7 +247,15 @@ export async function afterGenerateCommit(auth: AuthCtx, stageId: string, write:
   // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. `created` counts a Swiss
   // seating too, so Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair:
   // the bye win shows at once, Finn/Gus). The kind gate and the empty-fold rule are `refoldStageTable`'s.
-  if (outcome.created > 0) await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip");
+  // B5 fix wave fix rounds 3-4 (m5; controller ruling, the reviewer's option a): a Swiss seating that awards a bye folds a point in
+  // - a result, which opens its own step (the table just before the bye against the table just after it; its climber is the bye's
+  // holder). Read off the rows THIS pass seated (`swissSeatedIds`), never the stage's: an earlier round's bye is still there after a
+  // withdrawal has made the field even. A seating without one changes nothing in the table (pairing scores nobody), so its refold
+  // stays a roster refold: an unchanged table keeps its step either way, and anything else such a refold moves is not a result's.
+  if (outcome.created > 0) {
+    const cause = seatedABye(outcome.fixtures, write.swissSeatedIds) ? "result" : "roster";
+    await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip", cause);
+  }
   await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
@@ -243,6 +276,51 @@ export interface RebuildOutcome extends GenerateOutcome {
    *  boards `chooseDoomedBoards` keeps); `freed` — slots no rebuilt fixture inherits; `unscheduled` — rebuilt fixtures
    *  at a new position with nothing to inherit, counted only when the stage had a layout. */
   slots: { kept: number; freed: number; unscheduled: number };
+  /** W5 T23 (Task 18 review): how many manual ranks the Rebuild dropped — every pin of a pool whose membership changed
+   *  (`dropPinsOfChangedPools`). Absent when none was, as Generate's redraw reports it (`reconcile.pins_cleared`). */
+  pins_cleared?: number;
+}
+
+/** What `rebuildStageInTx` wrote: the regenerate's own answer, the pins it dropped, and the late players it drew in. */
+export interface RebuildWrite {
+  generated: GenerateWrite;
+  removedIds: string[];
+  slots: { kept: number; freed: number; unscheduled: number };
+  /** Manual ranks dropped: every pin of a pool whose membership changed (`dropPinsOfChangedPools`). */
+  pinsCleared: number;
+  /** The players who were WAITING on the stage (`table_waiting_stage_id`) and are in the redraw, in listed (seed) order. */
+  waitersDrawnIn: string[];
+}
+
+/**
+ * The ONE Rebuild body (W5 B5 fix wave G1; batch review I1): the stage card's Rebuild (`rebuildStageFixtures`) and the waiting
+ * strip's "Rebuild fixtures" (`prefer_rebuild` on the late-entry tap, `roundrobin-late-entry.ts`) both run exactly this, in the
+ * caller's transaction, so the two doors cannot drift again. The caller has already refused a stage Rebuild does not apply to.
+ *
+ * Order: the format-size refusal; the `division:` lock (re-entrant: a caller that holds it already is unaffected); the seating
+ * read under it (only when the stage holds a pin); the delete-and-regenerate; then the pins of every pool whose membership
+ * changed are dropped (W5 T18 — RB-1, X-PO-3, RB5-P5: a pin names a place in one pool's table, and a pool that came out the
+ * same keeps its pins, the same rule as a Generate that redraws, `reconcileRoundRobinGenerate`); then every waiting marker on
+ * the stage goes — Rebuild draws every active entrant, so nobody waits on it any more (W4 T11 X-LE-10 for a knockout; W5 T6
+ * X-CU-8 and storage table G7 for a league or group).
+ */
+export async function rebuildStageInTx(tx: Tx, auth: AuthCtx, stageId: string, stage: { division_id: string; kind: string }): Promise<RebuildWrite> {
+  await refuseFormatTooSmall(tx, stage.division_id);
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + stage.division_id}))`;
+  const seatedBefore = (await readStagePins(tx, stageId)).length > 0 ? await readPoolMembers(tx, stageId) : null;
+  const regen = await regenerateStageInTx(tx, auth, stageId, stage);
+  const pinsCleared = seatedBefore !== null ? await dropPinsOfChangedPools(tx, stageId, seatedBefore) : 0;
+  await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
+  const cleared = await tx<{ id: string }[]>`
+    update entrants set table_waiting_stage_id = null where table_waiting_stage_id = ${stageId} returning id`;
+  const waitersDrawnIn =
+    cleared.length === 0
+      ? []
+      : (
+          await tx<{ id: string }[]>`
+            select id from entrants where id = any(${cleared.map((c) => c.id)}::uuid[]) order by seed nulls last, created_at, id`
+        ).map((e) => e.id);
+  return { ...regen, pinsCleared, waitersDrawnIn };
 }
 
 /**
@@ -296,12 +374,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
         "STAGE_NOT_ROOT",
       );
     }
-    await refuseFormatTooSmall(tx, stage.division_id);
-    const regen = await regenerateStageInTx(tx, auth, stageId, stage);
-    // W4 T11 (X-LE-10): Rebuild draws every active entrant, so nobody waits on this stage any more — the late players the
-    // desk flagged are in the new bracket, and the flag goes with them.
-    await tx`update entrants set knockout_waiting_stage_id = null where knockout_waiting_stage_id = ${stageId}`;
-    return regen;
+    return rebuildStageInTx(tx, auth, stageId, stage);
   });
 
   // After the commit, and only after it. A refusal anywhere above rolled the
@@ -323,7 +396,7 @@ export async function rebuildStageFixtures(auth: AuthCtx, stageId: string): Prom
       afterScheduleWrite(write.generated.divisionId, write.generated.competitionId, "schedule", write.removedIds);
     }
   }
-  return { ...outcome, removed: write.removedIds.length, slots: write.slots };
+  return { ...outcome, removed: write.removedIds.length, slots: write.slots, ...(write.pinsCleared > 0 ? { pins_cleared: write.pinsCleared } : {}) };
 }
 // ---------------------------------------------------------------------------
 // MD-1 Task 5 (Match Day spec §7, Review Focus 4): the next Swiss round, previewed for an approval on the phone and then

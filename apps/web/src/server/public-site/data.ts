@@ -1,4 +1,5 @@
 import "server-only";
+import { reportsRankOverrides } from "@/lib/rank-override";
 // Public dashboard read model (doc 09, PROMPT-12). Every query goes through
 // the consent-filtered public_*_v views ONLY — no auth'd query path exists in
 // these pages. Caching is Next's tag-based data cache (unstable_cache; this
@@ -406,6 +407,9 @@ export interface PublicFixture {
 }
 
 export interface PublicStage {
+  /** W5 T3 (X-SF-4): the stage's recorded byes (`config.round_byes`: `{pool, round_no, leg, entrant_id}`), or null when it has none
+   *  (a knockout, a stage drawn before W5). Read for the public fixtures list's "Sits out" line only (`sitsOutByesOf`). */
+  round_byes?: unknown;
   id: string;
   division_id: string;
   seq: number;
@@ -1007,12 +1011,16 @@ export async function readPublicDivisionDetail(
              -- view still decides which rows exist and the rest of config
              -- (progression, cross-feeds) stays private.
              (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules,
+             -- W5 T3 (X-SF-4): who sits out which round, for the fixtures list's "Sits out" line - the one other key of config read here.
+             (select x.config->'round_byes' from stages x where x.id = public_stages_v.id) as round_byes,
              -- C16: the stored progression, for the champion rule graph ONLY (see stageFeedsOf); never published.
              (select x.progression from stages x where x.id = public_stages_v.id) as progression
       from public_stages_v where division_id = ${division.id} order by seq`;
     // W2d Task 9: every stage's table rules in one read — its pin once started, else its live layers (OC2).
     const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
     for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
+    // W5 T13 (RB5-P7): the public page reports an organiser's rank pins only on a stage that has a table.
+    for (const st of stages) st.has_rank_overrides = reportsRankOverrides(st.kind, st.has_rank_overrides);
     // C16: the progression graph, published as EDGES only. The stored progression is read off `stages` by the VIEW
     // row's id (as `rules` is), inside this one read — an extra query here would cost the sequential path a connection
     // — and is dropped before the row leaves.
