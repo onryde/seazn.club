@@ -141,7 +141,9 @@ describe("watchLinkOf — what the Fixtures list offers for an online board", ()
       "double_walkover_blocked", "create_outcome_unknown", "tiebreak_owed", "fair_play",
       // T17B fix 2, D11: written only past a flag (two plies on file), so before a move it is the CHECK's word alone —
       // still a hold the organiser answers, so the row offers nothing.
-      "clock_flag_unsettled"] as const;
+      "clock_flag_unsettled",
+      // V533: written at the open, before any game: the same row as a hold the organiser answers.
+      "lichess_unlinked", "lichess_reconnect"] as const;
     for (const reason of HELD) cells.push([`held: ${reason}`, before({ status: "needs_organiser", needs_reason: reason }), null]);
     expect([...HELD, "token_revoked", "account_changed"].sort(), "every hold reason is a cell").toEqual([...NEEDS_REASONS].sort());
     let checked = 0;

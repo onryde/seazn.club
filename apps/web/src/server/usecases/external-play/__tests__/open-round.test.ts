@@ -121,6 +121,7 @@ import { log } from "@/server/logger";
 import { createGameIfReady } from "../create-game";
 import { resolveExternalPlay } from "../resolve";
 import { holdForOrganiser, writeResultFrom } from "../result";
+import { listNeedsOrganiserExternalPlay } from "../queue";
 import type { GameSnapshot } from "@/server/external-play/types";
 import { getFixtureState } from "../../fixtures";
 import { scoreEvent } from "../../scoring";
@@ -190,6 +191,7 @@ type BridgeView = {
   round_open_id: string | null;
   white_emailed_at: Date | null;
   black_emailed_at: Date | null;
+  needs_reason: string | null;
   status: string;
   challenge_id: string | null;
   create_sent_at: Date | null;
@@ -197,7 +199,7 @@ type BridgeView = {
 
 async function bridgeOf(fixtureId: string): Promise<BridgeView | null> {
   const [row] = await sql<BridgeView[]>`
-    select round_open_id, white_emailed_at, black_emailed_at, status, challenge_id, create_sent_at
+    select round_open_id, white_emailed_at, black_emailed_at, status, needs_reason, challenge_id, create_sent_at
       from fixture_external_play where fixture_id = ${fixtureId}`;
   return row ?? null;
 }
@@ -3243,6 +3245,9 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
       [a!.home.email, a!.away.email, c!.home.email, c!.away.email].sort(),
     );
     const held = await bridgeOf(b!.fixtureId);
+    expect(held, "the held board is parked for the organiser, bound to no open").toMatchObject({
+      status: "needs_organiser", needs_reason: "lichess_unlinked", round_open_id: null,
+    });
     expect(held?.white_emailed_at ?? null).toBeNull();
     expect(held?.black_emailed_at ?? null).toBeNull();
     for (const x of [a!, c!]) expect((await bridgeOf(x.fixtureId))?.white_emailed_at, "an unheld board is stamped").not.toBeNull();
@@ -3284,5 +3289,44 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
     expect(mail.sent).toEqual([]);
     await reconnectLichess(r.boards[0]!.home);
     expect(await open(r, 1)).toMatchObject({ opened: true, invited: 2, skipped: [{ fixtureId: r.boards[1]!.fixtureId, reason: "lichess_unlinked" }] });
+  });
+
+  const noShowEvents = async (fixtureId: string) =>
+    (await sql<{ n: number }[]>`
+      select count(*)::int as n from score_events where fixture_id = ${fixtureId} and idempotency_key like 'extplay-noshow:%'`)[0]!.n;
+
+  it("a held board is NEVER forfeited: the real sweep past the deadline walks over the un-held board that nobody came to, and leaves the held one parked in the organiser's queue - no Lichess call, no forfeit - until the organiser awards it", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2, scheduledAt: null });
+    const [held, plain] = r.boards;
+    await unlink(held!.home.userId);
+    const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
+    expect(await open(r, 1, t0)).toMatchObject({ opened: true, invited: 2, skipped: [{ fixtureId: held!.fixtureId, reason: "lichess_unlinked" }] });
+    const sweep = () => sweepExternalPlay({ ...NO_PRUNE, orgIds: [r.orgId], serialise: false, endMeeting: async () => undefined, ...NO_WINDOW });
+    await sweep();
+    await sweep(); // twice: a pass that skipped it once must not take it on the next
+    expect(await noShowEvents(plain!.fixtureId), "positive pair: the sweep DOES forfeit the board nobody came to").toBeGreaterThan(0);
+    expect(await noShowEvents(held!.fixtureId), "the held board is not a no-show").toBe(0);
+    expect(await bridgeOf(held!.fixtureId)).toMatchObject({ status: "needs_organiser", needs_reason: "lichess_unlinked", challenge_id: null });
+    const queue = await listNeedsOrganiserExternalPlay(r.owner, r.divisionId);
+    expect(queue.map((q) => [q.fixtureId, q.reason])).toContainEqual([held!.fixtureId, "lichess_unlinked"]);
+    for (const fn of Object.values(board)) expect(fn, "nothing was asked of Lichess").not.toHaveBeenCalled();
+    // The organiser's own choice still works: award the board.
+    await resolveExternalPlay(r.owner, held!.fixtureId, "away_wins", { defer: () => undefined });
+    const [fx] = await sql<{ status: string }[]>`select status from fixtures where id = ${held!.fixtureId}`;
+    expect(["scheduled", "in_play"]).not.toContain(fx!.status);
+  });
+
+  it("a held board past its running window reports window_closed (a re-open cannot help), yet is still parked and never forfeited", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2, scheduledAt: null });
+    const [held] = r.boards;
+    const t0 = new Date(Date.now() - DEADLINE_AFTER_MS - 10 * MIN);
+    expect(await open(r, 1, t0), "premise: the first open invites everyone inside its own window").toMatchObject({ opened: true, invited: 4 });
+    // The player unlinks LATER; the organiser presses Open again, long after the window closed - but a board whose seats are both invited
+    // is nothing new, so a never-invited one is what it needs: a board added afterwards.
+    await sql`delete from fixture_external_play where fixture_id = ${held!.fixtureId}`; // the board is back to "no row": owed an invite
+    await unlink(held!.away.userId);
+    const res = await open(r, 1, new Date(t0.getTime() + DEADLINE_AFTER_MS + 5 * MIN));
+    expect(res).toMatchObject({ opened: false, reason: "already_open", skipped: [{ fixtureId: held!.fixtureId, reason: "window_closed" }] });
+    expect(await bridgeOf(held!.fixtureId), "still parked").toMatchObject({ status: "needs_organiser", needs_reason: "lichess_unlinked" });
   });
 });

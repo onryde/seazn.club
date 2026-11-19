@@ -49,6 +49,8 @@ const ABANDON_REASON_KEY = {
   fair_play: "externalPlay.resolve.abandonReason.fair_play",
   account_changed: "externalPlay.resolve.abandonReason.account_changed",
   clock_flag_unsettled: "externalPlay.resolve.abandonReason.clock_flag_unsettled",
+  lichess_unlinked: "externalPlay.resolve.abandonReason.lichess_unlinked",
+  lichess_reconnect: "externalPlay.resolve.abandonReason.lichess_reconnect",
   none: "externalPlay.resolve.abandonReason.none",
 } as const satisfies Record<Exclude<NeedsReason, BothAbsent> | "none", MessageKey>;
 

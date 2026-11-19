@@ -92,6 +92,9 @@ describe("held copy: every reason, every locale", () => {
       // T17B fix 2, D11 + controller ruling (2026-10-14): the organiser is confirming it, never "not confirmed" — the
       // player's room reads "Time's up — your organiser is confirming the result"; the desk asks for that confirmation.
       clock_flag_unsettled: "Time's up: confirm the result",
+      // V533: held at the open for a player's Lichess link.
+      lichess_unlinked: "Lichess account not linked",
+      lichess_reconnect: "Lichess account needs reconnecting",
     };
     let checked = 0;
     for (const reason of NEEDS_REASONS) {
