@@ -1,11 +1,11 @@
 ---
 title: Writing an instruction AI Schedule can check
-description: Which parts of a sentence become rules the checker looks for, and how to see how yours was read before you spend a credit.
+description: Which parts of a sentence become rules the checker looks for, and how to see how yours was read before any credit is spent.
 order: 5.1
 related: scheduling/ai-scheduling, scheduling/ai-dates, scheduling/ai-review, scheduling/ai-credits
 ---
 
-Before a timetable is built, your sentence is read once and turned into rules. The checker then looks for each rule in the proposal. You can see exactly how your sentence was read before you spend a credit.
+Before a timetable is built, your sentence is read once and turned into rules. The checker then looks for each rule in the proposal. You can see exactly how your sentence was read before any credit is spent.
 
 ![The card that opens after Check what this means. It lists the rules the sentence was read as, with a Run with these rules button and a Back to the brief button underneath.](/help/scheduling/ai-check-card.webp "The check card for the sentence Finish by 6pm and play at most 4 matches a day. Give every player 30 minutes rest. It lists three rules and offers Run with these rules.")
 
@@ -13,7 +13,7 @@ Before a timetable is built, your sentence is read once and turned into rules. T
 
 These kinds of sentence become rules. Each example below shows how that sentence was read:
 
-- **A limit on matches a day.** "Two matches a day at most." reads as **at most 2 matches a day**. "Nobody plays more than two matches a day." reads as **at most 2 matches a day — for every player**. "Matches at most 3 per day for every team" reads as **at most 3 matches a day — for every team or pair**.
+- **A limit on matches a day.** "Two matches a day at most." reads as **at most 2 matches a day**, a cap on the whole run's daily total, not on each player. "Nobody plays more than two matches a day." reads as **at most 2 matches a day — for every player**. "Matches at most 3 per day for every team" reads as **at most 3 matches a day — for every team or pair**.
 - **A minimum rest.** "At least 40 minutes between matches." reads as **at least 40 min rest between a player's matches, and before a match they feed into**.
 - **A day for the final.** "Finals on Saturday." reads as **the final on Saturday**.
 - **Earliest and latest starts.** "Nothing after 7pm." reads as **nothing after 19:00**. "Nothing before 10am." reads as **nothing before 10:00**.
@@ -45,7 +45,7 @@ Select **Check what this means** under the instruction box. A card opens with up
 
 Then choose **Run with these rules**, which shows the credits it will charge, or **Back to the brief**, which spends nothing.
 
-The card's hint says a plan that breaks a rule is rejected. In our run of the 15-match league, a plan that went over a day limit was still offered, with the break flagged under **To review**. Treat the rules as checks you read, and read the list before you apply. See [reviewing a proposal](/help/scheduling/ai-review).
+The card's hint says a plan that breaks a rule is rejected. A plan that breaks a day limit is still offered, with the break flagged under **To review**. Treat the rules as checks you read, and read the list before you apply. See [reviewing a proposal](/help/scheduling/ai-review).
 
 If nothing in your sentence can be enforced, the card says so: **Nothing in this instruction can be enforced. The architect still reads your words, but no rule will be checked.** If a sentence cannot be read at all, you can choose **Send it as written** or **Edit the brief**.
 

@@ -5,7 +5,7 @@ order: 4
 related: scheduling/board, scheduling/locks, scheduling/ai-scheduling, scheduling/undo
 ---
 
-Constraints are the rules the scheduler plays by. You set them once per division, and Auto-schedule and AI Schedule both obey them. Matches you place by hand are checked against them too. Every plan has them.
+Constraints are the rules the scheduler plays by. You set them once per division. Auto-schedule obeys them. An AI plan is checked against them, and any break is flagged for you to review before you apply. Matches you place by hand are checked against them too. Every plan has them.
 
 ![The Constraints tab of a division's schedule. It shows the two rule boxes, Minimum rest, Max matches per day, Field fairness and Blackout windows.](/help/scheduling/constraints-panel.webp "The Constraints tab: the rule boxes and fields sit at the top, with Blackout windows, Bulk time shift and the Wait-time report below.")
 
@@ -20,7 +20,7 @@ On the **Settings** tab you set:
 - **Match length (minutes)** and **Gap between matches (minutes)**. The gap is turnaround time on the same court, such as warm-up and teardown.
 - **Minimum rest per entrant (minutes)**.
 
-Set **Play from** and **Play until** before you run **Auto-schedule**. In a six-player league with no play hours, the first match landed at midnight, not at the start time we had picked. With play hours of 09:00 to 12:00, the first match landed at 09:00.
+Set **Play from** and **Play until** before you run **Auto-schedule**. With no play hours, Auto-schedule starts at midnight, not at the time of day you picked for the start. In a six-player league with play hours of 09:00 to 12:00, the first match landed at 09:00.
 
 On the **Courts** tab you pick the courts this schedule can use.
 

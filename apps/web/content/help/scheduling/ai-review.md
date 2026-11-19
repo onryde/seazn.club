@@ -34,7 +34,7 @@ Rest gaps, blackouts, session windows and rules from your sentence are warnings.
 
 ## Clashes fixed before you see them
 
-If a proposal clashes, the console repairs it before it reaches you, by moving as few matches as it can. The panel then reads **Clash fixed automatically** and tells you how many matches moved. It adds **No smaller change would have worked.** when that is true, **No credits used.** for the repair, and **Pinned fixtures were left where they are.** When the repair cannot fix everything, it reads **1 fixture left for the AI**, or more, and the run carries on.
+If a proposal clashes, the console repairs it before it reaches you, by moving as few matches as it can. The panel then reads **Clash fixed automatically** and tells you how many matches moved. It adds **No smaller change would have worked.** when that is true, and **No credits used.** for the repair. When the repair cannot fix everything, it reads **1 fixture left for the AI**, or more, and the run carries on.
 
 ## Later rounds and shared players
 

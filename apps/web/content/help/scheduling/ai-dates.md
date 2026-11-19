@@ -25,7 +25,7 @@ All of this is worked out in one zone, your organisation's scheduling timezone. 
 
 Dates you write into the instruction replace the worked-out window. Use words the product can place on the calendar, such as "tomorrow" or "Friday". The card from **Check what this means** shows the result under **Window**, as the first day, the last day and the timezone.
 
-If the range you write is too tight for another rule in the same sentence, the card widens it and says so under **Assumed**.
+One case widens the range. If you cap the whole run at some matches a day and the days you wrote cannot hold every match at that cap, the card moves the end date out by 7 days, once, and says so under **Assumed**. It does not check that the wider range is enough. A cap for each player or each team never widens the range.
 
 > **Example**
 > It is Thursday 19 November. You type: "From tomorrow till Friday. At most 3 matches a day." The sentence reads as 20 November to 20 November. A six-player league has 15 matches, and one day at 3 a day holds only 3 of them. The card widens the end to the following week. **Window** shows **2026-11-20 → 2026-11-27 · UTC**, and the reason is listed under **Assumed**.

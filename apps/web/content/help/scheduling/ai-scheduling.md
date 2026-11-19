@@ -21,7 +21,7 @@ Four steps run along the top: **Brief**, **Schedule**, **Officials** and **Apply
 Type in **What should the schedule do?** Plain language works best: describe times, courts and rest gaps. You can also:
 
 - Select an example sentence, such as **Give every team at least 30 minutes rest between games.**
-- Use **Add a wish**: **Finish by**, **Before / after**, **Keep apart**, **Final last** or **Pin slots**. Each wish writes a line into the instruction, and you can edit the text freely afterwards.
+- Use **Add a wish**: **Finish by**, **Before / after**, **Keep apart**, **Final last** or **Pin slots**. Each wish writes a sentence into the instruction, and you can edit the text freely afterwards. **Finish by** writes a time limit the checker can read. The other four name one team, one match or one court, which the checker has no rule for, so the card lists those sentences under **Couldn't use** and they reach the AI only as your own words.
 
 Then choose a run type:
 
@@ -45,4 +45,4 @@ Pinned matches stay where they are, and a frozen schedule cannot be planned: **T
 
 ## What is sent
 
-The console sends this division's scheduling picture: the matches it may move, the entrants in them, your courts, play hours, blackouts and constraints, and other divisions' bookings on shared courts as blocked time. Requests routed through OpenRouter carry a no-training, zero-data-retention policy. The providers we use are listed on the [sub-processors page](/legal/sub-processors).
+The console sends this division's scheduling picture: the matches it may move, the entrants in them, your courts, play hours, blackouts and constraints, and other divisions' bookings on shared courts as blocked time. The brief goes to one of our AI providers, Anthropic (Claude), Google (Gemini) or xAI (Grok), only to produce the proposal. They do not use your data to train their models, and requests routed through a gateway also carry zero-data-retention terms. The providers are listed on the [sub-processors page](/legal/sub-processors).

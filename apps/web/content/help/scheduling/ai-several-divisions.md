@@ -5,7 +5,7 @@ order: 5.5
 related: scheduling/ai-scheduling, scheduling/ai-credits, scheduling/ai-review, scheduling/board
 ---
 
-The competition's own schedule board can plan several divisions at once. Divisions that share a venue are fitted around each other in a single pass, so you do not schedule them one at a time and patch up the clashes afterwards. It is available on every plan, Community included. What differs by plan is the AI credit each run spends. See [what a run costs](/help/scheduling/ai-credits).
+The competition's own schedule board can plan several divisions at once. Divisions that share a venue are fitted around each other in a single pass, so you do not schedule them one at a time and patch up the clashes afterwards. It is available on every plan, Community included. What differs by plan is the monthly credit grant. A run costs the same on every plan. See [what a run costs](/help/scheduling/ai-credits).
 
 ![The AI Schedule console on a competition's schedule board, with the list of divisions to schedule together and one instruction box for all of them.](/help/scheduling/ai-several-divisions.webp "The competition-level console: pick two or more divisions, write one instruction, then review the proposal division by division.")
 
@@ -21,11 +21,11 @@ A division with nothing left to place reads **Nothing to place** and is left out
 
 You need at least two. The picker says **Pick at least two divisions. To schedule one on its own, open its own schedule page.**
 
-## Courts are matched by name
+## Courts are matched by court, not by name
 
-A court is the name you gave it, and the console treats the same name as the same court. **Court 1** in one division and **Court A** in another are two different courts, and a run can put a match on each at the same time. When the names do not match across the divisions you picked, the console says **Court names don’t match** and adds **Courts are matched by name: the same name is the same court, a different name is a different court.** Make the names match in each division's settings.
+The console matches courts by the court itself. Two courts that share a name are still two courts, and a run can put a match on each at the same time. When the divisions you picked do not all use the same courts, the console warns **Court names don’t match**. To clear it, pick the same courts on each division's **Courts** tab. Renaming a court does not clear it, whatever the wording of the warning suggests.
 
-When the divisions use different timezones, the console says so and tells you which zone the board shows.
+When the divisions use different timezones, the console says so and tells you which zone the board shows. It reads each division's own saved zone, so an older division can trigger it even when the organisation's zone has changed since.
 
 ## Apply and undo
 
