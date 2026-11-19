@@ -46,8 +46,8 @@ const FRAGMENT_USES: Record<Fragment, Record<string, number>> = {
   // sum of the stamped prices (plan 2 Task 7: a third statement in the standing read, over the SAME waiting-ahead stays as the count),
   // 3 (the door), 9 (the optional yield) directly; 4, 5, 7 and 8 through lineHoldsBoard (boardPhase).
   lineLiveSql: { readStanding: 3, ownStayInLine: 1, lineActive: 1, lineHoldsBoard: 1 },
-  // The four consumers: the pool, the idle test, the own-row test (all in the standing read), and the optional yield.
-  reservedSql: { readStanding: 3, lineActive: 1 },
+  // The five consumers: the pool, the idle test, the own-row test (all in the standing read), the optional yield, and the arbiter floor.
+  reservedSql: { readStanding: 3, lineActive: 1, linePool: 1 },
   // Inside the two fragments built on it: one each. Outside them: the `completing` evaluation, the one.
   stayOpenSql: { lineLiveSql: 1, reservedSql: 1, readStanding: 1 },
   // The lapse clause: the open test, and the upsert's restart / silent / hold reads.
@@ -71,6 +71,7 @@ const SITES: readonly Site[] = [
   { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "seatReadCalls", times: 1, consumer: "the price: what one read costs now (the gate's ask)" },
   { file: "server/usecases/external-play/room.ts", owner: "queueDeferred", fn: "stayMintOf", times: 1, consumer: "the price: what the first claim meets (a mid-claim deferral's ask)" },
   { file: "server/usecases/external-play/room.ts", owner: "queueDeferred", fn: "seatReadCalls", times: 1, consumer: "the price: what one read costs now (a mid-claim deferral's ask)" },
+  { file: "server/usecases/external-play/arbiter.ts", owner: "joinAsArbiter", fn: "linePool", times: 1, consumer: "the arbiter join's floor" },
   { file: "server/usecases/external-play/room.ts", owner: "viewerPhase", fn: "judgePhase", times: 1, bothOnly: false, consumer: "inLine 7: the room's phase, per viewer (and where its hold ends)" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayInLine", times: 1, consumer: "inLine 3: the door" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayArrival", times: 1, consumer: "the check-in is dated at the stay's arrival" },
@@ -88,7 +89,7 @@ const SITES: readonly Site[] = [
  *  `stayMintOf` and `seatReadCalls`: they are not seat-line's, but a GateAsk is priced by nobody without them). */
 const SEAT_LINE_API = [
   "boardPhase", "judgePhase", "lineActive", "gateClaim", "answerBusy", "ownStayInLine", "ownStayArrival", "endStay", "settleDeferral", "lineHoldsBoard",
-  "stayMintOf", "seatReadCalls",
+  "stayMintOf", "seatReadCalls", "linePool",
 ] as const;
 
 // ─── The scanner ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -263,11 +264,11 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
     expect(judgeLineFile(lineScan)).toEqual([]);
   });
 
-  it("seat-line.ts: the consumers of the fragments are the pinned ones - lineLiveSql 6 uses in 4 declarations, reservedSql 4 in 2 (the four consumers), stayOpenSql outside its two fragments 1 (the completing evaluation)", () => {
+  it("seat-line.ts: the consumers of the fragments are the pinned ones - lineLiveSql 6 uses in 4 declarations, reservedSql 5 in 3 (the five consumers), stayOpenSql outside its two fragments 1 (the completing evaluation)", () => {
     const uses = (f: Fragment) => Object.values(lineScan.fragmentUses[f]).reduce((a, b) => a + b, 0);
     expect(uses("lineLiveSql"), "lineLiveSql uses: the waiting-ahead count, the ahead sum of the stamped prices, the key-wide count, the door, the yield, the hold query").toBe(6);
     expect(Object.keys(lineScan.fragmentUses.lineLiveSql).sort()).toEqual(["lineActive", "lineHoldsBoard", "ownStayInLine", "readStanding"]);
-    expect(uses("reservedSql"), "reservedSql consumers: the pool, the idle test, the own-row test, the optional yield").toBe(4);
+    expect(uses("reservedSql"), "reservedSql consumers: the pool, the idle test, the own-row test, the optional yield, the arbiter floor").toBe(5);
     const outside = Object.entries(lineScan.fragmentUses.stayOpenSql).filter(([o]) => o !== "lineLiveSql" && o !== "reservedSql");
     expect(outside, "stayOpenSql outside the two fragments built on it: the completing evaluation").toEqual([["readStanding", 1]]);
   });
@@ -294,7 +295,7 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
       calls += scan.calls.length;
       bad.push(...callBadness(file, scan));
     }
-    expect(files.length, "files with pinned sites").toBe(6);
+    expect(files.length, "files with pinned sites").toBe(7);
     expect(calls, "calls found in them").toBeGreaterThanOrEqual(SITES.reduce((n, s) => n + s.times, 0));
     expect(bad).toEqual([]);
     // The nine, by name: each is reached through a pinned site or through a fragment use above.

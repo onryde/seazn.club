@@ -21,8 +21,9 @@ import {
   startRealtimeKitFixtureServer,
   type RealtimeKitFixtureServer,
 } from "../../../../e2e/realtimekit-fixture-server";
-import { ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
+import { ensureMeeting, refreshParticipantToken, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { joinAsArbiter, leaveAsArbiter } from "../external-play/arbiter";
+import { stampFixtureCheckIn } from "../me";
 import { seatPlayer } from "../external-play/preflight";
 import { putVideoParticipant, seedOnlineChessFixture, seedOnlineChessRound, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
@@ -56,6 +57,8 @@ async function watchable(): Promise<{ r: SeedOnlineChessRoundResult; fixtureId: 
   // alone is no arrival (check-in capacity plan 2 Task 10: the pre-mint job makes rooms before anyone comes), so their participant is on file.
   await ensureMeeting(fixtureId, "home");
   await putVideoParticipant({ fixtureId, side: "home", personId: r.boards[0]!.home.personId });
+  // ... and a COUNTED check-in (check-in capacity plan 3, flag off): inside the window the round's open (5 minutes ago) made.
+  await stampFixtureCheckIn(r.boards[0]!.home.personId, fixtureId, r.orgId, { at: new Date(Date.now() - 4 * 60_000) });
   return { r, fixtureId };
 }
 
@@ -66,33 +69,35 @@ async function arbiterRows(fixtureId: string) {
 }
 
 describe.skipIf(!DB)("each arbiter OPEN is its own participant (T17B fix 2, D3)", () => {
-  it("the defect: the same organiser opening a board twice gets two watches — both on file, both alive at the vendor", async () => {
+  it("the organiser opening a board twice holds ONE watch: the second open refreshes its token at the vendor (one call), mints nothing and the participant stays alive", async () => {
     const { r, fixtureId } = await watchable();
     const first = await joinAsArbiter(r.owner, fixtureId, "home");
     const again = await joinAsArbiter(r.owner, fixtureId, "home");
-    expect(again.participantId, "a new participant, never the first open's").not.toBe(first.participantId);
-    const rows = new Map((await arbiterRows(fixtureId)).map((x) => [x.participant_id, x.removed_at]));
-    expect(rows.size, "two watches on file").toBe(2);
-    expect(rows.get(first.participantId), "the first is still live").toBeNull();
-    expect(rows.get(again.participantId)).toBeNull();
-    for (const id of [first.participantId, again.participantId]) expect(fx.participant(id)?.deleted, `${id}: alive`).toBe(false);
+    expect(again.participantId, "the same participant").toBe(first.participantId);
+    expect([first.reused, again.reused]).toEqual([false, true]);
+    expect(again.authToken, "a fresh token, not the first one").not.toBe(first.authToken);
+    const rows = await arbiterRows(fixtureId);
+    expect(rows.map((x) => [x.participant_id, x.removed_at]), "one watch on file, live").toEqual([[first.participantId, null]]);
+    expect(fx.participant(first.participantId)?.deleted, "alive at the vendor").toBe(false);
   });
 
-  it("closing one tab removes ONLY that tab's watch: the other stays alive at the vendor and on file", async () => {
+  it("an explicit revocation removes the watch at the vendor and on file; the next open makes a NEW participant (the removed one is never refreshed)", async () => {
     const { r, fixtureId } = await watchable();
     const a = await joinAsArbiter(r.owner, fixtureId, "home");
-    const b = await joinAsArbiter(r.owner, fixtureId, "home");
     expect(await leaveAsArbiter(r.owner, fixtureId, a.participantId)).toEqual({ removed: true });
     expect(fx.participant(a.participantId)?.deleted).toBe(true);
-    expect(fx.participant(b.participantId)?.deleted, "the other tab still watches").toBe(false);
+    const b = await joinAsArbiter(r.owner, fixtureId, "home");
+    expect([b.reused, b.participantId === a.participantId]).toEqual([false, false]);
     const rows = new Map((await arbiterRows(fixtureId)).map((x) => [x.participant_id, x.removed_at]));
     expect(rows.get(a.participantId)).not.toBeNull();
     expect(rows.get(b.participantId)).toBeNull();
+    expect(fx.participant(b.participantId)?.deleted).toBe(false);
   });
 
-  it("the custom id is internal ids only — the organiser's user id and a nonce, never an email or a name — and differs per open", async () => {
+  it("the custom id is internal ids only — the organiser's user id and a nonce, never an email or a name — and differs per MINT (a removal between)", async () => {
     const { r, fixtureId } = await watchable();
     const a = await joinAsArbiter(r.owner, fixtureId, "home");
+    await leaveAsArbiter(r.owner, fixtureId, a.participantId);
     const b = await joinAsArbiter(r.owner, fixtureId, "home");
     const subjects = [fx.participant(a.participantId)!.subject, fx.participant(b.participantId)!.subject];
     const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -106,20 +111,28 @@ describe.skipIf(!DB)("each arbiter OPEN is its own participant (T17B fix 2, D3)"
     expect(subjects[0]).not.toBe(subjects[1]);
   });
 
-  it("a mint the record refuses: the vendor's participant is removed AND every record of it is stamped removed — never a live row for a gone participant", async () => {
+  it("a mint the record refuses (the vendor answers an id a REMOVED row holds): the vendor's participant is removed, nothing is refreshed, and no row's removed_at moves", async () => {
     const { r, fixtureId } = await watchable();
     const held = await joinAsArbiter(r.owner, fixtureId, "home");
-    // The vendor answers an id already on file (its idempotency, or anything else): the unique key refuses it.
+    // The row is removed (an explicit revocation), so the find misses it; the vendor then answers its id again (its idempotency, or
+    // anything else) and V451's (fixture_id, participant_id) key refuses the insert: not a racing tab, so no refresh.
+    await leaveAsArbiter(r.owner, fixtureId, held.participantId);
+    const [before] = await arbiterRows(fixtureId);
+    const refreshed: string[] = [];
     const video = {
       addParticipant: async () => ({ participantId: held.participantId, authToken: "tok-dup" }),
       removeParticipant: (a: { meetingId: string; participantId: string }) => removeParticipant(a),
+      refreshParticipantToken: async (a: { meetingId: string; participantId: string }) => {
+        refreshed.push(a.participantId);
+        return refreshParticipantToken(a);
+      },
     };
     await expect(joinAsArbiter(r.owner, fixtureId, "home", { video })).rejects.toMatchObject({ code: "23505" });
-    expect(fx.participant(held.participantId)?.deleted, "the vendor's participant was removed").toBe(true);
-    const [row] = await arbiterRows(fixtureId);
-    expect(row!.participant_id).toBe(held.participantId);
-    expect(row!.removed_at, "and the record says so").not.toBeNull();
-    // A leave of that watch now changes nothing, and calls nobody.
+    expect(refreshed, "no refresh: it was not a racing tab").toEqual([]);
+    expect(fx.participant(held.participantId)?.deleted, "the vendor's participant is gone").toBe(true);
+    const rows = await arbiterRows(fixtureId);
+    expect(rows.map((x) => x.participant_id)).toEqual([held.participantId]);
+    expect(rows[0]!.removed_at, "the stamp is a no-op").toEqual(before!.removed_at);
     expect(await leaveAsArbiter(r.owner, fixtureId, held.participantId)).toEqual({ removed: false });
   });
 });

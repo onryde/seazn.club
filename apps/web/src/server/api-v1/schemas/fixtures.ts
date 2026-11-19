@@ -245,8 +245,8 @@ export type ArbiterJoinInput = z.infer<typeof ArbiterJoinInput>;
 
 /** POST /fixtures/{id}/external-play/arbiter (T15, design §5.3; D16, §5.6.4) — the
  *  arbiter's OWN RealtimeKit token for that player's meeting (preset `arbiter`,
- *  receive-only), a FRESH participant per open (fix round 1, I2) whose id
- *  the client hands back when it leaves, the side joined, and the participant
+ *  receive-only) for the ONE participant the organiser holds in that meeting for the life of the game (a second open
+ *  refreshes its token: `reused`), whose id names it, the side joined, and the participant
  *  ids of the PLAYERS in that meeting (usually one), which its client subscribes
  *  to and refuses every other peer for. Never a player's token (spec §10). */
 export const ArbiterJoinOut = z.object({
@@ -254,10 +254,17 @@ export const ArbiterJoinOut = z.object({
   participantId: z.string(),
   side: z.enum(["home", "away"]),
   players: z.array(z.string()),
+  /** True when this answer is a fresh token for the participant the organiser already held on this side (no new participant). */
+  reused: z.boolean(),
 });
 
+/** DELETE /fixtures/{id}/external-play/arbiter/{participantId} body: explicit revocation only (owner, 2026-11-17). Strict, so no
+ *  browser "leave" can reach the route by accident: no body, another intent or an extra key is a 400. */
+export const ArbiterRevokeInput = z.object({ intent: z.literal("revoke") }).strict();
+export type ArbiterRevokeInput = z.infer<typeof ArbiterRevokeInput>;
+
 /** DELETE /fixtures/{id}/external-play/arbiter/{participantId} (T15 fix
- *  round 1, I2) — the panel closed: the server removes the caller's own
+ *  round 1, I2) — explicit revocation: the server removes the caller's own
  *  arbiter participant from the meeting. `removed: false` when it was
  *  already removed (a repeat, the sweep, the room's teardown). */
 export const ArbiterLeaveOut = z.object({ removed: z.boolean() });

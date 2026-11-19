@@ -81,20 +81,33 @@ type Round = {
   boards: [Board, Board];
 };
 
-/** D16: one side's camera meeting, as a check-in leaves it: the room AND the player on file in it. A room alone is no arrival (check-in
- *  capacity plan 2 Task 10: the pre-mint job makes a paired board's rooms before anyone comes, and the join and the panel offer an arbiter
- *  only a side whose player is on file). The meeting id is not a real vendor id (see the header). */
+/** D16: one side's ARRIVAL, whole: the camera room, the player on file in it, a counted check-in and a presence row naming the player.
+ *  A room alone is no arrival (check-in capacity plan 2 Task 10), and the join admits only a side whose player has come: with the proof flag
+ *  off (`EXTERNAL_PLAY_PRESENCE_PROOF` unset) the signal is the counted check-in (`fixture_availability.checked_in_at`, now, inside the window
+ *  `seedRound` opened), with it on (the `e2e-parallel` job's server) it is the presence row; seeding both admits in either state. The
+ *  meeting id and the participant id are not real vendor ids (see the header). */
 async function putRoom(fixtureId: string, orgId: string, side: "home" | "away", personId: string): Promise<void> {
   await withDb(async (sql) => {
+    const meetingId = `e2e-mtg-${side}-${randomUUID().slice(0, 8)}`;
     const res = await sql`
       insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
-      select f.id, ${side}, ${orgId}, ${`e2e-mtg-${side}-${randomUUID().slice(0, 8)}`}, f.home_entrant_id, f.away_entrant_id
+      select f.id, ${side}, ${orgId}, ${meetingId}, f.home_entrant_id, f.away_entrant_id
         from fixtures f where f.id = ${fixtureId}`;
     expect(res.count, `room ${side} for ${fixtureId}`).toBe(1);
+    const participantId = `e2e-pp-${side}-${randomUUID().slice(0, 8)}`;
     const player = await sql`
       insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
-      values (${fixtureId}, ${side}, ${personId}, 'player', ${`e2e-pp-${side}-${randomUUID().slice(0, 8)}`})`;
+      values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId})`;
     expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
+    const checkIn = await sql`
+      insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+      values (${fixtureId}, ${personId}, ${orgId}, 'in', now())
+      on conflict (fixture_id, person_id) do update set checked_in_at = now()`;
+    expect(checkIn.count, `the ${side} player's check-in for ${fixtureId}`).toBe(1);
+    const presence = await sql`
+      insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, source)
+      values (${meetingId}, ${`e2e-peer-${side}-${randomUUID().slice(0, 8)}`}, ${fixtureId}, ${side}, ${participantId}, ${personId}, now(), 'webhook')`;
+    expect(presence.count, `the ${side} player's presence row for ${fixtureId}`).toBe(1);
   });
 }
 

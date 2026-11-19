@@ -38,7 +38,7 @@ vi.mock("@/server/api-v1/auth", async (importOriginal) => {
 // RealtimeKit at its module boundary: the meetings are the seeded rows, a new
 // participant is minted locally. Nothing reaches Cloudflare. D16: an arbiter joins a player's EXISTING meeting and never
 // makes one, so `ensureMeeting` is a tripwire here - any call to it fails the test that made it.
-const rtk = vi.hoisted(() => ({ minted: [] as string[], removed: [] as string[], created: 0 }));
+const rtk = vi.hoisted(() => ({ minted: [] as string[], removed: [] as string[], refreshed: [] as string[], created: 0 }));
 vi.mock("@/server/external-play/video/realtimekit", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/external-play/video/realtimekit")>();
   return {
@@ -55,12 +55,18 @@ vi.mock("@/server/external-play/video/realtimekit", async (importOriginal) => {
     removeParticipant: vi.fn(async (a: { participantId: string }) => {
       rtk.removed.push(a.participantId);
     }),
+    // A second open by the same organiser refreshes the participant's token instead of minting (plan 3 Task 1).
+    refreshParticipantToken: vi.fn(async (a: { participantId: string }) => {
+      rtk.refreshed.push(a.participantId);
+      return { participantId: a.participantId, authToken: `tok-refresh-${a.participantId}` };
+    }),
   };
 });
 // The resync throttle's counter (M3): deterministic, per key, reset per test.
 const limiter = vi.hoisted(() => ({ counts: new Map<string, number>() }));
 
 import { sql } from "@/lib/db";
+import { stampFixtureCheckIn } from "@/server/usecases/me";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { POST as arbiterRoute } from "@/app/api/v1/fixtures/[id]/external-play/arbiter/route";
@@ -109,6 +115,8 @@ async function liveBoard(policy: "required" | "optional" = "required", fixtures 
     for (const side of ["home", "away"] as const) {
       await putVideoMeeting({ fixtureId: b.fixtureId, orgId: r.orgId, side });
       await putVideoParticipant({ fixtureId: b.fixtureId, side, personId: b[side].personId, participantId: `${side === "home" ? "pw" : "pb"}-${b.fixtureId.slice(0, 6)}` });
+      // The player has arrived: a counted check-in inside the window the round's open (now) made - the join's flag-off arm.
+      await stampFixtureCheckIn(b[side].personId, b.fixtureId, r.orgId);
     }
   }
   return { r, b: r.boards[0]! };
@@ -135,6 +143,7 @@ beforeEach(() => {
   door.userless = false;
   rtk.minted.length = 0;
   rtk.removed.length = 0;
+  rtk.refreshed.length = 0;
   rtk.created = 0;
   limiter.counts = new Map();
   __setRateLimitCounterForTests(async (key, windowSeconds) => {
@@ -236,12 +245,13 @@ describe.skipIf(!HAS_DB)("POST …/external-play/arbiter", () => {
     for (const side of ["home", "away"] as const) {
       const res = await read(await joinSide(b.fixtureId, { side }));
       expect(res.status, side).toBe(200);
-      const data = res.body.data as { authToken: string; participantId: string; side: string; players: string[] };
+      const data = res.body.data as { authToken: string; participantId: string; side: string; players: string[]; reused: boolean };
       expect(data.side, side).toBe(side);
       expect(data.players, `${side}: only that side's player`).toEqual([`${side === "home" ? "pw" : "pb"}-${b.fixtureId.slice(0, 6)}`]);
       expect(data.participantId, side).toBe(rtk.minted.at(-1)!.split(":")[1]);
       expect(data.authToken, side).toBe(`tok-${data.participantId}`);
-      expect(Object.keys(data).sort(), side).toEqual(["authToken", "participantId", "players", "side"]);
+      expect(Object.keys(data).sort(), side).toEqual(["authToken", "participantId", "players", "reused", "side"]);
+      expect(data.reused, `${side}: a first join makes the participant`).toBe(false);
       checked += 1;
     }
     expect(checked).toBe(2);
@@ -277,21 +287,30 @@ describe.skipIf(!HAS_DB)("POST …/external-play/arbiter", () => {
     expect((await read(await joinSide(b.fixtureId, { side: "home" }))).status, "the side with a meeting").toBe(200);
   });
 
-  it("past ARBITER_JOIN_LIMIT joins of one board by one organiser in a window the next is a 429 - another board is not throttled", async () => {
+  it("past ARBITER_JOIN_LIMIT joins of one board SIDE by one organiser in a window the next is a 429 - the other side and another board are not throttled; the twelve admitted joins are one mint and eleven refreshes", async () => {
     const { r } = await liveBoard("required", 2);
     authState.userId = r.ownerUserId;
     const [one, two] = r.boards;
     const statuses: number[] = [];
     for (let i = 0; i <= ARBITER_JOIN_LIMIT.max; i += 1) statuses.push((await joinSide(one!.fixtureId, { side: "home" })).status);
     expect(statuses).toEqual([...Array(ARBITER_JOIN_LIMIT.max).fill(200), 429]);
+    expect(rtk.minted, "rtk.added: one participant").toHaveLength(1);
+    expect(rtk.refreshed, "rtk.refreshed: eleven, one call each").toHaveLength(ARBITER_JOIN_LIMIT.max - 1);
+    expect((await joinSide(one!.fixtureId, { side: "away" })).status, "per side").toBe(200);
     expect((await joinSide(two!.fixtureId, { side: "home" })).status, "per fixture").toBe(200);
   });
 });
 
 describe.skipIf(!HAS_DB)("DELETE …/external-play/arbiter/{participantId} (I2)", () => {
-  const del = (fixtureId: string, participantId: string, headers: Record<string, string> = {}) =>
+  // Explicit revocation needs the body `{ intent: "revoke" }` (owner 2026-11-17); `body: null` sends none.
+  const REVOKE = JSON.stringify({ intent: "revoke" });
+  const del = (fixtureId: string, participantId: string, headers: Record<string, string> = {}, body: string | null = REVOKE) =>
     leaveRoute(
-      new Request(`https://test.local/api/v1/fixtures/${fixtureId}/external-play/arbiter/${participantId}`, { method: "DELETE", headers }),
+      new Request(`https://test.local/api/v1/fixtures/${fixtureId}/external-play/arbiter/${participantId}`, {
+        method: "DELETE",
+        headers: body === null ? headers : { "content-type": "application/json", ...headers },
+        body,
+      }),
       { params: Promise.resolve({ id: fixtureId, participantId }) },
     );
   const removedAt = async (participantId: string) => {
@@ -362,6 +381,41 @@ describe.skipIf(!HAS_DB)("DELETE …/external-play/arbiter/{participantId} (I2)"
     expect(res.body.error?.message).toMatch(/cannot access this endpoint/);
     expect(rtk.removed).toEqual([]);
     expect(await removedAt(pid)).toBeNull();
+    // With no body the same refusal, never a 400 (auth first).
+    const bare = await read(await del(b.fixtureId, pid, { authorization: `Bearer ${secret}` }, null));
+    expect([bare.status, bare.body.error?.message]).toEqual([res.status, res.body.error?.message]);
+  });
+
+  it("the revocation route refuses a DELETE without the explicit intent, and revokes with it", async () => {
+    const { r, b } = await liveBoard();
+    const pid = await joined(r, b.fixtureId, r.ownerUserId);
+    const bodies: [string, string | null][] = [
+      ["no body", null],
+      ["not JSON", "revoke"],
+      ["{}", "{}"],
+      ["another intent", JSON.stringify({ intent: "leave" })],
+      ["an extra key", JSON.stringify({ intent: "revoke", x: 1 })],
+    ];
+    let checked = 0;
+    for (const [why, body] of bodies) {
+      expect((await del(b.fixtureId, pid, {}, body)).status, why).toBe(400);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity").toBe(5);
+    expect(rtk.removed, "nothing reached the vendor").toEqual([]);
+    expect(await removedAt(pid), "and the row is still live").toBeNull();
+    const ok = await read(await del(b.fixtureId, pid));
+    expect([ok.status, ok.body.data]).toEqual([200, { removed: true }]);
+    expect(rtk.removed).toEqual([pid]);
+  });
+
+  it("the revocation route checks auth BEFORE the body: a stranger with no body is 401, never 400", async () => {
+    const { r, b } = await liveBoard();
+    const pid = await joined(r, b.fixtureId, r.ownerUserId);
+    // (An anonymous caller cannot be built here: the suite's session mock always has a user. The smoke suite pins that row against a real server.)
+    authState.userId = (await seedOwner()).userId!;
+    expect((await del(b.fixtureId, pid, {}, null)).status, "stranger, no body").toBe(401);
+    expect(rtk.removed).toEqual([]);
   });
 });
 

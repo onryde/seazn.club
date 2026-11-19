@@ -105,7 +105,7 @@ export {
 export {
   PatchFixture, PutFixtureStream, CallFixtureInput, FixtureCalled, FixtureCallUndone, MatchDayRound,
   FixtureCallPreview, MatchDayFixture, MatchDayCourt, MatchDayView, MatchDayCandidate, ArbiterJoinInput,
-  ArbiterJoinOut, ArbiterLeaveOut, ExternalPlayResyncOut, VideoOverrideInput, VideoOverrideOut, ExternalPlayLobbyOut,
+  ArbiterJoinOut, ArbiterRevokeInput, ArbiterLeaveOut, ExternalPlayResyncOut, VideoOverrideInput, VideoOverrideOut, ExternalPlayLobbyOut,
   ResolveExternalPlay, ResolveExternalPlayOut, CloseExternalPlayFlags, CloseExternalPlayFlagsOut, RoomAct,
   RoomCameraFault, RoomCameraReport, RoomSeatClaim, RoomCameraAnswer, RoomActOut, FixtureStream,
   JointWinnersResult, JointWinnersUndoResult,

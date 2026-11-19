@@ -621,6 +621,16 @@ export async function lineActive(a: { budgetKey: string; at?: Date }): Promise<b
   return row!.active;
 }
 
+/** The pool as the gate sees it: the bucket's level (`peekRealtimeKitCall`) minus the reservations of the admitted live stays
+ *  (`reservedSql`). The arbiter's join floor reads it here, so the ledger keeps its one reader. Writes nothing. */
+export async function linePool(a: { budgetKey: string; at?: Date }): Promise<number> {
+  const now = at(a.at ?? (await dbNow()));
+  const tokens = await peekRealtimeKitCall(a.budgetKey, { at: a.at });
+  const [row] = await sql<{ reserved: number }[]>`
+    select coalesce(sum(${reservedSql(now)}), 0)::int as reserved from fixture_seat_line l where l.budget_key = ${a.budgetKey}`;
+  return tokens - row!.reserved;
+}
+
 /** The arrival (`first_claim_at`) of the caller's stay, for dating a check-in seated under the deadline protection (§5.7.8). */
 export async function ownStayArrival(a: { fixtureId: string; personId: string }): Promise<Date | null> {
   const [row] = await sql<{ first_claim_at: Date }[]>`

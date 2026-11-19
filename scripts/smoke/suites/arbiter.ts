@@ -67,20 +67,24 @@ export async function arbiterSuite(): Promise<void> {
     check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
     answered += 1;
   }
-  // The panel closing (I2): DELETE …/arbiter/{participantId} — nobody's watch here.
+  // Explicit revocation (owner 2026-11-17): DELETE …/arbiter/{participantId} needs the body `{ intent: "revoke" }`; the panel closing
+  // never sends it. Nobody's watch here. Auth runs before the body is parsed, so the three refusals below keep their answers.
   const leave = `${base}/arbiter/smoke-${tag}`;
-  const leaves: [string, Session, number, string | null][] = [
-    ["leave, no identity", anon, 401, null],
-    ["leave, a signed-in stranger", stranger, 401, "UNAUTHENTICATED"],
-    ["leave, the organiser, a watch that is not theirs", owner, 404, "NOT_FOUND"],
+  const revoke = { intent: "revoke" };
+  const leaves: [string, Session, unknown, number, string | null][] = [
+    ["leave, no identity", anon, revoke, 401, null],
+    ["leave, a signed-in stranger", stranger, revoke, 401, "UNAUTHENTICATED"],
+    ["leave, the organiser, a watch that is not theirs", owner, revoke, 404, "NOT_FOUND"],
+    // `parseBody`'s refusal for no JSON is a 400 with the class's default code: the code is not pinned.
+    ["leave, the organiser, no body", owner, undefined, 400, null],
   ];
-  for (const [what, session, want, code] of leaves) {
-    const r = await v1(session, leave, "DELETE");
+  for (const [what, session, body, want, code] of leaves) {
+    const r = await v1(session, leave, "DELETE", body);
     const got = r.json.error?.code;
     check(`arbiter API, ${what}: ${want}${code ? ` ${code}` : ""} (got ${r.status} ${got ?? ""})`, r.status === want && (code === null || got === code));
     answered += 1;
   }
-  check("arbiter API: anti-vacuity, thirteen calls", answered === calls.length + leaves.length && answered === 13);
+  check("arbiter API: anti-vacuity, fourteen calls", answered === calls.length + leaves.length && answered === 14);
 
   // The page: the division's slugs from the organiser's own links.
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[] | { orgs?: { slug: string }[] };

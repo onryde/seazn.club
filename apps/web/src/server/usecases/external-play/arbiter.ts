@@ -38,12 +38,17 @@ import { SHIP1_TIME_CONTROLS } from "@/server/external-play/time-controls";
 import { cameraMatchWindow, matchGuardFaults, type MatchTimes } from "@/server/external-play/video/match-window";
 import {
   addParticipant,
+  currentBudgetKey,
   RealtimeKitDeferred,
   RealtimeKitError,
+  refreshParticipantToken,
   removeParticipant,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
-import { anchorOfRow, boardExtraSql, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
+import { everJoined } from "@/server/external-play/video/presence";
+import { linePool } from "@/server/external-play/seat-line";
+import { VIDEO_BUSY } from "@/lib/online-chess";
+import { anchorOfRow, boardExtraSql, boardOpenFor, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
 import { type BoardAnchor, bridgeGameOnFile, checkInCounts, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
 import { latestEmailStatus, type EmailStatusRow } from "@/server/email-outbox/status";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
@@ -51,7 +56,7 @@ import { EDITOR_ROLES } from "@/lib/types";
 import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
-import { checkedInAtOfBoards } from "./check-ins";
+import { checkedInAtOfBoards, countedCheckIns } from "./check-ins";
 import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side, type SidePlayer } from "./guard";
 import { noResultOffer } from "./no-result";
 import { readNeedsReason } from "./queue";
@@ -678,20 +683,35 @@ async function scoreOf(r: BoardRow, whiteEntrantId: string, blackEntrantId: stri
 export type ArbiterVideo = {
   addParticipant: (a: { meetingId: string; subject: string; preset: "player" | "arbiter" }) => Promise<ParticipantToken>;
   removeParticipant: (a: { meetingId: string; participantId: string }) => Promise<void>;
+  /** A fresh token for a participant the organiser already holds (one call; the earlier token keeps working, so nothing is revoked). */
+  refreshParticipantToken: (a: { meetingId: string; participantId: string }) => Promise<ParticipantToken>;
 };
 
 export const REAL_ARBITER_VIDEO: ArbiterVideo = {
   addParticipant: (a) => addParticipant(a),
   removeParticipant: (a) => removeParticipant(a),
+  refreshParticipantToken: (a) => refreshParticipantToken(a),
 };
 
-/** What the arbiter's browser gets: ITS OWN token for a participant made for
- *  this open alone (`participantId`, which it hands back on leaving), the side
+/** A join takes its token only while the check-in line's pool (`linePool`: the bucket's level less the admitted stays' reservations)
+ *  holds at least this many calls; below it the join answers 503 VIDEO_BUSY, so a player's check-in is never the slower for an arbiter. */
+export const ARBITER_JOIN_FLOOR = 60;
+
+/** The one rule for "this side's player has arrived" (pure; the join and the loader's `joinable` both call it): a player participant
+ *  is on file, and either the presence proof is on and the player has ever joined the room, or it is off and a check-in counts. */
+export function arbiterSideAdmits(a: { proofFlag: boolean; presenceEver: boolean; checkInCounted: boolean; playerParticipants: number }): boolean {
+  return a.playerParticipants > 0 && (a.proofFlag ? a.presenceEver : a.checkInCounted);
+}
+
+const presenceProofOn = (): boolean => process.env.EXTERNAL_PLAY_PRESENCE_PROOF === "1";
+
+/** What the arbiter's browser gets: ITS OWN token for the one participant it holds in this meeting (`participantId`; `reused` when
+ *  the answer is a fresh token for a participant already held), the side
  *  it joined, and the participant ids of the PLAYERS in that meeting (their
  *  peers' `userId` - one, though the model allows more; D16, §5.6.4: a meeting
  *  holds one player, so there are no longer White and Black lists).
  *  Never a player's token (spec §10). */
-export type ArbiterJoin = { authToken: string; participantId: string; side: Side; players: string[] };
+export type ArbiterJoin = { authToken: string; participantId: string; side: Side; players: string[]; reused: boolean };
 
 /** The roles that may watch a board — the route's `write` (requireOrgAuth:
  *  owner or admin), and the role the sweep's arbiter removal keeps. One list,
@@ -723,23 +743,22 @@ export function requireWatcher(auth: AuthCtx): string {
  * business watching a player's camera — who does not play on the board (C1),
  * on a board still being played in an opened round (M2).
  *
- * Every open mints a FRESH participant (I2): a RealtimeKit token lasts 100
- * days and a token refresh does not revoke the old one, so a reused
- * participant would keep every token ever handed out alive. The server
- * removes it — leaveAsArbiter when the panel closes, the sweep when the role
- * is gone or ARBITER_PARTICIPANT_TTL_MS has passed, endMeeting at teardown.
- * Throttled per fixture and organiser (ARBITER_JOIN_LIMIT, 429): every flip of the panel's switch is one of these.
+ * One participant per (organiser, meeting) for the game's life: a second open finds the organiser's live row and refreshes its
+ * token (`reused`), so tabs and re-opens spend one vendor call and mint nothing; a token refresh does not revoke the old one, and
+ * the participant ends with the sweep (role gone, ARBITER_PARTICIPANT_TTL_MS), endMeeting at teardown, or explicit revocation.
+ * Refused 409 VIDEO_MEETING_NOT_STARTED until the side's player has ARRIVED (`arbiterSideAdmits`), and 503 VIDEO_BUSY while the
+ * line's pool is under ARBITER_JOIN_FLOOR. Throttled per fixture, side and organiser (ARBITER_JOIN_LIMIT, 429).
  */
 export async function joinAsArbiter(
   auth: AuthCtx,
   fixtureId: string,
   side: Side,
-  deps: { video?: ArbiterVideo } = {},
+  deps: { video?: ArbiterVideo; at?: Date } = {},
 ): Promise<ArbiterJoin> {
   const userId = requireWatcher(auth);
   const f = await loadOnlinePlayFixture(fixtureId);
   if (f === null || f.orgId !== auth.orgId) throw new HttpError(404, "fixture not found", "NOT_FOUND");
-  await rateLimit(`arbiter-join:${fixtureId}:${userId}`, ARBITER_JOIN_LIMIT);
+  await rateLimit(`arbiter-join:${fixtureId}:${side}:${userId}`, ARBITER_JOIN_LIMIT);
   // C1 (D7 safeguarding): a player never watches their opponent's camera,
   // and an organiser who plays on this board is its player. Refused before
   // any participant is minted.
@@ -768,10 +787,9 @@ export async function joinAsArbiter(
 
   // The player's meeting, as it stands NOW: made for the board's current pairing (a row an earlier pairing left is no
   // meeting for this one), and not ended. Read, never made.
-  const [meeting] = await sql<{ meetingId: string; endedAt: Date | null; samePair: boolean; arrived: boolean }[]>`
+  const [meeting] = await sql<{ meetingId: string; endedAt: Date | null; samePair: boolean }[]>`
     select m.meeting_id as "meetingId", m.ended_at as "endedAt",
-           (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair",
-           ${playerOnFile(side)} as arrived
+           (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair"
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
      where m.fixture_id = ${fixtureId} and m.side = ${side}`;
@@ -779,14 +797,48 @@ export async function joinAsArbiter(
     throw new HttpError(409, "this player has not checked in yet", "VIDEO_MEETING_NOT_STARTED");
   }
   if (meeting.endedAt !== null) throw new HttpError(409, "this player's video meeting has ended", "VIDEO_MEETING_ENDED");
-  // A room is not an arrival (`playerOnFile`): the pre-mint job makes a paired board's rooms before anyone comes, and an arbiter minted into
-  // one would sit in an empty room - a vendor call spent at the moment the round opens, with nothing to watch. Refused before any request.
-  if (!meeting.arrived) throw new HttpError(409, "this player has not checked in yet", "VIDEO_MEETING_NOT_STARTED");
+  // A room is not an arrival: pre-mint makes a paired board's rooms before anyone comes, and an arbiter minted into one would sit in an
+  // empty room. The side's player has arrived (`arbiterSideAdmits`) or the join is refused before any vendor request. Every fact is read
+  // here, and only the arm the flag selects.
+  const sides = await loadSides(f);
+  const player = side === "home" ? sides.home : sides.away;
+  const players =
+    player.personId === null
+      ? []
+      : await sql<{ participantId: string }[]>`
+          select participant_id as "participantId"
+            from fixture_video_participants
+           where fixture_id = ${fixtureId} and side = ${side} and preset = 'player' and person_id = ${player.personId}
+           order by created_at, id`;
+  const proofFlag = presenceProofOn();
+  let presenceEver = false;
+  let checkInCounted = false;
+  if (proofFlag) {
+    for (const p of players) {
+      if (await everJoined(sql, { meetingId: meeting.meetingId, participantId: p.participantId, customParticipantId: player.personId! })) {
+        presenceEver = true;
+        break;
+      }
+    }
+  } else {
+    const anchor = (await boardOpenFor(sql, fixtureId))?.anchor ?? null;
+    checkInCounted = (await countedCheckIns(f, sides.home, sides.away, anchor))[side];
+  }
+  if (!arbiterSideAdmits({ proofFlag, presenceEver, checkInCounted, playerParticipants: players.length })) {
+    throw new HttpError(409, "this player has not checked in yet", "VIDEO_MEETING_NOT_STARTED");
+  }
+
+  // The floor: the line has first call on the vendor's budget. No vendor configured, no bucket, no floor.
+  const budgetKey = currentBudgetKey();
+  if (budgetKey !== null && (await linePool({ budgetKey, at: deps.at })) < ARBITER_JOIN_FLOOR) {
+    log.info({ fixtureId }, "arbiter: join refused VIDEO_BUSY");
+    throw new HttpError(503, "video is busy right now, try again in a moment", VIDEO_BUSY);
+  }
 
   const video = deps.video ?? REAL_ARBITER_VIDEO;
-  let token: ParticipantToken;
+  let joined: { token: ParticipantToken; reused: boolean };
   try {
-    token = await mintArbiter({ fixtureId, side, userId, meetingId: meeting.meetingId }, video);
+    joined = await findOrMakeArbiter({ fixtureId, side, userId, meetingId: meeting.meetingId }, video);
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
     // D21: a deferral (the platform's call budget is spent) is the same 503 — try again — but it is not an error to report.
@@ -800,59 +852,61 @@ export async function joinAsArbiter(
     throw new HttpError(503, "video is unavailable right now", "VIDEO_UNAVAILABLE");
   }
 
-  // The players in THIS meeting: the side's own player's participants (the peers' `userId`). The meeting holds no one else.
-  const sides = await loadSides(f);
-  const player = side === "home" ? sides.home : sides.away;
-  const players =
-    player.personId === null
-      ? []
-      : await sql<{ participantId: string }[]>`
-          select participant_id as "participantId"
-            from fixture_video_participants
-           where fixture_id = ${fixtureId} and side = ${side} and preset = 'player' and person_id = ${player.personId}
-           order by created_at, id`;
   return {
-    authToken: token.authToken,
-    participantId: token.participantId,
+    authToken: joined.token.authToken,
+    participantId: joined.token.participantId,
     side,
     players: players.map((p) => p.participantId),
+    reused: joined.reused,
   };
 }
 
-/** A fresh arbiter participant for this open, on file before its token is
- *  handed out. A record that cannot be written leaves no participant behind:
- *  it is removed at the vendor at once, so nothing watches untracked. */
-async function mintArbiter(
+const LIVE_ARBITER_INDEX = "fixture_video_participants_arbiter_live_idx";
+
+/** The organiser's participant in this side's meeting, found THROUGH THE ROW (never through the vendor's idempotency: its answer
+ *  after a delete is unmeasured, so the subject keeps its nonce) and given a fresh token, or made and put on file. A record that
+ *  cannot be written leaves no participant behind: OUR just-minted one is removed at the vendor at once. */
+async function findOrMakeArbiter(
   a: { fixtureId: string; side: Side; userId: string; meetingId: string },
   video: ArbiterVideo,
-): Promise<ParticipantToken> {
-  // `subject` is RealtimeKit's custom_participant_id: internal ids only, never
-  // an email or a name (realtimekit.ts addParticipant). T17B fix 2 (D3): the
-  // vendor's add-participant is IDEMPOTENT on that id within a meeting
-  // (measured: the same id answers the SAME participant), so a bare user id
-  // handed a second open the first open's participant — the record refused
-  // it, the catch below deleted it at the vendor, and every open tab of that
-  // organiser lost its watch. Each OPEN is its own participant: the user id
-  // and a nonce.
+): Promise<{ token: ParticipantToken; reused: boolean }> {
+  const findLive = async (): Promise<string | null> => {
+    const [row] = await sql<{ participantId: string }[]>`
+      select participant_id as "participantId" from fixture_video_participants
+       where fixture_id = ${a.fixtureId} and side = ${a.side} and preset = 'arbiter' and user_id = ${a.userId} and removed_at is null`;
+    return row?.participantId ?? null;
+  };
+  const live = await findLive();
+  if (live !== null) return { token: await video.refreshParticipantToken({ meetingId: a.meetingId, participantId: live }), reused: true };
+
+  // `subject` is RealtimeKit's custom_participant_id: internal ids only, never an email or a name (realtimekit.ts addParticipant). The
+  // nonce stays: the vendor's add is idempotent on that id within a meeting, and its answer after a DELETE is unmeasured.
   const minted = await video.addParticipant({ meetingId: a.meetingId, subject: `${a.userId}:${randomUUID()}`, preset: "arbiter" });
   try {
     await sql`
       insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, user_id)
       values (${a.fixtureId}, ${a.side}, null, 'arbiter', ${minted.participantId}, ${a.userId})`;
   } catch (err) {
-    // Best effort: a refusal (the call budget, D21) leaves the minted participant at the vendor with no row of ours
-    // naming it - nothing retries it. It is receive-only (the arbiter preset) and holds no token we gave out.
+    const e = err as { code?: string; constraint_name?: string };
+    // Best effort: ours alone, its token handed to nobody.
     await video.removeParticipant({ meetingId: a.meetingId, participantId: minted.participantId }).catch(() => undefined);
-    // The vendor's participant is gone (or going): a record already holding it
-    // must not stay a live watch. Arbiter rows only (V454: a player's is never
-    // removed).
-    await sql`
-      update fixture_video_participants set removed_at = now()
-       where fixture_id = ${a.fixtureId} and side = ${a.side} and participant_id = ${minted.participantId}
-         and preset = 'arbiter' and removed_at is null`;
+    if (e.code === "23505" && e.constraint_name === LIVE_ARBITER_INDEX) {
+      // A racing tab inserted first: its participant is the one; refresh its token.
+      const winner = await findLive();
+      if (winner === null) throw err;
+      return { token: await video.refreshParticipantToken({ meetingId: a.meetingId, participantId: winner }), reused: true };
+    }
+    if (e.code === "23505" && e.constraint_name === "fixture_video_participants_fixture_id_participant_id_key") {
+      // The vendor answered an id a row already holds (T17B fix 2, D3): that row names the participant just removed, so it is no
+      // live watch. Arbiter rows of this side only (V454: a player's is never removed).
+      await sql`
+        update fixture_video_participants set removed_at = now()
+         where fixture_id = ${a.fixtureId} and side = ${a.side} and participant_id = ${minted.participantId}
+           and preset = 'arbiter' and removed_at is null`;
+    }
     throw err;
   }
-  return minted;
+  return { token: minted, reused: false };
 }
 
 /**
