@@ -67,8 +67,8 @@ function board(over: Partial<ArbiterBoard> = {}): ArbiterBoard {
     videoOverridden: false,
     cameraReport: null,
     sides: {
-      home: { state: "none", endedAt: null, evidenceAt: null },
-      away: { state: "none", endedAt: null, evidenceAt: null },
+      home: { state: "none", endedAt: null, evidenceAt: null, presence: { present: false, since: null, leftAt: null }, camera: { state: "unknown", at: null }, joinable: false },
+      away: { state: "none", endedAt: null, evidenceAt: null, presence: { present: false, since: null, leftAt: null }, camera: { state: "unknown", at: null }, joinable: false },
     },
     canResync: false,
     playable: true,

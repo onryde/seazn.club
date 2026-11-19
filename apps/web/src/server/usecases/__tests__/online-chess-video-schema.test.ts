@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import postgres from "postgres";
 import { sql } from "@/lib/db";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 import { OLD_SHAPE, oldShapeStubs } from "./_v459-old-shape";
@@ -859,9 +860,10 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       /** Anti-vacuity, per file: what each later delta that touches the three runs on the replica (kept) and leaves out
        *  (skipped). Typed from each delta's own text, never counted by the code below. V531: the two `drop not null`s, the
        *  stamp-pair check, presence_fallback_from, camera_live_first_at and its check, token_issued_at (7); its two
-       *  fixture_seat_line columns (2). A new delta touching the three adds its own entry, and the keys stay in ASCENDING
+       *  fixture_seat_line columns (2). V534: the one unique index (1 kept); the dedupe's `do` block (split on its own `;` line ends into
+       *  five fragments) and its update are the 6 the replica leaves out. A new delta touching the three adds its own entry, and the keys stay in ASCENDING
        *  version order: they are compared, as a list, with the deltas in the order they replay. */
-      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V531: { kept: 7, skipped: 2 } };
+      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V531: { kept: 7, skipped: 2 }, V534: { kept: 1, skipped: 6 } };
       /** Every delta numbered above 459 with at least one statement on the three, in version order, split into statements
        *  on `;` at a line end (comments stripped first: a comment's own `;` is not an end). */
       const laterDeltas = (): { version: string; kept: string[]; skipped: string[] }[] =>
@@ -890,6 +892,7 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         const later = laterDeltas();
         const counted = Object.fromEntries(later.map((d) => [d.version, { kept: d.kept.length, skipped: d.skipped.length }]));
         expect(Object.keys(counted), "the deltas after V459 that touch the three tables").toEqual(Object.keys(REPLAYED));
+        expect(Object.keys(counted), "the scan finds this plan's own delta").toContain("V534");
         for (const [version, want] of Object.entries(REPLAYED)) expect(counted[version], version).toEqual(want);
         for (const d of later) for (const s of d.kept) await tx.unsafe(s);
       };
@@ -1137,4 +1140,65 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       expect(WITH_ORG_ID.filter((t) => SUPERUSER_ONLY.has(t))).toEqual(WITH_ORG_ID);
     });
   });
+
+  // ─── V534: one LIVE arbiter participant per organizer per player meeting ────────────────────────────────────────────────
+  describe("V534: the dedupe and the live index", () => {
+    const V534 = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "..", "..", "db", "migration", "deltas", "V534__arbiter_live_participant.sql");
+
+    it("the dedupe keeps the NEWEST live arbiter row of each (fixture, side, user), stamps the rest (3 of 5), names the 2 on a LIVE meeting in its warning, then builds the unique index (and the index refuses a second live row, by name)", async () => {
+      const notices: string[] = [];
+      // A client of its own: the warning is a notice on the connection that ran the delta.
+      const probe = postgres(process.env.DATABASE_URL!, {
+        max: 1,
+        connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+        onnotice: (n) => notices.push(String(n.message)),
+      });
+      const ROLLBACK = new Error("rollback");
+      const T = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+      try {
+        await probe.begin(async (tx) => {
+          await tx`drop index fixture_video_participants_arbiter_live_idx`;
+          // An ENDED meeting for the second group: the other fixture's home side.
+          await tx`
+            insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id, ended_at)
+            values (${meetinglessFixtureId}, 'home', ${orgId}, ${`mtg-v532-${randomUUID().slice(0, 8)}`},
+                    (select home_entrant_id from fixtures where id = ${meetinglessFixtureId}), (select away_entrant_id from fixtures where id = ${meetinglessFixtureId}), now())`;
+          const row = async (fixture: string, minutesAgo: number) => {
+            const pid = `p-v532-${randomUUID().slice(0, 8)}`;
+            await tx`
+              insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, user_id, created_at)
+              values (${fixture}, 'home', null, 'arbiter', ${pid}, ${userId}, ${T(minutesAgo)})`;
+            return pid;
+          };
+          const live = [await row(fixtureId, 30), await row(fixtureId, 20), await row(fixtureId, 10)]; // oldest .. newest, LIVE meeting
+          const ended = [await row(meetinglessFixtureId, 25), await row(meetinglessFixtureId, 5)]; // oldest .. newest, ENDED meeting
+          await tx.unsafe(readFileSync(V534, "utf8"));
+          const stamped = async (ids: string[]) =>
+            (await tx<{ participant_id: string; removed: boolean }[]>`
+              select participant_id, removed_at is not null as removed from fixture_video_participants where participant_id in ${tx(ids)}`)
+              .sort((a, b) => ids.indexOf(a.participant_id) - ids.indexOf(b.participant_id)).map((r) => r.removed);
+          expect(await stamped(live), "live group: the newest stays live").toEqual([true, true, false]);
+          expect(await stamped(ended), "ended group: the newest stays live").toEqual([true, false]);
+          expect([...(await stamped(live)), ...(await stamped(ended))].filter(Boolean).length, "3 of 5 stamped").toBe(3);
+          // The index now exists and refuses a second LIVE row, by name.
+          await tx`savepoint dup`;
+          await expect(tx`
+            insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, user_id)
+            values (${fixtureId}, 'home', null, 'arbiter', ${`p-v532-${randomUUID().slice(0, 8)}`}, ${userId})`).rejects.toMatchObject({
+            code: "23505", constraint_name: "fixture_video_participants_arbiter_live_idx",
+          });
+          await tx`rollback to savepoint dup`;
+          throw ROLLBACK;
+        }).catch((e) => {
+          if (e !== ROLLBACK) throw e;
+        });
+      } finally {
+        await probe.end({ timeout: 2 });
+      }
+      const warnings = notices.filter((m) => m.includes("V534:"));
+      expect(warnings, "one warning, naming the live duplicates stamped without a vendor removal").toHaveLength(1);
+      expect(warnings[0], "2 live duplicates (the ended group's one is not counted)").toMatch(/V534: 2 live arbiter duplicates/);
+    });
+  });
+
 });

@@ -224,6 +224,16 @@ describe.runIf(HAS_DB)("loadArbiterRound seats: the empty case and the boards th
     expect(vi.mocked(checkedInAtOfBoards).mock.calls.map((c) => [...c[0]])).toEqual([[inCheckIn!.fixtureId]]);
   });
 
+  it("the check-in read follows the loader's own state chain: an ABANDONED board (not in check-in, though no game is on file) is not asked about (pins readBoardFacts' inCheckIn restatement)", async () => {
+    const r = await openedRound(2);
+    const [open, abandoned] = r.boards;
+    await sql`update fixtures set status = 'abandoned' where id = ${abandoned!.fixtureId}`;
+    vi.mocked(checkedInAtOfBoards).mockClear();
+    const boards = await boardsOf(r);
+    expect(boards.map((b) => b.state.kind), "premise: one in check-in, one a result (abandoned)").toEqual(["checking_in", "result"]);
+    expect(vi.mocked(checkedInAtOfBoards).mock.calls.map((c) => [...c[0]])).toEqual([[open!.fixtureId]]);
+  });
+
   it("one read per round, not per board: several boards in check-in cost ONE outbox read and ONE check-in read, and each board keeps its own facts", async () => {
     const r = await openedRound(4);
     const [a, b, c, past] = r.boards;

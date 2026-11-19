@@ -12,7 +12,7 @@ export type Tx = postgres.TransactionSql;
  * is created on first use so that importing this module never throws during
  * the build when env vars are not present.
  */
-const globalForDb = globalThis as unknown as { _sql?: Sql; _queryCount?: number };
+const globalForDb = globalThis as unknown as { _sql?: Sql; _queryCount?: number; _queryTexts?: string[] };
 
 /**
  * Statement counting is a TEST INSTRUMENT, and it is on under vitest only.
@@ -74,6 +74,12 @@ export function statementCount(): number {
     );
   }
   return globalForDb._queryCount ?? 0;
+}
+
+/** Vitest only: every statement's text since process start (never its bind values), for counting by the table it names. */
+export function statementTexts(): readonly string[] {
+  if (!countsStatements()) throw new Error("statementTexts() is only live under vitest (see countsStatements)");
+  return globalForDb._queryTexts ?? [];
 }
 
 export interface DbConnectionOptions {
@@ -173,8 +179,10 @@ function getClient(): Sql {
     // URL or from PGDEBUG) puts every failed query's bind values on the error
     // as enumerable fields; leaving the key out would let the last two do it.
     debug: countsStatements()
-      ? () => {
+      ? (_connection: number, query: string) => {
           globalForDb._queryCount = (globalForDb._queryCount ?? 0) + 1;
+          // The statement's TEXT only (placeholders, never the bind values): tests count the statements that name a table.
+          (globalForDb._queryTexts ??= []).push(String(query));
         }
       : false,
     types: {

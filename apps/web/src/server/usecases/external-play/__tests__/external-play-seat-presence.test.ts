@@ -42,6 +42,7 @@ import {
   type RealtimeKitFixtureServer,
 } from "../../../../../e2e/realtimekit-fixture-server";
 import { openRound } from "../open-round";
+import { loadArbiterRound } from "../arbiter";
 import { reportOwnCamera } from "../camera-report";
 import {
   FIRST_READ_AFTER_JOIN_MS,
@@ -1168,5 +1169,48 @@ describe.skipIf(!DB)("the token stamp", () => {
     expect((await rowOf(b.pid)).token_issued_at?.getTime(), "a recheck stamps nothing").toBe(stamped);
     checked++;
     expect(checked, "anti-vacuity").toBe(5);
+  });
+});
+
+// Check-in capacity plan 3 Task 3, fix round 1: the arbiter loader's presence across the REAL re-open (openRound -> retireBoardsMeetings ->
+// resetKeptSeats), which KEEPS the room and its presence rows and re-stamps the window. Flag on (beforeEach). Online play is chess-only.
+describe.runIf(DB)("the arbiter loader's presence across a real re-open", () => {
+  async function reopened(leaves: boolean) {
+    stubOutboxEnv();
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    const b = r.boards[0]!;
+    fixturesMade.push(b.fixtureId);
+    const end = (id: string) => endMeeting(id);
+    mail.fail.add(b.home.email).add(b.away.email);
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true, invited: 0 });
+    const board: Board = { fixtureId: b.fixtureId, orgId: r.orgId, home: b.home, away: b.away } as unknown as Board;
+    const home = await arrive({ board, side: "home" });
+    const side = async () => (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.sides.home;
+    expect(await side(), "premise: window one, the player is in the room").toMatchObject({ state: "open", joinable: true, presence: { present: true } });
+    if (leaves) {
+      await new Promise((res) => setTimeout(res, 25));
+      await sql`update fixture_video_presence set left_at = now(), left_by = 'left' where meeting_id = ${home.meetingId} and left_at is null`;
+    }
+    await new Promise((res) => setTimeout(res, 25));
+    mail.fail.clear();
+    expect(await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { endMeeting: end })).toMatchObject({ opened: true });
+    const types = await sql<{ type: string }[]>`select type from competition_events where competition_id = ${r.competitionId} and type like 'external_play.round_%' order by created_at, id`;
+    expect(types.map((x) => x.type), "premise: a RE-OPEN").toEqual(["external_play.round_opened", "external_play.round_reopened"]);
+    const [kept] = await sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId} and side = 'home'`;
+    expect(kept?.meeting_id, "premise: the room was KEPT").toBe(home.meetingId);
+    return { side, home, b };
+  }
+
+  it("(a) the player was present in window 1 and LEFT: after the re-open, absent and not joinable until they rejoin", async () => {
+    const { side, home, b } = await reopened(true);
+    expect(await side()).toMatchObject({ joinable: false, presence: { present: false, since: null } });
+    await sql`insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, source)
+              values (${home.meetingId}, ${"rejoin-" + randomUUID().slice(0, 6)}, ${b.fixtureId}, 'home', ${home.pid}, ${home.personId}, now(), 'webhook')`;
+    expect(await side(), "the player returns").toMatchObject({ joinable: true, presence: { present: true } });
+  });
+
+  it("(b) the player stayed CONNECTED across the re-open (open row, no new join): still present and joinable", async () => {
+    const { side } = await reopened(false);
+    expect(await side()).toMatchObject({ joinable: true, presence: { present: true } });
   });
 });

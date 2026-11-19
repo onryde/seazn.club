@@ -46,7 +46,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
-import { RETIRED_PAIR, RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
+import { RETIRED_PAIR, RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensureMeeting, refreshParticipantToken, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
 import { prunePresence } from "@/server/external-play/video/presence";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
@@ -5437,7 +5437,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
       values (${`arb-${randomUUID().slice(0, 8)}@t.local`}, 'Arbiter', true, 'en') returning id`;
     await sql`insert into org_members (org_id, user_id, role) values (${w.orgId}, ${u!.id}, 'admin')`;
     const watch = await joinAsArbiter({ orgId: w.orgId, via: "session", userId: u!.id, role: "admin", keyId: null }, w.fixtureId, "home", {
-      video: { addParticipant: (a) => addParticipant(a, RTK), removeParticipant: (a) => removeParticipant(a, RTK) },
+      video: { addParticipant: (a) => addParticipant(a, RTK), removeParticipant: (a) => removeParticipant(a, RTK), refreshParticipantToken: (a) => refreshParticipantToken(a, RTK) },
     });
     await sql`update fixture_video_participants set created_at = now() - (${ARBITER_PARTICIPANT_TTL_MS + 60_000}::float8 * interval '1 millisecond')
                where participant_id = ${watch.participantId}`;
@@ -5490,6 +5490,7 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
   const VIDEO: ArbiterVideo = {
     addParticipant: (a) => addParticipant(a, RTK),
     removeParticipant: (a) => removeParticipant(a, RTK),
+    refreshParticipantToken: (a) => refreshParticipantToken(a, RTK),
   };
   /** A live game (T9 + T10, so the room is kept by teardown) watched by a
    *  second admin of the club through the real join. */
@@ -5698,6 +5699,7 @@ describe.runIf(HAS_DB)("D16 - a board has a room per player: teardown, the arbit
   const VIDEO: ArbiterVideo = {
     addParticipant: (a) => addParticipant(a, RTK),
     removeParticipant: (a) => removeParticipant(a, RTK),
+    refreshParticipantToken: (a) => refreshParticipantToken(a, RTK),
   };
   const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit"> = { reconcile: async () => null, realtimeKit: RTK };
   const SIDES = ["home", "away"] as const;
@@ -6132,6 +6134,7 @@ describe.runIf(HAS_DB)("T8 - the open-window deferral, the shared call cap and t
   const VIDEO: ArbiterVideo = {
     addParticipant: (a) => addParticipant(a, RTK),
     removeParticipant: (a) => removeParticipant(a, RTK),
+    refreshParticipantToken: (a) => refreshParticipantToken(a, RTK),
   };
 
   /** A round's open stamp, written directly (the product stamps exactly these columns): `openedAt`, unstaggered. */

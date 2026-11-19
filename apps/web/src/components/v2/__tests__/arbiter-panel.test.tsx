@@ -33,11 +33,12 @@ import {
   ArbiterPanel,
   ArbiterScreen,
   arbiterJoinStateFromError,
-  arbiterWatchRelease,
   defaultWatchSide,
   nextOffSince,
+  rejoinAfterPoll,
   seatSide,
   shouldJoinVideo,
+  sideWatchable,
   showsOutageCard,
   sideSeat,
   switchingFrom,
@@ -97,7 +98,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     videoOverridden: false,
     cameraReport: null,
     // D16: a room per player; the canvas's boards are under way, so both are open.
-    sides: { home: { state: "open", endedAt: null, evidenceAt: null }, away: { state: "open", endedAt: null, evidenceAt: null } },
+    sides: { home: { state: "open", endedAt: null, evidenceAt: null, presence: { present: false, since: null, leftAt: null }, camera: { state: "unknown", at: null }, joinable: true }, away: { state: "open", endedAt: null, evidenceAt: null, presence: { present: false, since: null, leftAt: null }, camera: { state: "unknown", at: null }, joinable: true } },
     canResync: true,
     playable: true,
     canSettle: true,
@@ -457,6 +458,9 @@ const meeting = (state: ArbiterSideMeeting["state"]): ArbiterSideMeeting => ({
   state,
   endedAt: state === "ended" ? at(19, 50) : null,
   evidenceAt: null,
+  presence: { present: false, since: null, leftAt: null },
+  camera: { state: "unknown", at: null },
+  joinable: state === "open",
 });
 const PANE = (h: string) => /<figure[\s\S]*?<\/figure>/.exec(h)?.[0] ?? "";
 /** The switch's markup: from its root to the live region that follows it (a plain row for each player when it is not interactive). */
@@ -1753,84 +1757,15 @@ describe("the camera join, as pure decisions", () => {
       // The panel only lists opened rounds: unreachable but by a race, so no copy of its own.
       [new ApiV1Error("x", 409, "ROUND_NOT_OPEN"), "error"],
       [new Error("network"), "error"],
+      // ACCEPTED INTERIM: the busy view and its retry are the Match Day plan's Task 9, which flips this row.
+      [new ApiV1Error("x", 503, "VIDEO_BUSY"), "error"],
     ];
     let checked = 0;
     for (const [err, kind] of rows) {
       expect(arbiterJoinStateFromError(err).kind).toBe(kind);
       checked++;
     }
-    expect(checked).toBe(12);
-  });
-
-  describe("I2: the watch is handed back — once, whenever the board closes", () => {
-    const recorder = () => {
-      const sent: { url: string; init: RequestInit }[] = [];
-      return { sent, send: async (url: string, init: RequestInit) => void sent.push({ url, init }) };
-    };
-    const URL_OF = (f: string, p: string) => `/api/v1/fixtures/${f}/external-play/arbiter/${p}`;
-
-    it("the empty case first: closed (or the tab hidden) before any mint — nothing sent", () => {
-      const r = recorder();
-      const w = arbiterWatchRelease("fx-1", r.send);
-      w.release();
-      w.close();
-      expect(r.sent).toEqual([]);
-    });
-
-    it("minted then closed: ONE DELETE that outlives the page (keepalive); a second close sends nothing", () => {
-      const r = recorder();
-      const w = arbiterWatchRelease("fx-1", r.send);
-      w.minted("pid-1");
-      w.close();
-      w.close();
-      expect(r.sent).toEqual([{ url: URL_OF("fx-1", "pid-1"), init: { method: "DELETE", keepalive: true } }]);
-    });
-
-    it("the tab going away (pagehide) hands it back; the board closing after sends nothing more", () => {
-      const r = recorder();
-      const w = arbiterWatchRelease("fx-1", r.send);
-      w.minted("pid-1");
-      w.release();
-      w.close();
-      expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx-1", "pid-1")]);
-    });
-
-    it("a mint that lands AFTER the board closed is handed back at once — the POST raced the switch", () => {
-      const r = recorder();
-      const w = arbiterWatchRelease("fx-1", r.send);
-      w.close();
-      expect(r.sent, "premise: nothing to send yet").toEqual([]);
-      w.minted("pid-late");
-      expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx-1", "pid-late")]);
-    });
-
-    it("ids are path-encoded, and a failed send is caught here — never unhandled; the sweep removes what the browser could not", () => {
-      // A rejected send that reports whether a rejection handler was attached.
-      let handled = 0;
-      const rejected = {
-        then: (_ok: unknown, bad?: (e: unknown) => unknown) => {
-          if (bad) {
-            handled++;
-            bad(new Error("offline"));
-          }
-          return Promise.resolve();
-        },
-        catch: (bad: (e: unknown) => unknown) => {
-          handled++;
-          bad(new Error("offline"));
-          return Promise.resolve();
-        },
-      } as unknown as Promise<unknown>;
-      const w = arbiterWatchRelease("fx/1", () => rejected);
-      w.minted("p d");
-      expect(() => w.close()).not.toThrow();
-      expect(handled, "the failure has a handler").toBe(1);
-      const r = recorder();
-      const enc = arbiterWatchRelease("fx/1", r.send);
-      enc.minted("p d");
-      enc.close();
-      expect(r.sent.map((x) => x.url)).toEqual([URL_OF("fx%2F1", "p%20d")]);
-    });
+    expect(checked).toBe(13);
   });
 
   it("'camera off since' starts when this browser first sees a present player's camera off, holds, and clears when it is back", () => {
@@ -2500,3 +2435,53 @@ function hhmm(iso: string): string {
 function hhmmss(iso: string): string {
   return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(iso));
 }
+
+
+// Check-in capacity plan 3 Task 3: the join gate on `joinable`, and the re-open on the next poll. Online play is chess-only.
+describe("sideWatchable - open AND joinable, nothing else", () => {
+  it("every state x joinable (6): true only for open + joinable", () => {
+    let checked = 0;
+    for (const state of ["none", "open", "ended"] as const) {
+      for (const joinable of [false, true]) {
+        const m: ArbiterSideMeeting = { ...meeting(state), joinable };
+        expect(sideWatchable({ sides: { home: m, away: meeting("none") } }, "home"), `${state} / joinable ${joinable}`).toBe(state === "open" && joinable);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("defaultWatchSide follows it: an open-but-not-joinable White yields to a joinable Black", () => {
+    const board = { whiteSide: "home" as const, sides: { home: { ...meeting("open"), joinable: false }, away: meeting("open") } };
+    expect(defaultWatchSide(board)).toBe("away");
+  });
+});
+
+describe("rejoinAfterPoll - re-open only a join refused NOT_STARTED while the side is watchable", () => {
+  const VIEWS: Record<ArbiterVideoView["kind"], ArbiterVideoView> = {
+    idle: { kind: "idle" },
+    connecting: { kind: "connecting" },
+    switching: { kind: "switching" },
+    watching: { kind: "watching", tile: {} as never },
+    notStarted: { kind: "notStarted" },
+    none: { kind: "none" },
+    overridden: { kind: "overridden" },
+    over: { kind: "over" },
+    ended: { kind: "ended" },
+    unavailable: { kind: "unavailable" },
+    fault: { kind: "fault" },
+    own: { kind: "own" },
+    error: { kind: "error" },
+  };
+  it("true only for notStarted + watchable; false for every other view kind, for watchable false, and for no view", () => {
+    let checked = 0;
+    for (const [kind, view] of Object.entries(VIEWS)) {
+      expect(rejoinAfterPoll(view, true), `${kind}, watchable`).toBe(kind === "notStarted");
+      expect(rejoinAfterPoll(view, false), `${kind}, not watchable`).toBe(false);
+      checked += 2;
+    }
+    expect(rejoinAfterPoll(null, true), "no view").toBe(false);
+    expect(checked, "views iterated x 2").toBe(Object.keys(VIEWS).length * 2);
+    expect(Object.keys(VIEWS).length, "every ArbiterVideoView kind (13)").toBe(13);
+  });
+});

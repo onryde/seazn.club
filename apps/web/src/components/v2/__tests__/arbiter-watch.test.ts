@@ -1,25 +1,22 @@
-// D16 (§5.6.4, shape (b)) - the arbiter holds ONE player's meeting at a time and a switch is a serial chain:
-// the SDK leave is awaited, then the server DELETE of the participant that open minted is awaited, and only then is the
-// next join POSTed. React does not await an effect's cleanup, so the order lives in `makeArbiterSerial`, not in the
-// panel. Driven through the REAL helper with deferred ports (every step is a promise the test settles by hand), so
-// "DELETE answered BEFORE the next join is sent" is read off a log the test controls, not off the helper's own state.
+// The arbiter's browser side (plan 3 Task 2): one join chain PER MEETING, a token kept in memory once a connect with it has
+// succeeded, and a close that is the SDK leave only - the browser sends no DELETE, ever. Driven through the REAL helper with
+// deferred ports (every step a promise the test settles by hand), so order is read off a log the test controls.
 import { describe, expect, it } from "vitest";
 import { ArbiterGuardError, type ArbiterCameras } from "../arbiter-camera";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "../arbiter-watch";
 
 const flush = async () => {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();
 };
 
-type Gate = { promise: Promise<void>; open(): void; fail(e: unknown): void };
+type Gate = { promise: Promise<void>; open(): void };
 function gate(): Gate {
   let open!: () => void;
-  let fail!: (e: unknown) => void;
-  const promise = new Promise<void>((res, rej) => {
+  const promise = new Promise<void>((res) => {
     open = res;
-    fail = rej;
   });
-  return { promise, open, fail };
+  return { promise, open };
 }
 
 function fakeCameras(log: string[], name: string, leaveGate?: Gate): ArbiterCameras {
@@ -35,293 +32,367 @@ function fakeCameras(log: string[], name: string, leaveGate?: Gate): ArbiterCame
   } as unknown as ArbiterCameras;
 }
 
-/** The world the helper talks to: a join route, the SDK, and the DELETE, each logged and each holdable. */
+/** The world the helper talks to: a join route and the SDK, each logged and each holdable or failable. */
 function rig(
   o: {
+    /** A POST (by fixture:side) that does not answer until its gate opens. */
     holdPost?: Record<string, Gate>;
-    holdDelete?: Record<string, Gate>;
-    holdLeave?: Record<string, Gate>;
-    failDelete?: Set<string>;
-    failPost?: Set<ArbiterSide>;
+    /** POSTs (by fixture:side) that are refused. */
+    refusePost?: Set<string>;
+    /** Connect labels (the mint's `t-<n>` without the `t-`) that reject. */
     connectFails?: Set<string>;
-    /** A connect (by the mint's label) that does not answer until its gate is opened: an SDK join that goes silent. */
+    /** Connects (by label) that never answer until their gate opens. */
     holdConnect?: Record<string, Gate>;
-    stepTimeoutMs?: number;
+    holdLeave?: Record<string, Gate>;
   } = {},
 ) {
   const log: string[] = [];
   let seq = 0;
-  const live = new Set<string>();
-  let maxLive = 0;
-  const idOf = new Map<string, string>(); // participant id -> label ("A1")
   const timeouts: Gate[] = [];
   const serial = makeArbiterSerial({
-    stepTimeoutMs: o.stepTimeoutMs ?? 10_000,
+    stepTimeoutMs: 10_000,
     after: () => {
       const g = gate();
       timeouts.push(g);
       return g.promise;
     },
     async join(fixtureId, side) {
-      const label = `${side}${(seq += 1)}`;
-      log.push(`POST ${fixtureId} ${side}`);
-      const held = o.holdPost?.[side];
+      const n = (seq += 1);
+      log.push(`POST ${fixtureId}:${side}`);
+      const held = o.holdPost?.[`${fixtureId}:${side}`];
       if (held) await held.promise;
-      if (o.failPost?.has(side)) throw new Error(`join ${side} refused`);
-      const participantId = `p-${label}`;
-      idOf.set(participantId, label);
-      live.add(participantId);
-      maxLive = Math.max(maxLive, live.size);
-      return { authToken: `t-${label}`, participantId, side, players: [`player-${side}`] } satisfies ArbiterJoinAnswer;
+      if (o.refusePost?.has(`${fixtureId}:${side}`)) throw new ApiV1Error("not started", 409, "VIDEO_MEETING_NOT_STARTED");
+      return { authToken: `t-${n}`, participantId: `p-${n}`, side, players: [`player-${side}`], reused: false } satisfies ArbiterJoinAnswer;
     },
     async connect(a) {
-      // The SDK join is handed the token and the players only; the token names the mint (`t-<label>`).
       const label = a.authToken.slice(2);
-      log.push(`connect ${label}`);
-      if (o.connectFails?.has(label)) throw new ArbiterGuardError(new Error("audio"));
+      log.push(`connect ${a.authToken}`);
+      if (o.connectFails?.has(label)) throw new ArbiterGuardError(new Error("dead token"));
       const held = o.holdConnect?.[label];
       if (held) await held.promise;
-      return fakeCameras(log, label, o.holdLeave?.[label]);
-    },
-    async send(url, init) {
-      const pid = decodeURIComponent(url.slice(url.lastIndexOf("/") + 1));
-      const label = idOf.get(pid) ?? pid;
-      expect(init, "every DELETE outlives the page").toEqual({ method: "DELETE", keepalive: true });
-      log.push(`DELETE ${label}`);
-      const held = o.holdDelete?.[label];
-      if (held) await held.promise;
-      if (o.failDelete?.has(label)) throw new Error("vendor said no");
-      live.delete(pid);
-      log.push(`DELETE answered ${label}`);
+      return fakeCameras(log, a.authToken, o.holdLeave?.[label]);
     },
   });
   const cameras: string[] = [];
   const errors: unknown[] = [];
   const open = (fixtureId: string, side: ArbiterSide) =>
     serial.open(fixtureId, side, { onCameras: () => void cameras.push(`${fixtureId}:${side}`), onError: (e) => void errors.push(e) });
-  return { log, open, cameras, errors, live, maxLive: () => maxLive, timeouts };
+  const posts = () => log.filter((e) => e.startsWith("POST"));
+  return { log, open, cameras, errors, timeouts, serial, posts };
 }
 
-describe("shape (b): a switch leaves, then deletes, then joins - each awaited", () => {
-  it("the order on the happy path, three switches: leave, DELETE sent, DELETE ANSWERED, and only then the next POST; never more than one live participant", async () => {
-    const r = rig();
-    let a = r.open("fx", "home");
+describe("one chain per meeting", () => {
+  it("two boards opened together proceed in parallel: board B connects while board A's POST is still pending", async () => {
+    const post = gate();
+    const r = rig({ holdPost: { "a:home": post } });
+    r.open("a", "home");
+    r.open("b", "home");
     await flush();
-    expect(r.log).toEqual(["POST fx home", "connect home1"]);
-    expect(r.live.size, "one participant after the first open").toBe(1);
-    let switches = 0;
-    for (const next of ["away", "home", "away"] as const) {
-      a.close();
-      a = r.open("fx", next);
-      await flush();
-      switches += 1;
-    }
-    expect(switches, "anti-vacuity: three switches driven").toBe(3);
-    const sequence = r.log.filter((e) => !e.startsWith("connect"));
-    expect(sequence).toEqual([
-      "POST fx home",
-      "leave home1", "left home1", "DELETE home1", "DELETE answered home1",
-      "POST fx away",
-      "leave away2", "left away2", "DELETE away2", "DELETE answered away2",
-      "POST fx home",
-      "leave home3", "left home3", "DELETE home3", "DELETE answered home3",
-      "POST fx away",
-    ]);
-    expect(r.maxLive(), "at most ONE live participant at any instant on this path").toBe(1);
-    expect(r.live.size, "and one at the end").toBe(1);
-    expect(r.cameras, "each open handed its cameras to its own caller").toEqual(["fx:home", "fx:away", "fx:home", "fx:away"]);
-  });
-
-  it("the next POST is NOT sent while the DELETE is unanswered, and goes out the moment it is", async () => {
-    const del = gate();
-    const r = rig({ holdDelete: { home1: del } });
-    const a = r.open("fx", "home");
-    await flush();
-    a.close();
-    r.open("fx", "away");
-    await flush();
-    expect(r.log).toContain("DELETE home1");
-    expect(r.log, "premise: the DELETE was sent and is waiting").not.toContain("DELETE answered home1");
-    expect(r.log.filter((e) => e.startsWith("POST")), "no second POST while the DELETE is out").toEqual(["POST fx home"]);
-    del.open();
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("POST")), "answered: now the POST").toEqual(["POST fx home", "POST fx away"]);
-    expect(r.log.indexOf("DELETE answered home1")).toBeLessThan(r.log.indexOf("POST fx away"));
-  });
-
-  it("the SDK leave is awaited before the DELETE is sent", async () => {
-    const leaving = gate();
-    const r = rig({ holdLeave: { home1: leaving } });
-    const a = r.open("fx", "home");
-    await flush();
-    a.close();
-    await flush();
-    expect(r.log).toContain("leave home1");
-    expect(r.log, "leave still pending: no DELETE yet").not.toContain("DELETE home1");
-    leaving.open();
-    await flush();
-    expect(r.log.indexOf("left home1")).toBeLessThan(r.log.indexOf("DELETE home1"));
-  });
-
-  it("a FAILED DELETE does not stop the join: the next POST goes out and its cameras arrive (two live participants on this path - the claim is not made for it)", async () => {
-    const r = rig({ failDelete: new Set(["home1"]) });
-    const a = r.open("fx", "home");
-    await flush();
-    a.close();
-    r.open("fx", "away");
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("POST"))).toEqual(["POST fx home", "POST fx away"]);
-    expect(r.log).not.toContain("DELETE answered home1");
-    expect(r.cameras).toEqual(["fx:home", "fx:away"]);
-    expect(r.errors, "the failed DELETE is nobody's error").toEqual([]);
-    expect(r.live.size, "the leftover is real: the sweep removes it, the helper cannot").toBe(2);
-  });
-
-  it("a leave or a DELETE that never answers is given up on after the step timeout, so one stuck step cannot wedge the switch", async () => {
-    const leaving = gate(); // never opened
-    const r = rig({ holdLeave: { home1: leaving } });
-    const a = r.open("fx", "home");
-    await flush();
-    a.close();
-    r.open("fx", "away");
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("POST")), "premise: wedged on the leave").toEqual(["POST fx home"]);
-    expect(r.timeouts.length, "premise: the leave is racing a timer").toBeGreaterThan(0);
-    r.timeouts.at(-1)!.open();
-    await flush();
-    expect(r.log, "the DELETE still went out after the leave was abandoned").toContain("DELETE home1");
-    expect(r.log.filter((e) => e.startsWith("POST"))).toEqual(["POST fx home", "POST fx away"]);
-  });
-});
-
-describe("every step of an open is bounded, so one silent step cannot wedge the page's whole chain (review I1)", () => {
-  it("a join POST that never answers is given up on after the step timeout: the pane gets an error, the next open still POSTs, and a mint that lands LATE is handed back at once", async () => {
-    const post = gate(); // the first POST goes silent
-    const r = rig({ holdPost: { home: post } });
-    const a = r.open("fx", "home");
-    r.open("fx", "away"); // the board is changed meanwhile; this open queues BEHIND the silent one
-    await flush();
-    expect(r.log, "premise: wedged on the first POST, the second is behind it").toEqual(["POST fx home"]);
-    expect(r.timeouts.length, "premise: the POST is racing a timer").toBe(1);
-    expect(r.errors, "premise: nothing has failed yet").toEqual([]);
-    r.timeouts[0]!.open();
-    await flush();
-    expect(r.errors, "the silent POST is the pane's one error").toHaveLength(1);
-    expect((r.errors[0] as Error).message).toMatch(/timed out/);
-    expect(r.log.filter((e) => e.startsWith("POST")), "the chain moved on: the next open POSTed").toEqual(["POST fx home", "POST fx away"]);
-    expect(r.cameras, "and its cameras arrived").toEqual(["fx:away"]);
-    // The silent POST finally answers: it minted a participant nobody is going to use.
+    expect(r.log, "premise: A's POST is out and held").toContain("POST a:home");
+    expect(r.cameras, "B did not wait for A").toEqual(["b:home"]);
     post.open();
     await flush();
-    expect(r.log, "the late mint is handed back at once").toContain("DELETE answered home1");
-    expect(r.live.has("p-home1"), "the abandoned mint is gone").toBe(false);
-    expect(r.live.size, "only the pane that is showing holds a participant").toBe(1);
-    a.close();
-    await flush();
-    expect(r.log.filter((e) => e === "DELETE home1"), "closing the abandoned open sends no second DELETE").toHaveLength(1);
+    expect(r.cameras.sort()).toEqual(["a:home", "b:home"]);
   });
 
-  it("an SDK join that never answers is given up on after the step timeout: the pane gets an error, the next open still goes, and the late join is left at once", async () => {
-    const connecting = gate(); // the first connect goes silent
-    const r = rig({ holdConnect: { home1: connecting } });
+  it("the two sides of one board are two meetings, so a side switch is parallel too", async () => {
+    const post = gate();
+    const r = rig({ holdPost: { "fx:home": post } });
     const a = r.open("fx", "home");
+    a.close();
     r.open("fx", "away");
     await flush();
-    expect(r.log, "premise: the first POST is minted and connecting, the second open is behind it").toEqual(["POST fx home", "connect home1"]);
-    expect(r.timeouts.length, "premise: the POST's timer and the connect's own are both racing").toBe(2);
-    expect(r.errors, "premise: nothing has failed yet").toEqual([]);
-    r.timeouts[1]!.open();
-    await flush();
-    expect(r.errors).toHaveLength(1);
-    expect((r.errors[0] as Error).message).toMatch(/timed out/);
-    expect(r.log.filter((e) => e.startsWith("POST")), "the chain moved on").toEqual(["POST fx home", "POST fx away"]);
     expect(r.cameras).toEqual(["fx:away"]);
-    // The silent connect finally lands: those cameras are never shown and are left at once.
-    connecting.open();
-    await flush();
-    expect(r.cameras, "the late cameras are never handed to the pane").toEqual(["fx:away"]);
-    expect(r.log, "the late join is left").toContain("left home1");
-    a.close();
-    await flush();
-    expect(r.log, "closing the abandoned open hands its participant back").toContain("DELETE answered home1");
   });
-});
 
-describe("the helper's other sequences", () => {
-  it("closed while the POST is in flight: no connect, and the participant it minted is handed back", async () => {
-    const post = gate();
-    const r = rig({ holdPost: { home: post } });
+  it("close then open of the SAME meeting runs in order on one chain: the leave resolves before the second connect starts", async () => {
+    const leaving = gate();
+    const r = rig({ holdLeave: { "1": leaving } });
     const a = r.open("fx", "home");
     await flush();
-    a.close();
-    post.open();
-    await flush();
-    expect(r.log).toEqual(["POST fx home", "DELETE home1", "DELETE answered home1"]);
-    expect(r.cameras).toEqual([]);
-    expect(r.live.size).toBe(0);
-  });
-
-  it("opened and closed before its turn comes (an earlier open is still starting): it never POSTs at all", async () => {
-    const post = gate();
-    const r = rig({ holdPost: { home: post } });
-    // The panel always closes the pane it leaves BEFORE it opens the next (effect cleanup, then effect).
-    const a = r.open("fx", "home");
-    await flush(); // A's POST is out and held
-    a.close();
-    const b = r.open("fx", "away");
-    b.close(); // flipped again before B ever started
-    const c = r.open("fx", "home");
-    await flush();
-    post.open();
-    await flush();
-    const posts = r.log.filter((e) => e.startsWith("POST"));
-    expect(posts, "A's POST, then C's - never B's").toEqual(["POST fx home", "POST fx home"]);
-    expect(r.log).not.toContain("POST fx away");
-    expect(r.live.size, "A was handed back, C holds the one live participant").toBe(1);
-    expect(r.maxLive(), "and they never overlapped").toBe(1);
-    c.close();
-    await flush();
-    expect(r.live.size).toBe(0);
-  });
-
-  it("a refused POST is the caller's error, once; nothing was minted so nothing is deleted; the next open still works", async () => {
-    const r = rig({ failPost: new Set(["away"] as const) });
-    const a = r.open("fx", "away");
-    await flush();
-    expect(r.errors).toHaveLength(1);
-    expect((r.errors[0] as Error).message).toBe("join away refused");
     a.close();
     r.open("fx", "home");
     await flush();
-    expect(r.log.filter((e) => e.startsWith("DELETE"))).toEqual([]);
-    expect(r.cameras).toEqual(["fx:home"]);
+    expect(r.log, "premise: wedged inside the leave").toContain("leave t-1");
+    expect(r.log.filter((e) => e.startsWith("connect")), "no second connect while the leave is out").toEqual(["connect t-1"]);
+    leaving.open();
+    await flush();
+    expect(r.log.indexOf("left t-1")).toBeLessThan(r.log.lastIndexOf("connect t-1"));
+    expect(r.log.filter((e) => e.startsWith("connect"))).toEqual(["connect t-1", "connect t-1"]);
   });
+});
 
-  it("a guard fault in the SDK join is the caller's error and the participant is still handed back when the pane closes", async () => {
-    const r = rig({ connectFails: new Set(["home1"]) });
+describe("the token memory", () => {
+  it("a close then an open of the same meeting POSTs nothing the second time and connects with the kept token", async () => {
+    const r = rig();
     const a = r.open("fx", "home");
     await flush();
-    expect(r.errors[0]).toBeInstanceOf(ArbiterGuardError);
-    expect(r.cameras).toEqual([]);
     a.close();
+    r.open("fx", "home");
     await flush();
-    expect(r.log).toContain("DELETE answered home1");
-    expect(r.live.size).toBe(0);
+    expect(r.posts(), "one POST in all").toEqual(["POST fx:home"]);
+    expect(r.log.filter((e) => e.startsWith("connect"))).toEqual(["connect t-1", "connect t-1"]);
+    expect(r.cameras).toEqual(["fx:home", "fx:home"]);
+    expect([...r.serial.tokens().keys()]).toEqual(["fx:home"]);
   });
 
-  it("a caller whose error handler throws does not wedge the chain: the next open still POSTs and its cameras arrive", async () => {
+  it("a close never sends a DELETE: through the real apiV1 over a mocked fetch, one POST on the first open, none on the second, no DELETE among the requests", async () => {
+    const requests: { url: string; method: string }[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      requests.push({ url: String(url), method: init?.method ?? "GET" });
+      return new Response(
+        JSON.stringify({ ok: true, data: { authToken: "t", participantId: "p", side: "home", players: ["x"], reused: false } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as typeof fetch;
+    try {
+      const serial = makeArbiterSerial({
+        join: (fixtureId, side) =>
+          apiV1<ArbiterJoinAnswer>(`/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter`, { method: "POST", json: { side } }),
+        connect: async () => fakeCameras([], "x"),
+      });
+      const h = { onCameras: () => undefined, onError: (e: unknown) => { throw e; } };
+      const first = serial.open("fx", "home", h);
+      await flush();
+      first.close();
+      serial.open("fx", "home", h);
+      await flush();
+    } finally {
+      globalThis.fetch = real;
+    }
+    expect(requests.filter((q) => q.method === "POST"), "the positive count").toHaveLength(1);
+    expect(requests.some((q) => q.method === "DELETE")).toBe(false);
+    expect(requests.length, "and nothing else was sent").toBe(1);
+  });
+});
+
+describe("a failed connect on a kept token", () => {
+  it("evicts the token, POSTs once more and connects with the new one (join twice in all)", async () => {
+    let calls = 0;
     const log: string[] = [];
+    let n = 0;
     const serial = makeArbiterSerial({
-      join: async (fixtureId, side) => {
-        log.push(`POST ${fixtureId} ${side}`);
-        if (side === "home") throw new Error("refused");
-        return { authToken: "t", participantId: `p-${side}`, side, players: [] };
+      join: async () => {
+        n += 1;
+        log.push(`POST ${n}`);
+        return { authToken: `t-${n}`, participantId: `p-${n}`, side: "home", players: ["x"], reused: false };
       },
-      connect: async () => fakeCameras(log, "x"),
-      send: async () => void log.push("DELETE"),
+      connect: async (a2) => {
+        calls += 1;
+        log.push(`connect ${a2.authToken}`);
+        if (calls === 2) throw new Error("token expired"); // the kept token, on the return
+        return fakeCameras(log, a2.authToken);
+      },
     });
     const got: string[] = [];
-    const a = serial.open("fx", "home", {
+    const h = { onCameras: () => void got.push("cameras"), onError: (e: unknown) => void got.push(`error ${(e as Error).message}`) };
+    const first = serial.open("fx", "home", h);
+    await flush();
+    first.close();
+    serial.open("fx", "home", h);
+    await flush();
+    expect(log.filter((e) => e.startsWith("POST")), "join called twice in all").toEqual(["POST 1", "POST 2"]);
+    expect(log.filter((e) => e.startsWith("connect"))).toEqual(["connect t-1", "connect t-1", "connect t-2"]);
+    expect(got).toEqual(["cameras", "cameras"]);
+    expect(serial.tokens().get("fx:home")?.authToken, "the new token replaced the dead one").toBe("t-2");
+  });
+
+  it("the dead token is gone even when the re-POST is refused (a revoked organizer): the pane reads the refusal, tokens() lacks the key, the next open POSTs", async () => {
+    let n = 0;
+    let revoked = false;
+    const log: string[] = [];
+    const serial = makeArbiterSerial({
+      join: async () => {
+        n += 1;
+        log.push(`POST ${n}`);
+        if (revoked) throw new ApiV1Error("no", 409, "ARBITER_PLAYS_THIS_BOARD");
+        return { authToken: `t-${n}`, participantId: `p-${n}`, side: "home", players: ["x"], reused: false };
+      },
+      connect: async (a) => {
+        if (revoked) throw new Error("participant removed");
+        return fakeCameras(log, a.authToken);
+      },
+    });
+    const got: unknown[] = [];
+    const h = { onCameras: () => void got.push("cameras"), onError: (e: unknown) => void got.push((e as ApiV1Error).code) };
+    const first = serial.open("fx", "home", h);
+    await flush();
+    first.close();
+    revoked = true;
+    serial.open("fx", "home", h);
+    await flush();
+    expect(got).toEqual(["cameras", "ARBITER_PLAYS_THIS_BOARD"]);
+    expect(serial.tokens().has("fx:home"), "the revoked token is not kept").toBe(false);
+  });
+
+  it("a second rejection is the pane's error with join called exactly twice, and the NEXT open starts the rule again (one more POST)", async () => {
+    let n = 0;
+    let phase: "ok" | "dead" = "ok";
+    const log: string[] = [];
+    const serial = makeArbiterSerial({
+      join: async () => {
+        n += 1;
+        log.push(`POST ${n}`);
+        return { authToken: `t-${n}`, participantId: `p-${n}`, side: "home", players: ["x"], reused: false };
+      },
+      connect: async (a) => {
+        log.push(`connect ${a.authToken}`);
+        if (phase === "dead") throw new Error("dead");
+        return fakeCameras(log, a.authToken);
+      },
+    });
+    const got: string[] = [];
+    const h = { onCameras: () => void got.push("cameras"), onError: () => void got.push("error") };
+    const first = serial.open("fx", "home", h);
+    await flush();
+    first.close();
+    phase = "dead";
+    const second = serial.open("fx", "home", h);
+    await flush();
+    expect(got).toEqual(["cameras", "error"]);
+    expect(log.filter((e) => e.startsWith("POST")), "exactly twice").toEqual(["POST 1", "POST 2"]);
+    expect(serial.tokens().has("fx:home"), "nothing kept after the double failure").toBe(false);
+    second.close();
+    serial.open("fx", "home", h);
+    await flush();
+    expect(log.filter((e) => e.startsWith("POST")), "the retry press starts again: one more POST, never a doomed reconnect").toEqual(["POST 1", "POST 2", "POST 3"]);
+    expect(got.at(-1)).toBe("error");
+  });
+
+  it("a kept token whose connect never answers (TIMED_OUT) is evicted and re-POSTed once, too", async () => {
+    const log: string[] = [];
+    let calls = 0;
+    const timeouts: Gate[] = [];
+    let n = 0;
+    const serial = makeArbiterSerial({
+      after: () => {
+        const g = gate();
+        timeouts.push(g);
+        return g.promise;
+      },
+      join: async () => {
+        n += 1;
+        log.push(`POST ${n}`);
+        return { authToken: `t-${n}`, participantId: `p-${n}`, side: "home", players: ["x"], reused: false };
+      },
+      connect: (a) => {
+        calls += 1;
+        log.push(`connect ${a.authToken}`);
+        return calls === 2 ? new Promise(() => undefined) : Promise.resolve(fakeCameras(log, a.authToken));
+      },
+    });
+    const h = { onCameras: () => undefined, onError: () => undefined };
+    const o1 = serial.open("fx", "home", h);
+    await flush();
+    o1.close();
+    serial.open("fx", "home", h);
+    await flush();
+    expect(log.filter((e) => e.startsWith("POST")), "premise: the return is waiting on a silent connect").toEqual(["POST 1"]);
+    timeouts.at(-1)!.open();
+    await flush();
+    expect(log.filter((e) => e.startsWith("POST"))).toEqual(["POST 1", "POST 2"]);
+    expect(serial.tokens().get("fx:home")?.authToken).toBe("t-2");
+  });
+});
+
+describe("what is never kept", () => {
+  it("a FRESH token whose first connect rejects is the pane's error and is not kept: the next open POSTs again", async () => {
+    const r = rig({ connectFails: new Set(["1"]) });
+    const a = r.open("fx", "home");
+    await flush();
+    expect(r.errors).toHaveLength(1);
+    expect(r.serial.tokens().has("fx:home")).toBe(false);
+    a.close();
+    r.open("fx", "home");
+    await flush();
+    expect(r.posts(), "one POST per open").toEqual(["POST fx:home", "POST fx:home"]);
+    expect(r.cameras, "the second token worked").toEqual(["fx:home"]);
+  });
+
+  it("a POST the route refused (VIDEO_MEETING_NOT_STARTED) is never kept: the next open POSTs again", async () => {
+    const r = rig({ refusePost: new Set(["fx:home"]) });
+    const a = r.open("fx", "home");
+    await flush();
+    expect((r.errors[0] as ApiV1Error).code).toBe("VIDEO_MEETING_NOT_STARTED");
+    expect(r.serial.tokens().has("fx:home")).toBe(false);
+    a.close();
+    r.open("fx", "home");
+    await flush();
+    expect(r.posts()).toEqual(["POST fx:home", "POST fx:home"]);
+  });
+});
+
+describe("every step is bounded, and the chain's other sequences", () => {
+  it("a join POST that never answers is the pane's one error after the step timeout, and the next open of that meeting still POSTs", async () => {
+    const post = gate();
+    const r = rig({ holdPost: { "fx:home": post } });
+    r.open("fx", "home");
+    await flush();
+    expect(r.timeouts.length, "premise: the POST is racing a timer").toBe(1);
+    r.timeouts[0]!.open();
+    await flush();
+    expect(r.errors).toHaveLength(1);
+    expect((r.errors[0] as Error).message).toMatch(/timed out/);
+    expect(r.serial.tokens().size).toBe(0);
+  });
+
+  it("an SDK join that never answers is the pane's error after the timeout; a late landing is left at once and never shown", async () => {
+    const connecting = gate();
+    const r = rig({ holdConnect: { "1": connecting } });
+    r.open("fx", "home");
+    await flush();
+    expect(r.timeouts.length, "premise: POST timer and connect timer").toBe(2);
+    r.timeouts[1]!.open();
+    await flush();
+    expect(r.errors).toHaveLength(1);
+    connecting.open();
+    await flush();
+    expect(r.cameras).toEqual([]);
+    expect(r.log, "the late join is left").toContain("left t-1");
+    expect(r.serial.tokens().size, "a timed-out fresh connect is not kept").toBe(0);
+  });
+
+  it("a leave that never answers is given up on after the step timeout", async () => {
+    const leaving = gate();
+    const r = rig({ holdLeave: { "1": leaving } });
+    const a = r.open("fx", "home");
+    await flush();
+    a.close();
+    r.open("fx", "home");
+    await flush();
+    expect(r.log.filter((e) => e.startsWith("connect")), "premise: wedged on the leave").toEqual(["connect t-1"]);
+    r.timeouts.at(-1)!.open();
+    await flush();
+    expect(r.log.filter((e) => e.startsWith("connect"))).toEqual(["connect t-1", "connect t-1"]);
+  });
+
+  it("opened and closed before its turn comes: it never POSTs at all", async () => {
+    const post = gate();
+    const r = rig({ holdPost: { "fx:home": post } });
+    const a = r.open("fx", "home");
+    await flush();
+    a.close();
+    const b = r.open("fx", "home");
+    b.close();
+    post.open();
+    await flush();
+    expect(r.posts(), "only A's POST; B was closed before its turn").toEqual(["POST fx:home"]);
+  });
+
+  it("closing twice leaves once", async () => {
+    const r = rig();
+    const a = r.open("fx", "home");
+    await flush();
+    a.close();
+    a.close();
+    await flush();
+    expect(r.log.filter((e) => e.startsWith("leave"))).toEqual(["leave t-1"]);
+  });
+
+  it("a caller whose error handler throws does not wedge the chain: the next open still works", async () => {
+    const r = rig({ refusePost: new Set(["fx:home"]) });
+    const a = r.serial.open("fx", "home", {
       onCameras: () => undefined,
       onError: () => {
         throw new Error("a handler bug");
@@ -329,51 +400,8 @@ describe("the helper's other sequences", () => {
     });
     await flush();
     a.close();
-    serial.open("fx", "away", { onCameras: () => void got.push("away"), onError: () => undefined });
+    r.serial.open("fx", "home", { onCameras: () => void r.cameras.push("later"), onError: () => undefined });
     await flush();
-    expect(log.filter((e) => e.startsWith("POST"))).toEqual(["POST fx home", "POST fx away"]);
-    expect(got, "the chain survived the throw").toEqual(["away"]);
-  });
-
-  it("closing twice sends one DELETE", async () => {
-    const r = rig();
-    const a = r.open("fx", "home");
-    await flush();
-    a.close();
-    a.close();
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("DELETE ") && !e.includes("answered"))).toEqual(["DELETE home1"]);
-  });
-
-  it("the tab going away (pagehide) hands the participant back AT ONCE, without waiting for the chain; the close after it sends no second", async () => {
-    const leaving = gate();
-    const r = rig({ holdLeave: { home1: leaving } });
-    const a = r.open("fx", "home");
-    await flush();
-    a.close(); // the chain is now wedged inside the SDK leave
-    await flush();
-    expect(r.log, "premise: wedged on the leave, nothing deleted").not.toContain("DELETE home1");
-    a.release();
-    await flush();
-    expect(r.log, "the pagehide DELETE did not queue behind the leave").toContain("DELETE home1");
-    expect(r.log).not.toContain("left home1");
-    leaving.open();
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("DELETE ") && !e.includes("answered")), "the close after the release adds none").toEqual(["DELETE home1"]);
-  });
-
-  it("a release before anything is minted sends nothing (the empty case)", async () => {
-    const post = gate();
-    const r = rig({ holdPost: { home: post } });
-    const a = r.open("fx", "home");
-    await flush();
-    a.release();
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("DELETE"))).toEqual([]);
-    post.open();
-    await flush();
-    a.close();
-    await flush();
-    expect(r.log.filter((e) => e.startsWith("DELETE ") && !e.includes("answered"))).toEqual(["DELETE home1"]);
+    expect(r.posts()).toEqual(["POST fx:home", "POST fx:home"]);
   });
 });

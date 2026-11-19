@@ -60,7 +60,7 @@ import {
   type RoundExtendState,
 } from "./checkin-extend-ui";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
-import { arbiterWatchRelease, makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "./arbiter-watch";
+import { makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "./arbiter-watch";
 import {
   boardStateWord,
   BUTTON_QUIET,
@@ -183,13 +183,14 @@ export function arbiterJoinStateFromError(err: unknown): ArbiterVideoView {
         return { kind: "own" };
       case "FIXTURE_NOT_PLAYABLE":
         return { kind: "over" };
+      case "VIDEO_BUSY":
+        // ACCEPTED INTERIM: the waiting-for-capacity view and its ARBITER_RETRY_MS retry are the Match Day plan's Task 9.
+        // Until then a busy kickoff shows the generic error with the manual Retry the panel offers for `error`.
+        return { kind: "error" };
     }
   }
   return { kind: "error" };
 }
-
-/** I2 (arbiter-watch.ts): the participant one open minted, handed back once whenever the pane closes. */
-export { arbiterWatchRelease };
 
 /** The side (home/away) that plays this colour: the meeting is the SIDE's, the colour only its label (§5.6.4) - a pairing
  *  card can swap the colours after a player has arrived and the pane then stays on the same meeting. */
@@ -202,12 +203,25 @@ export function sideSeat(board: Pick<ArbiterBoard, "whiteSide">, side: ArbiterSi
   return side === board.whiteSide ? "white" : "black";
 }
 
-/** The side a board opens on when the arbiter has not chosen: White's, unless only the other has a room open. Read once
+/** Whether a side may be joined from the panel: its meeting is open AND the loader marks it joinable (its player has arrived). The join
+ *  key, the tile's notStarted, the switch's refusal and `defaultWatchSide` all read this one rule instead of `state === "open"`. */
+export function sideWatchable(board: Pick<ArbiterBoard, "sides">, side: ArbiterSide): boolean {
+  const m = board.sides[side];
+  return m.state === "open" && m.joinable;
+}
+
+/** After a poll hands a new `round`: re-open the current join when its answer was VIDEO_MEETING_NOT_STARTED while the side is still
+ *  watchable (the guard behind the loader's monotonic facts: a side it calls joinable is refused only across a flag flip). Pure. */
+export function rejoinAfterPoll(view: ArbiterVideoView | null, watchable: boolean): boolean {
+  return watchable && view !== null && view.kind === "notStarted";
+}
+
+/** The side a board opens on when the arbiter has not chosen: White's, unless only the other has a side to watch. Read once
  *  and then held (the panel pins it), so a player arriving later never moves the pane under the arbiter's eyes. */
 export function defaultWatchSide(board: Pick<ArbiterBoard, "whiteSide" | "sides">): ArbiterSide {
   const white = board.whiteSide;
   const other: ArbiterSide = white === "home" ? "away" : "home";
-  return board.sides[white].state !== "open" && board.sides[other].state === "open" ? other : white;
+  return !sideWatchable(board, white) && sideWatchable(board, other) ? other : white;
 }
 
 /** "Camera off since HH:MM": the instant THIS browser first saw a present
@@ -746,7 +760,7 @@ function PlayerSwitch({
         const player = board[seat];
         const clock = seatClock(board, seat, nowMs);
         const sideState = board.sides[seatSide(board, seat)].state;
-        const unavailable = interactive && sideState !== "open";
+        const unavailable = interactive && !sideWatchable(board, seatSide(board, seat));
         const pressed = seat === shown;
         const reasonId = `${baseId}-${seat}`;
         const inner = (
@@ -1015,7 +1029,6 @@ const browserSerial = makeArbiterSerial({
   join: (fixtureId, side) =>
     apiV1<ArbiterJoinAnswer>(`/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter`, { method: "POST", json: { side } }),
   connect: joinArbiter,
-  send: (url, init) => apiV1(url, init),
 });
 
 /** True when the last answer on screen belongs to the OTHER side of the same board: a switch is in flight, not a first
@@ -1092,7 +1105,15 @@ export function ArbiterPanel({
   const [attempt, setAttempt] = useState(0);
   const [join, setJoin] = useState<{ key: string; view: ArbiterVideoView } | null>(null);
   const sideState = board && side ? board.sides[side].state : null;
-  const joinKey = board && side && shouldJoinVideo(board) && sideState === "open" ? `${board.fixtureId}:${side}#${attempt}` : null;
+  const watchable = board !== null && side !== null && sideWatchable(board, side);
+  const joinKey = board && side && shouldJoinVideo(board) && watchable ? `${board.fixtureId}:${side}#${attempt}` : null;
+  // A new `round` object arrives with each poll's refresh: a join that was refused NOT_STARTED while the loader now calls the side
+  // watchable is opened again (once per poll at most). Previous-props pattern, never a state set in an effect body.
+  const [seenRoundProp, setSeenRoundProp] = useState(round);
+  if (seenRoundProp !== round) {
+    setSeenRoundProp(round);
+    if (joinKey !== null && rejoinAfterPoll(join !== null && join.key === joinKey ? join.view : null, watchable)) setAttempt((a) => a + 1);
+  }
   useEffect(() => {
     if (joinKey === null) return;
     const [, fixtureId, joinSide] = /^(.+):(home|away)#\d+$/.exec(joinKey)!;
@@ -1120,11 +1141,8 @@ export function ArbiterPanel({
       },
       onError: (err) => answer(arbiterJoinStateFromError(err)),
     });
-    // I2: the tab going away hands the participant back at once (keepalive); the pane closing queues leave-then-DELETE.
-    window.addEventListener("pagehide", open.release);
     return () => {
       cancelled = true;
-      window.removeEventListener("pagehide", open.release);
       open.close();
     };
   }, [joinKey]);
@@ -1138,7 +1156,7 @@ export function ArbiterPanel({
           ? { kind: "overridden" }
           : boardIsOver(board.state)
             ? { kind: "over" }
-            : sideState === "none"
+            : sideState === "none" || (sideState === "open" && !watchable)
               ? { kind: "notStarted" }
               : sideState === "ended"
                 ? { kind: "ended" }

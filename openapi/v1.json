@@ -70352,7 +70352,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/arbiter": {
       "post": {
-        "summary": "A signed-in organiser joins ONE PLAYER's video meeting receive-only (RealtimeKit preset `arbiter`; each player has a meeting of their own, so the body names the entrant `side` - `home` or `away`): their OWN token for a FRESH participant (one per open, never reused; the server removes it when the panel closes, when the organiser's role is gone, when the organiser is now seated on the board, after 3 hours, or when the room is torn down), the side joined, and the participant ids of the players in that meeting. It joins an existing meeting or refuses; it never creates one. Never a player's token; never an API key. 400 for a missing or unknown side; 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board; 409 FIXTURE_NOT_PLAYABLE (the board is over), ROUND_NOT_OPEN, VIDEO_NOT_IN_USE (camera policy off), VIDEO_OVERRIDDEN (the board plays without video), VIDEO_MEETING_NOT_STARTED (that player has not checked in yet), VIDEO_MEETING_ENDED; 429 past 12 joins a minute for one fixture and organiser; 503 VIDEO_UNAVAILABLE when the video vendor is down",
+        "summary": "A signed-in organiser joins ONE PLAYER's video meeting receive-only (RealtimeKit preset `arbiter`; each player has a meeting of their own, so the body names the entrant `side` - `home` or `away`): their OWN token for the ONE participant they hold in that meeting for the life of the game (a second open by the same organiser on the same side refreshes that participant's token and answers `reused: true`; the server removes it when the organiser's role is gone, when the organiser is now seated on the board, after 3 hours, or when the room is torn down), the side joined, and the participant ids of the players in that meeting. It joins an existing meeting or refuses; it never creates one. Never a player's token; never an API key. 400 for a missing or unknown side; 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board; 409 FIXTURE_NOT_PLAYABLE (the board is over), ROUND_NOT_OPEN, VIDEO_NOT_IN_USE (camera policy off), VIDEO_OVERRIDDEN (the board plays without video), VIDEO_MEETING_NOT_STARTED (that player has not arrived: no player participant on file, and no counted check-in - or, with the presence proof on, no presence row naming the player), VIDEO_MEETING_ENDED; 429 past 12 joins a minute for one fixture, side and organiser; 503 VIDEO_UNAVAILABLE when the video vendor is down, VIDEO_BUSY while the check-in line's call pool is under the join floor (try again)",
         "tags": [
           "fixtures"
         ],
@@ -70431,13 +70431,17 @@
                           "items": {
                             "type": "string"
                           }
+                        },
+                        "reused": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
                         "authToken",
                         "participantId",
                         "side",
-                        "players"
+                        "players",
+                        "reused"
                       ],
                       "additionalProperties": false
                     },
@@ -70455,7 +70459,8 @@
                     "side": "home",
                     "players": [
                       "example"
-                    ]
+                    ],
+                    "reused": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -70783,7 +70788,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/arbiter/{participantId}": {
       "delete": {
-        "summary": "The arbiter panel closed: the server removes the caller's OWN arbiter participant from the board's meeting (kicked from the live session, then deleted at the video vendor), so its token can no longer watch. `removed: false` when it was already removed. Best effort from the browser; the sweep removes whatever is left. 404 for a participant that is not the caller's on this board; 503 VIDEO_UNAVAILABLE when the video vendor is down (the sweep retries). Session only, never an API key",
+        "summary": "Explicit revocation only: the body must be `{ \"intent\": \"revoke\" }` (anything else is a 400 and reaches nothing), and the server removes the caller's OWN arbiter participant from the board's meeting (kicked from the live session, then deleted at the video vendor), so its token can no longer watch. A panel closing never calls it. `removed: false` when it was already removed. 400 for a missing, non-JSON or other body; 404 for a participant that is not the caller's on this board; 503 VIDEO_UNAVAILABLE when the video vendor is down (the sweep retries). Session only, never an API key",
         "tags": [
           "fixtures"
         ],
@@ -70808,6 +70813,29 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "intent": {
+                    "type": "string",
+                    "const": "revoke"
+                  }
+                },
+                "required": [
+                  "intent"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "intent": "revoke"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",

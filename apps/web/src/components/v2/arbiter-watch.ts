@@ -1,63 +1,32 @@
-// D16 (chess design §5.6.4, shape (b)) - the arbiter holds ONE player's meeting at a time, and moving from one to the
-// other is a SERIAL chain: the SDK leave is awaited, then the server DELETE of the participant that open minted is
-// awaited, and only then is the next join POSTed. React does not await an effect's cleanup, so that order cannot live in
-// the panel's effect; it lives here, in a promise chain every open and close is queued on.
+// The arbiter's browser side of one meeting: ONE join chain per meeting, the token kept in memory once it has worked, and
+// a close that is the SDK leave only. There is no DELETE from the browser (the route is for explicit revocation, and the
+// sweep removes what the browser leaves): the server keeps one participant per (organizer, meeting) for the game's life, so
+// a return to a meeting reuses the token it already has and POSTs nothing.
 //
-// Every step is bounded - the join POST, the SDK join, the leave and the DELETE - because the chain is module-level
-// (the panel's `browserSerial`) and `apiV1` has no timeout of its own: one step that never answers would otherwise hold
-// every later open for the life of the page. A step that is given up on is left running; what it later produces (a mint,
-// cameras) is handed back or left at once.
+// Chains are per meeting (`${fixtureId}:${side}`), so a slow join on one board never holds another. Within one meeting
+// every open and close runs in the order asked for (a close then an open of the same meeting: the leave lands first).
 //
-// What this proves, and what it does not: on the happy path an arbiter holds at most ONE live participant. A DELETE that
-// fails does NOT hold the next join hostage - the view is not kept waiting on a vendor error - so on that path the
-// leftover (receive-only) participant stays until the sweep removes it. The claim is not made for the failure path.
+// Every step is bounded - the join POST, the SDK join and the leave - because `apiV1` has no timeout of its own: one step
+// that never answers would otherwise hold that meeting's chain for the life of the page. A step given up on is left
+// running; what it later produces (cameras) is left at once.
+//
+// A token is KEPT only once a connect with it has SUCCEEDED (never a doomed reconnect with a token that never worked). Any
+// failure of a connect made with a KEPT token (the TTL sweep's kick, the room ending, an expired token, a timeout) evicts
+// it and re-POSTs ONCE within that open; a second failure is the pane's error and the next open starts the rule again, so a
+// stuck SDK costs one POST per retry press and never one per poll. A POST's own refusal is never cached.
 import type { ArbiterCameras, JoinArbiter } from "./arbiter-camera";
 
 export type ArbiterSide = "home" | "away";
 
 /** The join route's answer (POST .../external-play/arbiter, `ArbiterJoinOut`). */
-export type ArbiterJoinAnswer = { authToken: string; participantId: string; side: ArbiterSide; players: string[] };
-
-type Send = (url: string, init: RequestInit) => Promise<unknown>;
-
-/** I2: the participant one open of a board minted on the server. The panel hands it back when the pane closes - a
- *  switch, the panel going away - and when the tab goes away (`release`, on pagehide: `keepalive`, so the request
- *  outlives the page), ONCE. A mint that lands after the pane closed (the POST raced the switch) is handed back at
- *  once. A send that fails is dropped: the sweep removes whatever the browser could not. `release` and `close` return
- *  the DELETE's settlement so a switch can await the answer before it joins the next meeting. */
-export function arbiterWatchRelease(fixtureId: string, send: Send) {
-  let participantId: string | null = null;
-  let closed = false;
-  const release = (): Promise<void> => {
-    if (participantId === null) return Promise.resolve();
-    const url = `/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter/${encodeURIComponent(participantId)}`;
-    participantId = null;
-    return send(url, { method: "DELETE", keepalive: true }).then(
-      () => undefined,
-      () => undefined,
-    );
-  };
-  return {
-    minted(id: string): Promise<void> {
-      participantId = id;
-      return closed ? release() : Promise.resolve();
-    },
-    close(): Promise<void> {
-      closed = true;
-      return release();
-    },
-    release,
-  };
-}
+export type ArbiterJoinAnswer = { authToken: string; participantId: string; side: ArbiterSide; players: string[]; reused: boolean };
 
 export type ArbiterSerialDeps = {
   /** POST .../external-play/arbiter with the side; the route's refusals reject (an `ApiV1Error`). */
   join(fixtureId: string, side: ArbiterSide): Promise<ArbiterJoinAnswer>;
   /** The SDK join (`joinArbiter`): receive-only, the guard on. */
   connect: JoinArbiter;
-  /** The DELETE of a participant (`apiV1`). */
-  send: Send;
-  /** A step that outlasts this is given up on, so one stuck step cannot wedge every later switch. */
+  /** A step that outlasts this is given up on, so one stuck step cannot wedge a meeting's chain. */
   stepTimeoutMs?: number;
   /** The clock that bounds a step; a test settles it by hand. */
   after?: (ms: number) => Promise<void>;
@@ -71,9 +40,7 @@ export type ArbiterOpenHandlers = {
 };
 
 export type ArbiterOpen = {
-  /** The tab is going away: hand the participant back NOW, without waiting for the chain. Idempotent. */
-  release(): void;
-  /** The pane is done (a switch, a retry, the panel going away): queue the leave, then the DELETE. Idempotent. */
+  /** The pane is done (a switch, a retry, the panel going away): queue the SDK leave. Idempotent. */
   close(): void;
 };
 
@@ -85,51 +52,58 @@ export function makeArbiterSerial(deps: ArbiterSerialDeps) {
   const after = deps.after ?? wait;
   const TIMED_OUT: unique symbol = Symbol("timed out");
   type TimedOut = typeof TIMED_OUT;
-  /** The step's answer, or TIMED_OUT when it outlasts the bound. The step itself is left running; whatever it later
-   *  produces is the caller's to clean up. */
   const within = <T>(step: Promise<T>): Promise<T | TimedOut> =>
     Promise.race<T | TimedOut>([step, after(timeoutMs).then((): TimedOut => TIMED_OUT)]);
 
-  /** Every open and every close, in the order they were asked for. A job never rejects. */
-  let tail: Promise<void> = Promise.resolve();
-  const enqueue = (job: () => Promise<void>): void => {
-    tail = tail.then(job).catch(() => undefined);
+  /** One chain per meeting. A job never rejects. */
+  const tails = new Map<string, Promise<void>>();
+  const enqueue = (key: string, job: () => Promise<void>): void => {
+    tails.set(key, (tails.get(key) ?? Promise.resolve()).then(job).catch(() => undefined));
   };
+  /** The answers whose connect has succeeded, by meeting key. */
+  const kept = new Map<string, ArbiterJoinAnswer>();
+
+  /** A connect bounded by the step timeout; a late landing is left at once. Throws on failure or timeout. */
+  async function connectWith(answer: ArbiterJoinAnswer): Promise<ArbiterCameras> {
+    const connecting = deps.connect({ authToken: answer.authToken, players: answer.players });
+    const joined = await within(connecting);
+    if (joined === TIMED_OUT) {
+      connecting.then((late) => void late.leave().catch(() => undefined), () => undefined);
+      throw new Error("The video connection timed out.");
+    }
+    return joined;
+  }
+
+  async function post(fixtureId: string, side: ArbiterSide): Promise<ArbiterJoinAnswer> {
+    const answer = await within(deps.join(fixtureId, side));
+    if (answer === TIMED_OUT) throw new Error("The video connection timed out.");
+    return answer;
+  }
 
   return {
     open(fixtureId: string, side: ArbiterSide, h: ArbiterOpenHandlers): ArbiterOpen {
+      const key = `${fixtureId}:${side}`;
       let closed = false;
       let cameras: ArbiterCameras | null = null;
-      const watch = arbiterWatchRelease(fixtureId, deps.send);
 
-      enqueue(async () => {
-        // Closed before its turn (an earlier open was still starting): no POST at all.
-        if (closed) return;
+      enqueue(key, async () => {
+        if (closed) return; // closed before its turn: no POST at all
         try {
-          // The POST is bounded like every other step (review I1): the chain is the page's, so one POST that never answers
-          // would hold every later open, switch and board change for as long as the page lives.
-          const posting = deps.join(fixtureId, side);
-          const answer = await within(posting);
-          if (answer === TIMED_OUT) {
-            // Whatever the POST mints later is handed back at once, never used.
-            posting.then(
-              (late) => {
-                void watch.minted(late.participantId);
-                return watch.release();
-              },
-              () => undefined,
-            );
-            throw new Error("The video connection timed out.");
+          const had = kept.get(key);
+          let joined: ArbiterCameras | null = null;
+          if (had !== undefined) {
+            try {
+              joined = await connectWith(had);
+            } catch {
+              kept.delete(key); // evict, then ONE re-POST within this open
+            }
           }
-          // The mint is recorded the moment it lands; a pane closed meanwhile has its DELETE queued behind this job.
-          void watch.minted(answer.participantId);
-          if (closed) return;
-          const connecting = deps.connect({ authToken: answer.authToken, players: answer.players });
-          const joined = await within(connecting);
-          if (joined === TIMED_OUT) {
-            // The SDK never answered. Whatever it produces later is left at once, never shown.
-            connecting.then((late) => void late.leave().catch(() => undefined), () => undefined);
-            throw new Error("The video connection timed out.");
+          if (joined === null) {
+            if (closed) return;
+            const fresh = await post(fixtureId, side);
+            if (closed) return;
+            joined = await connectWith(fresh);
+            kept.set(key, fresh);
           }
           cameras = joined;
           if (closed) return; // the close job queued behind this one leaves
@@ -140,22 +114,20 @@ export function makeArbiterSerial(deps: ArbiterSerialDeps) {
       });
 
       return {
-        release() {
-          void watch.release();
-        },
         close() {
           if (closed) return;
           closed = true;
-          enqueue(async () => {
+          enqueue(key, async () => {
             const c = cameras;
             cameras = null;
-            // Leave first, then the DELETE of the participant this open minted; each is awaited, each is bounded, and a
-            // failure of either does not stop the chain.
             if (c !== null) await within(c.leave().catch(() => undefined));
-            await within(watch.close());
           });
         },
       };
+    },
+    /** Test seam: the answers kept in memory, by meeting key. */
+    tokens(): ReadonlyMap<string, ArbiterJoinAnswer> {
+      return kept;
     },
   };
 }
