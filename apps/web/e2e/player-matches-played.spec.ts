@@ -116,6 +116,11 @@ async function seedDivision(
       const p = s.play(opp);
       await post(request, f.id, seq, p.type, p.payload);
       await post(request, f.id, seq, "core.forfeit", { by: patE, reason: "disqualified" });
+      // Reinstated again: the disqualification left her `disqualified`, and the public player card shows only a person in at least
+      // one live entry of a public competition (`public_players_v`) - three disqualified entries took her card down. Her lines
+      // are all decided by now (this scene runs last), so the Reinstate moves no result.
+      const again = await apiJson<{ status: string }>(request, `/api/v1/entrants/${patE}`, "PATCH", { status: "registered" });
+      expect([again.status, again.data?.status], `${name}: rig: Pat reinstated after scene 5 — ${JSON.stringify(again.error)}`).toEqual([200, "registered"]);
     } else {
       // The withdrawal cascade's no-event double walkover (usecases/stages/, the `dw` mode), its own statement.
       await withDb(async (sql) => {
