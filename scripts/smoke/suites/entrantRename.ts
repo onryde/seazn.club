@@ -76,14 +76,14 @@ export async function entrantRenameSuite(): Promise<void> {
   const customId = created.find((e) => e.display_name === customName)!.id;
   const thirdId = created.find((e) => e.display_name === `Third Pair ${tag}`)!.id;
 
-  // Started, so the division's public page is live.
+  // Drawn, NOT started: owner ruling 292 (W5) refuses a substitute partner once play has started, in every format, and claim 1
+  // below is exactly that swap. The drawn schedule already names every pair on the public page.
   const stage = v1data<{ id: string }>(
     await v1(free, `/api/v1/divisions/${div.id}/stages`, "POST", {
       seq: 1, kind: "league", name: "L", config: {},
     }),
   );
   await v1(free, `/api/v1/stages/${stage.id}/generate`, "POST");
-  await v1(free, `/api/v1/divisions/${div.id}/start`, "POST");
 
   const path = `/live/${org.slug}/${comp.slug}/${div.slug}`;
   // React escapes "&" in text; match what the page actually serves.
