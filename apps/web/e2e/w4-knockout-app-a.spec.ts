@@ -244,9 +244,10 @@ test.describe("X-RB-1 the final keeps its court across 8→9", () => {
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: "Rebuild" }).click();
     // Every old role survives in a bracket of 16; the one real new first-round line has nothing to inherit (its seven
-    // neighbours are byes, which need no slot).
+    // neighbours are byes, which need no slot). A bracket of 16 is 15 lines, and since W5 T6 (2aa2298ffa) the notice says how many
+    // were drawn whenever that differs from the number replaced.
     await expect(
-      page.getByText("Rebuilt — 7 fixture(s) replaced. 7 slot(s) kept, 0 freed, 1 unscheduled.", { exact: true }),
+      page.getByText("Rebuilt — 7 fixture(s) replaced. 15 fixture(s) drawn in their place. 7 slot(s) kept, 0 freed, 1 unscheduled.", { exact: true }),
     ).toBeVisible({ timeout: 20_000 });
 
     const after = await stageFixtures(request, divisionId, stageId);
