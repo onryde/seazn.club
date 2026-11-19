@@ -28,6 +28,8 @@ export const HELD_TITLE_KEYS: Readonly<Record<NeedsReason, DictionaryKey>> = {
   fair_play: "externalPlay.held.fairPlay",
   account_changed: "externalPlay.held.accountChanged",
   clock_flag_unsettled: "externalPlay.held.clockFlagUnsettled",
+  lichess_unlinked: "externalPlay.held.lichessUnlinked",
+  lichess_reconnect: "externalPlay.held.lichessReconnect",
 };
 
 export type HeldCopyInput = {
@@ -97,6 +99,10 @@ export function heldBody(row: HeldCopyInput): { key: DictionaryKey; vars?: { nam
       // T17B fix 2, D11: no seat is recorded for it (V454's revoked_seat is a seat hold's), so it names nobody; the
       // side and the times are the hold's detail.
       return { key: "externalPlay.reason.clockFlagUnsettled" };
+    case "lichess_unlinked":
+      return { key: "externalPlay.reason.lichessUnlinked" };
+    case "lichess_reconnect":
+      return { key: "externalPlay.reason.lichessReconnect" };
   }
 }
 

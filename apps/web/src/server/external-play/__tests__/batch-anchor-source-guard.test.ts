@@ -104,7 +104,7 @@ const SITES: readonly { file: string; fn: Consumer; times: number; readers: read
   { file: "server/usecases/external-play/sweep/reconcile.ts", fn: "playableWindow", times: 1, readers: ["expected-end"] },
   { file: "server/usecases/external-play/invite.ts", fn: "windowFor", times: 1, readers: ["invite"] },
   { file: "server/usecases/external-play/invite.ts", fn: "roomPhase", times: 1, readers: ["resend"] },
-  { file: "server/usecases/external-play/open-round.ts", fn: "roomPhase", times: 1, readers: ["reinvite"] },
+  { file: "server/usecases/external-play/open-round.ts", fn: "roomPhase", times: 2, readers: ["reinvite"] },
   // `closed` and a batch's `closesAt` are the LATEST deadline among the boards (an extended board outlasts its batch-mates), so they
   // ask `windowFor`, not `roomPhase`, board by board; `roomPhase` is left to the owed-seat count.
   { file: "server/usecases/external-play/open-round-view.ts", fn: "roomPhase", times: 1, readers: ["open-round-view"] },
