@@ -2,18 +2,19 @@
 //
 // The reported defect: the builder's format list showed double elimination as Pro-only for a Community org, although
 // `formats.double_elim` has been on for Community since V393. The page already derives the badge from
-// `hasFeature(orgId, "formats.double_elim" | "formats.advanced")` -> `templateLocksFor` (d/new/page.tsx,
-// d/[divSlug]/page.tsx); the static `FormatFamily.pro` flag is read only by the help pages. This test pins the live
-// derivation END TO END against the real plan rows: seed an org on each plan, ask the same two questions the pages ask,
-// feed the answers to the same builder, and read the locks.
+// `templateLocksForOrg(orgId, competitionId)` (format-gates.ts: `hasFeature` x2 -> `templateLocksFor`), the ONE function
+// both builder pages call (d/new/page.tsx, d/[divSlug]/page.tsx). This test drives that very function against the real
+// plan rows, and pins by source scan that both pages call it and ask `hasFeature("formats.*")` nowhere themselves.
 //
 // Never derived from the code under test: the expected locks are named per plan from the plan matrix's own rows
 // (read back from `plan_entitlements` in the same test), so a plan-row change moves the expectation with it.
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { hasFeature, invalidateOrgEntitlements } from "@/lib/entitlements";
+import { readFileSync } from "node:fs";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
-import { templateLocksFor } from "../format-gates";
+import { createCompetition } from "../competitions";
+import { templateLocksForOrg } from "../format-gates";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -26,10 +27,10 @@ afterAll(async () => {
   await client?.end();
 });
 
-/** What the pages do: two live reads, then the builder. */
-async function locksFor(orgId: string): Promise<Record<string, string>> {
-  const [doubleElim, advanced] = await Promise.all([hasFeature(orgId, "formats.double_elim"), hasFeature(orgId, "formats.advanced")]);
-  return templateLocksFor({ doubleElim, advanced });
+/** What both builder pages call, with a real competition of the org (the Event Pass arm is competition-scoped). */
+async function locksFor(auth: Awaited<ReturnType<typeof seedOrg>>["auth"]): Promise<Record<string, string>> {
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Locks " + Math.random().toString(36).slice(2, 8), visibility: "private", branding: {} });
+  return templateLocksForOrg(auth.orgId, comp.id);
 }
 
 async function planRow(plan: string, feature: string): Promise<boolean | null> {
@@ -45,7 +46,7 @@ describe.skipIf(!HAS_DB)("builder format locks follow the org's live entitlement
     expect(await planRow("community", "formats.advanced"), "community plan row for formats.advanced").not.toBe(true);
 
     const { auth } = await seedOrg("community");
-    const locks = await locksFor(auth.orgId);
+    const locks = await locksFor(auth);
     expect(locks.double_elim, "double elimination is open to Community").toBeUndefined();
     expect(locks.group_playoffs).toBeUndefined();
     expect(locks.swiss_playoff).toBeUndefined();
@@ -57,17 +58,39 @@ describe.skipIf(!HAS_DB)("builder format locks follow the org's live entitlement
     expect(await planRow("pro", "formats.advanced")).toBe(true);
     expect(await planRow("pro", "formats.double_elim")).toBe(true);
     const { auth } = await seedOrg("pro");
-    expect(await locksFor(auth.orgId)).toEqual({});
+    expect(await locksFor(auth)).toEqual({});
   });
 
   it("a plan change moves the locks: Community -> Pro unlocks, Pro -> Community locks again (the sequence, not one read)", async () => {
     const { auth } = await seedOrg("community");
-    expect(Object.keys(await locksFor(auth.orgId)).length).toBeGreaterThan(0);
+    expect(Object.keys(await locksFor(auth)).length).toBeGreaterThan(0);
     await setOrgPlan(auth.orgId, "pro");
     await invalidateOrgEntitlements(auth.orgId);
-    expect(await locksFor(auth.orgId)).toEqual({});
+    expect(await locksFor(auth)).toEqual({});
     await setOrgPlan(auth.orgId, "community");
     await invalidateOrgEntitlements(auth.orgId);
-    expect(Object.keys(await locksFor(auth.orgId)).sort()).toEqual(["americano", "ladder", "mexicano"]);
+    expect(Object.keys(await locksFor(auth)).sort()).toEqual(["americano", "ladder", "mexicano"]);
+  });
+});
+
+describe("both builder pages take their locks from templateLocksForOrg, not from a flag or their own copy of the question", () => {
+  const PAGES = ["src/app/o/[orgSlug]/c/[compSlug]/d/new/page.tsx", "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx"];
+  const code = (path: string) =>
+    readFileSync(path, "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .map((l) => l.replace(/(^|\s)\/\/.*$/, ""))
+      .join("\n");
+  it("each page calls templateLocksForOrg and asks no formats.* hasFeature itself", () => {
+    let checked = 0;
+    for (const page of PAGES) {
+      const src = code(page);
+      checked++;
+      expect(src, `${page} calls templateLocksForOrg`).toMatch(/templateLocksForOrg\(auth\.orgId,/);
+      expect(src, `${page} passes the result on as templateLocks`).toMatch(/templateLocks\b/);
+      expect(src, `${page} must not ask formats.double_elim / formats.advanced itself`).not.toMatch(/formats\.(double_elim|advanced)/);
+      expect(src, `${page} must not read the static gallery pro flag`).not.toMatch(/\.pro\b\s*[?:)]/);
+    }
+    expect(checked, "anti-vacuity: both pages scanned").toBe(PAGES.length);
   });
 });

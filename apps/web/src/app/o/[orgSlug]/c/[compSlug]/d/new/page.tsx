@@ -8,7 +8,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
 import { onlineChessOffered } from "@/server/usecases/external-play";
 import { competitionCameraPolicy } from "@/server/external-play/camera-policy";
-import { templateLocksFor } from "@/server/usecases/format-gates";
+import { templateLocksForOrg } from "@/server/usecases/format-gates";
 import { requireCompetitionPage } from "@/server/page-auth";
 import { routes } from "@/lib/routes";
 import { getCompetition } from "@/server/usecases/competitions";
@@ -33,7 +33,7 @@ export default async function NewDivisionPage({
   const { auth, canEdit } = page;
   const id = page.competition.id;
   if (!canEdit) redirect(routes.competition(orgSlug, compSlug));
-  const [competition, constraintsAllowed, explainArchivedSlots, venues, planKey, doubleElimAllowed, advancedAllowed, carryAllowed, onlineChess] = await Promise.all([
+  const [competition, constraintsAllowed, explainArchivedSlots, venues, planKey, templateLocks, carryAllowed, onlineChess] = await Promise.all([
     getCompetition(auth, id),
     // A multi-venue schedule seed is Pro (doc 12 §5) — gate the list in the
     // wizard rather than letting the settings PUT 402 after create.
@@ -53,8 +53,7 @@ export default async function NewDivisionPage({
     // The stage writers' own gates (createStages: formats.double_elim, formats.advanced with the competition's event pass,
     // standings.carry_over without), asked here so a format this organisation cannot create is said on the Format step
     // instead of as a 402 after the division already exists.
-    hasFeature(auth.orgId, "formats.double_elim", id),
-    hasFeature(auth.orgId, "formats.advanced", id),
+    templateLocksForOrg(auth.orgId, id),
     hasFeature(auth.orgId, "standings.carry_over"),
     onlineChessOffered(auth),
   ]);
@@ -63,9 +62,7 @@ export default async function NewDivisionPage({
   const inheritedCameraPolicy = onlineChess ? await competitionCameraPolicy(id) : "off";
   const locale = await resolveLocale();
   const [uiDict, publicDict] = await Promise.all([getDictionary(locale, "ui"), getDictionary(locale, "public")]);
-  // Template → the feature it needs and this organisation lacks (format-gates.ts templateLocksFor: each template's own
-  // stage kinds, with the gate predicates createStages uses).
-  const templateLocks = templateLocksFor({ doubleElim: doubleElimAllowed, advanced: advancedAllowed });
+  // `templateLocks` above: template → the feature it needs and this organisation lacks (format-gates.ts templateLocksForOrg).
   const viewerPlan = viewerPlanFrom(planKey);
 
   // Sport catalog + variant presets (system rows are tenant-readable, org
