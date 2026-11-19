@@ -257,7 +257,11 @@ export async function postCourtBeat(court: ResolvedCourtCode, body: Beat, deps: 
   if (body.claim !== null) {
     const refused = courtClaimRefusal(body.appVersion);
     if (refused !== null) {
-      log.info({ codeId: court.codeId, appVersion: body.appVersion }, "capture court: a claim from a build without court support was refused (O13)");
+      if (refused.code === "unavailable") {
+        log.error({ codeId: court.codeId }, "capture court: a claim was refused because COURT_MIN_APP_VERSION is unset or malformed (O13, fail closed)");
+      } else {
+        log.info({ codeId: court.codeId, appVersion: body.appVersion }, "capture court: a claim from a build without court support was refused (O13)");
+      }
       throw refused;
     }
   }

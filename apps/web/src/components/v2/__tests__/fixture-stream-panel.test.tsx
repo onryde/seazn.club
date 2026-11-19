@@ -3219,6 +3219,17 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST");
     expect(post?.[1]?.json, "a listed destination rides the body; the server overrides it with the court's").toEqual({ mode: "passthrough", targetId: "t1" });
     expect(bodyOf(island).view?.state).toBe("warming");
+    // #1265 review, R10's real case: the match's own choice is a channel since ARCHIVED (target_chosen, a reconnected YouTube) —
+    // the server's pick is none — and Go live is still enabled and starts.
+    apiV1.mockClear();
+    const r10 = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: "t-archived" }, phone: latchedCourt });
+    r10.create = () => { r10.current = session(); return { sessionId: "s2" }; };
+    const archivedPick = track(await mount(r10));
+    expect(bodyOf(archivedPick).selectedTargetId, "premise: an archived choice resolves to none").toBeNull();
+    expect(propsOf(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(archivedPick))), "stream-go-live")!).disabled).toBeFalsy();
+    bodyOf(archivedPick).onGoLive();
+    await settle();
+    expect(apiV1.mock.calls.some(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST"), "R10 starts").toBe(true);
     // The guard's other half: a match of its OWN with no pick still waits for one (its picker is drawn).
     apiV1.mockClear();
     const own = track(await mount({ current: null, targets: TARGETS, saved: { row: true, targetId: null }, phone: readModel({ phone: facts({ mode: "automatic" }) }) }));

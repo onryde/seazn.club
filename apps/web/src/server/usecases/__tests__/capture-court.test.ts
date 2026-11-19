@@ -42,7 +42,7 @@ import { postCaptureRecord } from "../capture-record";
 import { captureStageOf } from "../capture-stage";
 import { linkCourtStream, setCourtStream, withdrawCourtStream } from "../court-streams";
 import { endOtherCourtSessions } from "../court-stream-sessions";
-import { reissueStreamCode, resolveAnyStreamCode } from "../stream-codes";
+import { clearAutoStartBlocked, reissueStreamCode, resolveAnyStreamCode } from "../stream-codes";
 import { grantCredits } from "../stream-credits";
 import { startBroadcast, stopSession, tickSession, type SessionDeps } from "../stream-sessions";
 import { captureRig, override, phoneId } from "./_capture-rig";
@@ -369,6 +369,36 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(await sessionRow(again)).toMatchObject({ fixture_id: A, target_id: targetId, start_cause: "operator", court_link_id: linkId });
     expect(await latchedAt(A), "the human start cleared the latch").toBeNull();
     expect(await beat(phone, { sid: again, state: "armed", cause: "operator" })).not.toHaveProperty("autoRefusal");
+  });
+
+  // Review of #1265: the clear after a person's start touches only a latch older than that start, and only while that start's
+  // session still runs — a Stop that lands between the start's commit and the clear keeps its latch.
+  it("finding B / #1265 review: clearAutoStartBlocked clears an older latch of a running start; a Stop landing before the clear, or a latch stamped after the start, keeps it", async () => {
+    await streamed(A, AT_14);
+    await setStatus(A, "in_play");
+    const phone = phoneId("race");
+    await claimed(phone);
+    const [pairing] = await pairingOf(phone);
+    const latch = async () => sql`update fixture_stream_settings set auto_start_blocked_at = ${at(0)} where fixture_id = ${A}`;
+    const start = async () => (await startBroadcast(
+      { userId: day.auth.userId!, orgId: day.orgId, source: "phone", pairingId: pairing!.id }, A,
+      { targetId, startCause: "operator", phone: "present", mode: "passthrough", courtLinkId: linkId }, deps,
+    )).sessionId;
+    // 1. The start committed, then a Stop of it landed before the clear: the latch stands.
+    await latch();
+    const stoppedFirst = await start();
+    expect((await beat(phone, { stopped: stoppedFirst })).state, "premise: the phone's Stop landed").toBe("over");
+    expect(await clearAutoStartBlocked(day.orgId, A, day.auth.userId, stoppedFirst)).toBe(false);
+    expect(await latchedAt(A), "a Stop between the commit and the clear keeps its latch").not.toBeNull();
+    // 2. A latch stamped AFTER the start (a later Stop's) is not the one the start answers: kept.
+    const running = await start();
+    await sql`update fixture_stream_settings set auto_start_blocked_at = (select created_at + interval '1 second' from fixture_stream_sessions where id = ${running}) where fixture_id = ${A}`;
+    expect(await clearAutoStartBlocked(day.orgId, A, day.auth.userId, running)).toBe(false);
+    expect(await latchedAt(A)).not.toBeNull();
+    // 3. The positive: an older latch, the start still running — cleared.
+    await latch();
+    expect(await clearAutoStartBlocked(day.orgId, A, day.auth.userId, running)).toBe(true);
+    expect(await latchedAt(A)).toBeNull();
   });
 
   it("finding B: the hold prefers the court's own (unlatched) match, and the word is not told while one exists", async () => {

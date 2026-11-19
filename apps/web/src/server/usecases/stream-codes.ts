@@ -639,17 +639,24 @@ export async function markAutoStartBlocked(
 
 /** Court device check (2026-11-19, finding B; controller ruling): an explicit HUMAN start of a court match — the desk's Go live
  *  or the court phone's own Go live hold — clears the match's latch (`auto_start_blocked_at`), so a later Stop latches it
- *  afresh and the court treats the restarted match as its own again. Called only AFTER that start has committed: a refused
- *  start leaves the latch, so Automatic still never restarts a latched match. Touches only a row that IS latched (a no-op
- *  otherwise: no revision bump), and never `auto_started_at`. The caller has already proved the fixture is `orgId`'s. */
+ *  afresh and the court treats the restarted match as its own again. Called only AFTER that start (`sid`) has committed: a
+ *  refused start leaves the latch, so Automatic still never restarts a latched match. Review of #1265: it clears only a latch
+ *  OLDER than `sid` (a latch stamped since belongs to a later Stop), and only while `sid` is still starting or live — a Stop
+ *  of `sid` that landed between its commit and this clear finds the old latch already set (its own stamp is then a no-op), so
+ *  `sid` being stopped is the only trace of it, and the latch must stand. A no-op otherwise (no revision bump); never touches
+ *  `auto_started_at`. The caller has already proved the fixture is `orgId`'s. */
 export async function clearAutoStartBlocked(
-  orgId: string, fixtureId: string, updatedBy: string | null, exec: Tx | typeof sql = sql,
+  orgId: string, fixtureId: string, updatedBy: string | null, sid: string, exec: Tx | typeof sql = sql,
 ): Promise<boolean> {
   const rows = await exec`
-    update fixture_stream_settings
-       set auto_start_blocked_at = null, updated_by = ${updatedBy}, updated_at = now(), revision = revision + 1
-     where fixture_id = ${fixtureId} and org_id = ${orgId} and auto_start_blocked_at is not null
-    returning fixture_id`;
+    update fixture_stream_settings st
+       set auto_start_blocked_at = null, updated_by = ${updatedBy}, updated_at = now(), revision = st.revision + 1
+      from fixture_stream_sessions s
+     where st.fixture_id = ${fixtureId} and st.org_id = ${orgId} and st.auto_start_blocked_at is not null
+       and s.id = ${sid} and s.fixture_id = st.fixture_id
+       and st.auto_start_blocked_at < s.created_at
+       and s.state in ('requested', 'provisioning', 'warming', 'live')
+    returning st.fixture_id`;
   return rows.length > 0;
 }
 
@@ -657,7 +664,7 @@ export async function clearAutoStartBlocked(
  *  is logged and reported, and the match keeps streaming (its latch then only means the court will not start it by itself). */
 export async function clearLatchAfterStart(orgId: string, fixtureId: string, actorUserId: string | null, sid: string): Promise<void> {
   try {
-    await clearAutoStartBlocked(orgId, fixtureId, actorUserId);
+    await clearAutoStartBlocked(orgId, fixtureId, actorUserId, sid);
   } catch (err) {
     log.error({ err: String(err), sid, orgId }, "court start: clearing the match's latch failed — the start stands");
     captureError(err, { orgId, route: "capture.court.clear_latch", extra: { sid } });
