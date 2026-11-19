@@ -61,8 +61,10 @@ export type CaptureCourt = z.infer<typeof CaptureCourt>;
 export const CaptureNext = z.strictObject({ label: z.string().min(1).max(200), scheduledStart: EpochS.nullable() });
 export type CaptureNext = z.infer<typeof CaptureNext>;
 
-/** E2 (2026-11-17): why the court's automatic start was refused, the word the Match Day court card shows. */
-export const CAPTURE_AUTO_REFUSALS = ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"] as const;
+/** E2 (2026-11-17): why the court's automatic start was refused, the word the Match Day court card shows. Court device check
+ *  (2026-11-19): `match_stopped` — the court's only match to start was stopped by hand (latched, O17), so nothing starts it by
+ *  itself; a person's Go live (the panel, or the phone's hold) starts it again. */
+export const CAPTURE_AUTO_REFUSALS = ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen", "match_stopped"] as const;
 export const CaptureAutoRefusal = z.enum(CAPTURE_AUTO_REFUSALS);
 export type CaptureAutoRefusal = z.infer<typeof CaptureAutoRefusal>;
 
@@ -330,6 +332,9 @@ export const CaptureRefusalCode = z.enum([
   "match_finished",
   // Court stream (2026-11-14): a court code with no match to stream or score — 409 from `…/scoring-link` and `…/start`.
   "no_match",
+  // Court device check (2026-11-19): a court code's claim beat from a build older than the server's court minimum — 426 from
+  // `…/beats`. Distinct from an unknown code (404 not_a_stream_code), so the phone can say "update the app".
+  "app_outdated",
 ]);
 export type CaptureRefusalCode = z.infer<typeof CaptureRefusalCode>;
 /** Every refusal: {code, message, ...extras}. Only already_live carries extras: {code, message, sid, startedBy}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://seazn.club/contracts/capture-beat.v1.json",
   "title": "Seazn capture beat, v1: POST /api/v1/capture/codes/{code}/beats",
-  "description": "The phone's heartbeat body (capture QR v2 spec 2026-10-01 §6.3.2; `at` amended §17.5, R5 final, agreed with capture 2026-10-01). Strict: anything malformed is 422, which the phone counts as a failed beat. $defs.answer is the 200 answer (§6.3.3). A beat never answers 410 (ask 8). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
+  "description": "The phone's heartbeat body (capture QR v2 spec 2026-10-01 §6.3.2; `at` amended §17.5, R5 final, agreed with capture 2026-10-01). Strict: anything malformed is 422, which the phone counts as a failed beat. $defs.answer is the 200 answer (§6.3.3) and $defs.refusal every refusal body. A beat never answers 410 (ask 8). Vendored into the capture repo; its sha256, parity with its zod twin and its fixtures are pinned by apps/web/src/server/api-v1/__tests__/capture-contract.test.ts.",
   "type": "object",
   "properties": {
     "code": {
@@ -414,7 +414,7 @@
               "const": "waiting"
             },
             "autoRefusal": {
-              "description": "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s) or competition_frozen. Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
+              "description": "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s), competition_frozen, or match_stopped (court device check, 2026-11-19: the court's only match in play was stopped by hand — the desk's Stop, this court phone's Stop hold, or a handover — so nothing starts it by itself; the desk's Go live or the phone's own Go live hold starts it again). Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
               "type": "string",
               "enum": [
                 "no_destination",
@@ -422,7 +422,8 @@
                 "not_entitled",
                 "destination_in_use",
                 "unavailable",
-                "competition_frozen"
+                "competition_frozen",
+                "match_stopped"
               ]
             }
           },
@@ -1017,6 +1018,79 @@
           },
           "required": [
             "state"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "refusal": {
+      "description": "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 401 code_ended (an unknown code, a wrong tok or an ended code), 404 not_a_stream_code (a malformed code), 426 app_outdated (court codes only, court device check 2026-11-19: a claim beat — claim \"new\" or \"resume\" — from a build older than the server's court minimum; it is never paired, and every later claim from that build gets the same answer until the app is updated), 422 invalid, 429 rate_limited (with Retry-After) and 503 unavailable (also a court claim while the server has no court minimum configured). 422, 429 and 503 count as a failed beat (§6.3.2, §10.1).",
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The machine word the phone keys its copy on (§4).",
+              "type": "string",
+              "const": "already_live"
+            },
+            "message": {
+              "description": "A plain English developer string; the phone never shows it (§4).",
+              "type": "string"
+            },
+            "sid": {
+              "description": "already_live only: the session that is already live (§6.3.4, ask 4).",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "startedBy": {
+              "description": "already_live only: who started it (§6.3.4, ask 4).",
+              "type": "string",
+              "enum": [
+                "organiser",
+                "automatic",
+                "operator"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "sid",
+            "startedBy"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "description": "The machine word the phone keys its copy on (§4).",
+              "type": "string",
+              "enum": [
+                "code_ended",
+                "not_a_stream_code",
+                "replaced",
+                "no_destination",
+                "no_credit",
+                "not_entitled",
+                "unavailable",
+                "invalid",
+                "rate_limited",
+                "match_finished",
+                "no_match",
+                "app_outdated"
+              ]
+            },
+            "message": {
+              "description": "A plain English developer string; the phone never shows it (§4).",
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
           ],
           "additionalProperties": false
         }

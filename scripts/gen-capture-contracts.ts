@@ -93,7 +93,7 @@ const NEXT_PROSE: Record<string, string> = {
   "next.scheduledStart": "The next match's scheduled start as epoch seconds; null when it has none (§5.3).",
 };
 const AUTO_REFUSAL_PROSE: Record<string, string> = {
-  autoRefusal: "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s) or competition_frozen. Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
+  autoRefusal: "waiting only, court codes only (E2, 2026-11-17): why the server's automatic start of the court's match was refused, the word the Match Day court card shows for the court: no_destination (the destination needs the organiser: reconnect, live not enabled, none picked), no_credit, not_entitled, destination_in_use (another match holds the destination), unavailable (a transient failure; the server retries every 60 s), competition_frozen, or match_stopped (court device check, 2026-11-19: the court's only match in play was stopped by hand — the desk's Stop, this court phone's Stop hold, or a handover — so nothing starts it by itself; the desk's Go live or the phone's own Go live hold starts it again). Omitted, never null, when there is no refusal, once a start succeeds or is in flight, on a session shape, and on a fixture's code. The phone reads an unknown word as no refusal.",
 };
 const STAGE_PROSE: Record<string, string> = {
   stage: "Where the match sits in its stage (W28, added 2026-10-06): the scheduler board's chip, the round's role, the pool and (2026-10-07) the label the phone shows. On the waiting shape and every session state; omitted, never null, when no code can be produced. Recomputed on every read.",
@@ -173,7 +173,7 @@ const contracts: Contract[] = [
     title: "Seazn capture beat, v1: POST /api/v1/capture/codes/{code}/beats",
     root: {
       twin: CaptureBeat,
-      description: `The phone's heartbeat body (${SPEC} §6.3.2; \`at\` amended §17.5, R5 final, agreed with capture 2026-10-01). Strict: anything malformed is 422, which the phone counts as a failed beat. $defs.answer is the 200 answer (§6.3.3). A beat never answers 410 (ask 8). ${PINNED_BY}`,
+      description: `The phone's heartbeat body (${SPEC} §6.3.2; \`at\` amended §17.5, R5 final, agreed with capture 2026-10-01). Strict: anything malformed is 422, which the phone counts as a failed beat. $defs.answer is the 200 answer (§6.3.3) and $defs.refusal every refusal body. A beat never answers 410 (ask 8). ${PINNED_BY}`,
       props: {
         code: "The stream code (§6.1).",
         slot: "The camera slot, 0 in PR-1 (§6.3.1).",
@@ -211,6 +211,11 @@ const contracts: Contract[] = [
           device: "replaced and taken only: the current phone's model, for the organiser panel's takeover notice. The phone ignores it, and PR-1 never sends it (G0-e, §7.5, §17.5).",
           ...COMMON_PROSE("fixtures.scheduled_at as epoch seconds, or null when the fixture has none (§6.4, §4)."),
         },
+      },
+      refusal: {
+        twin: CaptureRefusal,
+        description: "Every refusal: `code` is the machine word the phone keys its copy on; `message` is a developer string, never shown (§4). 401 code_ended (an unknown code, a wrong tok or an ended code), 404 not_a_stream_code (a malformed code), 426 app_outdated (court codes only, court device check 2026-11-19: a claim beat — claim \"new\" or \"resume\" — from a build older than the server's court minimum; it is never paired, and every later claim from that build gets the same answer until the app is updated), 422 invalid, 429 rate_limited (with Retry-After) and 503 unavailable (also a court claim while the server has no court minimum configured). 422, 429 and 503 count as a failed beat (§6.3.2, §10.1).",
+        props: REFUSAL,
       },
     },
   },

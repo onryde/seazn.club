@@ -50,10 +50,10 @@ const without = (o: Json, key: string): Json => Object.fromEntries(Object.entrie
  *  same commit, and capture re-vendors the file. */
 const SHA256: Record<string, string> = {
   "capture-qr.v2.json": "0943072e30489dad04822cf266cc62d4e004e3a2ef46fe20e712a274ae272fbe",
-  "capture-descriptor.v1.json": "909ba262565857566bf49da0c3d547d876e4f5f8bbbc37fe9e921e448032108d",
-  "capture-beat.v1.json": "017ae3e398a07b4c24900ec06d5908acc72c16f0b8f239a9611159a7ac2447d0",
-  "capture-start.v1.json": "7fdccba89789c416b007440b32ba5bab5111d53598423eafd89672b156553a2c",
-  "capture-scoring-link.v1.json": "4ba43348d7b12fa776b2ff24f4dfd254342d38ddc62207f30156677291fbecae",
+  "capture-descriptor.v1.json": "308d58807d3b3754ccf5b400c18827d09ffb5dd0177aaed7d10b31b307c027f4",
+  "capture-beat.v1.json": "2909429a2dba925d18fdddc357c9a8e393d7c5ef25156fb7f13f375e8daa7e87",
+  "capture-start.v1.json": "46162c64e4b9e0da3f17a571103c3ba7e3e9e972997367c916bf7f6ea8e08778",
+  "capture-scoring-link.v1.json": "daa81ed4f907545f0fb1a8265d11011fab3b90a52d880dda8e3839f7651b5032",
   "capture-record.v1.json": "213f766043b7682f198cc98da13e93995b6602e46533ecf60c78bf562aebd6f8",
   // MD-1 Task 3 (capture S4 Match Day design §5, §9.3): a Match Day code's day read.
   // Task 8e (2026-11-13): + can_call, additive.
@@ -156,8 +156,15 @@ const SPEC_SCORING_LINK_REFUSALS: Record<string, number> = {
   code_ended: 401, not_a_stream_code: 404, replaced: 409, match_finished: 409, no_match: 409, not_entitled: 402, unavailable: 503,
   invalid: 422, rate_limited: 429,
 };
-/** Every refusal word on the capture wire: the start's ten, W27's `match_finished` and the court stream's `no_match` (court codes only). */
-const SPEC_REFUSAL_CODES = [...new Set([...Object.keys(SPEC_REFUSALS), ...Object.keys(SPEC_SCORING_LINK_REFUSALS)])];
+/** Court device check (2026-11-19, finding A; the brief's words): the beat's refusals, with their statuses — `app_outdated` is a
+ *  court code's claim from a build older than the court minimum, 426, its own answer and never the unknown code's (401) or a
+ *  malformed one's (404). */
+const SPEC_BEAT_REFUSALS: Record<string, number> = {
+  code_ended: 401, not_a_stream_code: 404, app_outdated: 426, invalid: 422, rate_limited: 429, unavailable: 503,
+};
+/** Every refusal word on the capture wire: the start's ten, W27's `match_finished`, the court stream's `no_match` (court codes
+ *  only) and the beat's `app_outdated` (court codes only). */
+const SPEC_REFUSAL_CODES = [...new Set([...Object.keys(SPEC_REFUSALS), ...Object.keys(SPEC_SCORING_LINK_REFUSALS), ...Object.keys(SPEC_BEAT_REFUSALS)])];
 /** W27: "The URL must match `^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$`" — the brief's text. */
 const SPEC_SCORING_LINK_URL = "^https://[^/]+/score/dl_[A-Za-z0-9_-]{43}$";
 /** W28: `role.kind` is the engine's `RoundRole["kind"]`. Typed against the engine's own declaration: a kind the engine
@@ -270,7 +277,7 @@ const MD_CALL = "capture-matchday-call.v1.json", MD_CALL_DIR = "capture-matchday
 const RECORD_DEFS = ["ok", "refusal", "secretS2", "secretS3", "secretS4", "secretS5", "secretShaped"];
 /** Each file's `$defs`, exactly. */
 const DEFS: Record<string, string[]> = {
-  [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"], [RECORD]: RECORD_DEFS,
+  [QR]: [], [DESCRIPTOR]: ["refusal"], [BEAT]: ["answer", "refusal"], [START]: ["ok", "refusal"], [SCORING]: ["ok", "refusal"], [RECORD]: RECORD_DEFS,
   [MD_DAY]: ["refusal"],
   [MD_OPEN]: ["refusal"],
   [MD_APPROVAL]: ["ok", "refusal", "request"],
@@ -299,7 +306,7 @@ type Route = [
 const DIRS: Record<string, { file: string; routes: Route[]; count: number }> = {
   "capture-qr.v2": { file: QR, routes: [["", CaptureQrV2, ""]], count: 12 },
   "capture-descriptor.v1": { file: DESCRIPTOR, routes: [["refusal-", S.CaptureRefusal, "#/$defs/refusal"], ["", S.CaptureDescriptor, ""]], count: 58 },
-  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"]], count: 47 },
+  "capture-beat.v1": { file: BEAT, routes: [["beat-", S.CaptureBeat, ""], ["answer-", S.CaptureBeatAnswer, "#/$defs/answer"], ["refusal-", S.CaptureRefusal, "#/$defs/refusal"]], count: 50 },
   "capture-start.v1": { file: START, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureStartOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 18 },
   "capture-scoring-link.v1": { file: SCORING, routes: [["request-", S.CaptureStartBody, ""], ["ok-", S.CaptureScoringLinkOk, "#/$defs/ok"], ["", S.CaptureRefusal, "#/$defs/refusal"]], count: 20 },
   [RECORD_DIR]: { file: RECORD, routes: [["line-", S.CaptureRecordLine, ""], ["ok-", S.CaptureRecordOk, "#/$defs/ok"], ["", S.CaptureRecordRefusal, "#/$defs/refusal"]], count: 63 },
@@ -505,6 +512,8 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [QR, rootOf(qr), CaptureQrV2],
       [`${DESCRIPTOR}#/$defs/refusal`, defOf(desc, "refusal"), S.CaptureRefusal],
       [BEAT, rootOf(beat), S.CaptureBeat],
+      // Finding A (2026-11-19): the beat's own refusal, the shared twin.
+      [`${BEAT}#/$defs/refusal`, defOf(beat, "refusal"), S.CaptureRefusal],
       [START, rootOf(start), S.CaptureStartBody],
       [`${START}#/$defs/ok`, defOf(start, "ok"), S.CaptureStartOk],
       [`${START}#/$defs/refusal`, defOf(start, "refusal"), S.CaptureRefusal],
@@ -541,7 +550,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       }
     }
     expect(RECORD_TWINS).toHaveLength(7);
-    expect(wholeChecked).toBe((9 + 7 + 2 + 2 + 4 + 6) * 2);
+    expect(wholeChecked).toBe((10 + 7 + 2 + 2 + 4 + 6) * 2);
     // secretShaped is the union of S2–S5 by $ref, each once, in order — so "secret-shaped" is exactly the four twins.
     const shaped = defOf(record, "secretShaped");
     expect(shaped.type).toBe("string");
@@ -617,7 +626,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(checked, `${dir}: fixtures checked`).toBe(count);
       total += checked;
     }
-    expect(total).toBe(12 + 58 + 47 + 18 + 20 + 63 + 13 + 10 + 17 + 26);
+    expect(total).toBe(12 + 58 + 50 + 18 + 20 + 63 + 13 + 10 + 17 + 26);
     expect(byFile, "fixtures checked against the published bytes").toBe(total);
     // Every ZOD_ONLY entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(zodOnlySeen, "ZOD_ONLY fixtures swept").toBe(Object.keys(ZOD_ONLY).length);
@@ -669,7 +678,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       ["descriptor state", desc, S.CaptureDescriptor, "state", SPEC_DESCRIPTOR.state, 6, true],
       ["descriptor preferred (5 session states)", desc, S.CaptureDescriptor, "preferred", SPEC_DESCRIPTOR.preferred, 5, false],
       ["descriptor scoreUpdates (5 session states)", desc, S.CaptureDescriptor, "scoreUpdates", SPEC_DESCRIPTOR.scoreUpdates, 5, false],
-      ...[START, DESCRIPTOR, SCORING].flatMap((file): [string, Json, Twin, string, string[], number, boolean][] => [
+      ...[START, DESCRIPTOR, SCORING, BEAT].flatMap((file): [string, Json, Twin, string, string[], number, boolean][] => [
         [`${file} refusal code`, defOf(contract(file), "refusal"), S.CaptureRefusal, "code", SPEC_REFUSAL_CODES, 2, true],
         [`${file} refusal startedBy (already_live only)`, defOf(contract(file), "refusal"), S.CaptureRefusal, "startedBy", SPEC_STARTED_BY, 1, false],
       ]),
@@ -684,8 +693,9 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         nodes += found.length;
       }
     }
-    // 9 beat + answer 6 + 1 + descriptor 6 + 5 + 5 + refusal (2 + 1) × 3 files = 41 nodes, each on the file and the twin.
-    expect(nodes).toBe(41 * 2);
+    // 9 beat + answer 6 + 1 + descriptor 6 + 5 + 5 + refusal (2 + 1) × 4 files (the beat's own since finding A) = 44 nodes, each
+    // on the file and the twin.
+    expect(nodes).toBe(44 * 2);
     // The exported enum twins later tasks import, by their own options.
     const exported: [string, z.ZodEnum, string[]][] = [
       ["CapturePhoneState", CS.CapturePhoneState, SPEC_BEAT.state], ["CaptureCause", CS.CaptureCause, SPEC_BEAT.cause],
@@ -1210,11 +1220,11 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
     const present = readdirSync(resolve(FIXTURES, dir)).filter((f) => /^valid-/.test(f)).map((f) => f.slice("valid-".length, -5));
     expect(present.sort()).toEqual([...codes].sort());
     // match_finished and the court stream's no_match are the NEW words; they carry no extras.
-    expect(SPEC_REFUSAL_CODES.filter((c) => !(c in SPEC_REFUSALS)).sort()).toEqual(["match_finished", "no_match"]);
+    expect(SPEC_REFUSAL_CODES.filter((c) => !(c in SPEC_REFUSALS)).sort()).toEqual(["app_outdated", "match_finished", "no_match"]);
     expect(parses(S.CaptureRefusal, { ...fixture(dir, "valid-match_finished"), sid: fixture("capture-start.v1", "valid-already_live").sid }), "match_finished carrying sid").toBe(false);
   });
 
-  it("E2 (2026-11-17): `autoRefusal` is one of six words, optional, never null, on the waiting shape only, in the twin AND the file", () => {
+  it("E2 (2026-11-17): `autoRefusal` is one of seven words (finding B's match_stopped among them), optional, never null, on the waiting shape only, in the twin AND the file", () => {
     const fileAdmits = fileValidator();
     const D = "capture-descriptor.v1", B = "capture-beat.v1";
     for (const [dir, file, ptr, twin, valid, plain] of [
@@ -1222,7 +1232,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       [B, BEAT, "#/$defs/answer", S.CaptureBeatAnswer, "answer-valid-waiting-autoRefusal", "answer-valid-waiting"],
     ] as const) {
       expect(without(fixture(dir, valid), "autoRefusal"), `${dir}: premise — differs from ${plain} in autoRefusal alone`).toEqual(fixture(dir, plain));
-      for (const word of ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen"]) {
+      for (const word of ["no_destination", "no_credit", "not_entitled", "destination_in_use", "unavailable", "competition_frozen", "match_stopped"]) {
         const v = { ...fixture(dir, plain), autoRefusal: word };
         expect(parses(twin, v), `${dir} ${word}: twin`).toBe(true);
         expect(fileAdmits(file, ptr, v), `${dir} ${word}: file`).toBe(true);
@@ -1233,7 +1243,7 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
         expect(fileAdmits(file, ptr, v), `${dir} ${String(bad)}: file`).toBe(false);
       }
     }
-    expect(CS.CAPTURE_AUTO_REFUSALS).toHaveLength(6);
+    expect(CS.CAPTURE_AUTO_REFUSALS).toHaveLength(7);
   });
 
   it("court stream (spec 2026-11-14 §5.3, §6.1): `court` and `next` are optional, never null, bounded and strict, in the twin AND the file; a fixture code's descriptor and answer parse to themselves", () => {
@@ -1296,6 +1306,34 @@ describe("capture contracts (docs/contracts/capture-*.json)", () => {
       expect(Object.keys(parsed).sort(), `${dir}/${name}: no court, no next added`).toEqual(Object.keys(fixture(dir, name)).sort());
     }
     expect(nulls + branches).toBe(12);
+  });
+
+  it("finding A (2026-11-19): the beat publishes its refusals, `app_outdated` (426, court codes only) among them — a word every refusal-bearing contract admits, with no extras, distinct from the unknown code's", () => {
+    const fileAdmits = fileValidator();
+    const dir = "capture-beat.v1";
+    expect(SPEC_BEAT_REFUSALS.app_outdated).toBe(426);
+    expect(SPEC_BEAT_REFUSALS.app_outdated).not.toBe(SPEC_BEAT_REFUSALS.not_a_stream_code);
+    expect(CS.CaptureRefusalCode.options).toContain("app_outdated");
+    for (const file of [DESCRIPTOR, START, SCORING, BEAT]) {
+      const codes = nodesAt(defOf(contract(file), "refusal"), ["code"]).flatMap(enumOf);
+      expect(codes, `${file} refusal codes`).toContain("app_outdated");
+    }
+    const prose = String(defOf(contract(BEAT), "refusal").description);
+    for (const [word, status] of Object.entries(SPEC_BEAT_REFUSALS)) expect(prose, `the beat's prose names ${status} ${word}`).toContain(`${status} ${word}`);
+    let checked = 0;
+    for (const word of ["app_outdated", "not_a_stream_code"]) {
+      const f = fixture(dir, `refusal-valid-${word}`);
+      expect(f.code).toBe(word);
+      expect(Object.keys(f).sort()).toEqual(["code", "message"]);
+      expect(parses(S.CaptureRefusal, f), word).toBe(true);
+      expect(fileAdmits(BEAT, "#/$defs/refusal", f), word).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    const extra = fixture(dir, "refusal-invalid-app_outdated-sid");
+    expect(without(extra, "sid"), "premise: differs from the valid one in sid alone").toEqual(fixture(dir, "refusal-valid-app_outdated"));
+    expect(parses(S.CaptureRefusal, extra), "app_outdated carrying sid").toBe(false);
+    expect(fileAdmits(BEAT, "#/$defs/refusal", extra), "app_outdated carrying sid (file)").toBe(false);
   });
 
   it("court stream scoring-link `label` and the `no_match` refusal: label is optional, 1..200, strict; no_match is a word every refusal-bearing contract admits", () => {

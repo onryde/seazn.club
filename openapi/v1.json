@@ -59882,7 +59882,8 @@
                             "not_entitled",
                             "destination_in_use",
                             "unavailable",
-                            "competition_frozen"
+                            "competition_frozen",
+                            "match_stopped"
                           ]
                         }
                       },
@@ -61207,7 +61208,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -61279,7 +61281,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -61351,7 +61354,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -61423,7 +61427,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -61495,7 +61500,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -61523,7 +61529,7 @@
     },
     "/api/v1/capture/codes/{code}/beats": {
       "post": {
-        "summary": "The phone's beat (Bearer: the stream code's tok), every pollSeconds. A strict body: a claim (new/resume) decides who holds slot 0 (a live slot is `taken` unless its phone is dead — no beat, no video and a fresh read not connected for 60 s); the current phone's beat is stored on the server's clock; `ended` from the session's phone is the operator's Stop (it ends the pairing), and `stopped` closes that sid unless another current phone holds it. Answers by state: waiting, go-live (sid, startedBy), live (sid), over (sid, endReason), replaced, taken — each with the waiting fields and pollSeconds. Served private, no-store. 401 code_ended, 404 not_a_stream_code, 422 invalid (a malformed body, a slot other than 0, a body naming another code), 429 rate_limited, 503 unavailable. Never 410",
+        "summary": "The phone's beat (Bearer: the stream code's tok), every pollSeconds. A strict body: a claim (new/resume) decides who holds slot 0 (a live slot is `taken` unless its phone is dead — no beat, no video and a fresh read not connected for 60 s); the current phone's beat is stored on the server's clock; `ended` from the session's phone is the operator's Stop (it ends the pairing), and `stopped` closes that sid unless another current phone holds it. Answers by state: waiting, go-live (sid, startedBy), live (sid), over (sid, endReason), replaced, taken — each with the waiting fields and pollSeconds. Served private, no-store. 401 code_ended, 404 not_a_stream_code, 426 app_outdated (a court code's claim from a build older than the court minimum), 422 invalid (a malformed body, a slot other than 0, a body naming another code), 429 rate_limited, 503 unavailable. Never 410",
         "tags": [
           "capture"
         ],
@@ -61976,7 +61982,8 @@
                             "not_entitled",
                             "destination_in_use",
                             "unavailable",
-                            "competition_frozen"
+                            "competition_frozen",
+                            "match_stopped"
                           ]
                         }
                       },
@@ -62585,7 +62592,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -62657,7 +62665,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -62729,7 +62738,81 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
+                          ]
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Client engine out of date",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "const": "already_live"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "sid": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "startedBy": {
+                          "type": "string",
+                          "enum": [
+                            "organiser",
+                            "automatic",
+                            "operator"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message",
+                        "sid",
+                        "startedBy"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "enum": [
+                            "code_ended",
+                            "not_a_stream_code",
+                            "replaced",
+                            "no_destination",
+                            "no_credit",
+                            "not_entitled",
+                            "unavailable",
+                            "invalid",
+                            "rate_limited",
+                            "match_finished",
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -62801,7 +62884,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -62873,7 +62957,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63020,7 +63105,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63092,7 +63178,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63164,7 +63251,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63236,7 +63324,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63308,7 +63397,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63380,7 +63470,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63452,7 +63543,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -63524,7 +63616,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -65443,7 +65536,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -65515,7 +65609,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -65587,7 +65682,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -65659,7 +65755,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -65731,7 +65828,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
@@ -65803,7 +65901,8 @@
                             "invalid",
                             "rate_limited",
                             "match_finished",
-                            "no_match"
+                            "no_match",
+                            "app_outdated"
                           ]
                         },
                         "message": {
