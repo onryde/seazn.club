@@ -5655,4 +5655,145 @@ describe("usePadPipeline — a stalled queue retries on a bounded backoff, with 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(server.appendCalls.length, "retried while mounted").toBeGreaterThan(1);
   });
+  // Fix round 1, I-1. A retry that re-runs a `conflict-again` stall would spend one of the entry's CONFLICT_PASS_CEILING
+  // passes every few seconds with nobody touching the pad, and dead-letter a score ("Not recorded") by itself. The pair
+  // of the network test above: that stall IS retried on a clock, this one is not.
+  it("a head entry that 409s on every pass is NOT retried by the timer: it stays queued across ten minutes, never rejected", async () => {
+    const appendCalls: AppendEventBody[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        return { kind: "conflict", currentSeq: 5, message: "seq conflict" };
+      },
+      async listEventsSince(): Promise<LedgerSlotEvent[]> {
+        // A FOREIGN event in the slot, so every pass renegotiates and then conflicts again.
+        return [{ seq: 1, type: "generic.score", payload: { by: "A", points: 9 }, recorded_by: "user-2", device_link_id: null }];
+      },
+      async getLastSeq() {
+        throw new Error("not used: the conflict body already carries current_seq");
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: 5, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    const afterTap = appendCalls.length;
+    expect(afterTap, "precondition: the tap's own pass sent (and renegotiated)").toBeGreaterThanOrEqual(2);
+    expect(pad.current.queueDepth, "precondition: stalled on the conflict").toBe(1);
+    expect(vi.getTimerCount(), "no retry timer is armed for a conflict stall").toBeLessThanOrEqual(baseline);
+
+    await vi.advanceTimersByTimeAsync(NEVER_DRAIN_MS);
+    expect(appendCalls, "the timer sent nothing in ten minutes").toHaveLength(afterTap);
+    expect(pad.current.queueDepth, "still queued").toBe(1);
+    expect(pad.current.lastRejection, "and not dead-lettered behind the scorer's back").toBeNull();
+
+    // The entry is alive, not stuck: a pass the scorer asks for still goes out (it is theirs to spend).
+    await pad.current.retryDrain();
+    expect(appendCalls.length, "a manual retry still sends").toBeGreaterThan(afterTap);
+  });
+
+  // Fix round 1, m3. A throttled head cannot be sent before its own `retryNotBefore`, so the backoff must not be spent
+  // (and doubled) on refusals that cost nothing: the first retry lands on the later of the two.
+  it("a throttled head is retried at its own retry-after, not on a shorter backoff that doubles past it for nothing", async () => {
+    let limited = true;
+    const appendCalls: AppendEventBody[] = [];
+    const rows: LedgerSlotEvent[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (limited) return { kind: "throttled", message: "Too many requests", retryAfterMs: 30_000 };
+        const seq = rows.length + 1;
+        rows.push({ id: `srv-${seq}`, seq, type: body.type, payload: body.payload, recorded_at: "2026-11-19T10:00:00.000Z", recorded_by: "user-1", device_link_id: null, voids_event_id: null });
+        return { kind: "ok", data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: `srv-${seq}` } };
+      },
+      async listEventsSince(_fixtureId, sinceSeq) {
+        return rows.filter((r) => r.seq > sinceSeq);
+      },
+      async getLastSeq() {
+        return rows.length;
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: rows.length, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.throttled, "precondition: throttled").toBe(true);
+    expect(pad.current.queueDepth).toBe(1);
+
+    limited = false; // the limiter frees up at once; the entry's own wait is what is left
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(pad.current.queueDepth, "still inside the retry-after").toBe(1);
+    expect(appendCalls, "nothing sent inside the wait").toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pad.current.queueDepth, "sent the moment the retry-after is up (a 5s/10s/20s backoff would be 5s late)").toBe(0);
+    expect(rows, "and landed once").toHaveLength(1);
+  });
+
+  // Fix round 1, m2. The three unmount guards (the cleanup's clearTimeout, the arm check, the fire check) each get a
+  // test that fails with that guard alone removed.
+  it("a drain still in flight when the pad unmounts arms no timer afterwards", async () => {
+    const server = flakyServer();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+
+    const release = server.holdNextSend();
+    const tap = pad.current.submit("generic.score", { by: "H", points: 1 }); // its send is held open
+    await vi.advanceTimersByTimeAsync(0);
+    expect(server.appendCalls, "precondition: the send is on the wire, unanswered").toHaveLength(1);
+
+    pad.unmount();
+    release(); // answered "offline" AFTER the pad is gone: the drain stalls, and must not arm anything
+    await tap;
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount(), "no retry timer armed by a drain that outlived its pad").toBeLessThanOrEqual(baseline);
+    await vi.advanceTimersByTimeAsync(NEVER_DRAIN_MS);
+    expect(server.appendCalls, "and nothing is resent").toHaveLength(1);
+    expect(errors, "no React warning about state updates after unmount").not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it("a timer already armed is cleared by the unmount itself (the cleanup, not the fire check, is what stops it)", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(vi.getTimerCount(), "precondition: a retry timer is pending").toBeGreaterThan(baseline);
+    pad.unmount();
+    expect(vi.getTimerCount(), "the unmount took it with it").toBeLessThanOrEqual(baseline);
+  });
+
+  // Fix round 1, m1. A different queue is a different pad: nothing armed for the old one may drain it, and its doubled
+  // delay does not carry over.
+  it("moving to another queue clears the old timer and starts the new queue's stall from the 5s base", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport, queueDbName: "retry-queue-a" }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    await vi.advanceTimersByTimeAsync(5_000); // retried once: the next wait on this queue is 10s
+    expect(vi.getTimerCount(), "precondition: a 10s timer is pending").toBeGreaterThan(baseline);
+
+    pad.rerender(baseParams({ transport: server.transport, queueDbName: "retry-queue-b" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount(), "the old queue's timer is gone").toBeLessThanOrEqual(baseline);
+
+    const before = server.appendCalls.length;
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    const afterTap = server.appendCalls.length;
+    expect(afterTap, "precondition: the new queue's tap went out and stalled").toBe(before + 1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(server.appendCalls).toHaveLength(afterTap);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(server.appendCalls, "5s, not the 20s the old queue had doubled to").toHaveLength(afterTap + 1);
+  });
+
 });

@@ -1331,7 +1331,9 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** The delay last armed; `null` once an entry has gone through, so the next stall starts from the base again. */
   const retryDelayRef = useRef<number | null>(null);
-  const retryStoppedRef = useRef(false);
+  /** Bumped when the pad unmounts or moves to another queue/fixture. A drain remembers the epoch it began in, and arms or
+   *  fires a retry only while it is still current — so a drain still in flight at that moment cannot start a timer after. */
+  const retryEpochRef = useRef(0);
   const runDrainRef = useRef<() => Promise<void>>(async () => {});
 
   // Review I-1 — every seq an ack (or an already-applied verdict) has
@@ -1712,8 +1714,14 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       if (!(await running)) return;
     }
     const run = (async (): Promise<boolean> => {
-      // True when this pass stopped on an entry that did not go, as opposed to one held for its release tick.
+      // True when this pass stopped on an entry that did not go FOR A REASON A RETRY CAN CURE (the network, a
+      // throttle, an indeterminate 409, an unreadable void target), as opposed to one held for its release tick or
+      // one that lost a seq race again. A `conflict-again` stall is deliberately NOT retried on a clock: every such
+      // pass spends one of the entry's CONFLICT_PASS_CEILING, so a timer would dead-letter a score with nobody
+      // touching the pad. That pass is still the scorer's to spend (a tap, a reconnect, a reload).
       let stalled = false;
+      let throttledStall = false;
+      const epoch = retryEpochRef.current;
       for (;;) {
         const queued = await peekInOrder(store);
         if (queued.length === 0) {
@@ -2003,17 +2011,25 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // 409 — stop here, in order: nothing behind it may jump ahead.
           setOffline(outcome.reason === "network");
           setThrottled(outcome.reason === "throttled");
-          stalled = true;
+          stalled = outcome.reason !== "conflict-again";
+          throttledStall = outcome.reason === "throttled";
           break;
         }
       }
-      if (stalled && !retryStoppedRef.current && retryTimerRef.current === null) {
-        const delay = nextOfflineRetryMs(retryDelayRef.current);
-        retryDelayRef.current = delay;
-        retryTimerRef.current = setTimeout(() => {
-          retryTimerRef.current = null;
-          if (!retryStoppedRef.current) void runDrainRef.current();
-        }, delay);
+      if (stalled) {
+        // A throttled head cannot be sent before its own `retryNotBefore` (sendOne refuses without a request), so a
+        // shorter backoff would be spent on a refusal that costs nothing and double for it. Wait for the later of the two.
+        // This read is the only await between the loop and the guards below, so the guards see the pad as it is NOW.
+        const headNotBefore = throttledStall ? (await peekInOrder(store))[0]?.retryNotBefore : undefined;
+        if (retryEpochRef.current === epoch && retryTimerRef.current === null) {
+          const backoff = nextOfflineRetryMs(retryDelayRef.current);
+          retryDelayRef.current = backoff;
+          const delay = headNotBefore === undefined ? backoff : Math.max(backoff, headNotBefore - Date.now());
+          retryTimerRef.current = setTimeout(() => {
+            retryTimerRef.current = null;
+            void runDrainRef.current(); // a cleared timer cannot fire, so no epoch check is owed here: the unmount clears it
+          }, delay);
+        }
       }
       return false;
     })().finally(() => {
@@ -2028,14 +2044,16 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   useEffect(() => {
     runDrainRef.current = runDrain;
   }, [runDrain]);
+  // Keyed on the pad's queue + fixture: a new one is a different queue, so a timer (and a doubled delay) armed for the old
+  // one must not drain it. Today a changed key means a remount anyway; this keeps that true without relying on it.
   useEffect(() => {
-    retryStoppedRef.current = false;
     return () => {
-      retryStoppedRef.current = true;
+      retryEpochRef.current += 1;
       if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
+      retryDelayRef.current = null;
     };
-  }, []);
+  }, [store, fixtureId]);
 
   // Resume a leftover queue from a previous session (tab death/reload) —
   // seeding `pendingEnvelopes` from whatever the durable store already held
