@@ -166,7 +166,7 @@ const keys = (rs: readonly MatchDayOnlineRound[]) => rs.map((r) => r.key);
 
 // ---- onlineRoundPhase -------------------------------------------------------------------------------------------------------------
 
-describe("onlineRoundPhase - the server's word, re-read on the page's clock (a round with no boards says what the server said)", () => {
+describe("onlineRoundPhase - the server's word, re-read from the round's BOARDS: a deadline passing flips nothing, a board leaving check-in does", () => {
   it("EMPTY CASE FIRST: a division not started and a round not opened keep their phase, whatever the clock", () => {
     for (const now of [null, NOW]) {
       expect(onlineRoundPhase(notStartedRound("s:1"), now)).toBe("not_started");
@@ -174,21 +174,41 @@ describe("onlineRoundPhase - the server's word, re-read on the page's clock (a r
     }
   });
 
-  it("a round with a board still inside its window is check-in; the same round once the LAST window has run out is playing", () => {
+  it("a round with a board checking in is check-in on every clock - before its window, inside it, at its deadline and long after (the sweep, not the clock, turns the board)", () => {
     const r = onlineRound("s:2", "checkin", arbiterRound([checkingIn(openNow(8)), live()]));
     const deadline = NOW + 8 * MIN; // openNow(8)'s deadline, typed
-    // the oracle for the boundary is the window's own half-open rule, not a copy of it
+    // the oracle for the boundary is the window's own half-open rule, not a copy of it: the clock DOES move the window...
     expect(inExtendWindow(openNow(8), deadline - 1)).toBe(true);
     expect(inExtendWindow(openNow(8), deadline)).toBe(false);
-    expect(onlineRoundPhase(r, deadline - 1)).toBe("checkin");
-    expect(onlineRoundPhase(r, deadline)).toBe("playing");
-    expect(onlineRoundPhase(r, deadline + 5 * MIN)).toBe("playing");
+    // ...and the phase does not follow it
+    let checked = 0;
+    for (const now of [null, NOW - 30 * MIN, deadline - 1, deadline, deadline + 5 * MIN, deadline + 6 * 60 * MIN]) {
+      expect(onlineRoundPhase(r, now), `now ${now}`).toBe("checkin");
+      checked += 1;
+    }
+    expect(checked).toBe(6);
   });
 
-  it("no clock yet (the server render, the first client paint): the snapshot's word stands - an open window reads check-in, a closed one playing", () => {
-    expect(onlineRoundPhase(onlineRound("s:2", "checkin", arbiterRound([checkingIn(openNow(8))])), null)).toBe("checkin");
+  it("SEQUENCE: the same round leaves check-in when its last checking-in board does (a game starts, a hold, a result), and not before", () => {
+    const stays = checkingIn(openNow(8));
+    const leaves = checkingIn(openNow(8));
+    const mk = (boards: ArbiterBoard[]) => onlineRound("s:2", "checkin", arbiterRound(boards));
+    expect(onlineRoundPhase(mk([stays, leaves]), NOW)).toBe("checkin");
+    // one board starts: the other is still checking in
+    expect(onlineRoundPhase(mk([stays, { ...leaves, state: { kind: "starting" } }]), NOW)).toBe("checkin");
+    // the last one leaves, by each way out
+    for (const state of [{ kind: "starting" }, { kind: "live", moveNo: 3 }, { kind: "on_hold" }, { kind: "result", score: "1-0", noResult: false }] as const satisfies readonly ArbiterBoardState[]) {
+      expect(onlineRoundPhase(mk([{ ...stays, state }, { ...leaves, state }]), NOW), state.kind).toBe("playing");
+    }
+  });
+
+  it("no clock yet (the server render, the first client paint), a round with a board checking in: check-in whether its window is open or the snapshot says it closed", () => {
+    // typed: an open window (refusal null) and a snapshot-closed one (the sweep has not turned the board yet) are BOTH check-in
     const closed = window(-20 * MIN, -1 * MIN, { canExtend: false, refusal: "closed" });
-    expect(onlineRoundPhase(onlineRound("s:2", "checkin", arbiterRound([checkingIn(closed)])), null)).toBe("playing");
+    expect(onlineRoundPhase(onlineRound("s:2", "checkin", arbiterRound([checkingIn(openNow(8))])), null)).toBe("checkin");
+    expect(onlineRoundPhase(onlineRound("s:2", "checkin", arbiterRound([checkingIn(closed)])), null)).toBe("checkin");
+    // and a round with none checking in is playing with no clock too
+    expect(onlineRoundPhase(onlineRound("s:2", "playing", arbiterRound([live(), done()])), null)).toBe("playing");
   });
 
   it("a later check-in group still to open keeps the round in check-in (check-in is not over while a batch is ahead)", () => {
@@ -223,6 +243,12 @@ describe("orderOnlineRounds - check-in or in play first, then paired and not ope
     const rounds = [overRound("a:3"), beforeRound("b:1"), checkinRound("c:2")];
     expect(keys(orderOnlineRounds(rounds, NOW))).toEqual(["c:2", "b:1", "a:3"]);
     expect(keys(orderOnlineRounds([...rounds].reverse(), NOW))).toEqual(["c:2", "b:1", "a:3"]);
+  });
+
+  it("no clock yet (the server render): the same non-empty list orders the same way, over rounds typed by their boards", () => {
+    const rounds = [overRound("o:1"), notStartedRound("n:0"), playingRound("p:2"), beforeRound("b:1"), checkinRound("c:2")];
+    expect(keys(orderOnlineRounds(rounds, null))).toEqual(["p:2", "c:2", "n:0", "b:1", "o:1"]);
+    expect(keys(orderOnlineRounds(rounds, null))).toEqual(keys(orderOnlineRounds(rounds, NOW)));
   });
 
   it("a round with a board live sits with check-in, ahead of a paired round and an over one", () => {
@@ -295,6 +321,24 @@ describe("roundRowWord - the round row's one line, from the column's own clock a
     const boards = [checkingIn(openNow(8), [true, false]), checkingIn(openNow(5), [true, true])];
     const r = onlineRound("s:2", "checkin", arbiterRound(boards));
     expect(roundRowWord(r, NOW + 5 * MIN)).toEqual({ kind: "closes", at: iso(NOW + 8 * MIN), here: 1, seats: 2 } satisfies RoundRowWord);
+  });
+
+  it("no clock yet (the server render): an open window names its deadline with the seats here; a window the snapshot calls closed says the playing tally", () => {
+    // typed: open window closing in 8 minutes, white here of 1 board = 1 of 2 seats
+    const open = onlineRound("s:2", "checkin", arbiterRound([checkingIn(openNow(8), [true, false])]));
+    expect(roundRowWord(open, null)).toEqual({ kind: "closes", at: iso(NOW + 8 * MIN), here: 1, seats: 2 } satisfies RoundRowWord);
+    // the snapshot's refusal says "closed" while the board still checks in: still a check-in round (its boards decide), no deadline to name
+    const closed = window(-20 * MIN, -1 * MIN, { canExtend: false, refusal: "closed" });
+    const ended = onlineRound("s:2", "checkin", arbiterRound([checkingIn(closed), live()]));
+    expect(onlineRoundPhase(ended, null)).toBe("checkin");
+    expect(roundRowWord(ended, null)).toEqual({ kind: "playing", playing: 1, total: 2 } satisfies RoundRowWord);
+  });
+
+  it("a check-in round whose last window has run out (the board not yet turned by the sweep) stays check-in and says the playing tally, never a deadline in the past", () => {
+    const r = onlineRound("s:2", "checkin", arbiterRound([checkingIn(openNow(8)), live()]));
+    expect(roundRowWord(r, NOW + 8 * MIN - 1)).toEqual({ kind: "closes", at: iso(NOW + 8 * MIN), here: 0, seats: 2 } satisfies RoundRowWord);
+    expect(onlineRoundPhase(r, NOW + 8 * MIN)).toBe("checkin");
+    expect(roundRowWord(r, NOW + 8 * MIN)).toEqual({ kind: "playing", playing: 1, total: 2 } satisfies RoundRowWord);
   });
 
   it("playing: boards playing of the boards on screen (a held board is not playing, a finished one is on screen)", () => {
@@ -409,13 +453,15 @@ describe("boardRowWord - one word for every state a listed board can be in", () 
   });
 
   it("EVERY hold reason reads 'On hold', the link holds (lichess_unlinked, lichess_reconnect) included: a board's state carries no reason", () => {
-    // The loader reads a held board as `on_hold` from the bridge status alone (arbiter.ts boardWithSides); the only reason-derived board
-    // fact is `tiebreakOwed`. So the row's word cannot depend on a reason, and a link hold (V536) is "On hold" like any other.
+    // The loader reads a held board as `on_hold` from the bridge status alone (arbiter.ts boardWithSides); the row's `hold_reason` (for
+    // Needs you's routing, MD-R2) and `tiebreakOwed` are the reason-derived facts. The row's WORD cannot depend on a reason, and a link
+    // hold (V536) is "On hold" like any other.
     expect(NEEDS_REASONS).toContain("lichess_unlinked");
     expect(NEEDS_REASONS).toContain("lichess_reconnect");
     let checked = 0;
     for (const reason of NEEDS_REASONS) {
-      const held = rowBoard({ state: { kind: "on_hold" }, tiebreakOwed: reason === "tiebreak_owed", flagCount: 0 });
+      const held = rowBoard({ state: { kind: "on_hold" }, hold_reason: reason, tiebreakOwed: reason === "tiebreak_owed", flagCount: 0 });
+      expect(held.hold_reason, reason).toBe(reason);
       expect(boardRowWord(held), reason).toEqual({ kind: "on_hold", flags: 0 });
       checked += 1;
     }
@@ -423,18 +469,25 @@ describe("boardRowWord - one word for every state a listed board can be in", () 
     expect(checked).toBeGreaterThanOrEqual(2);
   });
 
-  it("the pure rules do not enumerate hold reasons: online.ts names none of NEEDS_REASONS, or names ALL of them (so a new reason cannot be half-covered)", () => {
-    const src = readFileSync(join(__dirname, "../online.ts"), "utf8")
+  it("boardRowWord does not enumerate hold reasons: its body names none of NEEDS_REASONS, or names ALL of them (so a new reason cannot be half-covered)", () => {
+    // Scoped to the one function that makes a board's WORD: online.ts may name a reason elsewhere (a routing rule on `hold_reason`
+    // is not a word), but a word that begins to depend on a reason must cover every reason, link holds included.
+    const file = readFileSync(join(__dirname, "../online.ts"), "utf8");
+    const from = file.indexOf("export function boardRowWord");
+    expect(from, "boardRowWord not found in online.ts").toBeGreaterThanOrEqual(0);
+    const body = file
+      .slice(from, file.indexOf("\n}\n", from))
       .replace(/\/\*[\s\S]*?\*\//g, "")
       .replace(/(^|[^:])\/\/.*$/gm, "$1");
+    expect(body, "the scan must have read the switch").toContain('case "on_hold"');
     // `not_started` is both a hold reason and a PHASE word ("the division has not started"); a Record over the phases keeps this list honest
     const PHASE_WORDS = Object.keys({ not_started: 1, before: 1, checkin: 1, playing: 1 } satisfies Record<OnlineRoundPhase, 1>);
     const reasons = NEEDS_REASONS.filter((r: NeedsReason) => !PHASE_WORDS.includes(r));
     expect(reasons.length).toBe(NEEDS_REASONS.length - 1);
     expect(reasons).toContain("lichess_unlinked");
     expect(reasons).toContain("lichess_reconnect");
-    const named = reasons.filter((r) => src.includes(r));
-    expect(named.length === 0 || named.length === reasons.length, `online.ts names only ${named.join(", ")}`).toBe(true);
+    const named = reasons.filter((r) => body.includes(r));
+    expect(named.length === 0 || named.length === reasons.length, `boardRowWord names only ${named.join(", ")}`).toBe(true);
   });
 });
 

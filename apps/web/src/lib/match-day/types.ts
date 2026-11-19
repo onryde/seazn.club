@@ -5,6 +5,7 @@ import type { NeedsYouItem } from "@/components/v2/desk/needs-you";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import type { Attention } from "@/lib/division-phase";
 import type { OpenRoundView } from "@/lib/open-round";
+import type { NeedsReason } from "@/server/external-play/types";
 import type { VenueNoun } from "@/lib/venue";
 
 export type { NeedsYouItem, VenueNoun };
@@ -193,7 +194,8 @@ export interface MatchDayFindCourt {
 
 /** Where an online round is, as the list says it. `not_started`: the division has not started (its panel says to start it first);
  *  `before`: paired, not opened; `checkin`: opened and some board still checking in; `playing`: opened, none checking in. The
- *  server's word at the poll (`readOnlineRounds`); `onlineRoundPhase` (lib/match-day/online.ts) re-reads it on the page's clock. */
+ *  server's word at the poll (`readOnlineRounds`); `onlineRoundPhase` (lib/match-day/online.ts) re-reads it from the round's boards
+ *  (their states, never the clock: a deadline passing flips nothing). */
 export type OnlineRoundPhase = "not_started" | "before" | "checkin" | "playing";
 
 /** A board as the list carries it: a whole ArbiterBoard (so lib/round-column.ts's rules, which take ArbiterBoard[], apply unchanged;
@@ -201,6 +203,11 @@ export type OnlineRoundPhase = "not_started" | "before" | "checkin" | "playing";
 export interface MatchDayBoardRow extends ArbiterBoard {
   stage_id: string;
   round_no: number;
+  /** Why a held board is held (`fixture_external_play.needs_reason`): set by `readOnlineRounds` for a board in `on_hold`, null
+   *  otherwise. Absent on a board that came from a round's own `boards` (the loader carries no reason there). Needs you routes on it
+   *  (ruling MD-R2: a link hold, `lichess_unlinked` / `lichess_reconnect`, goes to the round panel's Open round, not the board's
+   *  decisions); the row's WORD never reads it (`boardRowWord`: a hold is a hold). */
+  hold_reason?: NeedsReason | null;
 }
 
 /** One row of the online block: one (division, stage, round) to show. */
