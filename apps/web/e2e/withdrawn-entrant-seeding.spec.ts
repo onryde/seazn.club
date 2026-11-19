@@ -122,14 +122,25 @@ async function seedToProposal(request: APIRequestContext, tag: string): Promise<
   return { divisionId, groupStageId, koStageId, entrants: entrants.data! };
 }
 
-async function proposalQualifierIds(request: APIRequestContext, koStageId: string): Promise<string[]> {
-  const proposal = await apiJson<{ computed: { qualifiers: { entrantId: string }[] } }>(
+interface ProposedSeat {
+  /** The bracket seed (seat number) the proposal gives her. */
+  rank: number;
+  entrantId: string;
+  source: { group?: string; rank: number };
+}
+
+async function proposalQualifiers(request: APIRequestContext, koStageId: string): Promise<ProposedSeat[]> {
+  const proposal = await apiJson<{ computed: { qualifiers: ProposedSeat[] } }>(
     request,
     `/api/v1/stages/${koStageId}/seed-proposal`,
     "POST",
   );
   expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
-  return proposal.data!.computed.qualifiers.map((q) => q.entrantId);
+  return proposal.data!.computed.qualifiers;
+}
+
+async function proposalQualifierIds(request: APIRequestContext, koStageId: string): Promise<string[]> {
+  return (await proposalQualifiers(request, koStageId)).map((q) => q.entrantId);
 }
 
 test("the seeding proposal screen does not offer a withdrawn qualifier", async ({
@@ -139,7 +150,8 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
   const rig = await seedToProposal(request, `${TAG}-ui`);
   const byId = new Map(rig.entrants.map((e) => [e.id, e.display_name]));
 
-  const before = await proposalQualifierIds(request, rig.koStageId);
+  const seatsBefore = await proposalQualifiers(request, rig.koStageId);
+  const before = seatsBefore.map((q) => q.entrantId);
   expect(before).toHaveLength(8);
   const departing = before[0]!;
   const departingName = byId.get(departing)!;
@@ -164,12 +176,14 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
   // Recompute on its null and stale branches only), which is precisely why
   // the status flip has to refresh the draft server-side.
   //
-  // RB4-V6 (W4 rulebook §5, OWNER 274): a departed qualifier from a TABLE
-  // source is replaced by the next-ranked eligible entrant of THAT table. Her
-  // table is her pool of 2, so her pool-mate — read off the rig's own group
-  // fixture, never off the proposal — is promoted, and the vacancy moves to
-  // the runners-up (a pool of 2 has nobody below the cut). Since W5 the
-  // promotion is a re-proposal over her table with her ranked last (below).
+  // RB4-V6 (W4 rulebook §5, OWNER 274) replaces a departed qualifier from a
+  // TABLE source with the next-ranked eligible entrant of that table - but
+  // only when somebody is below the cut. Here every pool is 2 and the cut
+  // takes 2, so her pool is an EXHAUSTED cut: W5 Task 11 fix round 3
+  // (eb2b12514f, `keepExhaustedSeatsDead`; RB4-E7/R6, RB4-S2) keeps her seat
+  // dead where her results earned it and leaves her pool-mate — read off the
+  // rig's own group fixture, never off the proposal — in his own seat. And
+  // she left after the table finished, so she is not re-ranked (RB5-L8).
   const groupFixtures = await apiJson<{ stage_id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>(
     request,
     `/api/v1/divisions/${rig.divisionId}/fixtures`,
@@ -190,19 +204,26 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
     els.map((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent?.trim() ?? ""),
   );
   expect(namesAfter).not.toContain(departingName);
-  // W5 (rulebook RB5-W1, OWNER 277; RB5-K6, OWNER S5): she stays in her pool's table RANKED LAST, and her departure stales the
-  // proposal, which is proposed again from the tables before the knockout starts. Her pool-mate is therefore now her pool's
-  // WINNER: he joins the winners' block (rank_order seats every pool's 1st before any pool's 2nd), and within it he comes last -
-  // he lost the pool's one match, 0 points against every other winner's 3. The runners-up keep their order without him. Neither the
-  // pre-W4 removal (her row dropped, nobody promoted) nor a whole-table reshuffle reads this way.
-  const [winnersBefore, runnersUpBefore] = [namesBefore.slice(0, 4), namesBefore.slice(4)];
-  expect(winnersBefore, "premise: she was a pool winner").toContain(departingName);
-  expect(runnersUpBefore, "premise: her pool-mate was its runner-up").toContain(mateName);
-  expect(namesAfter).toEqual([
-    ...winnersBefore.filter((n) => n !== departingName),
-    mateName!,
-    ...runnersUpBefore.filter((n) => n !== mateName),
-  ]);
+  // Her row is gone and every survivor keeps hers, in order.
+  expect(namesAfter).toEqual(namesBefore.filter((n) => n !== departingName));
+  // The panel's order alone cannot tell the dead seat from W4's promotion: with her pool first, her mate is the first runner-up,
+  // and both read the same list. The SEAT NUMBERS can. Her seat stays dead (nobody holds it) and her pool-mate keeps his own,
+  // as his pool's runner-up; a promotion would have moved him into hers, as his pool's winner.
+  const herSeat = seatsBefore[0]!;
+  const mateSeat = seatsBefore.find((q) => q.entrantId === mate);
+  expect(herSeat.source, "premise: she won her pool").toMatchObject({ rank: 1 });
+  expect(mateSeat?.source, "premise: her pool-mate was its runner-up").toMatchObject({ group: herSeat.source.group, rank: 2 });
+  const seatsAfter = await proposalQualifiers(request, rig.koStageId);
+  expect(seatsAfter, "seven seats proposed, hers not among them").toHaveLength(7);
+  expect(seatsAfter.filter((q) => q.rank === herSeat.rank), "her seat is dead: nobody holds it").toEqual([]);
+  expect(seatsAfter.find((q) => q.entrantId === mate), "her pool-mate keeps his own seat, as runner-up").toMatchObject({
+    rank: mateSeat!.rank,
+    source: { group: herSeat.source.group, rank: 2 },
+  });
+  // Every other survivor keeps the seat number the first proposal gave her.
+  const keptSeats = seatsBefore.filter((q) => q.entrantId !== departing).map((q) => [q.entrantId, q.rank]);
+  expect(keptSeats, "the comparison inspects the seven survivors").toHaveLength(7);
+  expect(seatsAfter.map((q) => [q.entrantId, q.rank])).toEqual(keptSeats);
 
   // …and she is not OFFERED either. The row that named her is gone, but every
   // remaining row's <select> lists candidates for its own slot, and that list
