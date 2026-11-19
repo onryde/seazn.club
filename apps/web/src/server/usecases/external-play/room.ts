@@ -54,7 +54,6 @@ import {
   roomPhaseWire,
   turnAfter,
   windowWire,
-  CAMERA_REPORT_STALE_MS,
   ROOM_BEING_REPAIRED,
   ROOM_SEAT_NO_ACCOUNT,
   type Colour,
@@ -81,7 +80,18 @@ import { createGameIfReady, type CreateOutcome } from "./create-game";
 import { onlineChessOffered, type OnlineChessAsker } from "./online-chess-flag";
 import { act, actAcceptance, playableGame, type PlayAction, type PlayResult } from "./play";
 import { fenAfter } from "@/server/external-play/fen";
-import { cameraTokenForSeat, isPlayableFixtureStatus, seatPlayer, storedPlayerParticipant, type CameraToken, type PreflightDeps, type SeatResult } from "./preflight";
+import { reportedCamera } from "./camera-reported";
+import {
+  cameraTokenForSeat,
+  isPlayableFixtureStatus,
+  seatPlayer,
+  seatReadCalls,
+  stayMintOf,
+  storedPlayerParticipant,
+  type CameraToken,
+  type PreflightDeps,
+  type SeatResult,
+} from "./preflight";
 import { currentBudgetKey } from "@/server/external-play/video/realtimekit";
 import { lichessGrantDowngraded } from "../external-accounts";
 import { RECONCILED_WHILE_HELD, reconcile } from "./reconcile";
@@ -314,7 +324,8 @@ async function settledWinner(fixtureId: string, afterSeq: number): Promise<strin
 /** D16 (§5.6.3): the opponent's camera as their OWN browser last reported it (the camera-report usecase writes it), judged
  *  on this server's clock. The opponent is in a meeting of their own, so nothing about it can be read from the viewer's -
  *  and nothing is read from the vendor: a DB read of one participant row, the opponent's, found by the one rule for whose
- *  participant is whose (storedPlayerParticipant, by `(fixture, side)` and person).
+ *  participant is whose (storedPlayerParticipant, by `(fixture, side)` and person) and judged by `reportedCamera`, the ONE reader of
+ *  the columns (camera-reported.ts, a leaf: this pill is the report's only PRESENTATION use, the seat's is a schedule).
  *    - fresh `live` / `off`: as reported;
  *    - no fresh report - none yet, a stale one, or no participant on file - `unknown`, never `off` and never hidden.
  *  A report is fresh while it is YOUNGER than CAMERA_REPORT_STALE_MS. An ENDED meeting reads nothing: its room is over. */
@@ -325,14 +336,7 @@ async function opponentCameraReport(
 ): Promise<"live" | "off" | "unknown"> {
   const participantId = await storedPlayerParticipant(sql, { fixtureId, side: opponent.side, personId: opponent.personId });
   if (participantId === null) return "unknown";
-  const [row] = await sql<{ state: string | null; at: Date | null }[]>`
-    select p.camera_reported as state, p.camera_reported_at as at
-      from fixture_video_participants p
-      join fixture_video_meetings m on m.fixture_id = p.fixture_id and m.side = p.side
-     where p.fixture_id = ${fixtureId} and p.side = ${opponent.side} and p.participant_id = ${participantId} and m.ended_at is null`;
-  if (!row || row.state === null || row.at === null) return "unknown";
-  if (now.getTime() - row.at.getTime() >= CAMERA_REPORT_STALE_MS) return "unknown";
-  return row.state === "live" ? "live" : row.state === "off" ? "off" : "unknown";
+  return (await reportedCamera(sql, { fixtureId, side: opponent.side, participantId, now })).state;
 }
 
 /** The room's phase for ONE viewer (spec §5.7.8): the window's own, held open by `judgePhase` for a protected player - and, then,
@@ -680,6 +684,9 @@ async function queueDeferred(r: Resolved, fixtureId: string, seat: SeatResult, d
     anchor,
     at: deps.line?.at,
     arrival: now,
+    // The stay's price, as `passTheLine` hands it (a stay this deferral STARTS is stamped by it; a stay already priced keeps its stamp).
+    mint: await stayMintOf(sql, { fixtureId, side: r.player.side, personId: r.player.personId }),
+    readCalls: seatReadCalls(),
   });
   return answer.kind === "queued"
     ? { seated: false, reason: "queued", participant: null, line: answer.line }

@@ -46,9 +46,16 @@ describe.skipIf(!DB)("the gate's lock is the two-key lock (test 38 (a))", () => 
   it("with the gate paused inside its transaction, a second connection finds exactly ONE advisory lock of the gate: classid = hashtext('rtk-line'), objid = hashtext(budget key), objsubid = 2 (the two-integer form)", async () => {
     configureRealtimeKit();
     const key = stubBucket();
+    // The gate's key space is shared: a parallel test file's seat claim holds a lock there on ITS OWN budget key, and counting the whole
+    // class once read 2. So the snapshot is keyed by this test's budget key too, and a lock on ANOTHER key, held by another backend for the
+    // whole measurement, stands in for that neighbour here every run (the witness below shows it was in the class, and not counted).
+    const neighbour = await sql.reserve();
+    const otherKey = `${key}|neighbour`;
+    await neighbour`select pg_advisory_lock(hashtext('rtk-line'), hashtext(${otherKey}))`;
     try {
       const board = await sceneBoard();
       let found: { classid: number; objid: number; objsubid: number; mine: number }[] = [];
+      let inClass = 0;
       let expected: { c: number; o: number } | null = null;
       await setBucket(key, 1000, sceneAt(0));
       await claimAt(key, board, "home", sceneAt(0), {
@@ -60,16 +67,25 @@ describe.skipIf(!DB)("the gate's lock is the two-key lock (test 38 (a))", () => 
             select l.classid::bigint as classid, l.objid::bigint as objid, l.objsubid,
                    (select count(*)::int from pg_locks m where m.pid = l.pid and m.locktype = 'advisory') as mine
               from pg_locks l
-             where l.locktype = 'advisory' and l.granted and l.classid::bigint = (hashtext('rtk-line')::bigint & 4294967295)`;
+             where l.locktype = 'advisory' and l.granted and l.classid::bigint = (hashtext('rtk-line')::bigint & 4294967295)
+               and l.objid::bigint = (hashtext(${key})::bigint & 4294967295)`;
+          inClass = (
+            await sql<{ n: number }[]>`
+              select count(*)::int as n from pg_locks l
+               where l.locktype = 'advisory' and l.granted and l.classid::bigint = (hashtext('rtk-line')::bigint & 4294967295)`
+          )[0]!.n;
         },
       });
       expect(expected, "premise: the expected hashes were computed").not.toBeNull();
-      expect(found.length, "locks found in the gate's key space: exactly 1, and zero is a failure").toBe(1);
+      expect(inClass, "premise: the neighbour's lock and the gate's were both in the class while the gate held its own").toBeGreaterThanOrEqual(2);
+      expect(found.length, "locks found in the gate's key space on THIS budget key: exactly 1, and zero is a failure").toBe(1);
       expect(Number(found[0]!.classid)).toBe(Number(expected!.c));
       expect(Number(found[0]!.objid)).toBe(Number(expected!.o));
       expect(found[0]!.objsubid, "the two-integer form").toBe(2);
       expect(found[0]!.mine, "and the gate's backend holds no other advisory lock").toBe(1);
     } finally {
+      await neighbour`select pg_advisory_unlock(hashtext('rtk-line'), hashtext(${otherKey}))`;
+      neighbour.release();
       await clearBucket(key);
     }
   });

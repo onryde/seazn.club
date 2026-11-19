@@ -117,9 +117,9 @@ type Board = { f: OnlinePlayFixture; seats: [InviteSeat, InviteSeat] };
 type Tx = postgres.TransactionSql | postgres.Sql;
 
 /** D16 review G1: retire the video meetings of these boards in the open's transaction - BOTH players' rows, by board on purpose
- *  (allow-listed in the source guard). EVERY row is MARKED first (RETIRED_PAIR), ended or not; then the ENDED ones are
- *  deleted (no room is left upstream; their participants cascade), and the boards whose rows were still ACTIVE when they
- *  were marked are returned for the caller to end after the commit (retireStaleMeeting). The order is the point (D16 fix-2
+ *  (allow-listed in the source guard). EVERY row is MARKED first (RETIRED_PAIR), ended or not (but see `mode`: a re-open
+ *  keeps some); then the ENDED ones are deleted (no room is left upstream; their participants cascade), and the boards whose
+ *  rows were still ACTIVE when they were marked are returned for the caller to end after the commit (retireStaleMeeting). The order is the point (D16 fix-2
  *  R1): the old shape deleted the ended rows and THEN marked the active ones, and under READ COMMITTED a room ended
  *  between the two statements was missed by both - not deleted, not marked, left on the old pairing, and the same-pair
  *  claim that followed was refused VIDEO_MEETING_ENDED for ever. Marking first takes the row whatever happens to it next;
@@ -128,19 +128,97 @@ type Tx = postgres.TransactionSql | postgres.Sql;
  *  call and cannot happen inside this transaction. A board a game IS or MAY BE on file behind keeps its meeting, unmarked -
  *  the camera evidence of that game (N-2; gameEvidenceOn, the one rule ensureMeeting keeps too). The re-arm's boards are
  *  game-less by their own selection (a finished bridge with no challenge, no create marker, no move), so the same clause
- *  spares nothing there. */
-async function retireBoardsMeetings(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<string[]> {
+ *  spares nothing there.
+ *
+ *  `mode` is who is asking, and only the re-open spares by pairing (check-in capacity, spec §11):
+ *  - `"first"` (the round's FIRST open; plan 2 Task 8, batch-3 review I1): marks nothing and retires nothing - an unended room of a
+ *    board that has never been opened is the pre-mint job's, current or unadopted, and a stale-paired one is the claim's to retire -
+ *    but DELETES the ENDED rows, as a re-open does, through the same delete below. With the pre-mint job a room can be ended before
+ *    the first open (the sweep's teardown of a decided board, `endRoomAtResult` at a result) and the decision then undone; an ended
+ *    row left on file refuses every claim VIDEO_MEETING_ENDED, and nothing would ever clear it, so the board could never check in.
+ *  - `"reinvite"` (an open into a window that is already RUNNING: a board that was decided at the first open - so it was no part of
+ *    `ids` then and its ended room was never deleted - and has since been undone is invited now): the same as `"first"`. Without it the
+ *    undone board's ENDED row refuses every claim VIDEO_MEETING_ENDED, because a re-invite retires nothing. Its `ids` are the round's
+ *    PLAYABLE boards, whose rooms are ended only by a result that was undone, so the delete takes nothing a live board needs.
+ *  - `"reopen"` (the organiser's re-open, a fresh window for a round nobody was invited into): an UNENDED room that is
+ *    unadopted (both stamps null: the pre-mint job's room for a board with no pairing yet) or stamped for the fixture's
+ *    CURRENT pairing is kept, unmarked - it is a room this window needs, made before anyone checked in, and retiring it would
+ *    make the first claim of every player pay for another. Only an EARLIER pairing's room is retired. An ENDED room is never
+ *    kept, whatever it names (spared, it would refuse every later claim VIDEO_MEETING_ENDED): the delete below takes it.
+ *  - `"rearm"` (D17, a board replayed after its bridge finished with no game): every room of the board without a game, stamped
+ *    for what it likes. The replay's bridge row is made afresh, and nobody ruled that a room carrying the old attempt's
+ *    `last_publisher_seen_at` and seat cache may carry into it. A re-stamp that re-arms a board runs both: the re-open's call
+ *    keeps its current-pairing rooms, and the re-arm's call, after it, takes what that kept.
+ *
+ *  `is not distinct from`, not `=`: defensive, unreachable via openRound (it only passes boards it has just read paired, under
+ *  the division lock), and unpinned by any test. With `=` a fixture with no pairing reads NULL against a stamp, and `not NULL`
+ *  would KEEP the room of a pairing that is gone. */
+async function retireBoardsMeetings(
+  tx: Tx,
+  fixtureIds: readonly string[],
+  now: Date,
+  mode: "first" | "reinvite" | "reopen" | "rearm",
+): Promise<string[]> {
   if (fixtureIds.length === 0) return [];
   const spare = tx`and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
-  const marked = await tx<{ fixture_id: string; ended_at: Date | null }[]>`
-    update fixture_video_meetings m
-       set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
-     where m.fixture_id in ${tx(fixtureIds as string[])} ${spare}
-    returning m.fixture_id, m.ended_at`;
+  const keepCurrent =
+    mode === "reopen"
+      ? tx`and not (m.home_entrant_id is null
+             or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))`
+      : tx``;
+  const marked =
+    mode === "first" || mode === "reinvite"
+      ? []
+      : await tx<{ fixture_id: string; ended_at: Date | null }[]>`
+          update fixture_video_meetings m
+             set home_entrant_id = ${RETIRED_PAIR}, away_entrant_id = ${RETIRED_PAIR}
+            from fixtures f
+           where f.id = m.fixture_id and m.fixture_id in ${tx(fixtureIds as string[])} ${spare} ${keepCurrent}
+          returning m.fixture_id, m.ended_at`;
   await tx`
     delete from fixture_video_meetings m
      where m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is not null ${spare}`;
+  if (mode === "reopen") await resetKeptSeats(tx, fixtureIds, now);
   return [...new Set(marked.filter((r) => r.ended_at === null).map((r) => r.fixture_id))];
+}
+
+/** Check-in capacity plan 2 Task 6 (batch-3 review m2): a re-open KEEPS the current pairing's rooms, and with them the participants
+ *  seated in them. What those participants carry from the LAST window, written by the SEAT, is a verdict or a schedule, and a new
+ *  window must not inherit either:
+ *  - `last_publisher_seen_at`: the pass the re-verify (`recheck`) trusts for SEAT_RECHECK_TRUST_MS, and what turns a refused camera
+ *    into `camera_lost` rather than `camera_required`;
+ *  - `seat_reads`, `seat_read_at`, `seat_read_state`, `seat_read_since`: the read back-off schedule and the not-yet verdict it caches;
+ *  - `presence_fallback_from`: the no-presence fallback's clock, which the seat stored (the clock is recomputed from the page's own
+ *    instants at the next claim, so what carries is only what the seat once wrote).
+ *  Reset here, in the re-open's own transaction, rather than judged against the window's `opened_at` at every reader: there are five
+ *  readers of these columns (the seat's judge, its read slot, its cache, the recheck and the clock), each would owe the comparison, and
+ *  one forgotten is a stale proof that seats a player or refuses one. NOT reset, because they are the PAGE's and the page is still the
+ *  same page: `token_issued_at` (which token it holds) and the browser's own report (`camera_reported*`, `camera_live_first_at`: what its
+ *  camera says and since when - the camera-report writer's columns, which only that writer and its reader name, source guard rule 2).
+ *  The presence rows are the vendor's own facts about who is in the room, which a re-open does not change.
+ *  The kept room's OPEN guard fault (guard-faults.ts) is closed too, at the re-open's clock (PR-2 whole review m4): while one is open the
+ *  opponent's room shows no presence pill and the seat's next stamp is `open_already`, so an interval the last window opened and never
+ *  closed would carry both into this one. A fault stamped after that clock is closed at its own start (the interval check refuses an end
+ *  before the start, which would fail the whole re-open). Closed faults stay: they are history, and the per-seat stamp cap counts them.
+ *  Only the rooms this call KEPT are reset: an unended room that is unadopted or stamped for the current pairing, with no game behind it
+ *  (a board a game stands behind is left exactly as it was). A retired room's participants go with it. A re-arm keeps nothing. */
+async function resetKeptSeats(tx: Tx, fixtureIds: readonly string[], now: Date): Promise<void> {
+  const kept = tx`m.fixture_id in ${tx(fixtureIds as string[])} and m.ended_at is null
+       and (m.home_entrant_id is null or (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id))
+       and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
+  await tx`
+    update fixture_video_participants vp
+       set seat_reads = 0, seat_read_at = null, seat_read_state = null, seat_read_since = null,
+           last_publisher_seen_at = null, presence_fallback_from = null
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where vp.fixture_id = m.fixture_id and vp.side = m.side and vp.preset = 'player' and ${kept}`;
+  await tx`
+    update fixture_video_guard_faults gf
+       set ended_at = greatest(${now}, gf.started_at)
+      from fixture_video_meetings m
+      join fixtures f on f.id = m.fixture_id
+     where gf.fixture_id = m.fixture_id and gf.side = m.side and gf.ended_at is null and ${kept}`;
 }
 
 
@@ -386,6 +464,7 @@ export async function openRound(
         returning id, opened_at as "roundOpenedAt", opened_by as "openedBy", staggered`;
       open = row!;
       kind = "opened";
+      await retireBoardsMeetings(tx, ids, now, "first");
     } else if (pending.length === 0) {
       return { kind: "nothing", skipped: [] };
     } else if (!anyInvited || !otherBoundStillPlayable) {
@@ -402,11 +481,13 @@ export async function openRound(
       // N-2: the meetings of the last window's pairing. A board a game IS or MAY BE on file behind keeps its
       // meeting — the camera evidence of that game: a recorded challenge, a sent create (T9's marker), or a LIVE mint
       // claim (T9 in flight, before its marker; R2-3) — gameEvidenceOn, the one rule ensureMeeting keeps too. Every
-      // other board's meeting goes, with its participants: players who checked in through the lobby inside the old
-      // window are kicked too, because the window starts now for everyone. Only the still-active meetings are ended
-      // at RealtimeKit, after the commit. D16: a board has a meeting PER PLAYER and this deletes BY BOARD on purpose -
-      // both rows go, and every one returned is ended below, not the first (allow-listed in the source guard).
-      retireBoards = await retireBoardsMeetings(tx, ids, now);
+      // other board's meeting of an EARLIER pairing, and every ended one, goes, with its participants. A room kept because it is
+      // the board's CURRENT pairing's (or unadopted: the pre-mint job's, check-in capacity spec §11) keeps its participants
+      // seated too: nobody in it is kicked, a lobby check-in into it included, not only the pre-mint job's empty rooms. Only
+      // the still-active meetings that are retired are ended at RealtimeKit, after the commit. D16: a board has a
+      // meeting PER PLAYER and this deletes BY BOARD on purpose - every row it takes goes, and every one returned is ended
+      // below, not the first (allow-listed in the source guard).
+      retireBoards = await retireBoardsMeetings(tx, ids, now, "reopen");
       // Spec §3.2.2: the window starts now for everyone, so time an arbiter added to the LAST window is not carried into it.
       // A board a game is or may be on file behind keeps its row as it was (its expiry and expected end were set from the
       // deadline it ran on). `is not true`, not `not`: on a fresh 'pending' row with no mint claim the evidence predicate is NULL
@@ -417,6 +498,9 @@ export async function openRound(
     } else {
       open = existing;
       kind = "reinvited";
+      // The ENDED rows of the round's playable boards go (check-in capacity plan 2 Task 8, the first-open gap): a board decided at
+      // the first open kept its ended room, and its undo lands HERE, a path that used to retire nothing.
+      await retireBoardsMeetings(tx, ids, now, "reinvite");
     }
 
     // Each board's place in its round (spec §3.2.1): its zero-based rank among EVERY fixture row, ordered `(seq_in_round,
@@ -473,7 +557,7 @@ export async function openRound(
     const refusedIds = new Set(closedSkips.map((s) => s.fixtureId));
     const rearmedIds = [...rearmed].filter((id) => !refusedIds.has(id));
     if (rearmedIds.length > 0) {
-      retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now)));
+      retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now, "rearm")));
       if (kind === "reinvited") {
         for (const r of await tx<{ id: string; extraMs: number; extensions: number }[]>`
           select fixture_id as id, checkin_extra_ms as "extraMs", checkin_extensions as extensions

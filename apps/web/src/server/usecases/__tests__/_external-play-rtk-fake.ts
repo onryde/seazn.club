@@ -8,6 +8,7 @@ import { vi } from "vitest";
 import {
   addParticipant,
   ensureMeeting,
+  peerReportCamera,
   refreshParticipantToken,
   seatCameraEvidence,
 } from "@/server/external-play/video/realtimekit";
@@ -161,6 +162,10 @@ export function fakeRealtimeKit(opts: { budget?: CallBudget } = {}) {
       adapter.push("seatCameraEvidence");
       return seatCameraEvidence(a, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
     },
+    peerReportCamera: (peerId) => {
+      adapter.push("peerReportCamera");
+      return peerReportCamera(peerId, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
+    },
     refreshParticipantToken: (a) => {
       adapter.push("refreshParticipantToken");
       return refreshParticipantToken(a, { fetch, ...(opts.budget ? { budget: opts.budget } : {}) });
@@ -169,6 +174,8 @@ export function fakeRealtimeKit(opts: { budget?: CallBudget } = {}) {
 
   return {
     video,
+    /** The in-memory transport itself, for a test that runs another adapter function (the pre-mint pass, `endMeeting`) against the same vendor. */
+    fetch,
     http,
     adapter,
     participants,

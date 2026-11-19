@@ -42,7 +42,7 @@ import { claimRoomSeat } from "../external-play/room";
 import { seatPlayer, SEAT_RECHECK_TRUST_MS, type SeatResult } from "../external-play/preflight";
 import { STRANDED_CREATE_AFTER_MS, __retryCandidates, sweepExternalPlay } from "../external-play/sweep";
 import { stampFixtureCheckIn } from "../me";
-import { seedOnlineChessFixture } from "./_external-play-seed";
+import { NO_PRUNE, seedOnlineChessFixture } from "./_external-play-seed";
 
 const DB = !!process.env.DATABASE_URL;
 
@@ -141,6 +141,7 @@ async function checkIn(s: Seeded, side: Side, deps: Parameters<typeof claimRoomS
 
 const sweepNow = (s: Seeded, afterMs: number) =>
   sweepExternalPlay({
+    ...NO_PRUNE,
     now: new Date(Date.now() + afterMs),
     orgIds: [s.orgId],
     serialise: false,

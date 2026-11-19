@@ -19,7 +19,7 @@ import {
   DEADLINE_AFTER_MS,
   boardAnchor as realBoardAnchor,
 } from "@/server/external-play/window";
-import { seedOnlineChessRoundWithRankedBoard } from "./_external-play-seed";
+import { NO_PRUNE, seedOnlineChessRoundWithRankedBoard } from "./_external-play-seed";
 import { configureRealtimeKit, fakeRealtimeKit } from "./_external-play-rtk-fake";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -200,7 +200,7 @@ describe.skipIf(!HAS_DB)("every reader follows the mocked gap (capacity tests 2 
       const deadline = startOf(2, g).getTime() + DEADLINE_AFTER_MS;
       const forfeited = async () =>
         (await sql<{ status: string }[]>`select status from fixtures where id = ${r.ranked.fixtureId}`)[0]!.status === "forfeited";
-      const report = await sweepExternalPlay({ now, orgIds: [r.orgId] });
+      const report = await sweepExternalPlay({ ...NO_PRUNE, now, orgIds: [r.orgId], serialise: false });
       // The first board of the round (batch 0, nobody came) is forfeited at this `now` under either gap: the sweep ran.
       const first = (await sql<{ status: string }[]>`select status from fixtures where id = ${r.boards[0]!.fixtureId}`)[0]!.status;
       expect(first, `gap ${g}: premise - the sweep forfeited batch 0 at this now`).toBe("forfeited");

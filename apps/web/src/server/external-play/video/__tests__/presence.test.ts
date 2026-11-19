@@ -486,7 +486,9 @@ describe.skipIf(!DB)("applyPresenceEvent", () => {
     // batch-1 T5 M5. Rows a repeat can still reach: a read hint of the session written after the first end (reads take no lock and
     // stay open), and a null-session peer that joined between the two stamps. Expected, typed from the rule: the recorded end is
     // the first applied; every closed row's left_at equals it; the null-session peer is closed only if it joined at or before it.
-    const held = { fixtureId: randomUUID(), side: "home" as const };
+    // A REAL board's fixture, not a random uuid: the read writer (recordPresenceFromRead) now takes KEY SHARE on the held board's fixture
+    // row and writes nothing for one that is gone (plan 2 Task 6), and this meeting is held through its presence rows' fixture_id.
+    const held = { fixtureId: (await board()).fixtureId, side: "home" as const };
     const E1 = at(100 * SEC);
     const E2 = at(200 * SEC);
     let closedChecked = 0;
@@ -885,6 +887,72 @@ describe.skipIf(!DB)("currentPresence / everJoined / peersOf / recordPresenceFro
     const first = await rowOf(b.homeMeeting, readFirst);
     await recordPresenceFromRead(sql, { ...ids(b), peerId: readFirst, sessionId: "s2", joinedAt: at(9 * SEC) }, at(30 * SEC));
     expect(await rowOf(b.homeMeeting, readFirst)).toEqual(first);
+  });
+
+  // Plan 2 Task 6 (carry from the batch-2 review I1): the read writer takes the same KEY SHARE on the board's fixture row as the
+  // receiver (webhook.ts step 4). A deleted fixture's meeting is still HELD through the room its delete parked (V460), so without it a
+  // read after the delete re-inserts a person UUID the delete's trigger purged.
+  it("recordPresenceFromRead after the board's fixture is DELETED writes no row (the meeting is still held through its parked room); a live board's read still writes (the positive pair)", async () => {
+    const b = await board();
+    const live = await board();
+    const p = peer();
+    const q = peer();
+    await sql`delete from fixtures where id = ${b.fixtureId}`;
+    parkedMade.push(b.homeMeeting, b.awayMeeting);
+    expect((await sql`select 1 from fixtures where id = ${b.fixtureId}`).length, "premise: the fixture is gone").toBe(0);
+    const [parked] = await sql<{ fixture_id: string }[]>`select fixture_id from video_rooms_to_end where meeting_id = ${b.homeMeeting}`;
+    expect(parked?.fixture_id, "premise: the delete PARKED the room (V460), so the meeting is still held and names the deleted fixture").toBe(b.fixtureId);
+    expect((await heldMeeting(sql, b.homeMeeting))?.fixtureId, "premise: heldMeeting still answers for it").toBe(b.fixtureId);
+
+    await recordPresenceFromRead(sql, { ...ids(b), peerId: p, sessionId: "sess-d", joinedAt: at(SEC) }, at(2 * SEC));
+    expect(await rowsOf(b.homeMeeting), "no person id re-enters the sealed table after its board is gone").toHaveLength(0);
+
+    await recordPresenceFromRead(sql, { ...ids(live), peerId: q, sessionId: "sess-l", joinedAt: at(SEC) }, at(2 * SEC));
+    expect(await rowsOf(live.homeMeeting), "a board that still exists is written").toHaveLength(1);
+  });
+
+  it("a fixture delete WAITS on a read writer that holds the fixture, then its trigger purges the row the writer committed (two connections)", async () => {
+    const b = await board();
+    parkedMade.push(b.homeMeeting, b.awayMeeting);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let heldPid!: (pid: number) => void;
+    const pidP = new Promise<number>((r) => (heldPid = r));
+    // The writer, inside the caller's transaction (as the receiver's apply runs): held open AFTER its write.
+    const writer = sql.begin(async (tx) => {
+      await recordPresenceFromRead(tx, { ...ids(b), peerId: peer(), sessionId: "sess-w", joinedAt: at(SEC) }, at(2 * SEC));
+      const [r] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      heldPid(r!.pid);
+      await gate;
+    });
+    const pid = await pidP;
+    let deleted = false;
+    const del = (async () => {
+      await sql`delete from fixtures where id = ${b.fixtureId}`;
+      deleted = true;
+    })();
+    let waiting = 0;
+    for (let i = 0; i < 100 && waiting === 0; i++) {
+      const [r] = await sql<{ n: number }[]>`select count(*)::int as n from pg_locks where not granted and ${pid} = any(pg_blocking_pids(pid))`;
+      waiting = r!.n;
+      if (waiting === 0) await new Promise((res) => setTimeout(res, 50));
+    }
+    expect(waiting, "the fixture delete waits on the read writer's key-share lock").toBeGreaterThan(0);
+    expect(deleted).toBe(false);
+    release();
+    await writer;
+    await del;
+    expect(deleted).toBe(true);
+    expect(await rowsOf(b.homeMeeting), "the delete ran after the writer committed, so its trigger saw and purged the row").toHaveLength(0);
+  });
+
+  it("a read for a meeting held NOWHERE still writes its row with no board (unchanged: the lock needs a board to lock)", async () => {
+    const b = await board();
+    const nowhere = `mtg-nowhere-${randomUUID().slice(0, 8)}`;
+    track(nowhere);
+    const p = peer();
+    await recordPresenceFromRead(sql, { meetingId: nowhere, participantId: b.homeParticipant, customParticipantId: b.home.personId, peerId: p, sessionId: null, joinedAt: at(SEC) }, at(2 * SEC));
+    expect(await rowOf(nowhere, p)).toMatchObject({ source: "read", fixture_id: null, side: null });
   });
 
   it("everJoined: false with no row; true for an open row, a closed row, a read row, and a null-participant row matched by custom id (4 trues counted)", async () => {

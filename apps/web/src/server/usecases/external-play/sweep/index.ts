@@ -9,9 +9,17 @@
 //   teardown.ts         job 3 (meeting teardown) and job 3b (parked rooms, V460)
 //   reconcile.ts        job 4: the reconcile sweep (back-off, the no-truth hold, expectedEndAt)
 //   camera-evidence.ts  job 5: the camera evidence after the match
-//   arbiter-revoke.ts   job 6: the arbiter watches the server removes
+//   arbiter-revoke.ts   job 6: the arbiter watches the server removes - split (check-in capacity R5) into `arbiter_revocation`,
+//                       the pass's FIRST job (the safeguarding arms), and `arbiter_revoke` (the TTL and ended-room arms)
 //   run.ts              the pass: the one-pass-at-a-time lock, runPass, sweepExternalPlay
-export { SWEEP_JOBS, SWEEP_PASS_BUDGET_MS, SWEEP_SETTLING_READS_PER_PASS, SWEEP_RECONCILE_BUDGET_MS, playableWindow } from "./pass";
+export {
+  SWEEP_JOBS,
+  SWEEP_PASS_BUDGET_MS,
+  SWEEP_RTK_CALLS_PER_PASS,
+  SWEEP_SETTLING_READS_PER_PASS,
+  SWEEP_RECONCILE_BUDGET_MS,
+  playableWindow,
+} from "./pass";
 export type { SweepJob, SweepReport, SweepDeps, ParkedRoom } from "./pass";
 export { NO_SHOW_REFUSALS_BEFORE_HOLD } from "./no-show";
 export { STRANDED_CREATE_AFTER_MS, __retryCandidates, throttledRetryAt } from "./mint-retry";

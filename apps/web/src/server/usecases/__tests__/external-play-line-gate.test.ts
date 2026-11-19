@@ -6,7 +6,7 @@
 // Single sport, deliberately: the gate does not know a sport, and online play exists for `boardgame` only (guard.ts).
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
-import { LINE_RECHECK_COST, LINE_RESERVATION } from "@/server/external-play/seat-line";
+import { LINE_FALLBACK_READ_CALLS, LINE_RESERVATION_MAX, lineRecheckCost } from "@/server/external-play/seat-line";
 import { SEAT_RECHECK_TRUST_MS, seatPlayer } from "../external-play/preflight";
 import { CAMERA_ON_EVENTS } from "./_external-play-rtk-fake";
 import { claimAt, holdWaiting, stayRow } from "./_external-play-line";
@@ -26,8 +26,9 @@ import {
 import { boardAnchor } from "@/server/external-play/window";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
-const R = LINE_RECHECK_COST;
+/** A stay priced at the unpriced maximum, its re-verify the full read (`askOf`'s default; a seeded row has no stamp). */
+const L = LINE_RESERVATION_MAX;
+const R = lineRecheckCost(LINE_FALLBACK_READ_CALLS);
 const ANCHOR = boardAnchor(OPENED, 0, false);
 
 afterEach(dropWorlds);
@@ -51,7 +52,7 @@ describe.skipIf(!DB)("service ends after the create, under the window (test 16)"
     // A stay WAITING behind HOME (it arrived later), so the line is active when HOME's read comes.
     const waiter = await holdWaiting(w.key, new Date(t1.getTime() + 2 * SEC), new Date(t1.getTime() + 3 * SEC));
 
-    // The bucket holds 2 x LINE_RESERVATION once the seat read and its token (4 requests) have been spent.
+    // The bucket holds 2 x L once the seat read and its token (4 requests) have been spent.
     const t2 = new Date(t1.getTime() + 3 * SEC);
     const seatReadCost = 4;
     await fund(w.key, 2 * L + seatReadCost);
@@ -90,7 +91,7 @@ describe.skipIf(!DB)("service ends after the create, under the window (test 16)"
     expect(inside.waiterAdmitted, "no admission").toBeNull();
     expect(inside.callsDuringPoll, "the held poll made no vendor request").toBe(0);
     expect(inside.recheck, "the re-verify finds its tokens and the camera").toBe(true);
-    expect(inside.recheckCalls, "the re-verify costs LINE_RECHECK_COST").toBe(R);
+    expect(inside.recheckCalls, "the re-verify costs lineRecheckCost(LINE_FALLBACK_READ_CALLS)").toBe(R);
     expect((await stayRow(b.fixtureId, b.home.personId))?.served_at, "served only after the whole claim").not.toBeNull();
   }, 60_000);
 });

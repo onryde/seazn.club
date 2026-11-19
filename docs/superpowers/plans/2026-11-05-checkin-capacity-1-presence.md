@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-05-checkin-capacity-design.md` (sections 3, 6.2, 6.8 steps 0 to 3). Read it first; this plan argues from it.
 
-> **Revised 2026-11-17** against origin/main 59c72dd361: migration V492 → V527 (siblings V528/V529), seed/pacing/env helpers and line numbers re-pinned, the root-script entry check moved to `isMainModule`, the staging key check moved under vitest (`server-only` is not installable outside Next/vitest), the walkthrough's base and insertion point re-pinned, and the missing commit wrapper replaced. Details in "Revision notes" at the end.
+> **Revised 2026-11-17** against origin/main 59c72dd361: migration V492 → V527 (siblings V528/V529; V529/V530 since 2026-11-18, when main's lots-draw index fix took V528), seed/pacing/env helpers and line numbers re-pinned, the root-script entry check moved to `isMainModule`, the staging key check moved under vitest (`server-only` is not installable outside Next/vitest), the walkthrough's base and insertion point re-pinned, and the missing commit wrapper replaced. Details in "Revision notes" at the end.
 >
 > **Review fixes 2026-11-17** (review `.superpowers/sdd/2026-11-17-checkin-capacity-review/plan-1.md`, owner rulings R4 and R7): the shadow report is two-sided and scoped; `currentPresence` has a deterministic tie-break and trusts a `source='read'` row only briefly; a third sealed table records ended sessions; deliveries are bound to meetings we hold; the key floor answers 503, not 401; retention, a smoke suite and the load harness's webhook knob are new tasks (10a–10c); and the rollout gate is a STAGING run against real RealtimeKit (Task 12 step 5), with the fixture-vendor load run kept as a local pre-check only. Every finding is mapped in "Review fixes 2026-11-17" at the end.
 
@@ -19,7 +19,7 @@
 ## Global Constraints
 
 - Every new table is SEALED exactly like V460 `video_rooms_to_end`: `enable row level security`, `force row level security`, no policy, no grant; the sealed catalog test `apps/web/src/server/usecases/__tests__/online-chess-video-schema.test.ts` gains all three names. Neither table carries `org_id`, so `scripts/rls-exempt.ts` is untouched.
-- Migrations are numbered by the next `V` after the highest file in `db/migration/deltas` at the moment of writing: V526 (`V526__pricing_recut_fees_credits_stream_cap.sql`) is the highest on origin/main 59c72dd361 (2026-11-17), so this plan's is V527 (plan 2's V528, plan 3's V529); the file header says "renumber at merge if main has moved", as V460's does.
+- Migrations are numbered by the next `V` after the highest file in `db/migration/deltas` at the moment of writing: V526 (`V526__pricing_recut_fees_credits_stream_cap.sql`) is the highest on origin/main 59c72dd361 (2026-11-17), so this plan's is V527 (plan 2's V529 and plan 3's V530 since 2026-11-18, when main's lots-draw index fix took V528); the file header says "renumber at merge if main has moved", as V460's does.
 - The load harness (rollout step 2 and every later measurement) is `apps/web/e2e/load/chess-30-boards.load.ts` with `apps/web/e2e/load/line-load.ts`, its scenarios `B`, `B-honest`, `B-slow-*`, `B-dry`, `B-end`, run metered (`LOAD_METERED=1`, the server with `REALTIMEKIT_METER_ANY_BASE=1`); its header is the runbook. From Task 10c on, `LOAD_WEBHOOKS=1` makes its fixture deliver webhooks to the server under test; unset (Task 11's baseline) it delivers none. Every run that measures presence (Task 12 step 4, plan 2's final run) sets it, and the harness fails a run that set it and delivered zero.
 - No token, key or secret is ever written to disk or committed. The fixture's key pair lives in process memory only.
 - **A delivery is ours only if it names a meeting we hold.** Cloudflare's key URL names no account or app, so every RealtimeKit customer's events verify against the same key, and staging and production may share one app. After verification and parsing, an event applies only when its `meeting.id` is in `fixture_video_meetings`, in `video_rooms_to_end` (a room a re-pair parked), or already has a `fixture_video_presence` row (so a `meeting.ended` that arrives after the sweep ended a parked room and deleted its parking row still closes our rows). Any other meeting is answered `200 ignored` and writes NOTHING, not even a delivery row: a third party can never make the public route insert.
@@ -454,7 +454,7 @@ export async function heldMeeting(db: AnySql, meetingId: string): Promise<{ fixt
 /** The participant a custom id names in a meeting, through the meeting row's (fixture_id, side): a player's row where `person_id::text =
  *  customParticipantId` (preset 'player'); else an arbiter's row where `user_id::text = split_part(customParticipantId, ':', 1)` (preset
  *  'arbiter', removed_at null): an arbiter's subject is the user id, a colon and a nonce (arbiter.ts mintArbiter, kept by plan 3), so the
- *  prefix is the match; when that user has more than one live arbiter row in the meeting (one per open tab until plan 3's V529 makes the
+ *  prefix is the match; when that user has more than one live arbiter row in the meeting (one per open tab until plan 3's V530 makes the
  *  pair unique) the newest wins: `order by created_at desc limit 1` (V451 line 280). null when neither. */
 export async function resolveParticipant(db: AnySql, a: { meetingId: string; customParticipantId: string }): Promise<string | null>;
 /** Applies one event; the result depends only on the SET of events applied, never their order or repeats (property in the tests).
@@ -924,7 +924,7 @@ Every repo path, symbol, signature and line number the plan cites was re-opened 
 
 Changes:
 
-1. **Migration number.** Global Constraints "V491 is the highest … V492 (plan 2's V493, plan 3's V494)" → "V526 … V527 (V528, V529)"; Task 2's file `V492__video_presence.sql` → `V527__video_presence.sql`; Task 5's "plan 3's V494" → "V529". Why: main reached V526 (`V526__pricing_recut_fees_credits_stream_cap.sql`).
+1. **Migration number.** Global Constraints "V491 is the highest … V492 (plan 2's V493, plan 3's V494)" → "V526 … V527 (V528, V529)"; Task 2's file `V492__video_presence.sql` → `V527__video_presence.sql`; Task 5's "plan 3's V494" → "V529" (V530 since 2026-11-18). Why: main reached V526 (`V526__pricing_recut_fees_credits_stream_cap.sql`).
 2. **Commit wrapper.** Global Constraints `~/.claude/tools/github-safe.sh commit …` → plain pathspec-limited `git commit` on a worktree branch. Why: the wrapper does not exist on this workstation (no `~/.claude/tools`), and no repo doc names it.
 3. **Fixture `reset()` return type** (Task 1 Interfaces). Made explicit: `void` → `Promise<void>`, because the plan's own "reset() … awaits the in-flight deliveries" cannot be done synchronously. Existing un-awaited callers need no edit (no `webhooks`, no floating-promise lint). The one interface shape change in this plan; siblings that call `fx.reset()` are unaffected.
 4. **Task 1 test import and `mint`.** `"<relative path …>"` → `"../../../../e2e/realtimekit-fixture-server"` (the contract test's path); `mint` now posts under `fx.kitPath`. Why: a path outside `kitPath` gets the fixture's gateway 404.

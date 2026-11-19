@@ -33,6 +33,11 @@ export type SwissShellFixtureRef = {
 /** A bye shell's ext_key, exactly as `planSwissShells` mints it. */
 const SWISS_BYE_SHELL_EXT_KEY = /^sw-r\d+-bye$/;
 
+/** The bye-shell pattern's SOURCE, for a SQL `~` (Postgres's regex reads `\d` and the anchors the same way): the pre-mint job's
+ *  candidate query (`premintBoardWhere`) refuses an unseated bye shell in SQL, and there is no second spelling of the pattern - a
+ *  test compares this against `isSwissByeShellExtKey` over a table of keys. */
+export const SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN: string = SWISS_BYE_SHELL_EXT_KEY.source;
+
 /** A board's ext_key, exactly as `planSwissShells` mints it; group 1 is the
  *  round, group 2 the board index. */
 const SWISS_BOARD_EXT_KEY = /^sw-r(\d+)-b(\d+)$/;

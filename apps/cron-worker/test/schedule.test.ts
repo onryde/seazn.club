@@ -33,15 +33,17 @@ const EVERY_5 = "*/5 * * * *";
 const EVERY_MINUTE = "* * * * *";
 /** Chess in-page board design §4: "The 5-minute cron stays what it is … but it is NOT optional" — the external-play
  *  sweep (T+20 no-show, mint retry, meeting teardown, reconcile, camera evidence). The email outbox's worker
- *  (owner ruling 2026-10-20) rides the same one fast trigger per env. Typed from the specs, never read from JOBS. The
- *  fast-trigger rows, in table order. */
-const FAST_ROWS = ["stream-tick", "external-play", "email-outbox"];
+ *  (owner ruling 2026-10-20) rides the same one fast trigger per env, and so does the pre-mint pass (check-in capacity
+ *  plan 2 Task 5, accepted by the owner 2026-11-17: Revision notes, Resolved 1), which Task 8 moved to the END of the table so its
+ *  vendor-call-a-second pass never delays the sweep or the outbox. Typed from the specs, never read from JOBS. The fast-trigger
+ *  rows, in table order. */
+const FAST_ROWS = ["stream-tick", "external-play", "email-outbox", "external-play-premint"];
 /** The ONE row that is still a 5-minute job: on prod it hangs off the minute trigger and runs on every fifth minute. The
  *  stream tick left this list on 2026-10-28 (YouTube Connect T15, spec §6.7, D9 as amended by owner Q1 = b): it runs on EVERY
  *  fast firing, so a broadcast whose end is due is ended within a minute on prod. */
 const FIVE_MINUTE_JOBS = ["external-play"];
 /** The rows due at a prod minute that is NOT a multiple of five: the every-firing rows, in table order. */
-const EVERY_FIRING_ROWS = ["stream-tick", "email-outbox"];
+const EVERY_FIRING_ROWS = ["stream-tick", "email-outbox", "external-play-premint"];
 /** A well-formed trigger no row names. */
 const UNKNOWN = "*/7 * * * *";
 
@@ -180,6 +182,34 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
     ]);
   });
 
+  it("the external-play-premint row is in the table exactly once, on the env's fast trigger, due on EVERY firing, never retried (check-in capacity spec §11, plan 2 Task 5)", () => {
+    expect(JOBS.filter((j) => j.id === "external-play-premint")).toEqual([
+      // Never retried: the next firing IS the retry, and the pass's lock answers an overlapping re-send with `skipped`. A
+      // failed room (`failed`) and a skipped pass (`skipped`: it overlapped the next firing) are failures to the monitor;
+      // `disabled` (the flag is off), `windowsOpen` and `deferred` (the budget or the platform's bucket ran out) are not.
+      {
+        id: "external-play-premint",
+        path: "/api/cron/external-play-premint",
+        trigger: FAST_TRIGGER,
+        due: { kind: "every" },
+        retry: false,
+        manual: true,
+        failureCounts: ["data.failed", "data.skipped"],
+      },
+    ]);
+  });
+
+  // Check-in capacity plan 2 Task 8, carry item 6: a pass that makes a vendor call a second (up to ~55 s) must never sit in front of
+  // the sweep or the outbox in a firing, so the row is the LAST of the whole table (it had been third of four since Task 5).
+  it("the premint row is the LAST row of the table: the Worker runs a firing's rows one after another, in table order, so every other row runs before it", () => {
+    const order = JOBS.map((j) => j.id);
+    expect(order.indexOf("external-play-premint"), "in the table").toBeGreaterThanOrEqual(0);
+    expect(order.at(-1), "the last row").toBe("external-play-premint");
+    const others = order.filter((id) => id !== "external-play-premint");
+    expect(others.length, "anti-vacuity: rows it follows").toBeGreaterThan(0);
+    for (const id of others) expect(order.indexOf(id), `${id} runs before the pre-mint pass`).toBeLessThan(order.indexOf("external-play-premint"));
+  });
+
   it("the email-outbox row is in the table exactly once, on the env's fast trigger, due on EVERY firing, never retried (spec 'The retry worker')", () => {
     expect(JOBS.filter((j) => j.id === "email-outbox")).toEqual([
       // Never retried: the next firing IS the retry, and skip-locked claims plus the lease make an overlap safe.
@@ -239,6 +269,20 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
       expect(checked).toBe(5);
       // The pair: stg's trigger is the only one that fires it there — the minute trigger is unknown to stg.
       expect(ids(new Date(Date.UTC(2026, 9, 28, 10, 1)), MINUTE_CRON, "stg")).toEqual([]);
+    });
+
+    it("the premint pass is due on EVERY fast firing on prod and stg alike (10:01 and 10:06 on prod, every */5 slot on stg), unlike the 5-minute sweep beside it", () => {
+      let checked = 0;
+      for (const minute of [1, 2, 5, 6, 59]) {
+        expect(ids(new Date(Date.UTC(2026, 9, 28, 10, minute)), MINUTE_CRON, "prod"), `prod 10:${String(minute).padStart(2, "0")}`).toContain("external-play-premint");
+        checked++;
+      }
+      for (const minute of [0, 5, 10, 55]) {
+        expect(ids(new Date(Date.UTC(2026, 9, 28, 10, minute)), FAST_TRIGGER.stg, "stg"), `stg 10:${String(minute).padStart(2, "0")}`).toContain("external-play-premint");
+        checked++;
+      }
+      expect(checked).toBe(9);
+      expect(JOBS.find((j) => j.id === "external-play-premint")!.due).toEqual({ kind: "every" });
     });
 
     it("external-play stays 5-minutely on prod: due at 10:05, NOT at 10:06 (the positive pair of the case above)", () => {
@@ -316,7 +360,7 @@ describe("triggerFor", () => {
   const row = (id: string) => JOBS.find((j) => j.id === id)!;
 
   it("a per-env row resolves to its env's trigger", () => {
-    for (const id of ["stream-tick", "external-play", "email-outbox"]) {
+    for (const id of ["stream-tick", "external-play-premint", "external-play", "email-outbox"]) {
       expect(triggerFor(row(id), "stg"), `${id} stg`).toBe(EVERY_5);
       expect(triggerFor(row(id), "prod"), `${id} prod`).toBe(EVERY_MINUTE);
     }
@@ -393,7 +437,7 @@ describe("a simulated hour: how many times each job actually runs (derived from 
     expect(() => firesAt("*/5 9 * * *", 0)).toThrow(/firesAt/);
   });
 
-  it("prod runs the stream tick and the outbox 60 times and the 5-minute job 12; stg runs all three 12 (stg's trigger fires every 5 minutes)", () => {
+  it("prod runs the stream tick, the pre-mint pass and the outbox 60 times and the 5-minute job 12; stg runs all four 12 (stg's trigger fires every 5 minutes)", () => {
     const prod = tally("prod");
     const stg = tally("stg");
     const fiveMin = 60 / FIVE_MINUTES; // 12, from the constant
@@ -408,6 +452,9 @@ describe("a simulated hour: how many times each job actually runs (derived from 
     expect(stg["stream-tick"], "stg stream-tick").toBe(stgTick);
     expect(prod["email-outbox"], "prod email-outbox").toBe(minute);
     expect(stg["email-outbox"], "stg email-outbox").toBe(stgTick);
+    // The pre-mint pass runs on EVERY firing of the env's fast trigger, like the tick and the outbox.
+    expect(prod["external-play-premint"], "prod external-play-premint").toBe(minute);
+    expect(stg["external-play-premint"], "stg external-play-premint").toBe(stgTick);
     // The hourly rows are untouched by any of this: once an hour on both envs.
     for (const id of HOURLY) {
       expect(prod[id], `prod ${id}`).toBe(1);
@@ -424,8 +471,8 @@ describe("JOBS table", () => {
     expect(new Set(JOBS.map((j) => j.path)).size).toBe(JOBS.length);
   });
 
-  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick, external-play and email-outbox (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
-    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play", "email-outbox"]);
+  it("retry is off for exactly news-digest (P3/D7), relay-sweep (R1), stream-tick, external-play, email-outbox and external-play-premint (each one's next firing is the retry); every job may be run by hand (R1, R2)", () => {
+    expect(JOBS.filter((j) => !j.retry).map((j) => j.id)).toEqual(["relay-sweep", "news-digest", "stream-tick", "external-play", "email-outbox", "external-play-premint"]);
     expect(JOBS.filter((j) => !j.manual)).toEqual([]);
   });
 
@@ -464,6 +511,10 @@ describe("JOBS table", () => {
       // Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when another pass held the
       // lock). `deferred` is NOT a failure (the pass budget ran out; the next firing reaches the rest).
       "external-play": ["data.failed", "data.skipped"],
+      // Check-in capacity plan 2 Task 5: PremintReport.failed (a board's room that could not be made; a down vendor is at most
+      // PREMINT_FAILURES_BEFORE_BREAK of them a pass) and .skipped (1 when another pass held the lock). `disabled` (the flag is
+      // off), `windowsOpen` and `deferred` are NOT failures.
+      "external-play-premint": ["data.failed", "data.skipped"],
       // The outbox worker's OutboxTickReport.failed — rows whose attempt threw in our own code, or a tick that could not
       // run (role check). `deferred` is NOT a failure (the next minute reaches those rows).
       "email-outbox": ["data.failed"],

@@ -264,7 +264,9 @@ export async function cameraEvidence(pass: Pass, c: CameraCandidate, rtk: Realti
       read = await readCameraEvidence(c, window, rtk);
     } catch (err) {
       // A day on, an unreadable answer gives up (below) — but a read the call budget REFUSED was never made, and says
-      // nothing about the match (D21): it is `each`'s deferral, whatever the day.
+      // nothing about the match (D21): it is `each`'s deferral, whatever the day. Only the PLATFORM's bucket can refuse
+      // here: the pass's cap gates a room's start and never refuses a started one (run.ts, PR-2 whole review I1), so a
+      // room that costs more than the cap is read to the end, not deferred for ever.
       if (!givenUp || err instanceof RealtimeKitDeferred) throw err; // reported by `each`; read again next pass
       read = "not_ready";
     }

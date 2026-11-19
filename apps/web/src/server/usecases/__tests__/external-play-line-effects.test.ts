@@ -6,7 +6,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import type { CameraPolicy } from "@/lib/camera-policy";
 import { CAMERA_EVIDENCE_DEADLINE_MS } from "@/components/public-site/match-room/room-snapshot";
-import { LINE_RELEASE_GRACE_MS, LINE_RESERVATION, ownStayInLine } from "@/server/external-play/seat-line";
+import { LINE_RELEASE_GRACE_MS, LINE_RESERVATION_MAX, ownStayInLine } from "@/server/external-play/seat-line";
 import { json, CAMERA_ON_EVENTS } from "./_external-play-rtk-fake";
 import { organiserOverrideVideo, type CameraRefusal } from "../external-play/preflight";
 import { claimAt, holdWaiting, stayRow } from "./_external-play-line";
@@ -30,7 +30,8 @@ import {
 import { boardAnchor } from "@/server/external-play/window";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
+/** A stay priced at the unpriced maximum (`askOf`'s default; a seeded row has no stamp). */
+const L = LINE_RESERVATION_MAX;
 const ANCHOR = boardAnchor(OPENED, 0, false);
 
 afterEach(dropWorlds);
@@ -146,7 +147,7 @@ describe.skipIf(!DB)("only a camera no wait can fix ends the stay (test 21)", ()
     expect(ended?.admitted_at, "P had been admitted").not.toBeNull();
     expect(ended?.ended_at, "and the refusal ended its stay").not.toBeNull();
     expect(await ownStayInLine({ fixtureId: p.fixtureId, personId: p.home.personId, at: t1 }), "P is no longer in line").toBe(false);
-    // Its reservation is released: the bucket now holds exactly LINE_RESERVATION, which the waiting stay may take at once.
+    // Its reservation is released: the bucket now holds exactly one maximum price (L), which the waiting stay may take at once.
     const freed = await claimAt(w.key, waiter, "home", new Date(t1.getTime() + SEC), { anchor: ANCHOR });
     expect(freed, "the waiting stay is admitted with the freed tokens").toEqual({ kind: "go", decision: "admit" });
     // Past the deadline P is NOT protected: its next press is a new stay that arrived late.
@@ -186,7 +187,7 @@ describe.skipIf(!DB)("only a camera no wait can fix ends the stay (test 21)", ()
     expect(reasonOf(absent.seat), "nobody joined: camera_required").toBe("camera_required");
     const kept = await stayRow(r.fixtureId, r.home.personId);
     expect([kept?.ended_at, kept?.admitted_at === null], "admitted and NOT ended").toEqual([null, false]);
-    // The reservation is still out: with the bucket at exactly LINE_RESERVATION the waiting stay is held.
+    // The reservation is still out: with the bucket at exactly L the waiting stay is held.
     const held = await claimAt(x.key, wait3, "home", new Date(t3.getTime() + SEC), { anchor: ANCHOR });
     expect(held.kind, "P still holds its reservation: the waiting stay is held").toBe("queued");
     // Protected past the deadline while live (its last claim is inside the grace)...

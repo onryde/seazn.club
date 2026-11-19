@@ -42,9 +42,10 @@ type Fragment = (typeof FRAGMENTS)[number];
 
 /** Where each fragment is used inside seat-line.ts, by declaration. The consumers of the lists in spec §5.7.2 hang off these. */
 const FRAGMENT_USES: Record<Fragment, Record<string, number>> = {
-  // inLine: 1 and 2 (the waiting-ahead count and the idle test's key-wide count: two statements in the standing read),
+  // inLine: 1 and 2 (the waiting-ahead count and the idle test's key-wide count: two statements in the standing read), plus the ahead
+  // sum of the stamped prices (plan 2 Task 7: a third statement in the standing read, over the SAME waiting-ahead stays as the count),
   // 3 (the door), 9 (the optional yield) directly; 4, 5, 7 and 8 through lineHoldsBoard (boardPhase).
-  lineLiveSql: { readStanding: 2, ownStayInLine: 1, lineActive: 1, lineHoldsBoard: 1 },
+  lineLiveSql: { readStanding: 3, ownStayInLine: 1, lineActive: 1, lineHoldsBoard: 1 },
   // The four consumers: the pool, the idle test, the own-row test (all in the standing read), and the optional yield.
   reservedSql: { readStanding: 3, lineActive: 1 },
   // Inside the two fragments built on it: one each. Outside them: the `completing` evaluation, the one.
@@ -64,6 +65,12 @@ const SITES: readonly Site[] = [
   { file: "server/usecases/external-play/preflight.ts", owner: "seatPlayer", fn: "lineActive", times: 1, consumer: "inLine 9: the optional yield" },
   { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "gateClaim", times: 1, consumer: "the gate (inLine 1 and 2, reservedSql 1 to 3)" },
   { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "answerBusy", times: 1, consumer: "the gate's one named refusal" },
+  // The PRICE producers (plan 2 Task 7): what the stay's first claim meets, and what one read costs now. The gate stamps the stay with
+  // them, so a claim path that builds a GateAsk without them is a stay priced by nobody. Each of the two GateAsk builders owes both.
+  { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "stayMintOf", times: 1, consumer: "the price: what the first claim meets (the gate's ask)" },
+  { file: "server/usecases/external-play/preflight.ts", owner: "passTheLine", fn: "seatReadCalls", times: 1, consumer: "the price: what one read costs now (the gate's ask)" },
+  { file: "server/usecases/external-play/room.ts", owner: "queueDeferred", fn: "stayMintOf", times: 1, consumer: "the price: what the first claim meets (a mid-claim deferral's ask)" },
+  { file: "server/usecases/external-play/room.ts", owner: "queueDeferred", fn: "seatReadCalls", times: 1, consumer: "the price: what one read costs now (a mid-claim deferral's ask)" },
   { file: "server/usecases/external-play/room.ts", owner: "viewerPhase", fn: "judgePhase", times: 1, bothOnly: false, consumer: "inLine 7: the room's phase, per viewer (and where its hold ends)" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayInLine", times: 1, consumer: "inLine 3: the door" },
   { file: "server/usecases/external-play/room.ts", owner: "claimRoomSeat", fn: "ownStayArrival", times: 1, consumer: "the check-in is dated at the stay's arrival" },
@@ -77,8 +84,12 @@ const SITES: readonly Site[] = [
   { file: "server/usecases/external-play/create-game.ts", owner: "createGameIfReady", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance" },
   { file: "server/usecases/external-play/create-game.ts", owner: "createAtDequeue", fn: "boardPhase", times: 1, bothOnly: true, consumer: "inLine 6: the create's allowance (dequeue)" },
 ];
-/** The seat-line functions whose callers are pinned above. */
-const SEAT_LINE_API = ["boardPhase", "judgePhase", "lineActive", "gateClaim", "answerBusy", "ownStayInLine", "ownStayArrival", "endStay", "settleDeferral", "lineHoldsBoard"] as const;
+/** The seat-line functions whose callers are pinned above, and the two price producers the gate's asks are built with (preflight's
+ *  `stayMintOf` and `seatReadCalls`: they are not seat-line's, but a GateAsk is priced by nobody without them). */
+const SEAT_LINE_API = [
+  "boardPhase", "judgePhase", "lineActive", "gateClaim", "answerBusy", "ownStayInLine", "ownStayArrival", "endStay", "settleDeferral", "lineHoldsBoard",
+  "stayMintOf", "seatReadCalls",
+] as const;
 
 // ─── The scanner ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -231,7 +242,8 @@ const read = (file: string) => readFileSync(join(SRC, file), "utf8");
 function namesOfTheLedger(src: string): string[] {
   const code = src.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:\w])\/\/[^\n]*/g, "$1");
   const found: string[] = [];
-  for (const name of ["fixture_seat_line", "queued_at", "last_seen_at", "last_gate", "admitted_at", ...READERS]) {
+  // `recheck_cost` is not one of the five guarded columns: it is the stamped price's own, distinctive name, kept to seat-line.ts too.
+  for (const name of ["fixture_seat_line", "queued_at", "last_seen_at", "last_gate", "admitted_at", "recheck_cost", ...READERS]) {
     if (new RegExp(`\\b${name}\\b`).test(code)) found.push(name);
   }
   return found;
@@ -251,13 +263,26 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
     expect(judgeLineFile(lineScan)).toEqual([]);
   });
 
-  it("seat-line.ts: the consumers of the fragments are the pinned ones - lineLiveSql 5 uses in 4 declarations, reservedSql 4 in 2 (the four consumers), stayOpenSql outside its two fragments 1 (the completing evaluation)", () => {
+  it("seat-line.ts: the consumers of the fragments are the pinned ones - lineLiveSql 6 uses in 4 declarations, reservedSql 4 in 2 (the four consumers), stayOpenSql outside its two fragments 1 (the completing evaluation)", () => {
     const uses = (f: Fragment) => Object.values(lineScan.fragmentUses[f]).reduce((a, b) => a + b, 0);
-    expect(uses("lineLiveSql"), "lineLiveSql uses").toBe(5);
+    expect(uses("lineLiveSql"), "lineLiveSql uses: the waiting-ahead count, the ahead sum of the stamped prices, the key-wide count, the door, the yield, the hold query").toBe(6);
     expect(Object.keys(lineScan.fragmentUses.lineLiveSql).sort()).toEqual(["lineActive", "lineHoldsBoard", "ownStayInLine", "readStanding"]);
     expect(uses("reservedSql"), "reservedSql consumers: the pool, the idle test, the own-row test, the optional yield").toBe(4);
     const outside = Object.entries(lineScan.fragmentUses.stayOpenSql).filter(([o]) => o !== "lineLiveSql" && o !== "reservedSql");
     expect(outside, "stayOpenSql outside the two fragments built on it: the completing evaluation").toEqual([["readStanding", 1]]);
+  });
+
+  it("the stamped price columns (`reservation`, `recheck_cost`, not guarded) are named by exactly three declarations: the upsert writes both, reservedSql and the standing read (the ahead sum) read them", () => {
+    const { live, chunks } = lex(lineSrc);
+    const decls = declarations(live);
+    const ownersOf = (re: RegExp) => [...new Set(chunks.filter((c) => re.test(c.text)).map((c) => ownerAt(decls, c.offset)))].sort();
+    // `reservation` is also an English word in messages: only an SQL use counts (an alias-qualified read, an assignment, or an insert column).
+    const sqlName = (col: string) => new RegExp(`(?:\\bl\\.${col}\\b|\\b${col}\\s*=|[(,]\\s*${col}\\s*[,)])`);
+    expect(ownersOf(sqlName("recheck_cost")), "recheck_cost").toEqual(["readStanding", "reservedSql", "upsertStay"]);
+    expect(ownersOf(sqlName("reservation")), "reservation").toEqual(["readStanding", "reservedSql", "upsertStay"]);
+    // Anti-vacuity: the scan sees the writer (an assignment in the upsert) and both readers.
+    expect(chunks.filter((c) => /reservation\s+=\s+case/.test(c.text)).length, "the upsert's stamp assignment is found").toBe(1);
+    expect(chunks.filter((c) => /coalesce\(l\.reservation/.test(c.text)).length, "the two readers' coalesce of the stamp is found").toBe(2);
   });
 
   it("the other consumers: every call of a seat-line reader outside it is pinned per file and declaration - the nine consumers of inLine map to concrete call sites (count reported)", () => {
@@ -364,6 +389,35 @@ describe("one predicate: the check-in line's ledger has one reader (test 33)", (
         applied += 1;
       }
       expect(applied, "mutants applied").toBe(mutants.length);
+    });
+
+    it("the price producers are pinned: a GateAsk built without `stayMintOf` or `seatReadCalls` (either builder) fails the call table", () => {
+      let checked = 0;
+      for (const [file, owner] of [["server/usecases/external-play/preflight.ts", "passTheLine"], ["server/usecases/external-play/room.ts", "queueDeferred"]] as const) {
+        const src = read(file);
+        expect(callBadness(file, scanFile(src)), `${file}: premise: the real file passes`).toEqual([]);
+        for (const fn of ["stayMintOf", "seatReadCalls"]) {
+          // Replace the ONE call inside the owner with a literal: the ask is still well-formed, and priced by nobody.
+          const at = src.indexOf(`${fn}(`, src.indexOf(`function ${owner}(`));
+          expect(at, `${file}: ${fn}( is called inside ${owner}`).toBeGreaterThan(0);
+          let depth = 0;
+          let end = at + fn.length;
+          for (let i = end; i < src.length; i += 1) {
+            if (src[i] === "(") depth += 1;
+            else if (src[i] === ")") {
+              depth -= 1;
+              if (depth === 0) {
+                end = i;
+                break;
+              }
+            }
+          }
+          const mutated = src.slice(0, at) + (fn === "stayMintOf" ? '"all"' : "3") + src.slice(end + 1);
+          expect(callBadness(file, scanFile(mutated)).join("\n"), `${file}: ${fn} dropped`).toMatch(new RegExp(`${fn}\\(\\) in ${owner}: 0x, expected 1`));
+          checked += 1;
+        }
+      }
+      expect(checked, "builder x producer pairs mutated").toBe(4);
     });
 
     it("a consumer outside seat-line.ts is pinned too: the create's allowance losing bothOnly, and a new caller, both fail the call table", () => {

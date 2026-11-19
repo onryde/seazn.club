@@ -4,8 +4,9 @@
 //
 // Driven through the real gate (`gateClaim`) against the database, one clock (`at`) for the whole decision and the bucket PINNED to
 // a stated level at that instant (`setBucket`), so no refill hides a shortfall. Every expected number is the declaration it follows:
-// LINE_RESERVATION and LINE_RECHECK_COST are read from the module that declares them and the sums are made HERE from raw rows -
-// never from the code under test's own arithmetic. Single sport, deliberately: the gate does not know a sport.
+// The maximum price (a stay the gate prices `all` at the three-call read - `askOf`'s default, and what a seeded row without a stamp is
+// reserved at) and the full-read re-verify are read from the module that declares them and the sums are made HERE from raw rows -
+// never from the code under test's own arithmetic. The per-stay stamped prices are external-play-line-price.test.ts. Single sport, deliberately: the gate does not know a sport.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,14 +14,14 @@ import { sql } from "@/lib/db";
 import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
-  LINE_COMPLETING_LEVEL,
-  LINE_READ_CALLS,
-  LINE_RECHECK_COST,
+  LINE_FALLBACK_READ_CALLS,
   LINE_RELEASE_GRACE_MS,
-  LINE_RESERVATION,
+  LINE_RESERVATION_MAX,
   LINE_TOKEN_CALLS,
   endStay,
   gateClaim,
+  lineCompletingLevel,
+  lineRecheckCost,
   ownStayInLine,
   settleDeferral,
   type GateAnswer,
@@ -41,8 +42,8 @@ import {
 } from "./_external-play-line";
 
 const DB = !!process.env.DATABASE_URL;
-const L = LINE_RESERVATION;
-const R = LINE_RECHECK_COST;
+const L = LINE_RESERVATION_MAX;
+const R = lineRecheckCost(LINE_FALLBACK_READ_CALLS);
 
 const keys: string[] = [];
 /** A fresh bucket - and so a fresh line - for one scene. */
@@ -66,7 +67,7 @@ afterAll(async () => {
 const kindOf = (a: GateAnswer) => (a.kind === "go" ? `go:${a.decision}` : a.kind);
 
 describe.skipIf(!DB)("the pool test: the threshold is the reservation the candidate WOULD hold (test 14 (a))", () => {
-  it("a non-completing candidate: queued one token under LINE_RESERVATION, admitted at it - zero admission below; the pool is never negative after an admission", async () => {
+  it("a non-completing candidate: queued one token under L (the maximum price), admitted at it - zero admission below; the pool is never negative after an admission", async () => {
     let checked = 0;
     for (const [pool, want] of [[L - 1, "queued"], [L, "go:admit"]] as const) {
       const key = scene();
@@ -84,7 +85,7 @@ describe.skipIf(!DB)("the pool test: the threshold is the reservation the candid
     expect(checked, "pool values checked").toBe(2);
   });
 
-  it("a COMPLETING candidate needs LINE_RESERVATION + LINE_RECHECK_COST: every pool in [L, L+R) is queued with no admission, and L+R admits - in all three causes of `completing`", async () => {
+  it("a COMPLETING candidate needs L + R: every pool in [L, L+R) is queued with no admission, and L+R admits - in all three causes of `completing`", async () => {
     // The three causes (§5.7.2): the board's other side has an OPEN stay and no counted check-in; it has a COUNTED check-in and no
     // open stay; neither. Pools that are short for a completing candidate but would admit a non-completing one are the ones that matter.
     const causes = [
@@ -123,7 +124,7 @@ describe.skipIf(!DB)("the pool test: the threshold is the reservation the candid
 });
 
 describe.skipIf(!DB)("reservations subtract, and release (test 14 (b))", () => {
-  it("with k admitted stays the next is admitted only at tokens >= (k + 1) x LINE_RESERVATION, and a completing stay's reservation is larger by LINE_RECHECK_COST", async () => {
+  it("with k admitted stays the next is admitted only at tokens >= (k + 1) x L, and a completing stay's reservation is larger by R (the re-verify)", async () => {
     let checked = 0;
     for (const k of [1, 2, 3]) {
       for (const completingFirst of [false, true]) {
@@ -276,32 +277,35 @@ describe.skipIf(!DB)("a new arrival joins the tail (test 17)", () => {
   });
 });
 
-// ─── LINE_COMPLETING_LEVEL is derived, never typed (spec §5.7.3 constants row) ───────────────────────────────────────────────
-// No database: the constant's value and the text of its declaration. The value alone cannot tell a typed 7 from the sum while the three
-// terms still add up to 7; the declaration's text can, so a literal fails here the day it is typed, not the day `LINE_READ_CALLS` moves.
-describe("LINE_COMPLETING_LEVEL is the seating claim's own spend plus the opponent's re-verify (test 37 (e), the constants row)", () => {
-  it("equals LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST, and sits above the re-verify's price alone", () => {
-    expect(LINE_COMPLETING_LEVEL).toBe(LINE_READ_CALLS + LINE_TOKEN_CALLS + LINE_RECHECK_COST);
-    expect(LINE_COMPLETING_LEVEL, "above LINE_RECHECK_COST: the two checks differ").toBeGreaterThan(LINE_RECHECK_COST);
+// ─── lineCompletingLevel is derived, never typed (spec §5.7.3 constants row) ─────────────────────────────────────────────────
+// No database: the function's value at both read prices and the text of its declaration. The value alone cannot tell a typed 7 from the
+// sum while the terms still add up to 7; the declaration's text can, so a literal fails here the day it is typed, not the day a read price moves.
+describe("lineCompletingLevel is the seating claim's own spend plus the opponent's re-verify (test 37 (e), the constants row)", () => {
+  it("equals readCalls + LINE_TOKEN_CALLS + lineRecheckCost(readCalls) - 7 with the three-call read - and sits above the re-verify's price alone", () => {
+    const level = lineCompletingLevel(LINE_FALLBACK_READ_CALLS);
+    expect(level).toBe(LINE_FALLBACK_READ_CALLS + LINE_TOKEN_CALLS + lineRecheckCost(LINE_FALLBACK_READ_CALLS));
+    expect(level, "the hand count: 3 reads + 1 token + 3 for the re-verify").toBe(7);
+    expect(level, "above the re-verify's price alone: the two checks differ").toBeGreaterThan(lineRecheckCost(LINE_FALLBACK_READ_CALLS));
   });
-  it("is declared as that sum of the three constants in seat-line.ts, not as a literal", () => {
+  it("is declared as that sum in seat-line.ts, not as a literal", () => {
     const src = readFileSync(join(import.meta.dirname, "..", "..", "external-play", "seat-line.ts"), "utf8");
-    const decl = /export const LINE_COMPLETING_LEVEL\s*=\s*([^;]+);/.exec(src);
+    const decl = /export function lineCompletingLevel\([^)]*\)[^{]*\{\s*return ([^;]+);/.exec(src);
     expect(decl, "the declaration was found").not.toBeNull();
+    // `a + b + f(c)`: no sum inside a parenthesis here, so a plain split is exact.
     const terms = decl![1]!.split("+").map((t) => t.trim()).sort();
-    expect(terms).toEqual(["LINE_READ_CALLS", "LINE_RECHECK_COST", "LINE_TOKEN_CALLS"]);
+    expect(terms).toEqual(["LINE_TOKEN_CALLS", "lineRecheckCost(readCalls)", "readCalls"]);
   });
 });
 
 // ─── The idle line and a COMPLETING claim (test 37 (e)) ─────────────────────────────────────────────────────────────────────
 // On an idle line a claim passes with no admission and no reservation - except a COMPLETING one, whose seat triggers the create and
-// its T9 re-verify (LINE_RECHECK_COST reads). Nothing is reserved for it, so the bucket must hold, at the gate, what the seating claim
-// itself will spend (LINE_READ_CALLS reads and the LINE_TOKEN_CALLS token handed with the seat) AND the re-verify behind it: the level
+// its T9 re-verify (the re-verify's reads, R). Nothing is reserved for it, so the bucket must hold, at the gate, what the seating claim
+// itself will spend (LINE_FALLBACK_READ_CALLS reads and the LINE_TOKEN_CALLS token handed with the seat) AND the re-verify behind it: the level
 // LEVEL below. The load run that found this (spec B, instant cameras) held a claim at 3.9 tokens: a check at the re-verify's price
 // alone (3) let it through, and its own seat then left the re-verify short. Below LEVEL the claim is held like any stay that meets a
 // dry bucket. The expectation is the rule written out per cause and per level from the three declarations, never read back from the gate.
 describe.skipIf(!DB)("an idle line's COMPLETING claim must find its own seating spend and the opponent's re-verify in the bucket (test 37 (e))", () => {
-  const LEVEL = LINE_READ_CALLS + LINE_TOKEN_CALLS + R;
+  const LEVEL = LINE_FALLBACK_READ_CALLS + LINE_TOKEN_CALLS + R;
   /** The three causes of `completing` (§5.7.2), as in test 14 (a), and the levels around the threshold - R, the re-verify's price
    *  alone, and LEVEL - 1 are the ones a too-low check would let through. */
   const causes = [

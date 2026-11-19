@@ -31,7 +31,7 @@ import {
   type RealtimeKitFixtureServer,
 } from "../../../../e2e/realtimekit-fixture-server";
 import { SEAT_RECHECK_TRUST_MS, seatPlayer, type PreflightDeps, type SeatResult } from "../external-play/preflight";
-import { addParticipant, ensureMeeting, refreshParticipantToken, seatCameraEvidence } from "@/server/external-play/video/realtimekit";
+import { addParticipant, ensureMeeting, peerReportCamera, refreshParticipantToken, seatCameraEvidence } from "@/server/external-play/video/realtimekit";
 import { seedOnlineChessFixture } from "./_external-play-seed";
 
 const DB = !!process.env.DATABASE_URL;
@@ -97,6 +97,7 @@ function metered(budget: () => Promise<boolean>): Video {
     ensureMeeting: (id, side) => ensureMeeting(id, side, { budget }),
     addParticipant: (a) => addParticipant(a, { budget }),
     seatCameraEvidence: (a) => seatCameraEvidence(a, { budget }),
+    peerReportCamera: (id) => peerReportCamera(id, { budget }),
     refreshParticipantToken: (a) => refreshParticipantToken(a, { budget }),
   };
 }

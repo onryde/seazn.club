@@ -33,6 +33,7 @@ import "server-only";
 // returns `mock-token-*` whenever credentials are missing; here an
 // unconfigured process refuses loudly, because a silently-mocked camera gate
 // on a Required division is a tournament played with no camera at all.
+import type postgres from "postgres";
 import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { liveMintClaimSince } from "@/server/external-play/window";
@@ -178,6 +179,54 @@ async function cf(
   return (await cfEnvelope(cfg, path, init, deps)).data;
 }
 
+/** What `cfEnvelope` spends with for this base when the caller passed no `budget`: the platform's database bucket when the
+ *  request is metered, null when it is not. Metered by default on the path that counts against the vendor - the real `fetch`
+ *  to Cloudflare's own API - so a new caller cannot forget. Exempt: a caller-supplied `fetch` (a test double that never
+ *  leaves the process) and a base URL that is not Cloudflare's (a fixture, where a bucket would only throttle the suites and
+ *  the e2e run that use it). The gate FAILS OPEN on a base that is not Cloudflare's: a forwarding proxy, or a misspelt URL,
+ *  spends the real account's budget and is NOT metered - which is why that case warns once per process in production
+ *  (warnUnmetered) and why .env.example says so. A caller can always pass its own `budget`.
+ *  D22: REALTIMEKIT_METER_ANY_BASE=1 turns the gate's second half off - the base is metered whatever it is. For a forwarding
+ *  proxy in front of the real account (the case the warning below is about) and for the load test, which has to see the
+ *  budget act on the fixture host to measure what a deferral costs a player. Exactly "1"; the bucket is keyed by the base and
+ *  account, so it can never spend the real account's. Exported so a job that caps its own calls (`cappedBudget`) composes
+ *  with exactly what the adapter would have spent: `cappedBudget(cap, deps.budget ?? platformSpend(deps))`. */
+export function platformSpend(deps: RealtimeKitDeps): CallBudget | null {
+  const meterAnyBase = process.env.REALTIMEKIT_METER_ANY_BASE === "1";
+  const metered = deps.fetch === undefined && (baseUrlOf(deps) === CF_BASE || meterAnyBase);
+  return metered ? takeRealtimeKitCall : null;
+}
+
+/** A budget that refuses past `cap` attempts and otherwise asks `inner` (grants when `inner` is null). The (cap+1)th
+ *  attempt is refused WITHOUT reaching `inner`, so a job's own ceiling never spends a platform token it will not use.
+ *  `spent()` counts the attempts that reached `inner` - granted by it or not - and never a capped one.
+ *  `finish` is for work the caller's own gate let START under the cap (`spent() < cap`) and that must not stop part-way (the
+ *  sweep's camera evidence, PR-2 whole review I1): it asks `inner` only - the cap never refuses it - and is counted like any other
+ *  attempt, so once started work has overrun the cap, `budget` refuses everything after it. */
+export function cappedBudget(cap: number, inner: CallBudget | null): { budget: CallBudget; finish: CallBudget; spent(): number } {
+  // `attempts > cap` is false for every attempt when `cap` is NaN, and for a negative or fractional cap it caps at the wrong
+  // count: a ceiling that fails OPEN spends the platform's tokens, so a cap that is not a count is refused up front.
+  if (!Number.isInteger(cap) || cap < 0) throw new RangeError(`cappedBudget needs a cap that is a non-negative integer, got ${cap}`);
+  let attempts = 0;
+  let reached = 0;
+  const ask = (key: string) => {
+    reached += 1;
+    return inner === null ? Promise.resolve(true) : inner(key);
+  };
+  return {
+    budget: async (key) => {
+      attempts += 1;
+      if (attempts > cap) return false;
+      return ask(key);
+    },
+    finish: async (key) => {
+      attempts += 1;
+      return ask(key);
+    },
+    spent: () => reached,
+  };
+}
+
 let warnedUnmetered = false;
 /** The origin of a base URL, for a log line: scheme, host and port, and NOTHING else. A base can carry credentials
  *  (`https://user:secret@host`) and a path, and a URL that does not parse is not echoed either (the parse error quotes its
@@ -213,22 +262,12 @@ async function cfEnvelope(
   const base = baseUrlOf(deps);
   const url = `${base}/accounts/${cfg.accountId}/realtime/kit/${cfg.appId}${path}`;
   const doFetch = deps.fetch ?? fetch;
-  // D21: ONE token per request, taken BEFORE it is made (never after — a refused request must not reach the vendor, whose
-  // limit is the account's and blocks every call for five minutes once passed). Metered by default on the path that
-  // counts against the vendor — the real `fetch` to Cloudflare's own API — so a new caller cannot forget. Exempt: a
-  // caller-supplied `fetch` (a test double that never leaves the process) and a base URL that is not Cloudflare's (a
-  // fixture, where a bucket would only throttle the suites and the e2e run that use it). The gate FAILS OPEN on a base
-  // that is not Cloudflare's: a forwarding proxy, or a misspelt URL, spends the real account's budget and is NOT metered
-  // - which is why that case warns once per process in production (warnUnmetered) and why .env.example says so. A
-  // caller can always pass its own `budget`.
-  // D22: REALTIMEKIT_METER_ANY_BASE=1 turns the gate's second half off - the base is metered whatever it is. For a
-  // forwarding proxy in front of the real account (the case the warning below is about) and for the load test, which
-  // has to see the budget act on the fixture host to measure what a deferral costs a player. Exactly "1"; the bucket
-  // is keyed by the base and account, so it can never spend the real account's.
-  const meterAnyBase = process.env.REALTIMEKIT_METER_ANY_BASE === "1";
-  const metered = deps.fetch === undefined && (base === CF_BASE || meterAnyBase);
-  if (!metered && deps.budget === undefined && deps.fetch === undefined) warnUnmetered(base);
-  const spend = deps.budget ?? (metered ? takeRealtimeKitCall : null);
+  // D21: ONE token per request, taken BEFORE it is made (never after - a refused request must not reach the vendor, whose
+  // limit is the account's and blocks every call for five minutes once passed). What spends is the caller's own `budget`,
+  // else the platform's (`platformSpend`: which bases it meters, and why).
+  const platform = platformSpend(deps);
+  if (platform === null && deps.budget === undefined && deps.fetch === undefined) warnUnmetered(base);
+  const spend = deps.budget ?? platform;
   if (spend && !(await spend(budgetKey(base, cfg.accountId)))) {
     throw new RealtimeKitDeferred(`RealtimeKit ${init.method} ${path} deferred: the platform's call budget is spent`);
   }
@@ -314,6 +353,13 @@ function pairingChanged(fixtureId: string): HttpError {
   return new HttpError(409, `the video meeting for fixture ${fixtureId} belongs to an earlier pairing's game`, "VIDEO_MEETING_PAIRING_CHANGED");
 }
 
+/** Does the board have NO complete pairing now? A missing fixture reads false: the caller's own refusal (404) follows. */
+async function boardIsUnpaired(fixtureId: string): Promise<boolean> {
+  const [row] = await sql<{ unpaired: boolean }[]>`
+    select (home_entrant_id is null or away_entrant_id is null) as unpaired from fixtures where id = ${fixtureId}`;
+  return row?.unpaired === true;
+}
+
 /** R2-2, the empty case: a board with no pairing (unpaired, or a bye) has nobody to meet. */
 function unpaired(fixtureId: string): HttpError {
   return new HttpError(409, `fixture ${fixtureId} has no pairing to make a video meeting for`, "VIDEO_MEETING_UNPAIRED");
@@ -328,14 +374,20 @@ export function gameEvidenceOn(now: Date) {
               or (ep.status = 'pending' and ep.mint_claimed_at >= ${liveMintClaimSince(now)}))`;
 }
 
-type MeetingOnFile = { meetingId: string; endedAt: Date | null; samePair: boolean; evidence: boolean };
+/** `unadopted`: BOTH stamps are null - the pre-mint job made the room for a board that had no pairing yet (V531: the two
+ *  stamps are null together or set together, so one null alone cannot be on file). An unadopted room is made for the board's
+ *  FIRST pairing, whichever it is: it is never another pairing's (never stale), and a claim on a paired board adopts it.
+ *  `paired`: the board has both entrants now. A row is "the current pairing's" when `samePair` OR `unadopted`. */
+type MeetingOnFile = { meetingId: string; endedAt: Date | null; samePair: boolean; unadopted: boolean; paired: boolean; evidence: boolean };
 
 /** The player's meeting row (D16: a meeting per `(fixture, side)`), and whether it was made for the board's CURRENT
- *  pairing (R2-2). */
+ *  pairing (R2-2), or for none yet (`unadopted`). */
 async function meetingOnFile(fixtureId: string, side: MeetingSide, now: Date): Promise<MeetingOnFile | null> {
   const [row] = await sql<MeetingOnFile[]>`
     select m.meeting_id as "meetingId", m.ended_at as "endedAt",
            (m.home_entrant_id, m.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "samePair",
+           (m.home_entrant_id is null and m.away_entrant_id is null) as "unadopted",
+           (f.home_entrant_id is not null and f.away_entrant_id is not null) as "paired",
            exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)}) as evidence
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
@@ -363,7 +415,11 @@ export const RETIRED_PAIR = "00000000-0000-0000-0000-000000000000";
  *  not skip the others; the first is thrown once all have been tried. A row a game stands behind, or one made for this
  *  pairing, is never selected, and a game that appears while a room's end is in flight still keeps its row (the delete
  *  judges it again; the vendor call and that guard are not one atomic step, which is the residual window). An ended row
- *  needs no vendor call. `end` is the teardown (the sweep passes its own); `ensureMeeting` passes `endMeeting`. */
+ *  needs no vendor call. `end` is the teardown (the sweep passes its own); `ensureMeeting` passes `endMeeting`.
+ *  An UNADOPTED row (both stamps null: the pre-mint job's room for a board with no pairing yet) is never stale: it is made
+ *  for whichever pairing comes first, so `m.home_entrant_id is not null` keeps it out (and V531's pair check makes the one
+ *  column enough). Without that line the stamp comparison below reads null against a paired board as "another pairing" and
+ *  ends a room nobody has joined. */
 export async function retireStaleMeeting(
   fixtureId: string,
   now: Date,
@@ -374,6 +430,7 @@ export async function retireStaleMeeting(
       from fixture_video_meetings m
       join fixtures f on f.id = m.fixture_id
      where m.fixture_id = ${fixtureId}
+       and m.home_entrant_id is not null
        and (m.home_entrant_id, m.away_entrant_id) is distinct from (f.home_entrant_id, f.away_entrant_id)
        and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})
      order by m.side`;
@@ -408,6 +465,63 @@ export async function retireStaleMeeting(
   if (refused !== null) throw refused;
 }
 
+/** Every UNADOPTED room of the board (both stamps null: made by the pre-mint job for a board with no pairing yet) takes the
+ *  fixture's CURRENT pairing, in ONE statement: the stamps are written as a pair (V531's check refuses one without the other, so
+ *  a two-step write would not even commit), and both sides' rooms are adopted together - the board has one pairing, so an
+ *  adoption never leaves one side stamped beside a sibling still unadopted. That is the ADOPT path only: a claim that CREATES a
+ *  room (nothing on file for its own side) stamps just that room, and a sibling still unadopted stays so until its own claim -
+ *  harmless, since an unadopted room already reads as the current pairing's. Returns the number of rows adopted: 0 when the
+ *  fixture is unpaired (there is no pairing to take; the rooms stay unadopted), when nothing is unadopted (a second call), or
+ *  when there is no room at all. A row stamped for a pairing - this one's or another's - is never rewritten. It is a database
+ *  write and no vendor call: the room already exists. Its one production caller is `ensureMeeting`, i.e. a claim. */
+export async function adoptRooms(db: postgres.Sql | postgres.TransactionSql, fixtureId: string): Promise<number> {
+  // Both sides on purpose (allow-listed in the per-player source guard): the board's one pairing is every unadopted room's.
+  const adopted = await db`
+    update fixture_video_meetings m
+       set home_entrant_id = f.home_entrant_id, away_entrant_id = f.away_entrant_id
+      from fixtures f
+     where f.id = m.fixture_id
+       and m.fixture_id = ${fixtureId}
+       and m.home_entrant_id is null and m.away_entrant_id is null
+       and f.home_entrant_id is not null and f.away_entrant_id is not null
+    returning m.side`;
+  return adopted.length;
+}
+
+/** A claim read an UNADOPTED row of its own side and answers from it. On a paired board it adopts the board's rooms
+ *  (`adoptRooms`); the count is a GUARD, not an assumption: 0 means the read is already stale - another claim adopted the
+ *  rooms, the board was re-paired or unpaired, or the row was retired, between the read and the write - so the row is READ
+ *  AGAIN and the claim answers from what it says now: unpaired and no `allow` is VIDEO_MEETING_UNPAIRED, a room made for
+ *  another pairing is `pairingChanged` (a game behind it) or a 503 (the caller retries; never handed to this pairing), a row
+ *  that is gone is a 503, and the board's own pairing is the room (adopted by the other claim). On an unpaired board nothing
+ *  is adopted and only the job's `unpaired: "allow"` is handed the room. Returns the row to answer from; throws to refuse. */
+async function claimUnadopted(
+  fixtureId: string,
+  side: MeetingSide,
+  row: MeetingOnFile,
+  opts: { unpaired?: "allow" },
+  now: Date,
+): Promise<MeetingOnFile> {
+  let current = row;
+  if (row.paired) {
+    if ((await adoptRooms(sql, fixtureId)) > 0) return row;
+    const reread = await meetingOnFile(fixtureId, side, now);
+    if (!reread) throw new RealtimeKitError(503, "unavailable", "meeting row vanished while it was being adopted");
+    current = reread;
+  }
+  if (!current.unadopted) {
+    if (current.samePair) return current;
+    if (current.evidence) throw pairingChanged(fixtureId);
+    throw new RealtimeKitError(503, "unavailable", "the board's meeting changed while it was being adopted");
+  }
+  if (!current.paired) {
+    if (opts.unpaired !== "allow") throw unpaired(fixtureId);
+    return current;
+  }
+  // Unadopted on a PAIRED board though the adoption just took no rows: never hand out a room that nothing adopted.
+  throw new RealtimeKitError(503, "unavailable", "the board's meeting could not be adopted");
+}
+
 /** Created when a PLAYER first arrives in the window, not after both check
  *  in — preflight needs something to join (spec §5.2). One meeting per player
  *  (D16, §5.6.1): `(fixture, side)` is the key, the vendor title carries the
@@ -419,18 +533,45 @@ export async function retireStaleMeeting(
  *  (the lobby, a re-open, a direct link) comes through here; the arbiter's
  *  watch no longer does (it joins an existing meeting or is refused, §5.6.4).
  *  The loser of a creation race deactivates its own meeting rather than
- *  leaving a billable room nobody joins. */
-export async function ensureMeeting(fixtureId: string, side: MeetingSide, deps: RealtimeKitDeps = {}): Promise<MeetingRef> {
+ *  leaving a billable room nobody joins.
+ *
+ *  UNADOPTED rooms (check-in capacity, the pre-mint job): a room whose stamps are both null was made for a board that had no
+ *  pairing yet, and belongs to the first pairing the board gets. ALWAYS, whatever the caller passes (the seat passes nothing),
+ *  on a PAIRED fixture whose row is unadopted this adopts it (`adoptRooms`) and returns it as the current pairing's: a
+ *  database write, no vendor call, and never a second room beside it. On an UNPAIRED fixture the unadopted room is
+ *  returned only to a caller that said `unpaired: "allow"` - a seat on an unpaired board is refused as ever.
+ *
+ *  `opts.unpaired`: the default is today's rule - a fixture with no complete pairing and no room on file is
+ *  VIDEO_MEETING_UNPAIRED (R2-2's empty case: nobody to meet). `"allow"` is the pre-mint job's alone: a fixture with an empty
+ *  seat and no room on file gets a room stamped (null, null) - both columns, never one (V531). A paired fixture's room is
+ *  stamped with its pairing whatever the option says. */
+export async function ensureMeeting(
+  fixtureId: string,
+  side: MeetingSide,
+  deps: RealtimeKitDeps = {},
+  opts: { unpaired?: "allow" } = {},
+): Promise<MeetingRef> {
   const cfg = requireConfig();
   const now = new Date();
   const existing = await meetingOnFile(fixtureId, side, now);
   if (existing) {
+    if (existing.unadopted) {
+      const claimed = await claimUnadopted(fixtureId, side, existing, opts, now);
+      if (claimed.endedAt !== null) throw meetingEnded(fixtureId);
+      return { meetingId: claimed.meetingId };
+    }
     if (existing.samePair) {
       if (existing.endedAt !== null) throw meetingEnded(fixtureId);
       return { meetingId: existing.meetingId };
     }
     if (existing.evidence) throw pairingChanged(fixtureId);
     await retireStaleMeeting(fixtureId, now, (id) => endMeeting(id, deps));
+  } else if (opts.unpaired === "allow" && (await boardIsUnpaired(fixtureId))) {
+    // The pre-mint job's call, on a board with no pairing yet (a placeholder): there is no pairing for a sibling room to be stale
+    // AGAINST, and the sweep's teardown leaves an unpaired board's rooms alone for exactly that reason (its `retirable` needs a paired
+    // board: an organiser who unpairs and re-pairs the same players keeps their rooms). So a room of the sibling side stamped for an
+    // earlier pairing is not ended from here (check-in capacity plan 2 Task 8, batch-3 review m4): the claim on the re-paired board,
+    // or the sweep once the board has a pairing, retires it.
   } else {
     // A re-pair makes EVERY row of the board stale at once (§5.6.1, R3-1 unchanged), but it is a claim that finds a stale row
     // on ITS OWN side that retires them. A newcomer who lands on the side where nothing is on file finds none, and the
@@ -443,7 +584,11 @@ export async function ensureMeeting(fixtureId: string, side: MeetingSide, deps: 
   const [fixture] = await sql<{ org_id: string; home: string | null; away: string | null }[]>`
     select org_id, home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
   if (!fixture) throw new HttpError(404, "fixture not found", "NOT_FOUND");
-  if (fixture.home === null || fixture.away === null) throw unpaired(fixtureId);
+  const paired = fixture.home !== null && fixture.away !== null;
+  if (!paired && opts.unpaired !== "allow") throw unpaired(fixtureId);
+  // The stamp is the pairing, or - a board with an empty seat, the job's call only - BOTH columns null (an unadopted room).
+  const stampHome = paired ? fixture.home : null;
+  const stampAway = paired ? fixture.away : null;
 
   // Outside any transaction — an open transaction across an outbound HTTP
   // call holds a row lock, or a pooled connection, for the whole round trip
@@ -461,7 +606,7 @@ export async function ensureMeeting(fixtureId: string, side: MeetingSide, deps: 
   // meeting stale on arrival, so the next read retires it — it never labels an older pairing's room as the new one's.
   const inserted = await sql<{ meeting_id: string }[]>`
     insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
-    values (${fixtureId}, ${side}, ${fixture.org_id}, ${data.id}, ${fixture.home}, ${fixture.away})
+    values (${fixtureId}, ${side}, ${fixture.org_id}, ${data.id}, ${stampHome}, ${stampAway})
     on conflict (fixture_id, side) do nothing
     returning meeting_id`;
   const mine = inserted[0];
@@ -480,13 +625,15 @@ export async function ensureMeeting(fixtureId: string, side: MeetingSide, deps: 
   if (!winner) throw new RealtimeKitError(503, "unavailable", "meeting row vanished mid-race");
   // The winner is the board's only if it was made for this pairing (R2-2): a stale row on file now — a game appeared
   // behind it before the retire, or another pairing's create landed after it — is refused, never handed to a new
-  // pairing.
-  if (!winner.samePair) {
-    if (winner.evidence) throw pairingChanged(fixtureId);
+  // pairing. An UNADOPTED winner (the pre-mint job's room landing during our create) is the board's by definition: adopted
+  // on a paired board, as on the first read above.
+  const claimed = winner.unadopted ? await claimUnadopted(fixtureId, side, winner, opts, now) : winner;
+  if (!claimed.unadopted && !claimed.samePair) {
+    if (claimed.evidence) throw pairingChanged(fixtureId);
     throw new RealtimeKitError(503, "unavailable", "the board's meeting changed while one was being made");
   }
-  if (winner.endedAt !== null) throw meetingEnded(fixtureId);
-  return { meetingId: winner.meetingId };
+  if (claimed.endedAt !== null) throw meetingEnded(fixtureId);
+  return { meetingId: claimed.meetingId };
 }
 
 /** The preset names the role — the player publishes, the arbiter only
@@ -621,7 +768,8 @@ async function liveSessionId(cfg: Config, meetingId: string, deps: RealtimeKitDe
 
 /** The seat's camera evidence for one participant (T17B fix 2, D2):
  *  - `absent`: no live session, or this participant is not in it (never
- *    joined, or left) — or present with no peer still connected;
+ *    joined, or left) — or present with no peer still connected, or whose
+ *    current peer's own report says it has left (`peerReportCamera`, R4);
  *  - `on`: the CURRENT peer's report holds `media_permission` VIDEO ACCEPTED
  *    and its latest `video_on`/`video_off` event is `video_on`;
  *  - `off`: ACCEPTED, but the latest of those events is `video_off`;
@@ -645,9 +793,13 @@ async function liveSessionId(cfg: Config, meetingId: string, deps: RealtimeKitDe
  *  participant's present rows — an old peer that left is never judged. */
 export type SeatCamera =
   | { state: "absent" }
-  | { state: "on" | "off" | "blocked"; since: Date }
-  | { state: "starting"; since: Date }
-  | { state: "unreadable"; since: Date; error: RealtimeKitError };
+  | ({ state: "on" | "off" | "blocked"; since: Date } & SeatPeer)
+  | ({ state: "starting"; since: Date } & SeatPeer)
+  | ({ state: "unreadable"; since: Date; error: RealtimeKitError } & SeatPeer);
+
+/** The peer a present state was read for, and the live session it is in: what the read already knew, handed on so a caller
+ *  that records presence from a read (the seat's fallback) need not look it up again. */
+export type SeatPeer = { peerId: string; sessionId: string };
 
 export async function seatCameraEvidence(
   a: { meetingId: string; participantId: string },
@@ -685,27 +837,75 @@ export async function seatCameraEvidence(
   const peer = currentPeer(mine);
   if (peer === null) return { state: "absent" };
   const since = new Date(peer.joinedAt);
+  const read = await peerReportCamera(peer.peerId, deps);
+  const named = { since, peerId: peer.peerId, sessionId };
+  switch (read.camera) {
+    // RealtimeKit's own "no peer event exists for id": no report for this peer YET - not an outage, and not a camera.
+    case "none":
+      return { state: "starting", ...named };
+    // The list above showed this participant present, so a report that says the peer has gone is a guard here, not a case
+    // the seat has met: it is not judged on that peer's last camera events (R4), it is simply not there.
+    case "left":
+      return { state: "absent" };
+    case "unreadable":
+      return { state: "unreadable", ...named, error: read.error };
+    default:
+      return { state: read.camera, ...named };
+  }
+}
+
+/** The one-read proof's read: GET /sessions/peer-report/{peerId}, ONE vendor call, judged on that report alone.
+ *  `peerId` is a PEER id (the SDK's `meeting.self.id`, or a `peer_id` from the session participant's `peer_events`), never the
+ *  participant id addParticipant returned. The answer:
+ *  - `on` / `off` / `blocked` / `starting`: `cameraFromReport`'s reading of the report's `metadata.events`;
+ *  - `left` (owner ruling R4): the report's `participant.left_at` is set - the peer has gone, so it is never judged on its last
+ *    camera events (a `video_on` last is still `left`). The real vendor carries the field (`videoOffCoverage` parses it: its
+ *    "not_left" is this field null) and the e2e fixture serves it. A `left_at` that is not a date is `unreadable`, never `on`;
+ *  - `none`: the vendor's own not-found, no report yet;
+ *  - `unreadable`: an outage on the read, or a report that cannot be read (the caller waits it out like `starting`).
+ *  A RealtimeKitDeferred is RETHROWN, never `unreadable` (D21): a read we did not make says nothing about the vendor or the
+ *  camera, and an `unreadable` is waited out and then reported to the player as an outage. */
+export async function peerReportCamera(
+  peerId: string,
+  deps: RealtimeKitDeps = {},
+): Promise<
+  | { camera: "on" | "off" | "blocked" | "starting" }
+  | { camera: "left"; leftAt: Date }
+  | { camera: "unreadable"; error: RealtimeKitError }
+  | { camera: "none" }
+> {
+  // An empty id would request `/sessions/peer-report/` - another route, whose answer would be read as this peer's report.
+  if (peerId.trim() === "") throw new Error("peerReportCamera needs a peer id");
+  const cfg = requireConfig();
   let report: unknown;
   try {
-    report = await cf(cfg, `/sessions/peer-report/${encodeURIComponent(peer.peerId)}`, { method: "GET" }, deps);
+    report = await cf(cfg, `/sessions/peer-report/${encodeURIComponent(peerId)}`, { method: "GET" }, deps);
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
-    // D21: a read we did not make says nothing about the vendor or the camera — never `unreadable`, which the seat
+    // D21: a read we did not make says nothing about the vendor or the camera - never `unreadable`, which the seat
     // waits out and then reports as an outage.
     if (err instanceof RealtimeKitDeferred) throw err;
-    // RealtimeKit's own "no peer event exists for id" (measured body): no
-    // report for this peer YET — not an outage, and not a camera.
-    if (err.code === "not_found") return { state: "starting", since };
-    return { state: "unreadable", since, error: err };
+    if (err.code === "not_found") return { camera: "none" };
+    return { camera: "unreadable", error: err };
   }
-  let camera: "on" | "off" | "blocked" | "starting";
   try {
-    camera = cameraFromReport(report);
+    const leftAt = peerLeftAt(report);
+    if (leftAt !== null) return { camera: "left", leftAt };
+    return { camera: cameraFromReport(report) };
   } catch (err) {
     if (!(err instanceof RealtimeKitError)) throw err;
-    return { state: "unreadable", since, error: err };
+    return { camera: "unreadable", error: err };
   }
-  return { state: camera, since };
+}
+
+/** The instant the report says its peer left, or null while it has not (`left_at` null or absent). A value that is not a
+ *  date THROWS (malformed): an unreadable report is never read as a present peer. */
+function peerLeftAt(data: unknown): Date | null {
+  const participant = (data as { participant?: unknown } | null)?.participant as { left_at?: unknown } | undefined;
+  if (typeof participant !== "object" || participant === null) throw malformed("no participant");
+  const raw = participant.left_at;
+  if (raw === null || raw === undefined) return null;
+  return new Date(parseTime(raw, "participant.left_at"));
 }
 
 /** The SDK's VIDEO permission values that mean "the browser (or the OS)

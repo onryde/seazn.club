@@ -8,13 +8,17 @@ import { STRANDED_CREATE_AFTER_MS, SWEEP_CADENCE_MS } from "../../usecases/exter
 import {
   ADMIT_HOLD_MS,
   LINE_ABANDON_AFTER_MS,
-  LINE_COMPLETING_LEVEL,
-  LINE_MINT_CALLS,
+  LINE_FALLBACK_READ_CALLS,
+  LINE_MINT_PARTICIPANT_CALLS,
+  LINE_MINT_ROOM_CALLS,
   LINE_READ_CALLS,
-  LINE_RECHECK_COST,
   LINE_RELEASE_GRACE_MS,
-  LINE_RESERVATION,
+  LINE_RESERVATION_MAX,
+  LINE_RESERVATION_MIN,
   LINE_TOKEN_CALLS,
+  lineCompletingLevel,
+  lineRecheckCost,
+  lineReservation,
 } from "../seat-line";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "../video/budget";
 import {
@@ -55,6 +59,8 @@ import {
   webhookDigest,
   webhookVerdict,
   parseWebhooksKnob,
+  parseProofKnob,
+  stayPriceMax,
   type WebhookDigest,
 } from "../../../../e2e/load/line-load";
 
@@ -65,8 +71,29 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.windowLeadMs).toBe(WINDOW_OPEN_LEAD_MS);
     expect(LINE_LOAD.deadlineAfterMs).toBe(DEADLINE_AFTER_MS);
     expect(LINE_LOAD.lineGraceMs).toBe(LINE_DEADLINE_GRACE_MS);
-    expect(LINE_LOAD.reservation).toBe(LINE_RESERVATION);
-    expect(LINE_LOAD.recheckCost).toBe(LINE_RECHECK_COST);
+    // The stamped price table (check-in capacity plan 2, owner ruling R1), one pin per number against the line's own derivation.
+    // `proof` is the one-read proof on (a read is LINE_READ_CALLS), `fallback` the three-call read (LINE_FALLBACK_READ_CALLS).
+    const READS = { proof: LINE_READ_CALLS, fallback: LINE_FALLBACK_READ_CALLS } as const;
+    let pinned = 0;
+    for (const mode of ["proof", "fallback"] as const) {
+      expect(Object.keys(LINE_LOAD.stayPrice[mode]).sort(), `${mode}: a price for each way a stay's first claim can meet the vendor, no more`).toEqual(["all", "none", "room"]);
+      for (const kind of ["none", "room", "all"] as const) {
+        expect(LINE_LOAD.stayPrice[mode][kind], `LINE_LOAD.stayPrice.${mode}.${kind} is seat-line's lineReservation("${kind}", ${READS[mode]})`).toBe(lineReservation(kind, READS[mode]));
+        pinned += 1;
+      }
+      expect(LINE_LOAD.recheckCost[mode], `LINE_LOAD.recheckCost.${mode} is seat-line's lineRecheckCost(${READS[mode]})`).toBe(lineRecheckCost(READS[mode]));
+      pinned += 1;
+    }
+    expect(pinned, "anti-vacuity: six prices and two re-verify costs pinned").toBe(8);
+    // And the table the owner ruled (plan 2 Global Constraints, R1), typed from the ruling: a change to the line's derivation that moves
+    // a price must be a deliberate edit of BOTH, never one silently following the other.
+    expect(LINE_LOAD.stayPrice, "the ruled prices").toEqual({ proof: { none: 8, room: 8, all: 9 }, fallback: { none: 21, room: 20, all: 21 } });
+    expect(LINE_LOAD.recheckCost, "the ruled re-verify costs").toEqual({ proof: 1, fallback: 3 });
+    // The two extremes the line itself declares: the cheapest stay (flag on, everything on file) and the dearest (an unpriced stay).
+    expect(LINE_LOAD.stayPrice.proof.none).toBe(LINE_RESERVATION_MIN);
+    expect(LINE_LOAD.stayPrice.fallback.all).toBe(LINE_RESERVATION_MAX);
+    expect(stayPriceMax("proof"), "the dearest price a flag-on stay is stamped with").toBe(9);
+    expect(stayPriceMax("fallback"), "the dearest price a flag-off stay is stamped with: today's LINE_RESERVATION_MAX").toBe(LINE_RESERVATION_MAX);
     expect(LINE_LOAD.abandonAfterMs).toBe(LINE_ABANDON_AFTER_MS);
     expect(LINE_LOAD.releaseGraceMs).toBe(LINE_RELEASE_GRACE_MS);
     expect(LINE_LOAD.admitHoldMs).toBe(ADMIT_HOLD_MS);
@@ -75,15 +102,15 @@ describe("LINE_LOAD: every number the run copies is the server's own", () => {
     expect(LINE_LOAD.batchRereadJitterMs).toBe(BATCH_REREAD_JITTER_MS);
     expect(LINE_LOAD.pollMinMs).toBe(LINE_POLL_MIN_MS);
     expect(LINE_LOAD.pollMs).toBe(LINE_POLL_MS);
-    expect(LINE_LOAD.completingLevel, "seat-line.ts LINE_COMPLETING_LEVEL: the level B-dry's min gate level is judged against").toBe(LINE_COMPLETING_LEVEL);
+    expect(LINE_LOAD.completingLevel, "seat-line.ts lineCompletingLevel(LINE_FALLBACK_READ_CALLS): the level B-dry's min gate level is judged against").toBe(lineCompletingLevel(LINE_FALLBACK_READ_CALLS));
   });
 
   it("the MEASURED instant-camera cost per player sits between the model's floor and ceiling, both made from the server's own call counts", () => {
     // 7.1 is the report's `perPlayerCheckIn` of every B run (426 check-in calls for 60 players). The floor is one stay (the mint, one read of the
     // seat, the token handed with it); the ceiling adds the opponent's re-verify, shared by the board's two players. A measurement outside the
     // bracket would mean the harness or the product changed under it, and B-dry's derivation would be dry or wet by accident.
-    const floor = LINE_MINT_CALLS + LINE_READ_CALLS + LINE_TOKEN_CALLS;
-    const ceiling = floor + LINE_RECHECK_COST / 2;
+    const floor = LINE_MINT_ROOM_CALLS + LINE_MINT_PARTICIPANT_CALLS + LINE_FALLBACK_READ_CALLS + LINE_TOKEN_CALLS;
+    const ceiling = floor + lineRecheckCost(LINE_FALLBACK_READ_CALLS) / 2;
     expect(LINE_LOAD.instantCallsPerPlayer).toBeGreaterThanOrEqual(floor);
     expect(LINE_LOAD.instantCallsPerPlayer).toBeLessThanOrEqual(ceiling);
   });
@@ -203,6 +230,31 @@ describe("realized calls per stay, from the fixture server's own log", () => {
     expect(v.max).toBe(22);
     expect(judgeCosts([], 21, 3).stays, "nothing checked").toBe(0);
   });
+
+  it("judgeCosts at the flag-on prices SEES an overspend the flag-off bar (21) hides: a stay that spent 10 is over 9, and not over 21 (T7 review)", () => {
+    const costs = [
+      { id: "ok", own: 9, recheck: 1, unreserved: [] },
+      { id: "over", own: 10, recheck: 2, unreserved: [] },
+    ];
+    const on = judgeCosts(costs, stayPriceMax("proof"), LINE_LOAD.recheckCost.proof);
+    expect(on.over.map((c) => c.id), "flag on: 10 > 9").toEqual(["over"]);
+    expect(on.overRecheck.map((c) => c.id), "flag on: a two-call re-verify is over the one-call price").toEqual(["over"]);
+    const off = judgeCosts(costs, stayPriceMax("fallback"), LINE_LOAD.recheckCost.fallback);
+    expect(off.over, "flag off: the same spend is inside 21 - the bar the harness had").toEqual([]);
+    expect(off.overRecheck).toEqual([]);
+  });
+});
+
+describe("parseProofKnob: LOAD_PRESENCE_PROOF is the server's own flag, exactly \"1\" or off", () => {
+  it("1 is the one-read proof's prices, 0 / unset / empty the three-call read's", () => {
+    expect(parseProofKnob("1")).toBe("proof");
+    for (const off of ["0", undefined, ""]) expect(parseProofKnob(off), String(off)).toBe("fallback");
+  });
+  it("anything else throws, naming the variable: the server reads only the exact value 1, so a spelling it would read as OFF must not pick the flag-on bars", () => {
+    const bad = ["true", "2", "on", "yes", " 1", "1 "];
+    expect(bad.length, "anti-vacuity").toBeGreaterThan(0);
+    for (const v of bad) expect(() => parseProofKnob(v), v).toThrow(/LOAD_PRESENCE_PROOF=/);
+  });
 });
 
 describe("classifyInversions: the three excuses, each counted apart (§5.6.8)", () => {
@@ -250,8 +302,8 @@ describe("the pool, the drained phase, the admission pace", () => {
   const sample = (at: number, tokens: number, inFlight: number, completing: number, waiting: number): LineSample => ({ at, tokens, inFlight, completing, waiting });
 
   it("the pool is the level less every held reservation, plus the recheck cost of each completing stay", () => {
-    expect(poolOf(sample(0, 100, 2, 1, 0))).toBe(100 - 2 * LINE_RESERVATION - 1 * LINE_RECHECK_COST);
-    expect(poolOf(sample(0, 10, 1, 0, 0)), "it may go negative").toBe(10 - LINE_RESERVATION);
+    expect(poolOf(sample(0, 100, 2, 1, 0))).toBe(100 - 2 * LINE_RESERVATION_MAX - 1 * lineRecheckCost(LINE_FALLBACK_READ_CALLS));
+    expect(poolOf(sample(0, 10, 1, 0, 0)), "it may go negative").toBe(10 - LINE_RESERVATION_MAX);
   });
 
   it("drained: the first sample with a waiting stay and a pool under one reservation; the in-flight maximum is read from there on, not before", () => {
@@ -266,8 +318,8 @@ describe("the pool, the drained phase, the admission pace", () => {
     expect(drainOf(samples)).toEqual({ drainedAt: 1_500, maxInFlightDrained: 6, samplesChecked: 6 });
     // The pool EQUAL to one reservation still admits (the gate admits iff pool >= reservation): not drained. And the drain sample itself
     // is inside the drained phase, so an in-flight maximum standing AT it counts.
-    const edge = [sample(0, 2 * LINE_RESERVATION + LINE_RESERVATION, 2, 0, 3), sample(500, 2 * LINE_RESERVATION + LINE_RESERVATION - 1, 9, 0, 3), sample(1_000, 100, 1, 0, 3)];
-    expect(poolOf(edge[0]!), "premise: exactly one reservation in the pool").toBe(LINE_RESERVATION);
+    const edge = [sample(0, 2 * LINE_RESERVATION_MAX + LINE_RESERVATION_MAX, 2, 0, 3), sample(500, 2 * LINE_RESERVATION_MAX + LINE_RESERVATION_MAX - 1, 9, 0, 3), sample(1_000, 100, 1, 0, 3)];
+    expect(poolOf(edge[0]!), "premise: exactly one reservation in the pool").toBe(LINE_RESERVATION_MAX);
     expect(drainOf(edge).drainedAt, "pool == reservation is not drained; one token less is").toBe(500);
     expect(drainOf(edge).maxInFlightDrained, "the in-flight maximum standing AT the drain sample counts").toBe(9);
     expect(drainOf([sample(0, 300, 5, 0, 0)])).toEqual({ drainedAt: null, maxInFlightDrained: 0, samplesChecked: 1 });
@@ -429,7 +481,7 @@ describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply 
   const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };
 
   it("the margin is a completing candidate's admission threshold plus the idle level, from the server's declarations", () => {
-    expect(DRY_MARGIN_CALLS).toBe(LINE_RESERVATION + LINE_RECHECK_COST + LINE_COMPLETING_LEVEL);
+    expect(DRY_MARGIN_CALLS).toBe(LINE_RESERVATION_MAX + lineRecheckCost(LINE_FALLBACK_READ_CALLS) + lineCompletingLevel(LINE_FALLBACK_READ_CALLS));
   });
 
   it("at the derived spread the run's demand exceeds the supply by EXACTLY the margin (the definition, checked on the numbers)", () => {

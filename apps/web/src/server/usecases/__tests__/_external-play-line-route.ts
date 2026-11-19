@@ -12,9 +12,11 @@ import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import { claimRoomSeat, type RoomClaim, type RoomDeps } from "../external-play/room";
 import { sweepExternalPlay, type SweepDeps, type SweepReport } from "../external-play/sweep";
 import { seatPlayer } from "../external-play/preflight";
+import { reportOwnCamera } from "../external-play/camera-report";
+import { applyPresenceEvent } from "@/server/external-play/video/presence";
 import { CAMERA_ON_EVENTS, configureRealtimeKit, fakeRealtimeKit } from "./_external-play-rtk-fake";
 import { clearBucket, setBucket, stubBucket } from "./_external-play-line";
-import { seedOnlineChessFixture } from "./_external-play-seed";
+import { NO_PRUNE, NO_WINDOW, seedOnlineChessFixture } from "./_external-play-seed";
 
 export const MIN = 60_000;
 export const SEC = 1_000;
@@ -109,6 +111,41 @@ export function joinAt(w: World, seat: Seat, joinedAt: Date, events: ((at: strin
   w.rtk.joinWith(tokenOf(seat).authToken, events ?? (() => null));
   peerOf(w, seat).joinedAt = joinedAt.toISOString();
 }
+/** WITH THE ONE-READ PROOF (EXTERNAL_PLAY_PRESENCE_PROOF=1): the browser joins as `joinAt` does AND the vendor's join webhook arrives,
+ *  written by the REAL presence producer (`applyPresenceEvent`, the one the webhook receiver calls) for the fake's own peer, received
+ *  at `receivedAt` (default: the vendor's own instant, so the seat's `since` is the vendor's join and a vendor clock running ahead is
+ *  honoured, not clamped by our receipt). */
+export async function joinWithPresence(
+  w: World,
+  b: Board,
+  side: Side,
+  seat: Seat,
+  joinedAt: Date,
+  opts: { events?: ((at: string) => unknown[] | null) | null; receivedAt?: Date } = {},
+): Promise<void> {
+  joinAt(w, seat, joinedAt, opts.events ?? null);
+  const peer = peerOf(w, seat) as Peer & { id: string };
+  const [m] = await sql<{ meeting_id: string }[]>`select meeting_id from fixture_video_meetings where fixture_id = ${b.fixtureId} and side = ${side}`;
+  const applied = await applyPresenceEvent(
+    sql,
+    {
+      kind: "joined",
+      event: "meeting.participantJoined",
+      meetingId: m!.meeting_id,
+      sessionId: `sess-${m!.meeting_id}`,
+      peerId: peer.id,
+      customParticipantId: b[side].personId,
+      joinedAt,
+    },
+    opts.receivedAt ?? joinedAt,
+  );
+  expect(applied, "the join webhook was applied to a meeting we hold").toBe("applied");
+}
+/** The player's own page says its camera is LIVE, on `at` (the real writer, `reportOwnCamera`; it makes no vendor call). The seat
+ *  uses it to SCHEDULE a read - it skips the first-read wait - and never to seat anyone. */
+export async function pageReportsLive(b: Board, side: Side, at: Date): Promise<void> {
+  await reportOwnCamera({ kind: "session", userId: b[side].userId }, b.fixtureId, { state: "live", heartbeat: false }, { now: at, publish: async () => {} });
+}
 /** The camera comes on (the peer's report now holds the measured honest events). */
 export function cameraOn(w: World, seat: Seat, at: Date): void {
   peerOf(w, seat).events = CAMERA_ON_EVENTS(at.toISOString());
@@ -142,7 +179,10 @@ export async function pollStay(
 }
 
 /** One sweep pass at `now`, scoped to the board's organisation, without the single-flight lock (another file may be sweeping
- *  in parallel), with the room's teardown recorded and no create attempted. */
+ *  in parallel), with the room's teardown recorded and no create attempted. `NO_WINDOW` (check-in capacity plan 2 Task 8, R3): every
+ *  scene here opens its own round, and the REAL window check would defer the teardown for the board's own window - so a case that
+ *  asserts a room is KEPT (the line's consumer 8, the cap's "room is not torn down") would hold for the wrong reason. A case that is
+ *  about the deferral passes its own `windowsOpen` through `over`. */
 export async function sweepBoard(
   b: Board,
   now: Date,
@@ -150,6 +190,7 @@ export async function sweepBoard(
 ): Promise<{ report: SweepReport; ended: string[] }> {
   const ended: string[] = [];
   const report = await sweepExternalPlay({
+    ...NO_PRUNE,
     now,
     orgIds: [b.orgId],
     serialise: false,
@@ -157,6 +198,7 @@ export async function sweepBoard(
       ended.push(id);
     },
     createGameIfReady: async () => ({ created: false, reason: "not_ready" }),
+    ...NO_WINDOW,
     ...over,
   });
   return { report, ended };

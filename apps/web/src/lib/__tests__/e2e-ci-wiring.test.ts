@@ -2021,6 +2021,67 @@ describe("the online-chess fixture servers' wiring", () => {
     expect(checked, "vars checked").toBe(7);
   });
 
+  // Check-in capacity plan 2 Task 8 (finding 3): the sweep and the pre-mint job DEFER while any board of the platform is inside a
+  // check-in window (owner ruling R3), and the cron route takes no `orgIds`. The e2e server is shared by every spec of the job, so
+  // the chess walkthrough's cron-driven teardowns would wait on other specs' open windows: e2e-parallel switches the deferral off,
+  // with exactly "0" (the only value windowDeferralOn reads as off). Mirrored by ci-local.sh's e2e_env and the local runbook.
+  it("e2e-parallel's job-level env switches the open-window deferral off (EXTERNAL_PLAY_WINDOW_DEFER: \"0\"), and the runbook's server recipe carries it", () => {
+    expect(jobEnv(job("e2e-parallel", "e2e-serial")).get("EXTERNAL_PLAY_WINDOW_DEFER"), "e2e-parallel's job-level env").toBe("0");
+    const runbook = readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8");
+    expect(runbook, "docs/runbooks/e2e-local.md's server recipe").toMatch(/^EXTERNAL_PLAY_WINDOW_DEFER=0 \\$/m);
+    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
+    expect(body, "ci-local.sh's e2e_env").toMatch(/^\s*export EXTERNAL_PLAY_WINDOW_DEFER=0\s*$/m);
+    // The 30-boards load harness drives its STRICT teardown / evidence waits through /api/cron/external-play inside the window of the
+    // round it opened, so ITS server recipe carries the variable too, it fails naming it when a pass reports `windowsOpen: 1`, and its
+    // report records the count. Pinned in the file itself (the harness is never run in CI).
+    const load = readFileSync(join(E2E_DIR, "load/chess-30-boards.load.ts"), "utf8");
+    expect(load, "the load harness's server recipe").toMatch(/and EXTERNAL_PLAY_WINDOW_DEFER=0, which the\n \* walkthrough's job sets too/);
+    expect(load, "the harness fails naming the variable when a pass deferred for a window").toMatch(
+      /data\.windowsOpen === 1\) failures\.push\("[^"]*EXTERNAL_PLAY_WINDOW_DEFER=0/,
+    );
+    expect(load, "the harness's report records the passes that saw an open window").toMatch(/windowsOpenPasses: sweepPasses\.filter\(\(s\) => s\.report\.windowsOpen === 1\)\.length/);
+    // The two legs that run no chess walkthrough do not carry it: the deferral stays ON for them, as in production.
+    let checked = 0;
+    for (const [name, next] of [["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
+      expect(jobEnv(job(name, next)).has("EXTERNAL_PLAY_WINDOW_DEFER"), `${name} leaves the deferral on`).toBe(false);
+      checked++;
+    }
+    expect(checked, "jobs checked").toBe(2);
+  });
+
+  // Check-in capacity plan 2 Task 10: the walkthrough prices a pre-minted round (the pre-mint job, then the one-read proof) from the video
+  // fixture's own call log, so the server under test runs with BOTH flags: the job's work is off unless EXTERNAL_PLAY_PREMINT is exactly "1"
+  // (a pass answers `disabled: 1` otherwise) and the seat reads one peer report only with EXTERNAL_PLAY_PRESENCE_PROOF exactly "1". Job-level
+  // on e2e-parallel (the walkthrough's job), mirrored by the runbook's server recipe and ci-local.sh's e2e_env; the two legs that run no
+  // walkthrough leave both OFF, as in production before the rollout.
+  it("e2e-parallel's job-level env switches the pre-mint job and the one-read proof ON (exactly \"1\"), the runbook's recipe and ci-local.sh carry both, and the other legs leave them off", () => {
+    const FLAGS = ["EXTERNAL_PLAY_PREMINT", "EXTERNAL_PLAY_PRESENCE_PROOF"] as const;
+    const env = jobEnv(job("e2e-parallel", "e2e-serial"));
+    const runbook = readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8");
+    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
+    let checked = 0;
+    for (const k of FLAGS) {
+      expect(env.get(k), `e2e-parallel's job-level env: ${k}`).toBe("1");
+      expect(runbook, `docs/runbooks/e2e-local.md's server recipe: ${k}`).toMatch(new RegExp(`^${k}=1 \\\\$`, "m"));
+      expect(runbook, `docs/runbooks/e2e-local.md's var table names ${k}`).toContain(`\`${k}=1\``);
+      expect(body, `ci-local.sh's e2e_env: ${k}`).toMatch(new RegExp(`^\\s*export ${k}=1\\s*$`, "m"));
+      checked++;
+    }
+    expect(checked, "flags checked").toBe(2);
+    let legs = 0;
+    for (const [name, next] of [["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
+      for (const k of FLAGS) expect(jobEnv(job(name, next)).has(k), `${name} leaves ${k} off`).toBe(false);
+      legs++;
+    }
+    expect(legs, "jobs checked").toBe(2);
+    // The spec's own premise: its first premint assertion names the two variables when the pass answers `disabled`, so a server started
+    // without them reads as an environment fault, never as "the job made no rooms".
+    const spec = readFileSync(join(E2E_DIR, "walkthrough/chess-external-play.spec.ts"), "utf8");
+    for (const k of FLAGS) expect(spec, `the walkthrough names ${k} where a disabled pass is reported`).toContain(k);
+  });
+
   // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray
   // reconcile — a future mobile test that resigns, say — is refused on the runner instead of sending an
   // unauthenticated export read to lichess.org. Video stays unconfigured there (no credentials ⇒ no call at all), which

@@ -482,6 +482,9 @@ export async function seedOnlineSwiss(opts: {
   rounds?: number;
   pairing?: "fold" | "rank_adjacent";
   cameraPolicy?: CameraPolicy;
+  /** Defaults to true (Start pressed). `false` leaves the division in `setup` with round 1 already paired - what the
+   *  generator leaves before Start (check-in capacity R3: the pre-mint job serves that paired board). */
+  divisionStarted?: boolean;
 }): Promise<SeedOnlineSwissResult> {
   const owner = await seedOwner();
   const ownerUserId = owner.userId;
@@ -522,7 +525,7 @@ export async function seedOnlineSwiss(opts: {
   // A start time on every board: the guard serves only scheduled fixtures, and
   // a timetable write is not what these tests are about.
   await sql`update fixtures set scheduled_at = ${ROUND_T} where stage_id = ${stage!.id}`;
-  await startDivision(owner, division.id);
+  if (opts.divisionStarted ?? true) await startDivision(owner, division.id);
   return {
     orgId: owner.orgId,
     competitionId: competition.id,
@@ -538,6 +541,18 @@ export async function seedOnlineSwiss(opts: {
 // D16 - a RealtimeKit meeting per PLAYER. The rows preflight leaves, written directly for the suites that stage what
 // the sweep, the room or the arbiter then read. A meeting is (fixture, side); a participant lives on one.
 // ---------------------------------------------------------------------------
+
+/** Check-in capacity plan 2 Task 8 (owner ruling R3): while ANY board of the scoped orgs is inside a check-in window (a round opened
+ *  up to ROUND_WINDOW_TAIL_MS ago) the sweep defers its housekeeping - the teardown of rooms that are not stale-paired, and the camera
+ *  evidence - and the pre-mint job makes nothing. The bound is conservative, so a case that opens its OWN round and then sweeps inside
+ *  it meets the deferral. A case that is not about the deferral spreads this into the pass's deps and keeps every assertion; a case
+ *  that IS about it passes no `windowsOpen` and lets the REAL scoped check read the round it opened. Fits SweepDeps and PremintDeps. */
+export const NO_WINDOW = { windowsOpen: async (): Promise<boolean> => false };
+/** A test's sweep pass that does NOT run the presence prune. The prune is retention, not scoped by org (presence.ts
+ *  `prunePresence`): a pass deletes every presence row older than PRESENCE_RETENTION_MS, and other test files stamp theirs at fixed
+ *  past instants (`_external-play-line-route.ts` OPENED) - so a concurrent file's pass deleted their rows mid-stay. Every test sweep
+ *  helper spreads this FIRST; only the prune's own tests pass the real one. */
+export const NO_PRUNE = { prunePresence: async () => ({ deliveries: 0, presence: 0, endedSessions: 0 }) };
 
 export type VideoSide = "home" | "away";
 

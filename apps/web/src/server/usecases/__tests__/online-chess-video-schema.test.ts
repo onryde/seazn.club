@@ -7,7 +7,7 @@
 //  - an audit row's actor cannot be deleted out from under it.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sql } from "@/lib/db";
@@ -77,24 +77,24 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
     });
   });
 
-  it("R2-2: a meeting names the pairing it was made for — an insert without either entrant is refused, on the meetingless fixture (counted)", async () => {
-    // On the fixture with NO meeting, so the primary key cannot answer first (the not-null check would win anyway; this
-    // keeps the refusal the column's alone).
+  it("R2-2 (amended by V531): a meeting's pairing stamps are both set or both null — one null alone is refused each way round, by name (counted); an unadopted room, both null, is accepted", async () => {
+    // On the fixture with NO meeting, so the primary key cannot answer first; every write is rolled back, so that
+    // fixture stays meetingless for the cases below that need it. V451 made both stamps NOT NULL; V531 retires that for
+    // the pre-minted room (check-in capacity design §6.1), which has no pairing until a seat adopts it.
+    const [f] = await sql<{ home: string; away: string }[]>`
+      select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${meetinglessFixtureId}`;
+    const stamped = (home: string | null, away: string | null) => (tx: typeof sql) => tx`
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      values (${meetinglessFixtureId}, 'home', ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`}, ${home}, ${away})`;
     let checked = 0;
     for (const missing of ["home_entrant_id", "away_entrant_id"] as const) {
-      const [f] = await sql<{ home: string; away: string }[]>`
-        select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${meetinglessFixtureId}`;
-      const got = await sql`
-        insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
-        values (${meetinglessFixtureId}, 'home', ${orgId}, ${`mtg-${randomUUID().slice(0, 8)}`},
-                ${missing === "home_entrant_id" ? null : f!.home}, ${missing === "away_entrant_id" ? null : f!.away})`.then(
-        () => ({ accepted: true as const }),
-        (err: { code?: string; column_name?: string }) => ({ accepted: false as const, code: err.code, column: err.column_name }),
-      );
-      expect(got, missing).toEqual({ accepted: false, code: "23502", column: missing });
+      const got = await rolledBack(stamped(missing === "home_entrant_id" ? null : f!.home, missing === "away_entrant_id" ? null : f!.away));
+      expect(got, missing).toEqual({ accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_meetings_stamp_pair_check" });
       checked += 1;
     }
-    expect(checked).toBe(2);
+    expect(checked, "anti-vacuity: one null alone, each way round").toBe(2);
+    expect(await rolledBack(stamped(null, null)), "the pair: an unadopted room has no pairing yet").toEqual({ accepted: true });
+    expect(await rolledBack(stamped(f!.home, f!.away)), "and a stamped room, both set").toEqual({ accepted: true });
   });
 
   // V454 (T13, controller ruling C1): camera evidence is read after the
@@ -311,6 +311,27 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         select column_default as completing from information_schema.columns
          where table_schema = current_schema() and table_name = 'fixture_seat_line' and column_name = 'completing'`;
       expect(d!.completing, "completing starts false").toBe("false");
+    });
+
+    it("V531: the stay's stamped price — reservation in 1..64 and recheck_cost in 1..8, each bound and null (a row from before V531) accepted, one past each bound refused by the column's own check (counted)", async () => {
+      // Bounds typed from the plan's DDL (plan 2, Task 1), never read from the catalogue.
+      const BOUNDS = { reservation: [1, 64], recheck_cost: [1, 8] } as const;
+      let checked = 0;
+      for (const [col, [lo, hi]] of Object.entries(BOUNDS)) {
+        for (const v of [lo, hi]) {
+          expect(await rolledBack(stay({ [col]: String(v) })), `${col} = ${v}`).toEqual({ accepted: true });
+          checked += 1;
+        }
+        for (const v of [lo - 1, hi + 1]) {
+          expect(await rolledBack(stay({ [col]: String(v) })), `${col} = ${v}`).toEqual({
+            accepted: false, code: CHECK_VIOLATION, constraint: `fixture_seat_line_${col}_check`,
+          });
+          checked += 1;
+        }
+        expect(await rolledBack(stay({ [col]: null })), `${col} null`).toEqual({ accepted: true });
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: cases checked").toBe(10);
     });
 
     it("one stay per (fixture, person); a person who is not on file and a gate outside held/passed are refused", async () => {
@@ -787,6 +808,25 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
           accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_camera_reported_player_check",
         });
       });
+
+      it("V531: a live run's first-report stamp sits only on a `live` report — beside no report or an `off` one it is refused, by name (counted); beside `live` it is accepted, and so is none", async () => {
+        // The states typed from the design (§6.4, owner ruling 2026-11-17: the stamp is cleared when `off` is written),
+        // never read from the catalogue. The report's own pair check is satisfied in every row, so the new check alone decides.
+        const withFirst = (reported: string | null, first: Date | null) => (tx: typeof sql) => tx`
+          insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, camera_reported, camera_reported_at, camera_live_first_at)
+          values (${fixtureId}, 'home', ${personId}, 'player', ${`p-v529-${randomUUID().slice(0, 8)}`}, ${reported}, ${reported === null ? null : T}, ${first})`;
+        let checked = 0;
+        for (const reported of [null, "off"]) {
+          expect(await rolledBack(withFirst(reported, T)), `stamped beside ${String(reported)}`).toEqual({
+            accepted: false, code: CHECK_VIOLATION, constraint: "fixture_video_participants_camera_live_first_check",
+          });
+          checked += 1;
+        }
+        expect(checked, "anti-vacuity: the two states that are not a live run").toBe(2);
+        expect(await rolledBack(withFirst("live", T)), "the pair: stamped beside live").toEqual({ accepted: true });
+        expect(await rolledBack(withFirst("live", null)), "live with no stamp yet (a row live at deploy, or the old app version writing)").toEqual({ accepted: true });
+        expect(await rolledBack(withFirst("off", null)), "off with no stamp").toEqual({ accepted: true });
+      });
     });
 
     // ── The delta's own guard (§5.6.7, M6) ───────────────────────────────────────────────────────────────────────────
@@ -801,6 +841,58 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
       /** V451 + V454 + V457, the three tables as they were before V459 (_v459-old-shape.ts). */
       const TABLES = ["fixture_video_meetings", "fixture_video_participants", "fixture_video_guard_faults"] as const;
       const STUBS = (live: string) => oldShapeStubs(live, { fixtureIds: [fixtureId], orgId, personId });
+
+      // ── The deltas AFTER V459 (plan 2, Task 1) ──
+      // The live tables are what EVERY delta made them, so the replica replays each later delta's statements on the three
+      // tables too, in version order, before its shape is compared; the comparison is never loosened instead. A statement
+      // on any other table is SKIPPED, never run: it would resolve to the LIVE table (the scratch schema holds only these
+      // three and the stubs), take an access-exclusive lock on it, and fail on columns already there.
+      const DELTAS_DIR = dirname(DELTA);
+      /** A statement whose TARGET is one of the three: `alter table <t>` or `create [unique] index … on <t>`. Judged by the
+       *  statement's shape, because those are the only two shapes that move what `shapeOf` reads (columns, constraints,
+       *  indexes). So V460's `create trigger … after delete on fixture_video_meetings` is exempt by design: a trigger is not
+       *  part of the shape, and V460 drops out with zero statements kept. */
+      const ON_THE_THREE = new RegExp(
+        String.raw`^(?:alter\s+table(?:\s+if\s+exists)?(?:\s+only)?|create\s+(?:unique\s+)?index(?:\s+concurrently)?(?:\s+if\s+not\s+exists)?(?:\s+\w+)?\s+on(?:\s+only)?)\s+(?:${TABLES.join("|")})\b`,
+        "i",
+      );
+      /** Anti-vacuity, per file: what each later delta that touches the three runs on the replica (kept) and leaves out
+       *  (skipped). Typed from each delta's own text, never counted by the code below. V531: the two `drop not null`s, the
+       *  stamp-pair check, presence_fallback_from, camera_live_first_at and its check, token_issued_at (7); its two
+       *  fixture_seat_line columns (2). A new delta touching the three adds its own entry, and the keys stay in ASCENDING
+       *  version order: they are compared, as a list, with the deltas in the order they replay. */
+      const REPLAYED: Record<string, { kept: number; skipped: number }> = { V531: { kept: 7, skipped: 2 } };
+      /** Every delta numbered above 459 with at least one statement on the three, in version order, split into statements
+       *  on `;` at a line end (comments stripped first: a comment's own `;` is not an end). */
+      const laterDeltas = (): { version: string; kept: string[]; skipped: string[] }[] =>
+        readdirSync(DELTAS_DIR)
+          .flatMap((file) => {
+            const m = /^V(\d+)__.+\.sql$/.exec(file);
+            return m && Number(m[1]) > 459 ? [{ file, n: Number(m[1]) }] : [];
+          })
+          .sort((a, b) => a.n - b.n)
+          .map(({ file, n }) => {
+            const statements = readFileSync(join(DELTAS_DIR, file), "utf8")
+              .replace(/--[^\n]*/g, "")
+              .split(/;[ \t]*$/m)
+              .map((s) => s.trim())
+              .filter((s) => s !== "");
+            return {
+              version: `V${n}`,
+              kept: statements.filter((s) => ON_THE_THREE.test(s)),
+              skipped: statements.filter((s) => !ON_THE_THREE.test(s)),
+            };
+          })
+          .filter((d) => d.kept.length > 0);
+      /** The later deltas, checked against REPLAYED first (a delta on the three that is not pinned fails by its name), then
+       *  each one's kept statements run on the replica (the scratch schema is first on the search path). */
+      const replayLater = async (tx: typeof sql): Promise<void> => {
+        const later = laterDeltas();
+        const counted = Object.fromEntries(later.map((d) => [d.version, { kept: d.kept.length, skipped: d.skipped.length }]));
+        expect(Object.keys(counted), "the deltas after V459 that touch the three tables").toEqual(Object.keys(REPLAYED));
+        for (const [version, want] of Object.entries(REPLAYED)) expect(counted[version], version).toEqual(want);
+        for (const d of later) for (const s of d.kept) await tx.unsafe(s);
+      };
 
       /** Every column, constraint and index of a table, as one sorted list of words: its shape. */
       async function shapeOf(tx: typeof sql, schema: string, table: string): Promise<string[]> {
@@ -889,11 +981,12 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         expect(got.sideColumns, "and nothing was altered").toBe(0);
       });
 
-      it("with ONLY ended meetings it applies: the shared rows go, and the three tables end up exactly as the migrated database has them", async () => {
+      it("with ONLY ended meetings it applies: the shared rows go, and the three tables (with every later delta on them replayed) end up exactly as the migrated database has them", async () => {
         const got = await onOldShape(async (tx, live, scratch) => {
           await seedOld(tx, { ended: true });
           const before = await tx<{ n: number }[]>`select (select count(*) from fixture_video_meetings)::int + (select count(*) from fixture_video_participants)::int + (select count(*) from fixture_video_guard_faults)::int as n`;
           await tx.unsafe(delta());
+          await replayLater(tx);
           const after = await tx<{ n: number }[]>`select (select count(*) from fixture_video_meetings)::int + (select count(*) from fixture_video_participants)::int + (select count(*) from fixture_video_guard_faults)::int as n`;
           const applied: Record<string, string[]> = {};
           for (const t of TABLES) applied[t] = await shapeOf(tx, scratch, t);
@@ -913,10 +1006,11 @@ describe.skipIf(!HAS_DB)("video, flags and audit schema (V451)", () => {
         expect(compared).toBeGreaterThan(40);
       });
 
-      it("the replica and the delta lock only the scratch schema: no strong lock on a LIVE table (a parallel test file is never blocked or deadlocked by this one)", async () => {
+      it("the replica, the delta and the later deltas' replay lock only the scratch schema: no strong lock on a LIVE table (a parallel test file is never blocked or deadlocked by this one)", async () => {
         const got = await onOldShape(async (tx, live, scratch) => {
           await seedOld(tx, { ended: true });
           await tx.unsafe(delta());
+          await replayLater(tx);
           return tx<{ schema: string; mode: string }[]>`
             select n.nspname as schema, l.mode
               from pg_locks l join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace

@@ -161,7 +161,8 @@ describe("per challenger — lila's challenge.create.user", () => {
     const out = await Promise.allSettled(whites.map((w) => create(w)));
     expect(out.filter((o) => o.status === "fulfilled").length).toBe(32);
     expect(sent.length).toBe(32);
-    // Nothing spaced and nothing slept: queue wait is claim time (§3.3).
+    // Nothing spaced and nothing slept: the queue adds no wait of its own (the claim is taken at dequeue, so the wait that
+    // remains is the check-in request's, never a claim's).
     expect(t).toBe(0);
   });
 

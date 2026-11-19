@@ -223,12 +223,17 @@ describe("runDue: the R4 trigger seam", () => {
     ] as const) {
       const h = harness();
       const results = await runDue(MONDAY_0805, trigger, e, h.deps);
-      // The fast rows, in table order: stream-tick (capture QR v2 §6.11; every firing since T15), the external-play sweep
-      // (chess in-page §4) and the email outbox's worker (owner ruling 2026-10-20). Minute 05 is a multiple of FIVE_MINUTES on
-      // both envs.
-      expect(results.map((r) => r.job), name).toEqual(["stream-tick", "external-play", "email-outbox"]);
-      expect(h.posts(), name).toEqual([`${origin}/api/cron/stream-tick`, `${origin}/api/cron/external-play`, `${origin}/api/cron/email-outbox`]);
-      expect(h.lines.at(-1), name).toMatchObject({ event: "run", cron: trigger, jobs: 3 });
+      // The fast rows, in table order: stream-tick (capture QR v2 §6.11; every firing since T15), the external-play sweep (chess
+      // in-page §4), the email outbox's worker (owner ruling 2026-10-20) and, LAST (check-in capacity plan 2 Task 8: its vendor
+      // calls never delay the other three), the pre-mint pass (every firing). Minute 05 is a multiple of FIVE_MINUTES on both envs.
+      expect(results.map((r) => r.job), name).toEqual(["stream-tick", "external-play", "email-outbox", "external-play-premint"]);
+      expect(h.posts(), name).toEqual([
+        `${origin}/api/cron/stream-tick`,
+        `${origin}/api/cron/external-play`,
+        `${origin}/api/cron/email-outbox`,
+        `${origin}/api/cron/external-play-premint`,
+      ]);
+      expect(h.lines.at(-1), name).toMatchObject({ event: "run", cron: trigger, jobs: 4 });
     }
   });
 
@@ -244,15 +249,19 @@ describe("runDue: the R4 trigger seam", () => {
     }
   });
 
-  it("prod's minute trigger at a minute that is not a multiple of FIVE_MINUTES runs the stream tick and the outbox — and NOT external-play (T15: the tick joined the outbox here)", async () => {
+  it("prod's minute trigger at a minute that is not a multiple of FIVE_MINUTES runs the stream tick, the pre-mint pass and the outbox — and NOT external-play (T15: the tick joined the outbox here)", async () => {
     const h = harness();
     const notFive = new Date(Date.parse("2026-09-28T08:00:00Z") + (FIVE_MINUTES + 1) * 60_000);
     const results = await runDue(notFive, FAST_PROD, env(), h.deps);
-    expect(results.map((r) => r.job)).toEqual(["stream-tick", "email-outbox"]);
-    expect(h.posts()).toEqual(["https://seazn.club/api/cron/stream-tick", "https://seazn.club/api/cron/email-outbox"]);
+    expect(results.map((r) => r.job)).toEqual(["stream-tick", "email-outbox", "external-play-premint"]);
+    expect(h.posts()).toEqual([
+      "https://seazn.club/api/cron/stream-tick",
+      "https://seazn.club/api/cron/email-outbox",
+      "https://seazn.club/api/cron/external-play-premint",
+    ]);
   });
 
-  it("one prod hour of minute firings posts the stream tick and the outbox every minute and external-play every FIVE_MINUTES (the Worker's own count, through runDue)", async () => {
+  it("one prod hour of minute firings posts the stream tick, the pre-mint pass and the outbox every minute and external-play every FIVE_MINUTES (the Worker's own count, through runDue)", async () => {
     const h = harness();
     const HOUR = Date.parse("2026-09-28T08:00:00Z");
     let firings = 0;
@@ -261,17 +270,20 @@ describe("runDue: the R4 trigger seam", () => {
     const per = (path: string) => h.posts().filter((u) => u.endsWith(path)).length;
     expect(per("/api/cron/email-outbox")).toBe(60);
     expect(per("/api/cron/stream-tick")).toBe(60);
+    expect(per("/api/cron/external-play-premint")).toBe(60);
     expect(per("/api/cron/external-play")).toBe(60 / FIVE_MINUTES);
   });
 
-  it("one stg hour of */5 firings posts all three fast rows 12 times each — stg's cadence is unchanged by T15 (owner Q1 = b)", async () => {
+  it("one stg hour of */5 firings posts all four fast rows 12 times each — stg's cadence is unchanged by T15 (owner Q1 = b)", async () => {
     const h = harness();
     const HOUR = Date.parse("2026-09-28T08:00:00Z");
     let firings = 0;
     for (let m = 0; m < 60; m += 5, firings++) await runDue(new Date(HOUR + m * 60_000), FAST_STG, stgEnv(), h.deps);
     expect(firings).toBe(12);
     const per = (path: string) => h.posts().filter((u) => u.endsWith(path)).length;
-    for (const path of ["/api/cron/stream-tick", "/api/cron/external-play", "/api/cron/email-outbox"]) expect(per(path), path).toBe(12);
+    for (const path of ["/api/cron/stream-tick", "/api/cron/external-play-premint", "/api/cron/external-play", "/api/cron/email-outbox"]) {
+      expect(per(path), path).toBe(12);
+    }
   });
 
   it("an env name the table does not know is refused by name, before any call (a misnamed ENV_NAME is a loud failure, not a silent no-op)", async () => {

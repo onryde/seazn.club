@@ -31,7 +31,12 @@
  * not see it). From apps/web, against a FRESH DB (leftover meetings from an earlier run are swept into this one's
  * numbers) and a PRODUCTION build whose server carries the fixture variables (LICHESS_BASE_URL=http://127.0.0.1:4321,
  * REALTIMEKIT_BASE_URL=http://127.0.0.1:4322, REALTIMEKIT_METER_ANY_BASE=1 for the metered mode, ONLINE_CHESS_ALWAYS=1,
- * CRON_SECRET, AUTH_SECRET, LICHESS_TOKEN_KEK - the same set the walkthrough needs):
+ * CRON_SECRET, AUTH_SECRET, LICHESS_TOKEN_KEK - the same set the walkthrough needs - and EXTERNAL_PLAY_WINDOW_DEFER=0, which the
+ * walkthrough's job sets too: the sweep defers its teardown and camera evidence while ANY round is inside a check-in window
+ * (check-in capacity plan 2 Task 8, ruling R3), and this run's STRICT waits - every meeting ended, every camera evidence settled -
+ * are driven through /api/cron/external-play inside the window of the round it just opened, so a server that leaves the deferral on
+ * would hold them for 30+ minutes. The run FAILS NAMING the variable if a pass reports `windowsOpen: 1`, and its report carries the
+ * count (`sweep.windowsOpenPasses`):
  *
  *   PLAYWRIGHT_BASE=http://localhost:3391 E2E_PROD_TARGET=1 DATABASE_URL=... DATABASE_SSL=disable \
  *   AUTH_SECRET=... CRON_SECRET=... LICHESS_TOKEN_KEK=... \
@@ -51,7 +56,7 @@
  * and LOAD_EVIDENCE_SWEEP_EVERY_S (20: after the last result the run keeps sweeping until every meeting is ended and its
  * camera evidence settled - the sweep reads it at least two minutes after a room ends), LOAD_SERVER_LOG (the server's
  * stdout file, to count the seat deferrals it logged), LOAD_DUMP_CALLS=1 (every recorded vendor call with its time, next
- * to the report), LOAD_WEBHOOKS (0: the fixture emits webhooks but delivers none, the baseline; 1: delivered over HTTP to the server under
+ * to the report), LOAD_PRESENCE_PROOF (0, or unset: the server's one-read proof is OFF and a stay is priced at 21 / its re-verify at 3; 1: the server runs with EXTERNAL_PLAY_PRESENCE_PROOF=1 and the bars are the table's flag-on prices, 9 / 1 - it must equal the server's own flag; B-dry refuses 1), LOAD_WEBHOOKS (0: the fixture emits webhooks but delivers none, the baseline; 1: delivered over HTTP to the server under
  * test, which reads the key from the fixture's origin; the run then FAILS when it delivered none or one failed, when a presence row is left
  * open once every meeting has ended, when a delivered participantLeft has no row closed by 'left', or when a delivered uuid is not in
  * realtimekit_webhook_deliveries; its report carries `webhooks` and the shadow report's numbers - plan 1 Task 10c),
@@ -76,7 +81,7 @@
  * 0 unexcused rises) belong to the legs where the line forms with two or more stays waiting - `B-honest` and `B-slow-*` - because zero
  * pairs is a failure and B has none. `B` owes NO held-stays bar: its demand sits a few tokens from the bucket's supply, so whether a stay is
  * held is run to run (5 of 6 runs) - its held count and lowest gate level are only RECORDED. The DRY bars (a stay held, and the gate saw a
- * bucket level under LINE_COMPLETING_LEVEL) belong to `B-dry`, whose arrival spread is derived so the bucket is short of tokens by construction.
+ * bucket level under the completing level, `lineCompletingLevel`) belong to `B-dry`, whose arrival spread is derived so the bucket is short of tokens by construction.
  * Every strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database:
  *
  *   A           LOAD_SCENARIO=A LOAD_BOARDS=30 LOAD_ARRIVAL_SPREAD_S=20 LOAD_OPENED_AGO_S=0
@@ -152,6 +157,8 @@ import {
   webhookDigest,
   webhookVerdict,
 parseWebhooksKnob,
+  parseProofKnob,
+  stayPriceMax,
 } from "./line-load";
 
 const num = (name: string, fallback: number): number => {
@@ -166,11 +173,19 @@ const BOARDS = num("LOAD_BOARDS", 30);
 const PLIES = num("LOAD_PLIES", 20);
 /** Which capacity scenario this run is (a label in the report; the knobs below are what make it one). */
 const SCENARIO = process.env.LOAD_SCENARIO ?? "default";
+/** The runner's copy of the SERVER's EXTERNAL_PLAY_PRESENCE_PROOF (exactly "1" is on): "proof" prices a stay at the table's flag-on half (9 at
+ *  most) and its re-verify at one read, "fallback" (0 / unset, the default) at today's three-call read (21 and 3). The server under test reads its flag
+ *  from ITS env, so this must be set to the same value: a run that says "fallback" against a flag-on server gives every bar 12 calls of slack it does
+ *  not have (T7 review), and one that says "proof" against a flag-off server reds every stay over 9. The report records it (`cost.readMode`). */
+const READ_MODE = parseProofKnob(process.env.LOAD_PRESENCE_PROOF);
+const STAY_PRICE = stayPriceMax(READ_MODE);
+const RECHECK_COST = LINE_LOAD.recheckCost[READ_MODE];
 /** B-dry's arrival spread is DERIVED, never typed (line-load.ts dryArrivalSpreadS): demand exceeds what the call budget supplies by DRY_MARGIN_CALLS.
  *  The players are the required boards' two seats each (the default mix), at the instant-camera cost measured for B. Setting the spread or the mix
  *  by hand on this leg would make the derivation a lie, so either is refused; a spread that does not exist (a run too small to run dry) is refused too. */
 const DRY_DERIVATION = (() => {
   if (SCENARIO !== "B-dry") return null;
+  if (READ_MODE !== "fallback") throw new Error("B-dry is a flag-off leg: its per-player cost (LINE_LOAD.instantCallsPerPlayer) was measured with the one-read proof off, so LOAD_PRESENCE_PROOF must not be 1");
   for (const name of ["LOAD_ARRIVAL_SPREAD_S", "LOAD_POLICY_MIX"]) {
     if (process.env[name] !== undefined && process.env[name] !== "") throw new Error(`B-dry derives its own arrival spread: ${name} must not be set`);
   }
@@ -585,6 +600,8 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         return { skipped: false };
       }
       sweepPasses.push({ at, ms: Date.now() - at, skipped: data.skipped === true, report: data });
+      // Plan 2 Task 8: a pass that deferred for an open window would hold the strict teardown / evidence waits below for 30+ minutes.
+      if (data.windowsOpen === 1) failures.push("sweep deferred for an open check-in window: start the server with EXTERNAL_PLAY_WINDOW_DEFER=0 (this run's teardown waits cannot be met otherwise)");
       return { skipped: data.skipped === true };
     }
 
@@ -1188,12 +1205,12 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         };
       });
     const costs = stayCosts(vendorCalls, costInputs);
-    const costVerdict = judgeCosts(costs, LINE_LOAD.reservation, LINE_LOAD.recheckCost);
+    const costVerdict = judgeCosts(costs, STAY_PRICE, RECHECK_COST);
     const overWithoutReason = costVerdict.over.filter((c) => c.unreserved.length === 0);
     const overRecheckWithoutReason = costVerdict.overRecheck.filter((c) => c.unreserved.length === 0);
 
     // The drained phase, the pace, the netting trigger, B-slow's bound.
-    const drain = drainOf(lineSamples);
+    const drain = drainOf(lineSamples, STAY_PRICE, RECHECK_COST);
     const admittedAts = allTracks.flatMap((t) => (t.admittedAt === null ? [] : [t.admittedAt])).sort((a, b) => a - b);
     const pace = admissionPace(admittedAts, drain.drainedAt ?? Infinity);
     // D_run: the vendor calls from the run's first claim to its last game creation (teardown and evidence are outside it).
@@ -1215,6 +1232,8 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
             refillPerS: LOAD_LIMITS.rtkRefillPerS,
             pollMs: LINE_LOAD.pollMs,
             maxBackoffMs: Math.max(...BACKOFF_MS),
+            reservation: STAY_PRICE,
+            recheckCost: RECHECK_COST,
           })
         : null;
     const perPlayerCalls = requiredPlayers > 0 ? checkInCalls / requiredPlayers : null;
@@ -1269,7 +1288,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         .flatMap((c) => {
           const before = orderedSamples.filter((x) => x.at <= c.recvAt);
           const smp = before[before.length - 1];
-          return smp ? [poolOf(smp)] : [];
+          return smp ? [poolOf(smp, STAY_PRICE, RECHECK_COST)] : [];
         }),
     );
     let lockWaitsMs: number[] = [];
@@ -1317,8 +1336,9 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       order: { inversions, reorders, positionsLooked: rises.looked, rises: { excused: rises.excused.length, unexcused: rises.unexcused.length, excusedCauses: rises.excused.map((r) => r.cause), unexcusedRises: rises.unexcused.map((r) => ({ ...r, stay: stayFacts.find((x) => x.id === r.id) ?? null, neighbours: stayFacts.filter((x) => x.id !== r.id && x.queuedAt !== null && x.queuedAt > r.between[0] - 1_000 && x.queuedAt <= r.between[1] + 1_000).map((x) => ({ queuedAfterShownMs: x.queuedAt! - r.between[0], arrivedBeforeMineMs: (stayFacts.find((m) => m.id === r.id)?.firstClaimAt ?? 0) - x.firstClaimAt, rejoiner: x.rejoiner })) })) } },
       cost: {
         stays: costVerdict.stays,
-        reservation: LINE_LOAD.reservation,
-        recheckCost: LINE_LOAD.recheckCost,
+        readMode: READ_MODE,
+        reservation: STAY_PRICE,
+        recheckCost: RECHECK_COST,
         max: costVerdict.max,
         distribution: costVerdict.distribution,
         overReservation: costVerdict.over.map((c) => ({ id: c.id, own: c.own, unreserved: c.unreserved })),
@@ -1445,6 +1465,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
       sweep: {
         passes: sweepPasses.length,
         skippedByTheLock: sweepPasses.filter((s) => s.skipped).length,
+        windowsOpenPasses: sweepPasses.filter((s) => s.report.windowsOpen === 1).length,
         durationsMs: sweepRuns.map((s) => s.ms),
         callsDuringEachPass: sweepRuns.map((s) => ({
           lichess: lichessCalls.filter((c) => c.at >= s.at && c.at <= s.at + s.ms).length,
@@ -1560,12 +1581,12 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
     if (STRICT && bars.dry) {
       expect(held, `capacity ${SCENARIO}: the dry bucket was met and a stay was held for it (held stays; zero would leave the late-create bar vacuous)`).toBeGreaterThan(0);
       expect(gateLevel?.decisions ?? 0, `capacity ${SCENARIO}: gate decisions that carried a bucket level (zero is a failure: the level bar below would read nothing)`).toBeGreaterThan(0);
-      expect(gateLevel?.min ?? Number.POSITIVE_INFINITY, `capacity ${SCENARIO}: the gate saw the bucket below LINE_COMPLETING_LEVEL (${LINE_LOAD.completingLevel}) at least once`).toBeLessThan(LINE_LOAD.completingLevel);
+      expect(gateLevel?.min ?? Number.POSITIVE_INFINITY, `capacity ${SCENARIO}: the gate saw the bucket below the completing level (${LINE_LOAD.completingLevel}) at least once`).toBeLessThan(LINE_LOAD.completingLevel);
     }
     if (STRICT && bars.cost) {
       expect(costVerdict.stays, "capacity B: stays costed (the 60 players: zero is a failure)").toBe(requiredPlayers);
       expect(overWithoutReason.map((c) => c.id), "capacity B: a stay above its reservation with no unreserved claim to explain it: 0").toEqual([]);
-      expect(overRecheckWithoutReason.map((c) => c.id), "capacity B: a re-verify above LINE_RECHECK_COST with no unreserved claim to explain it: 0").toEqual([]);
+      expect(overRecheckWithoutReason.map((c) => c.id), "capacity B: a re-verify above the stamped re-verify cost (lineRecheckCost) with no unreserved claim to explain it: 0").toEqual([]);
       expect(busyRefusals ?? 0, "capacity B: gate lock busy refusals: expected 0").toBe(0);
     }
     if (STRICT && SCENARIO.startsWith("B-slow") && bound) {

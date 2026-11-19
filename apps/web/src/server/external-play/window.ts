@@ -82,6 +82,25 @@ export function boardCap(anchor: BoardAnchor): Date {
   return new Date(windowFor(anchor).deadline.getTime() + LINE_DEADLINE_GRACE_MS);
 }
 
+/** How long past a round's LAST batch start any of its boards can still be inside a check-in window, its grace or an extension: the
+ *  deadline, the line's grace and the arbiter's most extension (`CHECKIN_EXTEND_MAX` presses of `CHECKIN_EXTEND_STEP_MS`). A bound for
+ *  the whole round, never a per-board re-derivation of `windowFor`: `roundWindowBoundSql` (round-open.ts) adds it to the round's last
+ *  batch start. Summed HERE, and only here, because rule 3 of batch-anchor-source-guard.test.ts refuses arithmetic with
+ *  DEADLINE_AFTER_MS anywhere but this file. */
+export const ROUND_WINDOW_TAIL_MS = DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS + CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS;
+
+/** The most boards of one round that `ROUND_WINDOW_SCAN_LOOKBACK_MS` allows for. There is no product cap on a round's size (the
+ *  plan's entrant limit is unlimited on the top tier), so this is a DECLARED bound, 20 times the largest field a division is sold at
+ *  today (256): a staggered round bigger than this, still inside its last batch's window more than the lookback after its open, would
+ *  read as closed to `anyCheckinWindowOpen`. */
+export const ROUND_WINDOW_SCAN_MAX_BOARDS = 5_000;
+
+/** How far back `anyCheckinWindowOpen` looks for an open round: the tail plus the stagger of a round of `ROUND_WINDOW_SCAN_MAX_BOARDS`
+ *  boards. A round opened longer ago than this cannot still be inside a window, so the scan skips it - and, with it, the per-row count
+ *  of its fixtures that `roundWindowBoundSql` makes, which is the cost the bound exists to avoid (the table holds every round ever
+ *  opened). Summed HERE with the tail, for the same reason. */
+export const ROUND_WINDOW_SCAN_LOOKBACK_MS = ROUND_WINDOW_TAIL_MS + (batchCount(ROUND_WINDOW_SCAN_MAX_BOARDS) - 1) * CHECKIN_BATCH_GAP_MS;
+
 export type RoomPhase = "before" | "open" | "closed";
 
 export function roomPhase(now: Date, anchor: BoardAnchor): RoomPhase {

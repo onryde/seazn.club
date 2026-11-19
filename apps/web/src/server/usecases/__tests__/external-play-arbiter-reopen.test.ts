@@ -24,7 +24,7 @@ import {
 import { ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { joinAsArbiter, leaveAsArbiter } from "../external-play/arbiter";
 import { seatPlayer } from "../external-play/preflight";
-import { seedOnlineChessFixture, seedOnlineChessRound, type SeedOnlineChessRoundResult } from "./_external-play-seed";
+import { putVideoParticipant, seedOnlineChessFixture, seedOnlineChessRound, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
 const DB = !!process.env.DATABASE_URL;
 
@@ -52,8 +52,10 @@ async function watchable(): Promise<{ r: SeedOnlineChessRoundResult; fixtureId: 
     insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by)
     values (${r.stageId}, ${r.orgId}, ${r.roundNo}, ${new Date(Date.now() - 5 * 60_000)}, ${r.ownerUserId})`;
   const fixtureId = r.boards[0]!.fixtureId;
-  // D16: an arbiter joins a player's EXISTING meeting and never makes one; the home player's has been made by their arrival.
+  // D16: an arbiter joins a player's EXISTING meeting and never makes one; the home player's has been made by their arrival - and a room
+  // alone is no arrival (check-in capacity plan 2 Task 10: the pre-mint job makes rooms before anyone comes), so their participant is on file.
   await ensureMeeting(fixtureId, "home");
+  await putVideoParticipant({ fixtureId, side: "home", personId: r.boards[0]!.home.personId });
   return { r, fixtureId };
 }
 
