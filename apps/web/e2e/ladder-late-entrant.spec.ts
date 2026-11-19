@@ -7,7 +7,7 @@ import { apiJson, TAG, divisionPath, expectNoHorizontalScroll } from "./helpers"
 // the ladder panel (which lists the order) never showed them and every challenge naming them was refused
 // LADDER_ENTRANT_FOREIGN. The vitest (`ladder-late-entrant.test.ts`) drives the doors; this drives the console, which
 // is what an organiser sees: the new name appears at the bottom, is offered by the pickers, and a challenge they are in
-// goes through.
+// goes through. Desktop only (a spec outside e2e/mobile/); e2e/mobile/ladder-late-entrant.spec.ts runs the same flow at the seven phone/tablet widths.
 const GENERIC_CONFIG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
 test("a late entrant appears at the bottom of the ladder panel and can be challenged", async ({ page, request }) => {
@@ -41,5 +41,13 @@ test("a late entrant appears at the bottom of the ladder panel and can be challe
   await selects.nth(1).selectOption(ents.data![2]!.id);
   await page.getByRole("button", { name: /issue challenge/i }).click();
   await expect(page.locator("p.text-red-600")).toHaveCount(0);
+  // POSITIVE: the challenge exists - a fixture between the late entrant and the rung above appears in the division's
+  // fixtures (a refusal and a silent no-op would both leave the red banner absent, so the absence proves nothing alone).
+  await expect
+    .poll(async () => {
+      const fx = await apiJson<{ home_entrant_id: string | null; away_entrant_id: string | null }[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+      return (fx.data ?? []).some((f) => [f.home_entrant_id, f.away_entrant_id].includes(late.data![0]!.id) && [f.home_entrant_id, f.away_entrant_id].includes(ents.data![2]!.id));
+    })
+    .toBe(true);
   await expectNoHorizontalScroll(page);
 });
