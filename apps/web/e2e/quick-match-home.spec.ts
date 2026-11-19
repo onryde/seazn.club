@@ -541,6 +541,11 @@ function en(key: string, vars: Record<string, string | number> = {}): string {
     return String(vars[slot]);
   });
 }
+/** `en` with a pickup: the quick-match guest's ALREADY_DECIDED sentence as its pad renders it (`alreadyDecidedText`): the
+ *  guest key, its control filled from `device.undoMine` with the glyph the button draws. The negative "no refusal line"
+ *  checks below look for exactly this string, and the guest test at the end of the file shows it on screen, so a
+ *  negative here cannot pass on a string the product never renders. */
+const GUEST_REFUSAL = () => en("scorepad.refusal.alreadyDecidedGuest", { control: `⟲ ${en("device.undoMine")}` });
 /** `plural()`'s choice: the `.one`/`.other` line by English plural rules, `{count}` always filled. */
 const enPlural = (key: string, count: number, vars: Record<string, string | number> = {}) =>
   en(`${key}.${EN_RULES.select(count)}`, { count, ...vars });
@@ -968,7 +973,7 @@ test("Stale screens: a match skipped on another phone: the pad held on Confirm s
   await pressStart(pad);
   await expect(pad.getByTestId("scan-view-only")).toHaveText(en("device.quickMatch.notPlayed"), { timeout: 20_000 });
   await expect(pad.getByTestId("score-start-match"), "no Start left").toHaveCount(0);
-  await expect(pad.getByText(en("engineError.ALREADY_DECIDED")), "no refusal line").toHaveCount(0);
+  await expect(pad.getByText(GUEST_REFUSAL()), "no refusal line").toHaveCount(0);
   await expect(pad.getByText(en("device.failed")), "no failure line").toHaveCount(0);
   const [started] = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${id}`);
   expect(started!.n, "the refused Start wrote nothing").toBe(0);
@@ -1054,7 +1059,7 @@ test("Pad left open: a rally on the pad, the match skipped on another phone (the
     // says the match was marked Not played, with no refusal line.
     await homeHalf.click();
     await expect(page.getByTestId("scan-view-only")).toHaveText(en("device.quickMatch.notPlayed"), { timeout: HOLD_MS + 20_000 });
-    await expect(page.getByText(en("engineError.ALREADY_DECIDED")), "no refusal line").toHaveCount(0);
+    await expect(page.getByText(GUEST_REFUSAL()), "no refusal line").toHaveCount(0);
     await expect(homeHalf, "View-only: no controls").toHaveCount(0);
     expect(await rallies(id), "the tap after the skip wrote nothing").toBe(1);
     expect((await recordOf([id])).get(id)?.status).toBe("cancelled");
@@ -1772,4 +1777,26 @@ test("Every league match skipped (plan 5 T8 (4)): three level sides straddle a c
   const after = await lkRecord(first!);
   expect([after.confirmed, [after.knockout[0]!.home, after.knockout[0]!.away].sort()], "the final is as the pick filled it").toEqual([1, [...chosen].sort()]);
   await stale!.close();
+});
+
+test("Guest pad: a tap the server refuses ALREADY_DECIDED reads the guest's own line, with its control and nobody to ask (the positive pair of the 'no refusal line' checks)", async ({ guest: page }) => {
+  test.setTimeout(3 * 20_000 + HOLD_MS + 20_000);
+  await createThroughSetup(page, ["Ravi & Sam", "Priya & Tom", "Lee & Ana"]);
+  await nextMatch(page);
+  await page.getByTestId("qm-hero").getByTestId("qm-score").click();
+  await expect(page).toHaveURL(/\/score\/dl_/);
+  await pressStart(page);
+  const homeHalf = page.locator('[data-role="pad-v3"] button[data-role="v3-scorebug-half"][data-side="home"]');
+  await expect(homeHalf).toBeVisible({ timeout: 20_000 });
+  // The server's answer is the one thing faked: a real pad, a real tap, a real 422 envelope.
+  await page.route("**/api/v1/fixtures/*/events", (route) =>
+    route.request().method() !== "POST"
+      ? route.continue()
+      : route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ ok: false, error: { code: "ALREADY_DECIDED", message: "this match already has a result" } }) }),
+  );
+  await homeHalf.click();
+  const banner = page.locator('[data-role="v3-rejection"]');
+  await expect(banner, "the guest's line, in the pad").toHaveText(GUEST_REFUSAL(), { timeout: HOLD_MS + 20_000 });
+  expect(await banner.textContent(), "a guest has no organiser to ask").not.toMatch(/organi[sz]er/i);
+  expect(await banner.textContent(), "and no console").not.toContain(en("score.voidLast"));
 });
