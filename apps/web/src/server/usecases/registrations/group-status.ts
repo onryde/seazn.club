@@ -437,6 +437,26 @@ async function buildGroupStatusView(
     settlementsByRegistration(group.competition_id, entries.map((e) => e.id)),
   ]);
 
+  // Fix round 2 M-1: an entry whose OWN payment was lost to a chargeback is not refunded again (the refund paths refuse it), so the
+  // status page must not promise the automatic refund. One read for the whole cart, keyed on each entry's own intent (disputes.ts).
+  const ownIntents = entries.map((e) => e.entry_payment_intent_id).filter((i): i is string => !!i);
+  const lostIntents = new Set(
+    ownIntents.length === 0
+      ? []
+      : (
+          await sql<{ pi: string }[]>`
+            select distinct ev.payload->>'payment_intent_id' as pi from competition_events ev
+             where ev.competition_id = ${group.competition_id}
+               and ev.type = 'registration.dispute_lost'
+               and ev.payload->>'payment_intent_id' in ${sql(ownIntents)}`
+        ).map((r) => r.pi),
+  );
+
+  /** An entry whose own payment was lost: never refundable, and the page says why (`reason: "payment_lost"`) instead of promising an
+   *  automatic refund or "at the organiser's discretion" while manual Refund answers 422 (fix round 3). */
+  const withLostReason = (intent: string | null, policy: ResolvedRefundPolicy): ResolvedRefundPolicy =>
+    intent && lostIntents.has(intent) ? { ...policy, refundable: false, reason: "payment_lost" } : policy;
+
   const playersByEntry = new Map<string, GroupEntryPlayerView[]>();
   for (const p of players) {
     const list = playersByEntry.get(p.registration_id) ?? [];
@@ -520,7 +540,7 @@ async function buildGroupStatusView(
           : null,
       players: playersByEntry.get(e.id) ?? [],
       settled_by: settledByEntry.get(e.id) ?? null,
-      refund_policy: resolveRefundPolicy(
+      refund_policy: withLostReason(entry_payment_intent_id, resolveRefundPolicy(
         refundLockByDivision.get(e.division_id) ?? null,
         comp?.starts_on ?? null,
         refundTz,
@@ -540,11 +560,13 @@ async function buildGroupStatusView(
         // registrant "you will be refunded automatically" for a charge that
         // is not theirs. Null reads as not-automatically-refundable, which
         // is the honest answer when we cannot name this entry's charge.
-        e.status === "paid" || e.status === "confirmed" ? entry_payment_intent_id : null,
+        (e.status === "paid" || e.status === "confirmed") && entry_payment_intent_id && !lostIntents.has(entry_payment_intent_id)
+          ? entry_payment_intent_id
+          : null,
         e.amount_cents,
         // Polish wave P5 (carry b), the read twin of withdrawCore's: what was sent back of THIS payment, not the history.
         ownPaymentRefundedCents({ refunded_cents, late_refunded_cents }),
-      ),
+      )),
     })),
   };
 }

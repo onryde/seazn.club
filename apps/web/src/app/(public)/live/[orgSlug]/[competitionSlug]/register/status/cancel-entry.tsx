@@ -46,12 +46,15 @@ export function CancelEntry({
   token,
   divisionName,
   refundable,
+  paymentLost = false,
   refundAmountFormatted,
 }: {
   entryId: string;
   token: string;
   divisionName: string;
   refundable: boolean;
+  /** This entry's own card payment was lost to a dispute: the dialog says no refund can be made, not "at the organiser's discretion". */
+  paymentLost?: boolean;
   /** This entry's own remaining refund_policy.amount_cents, already
    *  formatted in the cart's currency/locale — only shown when refundable. */
   refundAmountFormatted: string;
@@ -70,9 +73,11 @@ export function CancelEntry({
     setArmed(true);
     const ok = await confirmDialog({
       title: msg("confirm.cancelEntry.title", { division: divisionName }),
-      body: refundable
-        ? msg("confirm.cancelEntry.bodyRefundable", { amount: refundAmountFormatted })
-        : msg("confirm.cancelEntry.bodyDiscretion"),
+      body: paymentLost
+        ? msg("confirm.cancelEntry.bodyPaymentLost")
+        : refundable
+          ? msg("confirm.cancelEntry.bodyRefundable", { amount: refundAmountFormatted })
+          : msg("confirm.cancelEntry.bodyDiscretion"),
       confirmLabel: msg("confirm.cancelEntry.label"),
       tone: "danger",
     });

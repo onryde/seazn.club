@@ -1,8 +1,11 @@
 import "server-only";
 // Chargeback handling and the dispute evidence pack (see ./index.ts).
 import type Stripe from "stripe";
+import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
-import { disputeAlertEmail, disputeLostEmail } from "@/lib/email";
+import { disputeAlertEmail, disputeLostEmail, staffDisputeAlertEmail } from "@/lib/email";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
+import { log } from "@/server/logger";
 import { routes } from "@/lib/routes";
 import { toLocale } from "@/lib/i18n-constants";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
@@ -10,9 +13,124 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "../dispute-recovery";
 import { orgOwnerRecipient } from "../org-owner";
 import { audit } from "../audit";
-import type { RegistrationRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
+import type { AnySql, RegistrationRow, RegistrationWithGroupRow, DivisionCtx } from "./types";
 import { regGroupCols, divisionCtx, fallbackOrigin, orgReg } from "./lookups";
 import { buildCartMail } from "./mail";
+
+/** Where the chargeback on ONE ENTRY'S OWN payment stands, as one SQL expression over the competition id expression `competitionId` and the
+ *  entry's own payment intent `entryIntent` (registration defects fix round 3): null when that payment was never disputed (or the entry
+ *  has no card payment of its own), else `'lost'`, `'won'` or `'open'`. No column stores it and the CART does not decide it: a cart can
+ *  be paid in several Checkout sessions, so a dispute on one session's charge says nothing about an entry paid on another (and a `won`
+ *  on one must never clear the display of another's still-open dispute, which the cart's single `disputed_at` did). It is read off the
+ *  ledger rows `handleRegistrationDispute` writes, every one of which names the DISPUTED charge (`payment_intent_id`):
+ *  - lost: a `registration.dispute_lost` row naming the intent (the money is gone whatever happened later);
+ *  - won: the newest `registration.disputed` row for the intent names a dispute that has a `registration.dispute_won` row (a won
+ *    chargeback, or an inquiry the bank closed);
+ *  - open: that newest dispute has neither.
+ *  A cart paid in ONE session shares one intent across its entries, so they all read the same. Evaluated per row: two index-friendly
+ *  probes of `competition_events` (competition, type) with a payload filter. */
+export function disputeOutcomeSql(db: AnySql, competitionId: postgres.PendingQuery<postgres.Row[]>, entryIntent: postgres.PendingQuery<postgres.Row[]>) {
+  return db`case
+      when ${entryIntent} is null then null
+      when exists (
+        select 1 from competition_events ev
+         where ev.competition_id = ${competitionId}
+           and ev.type = 'registration.dispute_lost'
+           and ev.payload->>'payment_intent_id' = ${entryIntent}
+      ) then 'lost'
+      else (
+        select case when exists (
+                 select 1 from competition_events w
+                  where w.competition_id = ${competitionId}
+                    and w.type = 'registration.dispute_won'
+                    and w.payload->>'dispute_id' = d.dispute_id
+               ) then 'won' else 'open' end
+          from (
+            select ev.payload->>'dispute_id' as dispute_id from competition_events ev
+             where ev.competition_id = ${competitionId}
+               and ev.type = 'registration.disputed'
+               and ev.payload->>'payment_intent_id' = ${entryIntent}
+             order by ev.created_at desc limit 1
+          ) d
+      )
+    end`;
+}
+
+/** Whether the payment `entryIntent` (an entry's OWN payment intent) was lost to a chargeback, as one SQL boolean over the competition id
+ *  expression `competitionId` (fix round 2 I-1). `disputeOutcomeSql` (above) reads the same per-entry-payment ledger rows for display; a refund moves ONE entry's own charge, and a cart
+ *  can be paid in several Checkout sessions (V387), so a loss on one session's charge says nothing about a sibling paid in another.
+ *  True when a `registration.dispute_lost` ledger row names that intent (the handler stamps the disputed charge's intent on it, and on
+ *  the `registration.disputed` / `dispute_won` rows). A cart paid in ONE session shares one intent across its entries, so a lost dispute
+ *  on it reads lost for every entry on it: the whole charge was clawed back. False for a null intent (an entry with no card payment of
+ *  its own has nothing to lose). Any lost dispute of that charge counts, not only the cart's current one: the money is gone either way. */
+export function entryPaymentLostSql(db: AnySql, competitionId: postgres.PendingQuery<postgres.Row[]>, entryIntent: postgres.PendingQuery<postgres.Row[]>) {
+  return db`(${entryIntent} is not null and exists (
+      select 1 from competition_events ev
+       where ev.competition_id = ${competitionId}
+         and ev.type = 'registration.dispute_lost'
+         and ev.payload->>'payment_intent_id' = ${entryIntent}
+    ))`;
+}
+
+/** Whether THIS ENTRY's payment was lost to a chargeback (`entryPaymentLostSql`): Stripe has already repaid the cardholder and the loss is
+ *  written off, so no refund of that payment may be sent. Judged on the entry's own intent (fix round 2 I-1), not the cart: on a cart
+ *  paid in two sessions a loss on one charge leaves the sibling's money refundable. The dispute handler raises the CART's
+ *  `refunded_cents` only; the entry's own stays 0, which is why the refund paths' own cap (`amount_cents - ownPaymentRefundedCents`)
+ *  cannot see a lost dispute and this is asked separately. Read under the caller's entry lock; the dispute handler does not take that
+ *  lock, so a refund that read just before a loss commits can still go out: the same window a refund racing any chargeback has at Stripe. */
+export async function entryPaymentLost(db: AnySql, competitionId: string, entryIntent: string | null): Promise<boolean> {
+  if (!entryIntent) return false;
+  const [row] = await db<{ lost: boolean }[]>`select ${entryPaymentLostSql(db, db`${competitionId}::uuid`, db`${entryIntent}::text`)} as lost`;
+  return row?.lost === true;
+}
+
+/**
+ * Tell staff about an entry-fee dispute (registration defects fix round 1 I3, owner decision 2026-11-18): the organiser's alert says
+ * Seazn Club responds to the bank on their behalf, so Seazn Club must be told one exists. Queued on the outbox to STAFF_ALERT_EMAIL
+ * (silent when unset), once per dispute phase (`<dispute>:created`, `<dispute>:closed`), so a replayed webhook pages nothing more.
+ * NEVER throws and is called only after the dispute's own writes have committed: a staff mail that cannot be built or queued must not
+ * block the webhook ACK or undo the flag / write-off. No Stripe call and no mail transport happens here (queueing only), and no SQL
+ * transaction is open around it.
+ */
+async function alertStaffEntryFeeDispute(
+  dispute: Stripe.Dispute,
+  reg: RegistrationWithGroupRow,
+  ctx: DivisionCtx,
+  phase: "created" | "closed",
+  recoveredCents?: number,
+): Promise<void> {
+  try {
+    const dueBy = dispute.evidence_details?.due_by;
+    await queueStaffAlert({
+      kind: "staff_dispute_alert",
+      refType: "dispute",
+      id: dispute.id,
+      suffix: phase,
+      render: () =>
+        staffDisputeAlertEmail(
+          {
+            kind: "entry_fee",
+            orgName: ctx.org_name,
+            phase,
+            status: dispute.status,
+            amountCents: dispute.amount,
+            currency: reg.currency,
+            disputeId: dispute.id,
+            entry: {
+              competitionName: ctx.comp_name,
+              entryRef: reg.ref_code ?? reg.id,
+              evidenceUrl: `${fallbackOrigin()}/api/v1/registrations/${reg.id}/evidence`,
+              dueBy: typeof dueBy === "number" ? new Date(dueBy * 1000) : null,
+              ...(recoveredCents === undefined ? {} : { recoveredCents }),
+            },
+          },
+          "en",
+        ),
+    });
+  } catch (err) {
+    log.error({ err, disputeId: dispute.id, phase }, "entry-fee dispute staff alert failed");
+  }
+}
 
 /**
  * Dispute lifecycle (spec issue #5 — destination charges make the PLATFORM
@@ -30,12 +148,14 @@ export async function handleRegistrationDispute(
       ? dispute.payment_intent
       : dispute.payment_intent?.id;
   if (!intent) return false;
-  // payment_intent_id lives on the cart now (V364).
+  // payment_intent_id lives on the cart now (V364), and each entry carries its OWN (V387). A cart paid in two sessions holds only the
+  // latest on the cart, so a dispute on the first charge is found through the entry that paid it (fix round 2 I-1); the entry that
+  // owns the intent is preferred, then the cart's earliest.
   const [reg] = await sql<RegistrationWithGroupRow[]>`
     select ${regGroupCols(sql)}
     from registrations r join registration_groups g on g.id = r.group_id
-    where g.payment_intent_id = ${intent}
-    order by r.created_at, r.id limit 1`;
+    where g.payment_intent_id = ${intent} or r.payment_intent_id = ${intent}
+    order by coalesce(r.payment_intent_id = ${intent}, false) desc, r.created_at, r.id limit 1`;
   if (!reg) return false; // not an entry-fee charge (or intent not written yet)
   const ctx = await divisionCtx(sql, reg.division_id);
 
@@ -86,21 +206,28 @@ export async function handleRegistrationDispute(
       await audit(tx, ctx.competition_id, reg.org_id, "registration.disputed", {
         registration_id: reg.id,
         dispute_id: dispute.id,
+        payment_intent_id: intent,
         amount_cents: dispute.amount,
       }, null);
     });
+    await alertStaffEntryFeeDispute(dispute, reg, ctx, "created");
     return true;
   }
   // An inquiry (opened as `warning_needs_response`) that the bank drops without a chargeback closes `warning_closed`: no money was
   // ever taken, so it ends the dispute as a win does. Without this arm the registrant stayed "disputed" for good in the hub and in
   // the division's dispute count.
   if (dispute.status === "won" || dispute.status === "warning_closed") {
-    await sql`update registration_groups set disputed_at = null, updated_at = now()
-              where id = ${reg.group_id}`;
-    await audit(sql, ctx.competition_id, reg.org_id, "registration.dispute_won", {
-      registration_id: reg.id,
-      dispute_id: dispute.id,
-    }, null);
+    // The flag and its ledger row commit together (fix round 2 M-5): two autocommits left a window where one was visible without the other.
+    await sql.begin(async (tx) => {
+      await tx`update registration_groups set disputed_at = null, updated_at = now()
+               where id = ${reg.group_id}`;
+      await audit(tx, ctx.competition_id, reg.org_id, "registration.dispute_won", {
+        registration_id: reg.id,
+        dispute_id: dispute.id,
+        payment_intent_id: intent,
+      }, null);
+    });
+    await alertStaffEntryFeeDispute(dispute, reg, ctx, "closed");
   } else if (dispute.status === "lost") {
     // The write-off must land whatever Stripe does next — same contract as
     // refund failure never undoing a withdrawal. refunded_cents/refunded_at
@@ -113,52 +240,61 @@ export async function handleRegistrationDispute(
     // way in the "created" phase's audit above (line ~1386) — and `greatest`
     // matches syncRegistrationRefund's mirror: never regress what an
     // entry-level refund may already have recorded.
-    await sql`update registration_groups
-              set refunded_cents = greatest(refunded_cents, ${dispute.amount}),
-                  refunded_at = coalesce(refunded_at, now()), updated_at = now()
-              where id = ${reg.group_id}`;
-    await audit(sql, ctx.competition_id, reg.org_id, "registration.dispute_lost", {
-      registration_id: reg.id,
-      dispute_id: dispute.id,
-    }, null);
+    // ONE transaction (fix round 2 M-5): the cart's write-off and the `dispute_lost` ledger row that the refund guard and the console read
+    // become visible together, never one without the other. (The row names the disputed payment intent: a refund is judged per entry.)
+    await sql.begin(async (tx) => {
+      await tx`update registration_groups
+               set refunded_cents = greatest(refunded_cents, ${dispute.amount}),
+                   refunded_at = coalesce(refunded_at, now()), updated_at = now()
+               where id = ${reg.group_id}`;
+      await audit(tx, ctx.competition_id, reg.org_id, "registration.dispute_lost", {
+        registration_id: reg.id,
+        dispute_id: dispute.id,
+        payment_intent_id: intent,
+      }, null);
+    });
     const recovery = await recoverDisputedTransfer(dispute, reg, ctx);
-    // `already` = a replayed close (metadata guard hit) — everything below
-    // already happened on the first run.
-    if (!recovery.already) {
-      // The owner's notice states the write-off and what the recovery pulled back, both fixed now, in the owner's language (D4). It is
-      // queued once per dispute (`<dispute id>:lost`) and the worker makes the first attempt. A refused enqueue fails the webhook (D1).
-      const owner = await orgOwnerRecipient(sql, reg.org_id);
-      if (owner) {
-        const locale = await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale });
-        const kind = "registration_dispute_lost";
-        await enqueueEmailOnce(sql, {
-          kind,
-          refType: "dispute",
-          refId: dispute.id,
-          orgId: reg.org_id,
-          to: owner.email,
-          recipientUserId: owner.userId,
-          ...(await disputeLostEmail(
-            {
-              orgName: ctx.org_name,
-              competitionName: ctx.comp_name,
-              displayName: reg.display_name,
-              amountCents: dispute.amount,
-              currency: reg.currency,
-              refCode: reg.ref_code,
-              recoveredCents: recovery.recoveredCents,
-              // divisionRegistrations route deleted (RS001 demolition) —
-              // point at the competition page for now; RS004's hub re-points
-              // this at the new competition-level Registration hub.
-              consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
-            },
-            locale,
-          )),
-          transactional: false,
-          expiresAt: expiryWithin(null),
-          dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
-        });
-      }
+    // `already` = a replayed close (the reversal exists). Both notices below still go out; their once-keys keep a redelivery from
+    // mailing twice. Staff are told with what the recovery pulled back (0 = nothing). Sent on a REPLAY too (fix round 2 M-4): the once-key
+    // (`<dispute>:closed`) drops it when the first run's alert was queued, and if that one could not be queued (it is dropped silently)
+    // the replay is the only second chance. A replay's figure is the reversal Stripe holds for this dispute (`recovery` returns it).
+    await alertStaffEntryFeeDispute(dispute, reg, ctx, "closed", recovery.recoveredCents);
+    // The owner's notice is sent on a REPLAY too (fix round 3, as the staff alert in round 2): the first delivery's enqueue can be refused
+    // (D1: that fails the webhook, so Stripe redelivers) and the redelivery finds the reversal already made (`already`), which used to skip
+    // this and leave the owner never told. The once-key (`<dispute id>:lost`) keeps a second delivery from mailing twice.
+    // It states the write-off and what the recovery pulled back, both fixed now, in the owner's language (D4); the worker makes the
+    // first attempt. A refused enqueue fails the webhook (D1).
+    const owner = await orgOwnerRecipient(sql, reg.org_id);
+    if (owner) {
+      const locale = await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale });
+      const kind = "registration_dispute_lost";
+      await enqueueEmailOnce(sql, {
+        kind,
+        refType: "dispute",
+        refId: dispute.id,
+        orgId: reg.org_id,
+        to: owner.email,
+        recipientUserId: owner.userId,
+        ...(await disputeLostEmail(
+          {
+            orgName: ctx.org_name,
+            competitionName: ctx.comp_name,
+            displayName: reg.display_name,
+            amountCents: dispute.amount,
+            currency: reg.currency,
+            refCode: reg.ref_code,
+            recoveredCents: recovery.recoveredCents,
+            // divisionRegistrations route deleted (RS001 demolition) —
+            // point at the competition page for now; RS004's hub re-points
+            // this at the new competition-level Registration hub.
+            consoleUrl: fallbackOrigin() + routes.competition(ctx.org_slug, ctx.comp_slug),
+          },
+          locale,
+        )),
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: onceKey(kind, "dispute", dispute.id, "lost"),
+      });
     }
   }
   return true;

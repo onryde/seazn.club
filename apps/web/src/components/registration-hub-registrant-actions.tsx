@@ -36,7 +36,8 @@
 // button/confirm copy is translated). Promote's resulting status depends on
 // the division's settings (fee/approval mode) and is NOT safe to guess, so
 // it gets a narrower optimistic treatment: `promotedOptimistically` hides
-// the button the instant it's clicked, without asserting a specific next
+// the button once the promote request has SUCCEEDED (never while a confirm
+// dialog is still open, fix round 1 M2), without asserting a specific next
 // status; `router.refresh()` brings the real one, and the prop-sync
 // render-time adjustment below reconciles `optimisticStatus` (and clears
 // the promote guard) once it lands.
@@ -97,10 +98,11 @@ import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { registrantKindRefusalText } from "@/lib/entrant-kind-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
+import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
 import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS, REMINDER_LIMIT_CODE } from "@/lib/registration-reminder";
 import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
@@ -147,6 +149,9 @@ export interface RegistrationHubRegistrantActionsProps {
   /** Polish wave P5 (W12): when the organiser approved this entry while its fee was still due (`approved_at`, V513), ISO; null if
    *  never approved that way. Approve is then done and the payment confirms the entry. */
   approvedAt: string | null;
+  /** THIS entry's own payment was lost to a chargeback (`dispute === "lost"`, per entry payment: fix rounds 2 and 3): Stripe already repaid the cardholder, so
+   *  Refund is not offered (the server refuses it, 422). Per ENTRY, not per cart: a sibling paid in another session keeps its Refund. */
+  paymentLostToDispute: boolean;
 }
 
 function errorText(err: unknown): string {
@@ -165,8 +170,11 @@ export function RegistrationHubRegistrantActions({
   lastRemindedAt,
   remindersInWindow,
   approvedAt,
+  paymentLostToDispute,
 }: RegistrationHubRegistrantActionsProps) {
   const msg = useMsg();
+  // The two promote refusals say a NUMBER of places / entrants, so their sentence follows the count (`.one` / `.other`, Intl.PluralRules).
+  const msgPlural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [optimisticStatus, setOptimisticStatus] = useState<Status>(status);
@@ -240,6 +248,8 @@ export function RegistrationHubRegistrantActions({
       free_agent: false,
       assigned_team_id: null,
       division_started: false,
+      // Evidence is a plain download link rendered by the detail panel beside this island, not a control of this one.
+      dispute: paymentLostToDispute ? "lost" : null,
     },
   );
 
@@ -249,6 +259,10 @@ export function RegistrationHubRegistrantActions({
    *  doors refuse an entry whose kind the division no longer takes (FU1); that too is said off its code (fix round 1 m2). */
   function failureText(err: unknown): string {
     if (!(err instanceof ApiV1Error)) return errorText(err);
+    // The plan's per-division entrant limit is met: said in the organiser's language, with the limit the server read.
+    if (err.code === PROMOTE_PLAN_LIMIT_CODE && typeof err.extra.limit === "number") {
+      return msgPlural("reg.promote.planLimit", err.extra.limit, { limit: err.extra.limit });
+    }
     const said =
       registrantKindRefusalText(err, (key, vars) => msg(key, vars)) ??
       lichessRegistrantRefusalText(err, (key) => msg(key as MessageKey));
@@ -312,7 +326,8 @@ export function RegistrationHubRegistrantActions({
   async function reject() {
     const ok = await confirmDialog({
       title: msg("reg.hub.registrants.detail.actions.confirmReject.title"),
-      body: msg("reg.hub.registrants.detail.actions.confirmReject.body"),
+      // A paid entry is refunded on reject, except one whose payment was lost to a dispute (nothing to send back): no promise then.
+      body: msg(paymentLostToDispute ? "reg.hub.registrants.detail.actions.confirmReject.bodyPaymentLost" : "reg.hub.registrants.detail.actions.confirmReject.body"),
       confirmLabel: msg("reg.hub.registrants.detail.actions.confirmReject.confirm"),
       tone: "danger",
     });
@@ -357,22 +372,43 @@ export function RegistrationHubRegistrantActions({
   }
 
   async function promote() {
-    setBusy("promote");
     setFeedback(null);
-    setPromotedOptimistically(true);
-    try {
-      // Explicit registration_id override: THIS row promotes, never
-      // whichever entry promoteFromWaitlist's default (oldest-waitlisted)
-      // would otherwise pick — the button is "promote this entry", not
-      // "promote whoever's next".
-      await apiV1(`/api/v1/registrations/${registrationId}/promote`, {
+    // Explicit registration_id override: THIS row promotes, never whichever entry promoteFromWaitlist's default (oldest-waitlisted)
+    // would otherwise pick - the button is "promote this entry", not "promote whoever's next".
+    const send = (confirmOverCapacity: boolean) =>
+      apiV1(`/api/v1/registrations/${registrationId}/promote`, {
         method: "POST",
-        json: { registration_id: registrationId },
+        json: { registration_id: registrationId, ...(confirmOverCapacity ? { confirm_over_capacity: true } : {}) },
       });
+    // `busy` and the optimistic "promoted" hide are set only around a REQUEST, never across the confirm dialog: while the organiser is
+    // still deciding, nothing has been promoted and the button must not say it is (fix round 1 M2).
+    setBusy("promote");
+    try {
+      try {
+        await send(false);
+      } catch (err) {
+        // The division is at or over its OWN capacity: the server refuses until the organiser says so. Ask, saying how full it is (the
+        // numbers the refusal carries), and resend with the confirmation. (The PLAN's limit is never asked about - it refuses either
+        // way, and is said in `failureText`.) A refusal without its numbers is not ours to ask about: it is shown as a failure.
+        if (!(err instanceof ApiV1Error && err.code === PROMOTE_OVER_CAPACITY_CODE)) throw err;
+        const { taken, capacity } = err.extra;
+        if (typeof taken !== "number" || typeof capacity !== "number") throw err;
+        setBusy(null);
+        const ok = await confirmDialog({
+          title: msg("reg.promote.overCapacity.title"),
+          body: msgPlural("reg.promote.overCapacity.body", capacity, { taken, capacity }),
+          confirmLabel: msg("reg.promote.overCapacity.label"),
+          tone: "danger",
+        });
+        if (!ok) return;
+        setBusy("promote");
+        await send(true);
+      }
+      // Promoted: only now does the button go (until the refresh lands the real status), and the success is said.
+      setPromotedOptimistically(true);
       setFeedback({ tone: "success", text: msg("reg.hub.registrants.detail.actions.promoted") });
       router.refresh();
     } catch (err) {
-      setPromotedOptimistically(false);
       setFeedback({ tone: "error", text: failureText(err) });
     } finally {
       setBusy(null);

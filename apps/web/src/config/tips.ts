@@ -89,7 +89,7 @@ export const TIPS = {
     // msg(`tips.${id}.body`) from the four dictionaries; this is the source of
     // truth the en dictionary mirrors, and lib/__tests__/dictionary-copy-truth
     // asserts the two are identical so a fix here can never be cosmetic.
-    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee cut — 2% on Pro, instead of the 5% a free organisation pays.",
+    body: "Each organisation after the first costs no more than half the base rate. It also moves to your plan's entry-fee rate instead of the one a free organisation pays; the current rates are on the pricing page.",
     helpSlug: "billing/groups",
   },
   // Held back when the tips landed, because quantity_paid was written by
@@ -126,12 +126,12 @@ export const TIPS = {
   },
   "registration.platform-fee": {
     title: "The platform fee",
-    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments: 5% on Community, 3% on a competition with an Event Pass, 2% on Pro, 1% on Enterprise. Stripe's own processing fee is separate.",
+    body: "Charging entry fees is free on every plan, Community included. What your plan sets is the fee we keep on card payments — the current rates are on the pricing page. Stripe's own processing fee is separate.",
     helpSlug: "registration/card-payments",
   },
   "registration.ref-number": {
     title: "Reference numbers",
-    body: "Every registration gets a short reference like R-7F3K. Players use it to find, pay for or withdraw their entry — no account needed.",
+    body: "Every registration gets a short reference like SZ-7F3K-Q2JX. Players use it to find, pay for or withdraw their entry — no account needed.",
     helpSlug: "registration/reference-numbers",
   },
   "schedule.locking": {

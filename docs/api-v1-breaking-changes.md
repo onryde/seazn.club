@@ -7,6 +7,38 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-11-18 — promoting, confirming or waiving a waitlisted entry is checked for room
+
+An organiser could seat a waitlisted entry past the division's capacity, and past the plan's per-division entrant limit, with no
+refusal and no warning. Three writes seat such an entry and now share one check (`assertOrganiserPromotionHasRoom`):
+
+- `POST /api/v1/registrations/{id}/promote`
+- `POST /api/v1/registrations/{id}/confirm` (also seats an `expired` entry)
+- `POST /api/v1/registrations/{id}/waive`
+
+The check applies to a TEAM entry that does not already hold a place: a `waitlisted` or `expired` one. A solo sign-up (free agent)
+takes no division place and is never refused here; an entry that already holds a place (`pending`, `paid`) is unaffected. The two
+refusals carry a machine-readable `code` in the v1 error envelope (`error.code`), with the numbers beside it.
+
+| Case | Before | Now |
+|---|---|---|
+| The division's own capacity is reached, body without `confirm_over_capacity` | 200, the entry seated over capacity | `409 PROMOTE_OVER_CAPACITY`, `error.capacity` and `error.taken` set; nothing written |
+| The same, body `{ "confirm_over_capacity": true }` | not a field | 200, seated |
+| The plan's per-division entrant limit is reached (add-on bonus included), confirmed or not | 200, seated over the limit | `422 PROMOTE_PLAN_LIMIT`, `error.limit` and `error.taken` set; nothing written. Never lifted by `confirm_over_capacity` |
+| `confirm_over_capacity` present and not a boolean | ignored | `400` |
+| `confirm` or `waive` with no body at all | 200 | unchanged: the body is optional on both (`promote`'s was already) |
+| `confirm` or `waive` with a body that is not valid JSON | ignored (read as no body: 200) | `400 "Request body must be valid JSON"`. An EMPTY body is still fine; only malformed text is refused |
+| Room available, or a solo sign-up | 200 | unchanged |
+
+`confirm_over_capacity` is a new optional boolean on all three bodies (`PromoteRegistration` and the new `ConfirmRegistration`
+schema in `openapi/v1.json`; the `confirm` and `waive` request bodies are documented `required: false`, as the routes accept none). Only the division's own capacity can be confirmed past; a caller that retried a refused `confirm`
+or `waive` unchanged now gets the same 409, and must resend with the field once its user has agreed. Oldest-first promotion
+(`promote` with no `registration_id`) judges the entry it is about to promote, so a queue of solo sign-ups on a full division
+still promotes unrefused.
+
+Pinning tests: `apps/web/src/server/usecases/__tests__/registration-promote-capacity.test.ts` and
+`apps/web/src/app/api/v1/registrations/[id]/__tests__/approval-routes.test.ts`.
+
 ## 2026-11-12 — the public registration writes take a bot-check token
 
 Five public writes are now checked by Cloudflare Turnstile on the hosted service (staging and production):

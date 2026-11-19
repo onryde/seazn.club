@@ -15,13 +15,14 @@
 // ever actually mounted here.
 import type { ComponentProps } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { t } from "@/lib/i18n-runtime";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 import { REMINDER_CAP_PER_DAY, REMINDER_CONFIRM_WITHIN_MS } from "@/lib/registration-reminder";
+import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
 
 const nav = vi.hoisted(() => ({ refresh: vi.fn() }));
 vi.mock("next/navigation", () => ({
@@ -104,6 +105,7 @@ const PROPS: ActionProps = {
   lastRemindedAt: null,
   remindersInWindow: 0,
   approvedAt: null,
+  paymentLostToDispute: false,
 };
 
 function mount(overrides: Partial<ActionProps> = {}) {
@@ -184,6 +186,30 @@ describe("RegistrationHubRegistrantActions — legality (which buttons render)",
         "refund",
       ),
     ).toBeTruthy();
+  });
+
+  // Fix round 2 I-1: the island is handed a PROP (not the row), so Refund keys on it; without it the control showed on a lost entry.
+  it("hides refund on an entry whose own payment was lost to a chargeback, and only that one", () => {
+    const paid = { status: "confirmed", approval: "auto", amountCents: 2500, paymentIntentId: "pi_1", entryPaymentIntentId: "pi_1" } as const;
+    expect(findAction(mount({ ...paid, paymentLostToDispute: true }), "refund"), "lost: no Refund").toBeUndefined();
+    expect(findAction(mount({ ...paid, paymentLostToDispute: true }), "withdraw"), "the other actions stay (the control set is not empty)").toBeTruthy();
+    expect(findAction(mount({ ...paid, paymentLostToDispute: false }), "refund"), "not lost: Refund offered").toBeTruthy();
+  });
+
+  // Fix round 3: Reject refunds a paid entry, except one whose payment was lost to a dispute: the confirm must not promise money.
+  it("the reject confirm promises a refund for an ordinary paid entry, and not for one whose payment was lost", async () => {
+    const bodies: string[] = [];
+    for (const lost of [false, true]) {
+      confirmMock.fn.mockClear();
+      const island = mount({ status: "paid", approval: "manual", amountCents: 2500, paymentIntentId: "pi_1", entryPaymentIntentId: "pi_1", paymentLostToDispute: lost });
+      await (propsOf(findAction(island, "reject")!).onClick as () => Promise<void>)();
+      bodies.push((confirmMock.fn.mock.calls[0]![0] as { body: string }).body);
+    }
+    expect(bodies[0], "premise: the ordinary confirm says it will be refunded").toBe(t(uiEn, "reg.hub.registrants.detail.actions.confirmReject.body"));
+    expect(bodies[0]).toMatch(/it will be refunded/);
+    expect(bodies[1]).toBe(t(uiEn, "reg.hub.registrants.detail.actions.confirmReject.bodyPaymentLost"));
+    expect(bodies[1]).not.toMatch(/it will be refunded/);
+    expect(bodies[1]).toMatch(/nothing will be refunded/);
   });
 
   it("hides refund once the entry is fully refunded — the server answers 'Already fully refunded'", () => {
@@ -414,9 +440,16 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     expect(island.text()).toContain("Something went wrong");
   });
 
-  it("promote: hides itself once clicked, and a success shows a generic 'promoted' message rather than guessing a specific resulting status", async () => {
+  it("promote: hides itself once the request SUCCEEDS (not while it is in flight), and a success shows a generic 'promoted' message rather than guessing a specific resulting status", async () => {
+    const d = deferred<unknown>();
+    net.next.set("promote", d.promise);
     const island = mount({ status: "waitlisted", approval: "manual" });
-    await (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    const click = (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+    // In flight: the button is still there, busy ("Promoting..."), and says nothing is promoted yet.
+    await vi.waitFor(() => expect(textOf(findAction(island, "promote")!)).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoting")));
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    d.resolve({});
+    await click;
     expect(findAction(island, "promote")).toBeUndefined();
     expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
     expect(nav.refresh).toHaveBeenCalledTimes(1);
@@ -428,7 +461,7 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     const island = mount({ status: "waitlisted", approval: "manual" });
 
     const click = (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
-    await vi.waitFor(() => expect(findAction(island, "promote")).toBeUndefined());
+    await vi.waitFor(() => expect(textOf(findAction(island, "promote")!)).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoting")));
 
     d.reject(new ApiV1Error("Division is at capacity", 422, "ERROR"));
     await click;
@@ -443,6 +476,166 @@ describe("RegistrationHubRegistrantActions — optimistic flip + 4xx revert", ()
     const call = net.calls.find((c) => c.url === "/api/v1/registrations/reg-77/promote");
     expect(call).toBeTruthy();
     expect(call!.json).toEqual({ registration_id: "reg-77" });
+  });
+});
+
+// Registration defects item 1: the server refuses a promotion into a full division (409 PROMOTE_OVER_CAPACITY) until the organiser
+// confirms, and refuses one past the plan's per-division limit (422 PROMOTE_PLAN_LIMIT) outright. The island asks, then resends.
+describe("RegistrationHubRegistrantActions - promote into a full division", () => {
+  const overCapacity = () => new ApiV1Error("over capacity", 409, PROMOTE_OVER_CAPACITY_CODE, { capacity: 2, taken: 2 });
+  const promoteCalls = () => net.calls.filter((c) => c.url.endsWith("/promote"));
+  const clickPromote = (island: ReturnType<typeof mount>) => (propsOf(findAction(island, "promote")!).onClick as () => Promise<void>)();
+
+  it("a promotion that fits asks nothing: no dialog, one request, no confirm flag", async () => {
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(promoteCalls()).toHaveLength(1);
+    expect(promoteCalls()[0]!.json).toEqual({ registration_id: "reg-1" });
+  });
+
+  it("a 409 PROMOTE_OVER_CAPACITY opens the confirm with the new copy, and a yes resends WITH confirm_over_capacity", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).toHaveBeenCalledTimes(1);
+    expect(confirmMock.fn.mock.calls[0]![0]).toMatchObject({
+      title: t(uiEn, "reg.promote.overCapacity.title"),
+      body: t(uiEn, "reg.promote.overCapacity.body.other", { taken: 2, capacity: 2 }),
+      confirmLabel: t(uiEn, "reg.promote.overCapacity.label"),
+    });
+    expect(promoteCalls().map((c) => c.json)).toEqual([
+      { registration_id: "reg-1" },
+      { registration_id: "reg-1", confirm_over_capacity: true },
+    ]);
+    expect(island.text()).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("the dialog says how full the division is, from the refusal's own numbers (8 of 8, not the 2 of 2 of another test)", async () => {
+    net.next.set("promote", Promise.reject(new ApiV1Error("over capacity", 409, PROMOTE_OVER_CAPACITY_CODE, { capacity: 8, taken: 8 })));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    const body = (confirmMock.fn.mock.calls[0]![0] as { body: string }).body;
+    expect(body).toContain("8 of 8 places are taken");
+    expect(body).not.toContain("{taken}");
+  });
+
+  // Fix round 2 M-3: the count in the sentence is a NUMBER of places, so the sentence follows it ("1 of 1 places are taken" was wrong).
+  it("a ONE-place division reads singular, never '1 of 1 places are taken'; two or more read plural", async () => {
+    const said: string[] = [];
+    for (const capacity of [1, 2]) {
+      confirmMock.fn.mockClear();
+      net.next.set("promote", Promise.reject(new ApiV1Error("over capacity", 409, PROMOTE_OVER_CAPACITY_CODE, { capacity, taken: capacity })));
+      const island = mount({ status: "waitlisted" });
+      await clickPromote(island);
+      said.push((confirmMock.fn.mock.calls[0]![0] as { body: string }).body);
+    }
+    expect(said[0], "capacity 1 uses the .one sentence").toBe(t(uiEn, "reg.promote.overCapacity.body.one"));
+    expect(said[0]).not.toMatch(/places are/);
+    expect(said[1], "capacity 2 uses the .other sentence").toBe(t(uiEn, "reg.promote.overCapacity.body.other", { taken: 2, capacity: 2 }));
+    expect(said[1]).toContain("2 of 2 places are taken");
+  });
+
+  it("a plan limit of ONE reads '1 entrant', not '1 entrants'; 64 reads plural", async () => {
+    const said: string[] = [];
+    for (const limit of [1, 64]) {
+      net.next.set("promote", Promise.reject(new ApiV1Error("english", 422, PROMOTE_PLAN_LIMIT_CODE, { limit, taken: limit })));
+      const island = mount({ status: "waitlisted" });
+      await clickPromote(island);
+      said.push(island.text());
+    }
+    expect(said[0]).toContain(t(uiEn, "reg.promote.planLimit.one", { limit: 1 }));
+    expect(said[0]).toContain("allows 1 entrant per division");
+    expect(said[0]).not.toContain("1 entrants");
+    expect(said[1]).toContain(t(uiEn, "reg.promote.planLimit.other", { limit: 64 }));
+  });
+
+  it("while the dialog is OPEN nothing has been promoted: the Promote button is still there, not 'Promoting...', and no success is shown (M2)", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    const island = mount({ status: "waitlisted" });
+    const during: { button: boolean; label: string; text: string }[] = [];
+    confirmMock.fn.mockImplementation(async () => {
+      const button = findAction(island, "promote");
+      during.push({
+        button: !!button,
+        label: button ? textOf(button) : "",
+        text: island.text(),
+      });
+      return false;
+    });
+    await clickPromote(island);
+    expect(during, "the dialog opened once").toHaveLength(1);
+    expect(during[0]!.button, "the button is not hidden while the organiser decides").toBe(true);
+    expect(during[0]!.label).toContain(t(uiEn, "reg.hub.registrants.detail.actions.promote"));
+    expect(during[0]!.label).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoting"));
+    expect(during[0]!.text).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+  });
+
+  it("after a confirmed, successful promotion the button is gone (it hid only once the request succeeded)", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(findAction(island, "promote")).toBeFalsy();
+  });
+
+  it("a 409 over-capacity refusal WITHOUT its numbers is not asked about: it is shown as a failure, nothing is promoted", async () => {
+    net.next.set("promote", Promise.reject(new ApiV1Error("no numbers", 409, PROMOTE_OVER_CAPACITY_CODE, {})));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(promoteCalls()).toHaveLength(1);
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(findAction(island, "promote")).toBeTruthy();
+  });
+
+  it("a NO resends nothing, shows no success, and the Promote button is back", async () => {
+    net.next.set("promote", Promise.reject(overCapacity()));
+    confirmMock.fn.mockImplementation(async () => false);
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(promoteCalls()).toHaveLength(1);
+    expect(nav.refresh).not.toHaveBeenCalled();
+    expect(island.text()).not.toContain(t(uiEn, "reg.hub.registrants.detail.actions.promoted"));
+    expect(findAction(island, "promote")).toBeTruthy();
+  });
+
+  it("a 422 PROMOTE_PLAN_LIMIT never asks: it says the plan's limit, read off the error, and the button is back", async () => {
+    net.next.set("promote", Promise.reject(new ApiV1Error("english", 422, PROMOTE_PLAN_LIMIT_CODE, { limit: 64, taken: 64 })));
+    const island = mount({ status: "waitlisted" });
+    await clickPromote(island);
+    expect(confirmMock.fn).not.toHaveBeenCalled();
+    expect(promoteCalls()).toHaveLength(1);
+    expect(island.text()).toContain(t(uiEn, "reg.promote.planLimit.other", { limit: 64 }));
+    expect(island.text()).not.toContain("english");
+    expect(findAction(island, "promote")).toBeTruthy();
+  });
+
+  it("every locale carries the promote strings, translated (not the English copy), with each placeholder kept and both plural forms present", () => {
+    const keys = [
+      "reg.promote.overCapacity.title", "reg.promote.overCapacity.body.one", "reg.promote.overCapacity.body.other",
+      "reg.promote.overCapacity.label", "reg.promote.planLimit.one", "reg.promote.planLimit.other",
+    ] as const;
+    let checked = 0;
+    for (const dict of [uiFr, uiEs, uiNl]) {
+      const d = dict as Record<string, string>;
+      for (const k of keys) {
+        expect(d[k], k).toBeTruthy();
+        expect(d[k], `${k} must not be the English copy`).not.toBe((uiEn as Record<string, string>)[k]);
+        checked += 1;
+      }
+      expect(d["reg.promote.planLimit.one"]).toContain("{limit}");
+      expect(d["reg.promote.planLimit.other"]).toContain("{limit}");
+      expect(d["reg.promote.overCapacity.body.other"]).toContain("{taken}");
+      expect(d["reg.promote.overCapacity.body.other"]).toContain("{capacity}");
+      expect(d["reg.promote.overCapacity.body.one"], "the singular is its own sentence, not the plural one").not.toBe(d["reg.promote.overCapacity.body.other"]);
+      expect(d["reg.promote.planLimit.one"]).not.toBe(d["reg.promote.planLimit.other"]);
+    }
+    expect(checked).toBe(18);
+    // The old single keys are gone: nothing may still read them (a key the island no longer reads is a key that goes stale).
+    for (const dict of [uiEn, uiFr, uiEs, uiNl]) {
+      expect(Object.keys(dict).filter((k) => k === "reg.promote.planLimit" || k === "reg.promote.overCapacity.body")).toEqual([]);
+    }
   });
 });
 
@@ -665,6 +858,7 @@ describe("RegistrationHubRegistrantActions — finding 2: a failure never resurr
       lastRemindedAt: null,
       remindersInWindow: 0,
       approvedAt: null,
+      paymentLostToDispute: false,
     });
     // The existing render-time prop-sync already reconciles to it —
     // withdraw (legal on "confirmed") reappears.

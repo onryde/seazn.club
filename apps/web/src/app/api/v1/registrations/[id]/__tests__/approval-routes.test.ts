@@ -25,6 +25,7 @@ vi.mock("next/headers", () => ({
 
 import { sql } from "@/lib/db";
 import { putRegistrationSettings } from "@/server/usecases/registrations";
+import { PROMOTE_OVER_CAPACITY_CODE } from "@/lib/registration-promote";
 import {
   asOwner,
   makeUser,
@@ -35,6 +36,8 @@ import {
 import { POST as approveRoute } from "@/app/api/v1/registrations/[id]/approve/route";
 import { POST as rejectRoute } from "@/app/api/v1/registrations/[id]/reject/route";
 import { POST as promoteRoute } from "@/app/api/v1/registrations/[id]/promote/route";
+import { POST as confirmRoute } from "@/app/api/v1/registrations/[id]/confirm/route";
+import { POST as waiveRoute } from "@/app/api/v1/registrations/[id]/waive/route";
 
 const SETTINGS = { fee_cents: 0, currency: "gbp", payment_method: "offline" as const };
 const MANUAL_SETTINGS_INPUT = {
@@ -59,7 +62,7 @@ function postReq(path: string, body?: unknown): Request {
 interface Envelope {
   ok: boolean;
   data?: Record<string, unknown> | null;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; [k: string]: unknown };
 }
 
 async function read(res: Response): Promise<{ status: number; body: Envelope }> {
@@ -372,4 +375,102 @@ describe.skipIf(!HAS_DB)("POST /registrations/:id/promote — the documented def
     expect(httpStatus).toBe(400);
     expect(body.error?.message).toMatch(/valid JSON/i);
   });
+});
+
+// Registration defects item 1: the HTTP face of the organiser's room check. The refusal rides the v1 error envelope with its code (the
+// console says it in the organiser's language off the code), and `confirm_over_capacity` is the body field that lifts it.
+describe.skipIf(!HAS_DB)("POST /registrations/:id/promote - capacity confirmation (registration defects item 1)", () => {
+  async function fullDivisionWithWaiting() {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    await putRegistrationSettings(owner, division.id, { ...MANUAL_SETTINGS_INPUT, capacity: 1 });
+    await seedRegistration(competition.id, division.id, SETTINGS, { displayName: "Holds the place", status: "confirmed" });
+    const { registration } = await seedRegistration(competition.id, division.id, SETTINGS, { displayName: "Waiting", status: "waitlisted" });
+    return registration;
+  }
+
+  it("a full division: 409 with the PROMOTE_OVER_CAPACITY code and the numbers, and the entry stays waitlisted", async () => {
+    const waiting = await fullDivisionWithWaiting();
+    const { status: httpStatus, body } = await read(
+      await promoteRoute(postReq(`/registrations/${waiting.id}/promote`, { registration_id: waiting.id }), ctx(waiting.id)),
+    );
+    expect(httpStatus).toBe(409);
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatchObject({ code: PROMOTE_OVER_CAPACITY_CODE, capacity: 1, taken: 1 });
+    expect(await status(waiting.id)).toBe("waitlisted");
+  });
+
+  it("the same request with confirm_over_capacity: true promotes", async () => {
+    const waiting = await fullDivisionWithWaiting();
+    const { status: httpStatus, body } = await read(
+      await promoteRoute(
+        postReq(`/registrations/${waiting.id}/promote`, { registration_id: waiting.id, confirm_over_capacity: true }),
+        ctx(waiting.id),
+      ),
+    );
+    expect(httpStatus).toBe(200);
+    expect(body.data).toMatchObject({ id: waiting.id });
+    expect(await status(waiting.id)).toBe("pending");
+  });
+
+  it("a non-boolean confirm_over_capacity is a 400, never read as truthy", async () => {
+    const waiting = await fullDivisionWithWaiting();
+    const { status: httpStatus } = await read(
+      await promoteRoute(
+        postReq(`/registrations/${waiting.id}/promote`, { registration_id: waiting.id, confirm_over_capacity: "yes" }),
+        ctx(waiting.id),
+      ),
+    );
+    expect(httpStatus).toBe(400);
+    expect(await status(waiting.id)).toBe("waitlisted");
+  });
+});
+
+// Fix round 1 I1: confirm and waive seat a waitlisted entry too, so they carry the same room check and the same body field.
+describe.skipIf(!HAS_DB)("POST /registrations/:id/confirm and /waive - the room check on a waitlisted entry (fix round 1 I1)", () => {
+  async function fullDivisionWithWaiting() {
+    const { owner } = await signedInOwner();
+    const { competition, division } = await rig(owner);
+    await putRegistrationSettings(owner, division.id, { ...MANUAL_SETTINGS_INPUT, capacity: 1 });
+    await seedRegistration(competition.id, division.id, SETTINGS, { displayName: "Holds the place", status: "confirmed" });
+    const { registration } = await seedRegistration(competition.id, division.id, SETTINGS, { displayName: "Waiting", status: "waitlisted" });
+    return registration;
+  }
+  const doors = [
+    ["confirm", confirmRoute],
+    ["waive", waiveRoute],
+  ] as const;
+
+  for (const [name, route] of doors) {
+    it(`${name}: a full division answers 409 PROMOTE_OVER_CAPACITY with the numbers (body-less POST included) and writes nothing`, async () => {
+      const waiting = await fullDivisionWithWaiting();
+      const bodyless = new Request(`https://test.local/api/v1/registrations/${waiting.id}/${name}`, { method: "POST" });
+      const { status: httpStatus, body } = await read(await route(bodyless, ctx(waiting.id)));
+      expect(httpStatus).toBe(409);
+      expect(body.error).toMatchObject({ code: PROMOTE_OVER_CAPACITY_CODE, capacity: 1, taken: 1 });
+      expect(await status(waiting.id)).toBe("waitlisted");
+    });
+
+    it(`${name}: with confirm_over_capacity: true it seats the entry`, async () => {
+      const waiting = await fullDivisionWithWaiting();
+      const { status: httpStatus, body } = await read(
+        await route(postReq(`/registrations/${waiting.id}/${name}`, { confirm_over_capacity: true }), ctx(waiting.id)),
+      );
+      expect(httpStatus).toBe(200);
+      expect(body.data).toMatchObject({ id: waiting.id });
+      expect(await status(waiting.id)).toBe("confirmed");
+    });
+
+    it(`${name}: a non-boolean confirm_over_capacity is a 400 and malformed JSON is the same 400`, async () => {
+      const waiting = await fullDivisionWithWaiting();
+      expect((await read(await route(postReq(`/registrations/${waiting.id}/${name}`, { confirm_over_capacity: "yes" }), ctx(waiting.id)))).status).toBe(400);
+      const broken = new Request(`https://test.local/api/v1/registrations/${waiting.id}/${name}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{not json",
+      });
+      expect((await read(await route(broken, ctx(waiting.id)))).status).toBe(400);
+      expect(await status(waiting.id)).toBe("waitlisted");
+    });
+  }
 });

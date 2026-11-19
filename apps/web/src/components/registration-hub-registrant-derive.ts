@@ -21,6 +21,7 @@ import { isSoloAssignableStatus, isTerminalRegistrationStatus, ownPaymentRefunde
 // in this file that has to take the client-safe path instead.
 import { t } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 
 /** Keyed by `Record<..., string>` against the REAL status union (not a
  *  hand-copied string literal list) so a missing entry is a compile error,
@@ -108,6 +109,8 @@ export const CONSENT_STATUS_STYLE: Record<ConsentStatus, string> = {
 
 export type RegistrantPaymentState =
   | "disputed"
+  | "disputeLost"
+  | "disputeWon"
   | "refunded"
   | "partiallyRefunded"
   | "waitlisted"
@@ -115,6 +118,21 @@ export type RegistrantPaymentState =
   | "paid"
   | "awaitingPayment"
   | "free";
+
+/** The dictionary key naming each payment state: the ONE map, so the detail panel cannot name a state with a key that does not exist.
+ *  A lost chargeback reuses the console chip's own copy (`reg.chip.disputeLost`) rather than minting a second string for it. */
+export const REGISTRANT_PAYMENT_STATE_KEY: Record<RegistrantPaymentState, DictionaryKey> = {
+  disputed: "reg.hub.registrants.detail.paymentState.disputed",
+  disputeLost: "reg.chip.disputeLost",
+  disputeWon: "reg.hub.registrants.detail.paymentState.disputeWon",
+  refunded: "reg.hub.registrants.detail.paymentState.refunded",
+  partiallyRefunded: "reg.hub.registrants.detail.paymentState.partiallyRefunded",
+  waitlisted: "reg.hub.registrants.detail.paymentState.waitlisted",
+  paidOffline: "reg.hub.registrants.detail.paymentState.paidOffline",
+  paid: "reg.hub.registrants.detail.paymentState.paid",
+  awaitingPayment: "reg.hub.registrants.detail.paymentState.awaitingPayment",
+  free: "reg.hub.registrants.detail.paymentState.free",
+};
 
 /**
  * The detail panel's "payment state" field (task 2) — distinct from
@@ -125,8 +143,8 @@ export type RegistrantPaymentState =
  * actually moved, which `status` alone cannot say.
  *
  * Precedence, checked in order: a dispute wins over everything (Stripe has
- * already pulled the money back pending resolution); then refunded/partially
- * refunded; then a WAITLISTED entry reads "waitlisted", never "free" (RS005
+ * already pulled the money back pending resolution; once LOST it reads "Dispute lost · refunded"); then refunded/partially
+ * refunded; then a WON dispute ("Paid · dispute won"); then a WAITLISTED entry reads "waitlisted", never "free" (RS005
  * F2 finding 2, below); then a genuinely zero-fee entry is "free" (never
  * "awaiting payment" — there is nothing to await); then a paid/confirmed
  * status is "paid" or "paidOffline" depending on `payment_intent_id`
@@ -170,13 +188,21 @@ export type RegistrantPaymentState =
 export function deriveRegistrantPaymentState(
   row: Pick<
     RegistrationListRow,
-    "amount_cents" | "refunded_cents" | "disputed_at" | "entry_payment_intent_id" | "status"
+    "amount_cents" | "refunded_cents" | "dispute" | "entry_payment_intent_id" | "status"
   >,
 ): RegistrantPaymentState {
-  if (row.disputed_at !== null) return "disputed";
+  // The dispute on THIS entry's own payment (`dispute`, per entry payment since fix round 3; never the cart's `disputed_at`, which a
+  // sibling's dispute or a win elsewhere moves). A LOST one is read first: the money is gone and the entry is marked refunded, which
+  // "Disputed" (still being decided) does not say. A WON one reads as the payment it is, below.
+  if (row.dispute === "lost") return "disputeLost";
+  if (row.dispute === "open") return "disputed";
   if (row.refunded_cents > 0) {
     return row.refunded_cents >= row.amount_cents ? "refunded" : "partiallyRefunded";
   }
+  // A WON chargeback: nothing was taken and the flag is gone, so the organiser would otherwise read plain "Paid" and not know there was
+  // ever a dispute (registration defects item 4: open, lost and won must be told apart). After the refund arms: money that WAS later
+  // refunded is read as refunded, whatever the bank decided.
+  if (row.dispute === "won") return "disputeWon";
   if (row.status === "waitlisted") return "waitlisted";
   if (row.amount_cents === 0) return "free";
   if (row.status !== "paid" && row.status !== "confirmed") return "awaitingPayment";
@@ -247,6 +273,9 @@ export interface RegistrantActionFlags {
    *  refused, for the same reason `canApprove` reads the division's LIVE fee:
    *  a control the server will refuse is worse than no control. */
   canUnassign: boolean;
+  /** Download the dispute evidence pack: any entry whose cart has (or had) a chargeback - open, lost or won. A plain download link, not
+   *  an action that changes anything, but gated like the controls (write access) and counted by `hasAnyAction` so the section shows. */
+  canDownloadEvidence: boolean;
 }
 
 /**
@@ -349,7 +378,8 @@ export interface RegistrantActionFlags {
  * the cart's `payment_intent_id`, which a sibling's payment sets: polish wave
  * W8, where an unpaid entry offered Refund and it refunded the sibling's
  * money), and "Already fully refunded" when
- * `amount_cents - ownPaymentRefundedCents(row) <= 0`. Deliberately NOT gated on status:
+ * `amount_cents - ownPaymentRefundedCents(row) <= 0`, and (fix round 1 Q) "lost to a chargeback" when THIS entry's own payment was lost (`dispute === "lost"`, which is per entry payment since fix round 3; a sibling
+ * paid in another session keeps its Refund): Stripe already repaid the cardholder, which the entry's own `refunded_cents` does not record. Deliberately NOT gated on status:
  * the usecase is not either, and the case that matters most is a WITHDRAWN
  * entry — past `refund_lock_at`, `withdrawCore` refuses to auto-refund and
  * the registrant is told at that moment that "any refund is at the
@@ -378,6 +408,7 @@ export function deriveRegistrantActionFlags(
     | "free_agent"
     | "assigned_team_id"
     | "division_started"
+    | "dispute"
   >,
 ): RegistrantActionFlags {
   const awaitingManualDecision =
@@ -413,7 +444,7 @@ export function deriveRegistrantActionFlags(
     canRemind: row.status === "pending" && feeOwed,
     // The cap `refundRegistration` applies: what is left of THIS payment, never the refund history (a refunded LATE payment is not
     // this payment's; polish wave final fix m2).
-    canRefund: row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
+    canRefund: row.dispute !== "lost" && row.entry_payment_intent_id !== null && row.amount_cents - ownPaymentRefundedCents(row) > 0,
     // A solo sign-up (an entry with no roster of its own) is the only kind of
     // row that can be placed on a team. `assigned_team_id` is derived from
     // the roster row pointing back at this entry, so these two flags are
@@ -431,5 +462,6 @@ export function deriveRegistrantActionFlags(
       nonTerminal &&
       isSoloAssignableStatus(row.status),
     canUnassign: row.free_agent && row.assigned_team_id !== null && !row.division_started,
+    canDownloadEvidence: row.dispute !== null,
   };
 }

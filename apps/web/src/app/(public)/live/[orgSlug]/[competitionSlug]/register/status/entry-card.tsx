@@ -165,7 +165,7 @@ export interface EntryCardProps {
        *  existing hand-built fixture that predates this field still
        *  type-checks; a missing/undefined reason renders nothing extra,
        *  same as an explicit null. */
-      reason?: "no_deadline" | null;
+      reason?: "no_deadline" | "payment_lost" | null;
     };
     /** Polish wave sign-off V6: everything sent back for this entry (`GroupEntryView.refunded_cents`). REQUIRED for the reason
      *  `approved` is: an omitted value would read as "nothing refunded" on a rejected entry whose fee came back. */
@@ -479,7 +479,7 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             reuses awaitingTeamAssignment's own predicate, so this can never
             render once assigned even though pool_place_by_at is still
             carried on the entry. */}
-        {poolPlaceBy && (
+        {poolPlaceBy && entry.refund_policy.reason !== "payment_lost" && (
           <p className="text-xs text-ink-muted">
             {t(ui, "register.status.entry.awaitingTeamDeadline", { date: deadlineLabel(poolPlaceBy) })}
           </p>
@@ -567,11 +567,17 @@ export function EntryCard({ entry, cart, orgSlug, competitionSlug, token, locale
             {entry.refund_policy.reason === "no_deadline" && (
               <p className="mb-1.5 text-xs text-ink-muted">{t(ui, "register.status.cancel.refund.noDeadline")}</p>
             )}
+            {/* Fix round 3: the card payment for THIS entry was lost to a dispute, so no refund can be made for it (the organiser's
+                Refund answers 422); said plainly rather than "at the organiser's discretion". */}
+            {entry.refund_policy.reason === "payment_lost" && (
+              <p data-status-payment-lost className="mb-1.5 text-xs text-ink-muted">{t(ui, "register.status.cancel.refund.paymentLost")}</p>
+            )}
             <CancelEntry
               entryId={entry.id}
               token={token}
               divisionName={entry.division_name}
               refundable={entry.refund_policy.refundable}
+              paymentLost={entry.refund_policy.reason === "payment_lost"}
               refundAmountFormatted={formatMoneyExact(entry.refund_policy.amount_cents, cart.currency, locale)}
             />
           </div>

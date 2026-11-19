@@ -1089,7 +1089,8 @@ test.describe("RS005 registrants tab", () => {
       page.request,
       `/api/v1/registrations/${newerWaitlisted.registration_id}/promote`,
       "POST",
-      {},
+      // The division is full (capacity 1, held by `first`): the organiser's confirmation, or the server refuses 409.
+      { confirm_over_capacity: true },
     );
     expect(promoted.status).toBe(200);
     expect(promoted.data!.id, "the OLDEST waitlisted entry promotes, not the one in the URL").toBe(

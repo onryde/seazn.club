@@ -410,6 +410,11 @@ test("RS007 witness — cancelling one of two cart entries drops the money line 
     await page.waitForTimeout(500);
     await page.screenshot({ path: `${SHOTS}/13a-hub-before-promote.png`, fullPage: true });
     await rowB.getByRole("button", { name: "Promote from waitlist", exact: true }).click();
+    // Capacity is ONE and A holds it, so the server refuses until the organiser confirms (registration defects item 1): the real
+    // "Promote anyway" dialog, then the same request resent with the confirmation. Setup for this spec, but the dialog must be there.
+    const overCapacity = page.getByRole("alertdialog");
+    await expect(overCapacity, "a promotion into a full division asks first").toContainText("Promote anyway?", { timeout: 15_000 });
+    await overCapacity.getByRole("button", { name: "Promote anyway", exact: true }).click();
     // The success feedback and the button itself live in the DETAIL body
     // (RegistrationHubRegistrantDetail), which is NOT duplicated the way the
     // summary scan line is — a plain text match is safe here.

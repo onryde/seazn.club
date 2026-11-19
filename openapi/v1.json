@@ -106559,6 +106559,21 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "dispute": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "lost",
+                                  "won"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -106602,7 +106617,8 @@
                           "division_started",
                           "last_reminded_at",
                           "reminders_in_window",
-                          "promotion_skipped_at"
+                          "promotion_skipped_at",
+                          "dispute"
                         ],
                         "additionalProperties": false
                       }
@@ -106657,7 +106673,8 @@
                       "division_started": true,
                       "last_reminded_at": "example",
                       "reminders_in_window": 0,
-                      "promotion_skipped_at": "example"
+                      "promotion_skipped_at": "example",
+                      "dispute": "open"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -107473,6 +107490,21 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "dispute": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "enum": [
+                                  "open",
+                                  "lost",
+                                  "won"
+                                ]
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -107516,7 +107548,8 @@
                           "division_started",
                           "last_reminded_at",
                           "reminders_in_window",
-                          "promotion_skipped_at"
+                          "promotion_skipped_at",
+                          "dispute"
                         ],
                         "additionalProperties": false
                       }
@@ -107571,7 +107604,8 @@
                       "division_started": true,
                       "last_reminded_at": "example",
                       "reminders_in_window": 0,
-                      "promotion_skipped_at": "example"
+                      "promotion_skipped_at": "example",
+                      "dispute": "open"
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -108042,7 +108076,7 @@
     },
     "/api/v1/registrations/{id}/confirm": {
       "post": {
-        "summary": "Approve: materialise the entrant (idempotent)",
+        "summary": "Approve: materialise the entrant (idempotent). Seating a waitlisted or expired entry takes the same room check as Promote: 409 PROMOTE_OVER_CAPACITY unless confirm_over_capacity is true; 422 PROMOTE_PLAN_LIMIT past the plan's per-division entrant limit, always",
         "tags": [
           "registration"
         ],
@@ -108058,6 +108092,25 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_over_capacity": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "confirm_over_capacity": true
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -108428,6 +108481,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -109012,7 +109109,7 @@
     },
     "/api/v1/registrations/{id}/waive": {
       "post": {
-        "summary": "Confirm without payment (fee waived, audited)",
+        "summary": "Confirm without payment (fee waived, audited). Waiving a waitlisted entry takes the same room check as Promote: 409 PROMOTE_OVER_CAPACITY unless confirm_over_capacity is true; 422 PROMOTE_PLAN_LIMIT past the plan's per-division entrant limit, always",
         "tags": [
           "registration"
         ],
@@ -109028,6 +109125,25 @@
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "confirm_over_capacity": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "confirm_over_capacity": true
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Success",
@@ -109398,6 +109514,50 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {
@@ -110952,7 +111112,7 @@
     },
     "/api/v1/registrations/{id}/promote": {
       "post": {
-        "summary": "Promote from the waitlist: oldest-first in id's division by default, or an explicit registration_id override",
+        "summary": "Promote from the waitlist: oldest-first in id's division by default, or an explicit registration_id override. 409 PROMOTE_OVER_CAPACITY unless confirm_over_capacity is true; 422 PROMOTE_PLAN_LIMIT past the plan's per-division entrant limit, always",
         "tags": [
           "registration"
         ],
@@ -110979,12 +111139,16 @@
                     "type": "string",
                     "format": "uuid",
                     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "confirm_over_capacity": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": false
               },
               "example": {
-                "registration_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                "registration_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "confirm_over_capacity": true
               }
             }
           }
@@ -111366,6 +111530,50 @@
           },
           "404": {
             "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
             "content": {
               "application/json": {
                 "schema": {

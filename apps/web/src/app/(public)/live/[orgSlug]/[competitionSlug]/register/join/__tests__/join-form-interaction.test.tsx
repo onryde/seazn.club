@@ -636,7 +636,10 @@ describe("submit — designed failure states, never a raw server string", () => 
     const m = mount({ initialPlayerId: "p1" });
     fillMinimalValidForm(m);
     await submit(m);
-    expect(m.pageText()).toContain("expired");
+    // Registration defects item 6: a join link never times out, so the copy no longer says "expired"; it says the link stopped working
+    // and who to ask for a new one.
+    expect(m.pageText()).toContain("This link no longer works. Ask the team captain to send you a new one.");
+    expect(m.pageText()).not.toMatch(/expire/i);
     expect(m.pageText()).not.toContain("This join link is not valid");
   });
 

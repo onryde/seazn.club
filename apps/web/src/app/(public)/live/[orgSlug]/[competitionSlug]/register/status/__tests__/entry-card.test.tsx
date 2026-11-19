@@ -184,6 +184,21 @@ describe("EntryCard — pool_place_by_at deadline (RS012)", () => {
     expect(html).toContain(expectedZone);
   });
 
+  // Fix round 3: the pool-deadline sweep refunds nothing for a payment lost to a dispute, so the "automatically refunded" promise is not made
+  // for that entry, and the card says plainly that no refund can be made.
+  it("an unplaced solo sign-up whose payment was LOST: no automatic-refund promise, and the page says no refund can be made", () => {
+    const base = poolProps({ free_agent: true, assigned_team_name: null, pool_place_by_at: DEADLINE });
+    const withReason = (reason: "payment_lost" | null) =>
+      renderToStaticMarkup(<EntryCard {...base} entry={{ ...base.entry, refund_policy: { refundable: false, deadline: null, amount_cents: 1500, reason } }} />);
+    const normal = withReason(null);
+    const lost = withReason("payment_lost");
+    expect(normal, "premise: the promise IS made for an ordinary entry").toContain(expectedDate);
+    expect(lost).toContain("Waiting for a team");
+    expect(lost, "no deadline line").not.toContain(expectedDate);
+    expect(lost).toContain("no refund can be made for it");
+    expect(normal).not.toContain("no refund can be made for it");
+  });
+
   it("shows NEITHER the waiting notice NOR the deadline once assigned, even though pool_place_by_at is still carried", () => {
     const html = renderToStaticMarkup(
       <EntryCard

@@ -234,6 +234,10 @@ export const RegistrationListEntry = Registration.extend({
    *  its current wait; null otherwise (and on every entry that is not waitlisted). The hub shows "Skipped on <date>: Lichess wasn't
    *  linked". */
   promotion_skipped_at: z.string().nullable(),
+  /** Where the card chargeback on THIS entry's own payment stands (a cart paid in several Checkout sessions can dispute one charge and not
+   *  another; an entry with no card payment of its own is null): null when it never had one, `open` while it is being decided, `lost` (the cardholder was
+   *  repaid and the entry is marked refunded) or `won`. The hub shows "Disputed" / "Dispute lost · refunded" and offers the evidence pack. */
+  dispute: z.enum(["open", "lost", "won"]).nullable(),
 });
 
 /** `POST /registrations/{id}/promote` body. `id` in the URL resolves which
@@ -241,11 +245,24 @@ export const RegistrationListEntry = Registration.extend({
  *  `registration_id`, when given, overrides which waitlisted entry gets
  *  promoted instead of the oldest (`PromoteFromWaitlistOpts.registrationId`,
  *  registration-approval.ts) — it need not equal the URL `id`. Omitted →
- *  oldest-first, `promoteFromWaitlist`'s default. */
+ *  oldest-first, `promoteFromWaitlist`'s default.
+ *
+ *  `confirm_over_capacity`: the organiser has confirmed taking the division past its OWN capacity. Without it a promotion into a
+ *  division at or over capacity is refused 409 `PROMOTE_OVER_CAPACITY`. It never lifts the PLAN's per-division entrant limit, which
+ *  refuses 422 `PROMOTE_PLAN_LIMIT` either way. */
 export const PromoteRegistration = z.object({
   registration_id: Uuid.optional(),
+  confirm_over_capacity: z.boolean().optional(),
 });
 export type PromoteRegistration = z.infer<typeof PromoteRegistration>;
+
+/** `POST /registrations/{id}/confirm` and `/waive` body (optional). Both seat a `waitlisted` (or, for confirm, `expired`) entry, so they
+ *  take the same room check as Promote: `confirm_over_capacity` lifts the division's OWN capacity refusal (409 `PROMOTE_OVER_CAPACITY`);
+ *  the plan's per-division entrant limit (422 `PROMOTE_PLAN_LIMIT`) is never lifted. An entry that already holds a place is unaffected. */
+export const ConfirmRegistration = z.object({
+  confirm_over_capacity: z.boolean().optional(),
+});
+export type ConfirmRegistration = z.infer<typeof ConfirmRegistration>;
 
 /** `POST /registrations/{id}/assign` body (RS009) — places the solo sign-up
  *  `id` onto `target_registration_id`, a team entry in the same division.

@@ -14,7 +14,7 @@ import {
   type ExtraOrgRepriceFailedAlertEmail,
   connectBankAlertEmail,
 } from "@/lib/email";
-import type { StaffDisputeAlertArgs } from "@/lib/email-templates";
+import type { PlatformDisputeKind } from "@/lib/email-templates";
 import { queueStaffAlert } from "@/server/usecases/staff-alert";
 
 /**
@@ -156,7 +156,7 @@ export async function alertStreamClawback(a: StreamClawbackAlert): Promise<strin
  *  downgrade / revoke is the source of truth and must not be undone by an
  *  alerting hiccup (the queue logs and reports its own failure). */
 export async function notifyStaffDispute(
-  kind: StaffDisputeAlertArgs["kind"],
+  kind: PlatformDisputeKind,
   orgId: string,
   dispute: Stripe.Dispute,
   phase: "created" | "closed",

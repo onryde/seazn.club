@@ -443,6 +443,24 @@ export async function parseBody<T>(req: Request, schema: ZodType<T>): Promise<T>
 }
 
 /**
+ * `parseBody` for a body that is OPTIONAL: an empty (or whitespace-only) body is `{}` rather than the 400 `req.json()` would make of
+ * it, so a body-less `curl -X POST` reaches the documented default. Malformed JSON is still the same 400, never a raw SyntaxError.
+ * Normalised here, not in `parseBody`: that helper is shared by every route and most genuinely require a body.
+ */
+export async function parseOptionalBody<T>(req: Request, schema: ZodType<T>): Promise<T> {
+  const rawBody = await req.text();
+  let parsed: unknown = {};
+  if (rawBody.trim() !== "") {
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch {
+      throw new HttpError(400, "Request body must be valid JSON");
+    }
+  }
+  return schema.parse(parsed);
+}
+
+/**
  * Assert a query param is a member of its declared enum, 400ing when it is not.
  *
  * The alternative — the shape this replaced on two routes — is

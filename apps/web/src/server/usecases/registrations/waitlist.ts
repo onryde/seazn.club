@@ -3,6 +3,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { SPOT_HOLDERS, awaitingTeamAssignment } from "@/lib/registration-status";
+import { PROMOTE_OVER_CAPACITY_CODE, PROMOTE_PLAN_LIMIT_CODE } from "@/lib/registration-promote";
 import { resolveVenueTz } from "@/lib/tz";
 import { entryReferenceOf } from "@/lib/ref-code";
 import { registrationPromotedEmail } from "@/lib/email";
@@ -20,6 +21,7 @@ import { divisionNameOf, regGroupCols, loadSettings } from "./lookups";
 import { clearExpiresIfNoLongerNeeded, materialise } from "./materialise";
 import { issuePayLink, recordPayToken } from "./pay-token";
 import { queueRegistrationPromotionSkippedMail } from "./lifecycle-mail";
+import { promotionVerdict } from "./places-left";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
  *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
@@ -79,6 +81,43 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
   return (SPOT_HOLDERS as readonly string[]).includes(row.status) && !row.free_agent;
 }
 
+/** The room check an ORGANISER's manual promotion owes (registration defects, item 1), run inside the promoting transaction.
+ *  `promoteOldestWaitlisted` trusts its caller that a place is free, which holds for the automatic promotions (a withdrawal,
+ *  rejection or expiry just made the place) and not for an organiser pressing Promote on a full division.
+ *  - past the PLAN's per-division limit (`planLimit`, the limit submit honours: `getLimit` with its add-on bonus; null = unlimited):
+ *    always refused, 422 `PROMOTE_PLAN_LIMIT`;
+ *  - at or past the division's OWN capacity: refused 409 `PROMOTE_OVER_CAPACITY` unless `confirmOverCapacity`.
+ *  The count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same `registration_settings`
+ *  row lock submit takes, so two promotions - or a promotion and a sign-up - cannot both pass on the last place. */
+export async function assertOrganiserPromotionHasRoom(
+  tx: Tx,
+  divisionId: string,
+  opts: { planLimit: number | null; confirmOverCapacity: boolean },
+): Promise<void> {
+  const [settings] = await tx<{ capacity: number | null }[]>`
+    select capacity from registration_settings where division_id = ${divisionId} for update`;
+  const [{ n: active }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from registrations
+    where division_id = ${divisionId} and status in ${tx([...SPOT_HOLDERS])} and free_agent = false`;
+  const verdict = promotionVerdict({ capacity: settings?.capacity ?? null, planLimit: opts.planLimit, active });
+  if (verdict.kind === "plan_limit") {
+    throw new HttpError(
+      422,
+      `Your plan allows ${verdict.limit} entrants per division and this division already has ${verdict.active}. Raise the plan to promote more.`,
+      PROMOTE_PLAN_LIMIT_CODE,
+      { limit: verdict.limit, taken: verdict.active },
+    );
+  }
+  if (verdict.kind === "over_capacity" && !opts.confirmOverCapacity) {
+    throw new HttpError(
+      409,
+      `This takes the division over its capacity (${verdict.active} of ${verdict.capacity} places are taken). Confirm to promote anyway.`,
+      PROMOTE_OVER_CAPACITY_CODE,
+      { capacity: verdict.capacity, taken: verdict.active },
+    );
+  }
+}
+
 /**
  * Oldest waitlisted → pending (doc 16 §1.1 auto-promotion). Waitlisted rows
  * hold amount 0, so promotion SNAPSHOTS the current fee + method (spec §2);
@@ -124,6 +163,11 @@ export async function promoteOldestWaitlisted(
   settings: RegistrationSettingsRow | null,
   excludeId?: string,
   seatGate?: RegistrationSeatGate,
+  /** The organiser's manual oldest-first promotion passes its room check here (`assertOrganiserPromotionHasRoom`): it is asked of the
+   *  entry this call is ABOUT to promote, after the seat gate has passed over whoever it refuses, and never when the queue is empty. A
+   *  solo sign-up is the caller's to wave through (it takes no team place). The automatic promotions pass nothing: the place they fill
+   *  was just freed. A refusal throws, so nothing is promoted and the transaction rolls back. */
+  beforePromote?: (picked: { id: string; free_agent: boolean }) => Promise<void>,
 ): Promise<RegistrationWithGroupRow | null> {
   // FU1: where a promotion SEATS the next in line (free, auto approval), it seats them as the settings' kind - and a kind
   // the division no longer takes (Entrant kinds narrowed since they joined) would be refused by `materialise`, failing the
@@ -147,7 +191,10 @@ export async function promoteOldestWaitlisted(
       order by ${waitlistQueueKey(tx, "r")} limit 1
       for update skip locked`;
     if (!picked) return null;
-    if (!seatGate) return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+    if (!seatGate) {
+      await beforePromote?.(picked);
+      return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
+    }
     // ONLINE division: the promotion seats the registrant at once (free, auto-approval - `promotionSeats`), and the seat gate may
     // refuse them (no Lichess link that plays). That must neither fail the withdrawal / sweep / organiser act that freed the spot
     // nor leave the head of the queue stuck: offer the spot to the next in line. Hold-and-notify is not an option - an entry
@@ -165,6 +212,7 @@ export async function promoteOldestWaitlisted(
       skipped.push(picked.id);
       continue;
     }
+    await beforePromote?.(picked);
     try {
       return await tx.savepoint((sp) => promoteWaitlistedRow(sp, picked.id, picked.group_id, settings, seatGate));
     } catch (err) {

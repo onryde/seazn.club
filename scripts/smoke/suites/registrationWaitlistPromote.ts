@@ -124,7 +124,22 @@ export async function registrationWaitlistPromoteSuite(): Promise<void> {
   // is auto/free (settings above), so promote is the confirming step here,
   // not a separate approve() call.
   type PromoteOut = { id: string; status: string; entrant_id: string | null } | null;
-  const promoted = await v1(owner, `/api/v1/registrations/${secondId}/promote`, "POST", {});
+  // The division is full (capacity 1), so the organiser's promotion is refused until they confirm going over capacity (registration
+  // defects item 1): 409 PROMOTE_OVER_CAPACITY, entry still waitlisted - then the confirmed request is the promotion proper.
+  const refusedPromote = await v1(owner, `/api/v1/registrations/${secondId}/promote`, "POST", {});
+  check(
+    "waitlist: promoting into a FULL division without confirming is refused 409 PROMOTE_OVER_CAPACITY",
+    refusedPromote.status === 409 &&
+      refusedPromote.json.error?.code === "PROMOTE_OVER_CAPACITY",
+  );
+  const stillWaitingRows = v1data<{ id: string }[]>(
+    await v1(owner, `/api/v1/divisions/${div.id}/registrations?status=waitlisted`),
+  );
+  check(
+    "waitlist: the refused promotion changed nothing - the entry is still waitlisted",
+    stillWaitingRows.some((r) => r.id === secondId),
+  );
+  const promoted = await v1(owner, `/api/v1/registrations/${secondId}/promote`, "POST", { confirm_over_capacity: true });
   const promotedData = v1data<PromoteOut>(promoted);
   check(
     "waitlist: promoting on a free/auto division confirms it inline and materialises an entrant",

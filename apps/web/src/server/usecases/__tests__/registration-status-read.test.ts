@@ -61,6 +61,7 @@ import {
   confirmRegistration,
   confirmRegistrationWaived,
   groupById,
+  handleRegistrationDispute,
   groupByRef,
   handleRegistrationCheckoutCompleted,
   markRegistrationPaidOffline,
@@ -252,6 +253,39 @@ describe.skipIf(!HAS_DB)("groupByRef — token gate", () => {
 // prove it is actually WIRED into this read path, with a real payment
 // intent and a real competition row, not just callable in isolation.
 describe.skipIf(!HAS_DB)("groupByRef — resolved refund policy (V379/RS007)", () => {
+  // Fix round 2 M-1: the status page promised "you will be refunded automatically" after the payment was lost to a chargeback, but the
+  // refund paths refuse it (Stripe already repaid the cardholder). The promise is withdrawn for THAT entry's payment only.
+  it("an entry whose own payment was LOST to a chargeback no longer reads refundable; a sibling paid on another charge still does", async () => {
+    const { competition, division } = await stripeSettingsRig();
+    const refCode = freshRef();
+    const first = await seedRegistration(competition.id, division.id, { fee_cents: 500, currency: "gbp", payment_method: "stripe" }, { refCode });
+    const second = await seedSecondEntry(first.registration.group_id, division.id, 500, "Second entry");
+    const intentA = `pi_test_lostA_${randomUUID().slice(0, 8)}`;
+    const intentB = `pi_test_lostB_${randomUUID().slice(0, 8)}`;
+    // Two sessions' worth of payment: each ENTRY has its own charge; the cart carries the last one (B).
+    await sql`update registrations set status = 'paid', payment_intent_id = ${intentA} where id = ${first.registration.id}`;
+    await sql`update registrations set status = 'paid', payment_intent_id = ${intentB} where id = ${second.id}`;
+    await sql`update registration_groups set payment_intent_id = ${intentB} where id = ${first.registration.group_id}`;
+    const policies = async () => {
+      const view = await groupByRef(refCode, first.access_token);
+      return new Map(view.entries.map((e) => [e.id, e.refund_policy.refundable]));
+    };
+    const before = await policies();
+    expect([before.get(first.registration.id), before.get(second.id)], "premise: both refundable before any dispute").toEqual([true, true]);
+    const dispute = (status: string) => ({ id: `dp_lost_${refCode}`, payment_intent: intentA, amount: 500, currency: "gbp", status }) as never;
+    await handleRegistrationDispute(dispute("needs_response"), "created");
+    const open = await policies();
+    expect([open.get(first.registration.id), open.get(second.id)], "an OPEN dispute withdraws nothing").toEqual([true, true]);
+    await handleRegistrationDispute(dispute("lost"), "closed");
+    const after = await policies();
+    expect(after.get(first.registration.id), "A's charge was lost: no automatic refund is promised").toBe(false);
+    expect(after.get(second.id), "B's charge is intact").toBe(true);
+    const view = await groupByRef(refCode, first.access_token);
+    const reasons = new Map(view.entries.map((e) => [e.id, e.refund_policy.reason]));
+    expect(reasons.get(first.registration.id), "the page is told WHY (not a silent 'discretion')").toBe("payment_lost");
+    expect(reasons.get(second.id)).not.toBe("payment_lost");
+  });
+
   it("a paid entry with no refund_lock_at falls back to the competition's own starts_on, and reads refundable while that is still ahead", async () => {
     const { competition, division } = await stripeSettingsRig(); // shared rig: clock-relative future starts_on
     const refCode = freshRef();

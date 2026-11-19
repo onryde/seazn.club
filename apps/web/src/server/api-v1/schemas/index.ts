@@ -148,7 +148,7 @@ export {
 export {
   RegistrationStatus, RegistrationSort, RegistrationPaymentMethod, RegistrationApproval, RegistrationFormField,
   PutRegistrationSettings, RegistrationSettings, Registration, RefundRegistration, RegistrationListEntry,
-  PromoteRegistration, AssignSoloSignUp, AssignTargets, AssignSoloSignUpResult, UnassignSoloSignUpResult,
+  PromoteRegistration, ConfirmRegistration, AssignSoloSignUp, AssignTargets, AssignSoloSignUpResult, UnassignSoloSignUpResult,
   PublicRegistrationDivision, PublicRegistrationInfo, PublicRegisterGroupContact, PublicRegisterGroupPlayer,
   PublicRegisterGroupEntry, PublicRegisterGroupRequest, PublicRegisterGroupEntryResult, PublicRegisterGroupResponse,
   PublicJoinRequest, PublicJoinResponse, PublicJoinPreviewSlot, PublicJoinPreviewResponse, PublicRegistrationStatus,

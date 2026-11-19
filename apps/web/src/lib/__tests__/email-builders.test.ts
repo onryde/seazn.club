@@ -533,6 +533,39 @@ describe("email builders compose from the html templates", () => {
     expect(dispute.text).toContain("SZ-XXXX-YYYY");
   });
 
+  // Registration defects item 2: charges are destination charges, the dispute lands on the PLATFORM account and a connected Express
+  // account has no dispute screen (usecases/dispute-recovery.ts), so the platform answers the bank. The organiser's alert says so and
+  // asks for proof by reply; it promises no outcome and no timescale. Locale rows are the four shipped dictionaries.
+  it("dispute alert: Seazn Club responds to the bank, the organiser is asked to reply with proof, no outcome or timescale is promised - in every locale", () => {
+    const dicts: Record<string, Record<string, string>> = { en: emailsEn, fr: emailsFr, es: emailsEs, nl: emailsNl };
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(dicts)) {
+      const mail = disputeAlertTemplate(
+        { orgName: "O", competitionName: "C", displayName: "D", amountCents: 1234, currency: "gbp", refCode: "SZ-XXXX-YYYY" },
+        dict as Dict,
+      );
+      for (const [label, copy] of [["html", mail.html], ["text", mail.text]] as const) {
+        expect(copy, `${locale} ${label} names who answers the bank`).toContain("Seazn Club");
+      }
+      for (const key of ["disputeAlert.panelBody", "disputeAlert.textNext"]) {
+        const line = dict[key]!;
+        expect(line, `${locale} ${key} must be reflected in the built mail`).toBeTruthy();
+        expect(line, `${locale} ${key}: no timescale or amount promised (no digits)`).not.toMatch(/\d/);
+        expect(line, `${locale} ${key} keeps what a LOST dispute does (the cardholder is repaid, recovered from the balance)`).toContain("Stripe");
+        checked += 1;
+      }
+      expect(mail.text, `${locale} text carries the ask`).toContain(dict["disputeAlert.textNext"]!);
+    }
+    expect(checked, "anti-vacuity: lines checked").toBe(8);
+    // English, where "no promised outcome" can be read: it says what Seazn Club DOES, never that it will win or by when.
+    const en = emailsEn as Record<string, string>;
+    for (const key of ["disputeAlert.panelBody", "disputeAlert.textNext"]) {
+      expect(en[key]).toMatch(/Seazn Club responds to the bank on your behalf/);
+      expect(en[key]).toMatch(/reply to this email/i);
+      expect(en[key]).not.toMatch(/will win|guarantee|within|hours|days|gather/i);
+    }
+  });
+
   it("sponsor invoice by card: the number, the invoice page as its button and text link, the card line; no Checkout link, no bank panel", () => {
     const en = emailsEn as Record<string, string>;
     const out = sponsorInvoiceTemplate({ ...invoiceArgs, pay: { by: "card" } }, en as Dict);
