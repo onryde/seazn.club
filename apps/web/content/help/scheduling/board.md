@@ -18,7 +18,7 @@ A slot that already holds a match is switched off.
 
 ## Let the scheduler place the day
 
-Three buttons sit side by side. Their hint reads **Rebuild → fix clashes → tighten times. Locked cards stay put.** Each asks you to confirm and says how many matches it will touch.
+Three buttons sit side by side. Their hint reads **Rebuild → fix clashes → tighten times. Locked cards stay put.** Each asks you to confirm first.
 
 - **Auto-schedule** rebuilds the whole stage from scratch. With 15 matches waiting, the window reads **15 matches will be placed or moved.** Locked cards stay where they are, and the window says how many.
 - **Re-flow unlocked** places the matches still in the tray around everything already on the board. Nothing already placed moves, so it cannot fix a clash between two placed matches.
@@ -51,7 +51,7 @@ A few moves are refused outright. The board will not save a move that
 > **Example**
 > In a four-player knockout with both semi-finals at 08:00, you place the final at 08:00. The board answers **Can't schedule here. This match feeds a later one, so it can't start until the earlier match has finished and its players have had their rest.** and names both semi-finals. Nothing is saved.
 
-When two matches in a league share a player, the board answers **Can't schedule here. Someone would be playing in two matches at once.**
+When two matches in a league share a player, the board answers **Can't schedule here. Someone would be playing in two matches at once. A clash you introduce is refused; one already on the board stays a badge you can edit around.**
 
 Everything else is a badge you can act on or ignore, such as short rest or a blackout. The card gets a tag like **rest**, and the header shows a **⚠ conflicts** button that opens the full list.
 

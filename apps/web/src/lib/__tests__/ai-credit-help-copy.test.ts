@@ -20,6 +20,9 @@
 import { describe, expect, it } from "vitest";
 import { claimTexts, plainProse, sentences } from "@/lib/copy-truth";
 import { quoteRun, schedulingRungWeights, tokenBudgetForCredits } from "@/lib/ai-rung";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { HELP_ROOT } from "@/server/help-content";
 import { helpArticleBySlug } from "./_help-copy";
 
 /** The three articles that quote a price for an AI run. Any of them getting it
@@ -144,23 +147,20 @@ const FLAT_RUN_PRICE_PATTERNS = [
   /\bspends?\s+(?:one|a)\s+(?:AI\s+)?credit\b/i,
 ];
 
-/** Every page of the AI Schedule section. The flat-price claim can be written on
- *  any of them, not only the three that quote a price, so the scan covers all of
- *  them (the six pages Task 11a split the article into, plus AI Officials). */
-const AI_HELP_PAGES = [
-  "scheduling/ai-scheduling",
-  "scheduling/ai-instructions",
-  "scheduling/ai-dates",
-  "scheduling/ai-review",
-  "scheduling/ai-credits",
-  "scheduling/ai-several-divisions",
-  "scheduling/ai-officials",
-] as const;
+/** Every page of the AI Schedule section, read from the folder so a new `ai-*`
+ *  page is scanned the day it is added. The flat-price claim can be written on
+ *  any of them, not only the three that quote a price. */
+const AI_HELP_PAGES = readdirSync(join(HELP_ROOT, "scheduling"))
+  .filter((f) => /^ai-.+\.md$/.test(f))
+  .sort()
+  .map((f) => `scheduling/${f.replace(/\.md$/, "")}`);
 const FLAT_PRICE_SCAN_PAGES = [...new Set<string>([...PRICING_ARTICLES, ...AI_HELP_PAGES])];
 
 describe("no help article still sells a flat one-credit run", () => {
   it("scans every AI page and every pricing article (count pinned)", () => {
-    // 7 AI pages + billing/credits; ai-credits and ai-officials are in both lists.
+    // 7 AI pages (overview, instructions, dates, review, credits, several
+    // divisions, officials) + billing/credits; ai-credits and ai-officials are
+    // in both lists. A zero or shrunken folder read is a red, not a smaller green.
     expect(AI_HELP_PAGES.length).toBe(7);
     expect(FLAT_PRICE_SCAN_PAGES.length).toBe(8);
   });
@@ -228,5 +228,33 @@ describe("no help article still sells a flat one-credit run", () => {
         p.test("The no-instruction default spread makes no model call at all and is charged a flat 1 credit."),
       ),
     ).toBe(false);
+  });
+});
+
+/**
+ * The data-handling sentence on the AI overview page. Its truth lives on the
+ * public sub-processors page, so the expected phrase and the vendor names are
+ * read from THAT page's source, never typed here.
+ */
+describe("ai-scheduling states the no-training guarantee and names the vendors, as /legal/sub-processors does", () => {
+  const source = readFileSync(join(process.cwd(), "src/app/legal/sub-processors/page.tsx"), "utf8");
+  const flat = source.replace(/\s+/g, " ");
+  const prose = plainProse(helpArticleBySlug("scheduling/ai-scheduling")).replace(/\s+/g, " ");
+
+  it("repeats the legal page's no-training sentence", () => {
+    const m = /They (do not use your data to train their models)/.exec(flat);
+    expect(m, "the legal page no longer carries the no-training sentence — update this guard").not.toBeNull();
+    expect(prose).toContain(m![1]);
+  });
+
+  it("names every AI model vendor the legal page lists, and only those", () => {
+    // Vendors = the AI rows that SERVE a model. The routing gateway is a row too
+    // but is not a model vendor, so it is excluded by its own purpose text.
+    const rows = [...source.matchAll(/name: "([^"]+)",\s*purpose: "([^"]+)"/g)].map((r) => ({ name: r[1], purpose: r[2] }));
+    const vendors = rows
+      .filter((r) => /^AI /.test(r.purpose) && !/routing gateway/i.test(r.purpose))
+      .map((r) => r.name.split(/[\s(]/)[0]);
+    expect(vendors, "expected Anthropic, Google and xAI on the legal page").toHaveLength(3);
+    for (const v of vendors) expect(prose, `ai-scheduling does not name ${v}`).toContain(v);
   });
 });

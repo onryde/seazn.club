@@ -1,6 +1,6 @@
 ---
 title: Scheduling constraints
-description: The rules Auto-schedule and AI Schedule play by — hours, courts, rest, a daily cap, blackouts — and the tools that check a day.
+description: The rules Auto-schedule plays by and AI plans are checked against — hours, courts, rest, a daily cap, blackouts — and the tools that check a day.
 order: 4
 related: scheduling/board, scheduling/locks, scheduling/ai-scheduling, scheduling/undo
 ---
@@ -20,7 +20,7 @@ On the **Settings** tab you set:
 - **Match length (minutes)** and **Gap between matches (minutes)**. The gap is turnaround time on the same court, such as warm-up and teardown.
 - **Minimum rest per entrant (minutes)**.
 
-Set **Play from** and **Play until** before you run **Auto-schedule**. With no play hours, Auto-schedule starts at midnight, not at the time of day you picked for the start. In a six-player league with play hours of 09:00 to 12:00, the first match landed at 09:00.
+Set **Play from** and **Play until** before you run **Auto-schedule**. With no play hours, the optimiser can start the day at midnight rather than at your start time. In a six-player league with play hours of 09:00 to 12:00, the first match landed at 09:00.
 
 On the **Courts** tab you pick the courts this schedule can use.
 
