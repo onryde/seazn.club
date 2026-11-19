@@ -8,8 +8,8 @@ import { orgScope, type Pass } from "./pass";
 // ─── Job 6: the arbiter watches the server removes (T15 fix round 1, I2) ───
 //
 // An organiser's watch of a board is a RealtimeKit participant whose token
-// lasts 100 days. The panel removes it when it closes (leaveAsArbiter), but
-// a browser that crashes or loses the network never says so — and a role can
+// lasts 100 days. The panel sends no DELETE any more (the server owns cleanup), and a
+// browser that crashes or loses the network never says so — and a role can
 // be taken away mid-watch. So every pass looks at every watch not yet
 // removed, and ends one when:
 //   - its user is gone (the account deleted: ON DELETE SET NULL, M5);
@@ -17,8 +17,9 @@ import { orgScope, type Pass } from "./pass";
 //     roles — the route's `write`);
 //   - its user now PLAYS on the board (C1's predicate: a sub seated after the
 //     watch began never keeps watching their opponent);
-//   - it is ARBITER_PARTICIPANT_TTL_MS old: a panel left open runs longer
-//     than any game on the ship-1 clocks, and re-opening mints a fresh one;
+//   - it is ARBITER_PARTICIPANT_TTL_MS old, counted from created_at: a reload REUSES the row
+//     (no reset), so a kept room re-opened within the TTL is kicked once and the panel's
+//     evict + one re-POST mints a fresh participant;
 //   - its room has ended.
 // A watch whose room has ended needs no vendor call (the teardown kicked
 // everyone and INACTIVE keeps every token out): it is stamped. Otherwise it

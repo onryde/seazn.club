@@ -190,14 +190,15 @@ export type ArbiterSideMeeting = {
   evidenceAt: string | null;
   /** From fixture_video_presence, for the side's PLAYER's participant only (the stored player participant of (fixture, side); an
    *  arbiter's peer in the same meeting is never the player's presence): a current peer, when it joined, or when the last one left.
-   *  Scoped to the board's CURRENT window: a row that joined before the window's `opened_at` (a re-open keeps the room and its rows)
-   *  is the last window's and counts for nothing here. */
+   *  Scoped to the board's CURRENT window: a CLOSED row whose `left_at` is before the window's start (a re-open keeps the room and its
+   *  rows) is the last window's and counts for nothing here; an open row counts whatever its `joined_at`. */
   presence: { present: boolean; since: string | null; leftAt: string | null };
   /** The player's own browser's last word (camera-report.ts reportedCamera), judged on the loader's clock. */
   camera: { state: "live" | "off" | "unknown"; at: string | null };
   /** The join would admit this side NOW: state "open" AND `arbiterSideAdmits` over the loader's own facts (a player participant on
    *  file, and - proof flag on - the player's presence on file in this window / - flag off - the player's check-in counted). False for
-   *  "none" and "ended". The panel joins only a joinable side. */
+   *  "none" and "ended". Side facts ONLY: board-level refusals (the game over, a video override, camera policy off, the viewer's own
+   *  board) are not in it - the panel's `shouldJoinVideo` covers them. The panel joins only a joinable side. */
   joinable: boolean;
 };
 
