@@ -32,7 +32,7 @@
 // REACHES over the API. Every rename, and every screen the
 // renames are read back from, is done in the browser.
 import { test, expect } from "@playwright/test";
-import { TAG, divisionPath, expandAllFolds, failOnNativeDialog, scoreFixture } from "../helpers";
+import { TAG, apiJson, divisionPath, expandAllFolds, failOnNativeDialog, scoreFixture } from "../helpers";
 import { closeOpenContexts } from "../spectator-public-helpers";
 import { waitForHydration } from "../directory-kit";
 import { division, leagueFixtures, mintSpectatorOrg, publicCompetition } from "../spectator-w2-kit";
@@ -65,14 +65,14 @@ const LOADS = [
   "console: Doubles entrants (the swap is staged)",
   "public: Doubles, warm",
   "public: Doubles, after the swap",
-  "public: Doubles standings",
   "console: Doubles fixtures",
-  "console: Doubles standings",
   "console: Doubles entrants (name + Save roster)",
   "console: Doubles entrants, reloaded",
   "console: Doubles entrants, reloaded after the second swap",
   "console: Doubles fixtures, after the second swap",
   "public: Doubles, after the second swap",
+  "public: Doubles standings, after the result",
+  "console: Doubles standings, after the result",
   "console: directory",
   "public: Mixed, warm",
   "public: Mixed, after the player's rename",
@@ -148,12 +148,11 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   const mixedPair = derivedFrom(sankar, asha);
   const mixedPairId = await seedPair(page.request, mixed.id, [sankar, asha]);
   await seedPair(page.request, mixed.id, [dev, chen]);
-  const doublesFixtureRows = await leagueFixtures(page.request, doubles.id);
+  // Doubles is DRAWN but not started: both of its renames below are partner swaps, and owner ruling 292 (W5) refuses a substitute
+  // partner once play has started, in every format. Its Start and its one result come after the swaps (before step 3).
+  const doublesFixtureRows = await leagueFixtures(page.request, doubles.id, { start: false });
   const played = doublesFixtureRows.find((f) => f.home_entrant_id === pairId || f.away_entrant_id === pairId);
   expect(played, "the pair plays a Doubles fixture").toBeDefined();
-  // One result, so the Doubles standings exist: a league's table is written
-  // when a result lands, and before one there is no table to name anybody.
-  await scoreFixture(page.request, played!.id, 2, 1);
   expect((await leagueFixtures(page.request, mixed.id)).length, "Mixed has a fixture").toBeGreaterThan(0);
 
   const publicDoubles = `/live/${org.slug}/${comp.slug}/${doubles.slug}`;
@@ -185,15 +184,9 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   expect(Date.now() - doublesWarmedAt, "the swap reached the public page inside its cache lifetime").toBeLessThan(
     PUBLIC_DIVISION_TTL_MS,
   );
-  const publicStandings = await spectate(`${publicDoubles}?tab=standings`, "standings");
-  await expect(shown(publicStandings.locator("#panel-standings"), followed)).toBeVisible();
-  await expect(publicStandings.getByText(created)).toHaveCount(0);
 
   await visit(doublesFixtures);
   await openSettledRounds();
-  await expect(shown(page, followed)).toBeVisible();
-  await expect(page.getByText(created)).toHaveCount(0);
-  await visit(doublesStandings);
   await expect(shown(page, followed)).toBeVisible();
   await expect(page.getByText(created)).toHaveCount(0);
 
@@ -229,6 +222,19 @@ test("an organiser renames a pair three ways, and every screen that names it fol
   const afterSmash = await spectate(publicDoubles);
   await expect(shown(afterSmash.locator("#panel-schedule"), smash)).toBeVisible();
   await expect(afterSmash.getByText(followed)).toHaveCount(0);
+
+  // ---- The standings name the pair as the renames left it ----
+  // Reach: Doubles starts and the pair's match is played (a league's table is written when a result lands, and before one there is
+  // no table to name anybody). Both standings read the name the roster saves gave it; no earlier name survives there.
+  const started = await apiJson(page.request, `/api/v1/divisions/${doubles.id}/start`, "POST");
+  expect(started.status, `start Doubles: ${JSON.stringify(started.error)}`).toBe(200);
+  await scoreFixture(page.request, played!.id, 2, 1);
+  const publicStandings = await spectate(`${publicDoubles}?tab=standings`, "standings");
+  await expect(shown(publicStandings.locator("#panel-standings"), smash)).toBeVisible();
+  for (const old of [created, followed]) await expect(publicStandings.getByText(old)).toHaveCount(0);
+  await visit(doublesStandings);
+  await expect(shown(page, smash)).toBeVisible();
+  for (const old of [created, followed]) await expect(page.getByText(old)).toHaveCount(0);
 
   // ---- 3. A player renamed from the directory ----
   // Sankar is in two pairs now: "Smash Bros" in Doubles (a name of its own) and
