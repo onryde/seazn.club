@@ -29,7 +29,7 @@
  * check-in leaves are seeded - `putRoom` - with vendor ids that are not real: the route finds the row, asks
  * the unreachable vendor for a participant, and is refused.) The receive-only meeting itself (video only,
  * never audio, one player's camera) is the loader's own suite (components/v2/__tests__/arbiter-camera.test.ts)
- * against the fake SDK; the White/Black switch's ORDER (leave, DELETE answered, then the next join) is
+ * against the fake SDK; the White/Black switch (no DELETE ever, one join POST per open) is
  * driven here through the real panel against a stubbed join route.
  *
  * Expected copy comes from the dictionary, expected boards and moves from the
@@ -748,78 +748,46 @@ test.describe("arbiter panel", () => {
     await shoot(page, "arbiter-knockout-winner-settled");
   });
 
-  test("I2: the panel hands each watch back — on a board switch, and when the tab goes away", async ({ page, request }) => {
+  test("I2: leaving — a board switch, a side switch, the tab going away — sends no DELETE at all; one join POST per open of a joinable side", async ({ page, request }) => {
     test.setTimeout(120_000);
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
     const [b1, b2] = r.boards;
     await gameOn(b1, { moves: LINE });
     await gameOn(b2, { moves: LINE.slice(0, 4) });
-    // The server's RealtimeKit is unreachable here, so the JOIN is answered
-    // in the browser: a minted watch per open, as the route answers it. What
-    // is proven is the panel's half — that it hands back the id it was given.
-    // The route's own removal is the vitest suites' (route + usecase + sweep).
-    const minted: string[] = [];
-    const handedBack: string[] = [];
-    await page.route(/\/external-play\/arbiter$/, async (route) => {
-      if (route.request().method() !== "POST") return route.fallback();
-      const fixtureId = route.request().url().split("/fixtures/")[1]!.split("/")[0]!;
-      const { side } = route.request().postDataJSON() as { side: "home" | "away" };
-      const participantId = `e2e-${fixtureId.slice(0, 8)}-${minted.length + 1}`; // boardOf() reads the middle
-      minted.push(participantId);
-      await route.fulfill({ json: { ok: true, data: { authToken: "e2e-not-a-token", participantId, side, players: [] } } });
-    });
-    // A hand-back is counted where the browser SENDS it — its request event — and page.route only answers it. The
-    // tab-away DELETE is a keepalive request issued while the page unloads: CI's trace (run 38524988078, both
-    // attempts) shows it sent with the right id, after the join had answered, yet never handed to this route, so a
-    // count kept in the route handler read a release the panel had made as missing. The request event is the
-    // signal the trace itself records. One that misses the route reaches the server, where the id is unknown.
-    const handBack = /\/external-play\/arbiter\/[^/]+$/;
+    // The server's RealtimeKit is unreachable here, so the JOIN is answered in the browser (`wire`) with a token the real
+    // SDK cannot connect with: the pane reads `error`, so no answer is ever KEPT and every open POSTs exactly once. What is
+    // proven is the panel's half: it never sends a hand-back. (A return POSTing nothing needs a connect that succeeds, and
+    // is arbiter-watch.test.ts's.) A DELETE is counted where the browser SENDS it - the context's request event, which sees a
+    // keepalive request issued while the page unloads - never in a route handler, which can miss one.
+    const log = await wire(page, { post: () => "mint" });
+    const deletes: string[] = [];
     page.context().on("request", (req) => {
-      if (req.method() === "DELETE" && handBack.test(new URL(req.url()).pathname)) {
-        handedBack.push(decodeURIComponent(req.url().split("/").pop()!));
-      }
+      if (req.method() === "DELETE" && /\/external-play\/arbiter\//.test(new URL(req.url()).pathname)) deletes.push(req.url());
     });
-    await page.route(handBack, async (route) => {
-      if (route.request().method() !== "DELETE") return route.fallback();
-      await route.fulfill({ json: { ok: true, data: { removed: true } } });
-    });
-
-    // The invariant at every step: every watch minted is handed back exactly
-    // once, except the one on screen. (A dev server's StrictMode mounts the
-    // panel twice, so board 1 may be opened, closed and opened again — the
-    // first watch must then come back too.)
-    const boardOf = (pid: string) => pid.split("-")[1];
-    const settled = async (onScreen: Board | null, message: string) => {
-      await expect
-        .poll(
-          () => {
-            const live = minted.filter((pid) => !handedBack.includes(pid));
-            return {
-              live: live.map(boardOf),
-              repeats: handedBack.length - new Set(handedBack).size,
-              unknown: handedBack.filter((pid) => !minted.includes(pid)).length,
-            };
-          },
-          { message },
-        )
-        .toEqual({ live: onScreen === null ? [] : [onScreen.fixtureId.slice(0, 8)], repeats: 0, unknown: 0 });
-    };
+    const posts = () => log.filter((e) => e.startsWith("POST"));
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.arbiterPath);
-    await settled(b1, "board 1 on screen: its watch is the only one out");
-    const onBoard1 = minted.length;
-    expect(onBoard1, "anti-vacuity: board 1 minted").toBeGreaterThanOrEqual(1);
+    await expect.poll(() => posts(), { message: "board 1 open: one POST, White's side" }).toEqual(["POST home"]);
 
+    // A board switch away: board 2's side is POSTed, board 1's is left with nothing sent.
     await boardsNav(page).getByRole("button").nth(1).click();
     await expect(boardsNav(page).getByRole("button").nth(1)).toHaveAttribute("aria-pressed", "true");
-    await settled(b2, "board 2 on screen: board 1's watch handed back, a FRESH one for board 2");
-    expect(minted.length, "the switch minted a new watch").toBeGreaterThan(onBoard1);
+    await expect.poll(() => posts(), { message: "board 2 open: one POST" }).toHaveLength(2);
+    // ...and back: nothing was kept (no connect ever succeeds here), so the return is one more POST for board 1's side.
+    await boardsNav(page).getByRole("button").nth(0).click();
+    await expect(boardsNav(page).getByRole("button").nth(0)).toHaveAttribute("aria-pressed", "true");
+    await expect.poll(() => posts(), { message: "back on board 1: one POST per open" }).toHaveLength(3);
+    // A side switch on board 1: Black's side is another meeting, one POST.
+    await switchButton(page, "black").click();
+    await expect.poll(() => posts(), { message: "Black's side: one POST" }).toEqual(["POST home", "POST home", "POST home", "POST away"]);
 
-    // The tab going away: pagehide hands back the watch on screen.
+    // The tab going away.
     await page.goto(r.fixturesTab);
-    await settled(null, "the tab left: nothing out");
-    expect(handedBack.length, "anti-vacuity: every watch came back").toBe(minted.length);
+    await page.waitForTimeout(700); // a stray hand-back would have been sent by now
+    expect(posts().length, "anti-vacuity: the POSTs it did send (3 opens of White's side across two boards, 1 of Black's)").toBe(4);
+    expect(log.filter((e) => e.startsWith("DELETE")), "no DELETE reached the stub").toEqual([]);
+    expect(deletes, "and none was ever sent by the browser: board switch, side switch, tab away").toEqual([]);
   });
 
   test("I3: a link to a board that is not here says so — never another board — and offers the current round", async ({ page, request }) => {
@@ -1062,8 +1030,7 @@ test.describe("arbiter panel", () => {
   //
   // The server's RealtimeKit is unreachable, so a SUCCESSFUL join cannot be had: the join route is answered in the browser
   // (as I2 does), with a participant the real SDK then fails to connect to ("e2e-not-a-token"). What is proven is the
-  // panel's half through its real producer and consumer: which side it asks for, the order of a switch (the participant it
-  // was given is deleted and the DELETE ANSWERED before the next join is sent), the states it paints, and the control a
+  // panel's half through its real producer and consumer: which side it asks for, that a switch sends no DELETE and makes one join per open, the states it paints, and the control a
   // person touches. The loader's own suite (arbiter-camera.test.ts) owns the camera.
   const SWITCH_WIDTHS = [1280, 768, 320] as const;
   const group = (page: Page) => page.getByRole("group", { name: uiEn["arbiter.switch.group"] });
@@ -1080,10 +1047,10 @@ test.describe("arbiter panel", () => {
   type JoinAnswer = "mint" | { status: number; code: string };
 
   /** The join route and the hand-back route, answered in the browser, in the order the browser sends. `log` is what the
-   *  server side saw: a POST with its side, the participant it minted, a DELETE and (after the test's gate) its answer. */
+   *  server side saw: a POST with its side and the participant it minted, and a DELETE should the browser ever send one. */
   async function wire(
     page: Page,
-    h: { post(side: "home" | "away", n: number): Promise<JoinAnswer> | JoinAnswer; del?(id: string): Promise<void> },
+    h: { post(side: "home" | "away", n: number): Promise<JoinAnswer> | JoinAnswer },
   ): Promise<string[]> {
     const log: string[] = [];
     let posts = 0;
@@ -1104,15 +1071,13 @@ test.describe("arbiter panel", () => {
       if (route.request().method() !== "DELETE") return route.fallback();
       const id = decodeURIComponent(route.request().url().split("/").pop()!);
       log.push(`DELETE ${id}`);
-      await h.del?.(id);
-      log.push(`DELETE answered ${id}`);
       await route.fulfill({ json: { ok: true, data: { removed: true } } });
     });
     return log;
   }
 
   for (const width of SWITCH_WIDTHS) {
-    test(`the switch at ${width}: leave, DELETE answered, then the next join; a refusal on the tile asked for; keyboard; a 44px target hit-tested`, async ({
+    test(`the switch at ${width}: no DELETE, one join per open; a refusal on the tile asked for; keyboard; a 44px target hit-tested`, async ({
       page,
       request,
     }) => {
@@ -1120,7 +1085,6 @@ test.describe("arbiter panel", () => {
       const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
       const [b1] = r.boards;
       await gameOn(b1, { moves: LINE });
-      const delGate = deferred();
       const post2Gate = deferred();
       const log = await wire(page, {
         post: async (side, n) => {
@@ -1130,9 +1094,6 @@ test.describe("arbiter panel", () => {
           }
           if (n >= 4) return { status: 503, code: "VIDEO_UNAVAILABLE" };
           return "mint";
-        },
-        del: async (id) => {
-          if (id === "e2e-home-1") await delGate.promise;
         },
       });
       const white = () => switchButton(page, "white");
@@ -1168,16 +1129,10 @@ test.describe("arbiter panel", () => {
       }
       expect(hit).toBe(2);
 
-      // 1. Black: the leave and the DELETE go out FIRST, and the next join waits for the DELETE's ANSWER.
+      // 1. Black: its own meeting's join goes out at once (a side is its own chain) and nothing is deleted.
       await black().click();
-      await expect.poll(() => log.includes("DELETE e2e-home-1")).toBe(true);
-      await page.waitForTimeout(700);
-      expect(log, "the DELETE is unanswered: no second join yet").not.toContain("POST away");
-      expect(log).not.toContain("DELETE answered e2e-home-1");
-      delGate.release();
       await expect.poll(() => log.includes("POST away")).toBe(true);
-      expect(log.indexOf("DELETE answered e2e-home-1"), "answered BEFORE the next join was sent").toBeGreaterThan(-1);
-      expect(log.indexOf("DELETE answered e2e-home-1")).toBeLessThan(log.indexOf("POST away"));
+      expect(log.filter((e) => e.startsWith("DELETE")), "leaving White's side sent no DELETE").toEqual([]);
 
       // 2. The join is in flight: the switch says so, to the eye and to assistive technology.
       await expect(black()).toHaveAttribute("aria-pressed", "true");
@@ -1197,14 +1152,14 @@ test.describe("arbiter panel", () => {
       if (width === 1280) await shoot(page, "arbiter-switch-refused-not-started");
       await page.setViewportSize({ width, height: width === 1280 ? 900 : 700 });
 
-      // 4. The way back, from the KEYBOARD (Enter): nothing was minted by the refused join, so there is nothing to delete.
+      // 4. The way back, from the KEYBOARD (Enter): the refused join kept nothing.
       await white().focus();
       await page.keyboard.press("Enter");
       await expect.poll(() => log.filter((e) => e.startsWith("POST")).length).toBe(3);
       await expect(white()).toHaveAttribute("aria-pressed", "true");
       await expect(tiles(page).getByText(uiEn["arbiter.tile.error"], { exact: true })).toHaveCount(1);
 
-      // 5. And forth, with the SPACE bar: the participant minted by the third join is deleted before the fourth is sent.
+      // 5. And forth, with the SPACE bar: the fourth join is one more POST, and still nothing is deleted.
       await black().focus();
       await page.keyboard.press("Space");
       await expect.poll(() => log.filter((e) => e.startsWith("POST")).length).toBe(4);
@@ -1213,28 +1168,14 @@ test.describe("arbiter panel", () => {
       if (width === 1280) await shoot(page, "arbiter-switch-refused-outage");
       await page.setViewportSize({ width, height: width === 1280 ? 900 : 700 });
 
-      expect(log, "the whole conversation, in order").toEqual([
+      expect(log, "the whole conversation, in order: four POSTs, two mints, no DELETE").toEqual([
         "POST home", "minted e2e-home-1",
-        "DELETE e2e-home-1", "DELETE answered e2e-home-1",
         "POST away",
         "POST home", "minted e2e-home-3",
-        "DELETE e2e-home-3", "DELETE answered e2e-home-3",
         "POST away",
       ]);
-      // The invariant, read off the log rather than typed: after every join the participant it minted is deleted, and the
-      // delete answered, before the next join is sent.
-      let pairs = 0;
-      let minted: string | null = null;
-      for (const e of log) {
-        if (e.startsWith("minted ")) minted = e.slice("minted ".length);
-        if (e.startsWith("POST ") && minted !== null) {
-          expect(log.indexOf(`DELETE answered ${minted}`), `${minted} was deleted before ${e}`).toBeGreaterThan(-1);
-          expect(log.indexOf(`DELETE answered ${minted}`)).toBeLessThan(log.indexOf(e, log.indexOf(`minted ${minted}`)));
-          pairs += 1;
-          minted = null;
-        }
-      }
-      expect(pairs, "anti-vacuity: two mints each followed by a join").toBe(2);
+      expect(log.filter((e) => e.startsWith("POST")).length, "anti-vacuity: the POSTs it did send").toBe(4);
+      expect(log.filter((e) => e.startsWith("DELETE")).length).toBe(0);
       expect(await noSidewaysScroll(page, [width])).toBe(1);
     });
   }
@@ -1280,9 +1221,9 @@ test.describe("arbiter panel", () => {
     await expect(tiles(page).getByText(fill("arbiter.tile.notStarted", { name: b2.home.name }), { exact: true })).toBeVisible();
     await expect(white()).toHaveAttribute("aria-disabled", "true");
     await expect(black()).toHaveAttribute("aria-disabled", "true");
-    // Leaving board 1's pane handed its participant back; board 2 made no join at all.
-    await expect.poll(() => log.slice()).toEqual(["POST home", "minted e2e-home-1", "DELETE e2e-home-1", "DELETE answered e2e-home-1"]);
+    // Leaving board 1's pane sends nothing (no DELETE); board 2 made no join at all.
     await page.waitForTimeout(700);
+    expect(log).toEqual(["POST home", "minted e2e-home-1"]);
     expect(log.filter((e) => e.startsWith("POST")), "no join for a board nobody has checked in to").toHaveLength(1);
 
     // The player arrives: the poll (a hidden tab coming back refreshes at once) reads the room and the join opens.

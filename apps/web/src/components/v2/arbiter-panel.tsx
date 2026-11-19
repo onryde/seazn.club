@@ -60,7 +60,7 @@ import {
   type RoundExtendState,
 } from "./checkin-extend-ui";
 import { ArbiterGuardError, joinArbiter, type ArbiterCameras, type ArbiterSeat, type ArbiterTileView } from "./arbiter-camera";
-import { arbiterWatchRelease, makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "./arbiter-watch";
+import { makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "./arbiter-watch";
 import {
   boardStateWord,
   BUTTON_QUIET,
@@ -183,13 +183,14 @@ export function arbiterJoinStateFromError(err: unknown): ArbiterVideoView {
         return { kind: "own" };
       case "FIXTURE_NOT_PLAYABLE":
         return { kind: "over" };
+      case "VIDEO_BUSY":
+        // ACCEPTED INTERIM: the waiting-for-capacity view and its ARBITER_RETRY_MS retry are the Match Day plan's Task 9.
+        // Until then a busy kickoff shows the generic error with the manual Retry the panel offers for `error`.
+        return { kind: "error" };
     }
   }
   return { kind: "error" };
 }
-
-/** I2 (arbiter-watch.ts): the participant one open minted, handed back once whenever the pane closes. */
-export { arbiterWatchRelease };
 
 /** The side (home/away) that plays this colour: the meeting is the SIDE's, the colour only its label (§5.6.4) - a pairing
  *  card can swap the colours after a player has arrived and the pane then stays on the same meeting. */
@@ -1015,7 +1016,6 @@ const browserSerial = makeArbiterSerial({
   join: (fixtureId, side) =>
     apiV1<ArbiterJoinAnswer>(`/api/v1/fixtures/${encodeURIComponent(fixtureId)}/external-play/arbiter`, { method: "POST", json: { side } }),
   connect: joinArbiter,
-  send: (url, init) => apiV1(url, init),
 });
 
 /** True when the last answer on screen belongs to the OTHER side of the same board: a switch is in flight, not a first
@@ -1120,11 +1120,8 @@ export function ArbiterPanel({
       },
       onError: (err) => answer(arbiterJoinStateFromError(err)),
     });
-    // I2: the tab going away hands the participant back at once (keepalive); the pane closing queues leave-then-DELETE.
-    window.addEventListener("pagehide", open.release);
     return () => {
       cancelled = true;
-      window.removeEventListener("pagehide", open.release);
       open.close();
     };
   }, [joinKey]);

@@ -91,9 +91,9 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // `const path = `/api/v1/orgs/${orgId}/stream-targets/${t.id}`` — one literal
   // shared by the row's Remove (DELETE) and Rename/Replace (PATCH)
   "src/components/v2/stream-destinations-panel.tsx": 2,
-  // Online chess (traced 2026-10-13, re-traced D16). (1) `makeArbiterSerial({ join, send })` (arbiter-watch.ts) — `join` POSTs
-  // `/api/v1/fixtures/${id}/external-play/arbiter` with `{ side }` and `send` is `arbiterWatchRelease`'s DELETE of
-  // `/api/v1/fixtures/${id}/external-play/arbiter/${participantId}` (both routes exist, POST and DELETE).
+  // Online chess (traced 2026-10-13, re-traced D16). (1) `makeArbiterSerial({ join, connect })` (arbiter-watch.ts) — `join` POSTs
+  // `/api/v1/fixtures/${id}/external-play/arbiter` with `{ side }` (the route exists). The browser sends no DELETE any more
+  // (re-traced plan 3 Task 2: the DELETE route is explicit revocation only), so the count fell from 3 to 2.
   // (2) `decisionRunner({ post: (path, body) => apiV1(path, …) })` — arbiter-decision.ts builds every path as
   // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve (each a POST
   // route that exists). The check-in extension (traced 2026-10-19, spec 2026-10-09 §3.2.2) adds a third dynamic call and a tail to
@@ -102,7 +102,7 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // extend-checkin); (3) `roundExtendRunner({ post: (path, body) => apiV1(path, …) })` (checkin-extend-ui.ts) posts only
   // `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin` with `{ roundNo }` (a POST route that exists, src/app/api/v1/
   // stages/[id]/extend-checkin).
-  "src/components/v2/arbiter-panel.tsx": 3,
+  "src/components/v2/arbiter-panel.tsx": 2,
   // `openRoundRunner({ post: (path, body) => apiV1(path, …) })` — open-round-state.ts posts only
   // `/api/v1/stages/${stageId}/open-round` and `/api/v1/fixtures/${id}/external-play/resend` (both POST routes that exist). ONE
   // dynamic call. It moved out of open-round-control.tsx into the `useOpenRound` hook (arbiter round column, Task 4), which the
