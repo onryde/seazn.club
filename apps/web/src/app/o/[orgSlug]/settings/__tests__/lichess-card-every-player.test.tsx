@@ -1,10 +1,10 @@
-// T20 — Settings → Account: the "Link Lichess account" card is how a player STARTS online chess, so it is shown only
-// while the club is offered online chess (the PostHog flag `online-chess`, fallback off). Not rendered — never
-// rendered-and-disabled — when off. One exception, and it is not a start: a player who already linked keeps the card,
-// so they can still UNLINK.
+// Settings → Account: the "Link Lichess account" card is shown to EVERY signed-in player (owner 2026-11-18). Linking is
+// the player's own — they can do it before any club offers online chess, so a club's PostHog flag `online-chess` no
+// longer decides whether the card renders (it used to: T20, flag OFF or PostHog throwing rendered none, unless the
+// player was already linked). The page asks the flag nothing, and hands the card no club, so its link starts none.
 //
-// Drives the REAL page (an async server component, so `prerender`) with the flag asked through the REAL helper and
-// PostHog doubled at its boundary. Same page harness as preferences-tab.test.tsx: islands stubbed to markers, `sql`
+// Drives the REAL page (an async server component, so `prerender`) with PostHog doubled at its boundary — a call to it is
+// a defect now, so the double counts them. Same page harness as preferences-tab.test.tsx: islands stubbed to markers, `sql`
 // to one row. The card itself is a marker carrying the props the page handed it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -46,10 +46,10 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 });
 
 vi.mock("@/components/lichess-link-card", () => ({
-  LichessLinkCard: (p: { orgSlug: string | null; linkedUsername: string | null; configured: boolean; needsReconsent?: boolean }) => (
+  LichessLinkCard: (p: { linkedUsername: string | null; configured: boolean; needsReconsent?: boolean }) => (
     <div
       data-testid="lichess-card"
-      data-org={p.orgSlug ?? "none"}
+      data-props={Object.keys(p).sort().join(",")}
       data-linked={p.linkedUsername ?? ""}
       data-reconsent={String(p.needsReconsent ?? false)}
     />
@@ -159,27 +159,32 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("Settings → Account: the Lichess card follows the club's online-chess flag", () => {
-  it("not linked: flag ON shows the card, for THIS club; flag OFF or PostHog throwing renders none", async () => {
+describe("Settings → Account: the Lichess card is shown to every signed-in player, whatever the club's flag says", () => {
+  /** The override the suite runs under, plus every state of the flag: none of them may decide the card. */
+  const WORLDS: readonly { label: string; arm: () => void }[] = [
+    { label: "override ON", arm: () => undefined },
+    ...FLAG_STATES.map((s) => ({ label: s.label, arm: () => flagIs(s) })),
+  ];
+
+  it("not linked: the card renders in every flag world, handed no club, and the flag is never asked", async () => {
     let checked = 0;
-    for (const s of FLAG_STATES) {
-      flagIs(s);
+    for (const w of WORLDS) {
+      w.arm();
       const html = await render("account");
-      // Anti-vacuity: the account tab really rendered, so an absent card is the gate's doing.
-      expect(html, s.label).toContain("owner@example.com");
-      if (s.offered) {
-        expect(html, s.label).toContain('data-testid="lichess-card"');
-        expect(html, `${s.label}: the link names the club whose page this is`).toContain(`data-org="${ORG.slug}"`);
-      } else {
-        expect(html, s.label).not.toContain('data-testid="lichess-card"');
-      }
-      expect(isServerFeatureEnabled, s.label).toHaveBeenCalledWith("online-chess", "u1", { orgId: ORG.id, fallback: false });
+      // Anti-vacuity: the account tab really rendered, so the card's presence is the rule's doing.
+      expect(html, w.label).toContain("owner@example.com");
+      expect(html, w.label).toContain('data-testid="lichess-card"');
+      expect(html, `${w.label}: configured, linked-name and re-consent are the card's props`).toContain(
+        'data-props="configured,linkedUsername,needsReconsent"',
+      );
+      expect(html, `${w.label}: the card is handed no club to start at`).not.toContain("orgSlug");
+      expect(isServerFeatureEnabled, `${w.label}: online chess is none of this page's business`).not.toHaveBeenCalled();
       checked++;
     }
-    expect(checked).toBe(FLAG_STATES.length);
+    expect(checked).toBe(WORLDS.length);
   });
 
-  it("already linked with the flag OFF: the card stays, so the player can still unlink — unlinking starts nothing", async () => {
+  it("already linked, flag OFF: the card stays, so the player can still unlink", async () => {
     linkedAs("Magnus");
     flagIs(FLAG_STATES[1]!);
     const html = await render("account");
@@ -187,23 +192,23 @@ describe("Settings → Account: the Lichess card follows the club's online-chess
     expect(html).toContain('data-linked="Magnus"');
   });
 
-  it("T16: linked with a grant short of the play scopes asks for re-consent; the re-link names the club only while it is offered", async () => {
+  it("T16: linked with a grant short of the play scopes asks for re-consent, in every flag world; a full grant does not", async () => {
     let checked = 0;
-    for (const s of FLAG_STATES) {
-      flagIs(s);
+    for (const w of WORLDS) {
+      w.arm();
       linkedAs("Magnus", PLAY_SCOPES.slice(1));
       const html = await render("account");
-      expect(html, s.label).toContain('data-reconsent="true"');
-      expect(html, s.label).toContain(`data-org="${s.offered ? ORG.slug : "none"}"`);
+      expect(html, w.label).toContain('data-reconsent="true"');
+      expect(html, w.label).toContain('data-linked="Magnus"');
       checked++;
     }
-    expect(checked).toBe(FLAG_STATES.length);
+    expect(checked).toBe(WORLDS.length);
     linkedAs("Magnus");
     flagIs(FLAG_STATES[0]!);
     expect(await render("account"), "a full grant: nothing to re-consent").toContain('data-reconsent="false"');
   });
 
-  it("another tab neither shows the card nor asks the flag", async () => {
+  it("another tab does not show the card (it is the account tab's), and asks the flag nothing", async () => {
     flagIs(FLAG_STATES[0]!);
     const html = await render("organization");
     expect(html).toContain(ORG.name);

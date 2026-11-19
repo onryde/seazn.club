@@ -45,19 +45,25 @@ export async function GET(req: Request) {
   // parallel prefix check. Read up front: a refused start lands on it too.
   const next = safeNextPath(url.searchParams.get("next"));
 
-  // T20: linking is how online chess STARTS for a player, and online chess is offered per club (the PostHog flag
-  // `online-chess`). The start names its club (lib/lichess-link.ts); a start naming none or an unknown slug, or a
-  // club not offered online chess, is refused before anything is stored. A renamed club's old slug (a stale link or
-  // bookmark) is followed ONCE through slug_history to the club it names now — never a chain. Ahead of the
-  // configuration check: a club without the feature is told it is unavailable, not that Lichess is unconfigured.
+  // T20: a start that NAMES a club (the registration form, the match room - lib/lichess-link.ts) is for that club's online
+  // chess, which is offered per club (the PostHog flag `online-chess`): an unknown slug, or a club not offered online
+  // chess, is refused before anything is stored. A renamed club's old slug (a stale link or bookmark) is followed ONCE
+  // through slug_history to the club it names now - never a chain. Ahead of the configuration check: a club without
+  // the feature is told it is unavailable, not that Lichess is unconfigured.
+  //
+  // A start that names NO club (owner 2026-11-18) is the player's own - the card on /me and Settings, shown to every
+  // signed-in player. There is no club to ask, so no flag is asked and no club is looked up; every other check below
+  // (sign-in, configuration, the validated `next`, state + PKCE) still applies. A blank `org=` names no club either.
   //
   // The refusal is a browser navigation, so it lands on a page (fix round 1, m5), exactly as the callback reports its
   // own failures: back to `next`, or `/me`, with `?lichess=unavailable` — never a raw JSON body.
   const slug = url.searchParams.get(LICHESS_LINK_ORG_PARAM);
-  let org = slug ? await orgBySlug(slug) : null;
-  if (org && "renamedTo" in org) org = await orgBySlug(org.renamedTo);
-  if (!org || !("id" in org) || !(await onlineChessOffered({ orgId: org.id, userId: user.id }))) {
-    return redirectLocal(lichessLanding(next, "unavailable"));
+  if (slug) {
+    let org = await orgBySlug(slug);
+    if (org && "renamedTo" in org) org = await orgBySlug(org.renamedTo);
+    if (!org || !("id" in org) || !(await onlineChessOffered({ orgId: org.id, userId: user.id }))) {
+      return redirectLocal(lichessLanding(next, "unavailable"));
+    }
   }
 
   // Final review M-3: lands where every other exit does — the account settings page bounces an org-less player

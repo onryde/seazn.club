@@ -158,11 +158,16 @@ describe("GET /api/auth/lichess — start", () => {
   });
 });
 
-// T20: linking a Lichess account is how online chess STARTS for a player, so the start is offered only to a club
-// offered online chess (the PostHog flag `online-chess`, fallback off), the flag asked for the signed-in user in the
-// club's group. The refusal is a redirect onto a page with `?lichess=unavailable` (controller ruling, fix round 1 m5 —
-// the brief's 403 ONLINE_CHESS_DISABLED is for API callers; this route is a browser navigation).
-describe("GET /api/auth/lichess — online chess must be offered to the club", () => {
+// T20: a start that NAMES a club (the registration form, the match room) is for that club's online chess, so it is
+// offered only when the club is offered online chess (the PostHog flag `online-chess`, fallback off), the flag asked
+// for the signed-in user in the club's group. The refusal is a redirect onto a page with `?lichess=unavailable`
+// (controller ruling, fix round 1 m5 — the brief's 403 ONLINE_CHESS_DISABLED is for API callers; this route is a
+// browser navigation).
+//
+// Owner 2026-11-18: a start that names NO club is the player's own — the /me and Settings card, shown to every
+// signed-in player. No club's flag is asked (there is no club), and every other check stays: sign-in first, the
+// Lichess configuration, a validated `next`, and the state + PKCE cookies.
+describe("GET /api/auth/lichess — a start naming a club needs online chess offered to it; one naming none is the player's own", () => {
   type FlagState = { label: string; offered: boolean; arm: () => void };
   const FLAG_STATES: readonly FlagState[] = [
     { label: "flag ON", offered: true, arm: () => flags.isServerFeatureEnabled.mockResolvedValue(true) },
@@ -211,12 +216,9 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("a start naming no club, an unknown one, or a rename to a club that is gone is refused onto a page — /me when it carried no next — even with the override on, and the flag is never asked", async () => {
+  it("a start naming an unknown club, or a rename to a club that is gone, is refused onto a page — /me when it carried no next — even with the override on, and the flag is never asked", async () => {
     orgBySlug.mockImplementation(async (slug: string) => (slug === "gone-club" ? { renamedTo: "vanished" } : null));
     const cases: Array<{ url: string; pathname: string; query: Record<string, string> }> = [
-      { url: "http://localhost/api/auth/lichess", pathname: "/me", query: { lichess: "unavailable" } },
-      { url: "http://localhost/api/auth/lichess?next=/settings", pathname: "/settings", query: { lichess: "unavailable" } },
-      { url: "http://localhost/api/auth/lichess?org=", pathname: "/me", query: { lichess: "unavailable" } },
       { url: "http://localhost/api/auth/lichess?org=nobody", pathname: "/me", query: { lichess: "unavailable" } },
       { url: "http://localhost/api/auth/lichess?org=gone-club", pathname: "/me", query: { lichess: "unavailable" } },
       // An off-site next is dropped by the same `safeNextPath` the start uses: the refusal never leaves the site.
@@ -290,6 +292,133 @@ describe("GET /api/auth/lichess — online chess must be offered to the club", (
     flagIs(FLAG_STATES[0]!);
     const res = await GET(start());
     expect(path(res.headers.get("location")!).searchParams.get("lichess")).toBe("not_configured");
+  });
+
+  // ---- owner 2026-11-18: the player's own start names no club -----------------------------------------------------
+
+  /** The start the /me and Settings card builds: the real href builder, naming no club. */
+  const startOwn = (next?: string) => new Request(`http://localhost${lichessLinkStartHref(null, next)}`);
+  /** Every spelling of "no club": the bare path, a next only, and an empty `org=` (a blank slug names nothing). */
+  const OWN_STARTS: ReadonlyArray<{ label: string; req: () => Request; next: string | null }> = [
+    { label: "bare", req: () => new Request("http://localhost/api/auth/lichess"), next: null },
+    { label: "next only", req: () => startOwn("/me"), next: "/me" },
+    { label: "settings next", req: () => startOwn("/settings?tab=account"), next: "/settings?tab=account" },
+    { label: "empty org=", req: () => new Request("http://localhost/api/auth/lichess?org=&next=%2Fme"), next: "/me" },
+  ];
+  /** The override the suite runs under, plus every state of the flag: none of them may matter to a start naming no club. */
+  const EVERY_FLAG_WORLD: ReadonlyArray<{ label: string; arm: () => void }> = [
+    { label: "override ON", arm: () => undefined },
+    ...FLAG_STATES.map((s) => ({ label: s.label, arm: () => flagIs(s) })),
+  ];
+
+  it("a start naming no club goes ahead whatever any club's flag says — and never asks it, never looks up a club", async () => {
+    let checked = 0;
+    for (const world of EVERY_FLAG_WORLD) {
+      for (const own of OWN_STARTS) {
+        cookieJar.clear();
+        orgBySlug.mockClear();
+        world.arm();
+        const label = `${world.label} / ${own.label}`;
+        const res = await GET(own.req());
+        const loc = new URL(res.headers.get("location")!);
+        expect(loc.origin + loc.pathname, `${label}: on to Lichess`).toBe("https://lichess.org/oauth");
+        // The same protection as a named start: a state, a PKCE challenge of the stored verifier, no secret.
+        const state = loc.searchParams.get("state");
+        expect(state, `${label}: a state`).toBeTruthy();
+        expect(cookieJar.get(STATE_COOKIE), `${label}: the state is stored for the callback`).toBe(state);
+        expect(loc.searchParams.get("code_challenge"), label).toBe(pkceChallenge(cookieJar.get(VERIFIER_COOKIE)!));
+        expect(loc.searchParams.get("code_challenge_method"), label).toBe("S256");
+        expect(loc.searchParams.has("client_secret"), label).toBe(false);
+        expect(loc.searchParams.get("scope"), label).toBe(LICHESS_OAUTH_SCOPES);
+        expect(cookieJar.get(NEXT_COOKIE) ?? null, `${label}: next kept`).toBe(own.next);
+        expect(flags.isServerFeatureEnabled, `${label}: no flag asked`).not.toHaveBeenCalled();
+        expect(orgBySlug, `${label}: no club looked up`).not.toHaveBeenCalled();
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(EVERY_FLAG_WORLD.length * OWN_STARTS.length);
+    // The positive pair, so the "no flag asked" above is not the route having stopped asking for everyone: a NAMED
+    // start still asks it, and is still refused with it off.
+    cookieJar.clear();
+    flagIs(FLAG_STATES[1]!);
+    expect(landedOn(await GET(start())), "a named start, flag OFF, is still refused").toMatchObject({ query: { lichess: "unavailable" } });
+    expect(flags.isServerFeatureEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  // The redirect validation is exactly as strict without a club: only a same-origin relative path is ever kept.
+  it("a start naming no club drops every off-site next, and still goes ahead", async () => {
+    let checked = 0;
+    for (const hostile of [
+      "https://evil.example/me",
+      "//evil.example/me",
+      "/\\evil.example",
+      "/\tevil",
+      "javascript:alert(1)",
+    ]) {
+      cookieJar.clear();
+      const res = await GET(startOwn(hostile));
+      expect(new URL(res.headers.get("location")!).origin, hostile).toBe("https://lichess.org");
+      expect(cookieJar.has(NEXT_COOKIE), hostile).toBe(false);
+      expect(cookieJar.has(STATE_COOKIE), `${hostile}: the start itself went ahead`).toBe(true);
+      checked += 1;
+    }
+    expect(checked).toBe(5);
+    // Not configured: the refusal onto a page also never leaves the site, and never stores anything.
+    vi.stubEnv("LICHESS_CLIENT_ID", undefined);
+    cookieJar.clear();
+    const res = await GET(startOwn("//evil.example"));
+    expect(landedOn(res)).toMatchObject({ pathname: "/me", query: { lichess: "not_configured" } });
+    expect(res.headers.get("location")!.startsWith("/")).toBe(true);
+    expect([...cookieJar.keys()]).toEqual([]);
+  });
+
+  it("signed out: a start naming no club goes to the login page FIRST, keeping the whole start, and stores nothing", async () => {
+    requireUser.mockRejectedValueOnce(new Error("unauthenticated"));
+    const href = lichessLinkStartHref(null, "/settings?tab=account");
+    const res = await GET(new Request(`http://localhost${href}`));
+    const loc = path(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/login");
+    expect(loc.searchParams.get("next"), "the whole start, query included").toBe(href);
+    expect([...cookieJar.keys()]).toEqual([]);
+  });
+
+  it("not configured: a start naming no club lands on next, else /me, with lichess=not_configured", async () => {
+    vi.stubEnv("LICHESS_CLIENT_ID", undefined);
+    let checked = 0;
+    for (const [next, landing] of [
+      ["/settings?tab=account", { pathname: "/settings", query: { tab: "account", lichess: "not_configured" } }],
+      [undefined, { pathname: "/me", query: { lichess: "not_configured" } }],
+    ] as const) {
+      const res = await GET(startOwn(next));
+      expect(isRedirect(res.status), String(next)).toBe(true);
+      expect(landedOn(res), String(next)).toMatchObject(landing);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  // The seam, end to end: the callback is driven with the state the start ITSELF stored, not a hand-set cookie.
+  it("round trip: the state a start naming no club stored is the one the callback accepts, and it lands on the validated next", async () => {
+    const res = await GET(startOwn("/settings?tab=account"));
+    const state = new URL(res.headers.get("location")!).searchParams.get("state")!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        if (url.endsWith("/api/token") && init.method === "POST") return Response.json({ access_token: "tok" });
+        if (url.endsWith("/api/account")) return Response.json({ id: "alice", username: "Alice" });
+        return new Response(null, { status: 500 });
+      }),
+    );
+    const back = await CALLBACK(new Request(`http://localhost/api/auth/lichess/callback?code=c&state=${state}`));
+    expect(upsertLichessLink).toHaveBeenCalledWith("u1", expect.objectContaining({ externalUserId: "alice", token: "tok" }));
+    expect(landedOn(back)).toMatchObject({ pathname: "/settings", query: { tab: "account", lichess: "linked" } });
+    // And a callback carrying any other state is still refused: the start did not loosen the CSRF check.
+    cookieJar.clear();
+    upsertLichessLink.mockClear();
+    await GET(startOwn("/me"));
+    const refused = await CALLBACK(new Request("http://localhost/api/auth/lichess/callback?code=c&state=not-the-one"));
+    expect(upsertLichessLink).not.toHaveBeenCalled();
+    expect(landedOn(refused)).toMatchObject({ pathname: "/me", query: { lichess: "oauth_state" } });
   });
 
   // Final review M-3: the not_configured exit was hard-coded to /settings?tab=account, which bounces an org-less player

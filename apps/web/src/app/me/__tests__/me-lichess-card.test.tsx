@@ -1,7 +1,8 @@
-// T16 (T20 review m1) — `/me` mounts the shipped Lichess card with what `myLichessLink` read for THIS login
-// (me-lichess-link.test.ts drives that reader against the database): no card when there is nothing to link for or
-// unlink; otherwise the REAL card, whose link starts at the club the reader named and lands back on `/me` (where the
-// flash renders — me-lichess-flash.test.tsx). The reader is doubled at its boundary; the card is not.
+// T16 (T20 review m1, reworked 2026-11-18) — `/me` mounts the shipped Lichess card with what `myLichessLink` read for
+// THIS login (me-lichess-link.test.ts drives that reader against the database). The card shows to EVERY signed-in
+// player — linking is the player's own, not a club's — so there is no "no card" state: unlinked, linked, and linked
+// with a grant that cannot play each render the REAL card, whose link starts at no club and lands back on `/me`
+// (where the flash renders — me-lichess-flash.test.tsx). The reader is doubled at its boundary; the card is not.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -96,47 +97,47 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("/me: the Lichess card", () => {
-  it("the empty case first: nothing to link for and nothing linked ⇒ no card (the page renders)", async () => {
-    card.myLichessLink.mockResolvedValue({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null });
-    const html = await render();
-    expect(html).toContain(escaped(EN["me.title"]!));
-    expect(html).not.toContain('data-testid="lichess-link-card"');
-    expect(card.myLichessLink).toHaveBeenCalledWith("u1");
-  });
+describe("/me: the Lichess card (shown to every signed-in player)", () => {
+  /** The start the card builds, typed from the start route's contract (a same-origin next, no club) and agreeing with the helper. */
+  const OWN_START = "/api/auth/lichess?next=%2Fme";
 
-  it("entered online in a club offered online chess: the link starts at THAT club and lands back on /me", async () => {
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: "club-b" });
+  it("the empty case first: a player with no club, no entry and no link still gets the card, with a Link that names no club", async () => {
+    card.myLichessLink.mockResolvedValue({ linkedUsername: null, needsReconsent: false });
     const html = await render();
+    // Anti-vacuity: the page rendered, so the card's presence is the rule's doing.
+    expect(html).toContain(escaped(EN["me.title"]!));
     expect(html).toContain('data-testid="lichess-link-card"');
-    // Typed from the start route's contract (org first, then a same-origin next), and agreeing with the helper.
-    const href = "/api/auth/lichess?org=club-b&next=%2Fme";
-    expect(href).toBe(lichessLinkStartHref("club-b", "/me"));
-    expect(html).toContain(`href="${attr(href)}"`);
+    expect(card.myLichessLink).toHaveBeenCalledWith("u1");
+    expect(OWN_START).toBe(lichessLinkStartHref(null, "/me"));
+    const link = html.match(/<a[^>]*data-testid="lichess-link"[^>]*>/)?.[0] ?? "";
+    expect(link, "the Link anchor").not.toBe("");
+    expect(link).toContain(`href="${attr(OWN_START)}"`);
+    expect(link, "no club in the start").not.toContain("org=");
     expect(html).toContain(escaped(EN["settings.account.lichess.link"]!));
   });
 
-  it("linked with a grant that cannot play: says so and offers a re-link at the club; unlink stays", async () => {
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: "magnus", needsReconsent: true, orgSlug: "club-b" });
+  it("linked with a grant that cannot play: says so and offers a re-link (no club); unlink stays", async () => {
+    card.myLichessLink.mockResolvedValue({ linkedUsername: "magnus", needsReconsent: true });
     const html = await render();
     expect(html).toContain(escaped(EN["settings.account.lichess.reconsentRequired"]!));
     const relink = html.match(/<a[^>]*data-testid="lichess-relink"[^>]*>/)?.[0] ?? "";
     expect(relink, "the re-link anchor").not.toBe("");
-    expect(relink).toContain(`href="${attr("/api/auth/lichess?org=club-b&next=%2Fme")}"`);
+    expect(relink).toContain(`href="${attr(OWN_START)}"`);
     expect(html).toContain(escaped(EN["settings.account.lichess.consent.cta"]!));
     expect(html).toContain('data-testid="lichess-unlink"');
   });
 
   it("no Lichess client configured on this server: the card says so and offers no link", async () => {
     vi.stubEnv("LICHESS_CLIENT_ID", "");
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: "club-b" });
+    card.myLichessLink.mockResolvedValue({ linkedUsername: null, needsReconsent: false });
     const html = await render();
+    expect(html).toContain('data-testid="lichess-link-card"');
     expect(html).toContain('data-testid="lichess-not-configured"');
     expect(html).not.toContain('data-testid="lichess-link"');
   });
 
   it("linked, grant fine: the linked name and unlink, no link and no re-link", async () => {
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: "magnus", needsReconsent: false, orgSlug: null });
+    card.myLichessLink.mockResolvedValue({ linkedUsername: "magnus", needsReconsent: false });
     const html = await render();
     expect(html).toContain('data-testid="lichess-linked-username"');
     expect(html).toContain('data-testid="lichess-unlink"');
@@ -145,22 +146,13 @@ describe("/me: the Lichess card", () => {
     expect(html).not.toContain(escaped(EN["settings.account.lichess.reconsentRequired"]!));
   });
 
-  it("linked with a grant that cannot play, but no club offered online chess any more: the sentence, and NO re-link (it has nowhere to start)", async () => {
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: "magnus", needsReconsent: true, orgSlug: null });
-    const html = await render();
-    expect(html).toContain(escaped(EN["settings.account.lichess.reconsentRequired"]!));
-    expect(html).not.toContain('data-testid="lichess-relink"');
-    expect(html).not.toContain("/api/auth/lichess");
-    expect(html).toContain('data-testid="lichess-unlink"');
-  });
-
   // M5 (T16 fix round 1, canvas MePhone): every control is a 44px target, and the re-link block discloses what the
   // grant allows — the canvas's three lines, the account tab's own consent copy (the room's re-link card reads it too).
   it("M5: link, re-link and unlink are 44px targets; the re-link block discloses the grant, and only it does", async () => {
     const control = (html: string, id: string) => html.match(new RegExp(`<(?:a|button)[^>]*data-testid="${id}"[^>]*>`))?.[0] ?? "";
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: "magnus", needsReconsent: true, orgSlug: "club-b" });
+    card.myLichessLink.mockResolvedValue({ linkedUsername: "magnus", needsReconsent: true });
     const relinkHtml = await render();
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: "club-b" });
+    card.myLichessLink.mockResolvedValue({ linkedUsername: null, needsReconsent: false });
     const linkHtml = await render();
     let checked = 0;
     for (const [html, id] of [[relinkHtml, "lichess-relink"], [relinkHtml, "lichess-unlink"], [linkHtml, "lichess-link"]] as const) {
@@ -175,13 +167,5 @@ describe("/me: the Lichess card", () => {
       expect(scope, k).toContain(escaped(EN[k]!));
     }
     expect(linkHtml, "the plain link state (canvas: no disclosure)").not.toContain('data-testid="lichess-scope"');
-  });
-
-  it("a card handed no club and no link (the account tab of a club not offered online chess) starts nothing", async () => {
-    card.myLichessLink.mockResolvedValue({ show: true, linkedUsername: null, needsReconsent: false, orgSlug: null });
-    const html = await render();
-    expect(html).toContain('data-testid="lichess-link-card"');
-    expect(html).not.toContain('data-testid="lichess-link"');
-    expect(html).not.toContain("/api/auth/lichess");
   });
 });

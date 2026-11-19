@@ -50,7 +50,7 @@ vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () =>
 // /me lists the saved quick matches (quick match plan 3 T6); none here.
 vi.mock("@/server/usecases/quick-match-home", () => ({ listMyQuickMatches: async () => [] }));
 vi.mock("@/server/usecases/me-lichess", () => ({
-  myLichessLink: async () => ({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null }),
+  myLichessLink: async () => ({ linkedUsername: null, needsReconsent: false }),
 }));
 vi.mock("@/components/me/rsvp-control", () => ({ RsvpControl: () => <div /> }));
 vi.mock("@/components/me/officiating-lane", () => ({ OfficiatingLane: () => <div /> }));

@@ -83,7 +83,7 @@ vi.mock("@/server/usecases/me-officiating", () => ({
 }));
 vi.mock("@/server/usecases/official-marks", () => ({ myMarksAverage: async () => null }));
 vi.mock("@/server/usecases/me-lichess", () => ({
-  myLichessLink: async () => ({ show: false, linkedUsername: null, needsReconsent: false, orgSlug: null }),
+  myLichessLink: async () => ({ linkedUsername: null, needsReconsent: false }),
 }));
 
 import en from "@/dictionaries/en/ui.json";

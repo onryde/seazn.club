@@ -8,17 +8,15 @@ import { lichessLinkStartHref } from "@/lib/lichess-link";
 type Props = {
   linkedUsername: string | null;
   configured: boolean;
-  /** The club the link start names (T20 — online chess is offered per club): the settings page's own club, or on
-   *  `/me` a club offered online chess that the player is entered in. `null` ⇒ no club to start at, so no link. */
-  orgSlug: string | null;
   /** Where the linking flow lands afterwards (a same-origin path). Defaults to the account tab. */
   next?: string;
   /** Linked, but the grant is not enough to play (the play gate answers LICHESS_RECONSENT_REQUIRED). */
   needsReconsent?: boolean;
 };
 
-/** Control to link / re-link / unlink a Lichess account for online chess (account tab, and `/me`). */
-export function LichessLinkCard({ linkedUsername, configured, orgSlug, next = "/settings?tab=account", needsReconsent = false }: Props) {
+/** Control to link / re-link / unlink a Lichess account (account tab, and `/me`). Shown to every signed-in player
+ *  (owner 2026-11-18): linking is the player's own, so the start names no club and no club's flag decides the card. */
+export function LichessLinkCard({ linkedUsername, configured, next = "/settings?tab=account", needsReconsent = false }: Props) {
   const t = useT();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -66,15 +64,13 @@ export function LichessLinkCard({ linkedUsername, configured, orgSlug, next = "/
                 <p className="text-xs leading-relaxed text-slate-600">{t("settings.account.lichess.consent.body")}</p>
                 <p className="text-xs text-slate-500">{t("settings.account.lichess.consent.scopes")}</p>
               </div>
-              {orgSlug !== null && (
-                <a
-                  href={lichessLinkStartHref(orgSlug, next)}
-                  className="btn btn-primary min-h-11"
-                  data-testid="lichess-relink"
-                >
-                  {t("settings.account.lichess.consent.cta")}
-                </a>
-              )}
+              <a
+                href={lichessLinkStartHref(null, next)}
+                className="btn btn-primary min-h-11"
+                data-testid="lichess-relink"
+              >
+                {t("settings.account.lichess.consent.cta")}
+              </a>
             </>
           )}
           <button
@@ -87,15 +83,15 @@ export function LichessLinkCard({ linkedUsername, configured, orgSlug, next = "/
             {busy ? t("settings.account.lichess.unlinking") : t("settings.account.lichess.unlink")}
           </button>
         </div>
-      ) : orgSlug !== null ? (
+      ) : (
         <a
-          href={lichessLinkStartHref(orgSlug, next)}
+          href={lichessLinkStartHref(null, next)}
           className="btn btn-primary min-h-11"
           data-testid="lichess-link"
         >
           {t("settings.account.lichess.link")}
         </a>
-      ) : null}
+      )}
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
     </section>
   );
