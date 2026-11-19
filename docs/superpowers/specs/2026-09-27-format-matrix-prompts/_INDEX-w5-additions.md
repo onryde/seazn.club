@@ -1,5 +1,8 @@
 # `_INDEX.md` additions for W5 (paste-ready)
 
+**Applied 2026-11-19 in app PR A (#1262):** section 2 (rulings 276–292; 292 added here from the owner's 2026-11-17 answer)
+is now in `_INDEX.md` under "## Owner rulings". The sections below stay as the record of what was pasted.
+
 These two edits were applied to the `_INDEX.md` in the Downloads snapshot on 2026-11-06. The real repo's `_INDEX.md`
 needs the same two edits. Re-check `origin/main` first: the numbers assume 275 is the last ruling.
 
@@ -134,7 +137,12 @@ in the rulings list.
      answer "A" to the N1 question): a `seed` step gives seed order; `lots` gives the engine's stored lots draw; a
      cascade with neither gives seed then id. No engine change. **291 supersedes ruling 288's "listed seed order"
      wording for REC-2** (288's other confirmations stand). Rulebook RB5-G9 (re-worded); engine row X-PD-8; app PR A
-     Task 11c.
+     Task 11c.292. **One partner rule in every format after Start: a pair that loses a partner withdraws, a substitute is refused**
+     (2026-11-17, owner: "same rule for everywhere", extending 282 beyond the table formats). After Start, in any
+     format (league or group, Swiss, knockout, or a mixed template whose entry stage is not a table), a pair that loses
+     a partner withdraws as the entrant through that format's own withdrawal: a table's 50 percent rule (277), a Swiss
+     that leaves the rounds still to come, a knockout walkover. A substitute partner is refused by name. Before Start
+     nothing changes: a roster swap still renames a pair whose name its people derived. App PR A Task 10b.
 ```
 
 ## 3. Recommendations — append under "Recommendations (mine — not rulings)" (2026-11-16)
