@@ -548,6 +548,11 @@ export async function seedOnlineSwiss(opts: {
  *  it meets the deferral. A case that is not about the deferral spreads this into the pass's deps and keeps every assertion; a case
  *  that IS about it passes no `windowsOpen` and lets the REAL scoped check read the round it opened. Fits SweepDeps and PremintDeps. */
 export const NO_WINDOW = { windowsOpen: async (): Promise<boolean> => false };
+/** A test's sweep pass that does NOT run the presence prune. The prune is retention, not scoped by org (presence.ts
+ *  `prunePresence`): a pass deletes every presence row older than PRESENCE_RETENTION_MS, and other test files stamp theirs at fixed
+ *  past instants (`_external-play-line-route.ts` OPENED) - so a concurrent file's pass deleted their rows mid-stay. Every test sweep
+ *  helper spreads this FIRST; only the prune's own tests pass the real one. */
+export const NO_PRUNE = { prunePresence: async () => ({ deliveries: 0, presence: 0, endedSessions: 0 }) };
 
 export type VideoSide = "home" | "away";
 

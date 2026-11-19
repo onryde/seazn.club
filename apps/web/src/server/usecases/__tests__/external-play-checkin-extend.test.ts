@@ -157,7 +157,7 @@ import { playableWindow, sweepExternalPlay, type SweepDeps } from "../external-p
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { stampFixtureCheckIn, checkInToFixture } from "../me";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { NO_WINDOW, putVideoMeeting, seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
+import { NO_PRUNE, NO_WINDOW, putVideoMeeting, seedOnlineChessRound, seedOwner, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 /** A sweep pass that does not take the sweep's global lock. Test files share one database, and the serialised pass takes ONE advisory lock
@@ -168,7 +168,7 @@ const HAS_DB = !!process.env.DATABASE_URL;
  *  inside a window, and every case here opens its own round and judges the PER-BOARD window the extension moves, so `NO_WINDOW` (in every
  *  pass here) keeps that per-board judgement the thing under test: with the deferral on, "the extended room is not ended" would hold for
  *  the wrong reason. */
-const sweepIsolated = (deps: SweepDeps) => sweepExternalPlay({ serialise: false, ...NO_WINDOW, ...deps });
+const sweepIsolated = (deps: SweepDeps) => sweepExternalPlay({ ...NO_PRUNE, serialise: false, ...NO_WINDOW, ...deps });
 const MIN = 60_000;
 const ORIGIN = "https://seazn.test";
 
@@ -1170,7 +1170,7 @@ describe.skipIf(!HAS_DB)("the database's clock decides, not this machine's (revi
   }
   const noShowEvents = async (fixtureId: string) =>
     (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId} and idempotency_key like 'extplay-noshow:%'`)[0]!.n;
-  const pass = (r: SeedOnlineChessRoundResult) => sweepExternalPlay({ orgIds: [r.orgId], serialise: false, ...NO_WINDOW, endMeeting: async () => undefined });
+  const pass = (r: SeedOnlineChessRoundResult) => sweepExternalPlay({ ...NO_PRUNE, orgIds: [r.orgId], serialise: false, ...NO_WINDOW, endMeeting: async () => undefined });
 
   it("a machine clock an hour AHEAD does not refuse a press on a board whose window is open by the database's clock - and one an hour BEHIND does not accept a press on a closed one", async () => {
     const open = await openedAgo(5 * MIN); // open until ~5 minutes from now
@@ -1207,9 +1207,9 @@ describe.skipIf(!HAS_DB)("the database's clock decides, not this machine's (revi
     for (const x of [open, closed]) meetings.set(x.id, await putVideoMeeting({ fixtureId: x.id, orgId: x.r.orgId, side: "home" }));
     const ended: string[] = [];
     const endMeeting: NonNullable<SweepDeps["endMeeting"]> = async (m) => void ended.push(m);
-    await skewed(HOUR, () => sweepExternalPlay({ orgIds: [open.r.orgId], serialise: false, ...NO_WINDOW, endMeeting }));
+    await skewed(HOUR, () => sweepExternalPlay({ ...NO_PRUNE, orgIds: [open.r.orgId], serialise: false, ...NO_WINDOW, endMeeting }));
     expect(ended, "a fast machine clock cannot end the room of a board that is still open").toEqual([]);
-    await sweepExternalPlay({ orgIds: [closed.r.orgId], serialise: false, ...NO_WINDOW, endMeeting });
+    await sweepExternalPlay({ ...NO_PRUNE, orgIds: [closed.r.orgId], serialise: false, ...NO_WINDOW, endMeeting });
     expect(ended, "the control: a room on a board closed by the database's clock is ended").toEqual([meetings.get(closed.id)]);
   });
 });

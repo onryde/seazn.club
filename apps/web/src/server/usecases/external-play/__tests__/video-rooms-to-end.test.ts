@@ -13,6 +13,7 @@ import { deleteStage, generateStageFixtures, rebuildStageFixtures, unpairSwissRo
 import { deleteCompetition } from "../../competitions";
 import { deleteDivision } from "../../divisions";
 import {
+  NO_PRUNE,
   putVideoMeeting,
   putVideoParticipant,
   seedOnlineChessRound,
@@ -48,6 +49,7 @@ async function seatedBoard(orgId: string, fixtureId: string, personIds: readonly
 async function sweepOrg(orgId: string, over: Partial<SweepDeps> = {}) {
   const ended: string[] = [];
   const report = await sweepExternalPlay({
+    ...NO_PRUNE,
     orgIds: [orgId],
     serialise: false,
     // What the real endMeeting leaves behind besides the vendor calls: the row stamped ended (so a later delete of it parks nothing).

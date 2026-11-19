@@ -16,7 +16,7 @@ import { reportOwnCamera } from "../external-play/camera-report";
 import { applyPresenceEvent } from "@/server/external-play/video/presence";
 import { CAMERA_ON_EVENTS, configureRealtimeKit, fakeRealtimeKit } from "./_external-play-rtk-fake";
 import { clearBucket, setBucket, stubBucket } from "./_external-play-line";
-import { NO_WINDOW, seedOnlineChessFixture } from "./_external-play-seed";
+import { NO_PRUNE, NO_WINDOW, seedOnlineChessFixture } from "./_external-play-seed";
 
 export const MIN = 60_000;
 export const SEC = 1_000;
@@ -190,6 +190,7 @@ export async function sweepBoard(
 ): Promise<{ report: SweepReport; ended: string[] }> {
   const ended: string[] = [];
   const report = await sweepExternalPlay({
+    ...NO_PRUNE,
     now,
     orgIds: [b.orgId],
     serialise: false,

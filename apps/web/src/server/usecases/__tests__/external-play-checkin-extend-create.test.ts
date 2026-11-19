@@ -66,7 +66,7 @@ import { createGameIfReady } from "../external-play/create-game";
 import { sweepExternalPlay, type SweepDeps } from "../external-play/sweep";
 import { stampFixtureCheckIn } from "../me";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
+import { NO_PRUNE, seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
@@ -254,7 +254,7 @@ describe.skipIf(!HAS_DB)("the extension at the create (T9)", () => {
 });
 
 describe.skipIf(!HAS_DB)("the extension in the sweep's create and end readers", () => {
-  const sweep = (r: SeedOnlineChessRoundResult, now: Date, over: SweepDeps = {}) => sweepExternalPlay({ serialise: false, ...over, now, orgIds: [r.orgId] });
+  const sweep = (r: SeedOnlineChessRoundResult, now: Date, over: SweepDeps = {}) => sweepExternalPlay({ ...NO_PRUNE, serialise: false, ...over, now, orgIds: [r.orgId] });
 
   it("[extend-reader:mint-retry] a create Lichess throttled is retried past the unextended cap when the board is extended, and not retried on an unextended board", async () => {
     const r = await openedRound(2);

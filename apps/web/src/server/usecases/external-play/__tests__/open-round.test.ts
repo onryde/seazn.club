@@ -141,6 +141,7 @@ import { ensureBridgeRow, loadOnlinePlayFixture } from "../guard";
 import { readRoom } from "../room";
 import { mintMatchRoomToken } from "../../match-room-token";
 import {
+  NO_PRUNE,
   NO_WINDOW,
   seedOnlineChessRound,
   seedOnlineChessRoundWithRankedBoard,
@@ -1660,7 +1661,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
           // it (external-play-sweep.test.ts, in a parallel run) would skip this one, and this one would skip theirs.
           // `NO_WINDOW` (check-in capacity plan 2 Task 8, R3): this test opened its own round a moment ago, so the REAL window check
           // would defer the deadline teardown it is proving; what is under test here is the re-pair, not the deferral.
-          const report = await sweepExternalPlay({ now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false, ...NO_WINDOW });
+          const report = await sweepExternalPlay({ ...NO_PRUNE, now: later, orgIds: [s.orgId], endMeeting: rtk.end, serialise: false, ...NO_WINDOW });
           expect(report.meetingsEnded, `${label}: premise — the sweep ended each of the unpaired board's two meetings`).toBe(2);
           expect((await meetingsOf(fixtureId)).map((m) => m.ended_at === null), `${label}: premise — both ended`).toEqual([false, false]);
         }
@@ -1991,7 +1992,7 @@ describe.skipIf(!HAS_DB)("openRound — a re-paired board gets a FRESH meeting (
       errorSpy.mockRestore();
     }
     expect(await meetingsOf(b2!.fixtureId), "premise: the refused end kept the row").toEqual([{ meeting_id: kept!.meeting_id, ended_at: null }]);
-    const report = await sweepExternalPlay({ now: new Date(u0.getTime() + 3 * MIN), orgIds: [s2.orgId], endMeeting: rtk2.end, serialise: false });
+    const report = await sweepExternalPlay({ ...NO_PRUNE, now: new Date(u0.getTime() + 3 * MIN), orgIds: [s2.orgId], endMeeting: rtk2.end, serialise: false });
     expect(report.meetingsEnded, "the sweep ended the room the re-open could not").toBe(1);
     expect(rtk2.http.filter((c) => c.startsWith("PATCH") && c.includes(kept!.meeting_id))).toHaveLength(1);
     expect(await meetingsOf(b2!.fixtureId), "and deleted its row").toEqual([]);
@@ -2733,7 +2734,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     expect(["scheduled", "in_play"], "premise: the neighbour is decided").not.toContain(fx!.status);
   }
   const sweep = (r: SeedOnlineChessRoundResult) =>
-    sweepExternalPlay({ orgIds: [r.orgId], serialise: false, endMeeting: async () => undefined });
+    sweepExternalPlay({ ...NO_PRUNE, orgIds: [r.orgId], serialise: false, endMeeting: async () => undefined });
   const noShowEvents = async (fixtureId: string) =>
     (await sql<{ n: number }[]>`
       select count(*)::int as n from score_events where fixture_id = ${fixtureId} and idempotency_key like 'extplay-noshow:%'`)[0]!.n;
@@ -3029,6 +3030,7 @@ describe.skipIf(!HAS_DB)("openRound — a board voided after No result is re-arm
     // The row names no pairing, so nothing reuses the room: the next retire (a claim, or the sweep) takes it.
     const ended: string[] = [];
     const report = await sweepExternalPlay({
+      ...NO_PRUNE,
       orgIds: [r.orgId],
       serialise: false,
       // The real endMeeting stamps the row after the vendor calls (a row stamped ended parks nothing when its delete follows - V460).

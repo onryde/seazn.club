@@ -48,6 +48,7 @@ import { log } from "@/server/logger";
 import { CREATION_429_HOLD_MS, __resetCreationQueue, __setCreationQueueDeps } from "@/server/external-play/creation-queue";
 import { RETIRED_PAIR, RealtimeKitDeferred, RealtimeKitError, addParticipant, endMeeting, ensureMeeting, removeParticipant } from "@/server/external-play/video/realtimekit";
 import { closeGuardFault, openGuardFault } from "@/server/external-play/video/guard-faults";
+import { prunePresence } from "@/server/external-play/video/presence";
 import { GUARD_FAULT_FLAG_SECONDS, GUARD_FAULT_FLAG_STAMPS, MATCH_OFF_MIN_MS } from "@/server/external-play/video/match-camera-off";
 import { RECOVER_BACKOFF_MS, RECOVER_MAX_ATTEMPTS } from "@/components/public-site/match-room/camera-session";
 import {
@@ -116,6 +117,7 @@ import {
   type SweepReport,
 } from "../external-play/sweep";
 import {
+  NO_PRUNE,
   NO_WINDOW,
   seedOnlineChessFixture,
   seedOnlineChessRound,
@@ -573,7 +575,7 @@ let passesChecked = 0;
  *  (vitest's threads share a CI shard's Postgres) would otherwise find the lock held and get an empty `skipped` report, which
  *  reads as the job doing nothing. Only the tests OF the lock (M8, through `lockedSweep`) take it. */
 async function checkedPass(deps: SweepDeps, { locked = false }: { locked?: boolean } = {}): Promise<SweepReport> {
-  const r = await sweepExternalPlay(locked ? deps : { serialise: false, ...deps });
+  const r = await sweepExternalPlay(locked ? { ...NO_PRUNE, ...deps } : { serialise: false, ...NO_PRUNE, ...deps });
   expect(r.failed, `failed = failures.length: ${JSON.stringify(r.failures)}`).toBe(r.failures.length);
   passesChecked++;
   for (const f of r.failures) {
@@ -2747,7 +2749,7 @@ describe.runIf(HAS_DB)("M8 — one pass at a time", () => {
     const b = await openedBoard({ checkedIn: [] });
     // An org scope Postgres cannot read fails a candidate query, outside any
     // job's own catch: the pass itself throws.
-    await expect(sweepExternalPlay({ now: b.at(5), orgIds: ["not-a-uuid"] })).rejects.toThrow();
+    await expect(sweepExternalPlay({ ...NO_PRUNE, now: b.at(5), orgIds: ["not-a-uuid"] })).rejects.toThrow();
     const next = await lockedSweep(b, { now: b.at(5) });
     expect(next.skipped).toBe(0);
     expect(next.scanned, "premise: the next pass looked at the board").toBeGreaterThan(0);
@@ -5258,6 +5260,7 @@ describe.runIf(HAS_DB)("job 5 — the camera evidence after the match (C1)", () 
     const broken = new Error("test: relation video_rooms_to_end does not exist");
     await expect(
       sweepExternalPlay({
+        ...NO_PRUNE,
         now: after(m, CAMERA_EVIDENCE_AFTER_MS),
         serialise: false,
         orgIds: [m.b.orgId],
@@ -5559,6 +5562,7 @@ describe.runIf(HAS_DB)("job 6 — the arbiter watches the server removes (I2)", 
     const broken = new Error("test: relation video_rooms_to_end does not exist");
     await expect(
       sweepExternalPlay({
+        ...NO_PRUNE,
         now: new Date(w.createdAt + 60_000),
         serialise: false,
         orgIds: [w.b.orgId],
@@ -6047,7 +6051,13 @@ describe.runIf(HAS_DB)("Task 10b - the pass prunes the webhook deliveries and pr
   // there is in the shared database, so rows seeded on a made-up date would be racing every other pass. The seeded rows are a few
   // days either side of the week, never a second, and the assertions are by id (CI runs the DB files in parallel on one database).
   const DAY = 86_400_000;
-  const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit" | "orgIds"> = { reconcile: async () => null, realtimeKit: RTK, orgIds: [randomUUID()] };
+  // The prune's OWN tests: the real prune (every other pass here runs NO_PRUNE, since the prune is not scoped by org).
+  const quiet: Pick<SweepDeps, "reconcile" | "realtimeKit" | "orgIds" | "prunePresence"> = {
+    reconcile: async () => null,
+    realtimeKit: RTK,
+    orgIds: [randomUUID()],
+    prunePresence: (now) => prunePresence(sql, now),
+  };
   const mine: string[] = [];
   afterEach(async () => {
     if (mine.length > 0) await sql`delete from realtimekit_webhook_deliveries where rtk_uuid in ${sql(mine)}`;
