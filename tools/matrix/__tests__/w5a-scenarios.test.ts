@@ -29,7 +29,7 @@ import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { FakeMultiStageDriver } from "./fake-formats-driver.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
-import { W5A_ATOMS, W5A_FED_ROWS, W5A_NOT_RUN_KEYS, W5A_POOLED_ROWS, W5A_ROWS, W5A_RUN_KEYS, W5A_TABLE_ROWS, entryPools, w5aCells, w5aField } from "../lib/w5a-cells.ts";
+import { W5A_ATOMS, W5A_NOT_RUN_KEYS, W5A_RUN_KEYS, entryPools, w5aCells, w5aField, w5aFedRows, w5aPooledRows, w5aRows, w5aTableRows } from "../lib/w5a-cells.ts";
 
 const variantFor = offlineBuilderDefault;
 const failing = (items: readonly { ok: boolean; note: string }[]): string[] => items.filter((i) => !i.ok).map((i) => i.note);
@@ -65,27 +65,27 @@ describe("W5A registration: eight keys, opt-in, six that run and two planned and
 
   it("the row sets are DERIVED from the stage bodies: table rows start on a league or group, fed rows add a progression, pooled rows hold a group", () => {
     const table = ROW_KEYS.filter((r) => ["league", "group"].includes(stagesForRow(r)[0]?.kind ?? ""));
-    expect([...W5A_TABLE_ROWS]).toEqual(table);
+    expect([...w5aTableRows()]).toEqual(table);
     expect(table.length).toBeGreaterThan(0);
     expect(table).toContain("league");
     expect(table).toContain("group_group_ko");
     expect(table).not.toContain("knockout");
     expect(table).not.toContain("swiss");
-    expect(W5A_FED_ROWS.length).toBeGreaterThan(0);
-    for (const r of W5A_FED_ROWS) expect(stagesForRow(r)[1]?.progression?.sources?.length ?? 0, r).toBeGreaterThan(0);
-    expect(W5A_FED_ROWS).not.toContain("league");
-    expect(W5A_POOLED_ROWS.length).toBeGreaterThan(0);
-    for (const r of W5A_POOLED_ROWS) expect(stagesForRow(r).some((s) => s.kind === "group"), r).toBe(true);
+    expect(w5aFedRows().length).toBeGreaterThan(0);
+    for (const r of w5aFedRows()) expect(stagesForRow(r)[1]?.progression?.sources?.length ?? 0, r).toBeGreaterThan(0);
+    expect(w5aFedRows()).not.toContain("league");
+    expect(w5aPooledRows().length).toBeGreaterThan(0);
+    for (const r of w5aPooledRows()) expect(stagesForRow(r).some((s) => s.kind === "group"), r).toBe(true);
     expect(entryPools("league")).toBe(1);
     expect(entryPools("groups_ko")).toBeGreaterThan(1);
     // the script rows
-    expect([...W5A_ROWS.W5A_R2]).toEqual([...W5A_TABLE_ROWS]);
-    expect([...W5A_ROWS.W5A_Q2]).toEqual([...W5A_FED_ROWS]);
-    expect([...W5A_ROWS.W5A_F4]).toEqual([...W5A_POOLED_ROWS]);
+    expect([...w5aRows("W5A_R2")]).toEqual([...w5aTableRows()]);
+    expect([...w5aRows("W5A_Q2")]).toEqual([...w5aFedRows()]);
+    expect([...w5aRows("W5A_F4")]).toEqual([...w5aPooledRows()]);
   });
 
   it("a field is sized so the rule under test has something to act on: odd for a late add, pools of four for a withdrawal under half", () => {
-    for (const row of W5A_TABLE_ROWS) {
+    for (const row of w5aTableRows()) {
       const p = entryPools(row);
       expect(w5aField("W5A_R2", row) % 2, `${row} R2 odd`).toBe(1);
       expect(w5aField("W5A_R4C", row), `${row} R4c pools of four`).toBe(p === 1 ? 6 : p * 4);
@@ -97,20 +97,20 @@ describe("W5A registration: eight keys, opt-in, six that run and two planned and
     let planned = 0;
     for (const k of W5A_SCENARIO_KEYS) {
       const cases = planW1Driving(variantFor, { scenario: k });
-      expect(cases.length, k).toBe(W5A_ROWS[k].length * SPORT_KEYS.length);
+      expect(cases.length, k).toBe(w5aRows(k).length * SPORT_KEYS.length);
       expect(w5aCells(k).length, k).toBe(cases.length);
       for (const c of cases) {
         expect(c.scenario, c.caseId).toBe(k);
         expect(c.caseId, k).toBe(`${c.row}|${c.sport}|${c.variant}|${k}`);
-        expect(W5A_ROWS[k], c.caseId).toContain(c.row);
+        expect(w5aRows(k), c.caseId).toContain(c.row);
         planned++;
       }
       expect(new Set(cases.map((c) => c.sport)), `${k}: every sport of the registry`).toEqual(new Set(SPORT_KEYS));
-      expect(planW1Driving(variantFor, { scenario: k, only: `${W5A_ROWS[k][0]}|football` }).map((c) => c.caseId)).toEqual([`${W5A_ROWS[k][0]}|football|${variantFor("football")}|${k}`]);
+      expect(planW1Driving(variantFor, { scenario: k, only: `${w5aRows(k)[0]}|football` }).map((c) => c.caseId)).toEqual([`${w5aRows(k)[0]}|football|${variantFor("football")}|${k}`]);
     }
     expect(planned).toBeGreaterThan(0);
-    expect(planned).toBe(W5A_SCENARIO_KEYS.reduce((n, k) => n + W5A_ROWS[k].length * SPORT_KEYS.length, 0));
-    expect(w5aCells("W5A_R2", (row, sport) => row === "league" && sport === "football").length).toBe(W5A_TABLE_ROWS.length * SPORT_KEYS.length - 1);
+    expect(planned).toBe(W5A_SCENARIO_KEYS.reduce((n, k) => n + w5aRows(k).length * SPORT_KEYS.length, 0));
+    expect(w5aCells("W5A_R2", (row, sport) => row === "league" && sport === "football").length).toBe(w5aTableRows().length * SPORT_KEYS.length - 1);
     expect(w5aCells("W5A_R2", () => true)).toEqual([]);
   });
 

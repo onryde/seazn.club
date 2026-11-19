@@ -12,28 +12,40 @@ import type { W5aScenarioKey } from "./scenarios/types.ts";
 
 const TABLE_KINDS: ReadonlySet<string> = new Set(["league", "group"]);
 
+// Derived on FIRST USE, never at import (probe-set.test.ts, "the rows are derived when the set is BUILT, never at import"): this module
+// is imported by run.ts's whole scenario graph, so a `stagesForRow` that throws for one row must refuse by name where the set is
+// built, not take the import (and every other command) down with it. Memoised: the catalogue's rows are constant for a process.
+interface Derived { readonly table: readonly RowKey[]; readonly fed: readonly RowKey[]; readonly pooled: readonly RowKey[] }
+let derived: Derived | null = null;
+function derive(): Derived {
+  if (derived !== null) return derived;
+  const table = Object.freeze(ROW_KEYS.filter((r) => TABLE_KINDS.has(stagesForRow(r)[0]?.kind ?? "")));
+  derived = {
+    table,
+    fed: Object.freeze(table.filter((r) => (stagesForRow(r)[1]?.progression?.sources?.length ?? 0) > 0)),
+    pooled: Object.freeze(table.filter((r) => stagesForRow(r).some((s) => s.kind === "group"))),
+  };
+  return derived;
+}
 /** The rows whose entry stage is a root league or group (the API-only and refused rows included: `stagesForRow` builds every one). */
-export const W5A_TABLE_ROWS: readonly RowKey[] = Object.freeze(ROW_KEYS.filter((r) => TABLE_KINDS.has(stagesForRow(r)[0]?.kind ?? "")));
+export const w5aTableRows = (): readonly RowKey[] => derive().table;
 /** The table rows a later stage is fed from (progression sources on stage 2). */
-export const W5A_FED_ROWS: readonly RowKey[] = Object.freeze(W5A_TABLE_ROWS.filter((r) => (stagesForRow(r)[1]?.progression?.sources?.length ?? 0) > 0));
+export const w5aFedRows = (): readonly RowKey[] => derive().fed;
 /** The table rows with a pooled (group) stage. */
-export const W5A_POOLED_ROWS: readonly RowKey[] = Object.freeze(W5A_TABLE_ROWS.filter((r) => stagesForRow(r).some((s) => s.kind === "group")));
+export const w5aPooledRows = (): readonly RowKey[] => derive().pooled;
 
 /** The scripts that RUN, and the ones planned and not run (they wait for app PR B's engine major: unequal pools at k = size - min, adjust points). */
 export const W5A_RUN_KEYS: readonly W5aScenarioKey[] = Object.freeze(["W5A_R2", "W5A_R4C", "W5A_Q2", "W5A_P7", "W5A_C6A", "W5A_SURF"] as const);
 export const W5A_NOT_RUN_KEYS: readonly W5aScenarioKey[] = Object.freeze(["W5A_F4", "W5A_C5"] as const);
 
 /** The rows each script plays. */
-export const W5A_ROWS: Readonly<Record<W5aScenarioKey, readonly RowKey[]>> = Object.freeze({
-  W5A_R2: W5A_TABLE_ROWS,
-  W5A_R4C: W5A_TABLE_ROWS,
-  W5A_Q2: W5A_FED_ROWS,
-  W5A_P7: W5A_TABLE_ROWS,
-  W5A_C6A: W5A_FED_ROWS,
-  W5A_SURF: W5A_TABLE_ROWS,
-  W5A_F4: W5A_POOLED_ROWS,
-  W5A_C5: W5A_TABLE_ROWS,
-});
+export function w5aRows(key: W5aScenarioKey): readonly RowKey[] {
+  switch (key) {
+    case "W5A_R2": case "W5A_R4C": case "W5A_P7": case "W5A_SURF": case "W5A_C5": return w5aTableRows();
+    case "W5A_Q2": case "W5A_C6A": return w5aFedRows();
+    case "W5A_F4": return w5aPooledRows();
+  }
+}
 
 /** The catalogue atoms each script drives (scenario-catalogue.ts ATOMIC ids; the test pins every id to the atom list, so a rename there reds here). SURF is no atom: it is the
  *  "surfaces asserted after every scenario" of design 6.7 T5-b (the table's API shape), run on its own and appended to the others. */
@@ -69,6 +81,6 @@ export interface W5aCell { readonly row: RowKey; readonly sport: string }
 /** The scenario's cells, row-major in the registry's order, less the cells `isDropped` drops (the committed LIFECYCLE drops: a cell the product refuses). */
 export function w5aCells(key: W5aScenarioKey, isDropped: (row: RowKey, sport: string) => boolean = () => false): W5aCell[] {
   const out: W5aCell[] = [];
-  for (const row of W5A_ROWS[key]) for (const sport of SPORT_KEYS) if (!isDropped(row, sport)) out.push({ row, sport });
+  for (const row of w5aRows(key)) for (const sport of SPORT_KEYS) if (!isDropped(row, sport)) out.push({ row, sport });
   return out;
 }
