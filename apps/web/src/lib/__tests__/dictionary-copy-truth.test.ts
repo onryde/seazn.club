@@ -416,7 +416,7 @@ const KNOWN_GAPS = [
   // lib/pricing-cards.ts PLUS_CARD_FEATURES and e2e/pro-plus-tier.spec.ts
   // moved with it, in the same commit as task 5's fix.
   "config/tips.ts:82 — 'half your plan's rate', bare. Hardcoded English with no dictionary lookup, so it is a four-locale gap of its own class; routed to task 7, which is already editing that tip.",
-  "content/help/scheduling/ai-scheduling.md, content/help/billing/downgrade.md — task 3's gaps, still open (#303).",
+  "content/help/billing/downgrade.md — task 3's gap, still open (#303).",
   "BOUNDED_SCOPE_GRAMMAR (and therefore all four `bounded` rules, which share its shape) decides a bound by PROXIMITY inside one sentence, not grammar: a coordinated clause such as 'buy during checkout and your competitions stay active' satisfies it. Task 3's review has this queued for a fix round; the locale rules deliberately delegate to it rather than fork it, so they inherit the repair.",
 ];
 

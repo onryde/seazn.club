@@ -25,7 +25,7 @@ import { helpArticleBySlug } from "./_help-copy";
 /** The three articles that quote a price for an AI run. Any of them getting it
  *  wrong is a customer being told the wrong number before they spend. */
 const PRICING_ARTICLES = [
-  "scheduling/ai-scheduling",
+  "scheduling/ai-credits",
   "scheduling/ai-officials",
   "billing/credits",
 ] as const;
@@ -38,7 +38,7 @@ function asK(tokens: number): string {
 }
 
 describe("the budget table quotes tokenBudgetForCredits, not a remembered number", () => {
-  const article = plainProse(helpArticleBySlug("scheduling/ai-scheduling"));
+  const article = plainProse(helpArticleBySlug("scheduling/ai-credits"));
 
   it.each([1, 2, 3])("%d credit(s) is documented as the budget the code hands out", (credits) => {
     const budget = asK(tokenBudgetForCredits(credits));
@@ -76,7 +76,7 @@ describe("the budget table quotes tokenBudgetForCredits, not a remembered number
 });
 
 describe("the joint worked example is the arithmetic quoteRun actually does", () => {
-  const article = plainProse(helpArticleBySlug("scheduling/ai-scheduling"));
+  const article = plainProse(helpArticleBySlug("scheduling/ai-several-divisions"));
   // The article's own example: three divisions the organiser sized 1, 2 and 3.
   // Sizes are forced with `chosen`, so this asserts the PRICING rule and never
   // depends on the (uncalibrated) predictor thresholds.

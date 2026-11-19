@@ -261,7 +261,6 @@ const KNOWN: Known = {
   "getting-started": { "getting-started/generate-fixtures": ["developer-word"] },
   scheduling: {
     "scheduling/ai-officials": ["developer-word"],
-    "scheduling/ai-scheduling": ["developer-word"],
   },
 };
 
