@@ -80,6 +80,10 @@ name: E2E
 # 2026-11-12: a FIFTH walkthrough leg, `walkthrough sponsor`, carries the sponsor
 # x stream matrix (sponsor-stream-matrix.spec.ts) alone; "rest" ignores that file.
 #
+# 2026-11-19: `walkthrough rest 1/3` was cancelled at the cap (20m02s, run
+# 44539082067) with nothing failing, and "rest" is now sharded FOUR ways; see
+# the walkthrough block in e2e-parallel's matrix for the measurements.
+#
 # Each job independently migrates its own fresh Postgres and mints its own
 # `setup`-project org — GitHub Actions `services:` are job-scoped, so there
 # is no live database or server to share across jobs (see ci.yml's
@@ -118,32 +122,32 @@ on:
         required: false
         type: boolean
         default: false
-      # R4 S15: OFF unless asked for. On, the `walkthrough rest 2/3` leg also runs
+      # R4 S15: OFF unless asked for. On, the `walkthrough rest 2/4` leg also runs
       # e2e/walkthrough/sponsors-capture.spec.ts with SPONSOR_CAPTURE_DIR set (without it every test there skips) and
       # uploads the PNGs as the `sponsor-captures` artifact — the owner's sign-off pictures of the sponsor pages at
       # 320/768/1280, never committed. Off (and on every `push`), both steps are skipped by their `if:`.
       sponsor_captures:
-        description: "Also capture the sponsor pages (walkthrough rest 2/3 leg) and upload them as an artifact"
+        description: "Also capture the sponsor pages (walkthrough rest 2/4 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
-      # Sponsor deals PR 2 (Batch J): OFF unless asked for. On, the same `walkthrough rest 2/3` leg also runs
+      # Sponsor deals PR 2 (Batch J): OFF unless asked for. On, the same `walkthrough rest 2/4` leg also runs
       # e2e/walkthrough/sponsor-deals-captures.spec.ts with SPONSOR_DEALS_CAPTURE_DIR set (without it every test there skips)
       # and uploads the PNGs as the `sponsor-deals-captures` artifact - the owner's sign-off pictures of the deals screens at
       # 320/768/1280 (and the deal page and the Add deal sheet in es/fr/nl at 1280), never committed. Off (and on every `push`),
       # both steps are skipped by their `if:`.
       sponsor_deals_captures:
-        description: "Also capture the sponsor deals screens (walkthrough rest 2/3 leg) and upload them as an artifact"
+        description: "Also capture the sponsor deals screens (walkthrough rest 2/4 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
-      # Title sponsor poster (Task 10): OFF unless asked for. On, the same `walkthrough rest 2/3` leg also runs
+      # Title sponsor poster (Task 10): OFF unless asked for. On, the same `walkthrough rest 2/4` leg also runs
       # e2e/walkthrough/title-sponsor-poster-captures.spec.ts with TITLE_POSTER_CAPTURE_DIR set (without it every test there skips)
       # and uploads the PNGs as the `title-poster-captures` artifact - the owner's sign-off pictures of the competition hero's Title
       # sponsor poster and the sponsor editor at 320/768/1280 (and one at a phone's real size), never committed. Off (and on every
       # `push`), both steps are skipped by their `if:`.
       title_poster_captures:
-        description: "Also capture the Title sponsor poster screens (walkthrough rest 2/3 leg) and upload them as an artifact"
+        description: "Also capture the Title sponsor poster screens (walkthrough rest 2/4 leg) and upload them as an artifact"
         required: false
         type: boolean
         default: false
@@ -638,24 +642,83 @@ jobs:
           # and the Connect warning below now run six times, not five. The
           # slugs keep walkthrough-rest-1/-2 so the opt-in capture steps, keyed
           # on walkthrough-rest-2, still run on one leg.
-          - group: walkthrough rest 1/3
+          # REST RE-SHARDED FOUR WAYS, 2026-11-19. Three ways was 20-minute-cap
+          # territory again, on the same arithmetic as 2026-11-13 and for the
+          # same reason: the shard is by test count and the cost is not. Rest
+          # 1/3 was CANCELLED at 20m02s on run 44539082067 (job 135612315512,
+          # 175 passed / 0 failed, 17.0 min of Playwright, 14:01:55 to the
+          # cancel at 14:21:57) and at 20m16s on 44513831815 (job
+          # 135524598972), and finished at 19.9 min on 44511838223 and 19.7 on
+          # 44526752695 (jobs 135517777643, 135581236367). Every job and step
+          # figure in this paragraph is read from those run logs and from the
+          # playwright-report-walkthrough-rest-* artifacts' results.json
+          # (per-test durations; runs 44511838223, 44594819586, 44526752695,
+          # 44612009430). Measured per leg, Playwright step / job:
+          #
+          #   rest 1/3  1023s (slow day, 44511838223) .. 781s (fast, 44594819586)
+          #             / 1200s (cancelled at the cap on the slow runs)
+          #   rest 2/3  264-319s step / ~450-500s job (7.3-8.3 min)
+          #   rest 3/3  556s step / 12.2 min job (44511838223)
+          #
+          # The first third holds 2925 of the slice's 5529 worker-seconds
+          # (53%): quick-match 387s, chess-external-play 262s, event-pass 212s,
+          # football-shared-clock 210s, period-pair 116s, tennis-mtb 94s, then
+          # ~50 smaller files. The middle third (the settings and spectator
+          # specs, 176 cheap tests) holds 929s. Count sharding cannot see that.
+          # Replayed on a three-worker first-free scheduler over the real
+          # `E2E_WALKTHROUGH_SLICE=rest playwright test --list --shard=K/N`
+          # membership, with each test's own measured duration (slowest seen;
+          # it reproduces rest 1/3 as 994s against 1023 measured, -3%, and
+          # rest 3/3 as 516s against 556, -7%), the step is:
+          #
+          #   /3  994 / 283 / 516s                      (the cut being replaced)
+          #   /4  679 / 403 / 252 / 458s                (this cut)
+          #   /5  565 / 474 / 242 / 137 / 384s          /6  379 / 617 / 82 / 198 / 176 / 342s
+          #
+          # /4 puts the slowest leg at 679s of step, ~860-880s of job at the
+          # ~180s setup and teardown these logs show (1023s step in a 1200s job),
+          # i.e. 14.4-14.7 min on a slow day and ~11.6 min on a fast one, with
+          # five minutes under the cap. /5 would reach ~12.4 min for one more
+          # setup, and /6 is worse (617s) because count boundaries fall in the
+          # wrong place. A carve-out slice ("mid", as
+          # `parallel` has) was tried first over the same replay: it leaves
+          # rest 1/3 at 640-710s because the remainder's first third is still
+          # the expensive one, so it adds a slice, a regex and wiring tests for
+          # no better leg than a fourth shard. `timeout-minutes: 20` STAYS.
+          #
+          # The cost of the seventh walkthrough leg: `stripe:sync`, `stripe
+          # listen` and the Connect warning below now run seven times, not six.
+          # The slugs keep walkthrough-rest-N, and the opt-in capture steps stay
+          # keyed on walkthrough-rest-2 (they run their spec files explicitly,
+          # so which shard owns those files does not matter). Re-list
+          # `E2E_WALKTHROUGH_SLICE=rest npx playwright test --list
+          # --project=walkthrough --shard=1/4` after any large spec growth: the
+          # head of the alphabet is where chess-external-play, event-pass and
+          # quick-match live, and a new heavy file there re-creates this.
+          - group: walkthrough rest 1/4
             slug: walkthrough-rest-1
             project: walkthrough
             slice: ""
             walkthrough_slice: rest
-            args: --workers=3 --shard=1/3
-          - group: walkthrough rest 2/3
+            args: --workers=3 --shard=1/4
+          - group: walkthrough rest 2/4
             slug: walkthrough-rest-2
             project: walkthrough
             slice: ""
             walkthrough_slice: rest
-            args: --workers=3 --shard=2/3
-          - group: walkthrough rest 3/3
+            args: --workers=3 --shard=2/4
+          - group: walkthrough rest 3/4
             slug: walkthrough-rest-3
             project: walkthrough
             slice: ""
             walkthrough_slice: rest
-            args: --workers=3 --shard=3/3
+            args: --workers=3 --shard=3/4
+          - group: walkthrough rest 4/4
+            slug: walkthrough-rest-4
+            project: walkthrough
+            slice: ""
+            walkthrough_slice: rest
+            args: --workers=3 --shard=4/4
           # FIFTH WALKTHROUGH LEG, 2026-11-12: sponsor-stream-matrix.spec.ts
           # (the L2 sponsor x stream matrix). Serial, and four of its five
           # tests take the WHOLE placement pool for a composed stream, so it
@@ -1477,7 +1540,7 @@ jobs:
 
       # R4 S15, the same shape as the overlay gallery's two steps above: opt-in (`sponsor_captures`), one leg so the
       # artifact name is unique, `!cancelled()` so a red spec step elsewhere does not cost the pictures. The leg is
-      # rest 2/3 (2/2 before 2026-11-13): the capture spec's own skipped tests count toward that shard, so it carries fewer real ones (run
+      # rest 2/4 (2/3 until 2026-11-19, 2/2 before 2026-11-13): the capture spec's own skipped tests count toward that shard, so it carries fewer real ones (run
       # 41277565323: rest 1/2 650 s, rest 2/2 586 s; the capture step itself took 21 s). The spec's own
       # last test refuses a missing, non-PNG or byte-identical capture (AGENTS.md class 10); the count below refuses an
       # empty directory, which is what a run with the env var lost would leave.
