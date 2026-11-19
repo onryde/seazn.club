@@ -1,8 +1,8 @@
 import "server-only";
 // A late entrant to a RUNNING ladder joins the bottom of its order.
 //
-// `stage.config.ladder_order` is written ONCE, by the first challenge, from the field as it stood then (stages/ad-hoc.ts
-// `issueChallenge`). Anyone admitted afterwards - an organiser's late add, a registration, an import, or a reinstated
+// `stage.config.ladder_order` is INITIALISED by the first challenge, from the field as it stood then (stages/ad-hoc.ts
+// `issueChallenge`); before this module nothing extended it. Anyone admitted afterwards - an organiser's late add, a registration, an import, or a reinstated
 // entrant who was out of the field at that first challenge - sat in no rung: every challenge naming them refused
 // LADDER_ENTRANT_FOREIGN and the ladder panel, which lists the order, did not show them. The builder's promise that a
 // ladder takes late joiners by design could never be kept.

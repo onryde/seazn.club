@@ -27,6 +27,7 @@ import { completeStage, createStages, generateStageFixtures, issueChallenge } fr
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { withdrawEntrantCascade } from "../withdrawal";
+import { appendToLadderOrder } from "../ladder-late-entry";
 import { seedRegistration } from "./_registration-fixtures";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
@@ -281,5 +282,69 @@ describe.skipIf(!HAS_DB)("every door that admits an entrant appends to a running
     await commitImport(auth, late.importId, null);
     const [d] = await sql<{ id: string }[]>`select id from entrants where division_id = ${division.id} and display_name = 'D Team'`;
     expect(await storedOrder(stage!.id)).toEqual([...started.ladder_order, d!.id]);
+  });
+});
+
+// The result hook (scoring.ts) swaps two rungs. It used to rewrite the WHOLE `ladder_order` from the `stage_config` it
+// read at the top of its transaction, so a late add that committed its append while the result was being scored was
+// overwritten by the stale order. Driven here with two connections: tx1 admits a newcomer and appends them but has not
+// committed; the result is scored meanwhile (it reads the pre-append order and its write blocks on tx1's row lock);
+// tx1 then commits. The newcomer must survive the swap.
+describe.skipIf(!HAS_DB)("a late add that commits while a ladder result is being scored survives the swap", () => {
+  async function scoringBlockedOnALock(): Promise<boolean> {
+    for (let i = 0; i < 100; i++) {
+      const [row] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+        where wait_event_type = 'Lock' and query ilike '%jsonb_build_object%ladder_order%'`;
+      if (row!.n > 0) return true;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return false;
+  }
+
+  it("the swap lands, the newcomer is still on the ladder at the bottom, nobody is lost or duplicated", async () => {
+    const r = await ladder(3);
+    const before = await startTheLadder(r); // [L1, L2, L3]
+    const fx = await issueChallenge(r.auth, r.stageId, { challenger_id: r.ids[2]!, opponent_id: r.ids[0]! });
+
+    let release!: () => void;
+    const held = new Promise<void>((res) => (release = res));
+    let admitted!: () => void;
+    const admittedSignal = new Promise<void>((res) => (admitted = res));
+    let lateId = "";
+    const tx1 = sql.begin(async (tx) => {
+      const [e] = await tx<{ id: string }[]>`
+        insert into entrants (division_id, org_id, kind, display_name, seed)
+        values (${r.divisionId}, ${r.auth.orgId}, 'individual', 'Late in flight', 99) returning id`;
+      lateId = e!.id;
+      await appendToLadderOrder(tx, r.divisionId);
+      admitted();
+      await held;
+    });
+    await admittedSignal;
+
+    // L3 (the challenger) takes the game: the hook swaps L3 above L1.
+    const scoring = scoreEvent(r.auth, fx.fixture_id, { expected_seq: 0, type: "core.forfeit", payload: { by: r.ids[0]!, reason: "walkover" } });
+    // Anti-vacuity: the score really is blocked behind the uncommitted append. If it were not, the test would pass without
+    // ever interleaving anything.
+    expect(await scoringBlockedOnALock(), "the result's ladder write is waiting on the append's row lock").toBe(true);
+    release();
+    await tx1;
+    await scoring;
+
+    const order = await storedOrder(r.stageId);
+    expect(order, "the late entrant survived the swap, at the bottom").toEqual([r.ids[2]!, r.ids[1]!, r.ids[0]!, lateId]);
+    expect(new Set(order).size, "nobody duplicated").toBe(order!.length);
+    expect(before).toHaveLength(3);
+  });
+
+  it("a result where the holder wins swaps nothing (the SQL guard: winner below loser), and a later add still lands at the bottom", async () => {
+    const r = await ladder(3);
+    await startTheLadder(r);
+    const fx = await issueChallenge(r.auth, r.stageId, { challenger_id: r.ids[2]!, opponent_id: r.ids[0]! });
+    // the holder (L1) wins: the challenger forfeits - no swap, order unchanged except for the append
+    await scoreEvent(r.auth, fx.fixture_id, { expected_seq: 0, type: "core.forfeit", payload: { by: r.ids[2]!, reason: "walkover" } });
+    const [late] = await addEntrants(r.auth, r.divisionId, ["Late"], 4);
+    expect(await storedOrder(r.stageId)).toEqual([r.ids[0]!, r.ids[1]!, r.ids[2]!, late]);
   });
 });

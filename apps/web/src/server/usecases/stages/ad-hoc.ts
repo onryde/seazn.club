@@ -98,17 +98,20 @@ export async function issueChallenge(
     if (ci < 0 || oi < 0) {
       throw new HttpError(422, "both players must be on the ladder", "LADDER_ENTRANT_FOREIGN");
     }
-    // Presence on the ladder is not eligibility. `ladder_order` is written
-    // ONCE, from the live field, and never pruned afterwards; a withdrawal
-    // is a status flip that leaves her row and her rung in place, so the
-    // check above waves a departed player through in EITHER role.
+    // Presence on the ladder is not eligibility. `ladder_order` is initialised
+    // from the live field by the first challenge, then only EXTENDED (a late or
+    // reinstated entrant who holds no rung is appended at the bottom,
+    // usecases/ladder-late-entry.ts) or SWAPPED (a result, scoring.ts); it is
+    // never pruned. A withdrawal is a status flip that leaves her row and her
+    // rung in place, so the check above waves a departed player through in
+    // EITHER role.
     //
     // Filtered here, at read time, rather than pruned from `config` when she
     // withdraws: a pruned array cannot be un-pruned, and an entrant CAN be
-    // un-withdrawn (patchEntrant) — `ladder_order` only initialises while it
-    // is empty, so she would never be re-seated and would silently lose the
-    // rung she earned. Read-time filtering also cannot leave stale config
-    // behind, and needs no matching hook on the un-withdraw path.
+    // un-withdrawn (patchEntrant) — she would silently lose the rung she
+    // earned. Read-time filtering also cannot leave stale config behind. The
+    // un-withdraw path does call `appendToLadderOrder`, but it only appends an
+    // entrant the order does not hold, so a rung she held is found, not moved.
     //
     // BOTH sides, checked together: she can be the challenger or the
     // opponent, and a guard that looks at one is half a fix.
