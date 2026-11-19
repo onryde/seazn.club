@@ -38,7 +38,7 @@ If a match cannot be finished at all, use the forfeit flow for a walkover. An ab
 A league or group stage can also play a shoot-out when a match ends level. How the table counts it depends on the sport.
 
 - **Football and field hockey:** a draw for both sides, plus a bonus point for the side that won on kicks. The bonus is 1 by default, so with a draw worth 1 the winner gets 2 and the loser 1.
-- **Ice hockey:** by default a regulation win is worth 3, an overtime or shootout win 2 and an overtime or shootout loss 1. A level match that goes to overtime or a shootout is not booked as a draw.
+- **Ice hockey, IIHF variant:** a regulation win is worth 3, an overtime or shootout win 2 and an overtime or shootout loss 1. A level match that goes to overtime or a shootout is not booked as a draw. **Recreational variant:** it has no overtime or shootout, a win is worth 2, a draw 1 and a loss 0, and a level match stays a draw.
 - **Cricket:** the super over pays as a win and a loss.
 
 See [scoring football](/help/scoring/football) for how a shoot-out plays on the pad, and [scoring cricket](/help/scoring/cricket) for what the division's still-tied rule does when the super over is also tied.

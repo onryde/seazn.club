@@ -5,7 +5,7 @@ order: 9
 related: scoring/corrections, scoring/batch-import, api/keys
 ---
 
-Every entry is an event in the match's ledger. Corrections are new events, never edits, and each event is linked to the one before it by a hash. The fixture console shows the result of checking that chain: **Ledger Verified ✓**, or the exact entry where it breaks if someone has changed the database directly.
+Every entry is an event in the match's ledger. Corrections are new events, never edits, and each event is linked to the one before it by a hash. The fixture console shows the result of checking that chain: **Ledger verified ✓**, or the exact entry where it breaks if someone has changed the database directly.
 
 ## Download it
 

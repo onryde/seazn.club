@@ -24,7 +24,7 @@ Come back to the panel later and it reads "A scoring link is live for this match
 
 What the holder cannot do:
 
-- **Finalize.** A pad that refuses it says "Not recorded — you don't have permission to record this." (a script calling the API is told that finalizing needs an organiser or scorer account). A sport that records the result as a score (generic, for example) decides the match when the holder enters the final score.
+- **Finalize.** The **Finalize result** button is on the console, which a device link does not open, so the holder has no way to finalize. A sport that records the result as a score (generic, for example) decides the match when the holder enters the final score.
 - **Open another match.** A link only opens its own match. Used for another match, it is refused (the API answers that the link is for a different fixture).
 - **See or change anything else** in the competition.
 

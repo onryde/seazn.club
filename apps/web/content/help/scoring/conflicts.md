@@ -13,8 +13,8 @@ Usually both entries land and you see no message. If the pad was out of date whe
 
 - Both entries land in the ledger, one after the other. Nothing is lost and nothing is overwritten.
 - Nothing is merged either. If both people tap for the same point, the point is recorded twice.
-- **If the other entry already ended the game or the match, your tap is refused.** The pad shows "This match already has a result. Reopen it before scoring again." Nothing is recorded, and there is nothing to reopen in a match that has already been finalized, so check the ledger instead. In practice the pad refreshes within a moment and stops offering the score tiles for a match that has ended, so only a tap made in that window is refused.
-- **If the pad cannot get the entry in after two catch-ups, it gives up.** The entry is not recorded and the pad says "Not recorded — this entry could not be saved after several tries. Check the ledger, then retake it." Read the ledger, then tap again if the point is missing.
+- **If the other entry already decided the match, your tap is refused.** The pad shows "This match already has a result. Reopen it before scoring again." Nothing is recorded. A game ending is not enough: in a set sport a tap after a game has ended starts the next game. A match that is decided but not finalized can be reopened by [voiding](/help/scoring/corrections) the entry that decided it, from the console. A finalized match cannot be reopened. In practice the pad refreshes within a moment and stops offering the score tiles for a decided match, so only a tap made in that window is refused.
+- **If the pad keeps conflicting after it has caught up more than once, it gives up.** The entry is not recorded and the pad says "Not recorded — this entry could not be saved after several tries. Check the ledger, then retake it." Read the ledger, then tap again if the point is missing.
 
 > **Example**
 > Badminton, Mira against Jonas. A phone still shows 0-0 while the desk has already recorded a rally for Mira. The phone's scorer taps Jonas. The ledger now holds both rallies, and the phone shows 1-1.
