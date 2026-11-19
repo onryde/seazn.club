@@ -2,7 +2,7 @@
 
 // PROMPT-63 §4 — scoring-ledger integrity strip on the fixture console:
 // chain-verified badge (mirrors /admin/audit's staff-log treatment) + the
-// signed audit download (Pro `scoring.audit_export`). Hidden until the
+// signed audit download (`scoring.audit_export`: paid plans and the Event Pass). Hidden until the
 // fixture has events (nothing to audit).
 import { useMsg } from "@/components/i18n/dict-provider";
 
@@ -40,9 +40,14 @@ export function AuditStrip({
           {msg("audit.download")}
         </a>
       ) : (
-        <span className="text-slate-400" title={msg("audit.proHint")}>
-          {msg("audit.pro")}
-        </span>
+        <>
+          <span className="text-slate-400">{msg("audit.pro")}</span>
+          {/* Said in the open, not as a `title`: a tooltip is not reachable by touch or keyboard, and the lock
+              is the one place a scorer learns what unlocks the download. Own line, so it wraps at 320. */}
+          <p className="min-w-0 basis-full text-slate-600" data-testid="audit-pro-hint">
+            {msg("audit.proHint")}
+          </p>
+        </>
       )}
     </div>
   );
