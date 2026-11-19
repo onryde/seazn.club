@@ -7,22 +7,25 @@
 // The round-column rules (lib/round-column.ts) are the one authority for the check-in clock, the tallies and what "playing" means; this
 // file asks them over `round.boards` (an `ArbiterBoard[]`, so no adaptation) and never re-derives a window edge or a count.
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
-import { boardsOwedAnInvite, checkinClock, checkinTally, playingTally } from "@/lib/round-column";
+import { boardsOwedAnInvite, checkinClock, checkinTally, playingTally, roundColumnPhase } from "@/lib/round-column";
 import type { MatchDayBoardRow, MatchDayOnlineRound, OnlineRoundPhase } from "./types";
 
 // ---- phase and order (§5.2) -------------------------------------------------------------------------------------------------------
 
-/** The server's `phase`, re-read from `round.boards` for the page's ticking clock (the poll is up to 20 s apart, and a window's deadline
- *  moves nothing in the data). A division not started stays `not_started`; a round with no boards on screen is `before` whatever else it
- *  was called (nothing can be checking in; a producer that says otherwise is contradicting itself, and the row reads as not opened); a
- *  round with boards is `checkin` while the column's check-in clock (`checkinClock`) has a window open or still to open, else `playing`.
- *  So a board still `checking_in` after its window has run out (the sweep has not turned it yet) is in a round that is `playing`: the
- *  clock has nothing to count down, and the tally says who is playing. With no clock yet (`nowMs` null: the server render, the first
- *  client paint) the snapshot's word stands, as every other reader of a window reads it. */
-export function onlineRoundPhase(r: Pick<MatchDayOnlineRound, "view" | "round" | "phase">, nowMs: number | null): OnlineRoundPhase {
+/** The server's `phase`, re-read from `round.boards` (the poll is up to 20 s apart): a division not started stays `not_started`; every
+ *  other row takes `roundColumnPhase`'s ladder over its boards (lib/round-column.ts, the one authority the arbiter column used and the
+ *  e2e contract in arbiter-panel.spec.ts pins): no round on screen is `before` (nothing can be checking in, whatever else the producer
+ *  called it), `checkin` while ANY board is `checking_in`, else `playing` (every board over included, and a round every board of which
+ *  is the viewer's own). The phase follows the BOARDS and never the clock: a deadline passing flips nothing (a board stays
+ *  `checking_in` until the sweep turns it), a board leaving check-in does. What a closed or not-yet-open window says is the panel's
+ *  reading of `checkinClock` (`closed` / `opens`), not a phase of its own. `_nowMs` is part of the signature so the three round rules
+ *  take one clock; this one does not read it - do not re-introduce it. */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the one clock every round rule is given; this rule is the boards' alone
+export function onlineRoundPhase(r: Pick<MatchDayOnlineRound, "view" | "round" | "phase">, _nowMs: number | null): OnlineRoundPhase {
   if (r.phase === "not_started") return "not_started";
-  if (r.round === null) return "before";
-  return checkinClock(r.round.boards, nowMs).kind === "closed" ? "playing" : "checkin";
+  const phase = roundColumnPhase(r.round, null);
+  // `none` is the column's answer to a page that said "not here" (`requested`), which is never passed: typing only
+  return phase === "none" ? "before" : phase;
 }
 
 /** Every board decided and none owed its invite again. Never true of a round with no board on screen: the viewer plays on all of them,
@@ -57,7 +60,8 @@ export function orderOnlineRounds(rounds: readonly MatchDayOnlineRound[], nowMs:
 /** What a round row says on the right, as data (the copy is the component's, in four locales):
  *  - `closes`: check-in, the NEXT window to close (`checkinClock`) and the seats here of the seats being waited on (`checkinTally`);
  *  - `playing`: boards playing of the boards on screen (`playingTally`); also what a round in check-in says while no window has a
- *    deadline to name (a later group still to open), and a round whose every board is the viewer's own (`total` 0);
+ *    deadline to name (every window has run out, or only a later group is still to open), and a round whose every board is the
+ *    viewer's own (`total` 0);
  *  - `paired`: paired, not opened; `not_started`: the division has not started; `over`: every board decided. */
 export type RoundRowWord =
   | { kind: "closes"; at: string; here: number; seats: number }
