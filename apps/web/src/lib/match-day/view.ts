@@ -353,8 +353,9 @@ export function filterNoCourt(fixtures: readonly MatchDayFixture[], divisions: R
   return divisions === null ? [...fixtures] : fixtures.filter((f) => divisions.has(f.division_id));
 }
 
-/** What the organiser opened: a court, or a match playing on no court (B4) — with its name, to say so if it leaves the list. */
-export type Opened = { kind: "court" | "match"; id: string; name: string };
+/** What the organiser opened: a court, a match playing on no court (B4), or an online round or board (`id` is the round's key, or
+ *  the board's fixture id; lib/match-day/online.ts `resolveOnlineFocus`) - with its name, to say so if it leaves the list. */
+export type Opened = { kind: "court" | "match" | "round" | "board"; id: string; name: string };
 
 /** What is focused (§6.1, review M6): what the organiser opened while it is still on the list; none opened yet → the first
  *  court (the desktop's default), else the first match playing on no court (B4: a day with no courts at all); what was opened

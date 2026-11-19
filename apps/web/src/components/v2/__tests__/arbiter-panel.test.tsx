@@ -108,6 +108,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     checkin: null,
     seats: null,
     flags: [],
+    flagCount: 0,
     ...over,
   };
 }

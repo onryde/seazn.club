@@ -174,6 +174,9 @@ export type ArbiterBoard = {
   seats: { white: ArbiterSeatCheckin; black: ArbiterSeatCheckin } | null;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
+  /** How many open flags the board has, counted even when `flags` is [] (Match Day's list read carries the count and not the cards;
+   *  the board in focus reads its cards through its own route). Always equal to `flags.length` where the cards are read. */
+  flagCount: number;
 };
 
 /** One seat of a board in check-in: has its player checked in inside the board's window (`checkInCounts`), and what the seat's

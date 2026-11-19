@@ -96,6 +96,7 @@ function boardOf(fixtureId: string, boardNo: number, over: Partial<ArbiterBoard>
     checkin: null,
     seats: null,
     flags: [],
+    flagCount: 0,
     ...over,
   };
 }

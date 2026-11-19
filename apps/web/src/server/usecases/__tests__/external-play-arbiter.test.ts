@@ -27,6 +27,7 @@ import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "../external-play/auth";
 import { createDivision } from "../divisions";
+import { closeExternalPlayFlags } from "../external-play/flags";
 import {
   arbiterRequestedRound,
   ARBITER_JOIN_FLOOR,
@@ -570,6 +571,26 @@ describe.runIf(HAS_DB)("loadArbiterRound — flags, as evidence", () => {
     const r = await seedOnlineChessRound({ fixtures: 1 });
     await openRound(r);
     expect((await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!.flags).toEqual([]);
+  });
+
+  it("flagCount is the board's open-flag COUNT, and moves with the flags: 0 with none, 2 with two open, 1 once one is closed (Match Day's list reads the count, not the cards)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(r);
+    const b = r.boards[0]!;
+    const read = async () => (await loadArbiterRound(r.owner, r.divisionId))!.boards[0]!;
+    // the empty case first
+    expect(await read()).toMatchObject({ flagCount: 0, flags: [] });
+    await sql`insert into fixture_play_flags (fixture_id, org_id, kind, person_id, opened_at, note) values
+      (${b.fixtureId}, ${r.orgId}, 'camera_connection_problems', ${b.home.personId}, '2026-10-12T19:45:00Z', 'x'),
+      (${b.fixtureId}, ${r.orgId}, 'camera_connection_problems', ${b.away.personId}, '2026-10-12T19:46:00Z', 'y')`;
+    const two = await read();
+    expect(two.flagCount).toBe(2);
+    expect(two.flags).toHaveLength(2);
+    // a flag the organiser has closed ("Let the game go on") has had its review: the count is of OPEN flags, as the cards are
+    expect(await closeExternalPlayFlags(r.owner, b.fixtureId, [two.flags[0]!.id])).toEqual({ closed: 1, stillOpen: 1 });
+    const one = await read();
+    expect(one.flagCount).toBe(1);
+    expect(one.flags).toHaveLength(1);
   });
 
   it("every flag kind, read: plies from reconcile's note, the camera report from the sweep's, connection time from the guard's stamps", async () => {

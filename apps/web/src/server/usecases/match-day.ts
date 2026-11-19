@@ -882,6 +882,8 @@ export async function getMatchDay(
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
     venues_today: board.venuesToday,
+    // Match Day's online rounds (Task 2 fills this from `readOnlineRounds`); no online division is read yet.
+    online_rounds: [],
   };
 }
 
