@@ -95,7 +95,9 @@ const triggersFor = (r: Runner): RunnerTrigger[] => RUNNER_TRIGGER_TYPES.flatMap
   : [SAMPLE[t]]);
 /** A walk's NODE: every payload field a cell BRANCHES on — the state, the attempt (retryLeft, createStarted) and whether a
  *  stop is marked (creating's create_ok / create_failed / observed). A future cell that branches on another field adds it
- *  here, or every walk that dedupes on this key silently under-walks. */
+ *  here, or every walk that dedupes on this key silently under-walks. The one field left out on purpose is `machineId`
+ *  (prod 2026-11-19's adopted late create_ok): no id and the SAME id step identically but for the id recorded (pinned by
+ *  "no id / the same id / a DIFFERENT id"), and a walk's create_ok only ever carries the id its runners hold. */
 const nodeKey = (r: Runner): string =>
   `${r.state}:${r.attempt}:${r.stopRequestedAt !== null ? "marked" : "unmarked"}${r.lastExit?.exitCode === RELAY_EXIT_REFUSED ? ":refused-exit" : ""}` +   // R2003: afterLostDestroyed branches on it
   // R2003b: the cap reads the session's count, and the next count depends on this attempt's two bounds and on whether an
@@ -2232,5 +2234,135 @@ describe("Owed 67 — the restart cap: a SESSION survives RUNNER_RESTART_CAP in-
     expect(createsChecked, "a replacement was created and checked").toBeGreaterThan(0);
     expect(mixedWithCrash, "restarts and crashes were counted side by side").toBeGreaterThan(0);
     expect(checks, "oracle checks ran after every event").toBeGreaterThan(orders);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Prod 2026-11-19 (session 8a3acf4e): `relay runner: create_ok is not legal from booting`, an unhandled error. The create
+// call is out (apply.ts `create_machine`); meanwhile a reconcile ADOPTS the Machine under our name and the runner moves on,
+// so the call's own create_ok lands on a runner that already holds that Machine. The table has two adoption roads:
+// `creating × observed` found (pending / running — no id) and `creating × create_ok` (expiry.ts `reconcileSession`'s
+// list-adopt by name — WITH the id; the road production takes, since no producer observes a creating runner). Ruling
+// (controller, 2026-11-19): the same Machine is benign — record the id when the runner holds none, nothing else (no effect,
+// no signal); a DIFFERENT id beside a held one is two Machines and stays refused exactly as before; `lost` / `destroyed`
+// keep their late-create teardown (fix round 4). The `creating × create_ok` stop-marked branch is pinned above ("a LATE
+// create_ok: …"). ONE SPORT is moot: the relay never reads the sport (relay-internal-routes.test.ts header).
+// ---------------------------------------------------------------------------------------------------------------------
+describe("prod 2026-11-19 — a late create_ok after the runner already ADOPTED its Machine is benign, never a throw", () => {
+  const LATE = "m-late";
+  const lateOk = (machineId: string = LATE): RunnerTrigger => ({ type: "create_ok", machineId });
+  /** The ruling, typed as the oracle: the states whose late create_ok already tears the returned Machine down (fix round 4)
+   *  — unchanged by this fix. Every OTHER state the table reaches after an adoption answers the same Machine's late
+   *  create_ok with a benign stay. */
+  const TEARDOWN_ON_LATE_CREATE: ReadonlySet<RunnerState> = new Set<RunnerState>(["lost", "destroyed"]);
+  const creating = (): Runner => stepRunner(RUNNER_NONE, { type: "create_started", name: machineNameFor(SID, 1), attempt: 1 }, T0).next;
+  /** The adoption roads, each driven through the table from `none`. */
+  const ADOPTIONS: readonly RunnerTrigger[] = [{ type: "observed", state: "pending" }, { type: "observed", state: "running" }, lateOk()];
+  /** Every runner the TABLE reaches from an adoption while the create call is still out: every trigger except that call's
+   *  own outcome (create_ok / create_failed — the late one is what each node is handed) and a new attempt (create_started:
+   *  apply.ts drops a create whose attempt moved on, `stillOurs`). Nodes carry `nodeKey` plus whether an id is held. */
+  const adoptedRunners = (): Runner[] => {
+    const outsideTheCall = (t: RunnerTrigger) => t.type !== "create_ok" && t.type !== "create_failed" && t.type !== "create_started";
+    const seen = new Map<string, Runner>();
+    const queue: Runner[] = ADOPTIONS.map((t) => stepRunner(creating(), t, T0).next);
+    while (queue.length > 0) {
+      const r = queue.shift()!;
+      const key = `${nodeKey(r)}:${r.machineId === null ? "no-id" : "id"}`;
+      if (seen.has(key)) continue;
+      seen.set(key, r);
+      for (const t of triggersFor(r).filter(outsideTheCall)) {
+        try { queue.push(stepRunner(r, t, T0).next); } catch (e) { expect(e).toBeInstanceOf(InvalidRunnerTransition); }
+      }
+    }
+    return [...seen.values()];
+  };
+
+  it("the REAL sequences, through the table from none: creating → observed found (pending / running, no id) → the late create_ok RECORDS its id and stays booting; creating → the reconcile's list-adopt → the call's own create_ok (same id) moves nothing — no throw, no effect, no signal, and a second late call neither", () => {
+    let checked = 0;
+    for (const state of ["pending", "running"] as const) {
+      const adopted = stepRunner(creating(), { type: "observed", state }, T0);
+      expect(adopted.next, `premise (${state}): the adoption is booting with NO id`).toMatchObject({ state: "booting", machineId: null });
+      const late = stepRunner(adopted.next, lateOk(), T0);
+      expect(late, state).toEqual({ next: { ...adopted.next, machineId: LATE }, effects: [], signal: null });
+      expect(stepRunner(late.next, lateOk(), T0), `${state}, a second late call`).toEqual({ next: late.next, effects: [], signal: null });
+      checked++;
+    }
+    const listAdopted = stepRunner(creating(), lateOk(), T0);
+    expect(listAdopted.next, "premise: the list-adopt is booting WITH the id").toMatchObject({ state: "booting", machineId: LATE });
+    expect(stepRunner(listAdopted.next, lateOk(), T0), "the prod row").toEqual({ next: listAdopted.next, effects: [], signal: null });
+    checked++;
+    expect(checked).toBe(3);
+  });
+
+  it("the prod row through decide: a composed session's late create_ok after either adoption, at booting (provisioning, warming), playing (live), stopping and exited (ending), throws nothing, moves no session field and emits no effect — only the ledger's runner self-row; the id is recorded where none was held", () => {
+    const provisioning = liveComposed({ state: "provisioning", startedAt: null, runner: RUNNER_NONE });
+    const started = decide(provisioning, { type: "runner", trigger: { type: "create_started", name: machineNameFor(SID, 1), attempt: 1 } }, sec(0)).next;
+    expect(started.runner, "premise").toMatchObject({ state: "creating", machineId: null });
+    const STEPS: readonly [string, Command | null][] = [
+      ["booting / provisioning", null],
+      ["booting / warming", { type: "provisioned" }],
+      ["playing / live", { type: "runner", trigger: { type: "callback_playing" } }],
+      ["stopping / ending", { type: "stop", reason: "stopped" }],
+      ["exited / ending", { type: "runner", trigger: { type: "observed", state: "stopped" } }],
+    ];
+    let checked = 0, recorded = 0;
+    for (const adopt of [{ type: "observed", state: "running" } as const, lateOk()]) {
+      let s = decide(started, { type: "runner", trigger: adopt }, sec(1)).next;
+      for (const [label, c] of STEPS) {
+        if (c) s = decide(s, c, sec(2)).next;
+        const at = `${adopt.type} adoption, ${label}`;
+        expect(`${s.runner.state} / ${s.state}`, `premise: ${at}`).toBe(label);
+        const late = decide(s, { type: "runner", trigger: lateOk() }, sec(3));
+        expect(late.next, at).toEqual({ ...s, runner: { ...s.runner, machineId: LATE } });
+        expect(late.effects, at).toEqual([]);
+        expect(late.events, at).toEqual([{ type: "RunnerChanged", from: s.runner.state, to: s.runner.state, trigger: "create_ok" }]);
+        if (s.runner.machineId === null) recorded++;
+        checked++;
+      }
+    }
+    expect(checked).toBe(STEPS.length * 2);
+    expect(recorded, "the no-id road recorded the id at every step").toBe(STEPS.length);
+  });
+
+  it("the sweep, DERIVED from RUNNER_TABLE: every runner the table reaches from an adoption answers the same Machine's late create_ok without a throw — lost / destroyed with their teardown (unchanged), every other state with a stay that records the id; counted, and zero is a failure", () => {
+    const benign = new Map<RunnerState, number>(), teardown = new Map<RunnerState, number>();
+    let recorded = 0, kept = 0;
+    for (const r of adoptedRunners()) {
+      const label = `${nodeKey(r)} (${r.machineId === null ? "no id" : `id ${r.machineId}`})`;
+      let late: ReturnType<typeof stepRunner>;
+      try { late = stepRunner(r, lateOk(), T0); } catch (e) { throw new Error(`${label}: the late create_ok threw — ${String(e)}`); }
+      if (TEARDOWN_ON_LATE_CREATE.has(r.state)) {
+        expect(late, label).toEqual({ next: { ...r, state: "lost", machineId: LATE }, effects: [{ type: "force_destroy" }], signal: null });
+        teardown.set(r.state, (teardown.get(r.state) ?? 0) + 1);
+        continue;
+      }
+      expect(late, label).toEqual({ next: { ...r, machineId: LATE }, effects: [], signal: null });
+      if (r.machineId === null) recorded++; else kept++;
+      benign.set(r.state, (benign.get(r.state) ?? 0) + 1);
+    }
+    const checked = [...benign.values(), ...teardown.values()].reduce((a, b) => a + b, 0);
+    console.info(`late create_ok sweep — runners checked: ${checked}; benign by state: ${JSON.stringify(Object.fromEntries(benign))}; teardown by state: ${JSON.stringify(Object.fromEntries(teardown))}; ids recorded: ${recorded}, ids kept: ${kept}`);
+    expect(checked, "anti-vacuity: zero runners checked is a failure").toBeGreaterThan(0);
+    expect(benign.get("booting") ?? 0, "the prod row's state is among them").toBeGreaterThan(0);
+    expect(recorded, "the no-id road was swept").toBeGreaterThan(0);
+    expect(kept, "the held-id road was swept").toBeGreaterThan(0);
+    expect(teardown.size, "the unchanged teardown rows were swept too").toBeGreaterThan(0);
+  });
+
+  it("no id / the same id / a DIFFERENT id, side by side in every benign state the sweep derives: no id → recorded; the same id → nothing moves; a different id beside a held one is two Machines → InvalidRunnerTransition, exactly the refusal it was before", () => {
+    const states = [...new Set(adoptedRunners().map((r) => r.state))].filter((s) => !TEARDOWN_ON_LATE_CREATE.has(s));
+    let checked = 0;
+    for (const s of states) {
+      const held: Runner = { ...inState(s), machineId: "m1" };
+      expect(stepRunner({ ...held, machineId: null }, lateOk("m1"), T0), `${s}: no id`).toEqual({ next: held, effects: [], signal: null });
+      expect(stepRunner(held, lateOk("m1"), T0), `${s}: the same id`).toEqual({ next: held, effects: [], signal: null });
+      let refused: unknown = null;
+      try { stepRunner(held, lateOk("m2"), T0); } catch (e) { refused = e; }
+      expect(refused, `${s}: a different id`).toBeInstanceOf(InvalidRunnerTransition);
+      expect(refused, `${s}: the message is today's`).toMatchObject({ from: s, trigger: "create_ok", message: `relay runner: create_ok is not legal from ${s}` });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: zero states checked is a failure").toBeGreaterThan(0);
+    expect(checked).toBe(states.length);
   });
 });
