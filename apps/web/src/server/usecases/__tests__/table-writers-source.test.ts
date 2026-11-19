@@ -77,6 +77,48 @@ function sqlWrites(): { file: string; line: number; text: string }[] {
 const LITERAL_MERGE = /config = config \|\| \$\{\w+\.json\(\{([^}]*)\}/;
 const KEY_REMOVAL = /config = config - '(\w+)'/;
 const ORDER_KEY = /\b(tiebreakers|crossGroupTiebreakers)\b/;
+const BUILT_MERGE = /config = config \|\| jsonb_build_object\(/;
+const SET_KEY = /config = jsonb_set\(\s*config,\s*'\{(\w+)[,}]/;
+
+/** The top-level arguments of the call whose `(` is at `open`, split on commas outside parentheses, quotes and `${…}`. Null when
+ *  the call does not close in the text (fail closed). */
+function callArgs(text: string, open: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let quoted = false;
+  let from = open + 1;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i]!;
+    if (quoted) {
+      if (ch === "'") quoted = false;
+      continue;
+    }
+    if (ch === "'") quoted = true;
+    else if (ch === "(" || ch === "{") depth++;
+    else if (ch === ")" || ch === "}") {
+      depth--;
+      if (depth === 0) {
+        args.push(text.slice(from, i).trim());
+        return args;
+      }
+    } else if (ch === "," && depth === 1) {
+      args.push(text.slice(from, i).trim());
+      from = i + 1;
+    }
+  }
+  return null;
+}
+
+/** A `config || jsonb_build_object(k1, v1, k2, v2, …)` merge: "exempt" when every key is a string literal naming no order key,
+ *  "order" otherwise (a computed key, an order key, an odd argument count, or a call the scan cannot close). */
+function builtMerge(text: string): "order" | "exempt" {
+  const m = BUILT_MERGE.exec(text);
+  const args = callArgs(text, m!.index + m![0].length - 1);
+  if (args === null || args.length === 0 || args.length % 2 !== 0) return "order";
+  const keys = args.filter((_, i) => i % 2 === 0);
+  const literal = keys.map((k) => /^'(\w+)'$/.exec(k)?.[1]);
+  return literal.every((k) => k !== undefined && !ORDER_KEY.test(k)) ? "exempt" : "order";
+}
 
 /** Does this write carry a tie-break order? Exempt writes return the reason. */
 function classify(text: string): "order" | "exempt" | "other" {
@@ -87,6 +129,10 @@ function classify(text: string): "order" | "exempt" | "other" {
     if (merge !== null) return ORDER_KEY.test(merge[1]!) ? "order" : "exempt";
     const removal = KEY_REMOVAL.exec(text);
     if (removal !== null) return ORDER_KEY.test(removal[1]!) ? "order" : "exempt";
+    // W5 (G7): a key written in SQL. `jsonb_set`'s path is a literal whose first element is the top-level key it writes.
+    if (BUILT_MERGE.test(text)) return builtMerge(text);
+    const set = SET_KEY.exec(text);
+    if (set !== null) return ORDER_KEY.test(set[1]!) ? "order" : "exempt";
     // Fail closed (fix round 1, m1): any other `stages.config` write — a whole config, a merge of a computed object — can
     // carry an order whether or not its text names the key, so it counts as an order writer.
     return "order";
@@ -105,9 +151,20 @@ describe("W2d T10 every writer of a tie-break order validates it (source scan)",
       // W3 PR #1104 CI: patchSwissStage writes `{ rounds, chess }` as a visible literal, so the scan can prove it carries no
       // order; the same call with a computed `patch` object stays an order writer (the first two cases).
       ["update stages set config = config || ${tx.json({ rounds: roundsPatch, chess: chessPatch } as never)} where id = ${stageId}`", "exempt"],
+      // W5 (G7, ruling 288's storage table): a key written in SQL - `jsonb_build_object('<key>', …)` merged in, or
+      // `jsonb_set(config, '{<key>}', …)` - is a literal-key write too. Exempt only when EVERY key is a literal and none is an
+      // order key; a computed key (or path) fails closed.
+      ["update stages set config = config || jsonb_build_object('rank_overrides',\n coalesce((select jsonb_agg(p) from x p where p ->> 'entrant_id' <> ${id}), '[]'::jsonb))\n where id = ${id}`", "exempt"],
+      ["update stages set config = config || jsonb_build_object('tiebreakers', ${tx.json(order)}) where id = ${id}`", "order"],
+      ["update stages set config = config || jsonb_build_object('rank_overrides', '[]'::jsonb, 'crossGroupTiebreakers', ${tx.json(order)}) where id = ${id}`", "order"],
+      ["update stages set config = config || jsonb_build_object(${key}, ${tx.json(value)}) where id = ${id}`", "order"],
+      ["update stages set config = jsonb_set(\n config, '{round_byes}',\n coalesce((select jsonb_agg(b) from x b where b ->> 'entrant_id' <> ${id}), '[]'::jsonb))\n where id = ${id}`", "exempt"],
+      ["update stages set config = jsonb_set(config, '{tiebreakers}', ${tx.json(order)}) where id = ${id}`", "order"],
+      ["update stages set config = jsonb_set(config, '{crossGroupTiebreakers,0}', ${tx.json(step)}) where id = ${id}`", "order"],
+      ["update stages set config = jsonb_set(config, ${path}, ${tx.json(value)}) where id = ${id}`", "order"],
     ];
     for (const [text, want] of cases) expect(classify(text), text).toBe(want);
-    expect(cases.length, "anti-vacuity").toBe(6);
+    expect(cases.length, "anti-vacuity").toBe(14);
   });
 
   it("every SQL write to divisions.tiebreakers and stages.config under W/server is in a function that calls validateCascade (counted; 0 fails)", () => {
