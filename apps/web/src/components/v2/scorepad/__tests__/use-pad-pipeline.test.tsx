@@ -5696,6 +5696,100 @@ describe("usePadPipeline — a stalled queue retries on a bounded backoff, with 
     expect(appendCalls.length, "a manual retry still sends").toBeGreaterThan(afterTap);
   });
 
+  // Fix round 2, item 3. The retry is for every stall a retry can cure, not only a dead network: pin the two that are
+  // neither a network error nor a throttle, each with its own mutant (`stalled = reason === "network"`, and the
+  // unreadable-void-target arm that sets `stalled` on its own).
+  it("an indeterminate 409 (the ledger slot cannot be read) is retried by the timer, in order, and goes once the ledger answers", async () => {
+    let readable = false;
+    const appendCalls: AppendEventBody[] = [];
+    const rows: LedgerSlotEvent[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (!readable) return { kind: "conflict", currentSeq: 5, message: "seq conflict" };
+        const seq = rows.length + 1;
+        rows.push({ id: `srv-${seq}`, seq, type: body.type, payload: body.payload, recorded_at: "2026-11-19T10:00:00.000Z", recorded_by: "user-1", device_link_id: null, voids_event_id: null });
+        return { kind: "ok", data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: `srv-${seq}` } };
+      },
+      // Nothing in the slot the 409 names: `resolveConflict` cannot tell a foreign write from ours -> "indeterminate".
+      async listEventsSince(_fixtureId, sinceSeq) {
+        return rows.filter((r) => r.seq > sinceSeq);
+      },
+      async getLastSeq() {
+        return rows.length;
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: rows.length, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad = mountPipeline(baseParams({ transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    const afterTap = appendCalls.length;
+    expect(pad.current.queueDepth, "precondition: stalled on the indeterminate 409").toBe(1);
+    expect(pad.current.lastRejection, "precondition: stalled, not refused").toBeNull();
+    expect(vi.getTimerCount(), "the stall armed a retry").toBeGreaterThan(baseline);
+
+    readable = true; // the ledger answers from now on, and the slot is free
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(appendCalls.length, "the timer retried it").toBeGreaterThan(afterTap);
+    expect(pad.current.queueDepth, "and it went").toBe(0);
+    expect(rows, "once").toHaveLength(1);
+  });
+
+  it("an unreadable undo target (a void queued before a reload, its target's server id not readable yet) is retried by the timer", async () => {
+    const DB_NAME = "retry-unreadable-void-target";
+    let online = true;
+    let readable = true;
+    const landed: AppendEventBody[] = [];
+    const ORIGINAL: LedgerSlotEvent = { id: "srv-original", seq: 1, type: "generic.score", payload: { by: "H", points: 1 }, recorded_at: "2026-11-19T10:00:00.000Z", recorded_by: "user-1", device_link_id: null, voids_event_id: null };
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        if (!online) return { kind: "network-error", message: "offline" };
+        landed.push(body);
+        const seq = landed.length;
+        return { kind: "ok", data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: seq === 1 ? "srv-original" : `srv-${seq}` } };
+      },
+      async listEventsSince() {
+        return readable ? [ORIGINAL] : [];
+      },
+      async getLastSeq() {
+        return 1;
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: 1, state: null, summary: null, outcome: null };
+      },
+    };
+    const pad1 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad1.current.submit("generic.score", { by: "H", points: 1 }); // acked: the event the undo will name
+    const originalId = pad1.current.events.find((e) => e.type === "generic.score")!.id;
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS + 50);
+    online = false;
+    await pad1.current.submit("core.void", { event_id: originalId }); // queued offline, with its durable target seq
+    expect(pad1.current.queueDepth, "precondition: the undo is queued").toBe(1);
+
+    // A reload: the new mount knows nothing of the target's server id, and the read that would tell it fails.
+    pad1.unmount();
+    online = true;
+    readable = false;
+    const pad2 = mountPipeline(baseParams({ transport, queueDbName: DB_NAME }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+    expect(pad2.current.queueDepth, "precondition: the undo is still queued behind the unreadable target").toBe(1);
+    expect(landed.filter((c) => c.type === "core.void"), "precondition: the undo has not landed").toHaveLength(0);
+    expect(baseline, "precondition: the stall armed a retry").toBeGreaterThan(0);
+
+    readable = true; // the read works from now on
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(pad2.current.queueDepth, "the timer retried it, and the undo went").toBe(0);
+    const voids = landed.filter((c) => c.type === "core.void");
+    expect(voids, "landed once").toHaveLength(1);
+    expect(voids[0]!.payload, "naming the target's server id").toEqual({ event_id: "srv-original" });
+  });
+
   // Fix round 1, m3. A throttled head cannot be sent before its own `retryNotBefore`, so the backoff must not be spent
   // (and doubled) on refusals that cost nothing: the first retry lands on the later of the two.
   it("a throttled head is retried at its own retry-after, not on a shorter backoff that doubles past it for nothing", async () => {
