@@ -1,29 +1,41 @@
 ---
 title: Setting your lineup
-description: Pick starters, bench, roles and serve order before kickoff — the team sheet locks once the match starts.
+description: Pick starters, bench, positions and roles before the match starts. The team sheet locks when the match starts.
 order: 10
+related: scoring/attribution, scoring/basics, divisions/discipline
 ---
 
-Each side gets a lineup editor right on the fixture, alongside the pad. Set it before you press **Start** — once the match is live, the team sheet locks.
+Each side has a **Lineup** panel on the fixture. Open it from the **Lineup** button in the fixture header, set the team sheet, and press **Save lineup** under each side before you press **Start match**.
+
+![The Lineup panel for the home side of a football match, with the banner Starting line-up still needs Goalkeeper times 1 and the first five starters, each with a position list](/help/scoring/lineup-panel.webp "The Lineup panel: Home and Away tabs, and a position list on each starter")
 
 ## Starters and bench
 
-If nobody has saved a lineup yet, the editor auto-fills one from the roster (the first names in as starters, the rest on the bench) so matchday is one **Save lineup**, not picking every name by hand. Move players between **starting** and **bench**, reorder them, or add anyone missing from the roster — then save.
+If nobody has saved a lineup, the panel fills one in from the roster: the first names as starters (a football match: 11) and the rest on the bench. The heading reads **Lineup 11/11 starting**. You then only have to press **Save lineup**.
+
+Each row has a **⋯** menu with **Move to starting** or bench, **Make captain**, **Move up**, **Move down** and **Remove from lineup**.
 
 ## Positions
 
-Sports with a position catalogue (goalkeeper and outfield roles, batting/bowling order, and so on) let you assign each starter a position from that sport's own list.
+A sport with positions gives each starter a **position…** list. Football offers Goalkeeper, Defender, Midfielder, Forward and the finer positions such as Centre back and Striker. If the sport needs a goalkeeper and there is none, the panel says "Starting line-up still needs: Goalkeeper × 1" until you pick one. You can still save without one.
 
-## Roles: a coach isn't a player
+## Roles: a coach is not a player
 
-Every roster slot defaults to **Player**. Mark someone **Coach** or **Staff** instead, and they're recorded on the team sheet without entering the playing pool — they never show up as a scoring or [attribution](/help/scoring/attribution) candidate, and a card or incident logged against them never counts as a player statistic.
+Everyone starts as **Player**. In the **⋯** menu, set **Role** to **Coach** or **Staff**. They move under **Coaches & staff**, stay on the team sheet, and are not offered when you [credit a player](/help/scoring/attribution).
 
-## Serve order, for pairs
+## Serve order for pairs
 
-Doubles and pair entrants (tennis, badminton, table tennis and similar) get a **serves 1st** / **serves 2nd** choice per partner, so the pad knows whose turn it is when the pair serves. Singles and team entrants don't see this control at all.
+A pair entrant, such as a doubles pair, can choose who **serves 1st** and who **serves 2nd**, so the pad knows whose turn it is. Singles and teams do not see this choice.
+
+## When the lineup locks
+
+The team sheet locks when the match starts. A save after that is refused: "lineup is locked once a fixture is in_play". The panel can still be opened to read. A substitution during the match is recorded on the pad as its own entry.
+
+> **Example**
+> A football match between Hawks and Rockets. You open **Lineup**, see 11 starters and two on the bench for Hawks, pick Goalkeeper for the first starter, move one bench player to **Coach**, and press **Save lineup**. Once the match is started, the same save is refused.
 
 ## Common questions
 
-**Can I still change the lineup after kickoff?** Not from this editor — it locks the moment the match goes live, matching [why starting locks setup](/help/divisions/lifecycle). A sport that supports in-match changes, like a substitution, records those as their own scoring action instead.
+**Can I score without a lineup?** Yes. The pad still works. Credits to a player are not offered, because there is no roster.
 
-**Nobody's set a lineup at all — can I still score?** Yes. The pad works from whatever squad information exists. Without a lineup, [attribution](/help/scoring/attribution) simply has no roster to offer, and says so rather than guessing.
+**Can an official enter the lineup?** Yes, on a match they have accepted. See [officials](/help/scoring/scorer-role).
