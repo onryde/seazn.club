@@ -5,7 +5,7 @@ order: 5.4
 related: scheduling/ai-scheduling, scheduling/ai-instructions, scheduling/ai-several-divisions, billing/credits
 ---
 
-AI Schedule needs no upgrade. It is available on every plan, Community included. Every run is paid for from your organisation's shared **AI credit wallet**. Generate, refine and repair are all metered the same way, and so is the officials pass. See [AI credits](/help/billing/credits) for the monthly grant, credit packs and how a billing group shares one wallet.
+AI Schedule needs no upgrade. It is available on every plan, Community included. Every run is paid for from your organisation's shared AI credit wallet. Generate, refine and repair are all metered the same way, and so is the officials pass. See [AI credits](/help/billing/credits) for the monthly grant, credit packs and how a billing group shares one wallet.
 
 ![The Run cost card in the AI Schedule console. It reads 15 fixtures, 2 courts and an estimated token count, with a picker for 1, 2 or 3 credits and a Recommended hint.](/help/scheduling/ai-run-cost.webp "The Run cost card: the size of the job, the credits picker with the recommended number, and the thinking budget that number buys.")
 
@@ -25,7 +25,7 @@ A credit does not buy "a run". It buys the model a **thinking budget** for that 
 | 2 | up to 64K tokens |
 | 3 | up to 128K tokens |
 
-The price is fixed when you confirm. A run that needs less than its budget is not partly refunded, and a run that reaches the ceiling stops there rather than costing more. A run that fails with no usable timetable is not charged, and the credits return to your wallet.
+The price is fixed when you confirm. A run that reaches the ceiling stops there rather than costing more. A run that fails with no usable timetable is not charged, and the credits return to your wallet.
 
 ## Choose the number
 
