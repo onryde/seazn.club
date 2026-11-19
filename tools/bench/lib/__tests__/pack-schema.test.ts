@@ -2544,13 +2544,27 @@ describe("packToTemplateSkeleton — the pack schema is a superset of the templa
     }
   });
 
-  it("every declared TemplateDivision key is produced by the skeleton", () => {
+  it("every declared TemplateDivision key is produced by the skeleton, bar the named catalog sugar", () => {
+    // W5 X-BD-3 (Task 15) added `entrantCountOptions`: the field sizes a gallery CARD offers. A pack records one real
+    // tournament, whose entrant list is a fixed size, so it carries no data for it and the skeleton emits none (inventing a
+    // one-element list would be a value, not a carry). Like the TemplateStage sugar below, the exemption is a NAMED set, each
+    // member asserted optional and asserted not emitted, so a renamed or newly required key still reds here.
+    const CATALOG_SUGAR = ["entrantCountOptions"];
     const skeleton = packToTemplateSkeleton(parsed(basePack()));
     const division = skeleton.divisions[0];
     expect(division).toBeDefined();
-    for (const key of keyNames(source, "TemplateDivision")) {
-      expect(Object.keys(division ?? {}), `skeleton division is missing TemplateDivision key "${key}"`).toContain(key);
+    const emitted = Object.keys(division ?? {});
+    const declared = declaredKeys(source, "TemplateDivision").keys;
+    expect(declared.filter((k) => CATALOG_SUGAR.includes(k.name)).map((k) => k.name), "the sugar names are declared keys").toEqual(CATALOG_SUGAR);
+    for (const key of declared) {
+      if (CATALOG_SUGAR.includes(key.name)) {
+        expect(key.optional, `${key.name} is exempt only while the template declares it optional`).toBe(true);
+        expect(emitted, `${key.name} is catalog sugar: if the skeleton now emits it, drop it from CATALOG_SUGAR`).not.toContain(key.name);
+      } else {
+        expect(emitted, `skeleton division is missing TemplateDivision key "${key.name}"`).toContain(key.name);
+      }
     }
+    expect(declared.length - CATALOG_SUGAR.length, "anti-vacuity: the non-sugar keys were checked").toBeGreaterThan(0);
   });
 
   it("every REQUIRED TemplateStage key is produced by the skeleton's stages", () => {
