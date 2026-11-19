@@ -516,7 +516,9 @@ test.describe("X-WDT-5 a leaver's signed-off result is removed", () => {
     await dismissCookieBanner(page);
     const note = page.getByTestId(`standings-withdrawal-note-${p1}`);
     await expect(note).toHaveText(`${p1Name} (withdrawn): left after 1 of 3, so their results are removed and their other matches are void.`);
-    const names = page.locator('tbody th[scope="row"]');
+    // The StandingsTable's own rows: the results crosstable under it (a collapsed <details>) carries the same `th[scope=row]`, so a bare
+    // `tbody th[scope="row"]` counts both (8 for a field of 4). The standings table sits in its named scroll region; the crosstable does not.
+    const names = page.locator('[role="region"] > table > tbody > tr > th[scope="row"]');
     await expect(names, "she stays listed: four rows").toHaveCount(4);
     await expect(names.last(), "the leaver, with the most points, ranks last").toContainText(p1Name);
     await expect(names.last().getByTestId("standings-withdrawn")).toBeVisible();
