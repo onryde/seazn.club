@@ -602,7 +602,7 @@ test.describe("W2b — the console's forfeit dialog (Task 11)", () => {
       await expect(d2, "the open dialog is a snapshot").toBeVisible();
       await d2.getByTestId("forfeit-confirm").click();
       await expect(dialogOf(second), "the refusal closed the second dialog").toHaveCount(0, { timeout: 20_000 });
-      await expect(second.getByTestId("forfeit-refusal")).toHaveText(ui("engineError.ALREADY_DECIDED"));
+      await expect(second.getByTestId("forfeit-refusal")).toHaveText(ui("engineError.ALREADY_DECIDED", { control: ui("score.voidLast") }));
       expect(posts2()).toBe(1);
       expect(await forfeitsIn(request, fx.id), "one forfeit on the ledger").toHaveLength(1);
     } finally {
