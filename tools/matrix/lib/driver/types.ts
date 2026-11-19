@@ -147,7 +147,7 @@ export interface StandingsRowWire { entrantId: string; rank: number | null; /** 
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 /** W5 T24: GET /stages/:id/pools (api-v1/schemas/stages.ts StagePools) - a stage with SEVERAL pools lists them in the product's order; a league, a knockout and a one-pool group list none. */
 export interface StagePoolsOut { stage_id: string; pools: { id: string; key: string; name: string }[] }
-/** W5 T24: POST /stages/:id/standings/override's rows (api-v1/schemas/ai-planning.ts OverrideStandings): a rank pinned for an entrant, with the organiser's reason. */
+/** W5 T24: POST /stages/:id/standings/override's rows (the OverrideStandings schema, exported by api-v1/schemas/index.ts): a rank pinned for an entrant, with the organiser's reason. */
 export interface RankOverrideRow { entrant_id: string; rank: number; reason: string }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
 /** GET /fixtures/:id/state (usecases/fixtures.ts getFixtureState): the status, the ledger head, the engine's outcome, and — W2e
