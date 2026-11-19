@@ -116,7 +116,7 @@ export default async function AdminFixtureConfigPage({
             <p className="text-xs text-slate-500" data-testid="resnapshot-blocked">
               {panel.snapshot === null
                 ? "Nothing frozen to correct."
-                : `Reopen this fixture first — it is ${panel.status}.`}
+                : `Not available — this fixture is ${panel.status}, and a ${panel.status} fixture takes no change.`}
             </p>
           )}
         </div>

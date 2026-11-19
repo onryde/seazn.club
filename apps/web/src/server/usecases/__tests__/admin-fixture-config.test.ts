@@ -310,14 +310,19 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot", () => {
     expect(rows[0].detail.after).toEqual({ ...CFG, allowDraws: false });
   });
 
-  it("refuses a finalized fixture — reopen it first", async () => {
+  it("refuses a finalized fixture, and says it is final — there is no reopen to point at", async () => {
     const s = await seed();
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
     await sql`update fixtures set status = 'finalized' where id = ${s.fixtureId}`;
 
-    await expect(
-      resnapshotFixtureConfig(s.actorId, s.fixtureId, "should not happen"),
-    ).rejects.toBeInstanceOf(HttpError);
+    const refusal = await resnapshotFixtureConfig(s.actorId, s.fixtureId, "should not happen").then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refusal).toBeInstanceOf(HttpError);
+    // A finalized result takes no change from anyone, so the message must not promise a reopen that does not exist.
+    expect((refusal as HttpError).message).toMatch(/finalized/);
+    expect((refusal as HttpError).message).not.toMatch(/reopen/i);
     // Refusal leaves NOTHING behind — not the snapshot, not an audit row that
     // would read as though staff had done something.
     const panel = await fixtureConfigPanel(s.fixtureId);

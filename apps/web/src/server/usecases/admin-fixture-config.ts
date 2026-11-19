@@ -189,7 +189,7 @@ export async function resnapshotFixtureConfig(
     if (LOCKED_FIXTURE_STATUSES.has(row.status)) {
       throw new HttpError(
         409,
-        `This fixture is ${row.status}. Reopen it before rewriting the config it was scored under.`,
+        `This fixture is ${row.status}, and a ${row.status} fixture takes no change: the config it was scored under cannot be rewritten.`,
       );
     }
     // NO SNAPSHOT → REFUSED, and that is the right answer rather than a gap the
