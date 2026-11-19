@@ -2299,3 +2299,27 @@ describe.runIf(HAS_DB)("loadArbiterRound - `joinable`, per side, in both flag st
     });
   }
 });
+
+describe.runIf(HAS_DB)("joinAsArbiter - a participant the vendor no longer has (online play is chess-only)", () => {
+  it("a refresh answered not_found stamps the old row removed and mints ONE new participant (200); another vendor failure still fails and stamps nothing", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const b = r.boards[0]!;
+    await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await meeting(b.fixtureId, r.orgId, { sides: ["home"], arrived: true });
+    const first = fakeVideo();
+    const one = await joinAsArbiter(r.owner, b.fixtureId, "home", { video: first.video });
+    expect(one.reused, "premise: first join mints").toBe(false);
+    const gone = fakeVideo({ refreshParticipantToken: vi.fn(async () => { throw new RealtimeKitError(404, "not_found", "participant gone"); }) });
+    const two = await joinAsArbiter(r.owner, b.fixtureId, "home", { video: gone.video });
+    expect(two.participantId, "a NEW participant").not.toBe(one.participantId);
+    expect(two.reused).toBe(false);
+    expect(gone.calls.filter((c) => c.startsWith("add:arbiter")), "exactly one mint").toHaveLength(1);
+    const rows = await arbiterRows(b.fixtureId);
+    expect(rows.map((x) => [x.participant_id, x.removed_at !== null]), "old stamped removed, new live").toEqual([[one.participantId, true], [two.participantId, false]]);
+    // Any other failure stands, and stamps nothing.
+    const down = fakeVideo({ refreshParticipantToken: vi.fn(async () => { throw new RealtimeKitError(503, "unavailable", "down"); }) });
+    await expect(joinAsArbiter(r.owner, b.fixtureId, "home", { video: down.video })).rejects.toBeTruthy();
+    expect((await arbiterRows(b.fixtureId)).filter((x) => x.removed_at === null)).toHaveLength(1);
+  });
+});

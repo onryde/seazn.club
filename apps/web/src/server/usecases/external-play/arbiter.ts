@@ -1063,7 +1063,18 @@ async function findOrMakeArbiter(
     return row?.participantId ?? null;
   };
   const live = await findLive();
-  if (live !== null) return { token: await video.refreshParticipantToken({ meetingId: a.meetingId, participantId: live }), reused: true };
+  if (live !== null) {
+    try {
+      return { token: await video.refreshParticipantToken({ meetingId: a.meetingId, participantId: live }), reused: true };
+    } catch (err) {
+      // The vendor no longer has the participant (removed there, its stamp lost): the row is a dead watch, not a live one. Stamp it and
+      // fall through to mint, instead of failing every join until the sweep's TTL. Any other failure stands.
+      if (!(err instanceof RealtimeKitError) || err.code !== "not_found") throw err;
+      await sql`
+        update fixture_video_participants set removed_at = now()
+         where fixture_id = ${a.fixtureId} and side = ${a.side} and participant_id = ${live} and preset = 'arbiter' and removed_at is null`;
+    }
+  }
 
   // `subject` is RealtimeKit's custom_participant_id: internal ids only, never an email or a name (realtimekit.ts addParticipant). The
   // nonce stays: the vendor's add is idempotent on that id within a meeting, and its answer after a DELETE is unmeasured.
@@ -1096,7 +1107,7 @@ async function findOrMakeArbiter(
 }
 
 /**
- * The panel closed (I2): the caller's OWN arbiter participant on this board
+ * An explicit revocation (the panel sends no DELETE): the caller's OWN arbiter participant on this board
  * is removed at the vendor — kicked from the live session, then deleted, so
  * its token can no longer watch — and the watch's end is stamped. Only the
  * caller's: anything else on this board, or this participant named on
