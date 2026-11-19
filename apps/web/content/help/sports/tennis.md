@@ -36,7 +36,7 @@ At a set's tie-break the pad shows **TIE-BREAK** and counts in plain numbers, fo
 > **Example**
 > A Tour set reaches 6–6. The pad switches to a tie-break to 7, won by two. At 7–5 or 8–6 the set closes. At 7–6 the tie-break goes on.
 
-To undo a point, press **Take back** on the ribbon. The game steps back exactly, even across a finished set. See [fixing a mistake](/help/scoring/corrections).
+To undo a point, press **Take back** on the ribbon. See [fixing a mistake](/help/scoring/corrections).
 
 ## Other tiles
 
