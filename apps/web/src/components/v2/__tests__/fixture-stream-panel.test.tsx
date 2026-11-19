@@ -3200,6 +3200,35 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).createError).toBeNull();
   });
 
+  // Court device check (2026-11-19, finding B): R10, latched ("Stopped by you"), its court phone paired in Automatic, its own
+  // saved destination cleared (the server's pick is none): the panel draws no picker for a court match, so a pick could never be
+  // made — Go live must not wait for one. It starts, and the server streams to the court's channel whatever the body names (O9).
+  it("finding B: a latched court match with its phone in Automatic and NO destination of its own — Go live is enabled and POSTs; the same without a court is held", async () => {
+    const latchedCourt = readModel({
+      court: { name: "Court 2", targetLabel: "Court channel" }, code: null, phone: facts({ mode: "automatic", model: "NE2211" }),
+      auto: { enabled: false, refusal: null, wontStart: "stopped", stopApplies: null, stopAfterSeconds: null },
+    });
+    const s = serve({ current: null, targets: TARGETS, saved: { row: true, targetId: null }, phone: latchedCourt });
+    s.create = () => { s.current = session(); return { sessionId: "s1" }; };
+    const island = track(await mount(s));
+    expect(bodyOf(island).selectedTargetId, "premise: no destination of its own").toBeNull();
+    const tree = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "a court match needs no pick").toBeFalsy();
+    bodyOf(island).onGoLive();
+    await settle();
+    const post = apiV1.mock.calls.find(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST");
+    expect(post?.[1]?.json, "a listed destination rides the body; the server overrides it with the court's").toEqual({ mode: "passthrough", targetId: "t1" });
+    expect(bodyOf(island).view?.state).toBe("warming");
+    // The guard's other half: a match of its OWN with no pick still waits for one (its picker is drawn).
+    apiV1.mockClear();
+    const own = track(await mount({ current: null, targets: TARGETS, saved: { row: true, targetId: null }, phone: readModel({ phone: facts({ mode: "automatic" }) }) }));
+    expect(bodyOf(own).selectedTargetId).toBeNull();
+    expect(propsOf(byTestId(walk(expandWithHooks(PhoneTabBody, bodyOf(own))), "stream-go-live")!).disabled, "no court, no pick: held").toBe(true);
+    bodyOf(own).onGoLive();
+    await settle();
+    expect(apiV1.mock.calls.some(([url, o]) => url === "/api/v1/fixtures/f-1/stream-sessions" && o?.method === "POST"), "nothing posted").toBe(false);
+  });
+
   // R2006 (owner ruling 2026-10-19, "Option C"): the organiser's Go live streams the mode the tab SHOWS — the score by
   // default, Camera only when the organiser chose it, the camera when the deployment cannot run the score — and, for
   // the score, the style the picker shows and the timing Score timing shows (PR #989 review m2: carried, so Go live

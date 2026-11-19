@@ -277,14 +277,16 @@ describe.skipIf(!HAS_DB)("court stream: the tail, the latches, a desk restart, a
     expect(await beat(P, { stopped: sidA })).toMatchObject({ state: "over", sid: sidA });
     expect((await sessionRow(sidA)).end_reason).toBe("operator_stopped");
     expect(await latchedAt(A), "the phone's Stop hold latches A").not.toBeNull();
-    // Latched: A is not re-offered by itself.
+    // Latched: A is not re-offered by itself, and the court says why (finding B).
     now += (AUTO_START_RETRY_SECONDS + 1) * SEC;
-    expect((await beat(P)).state).toBe("waiting");
+    expect(await beat(P)).toMatchObject({ state: "waiting", autoRefusal: "match_stopped" });
     // The desk restarts it from the match page, the body naming ANOTHER destination.
     const { sessionId: again } = await deskGoLive(A, other);
     expect(await sessionRow(again)).toMatchObject({
       fixture_id: A, court_link_id: linkId, target_id: targetId, start_cause: "organiser", pairing_id: (await pairingOf(P))[0]!.id,
     });
+    // Court device check (2026-11-19, finding B; controller ruling): the desk's Go live is a person's start — it clears the latch.
+    expect(await latchedAt(A), "the desk's restart cleared A's latch").toBeNull();
     // The match's own destination choice is untouched: no pre-pick written by a court start.
     expect(await prePick(A)).toBe(pickBefore);
     // The court phone is handed the restart, and it goes live.

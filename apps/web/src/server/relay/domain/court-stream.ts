@@ -118,6 +118,21 @@ export function courtFocus(matches: readonly CourtMatchFacts[]): CourtFocus {
 }
 
 /**
+ * Court device check (2026-11-19, finding B; controller ruling): the match a PERSON may start on the court when the court will
+ * not start one by itself because its only candidate is latched — streamed, in play, latched (the desk's Stop, this court
+ * phone's Stop hold, or a handover, O17), with no open session of its own; newest kickoff first, as `courtFocus`'s candidate.
+ * Null while the court has an open session or an unlatched candidate (`courtFocus`'s own `start` or the running session is
+ * the court's match then). Only an explicit human start reads this — the phone's Go live hold (`postCourtStart`) and the
+ * court's `match_stopped` word; the automatic start never does, so Automatic still never restarts a latched match.
+ */
+export function courtLatchedStart(matches: readonly CourtMatchFacts[]): string | null {
+  if (matches.some((m) => m.openSession !== null)) return null;
+  if (matches.some(isCandidate)) return null;
+  const latched = matches.filter((m) => m.streamed && m.latched && m.status === "in_play").sort(newestKickoff);
+  return latched[0]?.fixtureId ?? null;
+}
+
+/**
  * Device check 3 (D2, 2026-11-17): the match whose court session EXISTS but is not yet handed to the phone. Once the
  * deferred start inserts its row, the claim no longer reads as in flight (C2) and the match, being in play, is no longer
  * `nextFixtureId`, so the beat's `next` went null and the phone read "No streamed match yet" for the seconds a composed

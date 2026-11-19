@@ -11,7 +11,8 @@
 //   - a court beat answer carries `next` {label, scheduledStart} when a streamed match waits; a fixture code's never does;
 //   - the court phone's `stopped: X` ends X operator_stopped AND latches X's match; the pairing stays (§5.4, §6.3);
 //   - the operator's start streams the court's in-play match to the LINK's target, cause operator, court_link_id set;
-//   - O13: a claim from a build older than COURT_MIN_APP_VERSION is 404 not_a_stream_code, with no pairing;
+//   - O13: a claim from a build older than COURT_MIN_APP_VERSION is refused with no pairing — court device check (2026-11-19,
+//     finding A): 426 app_outdated, its own answer, never the unknown code's (401 code_ended) or a malformed one's (404);
 //   - R4 (controller): a session ended by a handover latches its match while it is still in play;
 //   - web batch A1 (2026-11-17): while the court's link is live (not withdrawn, its day open) the court phone is never told to
 //     beat slower than the near cadence (10 s), idle or with a match far off; a withdrawn link keeps the fixture's rules;
@@ -228,8 +229,9 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     await sql`update fixture_stream_settings set auto_start_refusal = 'no_credit', auto_start_attempted_at = ${at(0)} where fixture_id = ${A}`;
     expect(await describeAs(phone), "premise: A is the start").toMatchObject({ autoRefusal: "no_credit" });
     await sql`update fixture_stream_settings set auto_start_blocked_at = now() where fixture_id = ${A}`;
-    expect(await describeAs(phone)).not.toHaveProperty("autoRefusal");
-    expect(await beat(phone)).not.toHaveProperty("autoRefusal");
+    // The stale no_credit is never told; finding B (2026-11-19): latched A is the court's only match in play, so it says why.
+    expect(await describeAs(phone)).toMatchObject({ autoRefusal: "match_stopped" });
+    expect(await beat(phone)).toMatchObject({ autoRefusal: "match_stopped" });
   });
 
   it("E2: while a start is in flight (startingFixtureId) the stored word is not told; without it, it is", async () => {
@@ -340,8 +342,47 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect((await sessionRow(sid)).end_reason).toBe("operator_stopped");
     expect(await latchedAt(A)).not.toBeNull();
     expect((await pairingOf(phone))[0]).toMatchObject({ ended_at: null });
-    // Latched: A is never the court's match to start again — the operator's start finds nothing.
-    expect(await refusal(operatorStart(phone))).toBe("409:no_match");
+  });
+
+  // Court device check (2026-11-19, finding B; controller ruling): an explicit human start clears the latch; Automatic never does.
+  it("finding B: a latched match — the court says match_stopped; Automatic (beat after beat, past the retry spacing) starts nothing; the phone's own Go live hold starts it, clears the latch, and the word goes", async () => {
+    await streamed(A, AT_14);
+    await setStatus(A, "in_play");
+    const phone = phoneId("latched");
+    await claimed(phone);
+    const first = await operatorStart(phone);
+    await beat(phone, { stopped: first });
+    expect(await latchedAt(A), "premise: the court phone's Stop latched A").not.toBeNull();
+    expect(await sessionsOf(A)).toBe(1);
+    // The court's waiting answer says why nothing starts, on the descriptor and the beat.
+    expect(await describeAs(phone)).toMatchObject({ state: "waiting", autoRefusal: "match_stopped" });
+    expect(await beat(phone)).toMatchObject({ state: "waiting", autoRefusal: "match_stopped" });
+    // Automatic: no human, so never a restart — over several beats spread past any retry spacing.
+    for (let i = 0; i < 4; i++) {
+      now += 90_000;
+      expect((await beat(phone, { mode: "automatic" })).state, `automatic beat ${i}`).toBe("waiting");
+    }
+    expect(await sessionsOf(A), "Automatic started nothing").toBe(1);
+    expect(await latchedAt(A), "Automatic left the latch").not.toBeNull();
+    // The phone's own Go live hold is a person's start: it starts A, on the link's target, and clears the latch.
+    const again = await operatorStart(phone);
+    expect(await sessionRow(again)).toMatchObject({ fixture_id: A, target_id: targetId, start_cause: "operator", court_link_id: linkId });
+    expect(await latchedAt(A), "the human start cleared the latch").toBeNull();
+    expect(await beat(phone, { sid: again, state: "armed", cause: "operator" })).not.toHaveProperty("autoRefusal");
+  });
+
+  it("finding B: the hold prefers the court's own (unlatched) match, and the word is not told while one exists", async () => {
+    const phone = phoneId("prefer");
+    await claimed(phone);
+    await streamed(A, AT_14);
+    await streamed(B, AT_14 + 30);
+    await setStatus(A, "in_play");
+    await setStatus(B, "in_play");
+    await sql`update fixture_stream_settings set auto_start_blocked_at = ${at(0)} where fixture_id = ${A}`;
+    expect(await describeAs(phone), "an unlatched candidate: no match_stopped").not.toHaveProperty("autoRefusal");
+    const sid = await operatorStart(phone);
+    expect((await sessionRow(sid)).fixture_id, "B, the court's own, not latched A").toBe(B);
+    expect(await latchedAt(A), "A's latch is not touched by B's start").not.toBeNull();
   });
 
   it("a REPLACED court phone's stale stopped: X ends X (T24a) but never latches its match (fix M1)", async () => {
@@ -461,14 +502,22 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(await sessionRow(sessionId)).toMatchObject({ court_link_id: linkId, code_id: codeId, pairing_id: pairing!.id });
   });
 
-  it("O13: COURT_MIN_APP_VERSION=1.0.14-1200 → a 1.0.13-1150 court claim is 404 not_a_stream_code, no pairing; 1.0.14-1200 and 1.0.15-1300 pair; a fixture code's 1.0.13-1150 claim pairs", async () => {
+  it("O13: COURT_MIN_APP_VERSION=1.0.14-1200 → a 1.0.13-1150 court claim is 426 app_outdated, no pairing; 1.0.14-1200 and 1.0.15-1300 pair; a fixture code's 1.0.13-1150 claim pairs", async () => {
     const old = phoneId("old");
-    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "new", appVersion: "1.0.13-1150" }), deps, clock()))).toBe("404:not_a_stream_code");
+    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "new", appVersion: "1.0.13-1150" }), deps, clock()))).toBe("426:app_outdated");
     expect(await pairingOf(old)).toHaveLength(0);
-    // A resume claim is refused the same way, and so is a build with no count at all.
-    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "resume", appVersion: "1.0.13-1150" }), deps, clock()))).toBe("404:not_a_stream_code");
-    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "new", appVersion: "capture-test/1" }), deps, clock()))).toBe("404:not_a_stream_code");
+    // A resume claim is refused the same way, and so is a build with no count at all; one below the minimum by one build too.
+    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "resume", appVersion: "1.0.13-1150" }), deps, clock()))).toBe("426:app_outdated");
+    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "new", appVersion: "capture-test/1" }), deps, clock()))).toBe("426:app_outdated");
+    expect(await refusal(postBeat(qr.code, qr.tok, body(old, { claim: "new", appVersion: "1.0.14-1199" }), deps, clock()))).toBe("426:app_outdated");
     expect(await pairingOf(old)).toHaveLength(0);
+    // Finding A: the outdated build's answer is NOT the unknown code's — the same old build's claim on a code nobody issued is
+    // 401 code_ended, and on a malformed one 404 not_a_stream_code — and its message carries neither the code nor the tok.
+    const unknown = "zzzzzzzzzzzz";
+    expect(await refusal(postBeat(unknown, qr.tok, CaptureBeat.parse({ ...body(old, { claim: "new", appVersion: "1.0.13-1150" }), code: unknown }), deps, clock()))).toBe("401:code_ended");
+    const outdated = await postBeat(qr.code, qr.tok, body(old, { claim: "new", appVersion: "1.0.13-1150" }), deps, clock()).then(() => null, (e: unknown) => e);
+    expect(outdated).toBeInstanceOf(CaptureRefusalError);
+    for (const secret of [qr.code, qr.tok]) expect((outdated as Error).message.includes(secret), "no code or tok in the message").toBe(false);
 
     const same = phoneId("same");
     expect((await beat(same, { claim: "new", appVersion: "1.0.14-1200" })).state).toBe("waiting");
@@ -484,13 +533,13 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
     expect(a.state).toBe("waiting");
   });
 
-  it("O13: an unset or malformed COURT_MIN_APP_VERSION admits no court claim (fail closed); a beat without a claim is not judged", async () => {
+  it("O13: an unset or malformed COURT_MIN_APP_VERSION admits no court claim (fail closed, 503 unavailable — the server's state, not the app's); a beat without a claim is not judged", async () => {
     const phone = phoneId("unset");
     await claimed(phone);
     for (const v of [undefined, "1.0.14", "latest"]) {
       if (v === undefined) delete process.env.COURT_MIN_APP_VERSION; else process.env.COURT_MIN_APP_VERSION = v;
       expect(await refusal(postBeat(qr.code, qr.tok, body(phoneId("x"), { claim: "new", appVersion: "9.9.9-99999" }), deps, clock())), String(v))
-        .toBe("404:not_a_stream_code");
+        .toBe("503:unavailable");
       expect((await beat(phone)).state, `an already-paired phone's beat is answered (${String(v)})`).toBe("waiting");
     }
   });
@@ -686,9 +735,16 @@ describe.skipIf(!HAS_DB)("a court code's descriptor, beat, start and record", ()
       // The phone hears the end on its next beat, and the operator's start finds nothing to start.
       expect(await beat(phone, { sid, state: "publishing" })).toMatchObject({ state: "over", sid, endReason: "stopped" });
       expect(await refusal(operatorStart(phone))).toBe("409:no_match");
-      // Switched back on: still latched, so nothing restarts it by itself (the desk restarts it by hand).
+      // Switched back on: still latched, so nothing restarts it by ITSELF (Automatic) — finding B (2026-11-19, controller ruling):
+      // a person's start does, the phone's own hold among them, and it clears the latch.
       await setCourtStream(day.auth, A, true, clock());
-      expect(await refusal(operatorStart(phone)), "the latch outlives the switch").toBe("409:no_match");
+      expect(await latchedAt(A), "the latch outlives the switch").not.toBeNull();
+      now += 120_000;
+      expect((await beat(phone, { mode: "automatic" })).state, "Automatic does not restart it").toBe("waiting");
+      expect(await sessionsOf(A)).toBe(1);
+      const again = await operatorStart(phone);
+      expect((await sessionRow(again)).fixture_id).toBe(A);
+      expect(await latchedAt(A), "the hold cleared it").toBeNull();
     });
 
     it("armed (warming) and requested: OFF ends it too", async () => {

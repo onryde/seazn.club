@@ -36,7 +36,7 @@ import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { creditBalance, ensureMonthlyStreamGrant, restartAllowance } from "../stream-credits";
 import { DestinationNotAllowedError } from "../stream-targets";
-import { lockFixtureCode, writeStreamSettings } from "../stream-codes";
+import { clearLatchAfterStart, lockFixtureCode, writeStreamSettings } from "../stream-codes";
 import { codeEnded } from "@/server/api-v1/capture-http";
 import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { type SessionDeps, youtubeOf } from "./deps";
@@ -188,6 +188,10 @@ export async function createSession(
     deps,
   );
   if (courtLinkId !== null) {
+    // Court device check (2026-11-19, finding B; controller ruling): the desk's Go live is a person's start, so it clears the
+    // match's latch (a Stop by the desk, the court phone or a handover) once it has committed — never before, so a refused start
+    // leaves the latch and Automatic still never restarts the match.
+    await clearLatchAfterStart(orgId, fixtureId, actorUserId, started.sessionId);
     // Start first, then end (§5.4): every OLDER session of the court ends, handed over to this one. A failure leaves the
     // start standing (it is running; an error would be retried into active_session), logged and reported, as for the
     // court's own starts. No pre-pick: the match's own destination choice is not the court's to change.

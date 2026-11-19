@@ -15,6 +15,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { CaptureRefusalError, codeEnded } from "@/server/api-v1/capture-http";
 import type { PutStreamSettings, StreamCodeShown, StreamMode, StreamSettings } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
+import { captureError } from "@/lib/sentry";
 import { CODE_GRACE_AFTER_FINISH_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, tunable } from "@/server/relay/config";
 import { composedUnavailable } from "@/server/relay/drivers";
 import { hasValidKek, sealWith } from "@/server/relay/crypto";
@@ -634,4 +635,31 @@ export async function markAutoStartBlocked(
        set auto_start_blocked_at = excluded.auto_start_blocked_at, updated_by = excluded.updated_by, updated_at = now(),
            revision = fixture_stream_settings.revision + 1
      where fixture_stream_settings.auto_start_blocked_at is null`;
+}
+
+/** Court device check (2026-11-19, finding B; controller ruling): an explicit HUMAN start of a court match — the desk's Go live
+ *  or the court phone's own Go live hold — clears the match's latch (`auto_start_blocked_at`), so a later Stop latches it
+ *  afresh and the court treats the restarted match as its own again. Called only AFTER that start has committed: a refused
+ *  start leaves the latch, so Automatic still never restarts a latched match. Touches only a row that IS latched (a no-op
+ *  otherwise: no revision bump), and never `auto_started_at`. The caller has already proved the fixture is `orgId`'s. */
+export async function clearAutoStartBlocked(
+  orgId: string, fixtureId: string, updatedBy: string | null, exec: Tx | typeof sql = sql,
+): Promise<boolean> {
+  const rows = await exec`
+    update fixture_stream_settings
+       set auto_start_blocked_at = null, updated_by = ${updatedBy}, updated_at = now(), revision = revision + 1
+     where fixture_id = ${fixtureId} and org_id = ${orgId} and auto_start_blocked_at is not null
+    returning fixture_id`;
+  return rows.length > 0;
+}
+
+/** Finding B: clear a human-started match's latch after its start committed. The start stands whatever happens here: a failure
+ *  is logged and reported, and the match keeps streaming (its latch then only means the court will not start it by itself). */
+export async function clearLatchAfterStart(orgId: string, fixtureId: string, actorUserId: string | null, sid: string): Promise<void> {
+  try {
+    await clearAutoStartBlocked(orgId, fixtureId, actorUserId);
+  } catch (err) {
+    log.error({ err: String(err), sid, orgId }, "court start: clearing the match's latch failed — the start stands");
+    captureError(err, { orgId, route: "capture.court.clear_latch", extra: { sid } });
+  }
 }
