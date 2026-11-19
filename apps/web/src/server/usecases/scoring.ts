@@ -1180,8 +1180,10 @@ export async function onDecided(auth: AuthCtx, fixtureId: string): Promise<strin
       // appends under the `division:` lock, which this hot path does not take) commits its append to the same row; a
       // blocked UPDATE re-evaluates its SET expression against the row version that commit left, so the swap is
       // computed from the order the newcomer is already in, and the newcomer survives it. (Taking the `division:` lock
-      // here instead would invert the fixture-then-division order the withdrawal cascade uses, which holds `division:`
-      // and then scores fixtures.) A swap only applies when both are on the ladder and the winner is BELOW the loser.
+      // here instead would INVERT the global order `division:` -> stage seats -> `fixture:` -> `division-config:`
+      // (see the lock comment above): this hook already holds `fixture:`, while stage-graph.ts and entrants.ts take
+      // `division:` first and score or seat fixtures after it.
+      // A swap only applies when both are on the ladder and the winner is BELOW the loser.
       await tx`
         update stages s set config = s.config || jsonb_build_object('ladder_order', (
           select jsonb_agg(case t.v when ${winner}::text then ${ladderLoser}::text when ${ladderLoser}::text then ${winner}::text else t.v end order by t.ord)
