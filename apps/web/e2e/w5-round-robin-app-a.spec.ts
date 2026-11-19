@@ -273,8 +273,10 @@ test.describe("X-BD-6 Add match lands in round 3", () => {
     await expect(round, "the default is the latest round where neither side plays").toHaveValue("3");
     await expect(round.locator("option:checked")).toHaveText("Round 3 · both free (suggested)");
     // A round where a side already plays is listed, with its reason, and cannot be picked; the new round after the last is open.
-    await expect(round.locator('option[value="5"]')).toBeDisabled();
-    await expect(round.locator('option[value="6"]')).toBeEnabled();
+    // The OPTION's own `disabled`: toBeDisabled/toBeEnabled retarget an element inside a <label> to the label's control (Playwright's
+    // `follow-label`), so on this labelled select they read the SELECT's state, never the option's.
+    await expect(round.locator('option[value="5"]')).toHaveJSProperty("disabled", true);
+    await expect(round.locator('option[value="6"]')).toHaveJSProperty("disabled", false);
     await expect(round.locator('option[value="5"]')).toHaveText(/^Round 5 · .+ plays /);
     await expectNoHorizontalScroll(page);
 
