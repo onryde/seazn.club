@@ -15,7 +15,7 @@
 // (guard.ts `d.sport_key = 'boardgame'`); nothing here branches on sport.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, statementTexts } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { ARBITER_JOIN_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
@@ -34,11 +34,15 @@ import {
   joinAsArbiter,
   leaveAsArbiter,
   loadArbiterRound,
+  listFlaggedExternalPlay,
+  readPlayerPresence,
   overrideVideoAsOrganiser,
   resyncExternalPlay,
   type ArbiterVideo,
 } from "../external-play/arbiter";
 import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
+import { CAMERA_REPORT_STALE_MS } from "@/components/public-site/match-room/room-snapshot";
+import { reportedCameras } from "../external-play/camera-reported";
 import { configureRealtimeKit } from "./_external-play-rtk-fake";
 import { clearBucket, putStay, setBucket, stubBucket } from "./_external-play-line";
 import { linePool } from "@/server/external-play/seat-line";
@@ -2082,5 +2086,228 @@ describe.runIf(HAS_DB)("fixture_video_participants.user_id / removed_at — V454
       select participant_id, user_id, created_at from fixture_video_participants where fixture_id = ${fid} and preset = 'arbiter'`;
     expect(rows.map((x) => [x.participant_id, x.user_id])).toEqual([["a-gone", null]]);
     expect(rows[0]!.created_at, "the watch keeps its time").toBeInstanceOf(Date);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Check-in capacity plan 3 Task 3: every side's presence, browser-reported camera and `joinable`, read from the tables.
+// Single-sport by construction: online play is chess-only (boardgame).
+// ---------------------------------------------------------------------------
+const textsNaming = (from: number, table: string) => statementTexts().slice(from).filter((t) => t.includes(table)).length;
+
+type PresenceSeed = { participantId: string | null; custom: string; peerId?: string; joinedAt?: Date; leftAt?: Date | null; source?: "webhook" | "read"; receivedAt?: Date };
+/** A presence row as the webhook (or the seat's read) leaves it: one per (meeting, peer). */
+async function presenceRow(fixtureId: string, side: "home" | "away", o: PresenceSeed): Promise<string> {
+  const [m] = await sql<{ meetingId: string }[]>`select meeting_id as "meetingId" from fixture_video_meetings where fixture_id = ${fixtureId} and side = ${side}`;
+  const peerId = o.peerId ?? `peer-${randomUUID().slice(0, 8)}`;
+  const joinedAt = o.joinedAt ?? new Date(OPENED.getTime() + 120_000);
+  await sql`
+    insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, left_at, left_by, source, received_at)
+    values (${m!.meetingId}, ${peerId}, ${fixtureId}, ${side}, ${o.participantId}, ${o.custom}, ${joinedAt}, ${o.leftAt ?? null},
+            ${o.leftAt ? "left" : null}, ${o.source ?? "webhook"}, ${o.receivedAt ?? joinedAt})`;
+  return peerId;
+}
+
+async function playerOf(fixtureId: string, side: "home" | "away"): Promise<string> {
+  const [row] = await sql<{ participantId: string }[]>`select participant_id as "participantId" from fixture_video_participants where fixture_id = ${fixtureId} and side = ${side} and preset = 'player'`;
+  return row!.participantId;
+}
+
+async function threeBoardRound() {
+  const r = await seedOnlineChessRound({ fixtures: 3, cameraPolicy: "required" });
+  await openRound(r);
+  for (const b of r.boards) {
+    await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await meeting(b.fixtureId, r.orgId, { arrived: true });
+  }
+  return r;
+}
+const sidesOf = (view: NonNullable<Awaited<ReturnType<typeof loadArbiterRound>>>, fixtureId: string) => view.boards.find((b) => b.fixtureId === fixtureId)!.sides;
+
+describe.runIf(HAS_DB)("the loader's presence and camera facts - the empty case first", () => {
+  it("both readers handed no boards answer empty and issue NO statement naming their tables", async () => {
+    const before = statementTexts().length;
+    expect([...(await readPlayerPresence([], new Date())).keys()]).toEqual([]);
+    expect([...(await reportedCameras(sql, [], new Date())).keys()]).toEqual([]);
+    expect(statementTexts().length - before, "nothing issued at all").toBe(0);
+  });
+
+  it("a flagged list with nothing flagged loads with 0 statements naming fixture_video_presence or camera_reported", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    const before = statementTexts().length;
+    expect((await listFlaggedExternalPlay(r.owner, r.divisionId)).boards).toEqual([]);
+    expect(textsNaming(before, "fixture_video_presence") + textsNaming(before, "camera_reported"), "no presence or camera statement").toBe(0);
+    expect(statementTexts().length - before, "premise: the load did issue statements (the counter is live)").toBeGreaterThan(0);
+  });
+});
+
+describe.runIf(HAS_DB)("loadArbiterRound - presence and camera per side, read from the tables", () => {
+  it("a round of 3 boards: live peer, left peer, no row, an arbiter-only room, custom-id match - and ONE statement each for presence, camera and check-ins", async () => {
+    const r = await threeBoardRound();
+    const [b0, b1, b2] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0], (typeof r.boards)[0]];
+    const T = (m: number) => new Date(OPENED.getTime() + m * 60_000);
+    const h0 = await playerOf(b0.fixtureId, "home");
+    const a0 = await playerOf(b0.fixtureId, "away");
+    await presenceRow(b0.fixtureId, "home", { participantId: h0, custom: b0.home.personId, joinedAt: T(5) });
+    await presenceRow(b0.fixtureId, "away", { participantId: a0, custom: b0.away.personId, joinedAt: T(4), leftAt: T(9) });
+    // board 1: home has no row; away's only OPEN peer is an ARBITER's, the player's own peer left.
+    const a1 = await playerOf(b1.fixtureId, "away");
+    await presenceRow(b1.fixtureId, "away", { participantId: a1, custom: b1.away.personId, joinedAt: T(3), leftAt: T(7) });
+    await presenceRow(b1.fixtureId, "away", { participantId: `arb-${randomUUID().slice(0, 6)}`, custom: `${randomUUID()}-nonce`, joinedAt: T(6) });
+    // board 2: home matched ONLY by the player's custom id (participant_id null), and camera reports.
+    await presenceRow(b2.fixtureId, "home", { participantId: null, custom: b2.home.personId, joinedAt: T(5) });
+    const now = new Date(OPENED.getTime() + 10 * 60_000);
+    await sql`update fixture_video_participants set camera_reported = 'live', camera_reported_at = ${new Date(now.getTime() - 5_000)} where fixture_id = ${b2.fixtureId} and side = 'home' and preset = 'player'`;
+    await sql`update fixture_video_participants set camera_reported = 'off', camera_reported_at = ${new Date(now.getTime() - 5_000)} where fixture_id = ${b2.fixtureId} and side = 'away' and preset = 'player'`;
+    await sql`update fixture_video_participants set camera_reported = 'live', camera_reported_at = ${new Date(now.getTime() - CAMERA_REPORT_STALE_MS - 1_000)} where fixture_id = ${b1.fixtureId} and side = 'home' and preset = 'player'`;
+
+    const before = statementTexts().length;
+    const view = (await loadArbiterRound(r.owner, r.divisionId, { now }))!;
+    expect(textsNaming(before, "fixture_video_presence"), "ONE presence statement").toBe(1);
+    expect(textsNaming(before, "camera_reported"), "ONE camera statement").toBe(1);
+    // `fixturesSeating` (the viewer's own boards) also names fixture_availability, so count the check-in STAMP read by its column.
+    expect(textsNaming(before, "checked_in_at"), "ONE check-in statement, shared with withSeats").toBe(1);
+
+    expect(sidesOf(view, b0.fixtureId).home.presence).toEqual({ present: true, since: T(5).toISOString(), leftAt: null });
+    expect(sidesOf(view, b0.fixtureId).away.presence).toEqual({ present: false, since: null, leftAt: T(9).toISOString() });
+    expect(sidesOf(view, b1.fixtureId).home.presence, "no row").toEqual({ present: false, since: null, leftAt: null });
+    expect(sidesOf(view, b1.fixtureId).away.presence, "only live peer is an arbiter's").toEqual({ present: false, since: null, leftAt: T(7).toISOString() });
+    expect(sidesOf(view, b2.fixtureId).home.presence, "custom id").toEqual({ present: true, since: T(5).toISOString(), leftAt: null });
+    expect(sidesOf(view, b2.fixtureId).home.camera.state).toBe("live");
+    expect(sidesOf(view, b2.fixtureId).away.camera.state).toBe("off");
+    expect(sidesOf(view, b1.fixtureId).home.camera, "stale report").toMatchObject({ state: "unknown" });
+    expect(sidesOf(view, b0.fixtureId).home.camera, "no report").toEqual({ state: "unknown", at: null });
+  });
+
+  it("two open rows of one participant with EQUAL joined_at: the later by received_at, seq is the current peer (the statement's order decides it)", async () => {
+    const r = await threeBoardRound();
+    const b = r.boards[0]!;
+    const h = await playerOf(b.fixtureId, "home");
+    const j = new Date(OPENED.getTime() + 5 * 60_000);
+    await presenceRow(b.fixtureId, "home", { participantId: h, custom: b.home.personId, peerId: "zzz-first", joinedAt: j, receivedAt: new Date(j.getTime() + 1_000) });
+    await presenceRow(b.fixtureId, "home", { participantId: h, custom: b.home.personId, peerId: "aaa-later", joinedAt: j, receivedAt: new Date(j.getTime() + 2_000) });
+    const got = (await readPlayerPresence([{ fixtureId: b.fixtureId, windowStart: OPENED }], new Date(OPENED.getTime() + 10 * 60_000))).get(`${b.fixtureId}:home`)!;
+    expect(got.peerId, "the later receipt wins, though its id sorts first").toBe("aaa-later");
+  });
+
+  it("a `read` row received 9 s before the loader's clock is present; at 11 s it is not - and joinable (flag on) stays true (ever)", async () => {
+    vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", "1");
+    const r = await threeBoardRound();
+    const b = r.boards[0]!;
+    const now = new Date(OPENED.getTime() + 20 * 60_000);
+    const h = await playerOf(b.fixtureId, "home");
+    const a = await playerOf(b.fixtureId, "away");
+    await presenceRow(b.fixtureId, "home", { participantId: h, custom: b.home.personId, source: "read", joinedAt: new Date(now.getTime() - 60_000), receivedAt: new Date(now.getTime() - 9_000) });
+    await presenceRow(b.fixtureId, "away", { participantId: a, custom: b.away.personId, source: "read", joinedAt: new Date(now.getTime() - 60_000), receivedAt: new Date(now.getTime() - 11_000) });
+    const s = sidesOf((await loadArbiterRound(r.owner, r.divisionId, { now }))!, b.fixtureId);
+    expect([s.home.presence.present, s.home.joinable], "9 s").toEqual([true, true]);
+    expect([s.away.presence.present, s.away.joinable], "11 s: not current, but ever").toEqual([false, true]);
+  });
+
+  it("the flagged list carries the same fields for a flagged board", async () => {
+    const r = await threeBoardRound();
+    const b = r.boards[0]!;
+    await sql`insert into fixture_play_flags (org_id, fixture_id, kind, opened_at, note) values (${r.orgId}, ${b.fixtureId}, 'out_of_band_play', now(), ${JSON.stringify({ plies: [3] })})`;
+    const h = await playerOf(b.fixtureId, "home");
+    await presenceRow(b.fixtureId, "home", { participantId: h, custom: b.home.personId, joinedAt: new Date(OPENED.getTime() + 5 * 60_000) });
+    await sql`update fixture_video_participants set camera_reported = 'live', camera_reported_at = now() where fixture_id = ${b.fixtureId} and side = 'home' and preset = 'player'`;
+    const before = statementTexts().length;
+    const flagged = (await listFlaggedExternalPlay(r.owner, r.divisionId)).boards.find((x) => x.fixtureId === b.fixtureId)!;
+    expect(flagged.sides.home.presence.present).toBe(true);
+    expect(flagged.sides.home.camera.state).toBe("live");
+    expect(flagged.sides.away.presence.present).toBe(false);
+    expect(textsNaming(before, "fixture_video_presence"), "one presence statement for the list").toBe(1);
+    expect(textsNaming(before, "camera_reported"), "one camera statement for the list").toBe(1);
+  });
+});
+
+describe.runIf(HAS_DB)("loadArbiterRound - `joinable`, per side, in both flag states (each case names the flag)", () => {
+  type Shape = "premint" | "refusedClaim" | "checkedIn" | "present" | "checkedInAndPresent" | "checkedInOutside" | "ended" | "noPlayerParticipant";
+  // Expected from the RULE as the plan states it (open AND a player participant AND (flag on: presence ever / flag off: counted check-in)).
+  const WANT: Record<Shape, { off: boolean; on: boolean; state: "none" | "open" | "ended" }> = {
+    premint: { off: false, on: false, state: "none" },
+    refusedClaim: { off: false, on: false, state: "open" },
+    checkedIn: { off: true, on: false, state: "open" },
+    present: { off: false, on: true, state: "open" },
+    checkedInAndPresent: { off: true, on: true, state: "open" },
+    checkedInOutside: { off: false, on: false, state: "open" },
+    ended: { off: false, on: false, state: "ended" },
+    noPlayerParticipant: { off: false, on: false, state: "none" },
+  };
+
+  async function seedShape(shape: Shape) {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const b = r.boards[0]!;
+    await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+    const inside = new Date(OPENED.getTime() + 60_000);
+    const stamp = (at: Date) => stampFixtureCheckIn(b.home.personId, b.fixtureId, r.orgId, { at });
+    const present = async () => presenceRow(b.fixtureId, "home", { participantId: await playerOf(b.fixtureId, "home"), custom: b.home.personId });
+    await putVideoMeeting({ fixtureId: b.fixtureId, orgId: r.orgId, side: "home" }, { endedAt: shape === "ended" ? new Date() : null });
+    if (shape !== "premint" && shape !== "noPlayerParticipant") await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId });
+    if (shape === "checkedIn" || shape === "checkedInAndPresent") await stamp(inside);
+    if (shape === "noPlayerParticipant") await stamp(inside);
+    if (shape === "checkedInOutside") await stamp(new Date(OPENED.getTime() + 24 * 3600_000));
+    if (shape === "present" || shape === "checkedInAndPresent") await present();
+    if (shape === "noPlayerParticipant") await presenceRow(b.fixtureId, "home", { participantId: null, custom: b.home.personId });
+    return { r, b };
+  }
+
+  it("every shape x flag state: the mark equals the rule's statement, and equals what joinAsArbiter then does on the same seed", async () => {
+    let compared = 0;
+    for (const shape of Object.keys(WANT) as Shape[]) {
+      for (const flag of ["off", "on"] as const) {
+        vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", flag === "on" ? "1" : "");
+        const { r, b } = await seedShape(shape);
+        const home = sidesOf((await loadArbiterRound(r.owner, r.divisionId))!, b.fixtureId).home;
+        const label = `${shape}, flag ${flag}`;
+        expect(home.state, label).toBe(WANT[shape].state);
+        expect(home.joinable, label).toBe(WANT[shape][flag]);
+        const { video } = fakeVideo();
+        const admitted = await joinAsArbiter(r.owner, b.fixtureId, "home", { video }).then(
+          () => true,
+          (err) => {
+            if (err instanceof HttpError && err.status === 409) return false;
+            throw err;
+          },
+        );
+        expect(admitted, `${label}: the join agrees with the mark`).toBe(home.joinable);
+        compared += 1;
+      }
+    }
+    expect(compared, "sides compared (anti-vacuity)").toBe(16);
+  });
+
+  it("away of every seeded board is `none`: the second side never inherits the first's facts", async () => {
+    vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", "1");
+    const { r, b } = await seedShape("checkedInAndPresent");
+    const away = sidesOf((await loadArbiterRound(r.owner, r.divisionId))!, b.fixtureId).away;
+    expect([away.state, away.joinable, away.presence.present]).toEqual(["none", false, false]);
+  });
+
+  for (const flag of ["off", "on"] as const) {
+    it(`the sequence, flag ${flag}: load -> not joinable; the arrival signal lands; load again -> joinable; join -> admitted`, async () => {
+      vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", flag === "on" ? "1" : "");
+      const { r, b } = await seedShape("refusedClaim");
+      const side = async () => sidesOf((await loadArbiterRound(r.owner, r.divisionId))!, b.fixtureId).home;
+      expect((await side()).joinable, "premise").toBe(false);
+      if (flag === "off") await stampFixtureCheckIn(b.home.personId, b.fixtureId, r.orgId, { at: new Date(OPENED.getTime() + 60_000) });
+      else await presenceRow(b.fixtureId, "home", { participantId: await playerOf(b.fixtureId, "home"), custom: b.home.personId });
+      expect((await side()).joinable, "after the signal").toBe(true);
+      const { video } = fakeVideo();
+      expect((await joinAsArbiter(r.owner, b.fixtureId, "home", { video })).side).toBe("home");
+    });
+  }
+
+  it("a re-open (CARRY): a kept room whose player was present in window 1 reads absent and not joinable until the player returns (flag on)", async () => {
+    vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", "1");
+    const { r, b } = await seedShape("present");
+    const side = async () => sidesOf((await loadArbiterRound(r.owner, r.divisionId))!, b.fixtureId).home;
+    expect(await side(), "window 1: present").toMatchObject({ joinable: true, presence: { present: true } });
+    // The re-open's own effect on the window: `stage_round_opens.opened_at` re-stamped (open-round.ts), the kept room's presence rows left as they are.
+    await sql`update stage_round_opens set opened_at = ${new Date(OPENED.getTime() + 3600_000)} where stage_id = ${r.stageId} and round_no = ${r.roundNo}`;
+    expect(await side(), "window 2, before the player returns").toMatchObject({ joinable: false, presence: { present: false, since: null } });
+    await presenceRow(b.fixtureId, "home", { participantId: await playerOf(b.fixtureId, "home"), custom: b.home.personId, joinedAt: new Date(OPENED.getTime() + 3600_000 + 120_000) });
+    expect(await side(), "the player returns").toMatchObject({ joinable: true, presence: { present: true } });
   });
 });

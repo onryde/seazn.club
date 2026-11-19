@@ -26,6 +26,15 @@ export type ReportedCamera = {
 
 const UNKNOWN: ReportedCamera = { state: "unknown", at: null, firstLiveAt: null };
 
+/** The judgement of one stored report on `now` (shared by the one-row and the list reader, so the staleness rule ships once). */
+function judged(row: { state: string | null; at: Date | null; first: Date | null } | undefined, now: Date): ReportedCamera {
+  if (!row || row.state === null || row.at === null) return UNKNOWN;
+  if (now.getTime() - row.at.getTime() >= CAMERA_REPORT_STALE_MS) return { state: "unknown", at: row.at, firstLiveAt: null };
+  if (row.state === "live") return { state: "live", at: row.at, firstLiveAt: row.first };
+  if (row.state === "off") return { state: "off", at: row.at, firstLiveAt: null };
+  return { state: "unknown", at: row.at, firstLiveAt: null };
+}
+
 /**
  * One DB read of `(fixtureId, side, participantId)`'s report, judged on `now`. An ENDED meeting reads nothing: its room is over.
  * Side-keyed (D16: a meeting per player; the source guard's rule 1).
@@ -39,9 +48,34 @@ export async function reportedCamera(
       from fixture_video_participants p
       join fixture_video_meetings m on m.fixture_id = p.fixture_id and m.side = p.side
      where p.fixture_id = ${a.fixtureId} and p.side = ${a.side} and p.participant_id = ${a.participantId} and m.ended_at is null`;
-  if (!row || row.state === null || row.at === null) return UNKNOWN;
-  if (a.now.getTime() - row.at.getTime() >= CAMERA_REPORT_STALE_MS) return { state: "unknown", at: row.at, firstLiveAt: null };
-  if (row.state === "live") return { state: "live", at: row.at, firstLiveAt: row.first };
-  if (row.state === "off") return { state: "off", at: row.at, firstLiveAt: null };
-  return { state: "unknown", at: row.at, firstLiveAt: null };
+  return judged(row, a.now);
+}
+
+/** The key `reportedCameras` answers by. */
+export const cameraKey = (r: { fixtureId: string; side: "home" | "away"; participantId: string }): string => `${r.fixtureId}:${r.side}:${r.participantId}`;
+
+/**
+ * The list form: every `(fixtureId, side, participantId)` of `rows` in ONE statement, judged on `now`, keyed by `cameraKey`. A row with
+ * no stored report, a stale one, no participant or an ended meeting is absent from the answer (read it as unknown). No rows: an empty
+ * map and NO statement (`in ${db([])}` is never interpolated). Participant ids are unique per fixture, so the statement keys by fixture
+ * and participant and the side is read back from the row; the meeting join is by side.
+ */
+export async function reportedCameras(
+  db: AnySql,
+  rows: readonly { fixtureId: string; side: "home" | "away"; participantId: string }[],
+  now: Date,
+): Promise<Map<string, ReportedCamera>> {
+  const out = new Map<string, ReportedCamera>();
+  if (rows.length === 0) return out;
+  const fixtureIds = [...new Set(rows.map((r) => r.fixtureId))];
+  const participantIds = [...new Set(rows.map((r) => r.participantId))];
+  const found = await db<{ fixtureId: string; side: "home" | "away"; participantId: string; state: string | null; at: Date | null; first: Date | null }[]>`
+    select p.fixture_id as "fixtureId", p.side, p.participant_id as "participantId",
+           p.camera_reported as state, p.camera_reported_at as at, p.camera_live_first_at as first
+      from fixture_video_participants p
+      join fixture_video_meetings m on m.fixture_id = p.fixture_id and m.side = p.side
+     where p.fixture_id in ${db(fixtureIds)} and p.participant_id in ${db(participantIds)} and m.ended_at is null`;
+  const byKey = new Map(found.map((f) => [cameraKey(f), f]));
+  for (const r of rows) out.set(cameraKey(r), judged(byKey.get(cameraKey(r)), now));
+  return out;
 }

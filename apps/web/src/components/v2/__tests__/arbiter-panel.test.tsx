@@ -35,8 +35,10 @@ import {
   arbiterJoinStateFromError,
   defaultWatchSide,
   nextOffSince,
+  rejoinAfterPoll,
   seatSide,
   shouldJoinVideo,
+  sideWatchable,
   showsOutageCard,
   sideSeat,
   switchingFrom,
@@ -96,7 +98,7 @@ function board(over: Partial<ArbiterBoard> & Pick<ArbiterBoard, "fixtureId" | "b
     videoOverridden: false,
     cameraReport: null,
     // D16: a room per player; the canvas's boards are under way, so both are open.
-    sides: { home: { state: "open", endedAt: null, evidenceAt: null }, away: { state: "open", endedAt: null, evidenceAt: null } },
+    sides: { home: { state: "open", endedAt: null, evidenceAt: null, presence: { present: false, since: null, leftAt: null }, camera: { state: "unknown", at: null }, joinable: true }, away: { state: "open", endedAt: null, evidenceAt: null, presence: { present: false, since: null, leftAt: null }, camera: { state: "unknown", at: null }, joinable: true } },
     canResync: true,
     playable: true,
     canSettle: true,
@@ -456,6 +458,9 @@ const meeting = (state: ArbiterSideMeeting["state"]): ArbiterSideMeeting => ({
   state,
   endedAt: state === "ended" ? at(19, 50) : null,
   evidenceAt: null,
+  presence: { present: false, since: null, leftAt: null },
+  camera: { state: "unknown", at: null },
+  joinable: state === "open",
 });
 const PANE = (h: string) => /<figure[\s\S]*?<\/figure>/.exec(h)?.[0] ?? "";
 /** The switch's markup: from its root to the live region that follows it (a plain row for each player when it is not interactive). */
@@ -2430,3 +2435,53 @@ function hhmm(iso: string): string {
 function hhmmss(iso: string): string {
   return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(new Date(iso));
 }
+
+
+// Check-in capacity plan 3 Task 3: the join gate on `joinable`, and the re-open on the next poll. Online play is chess-only.
+describe("sideWatchable - open AND joinable, nothing else", () => {
+  it("every state x joinable (6): true only for open + joinable", () => {
+    let checked = 0;
+    for (const state of ["none", "open", "ended"] as const) {
+      for (const joinable of [false, true]) {
+        const m: ArbiterSideMeeting = { ...meeting(state), joinable };
+        expect(sideWatchable({ sides: { home: m, away: meeting("none") } }, "home"), `${state} / joinable ${joinable}`).toBe(state === "open" && joinable);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("defaultWatchSide follows it: an open-but-not-joinable White yields to a joinable Black", () => {
+    const board = { whiteSide: "home" as const, sides: { home: { ...meeting("open"), joinable: false }, away: meeting("open") } };
+    expect(defaultWatchSide(board)).toBe("away");
+  });
+});
+
+describe("rejoinAfterPoll - re-open only a join refused NOT_STARTED while the side is watchable", () => {
+  const VIEWS: Record<ArbiterVideoView["kind"], ArbiterVideoView> = {
+    idle: { kind: "idle" },
+    connecting: { kind: "connecting" },
+    switching: { kind: "switching" },
+    watching: { kind: "watching", tile: {} as never },
+    notStarted: { kind: "notStarted" },
+    none: { kind: "none" },
+    overridden: { kind: "overridden" },
+    over: { kind: "over" },
+    ended: { kind: "ended" },
+    unavailable: { kind: "unavailable" },
+    fault: { kind: "fault" },
+    own: { kind: "own" },
+    error: { kind: "error" },
+  };
+  it("true only for notStarted + watchable; false for every other view kind, for watchable false, and for no view", () => {
+    let checked = 0;
+    for (const [kind, view] of Object.entries(VIEWS)) {
+      expect(rejoinAfterPoll(view, true), `${kind}, watchable`).toBe(kind === "notStarted");
+      expect(rejoinAfterPoll(view, false), `${kind}, not watchable`).toBe(false);
+      checked += 2;
+    }
+    expect(rejoinAfterPoll(null, true), "no view").toBe(false);
+    expect(checked, "views iterated x 2").toBe(Object.keys(VIEWS).length * 2);
+    expect(Object.keys(VIEWS).length, "every ArbiterVideoView kind (13)").toBe(13);
+  });
+});

@@ -45,7 +45,8 @@ import {
   removeParticipant,
   type ParticipantToken,
 } from "@/server/external-play/video/realtimekit";
-import { everJoined } from "@/server/external-play/video/presence";
+import { currentPeerOf, everJoined, PRESENCE_READ_TRUST_MS } from "@/server/external-play/video/presence";
+import { cameraKey, reportedCameras, type ReportedCamera } from "./camera-reported";
 import { linePool } from "@/server/external-play/seat-line";
 import { VIDEO_BUSY } from "@/lib/online-chess";
 import { anchorOfRow, boardExtraSql, boardOpenFor, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
@@ -221,11 +222,13 @@ export async function loadArbiterRound(
   // flags) — never one board after another. Promise.all keeps board order.
   const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
   // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
+  // The facts every side's presence, camera and `joinable` read: ONE statement each over the boards in hand (never one per board).
+  const facts = await readBoardFacts(listed.map(([, r]) => r), now, { seats: true });
   const built = await Promise.all(
-    listed.map(async ([, r]) => ({ row: r, ...(await boardWithSides(auth, r, { limitMs, policy, flagRows, now })) })),
+    listed.map(async ([, r]) => ({ row: r, ...(await boardWithSides(auth, r, { limitMs, policy, flagRows, now, facts })) })),
   );
-  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins and ONE of its invite mail.
-  const boards = await withSeats(auth, built);
+  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins (the one the facts above hold) and ONE of its invite mail.
+  const boards = await withSeats(auth, built, facts.checkedInAt);
   return {
     stageId: round.stageId,
     stageName: round.stageName,
@@ -273,10 +276,12 @@ export async function listFlaggedExternalPlay(
   const listed = rows.filter((r) => !own.has(r.fixtureId));
   const flagRows = await openFlagRows(auth, listed.map((r) => r.fixtureId));
   const limitMs = (division.config?.clock?.base ?? 0) * 1_000;
+  // The flagged list has no clock of its own (`now: null`): one reading serves the camera judgement of every board in it.
+  const facts = await readBoardFacts(listed, new Date(), { seats: false });
   const boards = await Promise.all(
     listed.map(async (r): Promise<FlaggedBoard> => {
       const policy = await fixtureCameraPolicy(r.fixtureId);
-      const board = await boardOf(auth, r, { limitMs, policy, flagRows, now: null });
+      const board = await boardOf(auth, r, { limitMs, policy, flagRows, now: null, facts });
       return { ...board, roundNo: r.roundNo, stageName: r.stageName };
     }),
   );
@@ -348,15 +353,193 @@ function openFlagRows(auth: AuthCtx, fixtureIds: readonly string[]): Promise<Fla
 
 /** One side's meeting as the board list reads it (D16, §5.6.4): none (no row, one an earlier pairing left, or a room no player has
  *  come to yet - `playerOnFile`), open or ended - with that row's own end and evidence stamps. */
-function sideMeeting(row: boolean, samePair: boolean, arrived: boolean, endedAt: Date | null, evidenceAt: Date | null): ArbiterSideMeeting {
-  if (!row || !samePair) return { state: "none", endedAt: null, evidenceAt: null };
+function sideMeeting(
+  row: boolean,
+  samePair: boolean,
+  arrived: boolean,
+  endedAt: Date | null,
+  evidenceAt: Date | null,
+  facts: SideFacts,
+): ArbiterSideMeeting {
+  const none: ArbiterSideMeeting = { state: "none", endedAt: null, evidenceAt: null, presence: NO_PRESENCE, camera: NO_CAMERA, joinable: false };
+  if (!row || !samePair) return none;
   // A torn-down room stays `ended` whoever came; a live one is open only for a side whose player is on file.
-  if (endedAt === null && !arrived) return { state: "none", endedAt: null, evidenceAt: null };
+  if (endedAt === null && !arrived) return none;
+  const open = endedAt === null;
   return {
-    state: endedAt === null ? "open" : "ended",
+    state: open ? "open" : "ended",
     endedAt: endedAt?.toISOString() ?? null,
     evidenceAt: evidenceAt?.toISOString() ?? null,
+    presence: { present: facts.present, since: facts.since?.toISOString() ?? null, leftAt: facts.leftAt?.toISOString() ?? null },
+    camera: { state: facts.camera.state, at: facts.camera.at?.toISOString() ?? null },
+    // `arbiterSideAdmits`, the join's own rule, over the loader's facts: false for an ended room, whatever the facts say.
+    joinable:
+      open &&
+      arbiterSideAdmits({
+        proofFlag: presenceProofOn(),
+        presenceEver: facts.everJoined,
+        checkInCounted: facts.checkInCounted,
+        playerParticipants: facts.playerParticipants,
+      }),
   };
+}
+
+const NO_PRESENCE = { present: false, since: null, leftAt: null } as const;
+const NO_CAMERA = { state: "unknown", at: null } as const;
+
+/** What one side's player has in the tables, as the loader read it (see `readBoardFacts`). */
+type SideFacts = {
+  playerParticipants: number;
+  everJoined: boolean;
+  present: boolean;
+  since: Date | null;
+  leftAt: Date | null;
+  camera: ReportedCamera;
+  checkInCounted: boolean;
+};
+
+/** Every board's facts, read once per load: the player presence of each side, the browser-reported camera of each side's player, and the
+ *  check-in stamps (`checkedInAtOfBoards`, read ONCE and handed to `withSeats` as well). */
+export type BoardFacts = {
+  now: Date;
+  presence: Map<string, PlayerPresence>;
+  cameras: Map<string, ReportedCamera>;
+  checkedInAt: Map<string, Map<string, Date | null>>;
+};
+
+const sideKey = (fixtureId: string, side: Side) => `${fixtureId}:${side}`;
+
+function sideFacts(facts: BoardFacts, fixtureId: string, side: Side, personId: string | null, anchor: BoardAnchor | null): SideFacts {
+  const p = facts.presence.get(sideKey(fixtureId, side));
+  const at = personId === null ? null : (facts.checkedInAt.get(fixtureId)?.get(personId) ?? null);
+  return {
+    playerParticipants: p?.playerParticipants ?? 0,
+    everJoined: p?.everJoined ?? false,
+    present: p?.present ?? false,
+    since: p?.since ?? null,
+    leftAt: p?.leftAt ?? null,
+    camera: p?.participantId == null ? { state: "unknown", at: null, firstLiveAt: null } : (facts.cameras.get(cameraKey({ fixtureId, side, participantId: p.participantId })) ?? { state: "unknown", at: null, firstLiveAt: null }),
+    checkInCounted: anchor !== null && checkInCounts(at, anchor),
+  };
+}
+
+export type PlayerPresence = {
+  /** The side's `preset = 'player'` participants on file (0: none), and the first of them (the one whose camera is read). */
+  playerParticipants: number;
+  participantId: string | null;
+  /** The current peer's id (null when nobody is present): the tie between equal `joined_at` is decided by the statement's order.*/
+  peerId: string | null;
+  /** Any presence row of the player in THIS window (open or closed, any source). */
+  everJoined: boolean;
+  present: boolean;
+  since: Date | null;
+  leftAt: Date | null;
+};
+
+/**
+ * Per (meeting, side) the presence of the side's PLAYER, from ONE statement over the boards in hand: `fixture_video_presence` joined to
+ * the stored player participant (`preset = 'player'`) by `meeting_id` and `participant_id`, with plan 1's custom-id fallback (a row with
+ * no participant id, matched by the player's person id). Never every peer of the meeting: an arbiter watching for the game's life is a
+ * peer of the same room. Rows come `order by joined_at, received_at, seq` (plan 1's presence order) so `currentPeerOf`'s tie between
+ * equal `joined_at` is deterministic. `present` applies plan 1's read-row rule (a `source = 'read'` row is current only within
+ * PRESENCE_READ_TRUST_MS of its `received_at`, judged on `now`); `everJoined` counts every row, as `everJoined()` does.
+ *
+ * Window scope: a re-open keeps a room (and its presence rows). A row whose join (`joined_at`, else `received_at`) is BEFORE the board's
+ * `windowStart` (the round open's `opened_at`, re-stamped by a re-open) is the last window's and is ignored, for `present` and
+ * `everJoined` alike. Empty `boards`: an empty map and NO statement.
+ */
+export async function readPlayerPresence(
+  boards: readonly { fixtureId: string; windowStart: Date | null }[],
+  now: Date,
+): Promise<Map<string, PlayerPresence>> {
+  const out = new Map<string, PlayerPresence>();
+  if (boards.length === 0) return out;
+  const windowOf = new Map(boards.map((b) => [b.fixtureId, b.windowStart]));
+  type Row = {
+    fixtureId: string;
+    side: Side;
+    participantId: string;
+    peerId: string | null;
+    joinedAt: Date | null;
+    leftAt: Date | null;
+    source: "webhook" | "read" | null;
+    receivedAt: Date | null;
+  };
+  const rows = await sql<Row[]>`
+    select m.fixture_id as "fixtureId", m.side, vp.participant_id as "participantId",
+           pr.peer_id as "peerId", pr.joined_at as "joinedAt", pr.left_at as "leftAt", pr.source, pr.received_at as "receivedAt"
+      from fixture_video_meetings m
+      join fixture_video_participants vp on vp.fixture_id = m.fixture_id and vp.side = m.side and vp.preset = 'player'
+      left join fixture_video_presence pr on pr.meeting_id = m.meeting_id
+           and (pr.participant_id = vp.participant_id or (pr.participant_id is null and pr.custom_participant_id = vp.person_id::text))
+     where m.fixture_id in ${sql(boards.map((b) => b.fixtureId))}
+     order by m.fixture_id, m.side, vp.created_at, vp.id, pr.joined_at, pr.received_at, pr.seq`;
+  const cutoff = now.getTime() - PRESENCE_READ_TRUST_MS;
+  const byKey = new Map<string, Row[]>();
+  for (const r of rows) {
+    const k = sideKey(r.fixtureId, r.side);
+    const list = byKey.get(k);
+    if (list) list.push(r);
+    else byKey.set(k, [r]);
+  }
+  for (const [k, list] of byKey) {
+    const fixtureId = list[0]!.fixtureId;
+    const windowStart = windowOf.get(fixtureId) ?? null;
+    const participants = [...new Set(list.map((r) => r.participantId))];
+    const inWindow = list.filter((r) => {
+      if (r.peerId === null) return false;
+      const joined = r.joinedAt ?? r.receivedAt!;
+      return windowStart === null || joined.getTime() >= windowStart.getTime();
+    });
+    const current = currentPeerOf(
+      inWindow
+        .filter((r) => r.leftAt === null && (r.source === "webhook" || r.receivedAt!.getTime() > cutoff))
+        .map((r) => ({ peerId: r.peerId!, joinedAt: r.joinedAt, leftAt: r.leftAt })),
+    );
+    const lefts = inWindow.flatMap((r) => (r.leftAt === null ? [] : [r.leftAt.getTime()]));
+    out.set(k, {
+      playerParticipants: participants.length,
+      participantId: participants[0] ?? null,
+      peerId: current?.peerId ?? null,
+      everJoined: inWindow.length > 0,
+      present: current !== null,
+      since: current?.joinedAt ?? null,
+      leftAt: current === null && lefts.length > 0 ? new Date(Math.max(...lefts)) : null,
+    });
+  }
+  return out;
+}
+
+/** Whether `boardWithSides` will read this board as `checking_in` (its state chain, from the row alone): not cancelled or abandoned,
+ *  still playable, the bridge neither finished nor held, and no game on file. The round view's seats read the check-ins of exactly these. */
+function inCheckIn(r: BoardRow): boolean {
+  return (
+    r.fixtureStatus !== "cancelled" &&
+    r.fixtureStatus !== "abandoned" &&
+    isPlayableFixtureStatus(r.fixtureStatus) &&
+    r.bridgeStatus !== "finished" &&
+    r.bridgeStatus !== "needs_organiser" &&
+    r.challengeId === null
+  );
+}
+
+/** One statement for the presence, one for the cameras, one for the check-in stamps (the boards in check-in - the round view only, the
+ *  Flagged list has no seats - or with an open side),
+ *  each over the boards in hand and none when it has nothing to read. */
+async function readBoardFacts(rows: readonly BoardRow[], now: Date, opts: { seats: boolean }): Promise<BoardFacts> {
+  const presence = await readPlayerPresence(
+    rows.map((r) => ({ fixtureId: r.fixtureId, windowStart: r.openedAt })),
+    now,
+  );
+  const cameraRows = [...presence.entries()].flatMap(([k, p]) =>
+    p.participantId === null ? [] : [{ fixtureId: k.slice(0, k.lastIndexOf(":")), side: k.slice(k.lastIndexOf(":") + 1) as Side, participantId: p.participantId }],
+  );
+  const openSide = (row: boolean, samePair: boolean, ended: Date | null) => row && samePair && ended === null;
+  const needCheckIns = rows
+    .filter((r) => (opts.seats && inCheckIn(r)) || openSide(r.homeRow, r.homeSamePair, r.homeEndedAt) || openSide(r.awayRow, r.awaySamePair, r.awayEndedAt))
+    .map((r) => r.fixtureId);
+  const [cameras, checkedInAt] = await Promise.all([reportedCameras(sql, cameraRows, now), needCheckIns.length === 0 ? Promise.resolve(new Map<string, Map<string, Date | null>>()) : checkedInAtOfBoards(needCheckIns)]);
+  return { now, presence, cameras, checkedInAt };
 }
 
 /** The board's camera report from its two rows (D16, §5.6.4), stating each count's answer instead of letting an empty set
@@ -382,7 +565,7 @@ function cameraReportOf(fixtureId: string, sides: { home: ArbiterSideMeeting; aw
 async function boardOf(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts },
 ): Promise<ArbiterBoard> {
   return (await boardWithSides(auth, r, ctx)).board;
 }
@@ -392,7 +575,7 @@ async function boardOf(
 async function boardWithSides(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts },
 ): Promise<{ board: ArbiterBoard; white: SidePlayer; black: SidePlayer }> {
   const { limitMs, policy, flagRows } = ctx;
   const [sides, whiteSide] = await Promise.all([
@@ -437,9 +620,10 @@ async function boardWithSides(
 
   const nameOf = (personId: string | null): string | null =>
     personId === null ? null : personId === white.personId ? white.displayName : personId === black.personId ? black.displayName : null;
+  const anchor = anchorOf(r);
   const meetings = {
-    home: sideMeeting(r.homeRow, r.homeSamePair, r.homePlayer, r.homeEndedAt, r.homeEvidenceAt),
-    away: sideMeeting(r.awayRow, r.awaySamePair, r.awayPlayer, r.awayEndedAt, r.awayEvidenceAt),
+    home: sideMeeting(r.homeRow, r.homeSamePair, r.homePlayer, r.homeEndedAt, r.homeEvidenceAt, sideFacts(ctx.facts, r.fixtureId, "home", sides.home.personId, anchor)),
+    away: sideMeeting(r.awayRow, r.awaySamePair, r.awayPlayer, r.awayEndedAt, r.awayEvidenceAt, sideFacts(ctx.facts, r.fixtureId, "away", sides.away.personId, anchor)),
   };
   // §5.6.4: a flag's window is its OWN player's row - the sweep judged each player over their own meeting's end, and the
   // panel must show what job 5 judged. A flag whose player has no row (or no side on this board) is judged on the game's
@@ -515,6 +699,7 @@ const COLOURS = ["white", "black"] as const satisfies readonly Colour[];
 async function withSeats(
   auth: AuthCtx,
   built: readonly { row: BoardRow; board: ArbiterBoard; white: SidePlayer; black: SidePlayer }[],
+  checkedInAt: Map<string, Map<string, Date | null>>,
 ): Promise<ArbiterBoard[]> {
   // A board whose round was never opened has no window to be here in, so it takes no seats, like the `checkin` it also lacks. It
   // cannot be on screen (the round is chosen from `stage_round_opens` and the board joins that same row, which no product writer
@@ -532,8 +717,7 @@ async function withSeats(
   if (inCheckIn.length === 0) return built.map((b) => b.board);
 
   const ids = inCheckIn.map((b) => b.row.fixtureId);
-  const [checkedInAt, mail] = await Promise.all([
-    checkedInAtOfBoards(ids),
+  const [mail] = await Promise.all([
     // Only the chess invite writes a seat ref today, but the outbox is shared: a row of another kind on the same ref and mailbox would
     // become the seat's "latest" and paint its word (final review m4). The hook that holds and releases the stamp reads the same kind.
     latestEmailStatus(auth.orgId, CHESS_SEAT_REF_TYPE, ids.flatMap((id) => COLOURS.map((c) => chessSeatRef(id, c))), "chess_invite"),

@@ -86,6 +86,14 @@ const BOTH_SIDES: readonly BothSides[] = [
     reason: "the game's end ends BOTH rooms: every unended row of the fixture, each in its own try",
   },
   {
+    file: "usecases/external-play/arbiter.ts",
+    fn: "readPlayerPresence",
+    table: "fixture_video_meetings",
+    times: 1,
+    reason:
+      "the round's presence statement reads BOTH sides of every board in hand on purpose, one row per (fixture, side) and each joined to its own side's player participant on `side`; the loader keys the answer by (fixture, side)",
+  },
+  {
     file: "external-play/video/presence.ts",
     fn: "presenceShadowReport",
     table: "fixture_video_participants",
@@ -99,8 +107,8 @@ const BOTH_SIDES: readonly BothSides[] = [
  *  finding 11: it needs the RAW state and stamp under a lock, which the reader's judge-on-`now` cannot give) and the ONE reader, a leaf
  *  (check-in capacity plan 2 Task 6). room.ts, preflight.ts and (plan 3) arbiter.ts reach the report through the leaf, never by column. */
 const CAMERA_REPORT_FILES = ["server/usecases/external-play/camera-report.ts", "server/usecases/external-play/camera-reported.ts"] as const;
-/** The production files that import the leaf reader (`reportedCamera`), pinned: a new consumer is a decision (plan 3 adds `arbiter.ts`). */
-const CAMERA_REPORT_CONSUMERS = ["server/usecases/external-play/preflight.ts", "server/usecases/external-play/room.ts"] as const;
+/** The production files that import the leaf reader (`reportedCamera`, `reportedCameras`), pinned: a new consumer is a decision (plan 3 Task 3 added `arbiter.ts`: `readBoardFacts` calls the list form once). */
+const CAMERA_REPORT_CONSUMERS = ["server/usecases/external-play/arbiter.ts", "server/usecases/external-play/preflight.ts", "server/usecases/external-play/room.ts"] as const;
 /** The OpenAPI document and the schemas that build it describe the wire, not the column (§5.6.3). */
 const SCHEMA_MODULES = readdirSync(join(SRC, "server/api-v1/schemas")).filter((f) => f.endsWith(".ts")).map((f) => `server/api-v1/schemas/${f}`);
 const WIRE_DESCRIBERS = ["server/api-v1/openapi.ts", ...SCHEMA_MODULES] as const;
@@ -384,6 +392,11 @@ describe("nothing but the writer and the one reader names the camera report (§5
     console.info(`[source guard 5.6.3] consumers of the leaf reader: ${JSON.stringify(consumers)}`);
     expect(consumers.length, "zero checked is a failure").toBeGreaterThan(0);
     expect(consumers, "a new reader of the report is a decision, not an import").toEqual([...CAMERA_REPORT_CONSUMERS].sort());
+    // The list form's one caller (plan 3 Task 3): the loader's facts reader, once. Counted by call, so a second call site is a decision too.
+    const arbiter = readFileSync(join(SRC, "server/usecases/external-play/arbiter.ts"), "utf8");
+    const body = arbiter.slice(arbiter.indexOf("async function readBoardFacts("));
+    expect(body.slice(0, body.indexOf("\n}\n")).match(/\breportedCameras\(/g)?.length, "readBoardFacts calls reportedCameras once").toBe(1);
+    expect(arbiter.match(/\breportedCameras\(/g)?.length, "and it is the only call in arbiter.ts").toBe(1);
     // The leaf: its static imports are the stale constant and a type, so room.ts, preflight.ts and arbiter.ts can all import it with no cycle.
     const leaf = readFileSync(join(SRC, "server/usecases/external-play/camera-reported.ts"), "utf8");
     const imports = [...leaf.matchAll(/^import (?!type\b)[^;]*?from "([^"]+)";/gms)].map((m) => m[1]!).filter((m) => m !== "server-only");

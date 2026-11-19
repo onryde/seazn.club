@@ -111,6 +111,47 @@ async function putRoom(fixtureId: string, orgId: string, side: "home" | "away", 
   });
 }
 
+/** A room whose player has NOT arrived: the meeting row and the player's participant row, and nothing else - what a claim refused for its
+ *  camera leaves (the first claim writes the participant before the camera is proven), and the shape the pre-mint job's room takes once a
+ *  claim has touched it. No check-in, no presence row. The name is kept from before check-in capacity plan 2's ruling 2026-11-17 (2), when
+ *  pre-mint wrote a participant too: now it stands for the camera-refused claim. Returns the meeting id and the participant id. */
+async function putPreMinted(fixtureId: string, orgId: string, side: "home" | "away", personId: string): Promise<{ meetingId: string; participantId: string }> {
+  return withDb(async (sql) => {
+    const meetingId = `e2e-mtg-${side}-${randomUUID().slice(0, 8)}`;
+    const room = await sql`
+      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
+      select f.id, ${side}, ${orgId}, ${meetingId}, f.home_entrant_id, f.away_entrant_id
+        from fixtures f where f.id = ${fixtureId}`;
+    expect(room.count, `pre-minted room ${side} for ${fixtureId}`).toBe(1);
+    const participantId = `e2e-pp-${side}-${randomUUID().slice(0, 8)}`;
+    const player = await sql`
+      insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
+      values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId})`;
+    expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
+    return { meetingId, participantId };
+  });
+}
+
+/** The arrival SIGNALS, one at a time, for a side `putPreMinted` made: the counted check-in (the flag-off join's proof) and the presence
+ *  row (the flag-on join's proof). */
+async function stampCheckIn(fixtureId: string, orgId: string, personId: string): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
+      values (${fixtureId}, ${personId}, ${orgId}, 'in', now())
+      on conflict (fixture_id, person_id) do update set checked_in_at = now()`;
+    expect(res.count, "the check-in").toBe(1);
+  });
+}
+async function putPresence(fixtureId: string, side: "home" | "away", personId: string, room: { meetingId: string; participantId: string }): Promise<void> {
+  await withDb(async (sql) => {
+    const res = await sql`
+      insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, source)
+      values (${room.meetingId}, ${`e2e-peer-${side}-${randomUUID().slice(0, 8)}`}, ${fixtureId}, ${side}, ${room.participantId}, ${personId}, now(), 'webhook')`;
+    expect(res.count, "the presence row").toBe(1);
+  });
+}
+
 /** `stage`: the stage the generator builds (a league unless named — I-4 builds a real knockout, its next match wired
  *  by the generator itself). */
 async function seedRound(
@@ -1180,7 +1221,7 @@ test.describe("arbiter panel", () => {
     });
   }
 
-  test("a side that has not checked in: the switch says so and refuses the press, no join is made for it, and the join opens when the player arrives", async ({
+  test("a side whose player has not arrived (a pre-minted room): the switch says so and refuses the press, NO join is POSTed across two polls, the join opens on the poll after the arrival signal, and a NOT_STARTED refusal is asked again on the next poll", async ({
     page,
     request,
   }) => {
@@ -1194,7 +1235,16 @@ test.describe("arbiter panel", () => {
       await sql`delete from fixture_video_meetings where fixture_id = ${b1.fixtureId} and side = 'away'`;
       await sql`delete from fixture_video_meetings where fixture_id = ${b2.fixtureId}`;
     });
-    const log = await wire(page, { post: () => "mint" });
+    // Board 2's home player: a pre-minted room (meeting row + the player's participant), not arrived.
+    const preMinted = await putPreMinted(b2.fixtureId, r.orgId, "home", b2.home.personId);
+    let refuseOnce = false;
+    const log = await wire(page, {
+      post: () => {
+        if (!refuseOnce) return "mint";
+        refuseOnce = false;
+        return { status: 409, code: "VIDEO_MEETING_NOT_STARTED" };
+      },
+    });
     const white = () => switchButton(page, "white");
     const black = () => switchButton(page, "black");
     await page.setViewportSize({ width: 1280, height: 900 });
@@ -1216,23 +1266,49 @@ test.describe("arbiter panel", () => {
     await shoot(page, "arbiter-switch-other-side-not-arrived");
     await page.setViewportSize({ width: 1280, height: 900 });
 
-    // Board 2: neither player has arrived. The pane says whose room it is; BOTH buttons refuse; the arbiter makes no room.
+    // Board 2: its home player's room is on file with the player's participant (a claim refused for its camera) and NOTHING else.
+    // The pane says whose room it is; BOTH buttons refuse; the arbiter makes no room and no join is POSTed - across two polls.
     await boardsNav(page).getByRole("button").nth(1).click();
     await expect(tiles(page).getByText(fill("arbiter.tile.notStarted", { name: b2.home.name }), { exact: true })).toBeVisible();
     await expect(white()).toHaveAttribute("aria-disabled", "true");
     await expect(black()).toHaveAttribute("aria-disabled", "true");
-    // Leaving board 1's pane sends nothing (no DELETE); board 2 made no join at all.
-    await page.waitForTimeout(700);
-    expect(log).toEqual(["POST home", "minted e2e-home-1"]);
-    expect(log.filter((e) => e.startsWith("POST")), "no join for a board nobody has checked in to").toHaveLength(1);
+    for (let i = 0; i < 2; i += 1) {
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await page.waitForTimeout(700);
+    }
+    expect(log, "leaving board 1 sends nothing; a pre-minted side is not joined, poll after poll").toEqual(["POST home", "minted e2e-home-1"]);
+    expect(log.filter((e) => e.startsWith("POST")), "no join for a board whose player has not arrived").toHaveLength(1);
 
-    // The player arrives: the poll (a hidden tab coming back refreshes at once) reads the room and the join opens.
-    await putRoom(b2.fixtureId, r.orgId, "home", b2.home.personId);
+    // The player arrives. The signal is the server's flag state: with the proof flag on (CI's server) the presence row, after first showing
+    // that a counted check-in ALONE does not open the join; with it off (the local recipe) the check-in alone.
+    const proofOn = process.env.EXTERNAL_PLAY_PRESENCE_PROOF === "1";
+    if (proofOn) {
+      await stampCheckIn(b2.fixtureId, r.orgId, b2.home.personId);
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await page.waitForTimeout(700);
+      expect(log.filter((e) => e.startsWith("POST")), "flag on: a check-in alone is not presence - still no join").toHaveLength(1);
+      await putPresence(b2.fixtureId, "home", b2.home.personId, preMinted);
+    } else {
+      await stampCheckIn(b2.fixtureId, r.orgId, b2.home.personId);
+    }
+    // The next poll (a hidden tab coming back refreshes at once) marks the side joinable and the join opens with NO press.
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
     await expect.poll(() => log.filter((e) => e.startsWith("POST")).length, { timeout: 30_000 }).toBe(2);
     expect(log.at(-2)).toBe("POST home");
     await expect(white()).not.toHaveAttribute("aria-disabled", "true");
     await expect(black(), "the other player has still not arrived").toHaveAttribute("aria-disabled", "true");
+
+    // The re-open: a join the server refuses NOT_STARTED even though the loader marked the side joinable is asked again on the next poll.
+    // Forced through a board switch away and back (a new join key), the next POST answered 409 once.
+    await boardsNav(page).getByRole("button").nth(0).click();
+    await expect.poll(() => log.filter((e) => e.startsWith("POST")).length, { timeout: 30_000 }).toBe(3);
+    refuseOnce = true;
+    await boardsNav(page).getByRole("button").nth(1).click();
+    await expect.poll(() => log.filter((e) => e.startsWith("POST")).length, { timeout: 30_000 }).toBe(4);
+    await expect(tiles(page).getByText(fill("arbiter.tile.notStarted", { name: b2.home.name }), { exact: true }), "the refused join reads notStarted").toBeVisible();
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect.poll(() => log.filter((e) => e.startsWith("POST")).length, { timeout: 30_000, message: "ONE poll later the join is POSTed again, with no press" }).toBe(5);
+    expect(log.filter((e) => e.startsWith("DELETE")), "no DELETE in the whole test").toHaveLength(0);
 
     // A room that has been closed is said so: ended, not "has not arrived".
     await withDb((sql) => sql`update fixture_video_meetings set ended_at = now() where fixture_id = ${b2.fixtureId} and side = 'home'`);
