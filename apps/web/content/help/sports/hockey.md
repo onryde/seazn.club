@@ -1,43 +1,53 @@
 ---
 title: Field hockey
-description: Quarters, cards that make the team play short, penalty corners and shoot-outs.
+description: Score field hockey goals by type, cards that leave a team short, quarters, penalty corners and shoot-outs on one pad.
 order: 5
+related: scoring/basics, scoring/knockout-deciders, scoring/lineups, sports/icehockey
 ---
 
-Field hockey is scored on a pad built around quarters, cards and shoot-outs. Pick a format when you create the division: **FIH outdoor** is the default — eleven a side, four fifteen-minute quarters, draws standing, 3/1/0 points. **FIH shoot-out** is the same game and settles a drawn match with a shoot-out rather than letting it stand. **Youth** is a different game, not just a shorter one: seven a side, four ten-minute quarters, and its own shorter cards.
+You score field hockey in four quarters. Every goal has a type, every card leaves the team short for a while, and the pad counts both for you.
 
-Ice hockey shares the same underlying clock and period model but almost nothing else on the scoresheet — it has assists, a seven-class penalty ladder and game-winning shots. It has [its own page](/help/sports/icehockey).
+![The field hockey pad at 2 to 1 in the first quarter of an FIH outdoor match. The header reads 4 × 15 min, the score board shows Home 2 and Away 1 with Period Q1, and a Clock at 0:00 with Start. Below are the notice Goal with Take back, the Recording chip set to Every detail, and tiles for Goal, Advance period, Card, Substitution and Injured, no sub, plus Set piece awarded and More.](/help/sports/hockey-pad.webp "The field hockey pad in the first quarter of an FIH outdoor match")
+
+## Choose the format
+
+You pick a format when you create the division. A new hockey division starts on **FIH outdoor**.
+
+- **FIH outdoor**: eleven a side, four 15-minute quarters. A draw stands.
+- **FIH with shoot-out**: the same game, and a drawn match is settled by a shoot-out. FIH formats play four 15-minute quarters.
+- **Youth**: a different game, not just a shorter one. Youth plays four 10-minute quarters, seven a side, with shorter cards.
 
 ## Goals
 
-Tap **Goal** and the pad first asks **What kind of goal?**, offering **Field goal**, **Penalty corner**, **Penalty stroke** and **Own goal**. Nothing is recorded until you answer, because the table breaks ties on field goals and so every goal needs its type. An own goal counts for the other side. Then pick who scored from the roster, or leave it unattributed and confirm; the goal counts either way (see [crediting the player](/help/scoring/attribution)). Field hockey records no assists.
+Tap **Goal**. The pad asks **What kind of goal?** with **Field goal**, **Penalty corner**, **Penalty stroke** and **Own goal**. Nothing is recorded until you choose, because the table breaks ties on field goals. An own goal counts for the other side. The pad then asks **Who scored?**. Ignore the question and the goal still counts. See [crediting the player](/help/scoring/attribution). Field hockey records no assists.
 
-A penalty corner or penalty stroke gets its own **Set piece awarded** entry as it's given, separate from the goal it may or may not lead to — penalty corners awarded is the sport's signature statistic, and it counts whether or not anything came of it.
+**Set piece awarded** records a penalty corner or stroke as it is given, to **Home** or **Away**, whether or not a goal follows.
 
 ## Cards and team strength
 
-Tap **Card** to record a green, yellow or red card. The sheet asks which card first; from the **Full timeline** [recording level](/help/scoring/fidelity) up it then asks what the card was for, from FIH's own offence list.
+Tap **Card** for a side. The pad asks **Which card?**: **Green card**, **Yellow card** or **Red card**. It then asks **What for?** with a list of offences, then the minutes, then **Served by** with the players and **Nobody — the offender serves it**.
 
-Next comes **Minutes**, which opens at that card's own declared duration for the format the division runs. On the FIH formats a green is two minutes and a yellow five. On Youth a green is one minute and a yellow three. Change it when the umpire gave more than the nominal — an FIH yellow is a minimum, and ten minutes is common. A red card is for the rest of the match, so it has no duration and that step is skipped. Last, again from Full timeline up, is who serves the card when that isn't the player it was shown to; who was carded is asked straight after the tap, while the entry is still held.
+On the FIH formats a green is 2 minutes and a yellow 5 minutes. On Youth a green is 1 minute and a yellow 3 minutes. A red card is for the rest of the match, so it has no duration and that step is skipped. Change the minutes when the umpire gave more than the usual.
 
-The team plays short on **every** FIH card, whatever its colour, which is the main way field hockey's discipline differs from football's. While a card runs, the pad and the public scoreboard show the strength chip, home side first: one card against the home side reads `10v11` on FIH formats and `6v7` on Youth. It's hidden while both sides are at full strength.
+A card of any colour leaves the team short. The strip then shows **ON PITCH** with the strength, home side first: one card against the home side reads `10v11` on FIH formats and `6v7` on Youth. It is hidden while both sides are at full strength. The card's own timer runs as a hint, and a **Release** tile appears. Press **Release** when the umpire says the suspension is over.
 
-The timer on the pad is a hint only: tap **Release** when the clock says the suspension is over. Red cards can't be released.
+> **Example**
+> The home side gets a yellow card in an FIH outdoor match. The strip shows **ON PITCH 10V11** and a **YELLOW CARD** timer. When the five minutes are over, press **Release**, and the strip goes back to full strength.
 
 ## Quarters and shoot-outs
 
-**Advance period** moves play along — Q1 to Q4. A tied game then follows your division's rules: a straight draw on FIH outdoor, or a shoot-out on FIH shoot-out formats. Record each attempt as it happens — field hockey calls it an **SO attempt** — and the pad ends the shoot-out the moment it's decided.
+**Advance period** moves from one quarter to the next, for example to **Q2**, in one tap. A tied game then follows the division's rules: it stands as a draw on FIH outdoor and Youth, and goes to a shoot-out on FIH with shoot-out.
+
+In the division's rules the hockey match settings are the variant, quarter length, **Shoot-out on a draw**, the shoot-out attempts and **If a match is abandoned**. The abandon options are **Replay the match**, **Result stands** and "Result stands from the 4th quarter, otherwise replay". FIH with shoot-out starts on the last of the three. The other two formats start on **Replay the match**.
 
 ## Standings
 
-FIH outdoor pays 3/1/0 with draws standing. On shoot-out formats the table counts a shoot-out as a draw for both sides plus a bonus point for the team that wins it — with a draw worth 1, a shoot-out win is worth 2 and a shoot-out loss 1, and neither side is credited a win.
+FIH outdoor and Youth pay 3 for a win, 1 for a draw and 0 for a loss. FIH with shoot-out also counts a shoot-out as a draw for both sides plus a bonus point for the team that wins it, so a shoot-out win is worth 2 and a shoot-out loss 1.
 
-Teams level on points are split by matches won, goal difference and goals for; then by points, matches won, goal difference and goals for counted only in the matches between the tied teams; then by field goals; and last by lot. The table's **FG** column shows each team's field goals: every goal not scored from a penalty corner or a penalty stroke. An own goal counts as a field goal for the side it is credited to.
+Teams level on points are split by matches won, goal difference and goals for (the tab calls it goals scored). Next come points, matches won, goal difference and goals for counted only in the matches between the tied teams. Then field goals, and last by lot (the tab shows "drawing of lots"). You see the list under "Tie-break cascade" on the division's **Standings** tab.
 
-## Common questions
+## Questions
 
-**Where are the card counts?** The division's **Stats** tab has a Discipline view.
+**Where do cards count against a player?** See [discipline](/help/divisions/discipline).
 
-**A player got a second card?** The pad flags a prior green card when you pick the same player again — the usual escalation is yellow.
-
-**I'm scoring ice hockey, not field hockey.** That's a different pad and a different page — see [scoring ice hockey](/help/sports/icehockey).
+**I'm scoring ice hockey.** That is a different pad. See [ice hockey](/help/sports/icehockey).

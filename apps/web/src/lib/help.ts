@@ -64,6 +64,7 @@ export const HELP_ARTICLE_SLUGS = [
   "sports/hockey",
   "sports/football",
   "sports/icehockey",
+  "sports/icehockey-penalties",
   "sports/tabletennis",
   "sports/tennis",
   "sports/volleyball",

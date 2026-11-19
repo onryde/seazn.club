@@ -41,4 +41,4 @@ A league or group stage can also play a shoot-out when a match ends level. How t
 - **Ice hockey, IIHF variant:** a regulation win is worth 3, an overtime or shootout win 2 and an overtime or shootout loss 1. A level match that goes to overtime or a shootout is not booked as a draw. **Recreational variant:** it has no overtime or shootout, a win is worth 2, a draw 1 and a loss 0, and a level match stays a draw.
 - **Cricket:** the super over pays as a win and a loss.
 
-See [scoring football](/help/sports/football) for how a shoot-out plays on the pad, and [scoring cricket](/help/sports/cricket) for what the division's still-tied rule does when the super over is also tied.
+See [football](/help/sports/football) for how a shoot-out plays on the pad, and [cricket](/help/sports/cricket) for what the division's still-tied rule does when the super over is also tied.

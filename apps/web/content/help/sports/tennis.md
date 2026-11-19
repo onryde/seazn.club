@@ -1,21 +1,57 @@
 ---
 title: Tennis
-description: Point-by-point with real tennis scoring — deuce, tie-breaks and match tie-breaks — or per-set totals.
+description: Score tennis point by point, with games, sets, tie-breaks and the serve handled for you, or enter a finished set's games directly.
 order: 9
+related: scoring/basics, scoring/fidelity, scoring/corrections, sports/badminton
 ---
 
-Tennis divisions score with real tennis rules: points build to games, games to sets, with deuce and advantage handled for you. Pick a format when you create the division — **Tour** (best of 3, tie-break sets), **Grand slam** (best of 5, 10-point tie-break in the deciding set), **Fast4** (short sets to 4) or **Doubles no-ad** (a 10-point match tie-break replaces the deciding set).
+You score tennis one point at a time. The pad turns points into games and games into sets, rotates the serve and switches to tie-break scoring when the set needs one.
 
-## Point-by-point
+![The tennis pad in the first set of a Tour match. The context line reads Best of 3, Set 1, the points are 0 and 0, and the strip reads Sets 0–0, Games 1–0, Serving Away and Ends changed. Below are the notice Point recorded with Take back, and tiles for Code violation, Award game and Interruption.](/help/sports/tennis-pad.webp "The tennis pad after the first game of a Tour match")
 
-One tap per point. The pad speaks the score the way an umpire would — 15, 30, 40, deuce, advantage — and shows who's serving. Tie-breaks switch to plain numbers and rotate the serve automatically.
+## Choose the format
 
-Mistapped? [Undo it from the activity feed](/help/scoring/corrections) — the game state steps back exactly, even across a banked set or match point.
+You pick a format when you create the division. A new tennis division starts on **Tour**.
 
-## Set score
+| Format | Match | Each set | Deciding set |
+|---|---|---|---|
+| **Tour** | Best of 3 | First to 6 games, tie-break at 6–6 | Same as any set |
+| **Grand Slam** | Best of 5 | First to 6 games, tie-break at 6–6 | Tie-break to 10 |
+| **Short sets, TB at 3–3 (Fast4)** | Best of 3 | First to 4 games, tie-break at 3–3 | Same as any set, with no advantage scoring |
+| **Short sets (TB at 4–4)** | Best of 3 | First to 4 games, tie-break at 4–4 | Same as any set |
+| **Doubles (no-ad, match tie-break)** | Best of 3 | First to 6 games, tie-break at 6–6 | A match tie-break to 10 replaces it. No advantage |
 
-No time to score every point? Use **Set score** to record a finished set's game score directly instead of rallying through it point by point. Both ways of entering a set feed the same standings — sets won, then set ratio, then game ratio break ties.
+## Start the match
 
-## Common questions
+Press **Start match**. The pad asks **Who serves first?** with the two sides. Nothing is recorded until you choose. The serve then rotates from that side. Who serves does not change the score.
 
-**Who serves first?** When you press **Start match**, the pad asks who serves first — pick the side that won the toss, and the match starts with them serving. The serve indicator then rotates from that side. It's a scoring aid, not a result: who serves doesn't change the score. A match started before this question existed keeps the home side serving first.
+## Score a point
+
+1. Tap the half of the side that won the point. The half reads **Tap to award the point**.
+2. Keep tapping. The pad shows 15, 30 and 40. At 40–40 it shows **40 – 40**, then **AD** for the side ahead.
+3. The strip shows **Sets**, **Games** and **Serving**. After an odd game it adds **Ends changed**.
+
+At a set's tie-break the pad shows **TIE-BREAK** and counts in plain numbers, for example **TB 3–2**. When a set closes, the next one opens ("SET 2") and the strip updates, for example **Sets 1–0**.
+
+> **Example**
+> A Tour set reaches 6–6. The pad switches to a tie-break to 7, won by two. At 7–5 or 8–6 the set closes. At 7–6 the tie-break goes on.
+
+To undo a point, press **Take back** on the ribbon. The game steps back exactly, even across a finished set. See [fixing a mistake](/help/scoring/corrections).
+
+## Other tiles
+
+- **Code violation** (one per side) asks **Warning**, **Point penalty**, **Game penalty** or **Default**.
+- **Award game** (one per side) gives the game to that side in one tap and shows "Game awarded".
+- **Interruption** asks for the kind: **Medical time-out**, **Toilet break**, **Heat rule** or **Other**.
+
+## Record a set's games
+
+**Set score** records a finished set as games. It asks **Games — Home**, then the away side's games, and you press **Confirm**. It is offered at 0–0 of a game, not in the middle of one.
+
+## Recording level
+
+A new tennis match opens at **Every detail**. See [choosing a detail level](/help/scoring/fidelity) for the **Recording** chip.
+
+## How the league table breaks ties
+
+A tennis league table scores a win as 2 and a loss as 0. When sides are level, the division's **Standings** tab lists the tie-break order under "Tie-break cascade": wins, matches played, head-to-head between the two, set ratio, head-to-head, game ratio, head-to-head, seeding, then a drawing of lots.

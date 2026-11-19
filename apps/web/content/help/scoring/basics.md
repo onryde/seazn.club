@@ -9,11 +9,11 @@ You score a match on its **pad**, the panel of tiles on the fixture page. The pa
 
 ## Pick your sport
 
-- [Tennis](/help/sports/tennis): points, games and sets, with deuce and tie-breaks worked out for you.
+- [Tennis](/help/sports/tennis): points, games and sets, with advantage and tie-breaks worked out for you.
 - [Badminton](/help/sports/badminton), [table tennis](/help/sports/tabletennis) and [volleyball](/help/sports/volleyball): rally by rally, with the serve worked out from what you have already recorded.
 - [Cricket](/help/sports/cricket): ball by ball, with overs and wickets.
 - [Football](/help/sports/football): goals, cards, substitutions and shoot-outs.
-- [Field hockey](/help/sports/hockey): quarters, cards that leave a team short, penalty corners and shoot-outs. [Ice hockey](/help/sports/icehockey) has its own page for assists, the penalty ladder and game-winning shots.
+- [Field hockey](/help/sports/hockey): quarters, cards that leave a team short, penalty corners and shoot-outs. [Ice hockey](/help/sports/icehockey) has its own page for assists, overtime and game-winning shots, and [ice hockey penalties](/help/sports/icehockey-penalties) another for the penalty box.
 - [Carrom](/help/sports/carrom): a board at a time, coins and the queen.
 - [Chess and other board games](/help/sports/chess): who won, and how it ended.
 - [Everything else](/help/sports/generic): a running tally you tap during play, or a plain result at the end.

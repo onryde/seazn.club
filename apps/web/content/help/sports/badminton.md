@@ -1,52 +1,75 @@
 ---
 title: Badminton
-description: Tap the side that won the rally — the serve, the service court and the interval all work themselves out — or record each game's final score.
+description: Score badminton rally by rally by tapping the half of the side that won. The pad shows the game, the server and the service court for you.
 order: 1
+related: scoring/basics, scoring/fidelity, scoring/attribution, scoring/corrections
 ---
 
-Badminton divisions score rally by rally, and the board itself is the button: tap the half of the side that won the rally, and that's the whole entry. Pick a format when you create the division — **BWF** (games to 21, win by two, hard cap at 30) or **Short** (games to 11, cap 15) for junior and social play. Either way, a match is best of three games.
+You score badminton by tapping the half of the side that won the rally. One tap is one entry. The pad keeps the game, the server and the service court up to date for you.
 
-## The board is the button
+![The badminton pad at 9 to 5 in the first game of a BWF 3×15 match. The context line reads Best of 3, Game 1, and the strip reads Games 0–0, Serving Home, Left service court. Below are the notice Rally recorded with Take back, the Recording chip set to Every detail, and a Sanction tile for each side.](/help/sports/badminton-pad.webp "The badminton pad at 9 to 5 in game 1 of a BWF 3×15 match")
 
-Each side's half shows its points in the current game and the player or pair named on the team sheet. Tap the winner's half — *Tap to award the rally* — and the point is recorded.
+## Choose the format
 
-Above the two scores sits the format and the game you're in: *Best of 3 · Game 2*. At 20-all it adds **Setting** — win by two from here — and at 29-all under the cap it adds **Golden point**, where the next rally ends the game outright.
+You pick a format when you create the division. Every format is best of three games, won by two clear points, up to a hard cap.
+
+| Format | A game is played to | Hard cap |
+|---|---|---|
+| **BWF 3×21 (21 points)** | 21 | 30 |
+| **BWF 3×15 (15 points)** | 15 | 21 |
+| **Short (11 points)** | 11 | 15 |
+
+A new badminton division starts on **BWF 3×15**. You can change the points and the cap in the division's rules.
+
+## Score a rally
+
+1. Open the match in the console and start it.
+2. Tap the half of the side that won the rally. The half reads **Tap to award the rally**.
+3. Keep tapping. When a game is won, the next game opens.
+
+Above the scores the pad says which game you are in, for example "Best of 3 · Game 2". Two notices appear near the end of a game:
+
+- **Setting** appears when the score is level one point below the target: 20–20 in BWF 3×21, 14–14 in BWF 3×15, 10–10 in Short. A side must now win by two.
+- **Golden point** appears when the score is level one point below the cap: 29–29 in BWF 3×21, 20–20 in BWF 3×15, 14–14 in Short. The next rally ends the game.
+
+> **Example**
+> A BWF 3×21 game is 29–29. The pad shows **Golden point**. Mira wins the next rally and the game closes at 30–29 in her favour, a lead of one point.
 
 ## What the strip tells you
 
-Under the scores, in the order an umpire says them:
+Under the scores, the strip shows:
 
-- **Games** — the match score in games, `1–0`.
-- **Serving** — the side that serves next, or the player in singles. Never a guess: it's worked out from the rallies already recorded (the side that wins a rally serves the next; the side that won a game serves first in the next one). When the app can't say, it shows nothing at all rather than a placeholder.
-- The service court — *Right service court* when the server's own score in this game is even, *Left service court* when it's odd.
-- **Interval at** 11 — the mark where the 60-second break falls — which becomes just **Interval** the moment a side first reaches it. In the short format the mark is 6, because it's half the game's own target rather than a fixed number.
+- **Games**: the match score in games.
+- **Serving**: the side that serves next. In singles it names the player. In doubles it names the side only. At 0–0 in the first game it is blank. After that, the side that wins a rally serves the next one, and the side that won a game serves first in the next.
+- **Right service court** when the server's score in this game is even, **Left service court** when it is odd.
+- **Interval at 11** (BWF 3×21), **Interval at 8** (BWF 3×15) or **Interval at 6** (Short). It shows before the first rally of a game.
 
-In doubles the strip names the serving **side** but never a player. Badminton decides which partner serves from the service court they're standing in, which isn't something the scoring tracks — so it isn't claimed.
+## Say who won the rally
 
-## Who won the point
-
-In singles there's nothing to ask: the side's only player is credited as you tap.
-
-In doubles the entry is held for a moment and asks **Which player won it?** with the two partners offered. Answer it or ignore it — the rally counts either way, and the panel shows how long is left plus **Send now** if you'd rather not wait. See [crediting the player](/help/scoring/attribution).
+In singles there is nothing to ask, because the side's one player is credited. In doubles the pad asks **Which player won it?** and offers both partners. The rally counts whether you answer or not. A countdown runs, and **Send now** skips the wait. See [crediting the player](/help/scoring/attribution).
 
 ## Sanctions
 
-**Sanction** has its own tile per side, so which tile you tap decides the side. The ladder is offered in order — **Warning** (the yellow card), **Penalty** (red), **Expulsion**, and **Disqualification** (black) — then who, asked only in doubles; a singles side stamps its one player for you.
+**Sanction** has one tile per side. The ladder is **Warning**, **Penalty**, **Expulsion** and **Disqualification**. In doubles the pad then asks **Who?** In singles it records the sanction against the side's one player at once.
 
-## A game's score, without the rallies
+## Record a game's final score
 
-**Set score** records a finished game's points directly: two numbers, prefilled from wherever the current game has got to. It's offered only while the current game has no rally in it — the two ways of scoring a game can't be mixed inside one game — so it returns the moment a new game opens. [Undo](/help/scoring/corrections) a game's first rally and it comes back for that game too.
+**Set score** records a finished game as two numbers instead of rally by rally. It is offered while the current game has no rally in it. It comes back when a new game opens, and when you take back a game's first rally. Do not mix the two ways inside one game.
+
+To undo a rally, press **Take back** on the ribbon under the strip. See [fixing a mistake](/help/scoring/corrections).
 
 ## Recording level
 
-Rally by rally is the finest level badminton records, and it is available on every plan — a badminton pad opens there. Drop to a lower level on the **Recording** chip and the halves stop being tappable, because a rally is no longer something this pad records; use **Set score** for each game's final score instead. Set score works at every level; sanctions from **Key moments** upwards. See [choosing a detail level](/help/scoring/fidelity).
+A new badminton match opens at **Every detail**. The **Recording** chip lets you step down.
 
-## Common questions
+- **Every detail**: the halves are tappable, and you also get **Sanction** and **Set score**.
+- **Full timeline** and **Key moments**: the halves are not tappable. You get **Sanction** and **Set score**.
+- **Result only**: you get **Set score** only.
 
-**Where are the time-outs and substitutions?** Badminton has neither, so the pad offers neither. The interval at 11 and the break between games aren't recorded events, and a player who can't continue retires — the match ends rather than the player being replaced.
+See [choosing a detail level](/help/scoring/fidelity).
 
-**Who serves the very first rally?** Nobody is named until the first rally is recorded; from then on the record answers by itself, because the side that wins a rally serves the next one.
+## Questions
 
-**Can someone score from the other end of the hall?** Yes, with a [device link](/help/scoring/device-links). It scores the same way and can't finalize the match.
+**Where are time-outs and substitutions?** The badminton pad has no tile for either.
 
-**Signal dropped mid-game?** Entries queue on the device and send when it returns — see [scoring without signal](/help/scoring/offline-scoring).
+**What if the signal drops?** Entries queue on the device and send when the signal returns. See [scoring without signal](/help/scoring/offline-scoring).

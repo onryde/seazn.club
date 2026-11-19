@@ -1,35 +1,58 @@
 ---
 title: Football
-description: Goals, cards and subs per side on one pad, then extra time or a shoot-out when a knockout can't end level.
+description: Score football goals, cards and substitutions on one pad, then extra time and a shoot-out when a knockout match cannot end level.
 order: 6
+related: scoring/basics, scoring/knockout-deciders, scoring/lineups, scoring/attribution
 ---
 
-Football divisions score by half — two halves by default, or four quarters for mini-soccer — with one pad for goals, cards and substitutions per side. Extra time and a penalty shoot-out are both optional deciders you turn on for a stage that can't finish level (see [knockout deciders](/help/scoring/knockout-deciders)); a league or group stage without them simply records a draw.
+You score football on one pad with a tile for each action, one per side where it belongs to a side. A goal is one tap. The details come after it.
+
+![The football pad at 2 to 1 in the first half of an 11-a-side match. The score board shows Home 2 and Away 1 with Period First half, and a Clock at 0:00 with Start. Below are the notice Goal recorded with Take back, the Recording chip set to Every detail, and tiles for Goal, Card, Substitution and Injured, no sub on each side, plus End of period, Penalty and More.](/help/sports/football-pad.webp "The football pad in the first half of an 11-a-side match")
+
+## Choose the format
+
+You pick a format when you create the division. A new football division starts on **11-a-side**. Every format awards 3 for a win, 1 for a draw and 0 for a loss.
+
+| Format | Periods | Rolling substitutions |
+|---|---|---|
+| **11-a-side** | 2 halves of 45 minutes | No |
+| **Youth** | 2 halves of 30 minutes | Yes |
+| **Small-sided** | 2 halves of 20 minutes, 7 a side | Yes |
+| **Mini-soccer** | 4 quarters of 10 minutes, 7 a side | Yes |
 
 ## Goals
 
-Tap **Goal** for the side that scored and pick who from the roster — plus an assist if there was one — or leave it unattributed and confirm; the goal counts either way (see [crediting the player](/help/scoring/attribution)). Tick **own goal** when the ball came off the other side's player: it's recorded as theirs to give away, not as a goal for whoever it deflected off.
+Tap **Goal** for the side that scored. The goal is recorded at once, and a **Goal detail** panel opens under the pad. Use it to say **Own goal** or **Penalty**, or pick the scorer from the roster. Once you pick a scorer, the panel asks **Who assisted?** Ignore the panel and the goal still counts. See [crediting the player](/help/scoring/attribution).
 
 ## Cards and substitutions
 
-**Card** records a yellow, a red, or a second yellow — its own option on the sheet for a player who's already been cautioned this match, counting as both a caution and a sending-off, the same as the referee's version — with the offence if you want it logged. **Substitution** swaps a bench player on for one coming off; a batch of subs made at the same stoppage are grouped as one window, so the activity feed doesn't read them as five separate interruptions.
+- **Card** asks **Which card?**: **Yellow card**, **Red card** or **Second yellow**. Second yellow is greyed out with "Nobody is on a yellow" until a player has a yellow. The pad then asks **What was the offence?**
+- **Substitution** asks **Who comes off?** and lists the starters.
+- **Injured, no sub** records a player who cannot continue and is not replaced.
 
 ## Penalties
 
-**Penalty** is for a penalty kick that didn't produce a goal — saved, missed, or off the woodwork. Pick who was awarded it, then what happened. A converted penalty isn't a separate entry at all: it's just a **Goal**, the same as any other.
+**Penalty** records a penalty kick that did not produce a goal. It asks **What happened?** with **Saved**, **Missed** or **Hit the post**. A penalty that scores is a **Goal** with **Penalty** chosen in the detail panel.
 
-## Periods, extra time, shoot-outs
+## Periods, extra time and shoot-outs
 
-**End of period** closes the half (or quarter) you're in and asks which break it is — the pad only offers the ones that make sense from where you are. If both sides are level at full time and the stage plays extra time, two more periods follow before anything is decided; if it doesn't, or they're still level after extra time, the match goes straight to a shoot-out.
+**End of period** asks **Which break?** and offers **Half-time**, **Full-time**, **Extra time — half-time** and **End of extra time**. An option that does not fit the moment is greyed out with a reason.
 
-Once the shoot-out starts, **Shoot-out kick** tiles replace the goal and substitution tiles — kicks aren't goals, and don't add to the regulation score. **Card** stays available: a card during the shoot-out is still a real disciplinary moment the pad has to record. The board shows the shoot-out tally next to it instead, as `1 (2)`, and names whose kick is next. Kicks have to alternate side to side; only the side whose turn it is has a tappable kick tile, so there's nothing to record out of turn. It ends the moment the outcome is no longer in doubt, not necessarily after a full round each.
+In a knockout stage, a match that is level at full time goes into extra time, and a match still level after extra time goes to the **shoot-out**. These deciders start **on** in a knockout stage. You turn them off in the stage's **Match rules**. See [knockout deciders](/help/scoring/knockout-deciders).
 
-## Standings
+In the shoot-out the pad shows the kick tally in brackets next to the score, for example "1 (0)". **Shoot-out kick** tiles for each side replace the goal tiles, and **Card** stays. Press a kick tile and choose **Scored** or **Missed**. After a kick the other side's tile is the only one you can press, and the pad names the next kicker, for example "Next kicker: Away".
 
-Football pays your division's usual win/draw/loss points. In a knockout the shoot-out only decides who goes through. A group or league stage that also plays a shoot-out counts it on the table as a draw for both sides plus a bonus point for the team that wins on kicks — with a draw worth 1, that is 2 for the winner and 1 for the loser, and neither side is credited a win. Whether a stage plays a shoot-out is a setting in its **Match rules**, not something you choose while scoring — see [knockout deciders](/help/scoring/knockout-deciders).
+## Match rules
 
-## Common questions
+In the division's rules, football has settings for extra time, penalty shoot-out, kicks each, team size, substitutions, rolling subs, substitution windows, concussion subs, sin-bin, and **If a match is abandoned**: **Replay the match** or **Result stands**. A new division replays.
 
-**Why can't I record a kick?** Shoot-out kicks only exist once the match is actually in the shoot-out phase — level at full time (or after extra time) with the decider turned on. Before that, score the goal as usual.
+## The league table
 
-**Someone kicked out of turn?** It can't happen from the pad itself — kicks strictly alternate side to side, and the board names whose turn it is; the other side's kick tile is simply greyed out until its turn comes round.
+> **Example**
+> Hawks and Rockets finish level on points. Hawks beat Rockets 2–1 when they met, so Hawks rank above Rockets even if Rockets have the better goal difference overall. Head-to-head is checked before goal difference.
+
+When sides are level, the division's **Standings** tab lists the order under "Tie-break cascade": points, head-to-head, head-to-head difference, head-to-head scoring, goal difference, goals scored, fair play, then a drawing of lots. A shoot-out in a league or group stage counts as a draw for both sides plus a bonus point for the winner on kicks. See [knockout deciders](/help/scoring/knockout-deciders).
+
+## Recording level
+
+A new football match opens at **Every detail**. See [choosing a detail level](/help/scoring/fidelity).

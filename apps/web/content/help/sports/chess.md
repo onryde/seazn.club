@@ -1,30 +1,38 @@
 ---
 title: Chess and other board games
-description: Tap the winner, say how it ended, and record the board and colours on a pairing card.
+description: Score chess by tapping the winner and saying how the game ended, with an optional pairing card for the board number and colours.
 order: 3
+related: scoring/basics, scoring/fidelity, scoring/corrections, scoring/knockout-deciders
 ---
 
-Chess divisions record one thing: the result, and how the game got there. A win is worth a point, a draw half a point, and the standings show them that way. Pick a time-control family when you create the division — **Classical**, **Rapid** or **Blitz**; it's recorded as a label on the fixture and doesn't change how anything is scored.
+You score chess by tapping the winner and, if you want, saying how the game ended. A draw has its own tile.
+
+![The chess pad before a result, in a Blitz match. The header reads Colours tracked, the two players are Meena A, marked Playing White, and Ravi A, each with a dash and the words Tap to record the winner. Below are the notice Match started with Take back, the Recording chip set to Key moments, and a Draw or no result tile.](/help/sports/chess-pad.webp "The chess pad before a result, in a Blitz match")
+
+## Choose the time control
+
+You pick a time control when you create the division: **Classical**, **Rapid** or **Blitz**. A new chess division starts on **Blitz**. In the division's rules you also set the clock family, the time per side, the increment and the move delay. For a knockout stage you set the tie-break games, in order: **Rapid**, **Blitz** or **Armageddon**. See [knockout deciders](/help/scoring/knockout-deciders).
 
 ## The board
 
-Each half names the player from the team sheet and shows their score once the game is decided — **1**, **½** or **0**, and a dash until then. The side playing White is marked **Playing White**; a division with colours switched off marks neither.
-
-The line above says whether colours are tracked, and — once a pairing card has recorded one — which board this is: *Colours tracked · Board 3*.
+Each half names a player and shows a dash until the game is decided. The result then shows as **1**, **½** or **0**. The player with White is marked **Playing White**. The header says **Colours tracked** when the division tracks colours.
 
 ## The pairing card
 
-**Pairing card** is a pre-match tile. It asks for the board number (most fixtures just take 1) and, when the division tracks colours, who has White. The players themselves aren't asked for: each side has at most one named player, so whoever the team sheet names is attached for you rather than offered as a picker with one option.
+**Pairing card** is a tile that appears before the match starts. It asks for the **Board number**, with a **−** and **+** stepper and **Confirm**.
 
-Colours default to home playing White from the moment the fixture exists, so the White marker is right on the board before any pairing card is filled in. A card can flip it.
+## Record the result
 
-## The result
+1. Start the match.
+2. Tap the half of the player who won. The half reads **Tap to record the winner**.
+3. The pad records "Result recorded" and asks **How did it end?** with **Checkmate**, **Resignation**, **Flag fall**, **Adjudication** and **Illegal move**. Answering is optional, and the result stands without it. A countdown runs and the panel clears.
 
-Tap the half of the player who won — *Tap to record the winner* — and the result is recorded on the spot. The panel that follows asks **How did it end?** with the decisive endings only: **Checkmate**, **Resignation**, **Flag fall**, **Forfeit**, **Adjudication**, **Illegal move**. It's optional; the result stands without it, and tapping a different one simply replaces your last choice while the entry is still held.
+For a draw, press **Draw / no result**. It asks **How did it end?** with **Draw by agreement**, **Stalemate**, **Insufficient material**, **Adjudication**, **Threefold repetition**, **Fifty-move rule** and **Dead position**.
 
-**Draw / no result** is a full-width tile for the outcome that has no half to tap. It opens the same panel with the drawn endings instead: **Draw by agreement**, **Stalemate**, **Insufficient material**, **Adjudication**, **Threefold repetition**, **Fifty-move rule**, **Dead position**, **Double forfeit**. The two lists never mix — a decisive game is never offered "stalemate", and a drawn one is never offered "checkmate".
+> **Example**
+> Meena and Ravi agree a draw. You press **Draw / no result** and choose **Draw by agreement**. The pad shows ½ for each side.
 
-A mis-tap on a half is a real risk on this pad, because one tap decides the game. [Undo](/help/scoring/corrections) is the fix, and it's immediate.
+One tap decides the game, so a wrong tap matters. Press **Take back** on the ribbon to undo it. See [fixing a mistake](/help/scoring/corrections).
 
 ## Online chess: adding time to check-in
 
@@ -38,20 +46,10 @@ On a division that plays its chess online, players check in before each game. If
 - Players don't need to do anything: the check-in countdown on their board updates to the new deadline.
 - **Every use is logged.** Each board extended gets a row in the online-chess audit log — the same log that records a video override — with who pressed it, which board and the new deadline.
 
-## Standings and stats
+## The league table
 
-Wins, draws and losses feed the table the usual way, and half points are exact — the ledger holds them as whole numbers and halves them only to display, so Buchholz and Sonneborn-Berger arithmetic stays exact for Swiss events. Games as White and games as Black are tracked as pairing data rather than shown as table columns.
-
-Draws are always allowed here, in every kind of stage, including knockouts — a knockout in chess is settled by a mini-match of several games rather than by forcing one of them to have a winner.
+When players are level, the division's **Standings** tab lists the order under "Tie-break cascade": points, direct encounter, wins, Sonneborn–Berger, then a drawing of lots.
 
 ## Recording level
 
-The result records at every level. The pairing card needs **Key moments** or above. See [choosing a detail level](/help/scoring/fidelity).
-
-## Common questions
-
-**Can I record how many moves it took?** No — the pad asks for the result and how it ended, and nothing else. A move count isn't one of its questions.
-
-**Double forfeit — neither side turned up.** Record it as **Draw / no result** and pick **Double forfeit**. Both sides take a zero rather than half a point each.
-
-**I tapped the wrong player.** [Undo it](/help/scoring/corrections) from the activity feed and record the right one. Nothing is erased — the undo is recorded too, so the history stays reconstructable.
+A new chess match opens at **Key moments**, the finest level chess has. See [choosing a detail level](/help/scoring/fidelity).

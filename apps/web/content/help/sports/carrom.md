@@ -1,44 +1,61 @@
 ---
 title: Carrom
-description: One entry a board — who won it, the coins left, and whether the queen was covered — with games and the match tallied for you.
+description: Score carrom one board at a time: who won it, the coins left and whether the queen was covered. Games and the match add up for you.
 order: 2
+related: scoring/basics, scoring/fidelity, scoring/corrections, scoring/knockout-deciders
 ---
 
-Carrom divisions score a board at a time. A match is best of three games, a game is first to 25 points or the leader once eight boards are done, and the queen is worth 3 until the winning side reaches 22 — the **ICF** default. A division can run **Club 29** instead: games to 29, the queen worth 5, and its bonus lapsing at 24.
+You score carrom a board at a time. You say who won the board and how many coins the loser has left, and the pad adds up the points, the games and the match.
 
-## What the board shows
+![The carrom pad after two boards of a Club 29 match. The header reads Best of 3, First to 29, and the score board shows Meena A with 8 and Ravi A with 2, with Game 1 of 3 below. Below are the notice Board recorded, with Take back, the Recording chip set to Key moments, and tiles for Board with no queen, Board with queen covered, and Adjustment credit and deduction.](/help/sports/carrom-pad.webp "The carrom pad after two boards of a Club 29 match")
 
-The two halves are readouts here, not buttons — carrom is scored through the tiles below them. Each half names the player or pair from the team sheet, shows their score in the current game as the big number, and their games won in brackets beneath it. The line above states the format — *Best of 3 · First to 25* — and, once the first game opens, a **Game** chip says which game of the series you're on.
+## Choose the format
 
-## The toss
+You pick a format when you create the division. A new carrom division starts on **Club (29 points)**. Every format is best of three games, over at most 8 boards.
 
-**Toss** is a pre-match tile: one question, who breaks first. It's the only thing on the pad before the match starts. Skip it and home breaks first.
+| Format | A game is played to | Queen bonus | The bonus lapses at |
+|---|---|---|---|
+| **Club (29 points)** | 29 | 5 | 24 |
+| **ICF rules** | 25 | 3 | 22 |
 
-## A board at a time
+## What the pad shows
 
-Two tiles, side by side, for the same entry:
+The two halves are readouts, not buttons. Each half shows a side's name, its score in the current game as the big number, and its games won in brackets. The header says, for example, "Best of 3 · First to 29". Once the match starts a **Game** chip says which game you are in, for example "1/3".
 
-- **Board (no queen)** — who won the board, then the loser's coins left on the table (0 to 9).
-- **Board (queen covered)** — the same two questions with *which side covered the queen* between them.
+## Start the match
 
-The queen is asked separately from the winner on purpose: a board can be won by one side while the queen was covered by the other, and the scoring works out whether the bonus applies. It also lapses once a player is close enough to the target, which is handled for you rather than being something to remember.
+Before the match starts the pad has one tile, **Toss**. It asks **Who breaks first?** with **Home** and **Away**. Press the start button to begin. After the match starts, the toss tile is gone.
 
-After the entry is recorded, the held panel asks **Who broke?** with that board's breaking side offered, and — on a covered-queen board — **Queen covered by?**. Both are optional; the board counts either way, and it's the only way per-player breaks and queens reach the [stats](/help/players/player-stats-and-photo). See [crediting the player](/help/scoring/attribution).
+## Score a board
 
-Games and the match settle themselves as boards land: reach the target or lead once the board limit is up and the game banks, and the match ends at two games won.
+A board is one entry, through one of two tiles:
+
+- **Board (no queen)** asks which side won the board.
+- **Board (queen covered)** asks which side won the board, then **Which side covered the queen?**
+
+The pad then asks the loser's coins left on the table with a **−** and **+** stepper, **Opponent's coins left**, and you press **Confirm**. The ribbon says what it recorded, for example "Board recorded — Home · 3 coins left · Queen: Home".
+
+> **Example**
+> In an ICF match, Home wins a board and covers the queen. Away has 3 coins left. Home scores 3 for the coins and 3 for the queen: 6 points. In Club 29 the same board scores 3 and 5: 8 points.
+
+When a side reaches the target, or leads once the boards are used up, the game is banked. The match ends at two games won.
 
 ## Umpire adjustments
 
-**Adjustment — credit** and **Adjustment — deduction** are separate tiles so a mis-tap can't land on zero, which is the one value an adjustment can't be. Each asks which side, how many points, and why — coins due, a foul, or other. The panel afterwards offers **Who committed this?**, drawn from *both* sides' players, because a penalty is usually a credit to the opponent of the person who caused it.
+**Adjustment — credit** and **Adjustment — deduction** are separate tiles. Each asks **Which side?** and then **How many points?**.
+
+## A game that finishes level
+
+The division's rules have a setting, **Game tied at max boards**, with **Sudden-death extra board** and **Drawn game**. A new division plays an extra board. In a knockout stage an extra board is always played. See [knockout deciders](/help/scoring/knockout-deciders).
+
+The rules also set **If a match is abandoned**: **Replay** or **Share the points**.
 
 ## Recording level
 
-Boards are the level carrom records, and they work at every level. The toss and umpire adjustments — and the per-player credits in the held panel — need **Key moments** or above. See [choosing a detail level](/help/scoring/fidelity).
+A new carrom match opens at **Key moments**. At **Result only** the pad offers the two board tiles and no adjustment tiles. At **Key moments** and above you also get the adjustments. See [choosing a detail level](/help/scoring/fidelity).
 
-## Common questions
+## The league table
 
-**A game finished level.** By default an extra sudden-death board decides it. A division can instead set the house rule that a level game is drawn — and only then can a carrom match end drawn at all.
+A win pays 2, a draw 1 and a loss 0. When sides are level, the division's **Standings** tab lists the order under "Tie-break cascade": points, wins, set ratio, board ratio, point ratio, head-to-head, then a drawing of lots.
 
-**Where's the substitution?** There isn't one. Carrom has no in-play substitution, so the pad offers none.
-
-**Can two people score the same match?** Not at once — the second entry is rejected and refreshed rather than overwriting. See [score conflicts](/help/scoring/conflicts).
+To undo a board, press **Take back** on the ribbon. See [fixing a mistake](/help/scoring/corrections).

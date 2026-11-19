@@ -13,7 +13,7 @@ The **Discipline** tab turns the cards your scorers record into suspensions. You
 
 The tab appears for sports that have cards or penalties: football, hockey, ice hockey, volleyball, badminton, table tennis, tennis and carrom. It does not appear for cricket, chess or an "any other game" division.
 
-Discipline is not on the Community plan. On Community the tab asks you to upgrade. Recording a card is separate from this tab. See [scoring football](/help/sports/football).
+Discipline is not on the Community plan. On Community the tab asks you to upgrade. Recording a card is separate from this tab. See [football](/help/sports/football).
 
 ## Set the rules
 

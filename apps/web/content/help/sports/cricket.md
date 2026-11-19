@@ -1,59 +1,74 @@
 ---
 title: Cricket
-description: Ball by ball — runs, extras and wickets in one tap each, with who's batting and bowling set once at the top.
+description: Score cricket ball by ball with the batters and bowler set once, or over by over, and see how a tied match goes to a super over.
 order: 4
+related: scoring/basics, scoring/knockout-deciders, scoring/fidelity, scoring/lineups
 ---
 
-Cricket divisions score ball by ball: one tap per delivery, with the striker, non-striker and bowler held at the top of the pad so you never re-enter them. Overs and wickets build the score; the format you picked for the division decides the rest — **T20**, **One-day**, **The Hundred** (five-ball overs) or **Test** (two innings a side, with declarations and the follow-on).
+You score cricket one delivery at a time. The striker, non-striker and bowler stay at the top of the pad, so you do not enter them again for each ball.
 
-## Who's in
+![The cricket pad after five balls of a T20 match. The header reads T20, Over 0.5 and a run rate of 15.6, and the score board reads Batting Harbour CC 13/0 and Overs 0.5. Below are the batters and bowler, the notice Ball recorded with Take back, the run tiles 0, 1, 2, 3, 4 and 6, and tiles for Wide, Wicket, No-ball, Bye, Leg bye, Penalty, Review, Retire, Close innings and More.](/help/sports/cricket-pad.webp "The cricket pad in a T20 match, five balls into the first over")
 
-Above the run buttons sit three chips: **striker**, **non-striker** and **bowler**. Set them once at the start of the over and every ball you tap carries them automatically. Tap a chip to change it — at the end of an over the pad asks for the next bowler, and the strike swaps itself on odd runs.
+## Choose the format
 
-The bowler chip only offers your fielding side, and anyone who cannot legally bowl the next over is shown greyed out with the reason next to their name — whether they bowled the previous over, or have already bowled their maximum. You are told before you tap, rather than after.
+You pick a format when you create the division. A new cricket division starts on **T20**.
+
+| Format | An innings is | Most overs for one bowler |
+|---|---|---|
+| **T20** | 20 overs of 6 balls | 4 |
+| **One-day (50 overs)** | 50 overs of 6 balls | 10 |
+| **The Hundred** | 100 balls in overs of 5 | 4 |
+| **Test match** | Two innings a side, with a follow-on and a draw | No limit |
+
+## Who is in
+
+Three chips sit above the run tiles: **Striker**, **Non-striker** and **Bowler**. At the start the pad says "Pick the two openers" and "Pick the bowler for over 1". Tap a chip to change it. After an over the pad says "Pick the bowler for over 2".
+
+The bowler list marks anyone who cannot bowl the next over and shows why, for example "Bowled the last over". The strike swaps itself on odd runs.
 
 ## A ball at a time
 
-Tap the runs scored: **0** through **6**. **Wide** and the other extras — no-ball, bye, leg-bye, penalty — sit alongside, and each one records as that ball with the extra attached rather than as a separate entry.
+Tap the runs: **0**, **1**, **2**, **3**, **4** or **6**. There is no tile for 5. The other deliveries have their own tiles: **Wide**, **No-ball**, **Bye**, **Leg bye** and **Penalty**.
 
-Every tap answers in plain words along the bottom of the pad — *FOUR · Kannan · through covers* — with **Undo** beside it. Tap the confirmation and you can add detail to what you just recorded, like the type of shot. Nothing is asked of you that the ball itself already knows.
+- **Wide** asks **No run**, **1 run**, **2 runs**, **3 runs**, **4 runs** or **+ Out**.
+- **Penalty** records at once as a ball of 5 runs.
+- **Review** asks the type: **Player** or **Umpire**.
 
-## Wickets
+After each tap the ribbon says what it recorded, for example "Ball recorded — 4 runs". The header shows the over and the run rate, for example "T20 · Over 0.1 · RR 24.0".
 
-**Wicket** asks only what changes. Pick how the batter went — bowled, caught, LBW, run out, stumped and the rest — and the pad asks who was out only when that isn't obvious, and for the fielder only when the dismissal involves one. Credit to the bowler follows from the dismissal, so it is never a question.
+To undo a ball, press **Take back** on the ribbon. See [fixing a mistake](/help/scoring/corrections).
 
-After a wicket the pad prompts for the incoming batter. **Retire** handles a batter leaving without being dismissed: it offers only the two batters currently at the crease, then asks why — hurt, out, or another reason. The incoming batter follows your batting order.
+## Wickets and retiring
 
-## Undo
+**Wicket** asks **What happened?** with **Bowled**, **Caught**, **LBW**, **Run out**, **Stumped**, **Hit wicket**, **Retired**, **Obstructing the field**, **Timed out** and **Hit the ball twice**. The pad then asks **Who walks in?** and lists the batters still to come.
 
-Straight after a tap, while the entry is still held, **Undo** removes it outright — it never reaches the record, so there's nothing to explain later. After that it is [a correction on an append-only ledger](/help/scoring/corrections): the entry is undone rather than erased, and the scorecard can always be reconstructed.
+**Retire** asks **Who is retiring?** and offers the two batters at the crease.
 
-## The rest of the innings
+## Over by over
 
-If a side has used up its reviews for the innings, that side is greyed out when you record the next one, with the reason shown — an umpire review is never limited. Toss, reviews, innings close and — in Test formats — declarations, the follow-on and the close of the match are all on the pad. The commonest sit as their own buttons; the rest are under **More actions**, which always offers exactly what the format and the current state of the match allow.
+You can score a whole over in one entry. At the start of an over the pad offers **End of over 1** (the number follows the over). Press it and the pad asks **Runs this over**, with a **−** and **+** stepper and **Confirm**.
+
+Each innings keeps the level it began with. The pad says so under the chips: "This innings: Ball-by-ball — Set when this innings began, by its first ball."
+
+## More actions
+
+**More** lists **New ball**, **Powerplay**, **Interruption** and **Change bowler**. In a Test match it also lists **Enforce follow-on** and **Draw (time expired)**, and the pad has a **Declare** tile.
 
 ## Super overs
 
-A tied match goes to a super over automatically when your division has it enabled — there's no separate "start super over" step. It's scored with the same run, extra and wicket tiles as the rest of the innings.
+In a limited-overs knockout, a tied match goes to a **super over**. It uses the same tiles. You turn it on or off in the stage's match rules, under **Super over**.
 
-The side that batted second in the match bats first in the super over, so whoever bowled second in the match bowls first here. Two wickets ends that side's over (a super over is all out much sooner than a full innings), and so does bowling out the over. The reply then chases whatever the first side scored, plus one — reach that and the match is over on the spot.
+The side that batted second in the match bats first in the super over. An over is 6 balls in T20. Two wickets end a side's over, and so does the last ball. The second side chases the first side's score plus one, and the match ends the moment it gets there. If the super over is level, **If the super over is tied** decides: **Another super over (ICC)**, **Most boundaries wins** or **Leave it as a tie**.
 
-Still level after that? Your division's still-tied rule decides what happens next: **repeat** plays another super over, and keeps going until someone wins; **boundary count** gives the match to whoever hit more boundaries across the whole match, main innings included; **shared** records the match as a tie outright.
+> **Example**
+> Home bats first and the match ties. Away batted second, so Away bats first in the super over and scores 12. Home needs 13. If Home gets 13 in the over, or in fewer balls, the match ends then and Home wins. If Home finishes on 12, the super over is level and the rule above decides.
+
+A Test match has no super over.
 
 ## Recording level
 
-Ball by ball is the finest level a cricket match records, and it is available on every plan — a cricket pad opens there. Drop to a lower level on the **Recording** chip and the pad records innings totals instead: a correct score and correct standings, with fewer details behind them. The chip always says which level you're on, in words. See [choosing a detail level](/help/scoring/fidelity).
+A new cricket match opens at **Every detail**. A lower level records innings totals instead of balls. See [choosing a detail level](/help/scoring/fidelity). For what happens to an abandoned match, see [if a match is abandoned](/help/scoring/basics#if-a-match-is-abandoned).
 
-## Over-by-over or ball-by-ball
+## The league table
 
-Every innings decides its own level from your first entry, not from a setting you pick beforehand. Tap a run, an extra or **Wicket** first, and that innings is scored ball by ball from then on. Tap **End of over** first instead, and it records over by over: each entry opens showing the innings' running total, ready to edit up to what actually happened, so you never add up an over yourself. Once an innings has picked a level the buttons for the other one drop away, since they'd no longer agree with the score.
-
-Tapped the wrong one? **Undo** the very first entry for that innings and it goes back to undecided, exactly as if nothing had been recorded — tap again to lock in whichever level you meant.
-
-## Common questions
-
-**Does The Hundred's five-ball over work?** Yes — the over fills to whatever the format sets, not always six.
-
-**Can someone score from the boundary?** Yes, with a [device link](/help/scoring/device-links). It scores the same way and can't finalize the match.
-
-**Signal dropped mid-over?** Entries queue on the device and send when it returns — see [scoring without signal](/help/scoring/offline-scoring).
+Every format pays 2 for a win, 1 for a tie, 1 for no result and 0 for a loss. A drawn Test match pays 1. When teams are level, the division's **Standings** tab lists the order under "Tie-break cascade": points, wins, net run rate, head-to-head, seeding, then a drawing of lots.
