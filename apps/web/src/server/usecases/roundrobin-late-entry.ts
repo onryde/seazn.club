@@ -392,11 +392,11 @@ async function tableDrawnAndOffered(tx: Tx, divisionId: string, stages: TableEnt
  * `table_waiting_stage_id` names the stage, the desk counts it (`late_players_waiting`, `table: true`), and the organiser's one
  * tap (`placeWaitingTableEntrant`) runs the cases.
  *
- * - The stage is COMPLETE: nothing is marked (a finished table takes no one, RB5-L8 — V533's own ruling) and the arrival still
+ * - The stage is COMPLETE: nothing is marked (a finished table takes no one, RB5-L8 — V535's own ruling) and the arrival still
  *   commits; the answer SAYS so (`refused`, RR_LATE_ENTRY_STAGE_COMPLETE), never a throw.
  * - The table is not drawn: null (a later Generate draws them in).
  * - The entrant already holds a fixture of ANY kind in the stage (a Reinstate whose lines still exist): null — they never wait.
- *   "Seatless" is V533's backfill predicate (no fixture at all), so the column's two writers agree on who waits.
+ *   "Seatless" is V535's backfill predicate (no fixture at all), so the column's two writers agree on who waits.
  * - Otherwise the marker is written. Idempotent: the same value on a retry (a webhook redelivery never reaches here twice anyway:
  *   `materialise` returns early once the registration holds its entrant), so one arrival is one flag.
  */

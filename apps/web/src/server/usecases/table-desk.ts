@@ -2,7 +2,7 @@ import "server-only";
 // W5 app-A Task 23 (X-CU-8, X-CU-11; R24 picks 1A and 3A, owner 2026-11-16): the desk's reads for a late player joining a running
 // ROOT league or group — the neighbour of `knockout-desk.ts`.
 // - `listTableWaiting` (X-CU-8; Task 6 ruling I2): the players an automatic door (a paid or confirmed registration, a waitlist
-//   promotion, an import, a Reinstate) left WAITING on the table (`entrants.table_waiting_stage_id`, V533). The stage card lists them
+//   promotion, an import, a Reinstate) left WAITING on the table (`entrants.table_waiting_stage_id`, V535). The stage card lists them
 //   in a "Waiting to join the table" strip, one "Add to the table" each (the tap, `placeWaitingTableEntrant`). The SAME set the
 //   desk's `late_players_waiting` row counts (`competition-desk.ts`: the marker, on a stage that is not complete, an entrant still
 //   in the field), so the row's "Open fixtures" always lands on a strip that lists someone to add.

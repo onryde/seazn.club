@@ -946,7 +946,7 @@ describe.runIf(HAS_DB)("X-LE-2 fed tails: league_ko, groups_ko, swiss_knockout n
         // An automatic arrival: never a waiting flag on a fed knockout (it is no entry stage), seated nowhere in it.
         const arrival = await registerAndConfirm(rig, "Arrival");
         expect(await waitingOn(arrival), "RB4-L2: no flag points at a fed knockout").toBeNull();
-        // W5 X-CU-8 (RB5-L10, V533): on a running ROOT table the arrival waits on the TABLE, flagged on the desk with
+        // W5 X-CU-8 (RB5-L10, V535): on a running ROOT table the arrival waits on the TABLE, flagged on the desk with
         // `table: true` and the table's name; a Swiss root takes no flag (it seats the arrival itself). Never the knockout.
         const [tw] = await sql<{ w: string | null }[]>`select table_waiting_stage_id as w from entrants where id = ${arrival}`;
         if (FED_OUTCOME[template] === "table_open") {
