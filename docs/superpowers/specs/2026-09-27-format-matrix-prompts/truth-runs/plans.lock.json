@@ -54047,7 +54047,6 @@
         "qualifying_main|football|F1@834",
         "double_elim|football|F1@320",
         "ladder|football|F1@390",
-        "group_group_ko|football|F1@430",
         "knockout_third_place|football|F1@768"
       ],
       "planned": {
@@ -56622,6 +56621,10 @@
         "mexicano|football|F1@375": {
           "state": "no_path",
           "reason": "W7: no organiser path: the division builder does not offer americano or mexicano to a sport whose engine entrant model holds no individuals (Match Day C9 review I5, option 2; round 3's shared rule). Owed: the stage create refuses it for team-only sports, the cells become refused, and the evidence is re-recorded on CI"
+        },
+        "group_group_ko|football|F1@430": {
+          "state": "no_path",
+          "reason": "W5: no organiser path: the catalog card seeds its own field, so a scenario that needs a different one (F1's odd field) cannot be built from a screen; the refusal F1 owes (RB5-E4/E6) is judged at L3 (field-size: no field for group_group_ko × F1 — catalog template super-groups seeds its own 16; an odd field is not the template's)"
         },
         "league|football|F2@320": {
           "state": "not_run",

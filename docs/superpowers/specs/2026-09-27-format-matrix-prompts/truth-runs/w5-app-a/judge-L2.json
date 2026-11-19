@@ -1,10 +1,10 @@
 {
   "version": 1,
   "mode": "regression",
-  "exit": 1,
+  "exit": 0,
   "layer": "L2",
   "runs": [
-    "ci-44395599687-1-l2"
+    "ci-44420793924-1-l2"
   ],
   "plannedNotRun": null,
   "compared": 275,
@@ -1330,19 +1330,6 @@
   "faults": [],
   "differing": [],
   "missing": [],
-  "regressed": [
-    {
-      "caseId": "swiss_knockout|tennis|tour|M1@768",
-      "was": "works",
-      "now": "red",
-      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-5c3e2b28-3452-4410-b53b-759cf3275ccd\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-5c3e2b28-3452-4410-b53b-759cf3275ccd\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
-    },
-    {
-      "caseId": "swiss_knockout|tennis|tour|F1@390",
-      "was": "works",
-      "now": "red",
-      "reason": "error: TimeoutError: locator.click: Timeout 17350ms exceeded.\nCall log:\n  - waiting for locator('[id=\"stage-rail-sheet-08573d67-34cd-4cfd-8044-d64e7aa27bbb\"]').getByTestId('stage-complete')\n    - locator resolved to <button type=\"button\" aria-disabled=\"true\" data-testid=\"stage-complete\" aria-describedby=\"stage-complete-hint-08573d67-34cd-4cfd-8044-d64e7aa27bbb\" class=\"btn min-h-11 px-3 py-1.5 text-xs aria-disabled:cursor-help aria-disabled:opacity-50 max-md:grow btn-ghost\">Complete stage</button>\n  - attempting click action\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n    - waiting 20ms\n    2 × waiting for element to be visible, enabled and stable\n      - element is not enabled\n    - retrying click action\n      - waiting 100ms\n    32 × waiting for element to be visible, enabled and stable\n       - element is not enabled\n     - retrying click action\n       - waiting 500ms\n"
-    }
-  ],
+  "regressed": [],
   "absent": []
 }

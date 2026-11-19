@@ -117,9 +117,9 @@ describe("ruling 70 is retired (W3, SW-H1): the live baseline carries no block, 
 
 // --- the committed baseline -------------------------------------------------------------------------------------------
 
-describe("the committed baseline (W5 app A truth run, CI 44395599687; W4 run 42992170592 and W3 run 41818942253 before it) shows no SW-H1", () => {
+describe("the committed baseline (W5 app A truth run, CI 44420793924; W4 run 42992170592 and W3 run 41818942253 before it) shows no SW-H1", () => {
   it("the committed baseline holds none of the three cells red on \"paired nobody\"", () => {
-    expect(baseline.runId).toBe("ci-44395599687-1-l3");
+    expect(baseline.runId).toBe("ci-44420793924-1-l3");
     let checked = 0;
     for (const id of RULING_70) {
       const c = baseline.cases.find((x) => x.caseId === id);
