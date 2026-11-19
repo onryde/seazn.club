@@ -2933,8 +2933,8 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
 
   /** The organiser's dispute-lost notices queued for one org (each rig is a fresh org). */
   const lostNotices = (orgId: string) =>
-    sql<{ ref_type: string; ref_id: string; dedupe_key: string | null; recipient: string; recipient_user_id: string | null; status: string; attempts: number }[]>`
-      select ref_type, ref_id, dedupe_key, recipient, recipient_user_id, status, attempts
+    sql<{ id: string; ref_type: string; ref_id: string; dedupe_key: string | null; recipient: string; recipient_user_id: string | null; status: string; attempts: number }[]>`
+      select id, ref_type, ref_id, dedupe_key, recipient, recipient_user_id, status, attempts
         from email_outbox
        where kind = 'registration_dispute_lost' and org_id = ${orgId}
        order by created_at, id`;
@@ -3058,6 +3058,8 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       amount: 2000,
     });
     await handleRegistrationDispute(lost, "closed");
+    const afterFirst = await lostNotices(orgId);
+    expect(afterFirst, "premise: the first close queued the owner's notice").toHaveLength(1);
     await handleRegistrationDispute(lost, "closed"); // /admin/billing-events replay
 
     expect(stripeMock.reversalCreate).toHaveBeenCalledTimes(1);
@@ -3065,9 +3067,37 @@ describe.skipIf(!HAS_DB)("dispute loss recovery (PROMPT-55)", () => {
       limit: 100,
     });
     expect(await auditRows("registration.dispute_recovered", regId)).toHaveLength(1);
+    // Mails are counted in the OUTBOX (what is sent), not at the renderer: since fix round 3 the replay builds the owner's body again
+    // (the notice is no longer behind the recovery's `already` guard) and the once-key refuses the second row. The replay after a
+    // successful first run queues nothing new: the same single row, to the owner, with the same dedupe key.
+    const afterReplay = await lostNotices(orgId);
+    expect(afterReplay.map((n) => [n.id, n.dedupe_key, n.recipient])).toEqual(
+      afterFirst.map((n) => [n.id, n.dedupe_key, n.recipient]),
+    );
+    expect(afterReplay).toHaveLength(1);
+  });
+
+  it("a replayed lost close sends exactly the owner notice the first attempt never queued, and no second reversal", async () => {
+    const { regId, orgId, intent, chargeId } = await disputedRig();
+    const disputeId = runDisputeId("dp_r3b");
+    stripeMock.reversalList.mockResolvedValueOnce({ data: [] }).mockResolvedValue({
+      data: [{ id: "trr_prior", amount: 1900, metadata: { dispute_id: disputeId } }],
+    });
+    const lost = disputeObj({ id: disputeId, payment_intent: intent, charge: chargeId, amount: 2000 });
+    await handleRegistrationDispute(lost, "closed");
+    // The first delivery's owner enqueue was refused: the reversal is made, no notice row exists (its enqueue landed nothing).
+    await sql`delete from email_outbox where kind = 'registration_dispute_lost' and org_id = ${orgId}`;
+    expect(await lostNotices(orgId), "premise: the owner was never told").toHaveLength(0);
+
+    await handleRegistrationDispute(lost, "closed");
+    const notices = await lostNotices(orgId);
+    expect(notices, "the redelivery queues the missing owner notice, once").toHaveLength(1);
+    expect(notices[0]!.dedupe_key).toBe(`${disputeId}:lost`);
+    expect(stripeMock.reversalCreate, "and makes no second reversal").toHaveBeenCalledTimes(1);
+    expect(await auditRows("registration.dispute_recovered", regId)).toHaveLength(1);
+
+    await handleRegistrationDispute(lost, "closed"); // a third delivery: nothing new
     expect(await lostNotices(orgId)).toHaveLength(1);
-    // The replay never renders a second notice: the recovery's guard stops it before the once-key is asked.
-    expect(vi.mocked(disputeLostEmail)).toHaveBeenCalledTimes(1);
   });
 
   it("partial dispute reverses the proportional net share, capped by the unreversed remainder", async () => {
