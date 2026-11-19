@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { builtinModules } from "@seazn/engine/sports";
 import ui from "@/dictionaries/en/ui.json";
+import { footballPadRules } from "@seazn/engine/pad";
 import { pickVariant } from "@/lib/preferred-variant";
 
 const DICT = ui as Record<string, string>;
@@ -146,6 +147,57 @@ describe("help: per-sport format tables are the engine's declarations", () => {
       const [sport, variant] = key.split("/") as [string, string];
       expect(Object.keys(mod(sport).variants), `exemption ${key} names a variant that no longer exists`).toContain(variant);
     }
+  });
+
+  it("tennis AD sentence names exactly the formats without noAd; the table tennis deuce scores are 2 x (target - 1) in total; football names each format's break markers", () => {
+    // Tennis: the sentence that says the next point shows AD names every variant whose engine cfg is not noAd, and no noAd variant.
+    const adLine = read("tennis").split("\n").find((l) => l.includes("shows **AD**"));
+    expect(adLine, "tennis.md has the AD sentence").toBeDefined();
+    const adSentence = adLine!.slice(adLine!.indexOf("On Tour"), adLine!.indexOf("shows **AD**"));
+    let tennis = 0;
+    for (const v of Object.keys(mod("tennis").variants)) {
+      const label = DICT[ROWS.find((r) => r.sport === "tennis" && r.variant === v)!.labelKey]!;
+      const noAd = cfg("tennis", v).game?.noAd === true;
+      expect(adSentence.includes(label), `AD sentence names "${label}" exactly when ${v} is not noAd (noAd=${noAd})`).toBe(!noAd);
+      tennis++;
+    }
+    expect(tennis, "anti-vacuity: tennis variants checked").toBe(5);
+
+    // Table tennis: each variant's deuce score is (setTo - 1) each, i.e. 2 x (setTo - 1) points in all, as the page states it.
+    const ttLine = read("tabletennis").split("\n").find((l) => l.includes("It adds **Deuce**"));
+    expect(ttLine, "tabletennis.md has the Deuce sentence").toBeDefined();
+    let tt = 0;
+    for (const v of Object.keys(mod("tabletennis").variants)) {
+      const row = ROWS.find((r) => r.sport === "tabletennis" && r.variant === v)!;
+      const plain = DICT[row.labelKey]!.replace(/\s*\(.*\)$/, "");
+      const each = cfg("tabletennis", v).setTo - 1;
+      const seg = [...ttLine!.matchAll(/(\d+)–(\d+) in ([^,.]+)/g)].find((m) => m[3]!.includes(plain));
+      expect(seg, `the Deuce sentence places ${plain}`).not.toBeNull();
+      expect([Number(seg![1]), Number(seg![2])], `${plain}: deuce at ${each}–${each} (${2 * each} points in all)`).toEqual([each, each]);
+      tt++;
+    }
+    expect(tt, "anti-vacuity: table tennis variants checked").toBe(3);
+
+    // Football: the sentence for a variant's group lists exactly the markers its engine declares, then the extra-time pair when on.
+    const brk = read("football").split("\n").find((l) => l.startsWith("**End of period** asks **Which break?**"));
+    expect(brk, "football.md has the break sentence").toBeDefined();
+    const bold = (t: string) => [...t.matchAll(/\*\*([^*]+)\*\*/g)].map((m) => m[1]);
+    const sentences = brk!.split(/(?<=\.) /);
+    const halvesSentence = sentences.find((x) => x.startsWith("The halves formats"))!;
+    const quartersSentence = sentences.find((x) => x.startsWith("Mini-soccer"))!;
+    const extraSentence = sentences.find((x) => x.includes("extra time is on"))!;
+    let football = 0;
+    for (const v of Object.keys(mod("football").variants)) {
+      const base = cfg("football", v);
+      const markers = footballPadRules.periodMarkers({ ...base, extraTime: { ...(base.extraTime ?? {}), enabled: false } }) as string[];
+      const withExtra = footballPadRules.periodMarkers({ ...base, extraTime: { ...(base.extraTime ?? {}), enabled: true } }) as string[];
+      const label = (m: string) => DICT[`matchPhase.${m}`]!;
+      const group = base.halves === 4 ? quartersSentence : halvesSentence;
+      expect(bold(group), `${v}: break markers named for its group`).toEqual(markers.map(label));
+      expect(bold(extraSentence), `${v}: extra-time markers`).toEqual(withExtra.filter((m) => !markers.includes(m)).map(label));
+      football++;
+    }
+    expect(football, "anti-vacuity: football variants checked").toBe(4);
   });
 
   it("each page names the variant a new division starts on, and it is the one the builder preselects", () => {

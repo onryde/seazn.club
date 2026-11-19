@@ -15,7 +15,7 @@ You pick a time control when you create the division: **Classical**, **Rapid** o
 
 ## The board
 
-Each half names a player and shows a dash until the game is decided. The result then shows as **1**, **½** or **0**. The player with White is marked **Playing White**. The header says **Colours tracked** when the division tracks colours.
+Each half names a player and shows a dash until the game is decided. The result then shows as **1**, **½** or **0**. A dot beside the name marks the player with White (its label reads **Playing White**). The header says **Colours tracked** when the division tracks colours.
 
 ## The pairing card
 

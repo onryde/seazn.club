@@ -33,7 +33,7 @@ A board is one entry, through one of two tiles:
 - **Board (no queen)** asks which side won the board.
 - **Board (queen covered)** asks which side won the board, then **Which side covered the queen?**
 
-The pad then asks the loser's coins left on the table with a **−** and **+** stepper, **Opponent's coins left**, and you press **Confirm**. The ribbon says what it recorded, for example "Board recorded — Home · 3 coins left · Queen: Home".
+The pad then asks the loser's coins left on the table with a **−** and **+** stepper, **Opponent's coins left**, and you press **Confirm**. The ribbon says what it recorded, for example "Board recorded — Home · 3 coins left · Queen: Home". For a few seconds after a board, a **Who broke?** panel with a player's name appears under the pad. It clears on its own.
 
 > **Example**
 > In an ICF match, Home wins a board and covers the queen. Away has 3 coins left. Home scores 3 for the coins and 3 for the queen: 6 points. In Club 29 the same board scores 3 and 5: 8 points.

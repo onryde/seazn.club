@@ -38,7 +38,7 @@ To undo a rally, press **Take back** on the ribbon. See [fixing a mistake](/help
 
 The strip carries **Games** and **Serving**, then **1st serve** or **2nd serve**. A side serves two points in turn, then the other side does. From 10–10 (20–20 in Hardbat), and once expedite is on, the serve changes after every rally.
 
-The pad does not guess who served first. **Note the server** is a tile of its own. Press it, say **Who served?**, then **Who won it?** for one rally. From then on the strip names the server and shows **1st serve** or **2nd serve**, and it follows that rule.
+The pad does not guess who served first. **Note the server** is a tile of its own. Press it, say **Who served?**, then **Who won it?** for one rally. From then on the strip names the server and shows **1st serve** or **2nd serve**, and it follows the two-serve rule above: it changes every rally from deuce, and once expedite is on.
 
 ## Time-outs and sanctions
 

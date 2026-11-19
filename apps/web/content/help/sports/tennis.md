@@ -30,7 +30,7 @@ Press **Start match**. The pad asks **Who serves first?** with the two sides. No
 ## Score a point
 
 1. Tap the half of the side that won the point. The half reads **Tap to award the point**.
-2. Keep tapping. The pad shows 15, 30 and 40. At 40–40 both halves show **40**. On Tour, Grand Slam and Short sets the next point shows **AD** for the side ahead. Fast4 and the no-ad doubles format play no advantage, so the next point at 40–40 wins the game.
+2. Keep tapping. The pad shows 15, 30 and 40. At 40–40 both halves show **40**. On Tour, Grand Slam and Short sets (TB at 4–4) the next point shows **AD** for the side ahead. Fast4 and the no-ad doubles format play no advantage, so the next point at 40–40 wins the game.
 3. The strip shows **Sets**, **Games** and **Serving**. After an odd game it adds **Ends changed**.
 
 At a set's tie-break the context line adds **Tie-break** and the halves count in plain numbers. When a set closes, the next one opens (the context line reads "Best of 3 · Set 2") and the strip updates, for example **Sets 1–0**.
