@@ -241,10 +241,11 @@ describe.skipIf(!DB)("resolveParticipant", () => {
     expect(await resolveParticipant(sql, { meetingId: b.homeMeeting, customParticipantId: "not-a-uuid" })).toBeNull();
   });
 
-  it("an arbiter's `<userId>:<nonce>` matches by the user prefix; the newest live row wins; a removed row never matches", async () => {
+  it("an arbiter's `<userId>:<nonce>` matches by the user prefix; two LIVE rows of one user cannot exist (V534's index); the one live row wins over older and newer removed ones", async () => {
     const b = await board();
     const user = b.ownerUserId;
-    const oldRow = await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: null, preset: "arbiter" });
+    // V534: one LIVE arbiter row per (fixture, side, user), so "the newest live row" is now the ONLY live row; the older row is removed.
+    const oldRow = await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: null, preset: "arbiter" }, { removedAt: T0 });
     const newRow = await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: null, preset: "arbiter" });
     const removed = await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: null, preset: "arbiter" }, { removedAt: T0 });
     await sql`update fixture_video_participants set user_id = ${user}, created_at = ${at(-3 * SEC)} where fixture_id = ${b.fixtureId} and participant_id = ${oldRow}`;
@@ -253,9 +254,12 @@ describe.skipIf(!DB)("resolveParticipant", () => {
     await sql`update fixture_video_participants set user_id = ${user}, created_at = ${at(-1 * SEC)} where fixture_id = ${b.fixtureId} and participant_id = ${removed}`;
     const custom = `${user}:nonce-${randomUUID().slice(0, 6)}`;
     expect(await resolveParticipant(sql, { meetingId: b.homeMeeting, customParticipantId: custom })).toBe(newRow);
+    // the premise of the reshaping: a second LIVE row for the same user is refused by the index
+    const second = putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: null, preset: "arbiter" });
+    await expect(second.then((id) => sql`update fixture_video_participants set user_id = ${user} where fixture_id = ${b.fixtureId} and participant_id = ${id}`)).rejects.toMatchObject({ code: "23505" });
     expect(await resolveParticipant(sql, { meetingId: b.awayMeeting, customParticipantId: custom }), "the arbiter sits in the HOME meeting only").toBeNull();
     // only the removed row left: no match
-    await sql`delete from fixture_video_participants where fixture_id = ${b.fixtureId} and participant_id in ${sql([oldRow, newRow])}`;
+    await sql`delete from fixture_video_participants where fixture_id = ${b.fixtureId} and participant_id = ${newRow}`;
     expect(await resolveParticipant(sql, { meetingId: b.homeMeeting, customParticipantId: custom }), "only a removed arbiter row is left").toBeNull();
   });
 });

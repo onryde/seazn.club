@@ -512,13 +512,12 @@ export async function readPlayerPresence(
   return out;
 }
 
-/** Whether `boardWithSides` will read this board as `checking_in` (its state chain, from the row alone): not cancelled or abandoned,
- *  still playable, the bridge neither finished nor held, and no game on file. The round view's seats read the check-ins of exactly these. */
+/** Whether `boardWithSides` will read this board as `checking_in` (its state chain, from the row alone): still playable (cancelled and
+ *  abandoned fixtures are not), the bridge neither finished nor held, and no game on file. The round view's seats read the check-ins of exactly these. */
 function inCheckIn(r: BoardRow): boolean {
   return (
-    r.fixtureStatus !== "cancelled" &&
-    r.fixtureStatus !== "abandoned" &&
-    isPlayableFixtureStatus(r.fixtureStatus) &&
+    isPlayableFixtureStatus(r.fixtureStatus) && // the one source for "still to be played": cancelled and abandoned are not
+
     r.bridgeStatus !== "finished" &&
     r.bridgeStatus !== "needs_organiser" &&
     r.challengeId === null

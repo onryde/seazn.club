@@ -114,7 +114,9 @@ const SITES: readonly { file: string; fn: Consumer; times: number; readers: read
   { file: "server/usecases/external-play/arbiter.ts", fn: "windowFor", times: 1, readers: ["arbiter-board"] },
   // The arbiter column's "who is here" (the loader's `seats` pass, spec 6): a seat's recorded check-in judged against the BOARD's own
   // anchor (`anchorOf`, the one the board list above uses: rank, stagger and extension). A batch reader, so it owns both titles.
-  { file: "server/usecases/external-play/arbiter.ts", fn: "checkInCounts", times: 1, readers: ["arbiter-here"] },
+  // Two sites, one rule (plan 3 Task 3): the seats pass above, and `sideFacts` (the loader's `joinable` mark, the join's own arm over the same hoisted
+  // stamps), each judged against the same `anchorOf` anchor.
+  { file: "server/usecases/external-play/arbiter.ts", fn: "checkInCounts", times: 2, readers: ["arbiter-here"] },
   { file: "server/usecases/external-play/checkin-extend.ts", fn: "windowFor", times: 1, readers: ["extend-result"] },
 ];
 
