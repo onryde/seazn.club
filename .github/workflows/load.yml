@@ -112,6 +112,7 @@ jobs:
           RELAY_DRIVERS: fake
           ENV_NAME: ci
           ONLINE_CHESS_ALWAYS: "1"
+          CAPTURE_QR_V2_ALWAYS: "1"
           LICHESS_BASE_URL: http://127.0.0.1:4321
           REALTIMEKIT_BASE_URL: http://127.0.0.1:4322
           REALTIMEKIT_METER_ANY_BASE: "1"
@@ -242,6 +243,7 @@ jobs:
           RELAY_DRIVERS: fake
           ENV_NAME: ci
           ONLINE_CHESS_ALWAYS: "1"
+          CAPTURE_QR_V2_ALWAYS: "1"
           LICHESS_BASE_URL: http://127.0.0.1:4321
           REALTIMEKIT_BASE_URL: http://127.0.0.1:4322
           REALTIMEKIT_METER_ANY_BASE: "1"
