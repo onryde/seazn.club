@@ -28,7 +28,7 @@ The pad's status line shows where the queue stands.
 
 A device that knows it is back online sends its queue by itself, oldest entry first, with no tap.
 
-Sometimes the connection is poor but the phone does not report it as offline, for example a hall with a Wi-Fi network that has no internet. Then the status line stays on **Offline** after the connection is good again. Tap the pad once: any new entry sends the whole queue, oldest first.
+Sometimes the connection is poor but the phone does not report it as offline, for example a hall with a Wi-Fi network that has no internet. Then the status line stays on **Offline** after the connection is good again. Reload the page: the pad sends what it saved. Or carry on scoring: the next entry you make sends the whole queue, oldest first, and the status goes to **All synced**.
 
 ## Switching devices
 

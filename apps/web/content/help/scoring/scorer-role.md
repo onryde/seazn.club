@@ -13,7 +13,7 @@ An **official** is someone from your officials pool, such as a referee or umpire
 2. Press **Invite**, enter their email and press **Send invite**. If the email does not arrive, share the claim link shown below the form. It is shown once.
 3. They open the link and claim the profile. They now have an account.
 4. Assign them to a match on a division's schedule.
-5. They accept the assignment. Until they do, the match is not theirs: the app refuses their entries with "You are not a member of this organization".
+5. They accept the assignment. Until they do, the match is not theirs and they cannot score it.
 
 ## What an official sees
 
@@ -30,10 +30,14 @@ On a match they have accepted:
 - **Finalize** the match.
 - **Enter lineups** for it.
 
-They cannot void anything after the match is finalized. The app answers "This fixture is finalized — ask an organiser to reopen it". They also cannot decline an assignment they have already accepted.
+They cannot **settle** a held match, record a **forfeit** or **walkover**, or **abandon** a match. Only an organiser (an owner or an admin) can, and the app refuses an official who tries. The one narrow exception is the forfeit that records a match-ending sanction the official has just entered. They also cannot decline an assignment they have already accepted.
+
+## Finalizing is final
+
+Once an official finalizes a match, the result is locked for everyone, you included. **Void** is no longer offered to anyone, and there is no way to reopen the match. Ask your officials to check the score with both sides before they press **Finalize**. A result that is entered but not yet finalized can still be voided and entered again.
 
 > **Example**
-> You assign Priya Nair to the match between Ana and Ben as referee. She claims her profile, accepts, and scores it from **My matches & teams**. When she has finished she finalizes it. Ben's team says the score is wrong. Priya cannot void it any more, so you correct it from the console.
+> You assign Priya Nair to the match between Ana and Ben as referee. She claims her profile, accepts, and scores it from **My matches & teams**. Ben's team says the score is wrong before she presses **Finalize**, so Priya voids the entry and enters it again. If she had already finalized, nobody could change it, so she checks the score with both sides first.
 
 ## Common questions
 

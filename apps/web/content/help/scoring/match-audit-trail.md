@@ -11,7 +11,7 @@ Every entry is an event in the match's ledger. Corrections are new events, never
 
 **Download audit** on the fixture console gives you the full trail. The same file is available from the API as `GET /api/v1/fixtures/{id}/audit`, as JSON, or as a readable PDF with `?format=pdf`. A key with the read scope can fetch it.
 
-The download is on **Pro** and on an **Event Pass** for that competition. On Community the app answers "The signed match audit trail download is on Pro and the Event Pass." See [plans](/help/billing/plans).
+The download needs a plan that includes it, or an **Event Pass** for that competition. Without either, the console shows **Signed audit — Pro** where the button would be, and its hover hint reads "The signed match audit trail download is a Pro feature." That hint does not mention the Event Pass, which unlocks the download too. See [plans](/help/billing/plans).
 
 The file holds:
 

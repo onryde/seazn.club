@@ -34,7 +34,7 @@ A card works until its match is over. There is no daily cut-off, so cards printe
 - **The match is deleted.** **Rebuild fixtures** deletes every match in the stage and makes new ones, so every card for that stage stops working. Deleting the stage does the same, and so does undoing the step that generated its matches. A Swiss round that loses a board because the number of players changed before it was paired does it for that board. Print again after any of these.
 
 > **Example**
-> The umpire at Court 2 scans the 10:30 card. The phone shows **Check the match before you start** with "Sana Ito" and "Jonas Lindqvist". They are the players on court, so the umpire presses **Start match** and scores. Later the organiser loses a card and chooses **Revoke & reissue**. The lost card now answers "This scoring link was revoked", and the printed day has a new card.
+> The umpire at Court 2 scans the 10:30 card. The phone shows **Check the match before you start** with "Sana Ito" and "Jonas Lindqvist". They are the players on court, so the umpire presses **Start match** and scores. Later the organiser loses a card and chooses **Revoke & reissue**. The lost card now answers "This scoring link was revoked", and the next time you print the day, it carries a new card. Cards already printed keep the old code.
 
 ## Common questions
 

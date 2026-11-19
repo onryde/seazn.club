@@ -15,20 +15,27 @@ Every entry in the pad's **Activity** feed has a **Void** button.
 2. Press **Confirm void**, or **Cancel**.
 3. The entry shows **Voided** and a new row, **Entry undone**, appears. The score and the state of the match are recalculated at once.
 
-Before the match starts, the pad's **Take back** button removes the last entry. Once it is live, the same button reads **Void last entry**. A [device link](/help/scoring/device-links) shows **Void my last entry**.
+Two shortcuts take back the latest entry without finding it in the feed. They are two controls in two places:
+
+- The ribbon on the pad has **Take back**. Pressed while the tap is still held back, it cancels the tap before it is sent. Pressed later, it voids the entry.
+- The ledger footer of the fixture console has **⟲ Void last entry**.
+
+A [device link](/help/scoring/device-links) shows **Void my last entry** on its pad.
 
 > **Example**
 > A badminton rally is recorded four times: Mira, Jonas, Mira, Mira, so 3-1. The second tap was a mistake. Void that entry and the score becomes 3-0 for Mira. The other three entries stand, and the pad works out the server and the court again from what is left.
 
 ## Who can void what
 
-- **You, as the organiser:** any entry, on any match, including after the result has moved the competition on.
+- **You, as the organiser:** any entry on a match that is not finalized, including after the result has moved the competition on.
 - **An official** with an accepted assignment to the match: any entry on that match until it is finalized. See [officials](/help/scoring/scorer-role).
-- **A device link** can void only entries made through that same link, never an official's entry or one made through a different link, and only until the result moves the competition on. In a knockout that is the moment the result is entered, because the winner goes straight into the next match. After that the link is refused with "This result has already moved the competition on", and corrections are the organiser's, from the console. Two phones that scanned the same QR share one link, so either can void the other's entries.
+- **A device link** can void only entries made through that same link, never an official's entry or one made through a different link, and only until the result moves the competition on. In a knockout that is the moment the result is entered, because the winner goes straight into the next match. After that the pad says "Not recorded — this result has already moved the competition on. Ask the organiser to correct it.", and corrections are the organiser's, from the console. Two phones that scanned the same QR share one link, so either can void the other's entries.
 
 ## After the match is finalized
 
-**Void** is no longer offered, and the app refuses a void with "This fixture is finalized". There is no button that reopens a finalized match. The signed [audit trail](/help/scoring/match-audit-trail) keeps the whole record either way.
+Nothing can change a finalized match, whoever you are. **Void** is no longer offered to the organiser, an official or a device link, the console shows no scoring controls for the match, and the app refuses every write to it, including from an owner or an API key. There is no way to reopen a finalized match.
+
+Check the result with both sides before you, or an official, press **Finalize**. Until then the result can be voided and entered again. A pad that was already open when the match was finalized and tries to score says "This match already has a result. Reopen it before scoring again.", but there is nothing to reopen. The signed [audit trail](/help/scoring/match-audit-trail) keeps the whole record either way.
 
 ## Replays
 
@@ -36,8 +43,8 @@ Voiding an entry does not subtract it. The app plays every entry after it again,
 
 ## Common questions
 
-**Can I undo a void?** No. The app answers "An undo cannot be undone — re-record the entry instead". Enter the entry again.
+**Can I undo a void?** No. The pad says "Not recorded — an undo cannot be undone. Re-record the entry instead." Enter the entry again.
 
-**I pressed Confirm void twice.** The second one is refused with "Nothing to undo — that entry is already undone". Nothing changes.
+**I pressed Confirm void twice.** The second one is refused: "Not recorded — that entry was already taken back." Nothing changes.
 
 **Someone else already voided it.** You get the same answer.

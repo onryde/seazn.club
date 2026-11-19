@@ -47,6 +47,4 @@ An unpaired Swiss board prints **TBD** for both sides, with the same lines. A ca
 
 Printing again is safe. A match keeps the same QR every time you print, and **Show QR** on the match shows that same code. Only **Revoke & reissue**, **Revoke**, or deleting the match changes it. See [device links](/help/scoring/device-links).
 
-## From the API
-
-The sheet is `POST /api/v1/competitions/{id}/exports/scorer-sheets`. It takes a `date`, or `dateFrom` and `dateTo`, an optional `divisionId`, and `groupBy`: `"court"` (the default) or `"division"`. With `"division"` each page run is one division, and each card shows its court under the time. A day with nothing to print answers "No fixtures to print on that day".
+The sheet can also be requested from a script. Access for scripts is covered in [API keys](/help/api/keys).

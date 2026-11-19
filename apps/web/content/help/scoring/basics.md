@@ -43,9 +43,9 @@ Results are an append-only ledger. You do not erase an entry, you void it. See [
 | **Result stands from the 4th quarter, otherwise replay** | Counts only when the abandon came in the last quarter. | field hockey |
 | **Share the points** | The match counts as a draw. | carrom, generic |
 
-Badminton, tennis, table tennis, volleyball and chess do not have the setting: an abandoned match is held. A cricket abandon is recorded as **no result** and the fixture is decided with no winner.
+Badminton, tennis, table tennis, volleyball and chess do not have the setting: an abandoned match is held. A cricket abandon is recorded as **no result** and the fixture is decided with no winner. The exception is a limited-overs match with **DLS revised targets** on, where the chasing side has faced at least the **Minimum overs for a result**: then a DLS par decides the abandoned match.
 
-Replay is the default where there is a choice. Football in particular does not keep the score unless you switch the setting to **Result stands**. **Share the points** needs draws to be possible. In generic, switch on **Allow draws**. In carrom, set **Game tied at max boards** to **Drawn game**. Without that the setting will not save.
+Replay is the default where there is a choice, with one exception: field hockey's FIH shoot-out variant defaults to **Result stands from the 4th quarter, otherwise replay**. Football in particular does not keep the score unless you switch the setting to **Result stands**. **Share the points** needs draws to be possible. In generic, switch on **Allow draws**. In carrom, set **Game tied at max boards** to **Drawn game**. Without that the setting will not save.
 
 Two things follow from the stage the match is in:
 
