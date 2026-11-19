@@ -37,7 +37,7 @@ The strip shows **Sets**, **Serving** and, in Indoor only, **Rotation**. The sid
 
 In Indoor, the first tap at 0–0 of a set opens **Who served?** with **Home** and **Away**, before it records the rally. After you answer, the strip shows, for example, **Serving Home** and **Rotation 1**. If Away wins the serve, it reads **Serving Away** and **Rotation 2**.
 
-In Beach the first tap is never interrupted, and **Serving Home** appears after it. The **Note the server** tile is there on both formats.
+In Beach the first tap is not interrupted, and **Serving Home** appears after it. The **Note the server** tile is there on both formats.
 
 ## Time-outs, sanctions and injuries
 

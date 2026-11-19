@@ -22,7 +22,7 @@ The band above the score says which settings apply. On IIHF it reads "3 × 20 mi
 
 ## The clock
 
-The **Clock** row has a **Start** button that becomes **Pause**. Every entry you record while the clock runs is stamped with the game time. The penalty box counts down against that clock.
+The **Clock** row has a **Start** button that becomes **Pause**. After a penalty, the strip shows a **BACK ON** countdown. See [ice hockey penalties](/help/sports/icehockey-penalties).
 
 ## Goals
 
@@ -41,7 +41,7 @@ In the division's rules, ice hockey has settings for the variant, period length,
 
 ## Other tiles
 
-- **Line change** (one per side) asks who is **Coming off**. Substitution is not limited.
+- **Line change** (one per side) asks who is **Coming off**.
 - **Set piece awarded** records a penalty shot and asks **Awarded to**.
 - **Injured, no sub** records a player who cannot continue and is not replaced.
 
