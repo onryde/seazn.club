@@ -513,6 +513,24 @@ describe.skipIf(!DB)("unadopted rooms", () => {
       }
     });
 
+    it("a game that appears while the end is in flight keeps the row, and the room is NOT logged as retired (the log follows the delete's row count)", async () => {
+      const { log } = await import("@/server/logger");
+      const info = vi.spyOn(log, "info").mockImplementation(() => undefined);
+      try {
+        const s = await seed();
+        const id = await putRoom(s, "home", { home: randomUUID(), away: randomUUID() });
+        await retireStaleMeeting(s.fixtureId, new Date(), async () => {
+          await sql`
+            insert into fixture_external_play (fixture_id, org_id, scheduled_at_basis, status, challenge_id)
+            values (${s.fixtureId}, ${s.orgId}, now(), 'ready', ${`gm-${RUN}-${randomUUID().slice(0, 6)}`})`;
+        });
+        expect((await roomsOf(s.fixtureId)).map((r) => r.meetingId), "premise: the delete was blocked, the row stays").toEqual([id]);
+        expect(info.mock.calls.filter((c) => c[1] === "realtimekit: stale room retired"), "kept row: no retired line").toHaveLength(0);
+      } finally {
+        info.mockRestore();
+      }
+    });
+
     it("on ONE board: the other pairing's room is ended and deleted while its unadopted sibling is neither ended nor deleted, and a second call finds nothing to do", async () => {
       const s = await seed();
       const staleId = await putRoom(s, "home", { home: randomUUID(), away: randomUUID() });

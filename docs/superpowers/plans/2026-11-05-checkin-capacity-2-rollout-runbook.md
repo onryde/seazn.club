@@ -89,7 +89,9 @@ Pre-mint flag first, for a week. Then the proof flag, only after sections 1.2 an
   (Flyway migrate, sync, build, `flyctl deploy`) and `deploy-cron-worker-stg`/`-prod` (`wrangler deploy --env ...`). They start together
   and run in parallel.
 - Consequences: the Worker can go live before the app's new route exists. A failed migrate or Fly deploy leaves the **Worker deployed**
-  and calling `/api/cron/external-play-premint` on the old app: a 404 each firing, counted by the Worker as a failure and paged. The
+  and calling `/api/cron/external-play-premint` on the old app, which has no such route. Whether that paged is **unverified**: the
+  Worker's `failureCounts` for this row read `data.failed` and `data.skipped` from the response body, and how the Worker treats a 404
+  with no body is not read here. Treat it as noise or a page, not as known behaviour. The
   Worker's `ACTIVE` var is `"true"` (wrangler.json), so there is no off switch short of redeploying or flipping that var.
 - A `needs:` was **not added**: `apps/web/src/__tests__/toolchain.test.ts` ("no deploy workflow declares needs:") forbids it, because
   the gate jobs live in `ci.yml` and a cross-workflow `needs:` is a silent no-op. A same-file `needs: deploy-stg` on the Worker job
@@ -105,12 +107,16 @@ Pre-mint flag first, for a week. Then the proof flag, only after sections 1.2 an
 V531 added `fixture_video_participants.camera_live_first_at` and the check `fixture_video_participants_camera_live_first_check`:
 `camera_live_first_at is null or camera_reported is not distinct from 'live'`. The new writer (`camera-report.ts`) clears the stamp in
 the same statement as every non-live write. A **pre-V531-aware build never clears it**, so after rolling the app back, its first
-`off` report over a stamped row is refused with 23514 and the camera report fails for that seat. (Migrations are not rolled back; V531's
-other changes, nullable pair stamps and the new columns, are harmless to old code.)
+`off` report over a stamped row is refused with 23514 and the camera report fails for that seat. (Migrations are not rolled back. Pricing is untouched by this trap: `reservation` and `recheck_cost` live on `fixture_seat_line`, not on
+`fixture_video_participants`.) V531's other changes (nullable pair stamps, the new columns) being harmless to an old build is
+**UNVERIFIED**; see "Unadopted rooms" below.
 
 Two fixes; **use A**:
 
-- **A (use this): clear the stamps, keep the constraint.** After the old app is serving (so no new-code writer can re-stamp):
+- **A (use this): clear the stamps, keep the constraint.** Run it only after the rollback deploy has **fully completed**: Fly's rolling
+  deploy overlaps old and new machines, and any new-build machine still running can re-stamp. Confirm no new-build machine is left
+  (`fly status` shows only the old release), then run it, then **run it once more** and confirm 0 rows updated. During the overlap the old
+  machines refuse `off` reports over stamped rows (23514); that is expected until the statement has run on a clean fleet.
 
   ```sql
   update fixture_video_participants set camera_live_first_at = null where camera_live_first_at is not null;
@@ -119,14 +125,27 @@ Two fixes; **use A**:
   Blast radius: only the new fallback clock's "first live receipt" for seats currently live (the reader treats live-with-null as a run
   starting now, so the worst case is a fallback that starts later). Old code never reads the column. Small, one table, no lock beyond row
   locks of live seats. Between the app rollback and this statement, `off` reports for stamped seats fail: run it immediately, then
-  re-check `off` reports succeed. Roll the app back first, clear second; the other order lets the new code re-stamp.
+  re-check `off` reports succeed. Roll the app back first and let it finish, clear second; the other order lets the new code re-stamp.
 - B (only if A cannot run): `alter table fixture_video_participants drop constraint fixture_video_participants_camera_live_first_check;`
   Blast radius: takes an access-exclusive lock on the table briefly, and removes the invariant for the next roll-forward (re-adding it
   validates every row). Stamps are then left in place and unread by old code.
 
-Flags first: before any app rollback, turn `EXTERNAL_PLAY_PRESENCE_PROOF` off **between rounds** (section 3), then `EXTERNAL_PLAY_PREMINT`
-off (unadopted rooms already made stay valid: an old build never selects them as another pairing's, and the sweep's `premintLeft` branch
-ends them; **unverified** against a pre-plan-2 build, which has no `premintLeft`).
+**Unadopted rooms (UNVERIFIED, treat as a risk).** The current `retireStaleMeeting` skips null-stamped (unadopted, pre-minted) rooms
+with `m.home_entrant_id is not null`. A **pre-plan-2 build lacks that guard** and was never tested against null stamps, so it would likely
+read a pre-minted room as "another pairing's" and end it (2 vendor calls each, +4 per board). Nothing in the tree is a route or script that
+cleans these up. Before rolling back past plan 2: turn `EXTERNAL_PLAY_PREMINT` off, then either accept the spend, or end the rooms first.
+There is no operator route for the end; the SQL to **list** them is:
+
+```sql
+select m.fixture_id, m.side, m.meeting_id from fixture_video_meetings m
+ where m.home_entrant_id is null and m.ended_at is null
+   and not exists (select 1 from fixture_video_participants p where p.fixture_id = m.fixture_id and p.side = m.side);
+```
+
+Ending them at the vendor is a Cloudflare call per room (`PATCH /meetings/:id` inactive) and has no tooling here; deleting the rows
+without ending the rooms leaves live vendor rooms nothing tracks (the exact thing the retire path's order exists to prevent), so do not.
+
+Flags first: before any app rollback, turn `EXTERNAL_PLAY_PRESENCE_PROOF` off **between rounds** (section 3), then `EXTERNAL_PLAY_PREMINT` off.
 
 ## 8. Open items for the owner
 
