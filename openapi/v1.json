@@ -29967,7 +29967,9 @@
                                     "type": "string",
                                     "enum": [
                                       "window_closed",
-                                      "send_failed"
+                                      "send_failed",
+                                      "lichess_unlinked",
+                                      "lichess_reconnect"
                                     ]
                                   }
                                 },
@@ -30012,7 +30014,9 @@
                                     "type": "string",
                                     "enum": [
                                       "window_closed",
-                                      "send_failed"
+                                      "send_failed",
+                                      "lichess_unlinked",
+                                      "lichess_reconnect"
                                     ]
                                   }
                                 },

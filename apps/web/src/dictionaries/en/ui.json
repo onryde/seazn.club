@@ -7472,6 +7472,8 @@
   "externalPlay.openRound.clockNotPlayable": "This division's clock can't be played online. Choose one of the listed time controls, then open the round.",
   "externalPlay.openRound.skipped.windowClosed": "Not invited: the time to take a seat at this board has passed.",
   "externalPlay.openRound.skipped.sendFailed": "The invite email could not be sent. Open the round again to retry.",
+  "externalPlay.openRound.skipped.lichessUnlinked": "Not invited: a player on this board has not linked their Lichess account. Once they link it, open the round again.",
+  "externalPlay.openRound.skipped.lichessReconnect": "Not invited: a player on this board needs to reconnect their Lichess account. Once they do, open the round again.",
   "externalPlay.onlineGameExists": "An online game has started on a board this would clear, so it can't be cleared. Settle that board in the arbiter panel.",
   "externalPlay.gameExistsCta": "Open the arbiter panel",
   "arbiter.notice.resyncTokenUnavailable": "We couldn't open the players' Lichess access on our side. This isn't something a retry fixes. Contact Seazn support.",

@@ -7472,6 +7472,8 @@
   "externalPlay.openRound.clockNotPlayable": "La cadence de cette division ne peut pas être jouée en ligne. Choisissez l'une des cadences proposées, puis ouvrez la ronde.",
   "externalPlay.openRound.skipped.windowClosed": "Non invité : le délai pour prendre place à cet échiquier est écoulé.",
   "externalPlay.openRound.skipped.sendFailed": "L'e-mail d'invitation n'a pas pu être envoyé. Ouvrez la ronde à nouveau pour réessayer.",
+  "externalPlay.openRound.skipped.lichessUnlinked": "Non invité : un joueur de cet échiquier n'a pas lié son compte Lichess. Une fois fait, ouvrez de nouveau la ronde.",
+  "externalPlay.openRound.skipped.lichessReconnect": "Non invité : un joueur de cet échiquier doit reconnecter son compte Lichess. Une fois fait, ouvrez de nouveau la ronde.",
   "externalPlay.onlineGameExists": "Une partie en ligne a commencé sur un échiquier que cette action viderait : il ne peut donc pas être vidé. Réglez cet échiquier dans le panneau d'arbitre.",
   "externalPlay.gameExistsCta": "Ouvrir le panneau d'arbitre",
   "arbiter.notice.resyncTokenUnavailable": "Nous n'avons pas pu ouvrir l'accès Lichess des joueurs de notre côté. Réessayer ne réglera rien. Contactez le support Seazn.",

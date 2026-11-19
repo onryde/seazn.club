@@ -16,7 +16,7 @@ export const OPEN_ROUND_REFUSALS = ["no_fixtures", "not_paired", "division_not_s
 export type OpenRoundRefusal = (typeof OPEN_ROUND_REFUSALS)[number];
 
 /** Why one board of an opened round was not invited. Reported per fixture. */
-export const OPEN_ROUND_SKIP_REASONS = ["window_closed", "send_failed"] as const;
+export const OPEN_ROUND_SKIP_REASONS = ["window_closed", "send_failed", "lichess_unlinked", "lichess_reconnect"] as const;
 export type OpenRoundSkipReason = (typeof OPEN_ROUND_SKIP_REASONS)[number];
 
 export type OpenRoundSkip = { fixtureId: string; reason: OpenRoundSkipReason };
@@ -133,6 +133,8 @@ export const OPEN_ROUND_REFUSAL_KEYS: Readonly<Record<OpenRoundRefusal, Dictiona
 export const OPEN_ROUND_SKIP_KEYS: Readonly<Record<OpenRoundSkipReason, DictionaryKey>> = {
   window_closed: "externalPlay.openRound.skipped.windowClosed",
   send_failed: "externalPlay.openRound.skipped.sendFailed",
+  lichess_unlinked: "externalPlay.openRound.skipped.lichessUnlinked",
+  lichess_reconnect: "externalPlay.openRound.skipped.lichessReconnect",
 };
 
 /** A re-pair (Swiss unpair, Rebuild, or the delete-entrant that unpairs) is

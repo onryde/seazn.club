@@ -7472,6 +7472,8 @@
   "externalPlay.openRound.clockNotPlayable": "De klok van deze divisie kan niet online worden gespeeld. Kies een van de vermelde tempo's en open dan de ronde.",
   "externalPlay.openRound.skipped.windowClosed": "Niet uitgenodigd: de tijd om plaats te nemen aan dit bord is voorbij.",
   "externalPlay.openRound.skipped.sendFailed": "De uitnodigingsmail kon niet worden verstuurd. Open de ronde opnieuw om het nog eens te proberen.",
+  "externalPlay.openRound.skipped.lichessUnlinked": "Niet uitgenodigd: een speler aan dit bord heeft zijn Lichess-account niet gekoppeld. Open de ronde opnieuw zodra dat gebeurd is.",
+  "externalPlay.openRound.skipped.lichessReconnect": "Niet uitgenodigd: een speler aan dit bord moet zijn Lichess-account opnieuw verbinden. Open de ronde opnieuw zodra dat gebeurd is.",
   "externalPlay.onlineGameExists": "Er is een online partij begonnen op een bord dat hierdoor leeg zou worden, dus dat kan niet. Beslis dat bord in het arbiterpaneel.",
   "externalPlay.gameExistsCta": "Arbiterpaneel openen",
   "arbiter.notice.resyncTokenUnavailable": "We konden de Lichess-toegang van de spelers aan onze kant niet openen. Opnieuw proberen lost dit niet op. Neem contact op met Seazn-support.",

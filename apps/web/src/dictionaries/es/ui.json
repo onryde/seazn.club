@@ -7472,6 +7472,8 @@
   "externalPlay.openRound.clockNotPlayable": "El reloj de esta división no se puede jugar en línea. Elige uno de los controles de tiempo de la lista y luego abre la ronda.",
   "externalPlay.openRound.skipped.windowClosed": "Sin invitar: ya pasó el plazo para ocupar el puesto en este tablero.",
   "externalPlay.openRound.skipped.sendFailed": "No se pudo enviar el correo de invitación. Abre la ronda de nuevo para reintentarlo.",
+  "externalPlay.openRound.skipped.lichessUnlinked": "Sin invitar: un jugador de este tablero no ha vinculado su cuenta de Lichess. Cuando lo haga, abre la ronda de nuevo.",
+  "externalPlay.openRound.skipped.lichessReconnect": "Sin invitar: un jugador de este tablero debe reconectar su cuenta de Lichess. Cuando lo haga, abre la ronda de nuevo.",
   "externalPlay.onlineGameExists": "Ya empezó una partida en línea en un tablero que esto vaciaría, así que no se puede vaciar. Resuelve ese tablero en el panel del árbitro.",
   "externalPlay.gameExistsCta": "Abrir el panel del árbitro",
   "arbiter.notice.resyncTokenUnavailable": "No pudimos abrir el acceso a Lichess de los jugadores por nuestra parte. Reintentar no lo soluciona. Contacta con el soporte de Seazn.",

@@ -52,7 +52,7 @@ import "server-only";
 // authorised HERE, first, against the stage's own org, before any write.
 import type postgres from "postgres";
 import { getOrgRole } from "@/lib/auth";
-import { sql } from "@/lib/db";
+import { sql, type Tx as DbTx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import type { OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
 import { EDITOR_ROLES } from "@/lib/types";
@@ -66,6 +66,7 @@ import { boardAnchor, roomPhase, type BoardAnchor } from "@/server/external-play
 import { errFields } from "@/server/email-outbox/err-fields";
 import { log } from "@/server/logger";
 import { audit } from "../audit";
+import { lichessLinkStatesByUser } from "../external-accounts";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
 import { attachToOpen, boardSeats, dispatchAndClassify, queueFixtureInvite, type InviteSeat } from "./invite";
 import { assertOnlineChessOffered } from "./online-chess-flag";
@@ -246,6 +247,28 @@ type Decision =
       closedSkips: OpenRoundSkip[];
     };
 
+type LinkHold = "lichess_unlinked" | "lichess_reconnect";
+
+/** The boards this open holds back for a link, by why: a seat with no resolvable Lichess link (or no single player to hold one) is
+ *  `lichess_unlinked`; a link `lichessGrantPlays` refuses (identity-only, short of a play scope - the seat gate's own verdict, via
+ *  `lichessLinkStatesByUser`) is `lichess_reconnect`. A board with both is reported unlinked. */
+async function lichessHeldBoards(boards: readonly Board[]): Promise<Map<string, LinkHold>> {
+  const userIds = boards.flatMap((b) => b.seats.flatMap((s) => (s.player.userId === null ? [] : [s.player.userId])));
+  const states = await lichessLinkStatesByUser(sql as unknown as DbTx, [...new Set(userIds)]);
+  const held = new Map<string, LinkHold>();
+  for (const b of boards) {
+    let hold: LinkHold | null = null;
+    for (const seat of b.seats) {
+      const { userId, lichess } = seat.player;
+      const state = userId === null || lichess === null ? undefined : states.get(userId);
+      if (state === undefined) hold = "lichess_unlinked";
+      else if (state === "reconnect" && hold === null) hold = "lichess_reconnect";
+    }
+    if (hold !== null) held.set(b.f.fixtureId, hold);
+  }
+  return held;
+}
+
 const AUDIT_TYPE = {
   opened: "external_play.round_opened",
   reopened: "external_play.round_reopened",
@@ -331,6 +354,9 @@ export async function openRound(
     await resetStaleBridge(f); // a rescheduled, game-less row starts over (T7)
     boards.push({ f, seats: await boardSeats(f) });
   }
+  // A board whose player has no Lichess link that PLAYS cannot make its challenge: held, not invited (neither seat), and the other boards open
+  // as usual. Read outside the transaction (the links are read through the pool, as `loadSide` reads them).
+  const heldBoards = await lichessHeldBoards(boards);
 
   const decision = await sql.begin(async (tx): Promise<Decision> => {
     // The lock every pairing write takes (generate, unpair, addFixture,
@@ -403,7 +429,11 @@ export async function openRound(
       return (colour === "white" ? b.white_emailed_at : b.black_emailed_at) !== null;
     };
 
-    const takes = boards.filter((b) => bridgeTakesInvites(factsOf(b.f.fixtureId)));
+    const takes = boards.filter((b) => !heldBoards.has(b.f.fixtureId) && bridgeTakesInvites(factsOf(b.f.fixtureId)));
+    // Only a board that would otherwise have been invited is reported: a decided or closed board is not "waiting on a link".
+    const linkSkips: OpenRoundSkip[] = boards
+      .filter((b) => heldBoards.has(b.f.fixtureId) && bridgeTakesInvites(factsOf(b.f.fixtureId)))
+      .map((b) => ({ fixtureId: b.f.fixtureId, reason: heldBoards.get(b.f.fixtureId)! }));
     const pending: { board: Board; seats: InviteSeat[] }[] = [];
     for (const board of takes) {
       const open = board.seats.filter((s) => !invitedFor(board.f.fixtureId, s.colour));
@@ -466,7 +496,7 @@ export async function openRound(
       kind = "opened";
       await retireBoardsMeetings(tx, ids, now, "first");
     } else if (pending.length === 0) {
-      return { kind: "nothing", skipped: [] };
+      return { kind: "nothing", skipped: linkSkips };
     } else if (!anyInvited || !otherBoundStillPlayable) {
       // Nobody this round was invited (a re-pair deleted the rows, or every
       // send failed), or — D17 — the only boards still playable are the ones
@@ -536,7 +566,7 @@ export async function openRound(
           pending.splice(i, 1);
         }
       }
-      if (pending.length === 0) return { kind: "nothing", skipped: closedSkips };
+      if (pending.length === 0) return { kind: "nothing", skipped: [...closedSkips, ...linkSkips] };
     }
 
     // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
@@ -555,7 +585,8 @@ export async function openRound(
     // organiser's.
     const keptExtension = new Map<string, { extraMs: number; extensions: number }>();
     const refusedIds = new Set(closedSkips.map((s) => s.fixtureId));
-    const rearmedIds = [...rearmed].filter((id) => !refusedIds.has(id));
+    // A board held for a link keeps the row it had too, for the same reason: it is not attached below, and a deleted row is a no-show candidate.
+    const rearmedIds = [...rearmed].filter((id) => !refusedIds.has(id) && !heldBoards.has(id));
     if (rearmedIds.length > 0) {
       retireBoards.push(...(await retireBoardsMeetings(tx, rearmedIds, now, "rearm")));
       if (kind === "reinvited") {
@@ -612,7 +643,7 @@ export async function openRound(
       // (as releaseSeat does for a seat it clears) - or "every send failed" would leave the round reading "someone was invited".
       if (queueFailed.has(fixtureId)) await unbindIfUnstamped(tx, fixtureId, open.id);
     }
-    return { kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips };
+    return { kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...linkSkips] };
   });
 
   if (decision.kind === "nothing") {

@@ -2805,6 +2805,8 @@ export type DictionaryKey =
   | "externalPlay.openRound.invited.other"
   | "externalPlay.openRound.noFixtures"
   | "externalPlay.openRound.notPaired"
+  | "externalPlay.openRound.skipped.lichessReconnect"
+  | "externalPlay.openRound.skipped.lichessUnlinked"
   | "externalPlay.openRound.skipped.sendFailed"
   | "externalPlay.openRound.skipped.windowClosed"
   | "externalPlay.openRound.startFirst"
