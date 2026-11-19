@@ -38,6 +38,7 @@ import { HttpError } from "@/lib/errors";
 import { sql } from "@/lib/db";
 import { liveMintClaimSince } from "@/server/external-play/window";
 import { log } from "@/server/logger";
+import { LINE_END_ROOM_CALLS } from "@/server/external-play/seat-line";
 import { budgetKey, takeRealtimeKitCall, type CallBudget } from "./budget";
 
 export const REALTIMEKIT_TIMEOUT_MS = 10_000;
@@ -448,10 +449,20 @@ export async function retireStaleMeeting(
       // Reached by its own id: the room is ended (or was), so the row has nothing left to track - EXCEPT that a game's meeting
       // is never deleted. The select above judged "no game" before the vendor round trip; judged again here, a game that
       // appeared meanwhile keeps its row (the claim is then refused by name, `pairingChanged`).
-      await sql`
+      const deleted = await sql`
         delete from fixture_video_meetings m
          where m.meeting_id = ${row.meeting_id}
-           and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})`;
+           and not exists (select 1 from fixture_external_play ep where ep.fixture_id = m.fixture_id and ${gameEvidenceOn(now)})
+        returning m.meeting_id`;
+      // Prod observability of the stale-room spend (T11 carry): the +LINE_END_ROOM_CALLS the claim pays OVER its stamp, per room whose
+      // end was asked of the vendor (an already-ended row cost nothing). Grep "stale room retired"; sum `endCalls` per hour.
+      // Only a delete that took: a row a game appeared behind meanwhile is kept, and is not "retired".
+      if (deleted.length > 0) {
+        log.info(
+          { fixtureId, side: row.side, meetingId: row.meeting_id, endCalls: row.ended_at === null ? LINE_END_ROOM_CALLS : 0 },
+          "realtimekit: stale room retired",
+        );
+      }
     } catch (err) {
       refused ??= err;
       // A call the platform's budget refused is nothing broken (D21): a warning, not an error.
