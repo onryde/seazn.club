@@ -5433,3 +5433,226 @@ describe("usePadPipeline — a foreign void naming the SERVER id of a pad-scored
     expect(running(pad), "the replacement stands alone — not 2 + 3").toEqual({ home: 3, away: 0 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scoring-defects item 2 (2026-11-19) — a stalled queue retries BY ITSELF. Before, the queue was sent on mount, on the
+// browser's `online` event and on a new entry only, so a browser that never fires `online` (captive portal, wifi that
+// never fully drops) left a stalled queue waiting for a reload or a tap. This node harness has no `window`, so no
+// `online` event can reach the hook at all: every drain below after the first tap is the timer's, by construction.
+// The schedule is the owner's ruling, typed here on purpose (5s, doubling, 60s cap) and never read back from the code.
+// ---------------------------------------------------------------------------
+describe("usePadPipeline — a stalled queue retries on a bounded backoff, with no online event", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A server that is offline until the test says otherwise, keeps a real ledger, and can hold one send open. */
+  function flakyServer() {
+    const rows: LedgerSlotEvent[] = [];
+    let online = false;
+    /** Sends still allowed before the network dies again; `null` = no limit. */
+    let budget: number | null = null;
+    let gate: Promise<void> | null = null;
+    const appendCalls: AppendEventBody[] = [];
+    const transport: PadTransport = {
+      async appendEvent(_fixtureId, body) {
+        appendCalls.push(body);
+        if (gate !== null) await gate;
+        if (!online || budget === 0) return { kind: "network-error", message: "offline" };
+        if (budget !== null) budget -= 1;
+        const seq = rows.length + 1;
+        rows.push({
+          id: `srv-${seq}`,
+          seq,
+          type: body.type,
+          payload: body.payload,
+          recorded_at: "2026-11-19T10:00:00.000Z",
+          recorded_by: "user-1",
+          device_link_id: null,
+          voids_event_id: null,
+        });
+        return { kind: "ok", data: { seq, state_summary: { seq }, outcome: null, status: "in_play", event_id: `srv-${seq}` } };
+      },
+      async listEventsSince(_fixtureId, sinceSeq) {
+        return rows.filter((r) => r.seq > sinceSeq);
+      },
+      async getLastSeq() {
+        return rows.length;
+      },
+      async fetchState(): Promise<FixtureStateResult> {
+        return { status: "in_play", last_seq: rows.length, state: null, summary: null, outcome: null };
+      },
+    };
+    return {
+      transport,
+      rows,
+      appendCalls,
+      goOnline: () => {
+        online = true;
+      },
+      goOffline: () => {
+        online = false;
+      },
+      /** The network works for exactly `n` more sends, then dies again. */
+      allowSends: (n: number) => {
+        online = true;
+        budget = n;
+      },
+      holdNextSend() {
+        const g = deferred<void>();
+        gate = g.promise;
+        return () => {
+          gate = null;
+          g.resolve();
+        };
+      },
+    };
+  }
+
+  const NEVER_DRAIN_MS = 10 * 60_000;
+
+  it("an offline tap is resent at 5s, 15s, 35s, 75s, 135s, 195s: doubling to a 60s cap (the schedule, call by call)", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.queueDepth, "the tap is queued behind a dead network").toBe(1);
+    expect(server.appendCalls, "the tap's own first send").toHaveLength(1);
+
+    // [wait before the next send, the sends there should have been once it has passed]
+    const waits = [5_000, 10_000, 20_000, 40_000, 60_000, 60_000];
+    let sends = 1;
+    let checked = 0;
+    for (const wait of waits) {
+      await vi.advanceTimersByTimeAsync(wait - 1);
+      expect(server.appendCalls, `${wait}ms is not up yet`).toHaveLength(sends);
+      await vi.advanceTimersByTimeAsync(1);
+      sends += 1;
+      expect(server.appendCalls, `retried after ${wait}ms`).toHaveLength(sends);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every step of the schedule was checked").toBe(waits.length);
+    expect(pad.current.queueDepth, "still queued, never dropped, however long the network stays dead").toBe(1);
+    expect(new Set(server.appendCalls.map((c) => c.idempotency_key)).size, "the SAME entry every time").toBe(1);
+  });
+
+  it("the queue drains when the network returns, with no online event and no tap: the next timer tick sends it, in order", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    expect(pad.current.queueDepth).toBe(2);
+    server.goOnline();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(pad.current.queueDepth, "drained by the timer alone").toBe(0);
+    expect(server.rows.map((r) => (r.payload as { by: string }).by), "in the order they were tapped").toEqual(["H", "A"]);
+    expect(pad.current.offline, "and the pad stops saying it is offline").toBe(false);
+  });
+
+  it("an entry going through puts the backoff back at 5s: the stall that follows it waits 5s, not the 40s it would have doubled to", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    await pad.current.submit("generic.score", { by: "A", points: 1 });
+    await vi.advanceTimersByTimeAsync(5_000); // stall 1 retried: the next wait is 10s
+    await vi.advanceTimersByTimeAsync(10_000); // stall 2 retried: the next wait is 20s
+    expect(pad.current.queueDepth, "precondition: both still queued").toBe(2);
+
+    server.allowSends(1); // the network comes back for ONE send, then dies again
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(server.rows, "precondition: the first entry went through").toHaveLength(1);
+    expect(pad.current.queueDepth, "precondition: the second stalled behind it").toBe(1);
+
+    const before = server.appendCalls.length;
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(server.appendCalls, "not before 5s").toHaveLength(before);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(server.appendCalls, "a stall after a success waits 5s again").toHaveLength(before + 1);
+  });
+
+  it("no timer while the queue is empty: nothing is sent, ever, for a pad that has nothing to send", async () => {
+    const server = flakyServer();
+    server.goOnline();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+    await vi.advanceTimersByTimeAsync(NEVER_DRAIN_MS);
+    expect(server.appendCalls, "empty from the start").toHaveLength(0);
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(pad.current.queueDepth).toBe(0);
+    const sent = server.appendCalls.length;
+    expect(sent, "precondition: the one tap went out").toBe(1);
+    expect(vi.getTimerCount(), "an acked tap leaves no retry timer behind").toBeLessThanOrEqual(baseline);
+    await vi.advanceTimersByTimeAsync(NEVER_DRAIN_MS);
+    expect(server.appendCalls, "and nothing is resent").toHaveLength(sent);
+  });
+
+  it("a stalled queue that another drain empties takes its retry timer with it", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    const baseline = vi.getTimerCount();
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // stalls: a retry timer is pending
+    expect(vi.getTimerCount(), "precondition: the stall armed a timer").toBeGreaterThan(baseline);
+    server.goOnline();
+    await pad.current.retryDrain(); // the scorer's own retry, not the timer's
+    expect(pad.current.queueDepth, "precondition: it emptied the queue").toBe(0);
+    expect(vi.getTimerCount(), "the timer is gone, not left to fire on an empty queue").toBeLessThanOrEqual(baseline);
+  });
+
+  it("no double send while a request is in flight: the timer firing mid-send waits for it, and the entry goes once", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    await pad.current.submit("generic.score", { by: "H", points: 1 }); // stalls; the 5s timer is armed
+    expect(server.appendCalls).toHaveLength(1);
+    server.goOnline();
+    const release = server.holdNextSend();
+    const manual = pad.current.retryDrain(); // a drain starts and its send is held open
+    await vi.advanceTimersByTimeAsync(0);
+    expect(server.appendCalls, "precondition: the second send is on the wire, unanswered").toHaveLength(2);
+
+    await vi.advanceTimersByTimeAsync(5_000); // the timer fires with that send still in flight
+    expect(server.appendCalls, "the timer did not send it a third time").toHaveLength(2);
+    release();
+    await manual;
+    await vi.advanceTimersByTimeAsync(NEVER_DRAIN_MS);
+
+    expect(server.appendCalls, "sent twice in all: the offline attempt and the one that landed").toHaveLength(2);
+    expect(server.rows, "and landed once").toHaveLength(1);
+    expect(pad.current.queueDepth).toBe(0);
+  });
+
+  it("the timer stops when the pad unmounts: a stalled queue is not retried against a closed pad", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    expect(server.appendCalls).toHaveLength(1);
+
+    pad.unmount();
+    await vi.advanceTimersByTimeAsync(NEVER_DRAIN_MS);
+    expect(server.appendCalls, "no retry after unmount").toHaveLength(1);
+  });
+
+  it("the pair of the unmount test: the same stall on a pad that stays mounted IS retried", async () => {
+    const server = flakyServer();
+    const pad = mountPipeline(baseParams({ transport: server.transport }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(server.appendCalls.length, "retried while mounted").toBeGreaterThan(1);
+  });
+});

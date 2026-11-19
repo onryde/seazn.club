@@ -338,7 +338,7 @@ import {
   takeBackHeld,
 } from "./queue";
 import type { QueueStore } from "./queue-store";
-import { deepEqual, reconcile, sendOne } from "./pipeline";
+import { deepEqual, nextOfflineRetryMs, reconcile, sendOne } from "./pipeline";
 import type { LedgerSlotEvent, OwnIdentity, PendingEvent } from "./types";
 import { rulesVersionOf, type PadAuthMode, type PadTransport } from "./transport";
 import type { NextMatchRef } from "@/lib/next-match-started";
@@ -1324,6 +1324,16 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
   // empty — see `runDrain`'s first lines for why a waiter needs to know.
   const drainInFlight = useRef<Promise<boolean> | null>(null);
 
+  // Scoring-defects item 2 — the retry of a stalled queue (pipeline.ts `nextOfflineRetryMs`). One timer at most: armed
+  // when a drain stops on an entry that did not go (network, throttle, an unreadable 409, an unreadable void target),
+  // cleared when a drain finds the queue empty or the pad unmounts. It only ever calls `runDrain`, which is single-
+  // flight, so a retry that fires mid-send waits for it instead of sending twice.
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The delay last armed; `null` once an entry has gone through, so the next stall starts from the base again. */
+  const retryDelayRef = useRef<number | null>(null);
+  const retryStoppedRef = useRef(false);
+  const runDrainRef = useRef<() => Promise<void>>(async () => {});
+
   // Review I-1 — every seq an ack (or an already-applied verdict) has
   // confirmed for one of THIS mount's own queued events. `sendOne` hands it to
   // `resolveConflict`, which never reads a row at one of these seqs as a
@@ -1702,9 +1712,16 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
       if (!(await running)) return;
     }
     const run = (async (): Promise<boolean> => {
+      // True when this pass stopped on an entry that did not go, as opposed to one held for its release tick.
+      let stalled = false;
       for (;;) {
         const queued = await peekInOrder(store);
-        if (queued.length === 0) return true;
+        if (queued.length === 0) {
+          if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+          retryDelayRef.current = null;
+          return true;
+        }
         const next = queued[0]!;
 
         // ScoringPad v3 R1 chassis soft-commit (spec §2.3, task 4): a
@@ -1798,6 +1815,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
               });
               await refreshDepth();
               setOffline(true);
+              stalled = true;
               break;
             }
             if (resolution.eventId !== targetId) {
@@ -1809,6 +1827,7 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
         const outcome = await sendOne(transport, store, fixtureId, eventToSend, identity, ackedSeqsRef.current);
         await refreshDepth();
 
+        if (outcome.kind !== "stayed-queued") retryDelayRef.current = null; // an entry went through: the next stall starts from the base
         if (outcome.kind === "acked" || outcome.kind === "already-applied") {
           setOffline(false);
           setThrottled(false);
@@ -1984,8 +2003,17 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
           // 409 — stop here, in order: nothing behind it may jump ahead.
           setOffline(outcome.reason === "network");
           setThrottled(outcome.reason === "throttled");
+          stalled = true;
           break;
         }
+      }
+      if (stalled && !retryStoppedRef.current && retryTimerRef.current === null) {
+        const delay = nextOfflineRetryMs(retryDelayRef.current);
+        retryDelayRef.current = delay;
+        retryTimerRef.current = setTimeout(() => {
+          retryTimerRef.current = null;
+          if (!retryStoppedRef.current) void runDrainRef.current();
+        }, delay);
       }
       return false;
     })().finally(() => {
@@ -1994,6 +2022,20 @@ export function usePadPipeline(params: UsePadPipelineParams): UsePadPipelineResu
     drainInFlight.current = run;
     await run;
   }, [store, transport, fixtureId, identity, refreshDepth, commitLedgerEvents, commitPendingEnvelopes, reconcileAfterAck, markOwn, reloadRules, releaseRows, reaimBehind]);
+
+  // The timer above calls the CURRENT `runDrain`, and stops with the pad. Kept out of the mount effect below on purpose:
+  // that one returns before its cleanup in a window-less environment, and this one has no such exit.
+  useEffect(() => {
+    runDrainRef.current = runDrain;
+  }, [runDrain]);
+  useEffect(() => {
+    retryStoppedRef.current = false;
+    return () => {
+      retryStoppedRef.current = true;
+      if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    };
+  }, []);
 
   // Resume a leftover queue from a previous session (tab death/reload) —
   // seeding `pendingEnvelopes` from whatever the durable store already held

@@ -293,6 +293,24 @@ async function resolveCurrentSeq(
 const CONFLICT_PASS_CEILING = 2;
 
 /**
+ * The pad's own retry of a stalled queue (scoring-defects item 2, 2026-11-19).
+ *
+ * The queue was sent on mount, on the browser's `online` event and on a new entry, and nowhere else. A browser that
+ * never fires `online` (a captive portal, wifi that never fully drops) left a stalled queue to wait for the scorer to
+ * reload or tap again. While the queue is stalled and nothing is in flight the pad now retries on this schedule:
+ * `OFFLINE_RETRY_BASE_MS`, doubling per consecutive stall to `OFFLINE_RETRY_CAP_MS`, back to the base once an entry
+ * is acked, applied or refused. Pacing only: what a retry DOES (send order, 409 handling, `CONFLICT_PASS_CEILING`) is
+ * the ordinary drain's, unchanged.
+ */
+export const OFFLINE_RETRY_BASE_MS = 5_000;
+export const OFFLINE_RETRY_CAP_MS = 60_000;
+
+/** The wait before the next retry: the base when none has been armed since the last success, else double the last. */
+export function nextOfflineRetryMs(previous: number | null): number {
+  return previous === null ? OFFLINE_RETRY_BASE_MS : Math.min(previous * 2, OFFLINE_RETRY_CAP_MS);
+}
+
+/**
  * The shortest wait that can possibly clear the limiter — one whole window.
  *
  * DERIVED, not picked. `scoring.ts`'s `SCORING_LIMIT` is a FIXED window
