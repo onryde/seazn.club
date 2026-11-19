@@ -62,6 +62,7 @@ import { fixtureFormatLines } from "./fixtures";
 import { readRounds, roundOf } from "./match-day-rounds";
 import { courtStreamsForDay } from "./court-streams";
 import { openStreamStates } from "./stream-sessions";
+import { readOnlineRounds } from "./match-day-online";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 import { log } from "@/server/logger";
@@ -812,12 +813,19 @@ export async function getMatchDay(
     ...board.courts.flatMap((c) => [...(c.current ? [c.current.id] : []), ...c.queue.map((q) => q.row.id)]),
     ...board.playingNoCourt.map((r) => r.id),
   ];
-  const [streams, desk, divisions, courtStreams] = await Promise.all([
+  const [streams, desk, divisions, courtStreams, onlineRounds] = await Promise.all([
     openStreamStates(auth, ids),
     getCompetitionDesk(auth, competitionId, now),
     listDivisions(auth, competitionId),
     courtStreamsForDay(auth.orgId, board.courts.map((c) => c.court_id), ids, now),
+    // Match Day's online chess rounds, behind MATCH_DAY_ONLINE until the arbiter page is gone (Task 10 removes the flag). Sealed tables,
+    // so it reads on its own connections, here and never inside the tenant transaction above.
+    process.env.MATCH_DAY_ONLINE === "1" ? readOnlineRounds(auth, competitionId, now) : Promise.resolve([]),
   ]);
+  // A board is listed once, under its round (design 5.2): an online board in play on no court is no no-court row. Dropped here, after
+  // `readBoard` and never inside it (the code read and the call preview read the same board and keep their own lists).
+  const onlineListed = new Set(onlineRounds.flatMap((r) => [...(r.round?.boards ?? []), ...r.needs_decision].map((b) => b.fixtureId)));
+  const playingNoCourt = board.playingNoCourt.filter((r) => !onlineListed.has(r.id));
   const switches = courtStreams.switches;
   const needs = needsYouItems(
     dict,
@@ -877,13 +885,12 @@ export async function getMatchDay(
     tz: board.tz,
     now: now.toISOString(),
     courts: board.courts.map((c) => courtView(c, rounds, streams, extras, switches, courtStreams.links.get(c.court_id) ?? null)),
-    playing_no_court: board.playingNoCourt.map((r) => fixtureView(r, rounds, streams, extras(r.id), switches)),
+    playing_no_court: playingNoCourt.map((r) => fixtureView(r, rounds, streams, extras(r.id), switches)),
     needs_you: withFindCourt(dict, atHome, findCourts, routes.competitionMatchDay(board.comp.org_slug, board.comp.slug)),
     results_owed: needsYouHome(fixturesToday) === "match_day" ? resultsOwedOf(desk) : 0,
     fixtures_today: fixturesToday,
     venues_today: board.venuesToday,
-    // Match Day's online rounds (Task 2 fills this from `readOnlineRounds`); no online division is read yet.
-    online_rounds: [],
+    online_rounds: onlineRounds,
   };
 }
 

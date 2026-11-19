@@ -4,13 +4,15 @@
 // the org's is a 404 on the wire.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { VENUE_NOUNS } from "@/lib/venue";
-import { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/server/api-v1/schemas";
+import { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayOnlineRound, MatchDayView } from "@/server/api-v1/schemas";
 import { SCORER_ATTENTIONS } from "@/lib/match-day/types";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { T0, between, place, seedDay, type Day } from "@/server/usecases/__tests__/_match-day-seed";
+import { addRound, bridgeRow, openStamp, seedOnlineDivisionIn } from "@/server/usecases/__tests__/_match-day-online-seed";
+import { getMatchDay } from "@/server/usecases/match-day";
 import { GET as matchDayRoute } from "@/app/api/v1/competitions/[id]/match-day/route";
 import { GET as candidatesRoute } from "@/app/api/v1/competitions/[id]/match-day/candidates/route";
 
@@ -92,5 +94,61 @@ describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day", () => {
       checked++;
     }
     expect(checked).toBe(3);
+  });
+});
+
+// Match Day online (Task 2): the poll answers `online_rounds`, and the published schema declares it. `MatchDayView` is a plain z.object, so a
+// parse STRIPS a key it does not name: an `online_rounds` the schema forgot would be served by the usecase and gone from the wire.
+describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day - online_rounds", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("a seeded online round: online_rounds survives the parse with the usecase's rows, every key of a row is declared, and a held board of an earlier round rides needs_decision", async () => {
+    vi.stubEnv("MATCH_DAY_ONLINE", "1");
+    const day = await seedDay();
+    const online = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid", fixtures: 1 });
+    const minutes = (m: number): Date => new Date(Date.now() + m * 60_000);
+    const owner = { stageId: online.stageId, orgId: day.orgId, ownerUserId: day.auth.userId! };
+    // Round 1 opened 90 minutes ago with a board held for the organiser; round 2 opened five minutes ago: round 1's held board rides needs_decision.
+    await openStamp(owner, 1, minutes(-90));
+    await bridgeRow(online.boards[0]!.fixtureId, day.orgId, { status: "needs_organiser", reason: "no_show_white" });
+    const [r2] = await addRound({ stageId: online.stageId, divisionId: online.divisionId, orgId: day.orgId }, 2, [online.boards[0]!]);
+    await openStamp(owner, 2, minutes(-5));
+    const secret = (await createApiKey(day.auth, { name: "match day online route", scopes: ["read"] })).secret;
+
+    const res = await matchDayRoute(
+      new Request(`https://test.local/api/v1/competitions/${day.comp.id}/match-day`, { headers: { authorization: `Bearer ${secret}` } }),
+      ctx(day.comp.id),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Envelope;
+    const parsed = MatchDayView.parse(body.data);
+    const usecase = (await getMatchDay(day.auth, day.comp.id)).online_rounds;
+
+    expect(usecase.length, "anti-vacuity: the usecase read the round").toBeGreaterThan(0);
+    expect(parsed.online_rounds.length, "the parse kept every row").toBe(usecase.length);
+    expect(parsed.online_rounds.map((r) => r.key)).toEqual(usecase.map((r) => r.key));
+    expect(parsed.online_rounds[0]).toMatchObject({ key: expect.stringMatching(/:2$/), round_no: 2, phase: "checkin", offered: true });
+    // Every key the answer carries for a round is one the published schema declares (zod would strip a stray one silently).
+    const declared = new Set(Object.keys(MatchDayOnlineRound.shape));
+    const raw = (body.data as { online_rounds: Record<string, unknown>[] }).online_rounds;
+    expect(raw.length, "rows checked").toBeGreaterThan(0);
+    for (const row of raw) expect(Object.keys(row).filter((k) => !declared.has(k))).toEqual([]);
+    // The documented-object fields keep their contents (passthrough): the round's boards and the held board with its reason.
+    const decision = parsed.online_rounds[0]!.needs_decision as { fixtureId: string; round_no: number; hold_reason?: string }[];
+    expect(decision.map((b) => b.fixtureId)).toEqual([online.boards[0]!.fixtureId]);
+    expect(decision[0]).toMatchObject({ round_no: 1, hold_reason: "no_show_white" });
+    expect((parsed.online_rounds[0]!.round as { boards: { fixtureId: string }[] }).boards.map((b) => b.fixtureId)).toEqual([r2]);
+  });
+
+  it("the flag off: online_rounds is [] on the wire, and a view without a seeded online division is unchanged", async () => {
+    const day = await seedDay();
+    const secret = (await createApiKey(day.auth, { name: "match day online off", scopes: ["read"] })).secret;
+    const res = await matchDayRoute(
+      new Request(`https://test.local/api/v1/competitions/${day.comp.id}/match-day`, { headers: { authorization: `Bearer ${secret}` } }),
+      ctx(day.comp.id),
+    );
+    const body = (await res.json()) as Envelope;
+    expect(MatchDayView.parse(body.data).online_rounds).toEqual([]);
+    expect((body.data as { online_rounds: unknown }).online_rounds, "present on the wire, not absent").toEqual([]);
   });
 });

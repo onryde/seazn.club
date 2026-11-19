@@ -30,6 +30,7 @@ import {
   type ArbiterSideMeeting,
 } from "@/lib/arbiter-view";
 import { seatInviteWords, type SeatInviteWord } from "@/lib/invite-status";
+import type { MatchDayBoardRow } from "@/lib/match-day/types";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -72,6 +73,8 @@ import { fixturesSeating, isSeatedOn } from "./seated";
 
 type BoardRow = {
   fixtureId: string;
+  /** The board's stage (Match Day's list read names a held or flagged board of an earlier round by it). */
+  stageId: string;
   fixtureNo: number | null;
   /** `fixtures.seq_in_round`, NOT NULL in the schema: every board has its own number (M4, T16 fix round 1 — the old
    *  `i + 1` fallback numbered across rounds, and could never run). */
@@ -175,7 +178,7 @@ export async function arbiterRequestedRound(auth: AuthCtx, divisionId: string, f
 export async function loadArbiterRound(
   auth: AuthCtx,
   divisionId: string,
-  opts: { round?: { stageId: string; roundNo: number }; now?: Date } = {},
+  opts: { round?: { stageId: string; roundNo: number }; now?: Date; flags?: FlagMode } = {},
 ): Promise<ArbiterRound | null> {
   const now = opts.now ?? new Date();
   const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
@@ -220,15 +223,8 @@ export async function loadArbiterRound(
 
   // M4: every board is read at once (its sides, its colours, its result, its
   // flags) — never one board after another. Promise.all keeps board order.
-  const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
-  // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
-  // The facts every side's presence, camera and `joinable` read: ONE statement each over the boards in hand (never one per board).
-  const facts = await readBoardFacts(listed.map(([, r]) => r), now, { seats: true });
-  const built = await Promise.all(
-    listed.map(async ([, r]) => ({ row: r, ...(await boardWithSides(auth, r, { limitMs, policy, flagRows, now, facts })) })),
-  );
-  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins (the one the facts above hold) and ONE of its invite mail.
-  const boards = await withSeats(auth, built, facts.checkedInAt);
+  const listed = rows.filter((r) => !own.has(r.fixtureId));
+  const boards = await composeBoards(auth, listed, { limitMs, policyOf: async () => policy, flagRows, now, flags: opts.flags ?? "full" });
   return {
     stageId: round.stageId,
     stageName: round.stageName,
@@ -239,6 +235,77 @@ export async function loadArbiterRound(
     current,
     extendableBoards: boards.filter((b) => b.checkin?.canExtend === true).length,
   };
+}
+
+/** How a board's flags are carried (Match Day's list read vs. the arbiter's own surfaces): `full` builds each flag's card
+ *  (`flagView`, which reads the guard's stamps for a connection-problems flag); `count` builds none - `flags` is [] and `flagCount` is
+ *  the open flags on file. The default of every reader is `full`. */
+export type FlagMode = "full" | "count";
+
+/** THE composition of a list of boards, one place for every reader that paints boards the way the arbiter does (MD-R1): the facts of
+ *  every side read once (`readBoardFacts`: presence, camera, check-in stamps), each board built with them (`boardWithSides`) and the
+ *  seats of the boards in check-in attached in a second pass (`withSeats`). The round view and Match Day's by-id read both end here, so
+ *  a board carries its presence, camera and `joinable` in either. `policyOf` is asked once per board (the round view answers from one
+ *  stage-wide policy; a by-id read, whose boards span stages, asks each). */
+async function composeBoards(
+  auth: AuthCtx,
+  listed: readonly BoardRow[],
+  ctx: { limitMs: number; policyOf: (r: BoardRow) => Promise<CameraPolicy>; flagRows: readonly FlagRow[]; now: Date; flags: FlagMode },
+): Promise<ArbiterBoard[]> {
+  // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
+  // The facts every side's presence, camera and `joinable` read: ONE statement each over the boards in hand (never one per board).
+  const facts = await readBoardFacts(listed, ctx.now, { seats: true });
+  const built = await Promise.all(
+    listed.map(async (r) => ({
+      row: r,
+      ...(await boardWithSides(auth, r, { limitMs: ctx.limitMs, policy: await ctx.policyOf(r), flagRows: ctx.flagRows, now: ctx.now, facts, flags: ctx.flags })),
+    })),
+  );
+  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins (the one the facts above hold) and ONE of its invite mail.
+  return withSeats(auth, built, facts.checkedInAt);
+}
+
+/**
+ * Boards by id, as the round view builds them (`boardRows` + `composeBoards`), for Match Day's held and flagged boards of earlier
+ * rounds: each carries the stage and round it sits in. Only this division's boards are read. The viewer's own boards are left out
+ * (`fixturesSeating`, the round view's own rule). A cancelled board is read only while it has an open flag (owner O1, 2026-11-17: the
+ * Flagged list's R4 rule - a settled one is nobody's to review). Flags are counted,
+ * never built (`flags: "count"`). Empty `fixtureIds`: [] and NO statement.
+ */
+export async function loadBoardsByIds(
+  auth: AuthCtx,
+  divisionId: string,
+  fixtureIds: readonly string[],
+  opts: { now: Date; flags: "count" },
+): Promise<MatchDayBoardRow[]> {
+  if (fixtureIds.length === 0) return [];
+  const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
+    select d.config from divisions d
+      join competitions c on c.id = d.competition_id
+     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;
+  if (!division) throw new HttpError(404, "division not found", "NOT_FOUND");
+
+  const rows = await boardRows(auth, sql`f.division_id = ${divisionId} and f.id in ${sql([...new Set(fixtureIds)])}`, { cancelled: true });
+  const flagRows = await openFlagRows(auth, rows.map((r) => r.fixtureId));
+  const flagged = new Set(flagRows.map((f) => f.fixtureId));
+  const own = auth.userId === null ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixtureId));
+  const listed = rows.filter((r) => !own.has(r.fixtureId) && (r.fixtureStatus !== "cancelled" || flagged.has(r.fixtureId)));
+  const policies = new Map<string, Promise<CameraPolicy>>();
+  // One stage, one policy: asked once per stage, by its first board.
+  const policyOf = (r: BoardRow): Promise<CameraPolicy> => {
+    const kept = policies.get(r.stageId) ?? fixtureCameraPolicy(r.fixtureId);
+    policies.set(r.stageId, kept);
+    return kept;
+  };
+  const boards = await composeBoards(auth, listed, {
+    limitMs: (division.config?.clock?.base ?? 0) * 1_000,
+    policyOf,
+    flagRows,
+    now: opts.now,
+    flags: opts.flags,
+  });
+  // `fixtures.round_no` is NOT NULL (V214): the row type is the loose one the round view's left joins share, the column never is null.
+  return boards.map((board, i) => ({ ...board, stage_id: listed[i]!.stageId, round_no: listed[i]!.roundNo! }));
 }
 
 /** A board with open flags, wherever it sits in the division (T16's
@@ -305,7 +372,7 @@ function playerOnFile(side: Side) {
  *  still to review); the round in view does not. */
 function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: boolean }) {
   return sql<BoardRow[]>`
-    select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
+    select f.id as "fixtureId", f.stage_id as "stageId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
            f.round_no as "roundNo", s.name as "stageName",
            f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
@@ -576,7 +643,7 @@ async function boardOf(
 async function boardWithSides(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts; flags?: FlagMode },
 ): Promise<{ board: ArbiterBoard; white: SidePlayer; black: SidePlayer }> {
   const { limitMs, policy, flagRows } = ctx;
   const [sides, whiteSide] = await Promise.all([
@@ -631,15 +698,18 @@ async function boardWithSides(
   // end alone.
   const sideOf = (personId: string | null): Side | null =>
     personId === null ? null : personId === sides.home.personId ? "home" : personId === sides.away.personId ? "away" : null;
-  const flags: ArbiterFlag[] = await Promise.all(
-    flagRows
-      .filter((x) => x.fixtureId === r.fixtureId)
-      .map((f) => {
-        const side = sideOf(f.personId);
-        const endedAt = side === null ? null : side === "home" ? (r.homeSamePair ? r.homeEndedAt : null) : r.awaySamePair ? r.awayEndedAt : null;
-        return flagView(f, { nameOf, side, times: { ...r, meetingEndedAt: endedAt } });
-      }),
-  );
+  const mine = flagRows.filter((x) => x.fixtureId === r.fixtureId);
+  // `count` (Match Day's list read) builds no card: no `flagView`, so no read of the guard's stamps - only the count is carried.
+  const flags: ArbiterFlag[] =
+    ctx.flags === "count"
+      ? []
+      : await Promise.all(
+          mine.map((f) => {
+            const side = sideOf(f.personId);
+            const endedAt = side === null ? null : side === "home" ? (r.homeSamePair ? r.homeEndedAt : null) : r.awaySamePair ? r.awayEndedAt : null;
+            return flagView(f, { nameOf, side, times: { ...r, meetingEndedAt: endedAt } });
+          }),
+        );
 
   const board: ArbiterBoard = {
     fixtureId: r.fixtureId,
@@ -676,8 +746,8 @@ async function boardWithSides(
     checkin: ctx.now === null ? null : checkinOf(r, ctx.now),
     seats: null,
     flags,
-    // Every read that builds the cards counts them here; Match Day's list read (Task 2) counts without building any.
-    flagCount: flags.length,
+    // Every read that builds the cards counts them here; Match Day's list read counts without building any.
+    flagCount: mine.length,
   };
   return { board, white, black };
 }

@@ -1198,6 +1198,10 @@ describe("the header, the filter and the poll's cadence", () => {
       { ...view([]), courts: undefined },
       // B4: a view without the "Playing, no court" group (a server older than the page) is not one this page can draw.
       { ...view([]), playing_no_court: undefined },
+      // Match Day online: a view without the online block (a server older than the page) is not one this page can draw - it would
+      // read `online_rounds.length` of undefined. Absent and not-an-array are both refused.
+      { ...view([]), online_rounds: undefined },
+      { ...view([]), online_rounds: "x" },
     ]) {
       expect(isMatchDayView(bad), JSON.stringify(bad)).toBe(false);
     }
