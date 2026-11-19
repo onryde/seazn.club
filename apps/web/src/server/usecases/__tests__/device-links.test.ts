@@ -13,7 +13,7 @@ import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { startDivision } from "../schedule";
-import { scoreEvent } from "../scoring";
+import { scoreEvent, finalizeFixture } from "../scoring";
 import {
   createDeviceLink,
   requestDeviceLinkCoversFixture,
@@ -266,6 +266,38 @@ describe.skipIf(!HAS_DB)("device links (doc 13 §7, PROMPT-21)", () => {
       status: 401,
       code: "LINK_REVOKED",
     });
+  });
+
+  // Copy-truth (scoring-defects item 1): a finalized ledger takes no append from ANYONE (append-event.ts
+  // ALREADY_DECIDED), so a refusal that sends the link's holder to "the organiser" promises a correction nobody can make.
+  it("a link's void on a FINALIZED fixture is refused 403 without pointing anyone at a reopen; the owner's own void is refused too", async () => {
+    const { orgId, ownerId } = await seedOrg("pro");
+    const owner = asOwner(orgId, ownerId);
+    const { fixtures } = await rig(owner);
+    const fixture = fixtures[0];
+    const link = await createDeviceLink(owner, fixture.id, "Court 1 phone");
+    const deviceAuth = await requireFixtureActor(dlRequest(link.secret), fixture.id, "score");
+    await scoreEvent(deviceAuth, fixture.id, { expected_seq: 0, type: "core.start", payload: {} });
+    const decided = await scoreEvent(deviceAuth, fixture.id, {
+      expected_seq: 1, type: "generic.result", payload: { p1Score: 2, p2Score: 1 },
+    });
+    const finalized = await finalizeFixture(owner, fixture.id, decided.seq);
+    expect(finalized.status, "precondition: the organiser finalized it").toBe("finalized");
+    const [{ id: deciding }] = await sql<{ id: string }[]>`
+      select id from score_events where fixture_id = ${fixture.id} and type = 'generic.result'`;
+    const attempt = (auth: AuthCtx) =>
+      scoreEvent(auth, fixture.id, { expected_seq: finalized.seq, type: "core.void", payload: { event_id: deciding } });
+
+    const refusal = await attempt(deviceAuth).then(
+      () => null,
+      (e: unknown) => e as { status: number; message: string },
+    );
+    expect(refusal, "the link's void was refused").not.toBeNull();
+    expect(refusal!.status).toBe(403);
+    expect(refusal!.message).toMatch(/finalized/);
+    expect(refusal!.message, "no organiser to ask, nothing to reopen").not.toMatch(/organi[sz]er|reopen/i);
+    // The premise the copy rests on: even the owner cannot change a finalized result.
+    await expect(attempt(owner)).rejects.toMatchObject({ code: "ALREADY_DECIDED" });
   });
 
   // The ownership guard is what separates "scoring detail is free" from

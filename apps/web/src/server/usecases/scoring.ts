@@ -734,7 +734,7 @@ async function assertEntitledToScore(
     if (replay) return { replay, sport };
     if (input.type === "core.void") {
       if (ctx.fixture_status === "finalized") {
-        throw new HttpError(403, "This fixture is finalized — ask the organiser");
+        throw new HttpError(403, "This fixture is finalized — a finalized result can't be changed");
       }
       const target = await voidTargetOf(auth.orgId, fixtureId, input.payload);
       if (!target || target.device_link_id !== auth.deviceLinkId) {
@@ -746,14 +746,14 @@ async function assertEntitledToScore(
   // Scorer capabilities: coverage was proven at the door
   // (requireFixtureActor → requireScorable); here the per-division config
   // gates apply to non-editors (accepted officials). Finalize is config-gated;
-  // undo is own-fixture PRE-finalize only — a finalized ledger is an editor's
-  // to reopen.
+  // undo is own-fixture PRE-finalize only — a finalized ledger takes no
+  // append from anyone (append-event.ts ALREADY_DECIDED), so there is no one to ask.
   if (subjectToScorerCapabilityGates(auth)) {
     if (input.type === "core.finalize" && !ctx.scorer_can_finalize) {
       throw new HttpError(403, "Finalizing is restricted to organisers in this division");
     }
     if (input.type === "core.void" && ctx.fixture_status === "finalized") {
-      throw new HttpError(403, "This fixture is finalized — ask an organiser to reopen it");
+      throw new HttpError(403, "This fixture is finalized — a finalized result can't be changed");
     }
   }
 

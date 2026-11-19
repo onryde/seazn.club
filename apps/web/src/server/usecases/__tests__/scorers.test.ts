@@ -204,6 +204,12 @@ describe.skipIf(!HAS_DB)("requireScorable without assignments (#707)", () => {
         expected_seq: finalized.seq, type: "core.void", payload: { event_id: starter.id },
       }),
     ).rejects.toMatchObject({ status: 403 });
+    // Copy-truth (scoring-defects item 1): nobody can reopen a finalized ledger, so the refusal must not say "ask … to reopen it".
+    const finalRefusal = await scoreEvent(official, fx, {
+      expected_seq: finalized.seq, type: "core.void", payload: { event_id: starter.id },
+    }).then(() => "", (e: unknown) => (e as Error).message);
+    expect(finalRefusal).toMatch(/finalized/);
+    expect(finalRefusal).not.toMatch(/organi[sz]er|reopen/i);
 
     const fx2 = fixtures[1];
     const entrantId = (fx2.home_entrant_id ?? fx2.away_entrant_id) as string;
