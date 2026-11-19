@@ -2,7 +2,9 @@
 // read model (server/usecases/match-day.ts), its two GET routes and the Match Day UI share them, and client code must not
 // import from server/**. Type-only imports only (eslint.config.mjs refuses a value import of @/server/** here).
 import type { NeedsYouItem } from "@/components/v2/desk/needs-you";
+import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import type { Attention } from "@/lib/division-phase";
+import type { OpenRoundView } from "@/lib/open-round";
 import type { VenueNoun } from "@/lib/venue";
 
 export type { NeedsYouItem, VenueNoun };
@@ -187,6 +189,58 @@ export interface MatchDayFindCourt {
   noun: VenueNoun;
 }
 
+// ---- online chess rounds in Match Day (spec 2026-11-05-match-day-all-in-one-design.md §4, §5, §7) -------------------------------
+
+/** Where an online round is, as the list says it. `not_started`: the division has not started (its panel says to start it first);
+ *  `before`: paired, not opened; `checkin`: opened and some board still checking in; `playing`: opened, none checking in. The
+ *  server's word at the poll (`readOnlineRounds`); `onlineRoundPhase` (lib/match-day/online.ts) re-reads it on the page's clock. */
+export type OnlineRoundPhase = "not_started" | "before" | "checkin" | "playing";
+
+/** A board as the list carries it: a whole ArbiterBoard (so lib/round-column.ts's rules, which take ArbiterBoard[], apply unchanged;
+ *  `flags` is [] and `flagCount` the count on the list read) plus where it sits. */
+export interface MatchDayBoardRow extends ArbiterBoard {
+  stage_id: string;
+  round_no: number;
+}
+
+/** One row of the online block: one (division, stage, round) to show. */
+export interface MatchDayOnlineRound {
+  /** `${stage_id}:${round_no}` - the same spelling as `roundKey` (server/external-play/round-open.ts), the `?round=` param's value. */
+  key: string;
+  division_id: string;
+  division_name: string;
+  division_slug: string;
+  stage_id: string;
+  stage_name: string;
+  round_no: number;
+  /** The division has more than one round row on the page: the row names the stage. */
+  multi_stage: boolean;
+  phase: OnlineRoundPhase;
+  /** The club's online-chess flag (`onlineChessOffered`). */
+  offered: boolean;
+  /** The venue zone the column printed times in. */
+  tz: string;
+  /** `listOpenRounds`' view for this (stage, round) (OpenRoundView, lib/open-round.ts): the press, the pairings, the batches. Null
+   *  when the reader has none for it (an opened round whose window has closed reads null, as the column handles it) and for
+   *  `not_started`. */
+  view: OpenRoundView | null;
+  /** The opened round whole (`loadArbiterRound` with flags "count"): its boards carry `seats`, `checkin` and `sides`, which the round
+   *  panel's rules read. Null before the open. `round.boards` is the row's board list. */
+  round: ArbiterRound | null;
+  /** Held or flagged boards of the division NOT in `round.boards`, any round, each with its round. A cancelled board is here only
+   *  while it has an open flag (owner O1, 2026-11-17). */
+  needs_decision: MatchDayBoardRow[];
+  /** Boards the viewer plays on, left out of both lists. */
+  own_boards: number;
+}
+
+/** The focused board's position, from the bridge's moves (`fenAfter`): the read-only chess board's whole input. */
+export interface BoardPosition {
+  fen: string;
+  lastMove: [string, string] | null;
+  turn: "white" | "black";
+}
+
 /** GET /api/v1/competitions/{id}/match-day. */
 export interface MatchDayView {
   competition_id: string;
@@ -214,4 +268,7 @@ export interface MatchDayView {
    *  is on — played, playing, queued or called — whatever the match's state. The venue filter's default selection; empty when
    *  none of today's matches has a court. */
   venues_today: string[];
+  /** The competition's online chess rounds (one per division, stage and round to show), after the courts in the list; empty when it
+   *  has none. Read by `readOnlineRounds` (server/usecases/match-day-online.ts). */
+  online_rounds: MatchDayOnlineRound[];
 }

@@ -694,6 +694,7 @@ function board(o: Partial<ArbiterBoard> = {}): ArbiterBoard {
     checkin: null,
     seats: null,
     flags: [],
+    flagCount: 0,
     ...o,
   };
 }

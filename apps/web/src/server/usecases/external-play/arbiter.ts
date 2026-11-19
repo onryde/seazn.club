@@ -676,6 +676,8 @@ async function boardWithSides(
     checkin: ctx.now === null ? null : checkinOf(r, ctx.now),
     seats: null,
     flags,
+    // Every read that builds the cards counts them here; Match Day's list read (Task 2) counts without building any.
+    flagCount: flags.length,
   };
   return { board, white, black };
 }

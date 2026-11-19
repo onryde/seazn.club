@@ -44,6 +44,7 @@ vi.mock("@/server/usecases/match-day", () => ({
     results_owed: 0,
     fixtures_today: 0,
     venues_today: [],
+    online_rounds: [],
   }),
 }));
 vi.mock("@/server/usecases/divisions", () => ({ listDivisions: async () => [] }));
