@@ -255,8 +255,8 @@ const KNOWN: Known = {
     "scheduling/ai-scheduling": ["developer-word"],
   },
   scoring: {
+    // The import file's own field is named `payload`; the sample file and the line that describes it have to say so.
     "scoring/batch-import": ["developer-word"],
-    "scoring/knockout-deciders": ["developer-word"],
   },
 };
 

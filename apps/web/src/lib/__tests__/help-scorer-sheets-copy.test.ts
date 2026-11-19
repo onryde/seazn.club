@@ -46,6 +46,10 @@ const PATH = join(process.cwd(), `content/help/${SLUG}.md`);
 const read = (p: string) => (existsSync(p) ? readFileSync(p, "utf8") : "");
 
 const article = () => read(PATH);
+// The page was split in the 2026-11 scoring rewrite: what the umpire's phone shows and when a card stops working moved to
+// `scoring/scorer-card-scan`. The tests below read each claim from the page that now carries it.
+const SCAN_SLUG = "scoring/scorer-card-scan";
+const scan = () => read(join(process.cwd(), `content/help/${SCAN_SLUG}.md`));
 const parts = () => {
   const [, frontmatter = "", body = ""] = article().split(/^---$/m);
   return { frontmatter, body };
@@ -60,6 +64,8 @@ const sentencesOf = (md: string) =>
     .filter((s) => s.length > 0);
 const sentences = () => sentencesOf(article());
 const withText = (needle: string) => sentences().filter((s) => s.includes(needle));
+const scanSentences = () => sentencesOf(scan());
+const scanWithText = (needle: string) => scanSentences().filter((s) => s.includes(needle));
 
 /** How these pages say a link is dead. */
 const DIES = /\bstops? working\b|\bno longer works?\b/i;
@@ -73,6 +79,9 @@ describe("scorer-sheets.md exists and is reachable", () => {
     expect(parts().frontmatter).toMatch(/^title: \S/m);
     expect(parts().frontmatter).toMatch(/^description: \S/m);
     expect(HELP_ARTICLE_SLUGS as readonly string[]).toContain(SLUG);
+    expect(scan(), `${SCAN_SLUG} is missing`).not.toBe("");
+    expect(HELP_ARTICLE_SLUGS as readonly string[]).toContain(SCAN_SLUG);
+    expect(article(), "the sheet page points at the scan page").toContain(`](/help/${SCAN_SLUG})`);
   });
 
   it("links to the device-link article, and the device-link article links back", () => {
@@ -146,7 +155,7 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
     const NOT_STARTED = en["device.scan.notStarted.title"];
     // An empty heading would be "in" every sentence.
     expect(NOT_STARTED).toMatch(/\w/);
-    const hits = withText(NOT_STARTED);
+    const hits = scanWithText(NOT_STARTED);
     expect(hits, `the article never names the ${NOT_STARTED} screen`).not.toHaveLength(0);
     expect(
       hits.some((s) => /\b(?:moves on|updates)\b[^.]*\bby itself\b|\bon its own\b/i.test(s) && /\bstart/i.test(s)),
@@ -154,7 +163,7 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
     ).toBe(true);
     // The retired claim: an early card simply "can't score", with no screen
     // and nothing that happens next.
-    expect(sentences().filter((s) => /\bcan't score\.?$/i.test(s))).toEqual([]);
+    expect([...sentences(), ...scanSentences()].filter((s) => /\bcan't score\.?$/i.test(s))).toEqual([]);
   });
 
   it("an undecided side prints as its place in the draw — the board's own 'Winner of' wording", () => {
@@ -174,55 +183,56 @@ describe("scorer-sheets.md says what the sheet is and who can print it", () => {
   });
 });
 
-describe("scorer-sheets.md quotes the umpire's screens as the phone shows them", () => {
+describe("scorer-card-scan.md quotes the umpire's screens as the phone shows them", () => {
   it("Confirm: the heading and the Start match button", () => {
-    expect(article()).toContain(en["device.scan.confirmTitle"]);
-    expect(article()).toContain(en["score.startMatch"]);
+    expect(scan()).toContain(en["device.scan.confirmTitle"]);
+    expect(scan()).toContain(en["score.startMatch"]);
   });
 
   it("Waiting: says the page updates by itself", () => {
-    expect(article()).toContain(en["device.scan.waitingHint"]);
+    expect(scan()).toContain(en["device.scan.waitingHint"]);
   });
 
   it("View-only: quotes one of the reasons the phone gives", () => {
     const lines = Object.values(VIEW_ONLY_COPY).map((k) => en[k]);
-    expect(lines.some((l) => article().includes(l)), lines.join(" | ")).toBe(true);
+    expect(lines.some((l) => scan().includes(l)), lines.join(" | ")).toBe(true);
   });
 
   it("a dead card: the revoked and the not-valid screens", () => {
-    expect(article()).toContain(en["device.dead.revoked"]);
-    expect(article()).toContain(en["device.dead.invalid"]);
+    expect(scan()).toContain(en["device.dead.revoked"]);
+    expect(scan()).toContain(en["device.dead.invalid"]);
   });
 });
 
-describe("scorer-sheets.md says when a printed card stops working — and when it does not", () => {
+describe("scorer-card-scan.md says when a printed card stops working — and when it does not", () => {
   it("no day-scoped lifetime anywhere, frontmatter included", () => {
-    const offending = sentences().filter((s) =>
+    const offending = [...sentences(), ...scanSentences()].filter((s) =>
       /\bexpir(e|es|ed|y|ing)\b|same[- ]day|local day|day-of|\btoday\b|midnight|end of the day/i.test(s),
     );
     expect(offending).toEqual([]);
   });
 
   it("a result that moves the competition on turns the card read-only, by each route", () => {
-    const body = parts().body;
+    const body = scan();
     // The CONSEQUENCE, in the sentence that states the cause: matching only
     // the vocabulary held with "read-only" gone from the page's claim.
     const movesOn = sentencesOf(body).filter((s) => /moves? the competition on/i.test(s));
     expect(movesOn, "the article never says a result moves the competition on").not.toHaveLength(0);
-    expect(movesOn.some((s) => /\bread-only\b/i.test(s)), movesOn.join(" | ")).toBe(true);
+    // The phone shows the result with no controls (the View-only screen); the page says so in the cause sentence.
+    expect(movesOn.some((s) => /\bno controls\b/i.test(s)), movesOn.join(" | ")).toBe(true);
     expect(body).toMatch(/next match/i);
     expect(body).toMatch(/next (?:Swiss )?round (?:is|was) paired/i);
     expect(body).toMatch(/stage (?:is|was) completed/i);
   });
 
   it("Revoke & reissue kills a printed card", () => {
-    const hits = withText(en["dlink.reissue"]);
+    const hits = scanWithText(en["dlink.reissue"]);
     expect(hits, `no sentence names ${en["dlink.reissue"]}`).not.toHaveLength(0);
-    expect(hits.some((s) => DIES.test(s)) || sentences().some((s) => /\bold QR\b/i.test(s) && DIES.test(s))).toBe(true);
+    expect(hits.some((s) => DIES.test(s)) || scanSentences().some((s) => /\bold QR\b/i.test(s) && DIES.test(s))).toBe(true);
   });
 
   it("Rebuild fixtures kills every card on the stage", () => {
-    const hits = withText(en["progression.rosterDrift.rebuildCta"]);
+    const hits = scanWithText(en["progression.rosterDrift.rebuildCta"]);
     expect(hits, "Rebuild fixtures is not named").not.toHaveLength(0);
     expect(hits.some((s) => DIES.test(s)), hits.join(" | ")).toBe(true);
   });
@@ -231,9 +241,9 @@ describe("scorer-sheets.md says when a printed card stops working — and when i
     // The STAGE must be the thing deleted: a looser `delet…stage` also matched
     // the Rebuild sentence ("deletes every match in the stage") and held with
     // the stage-delete clause gone.
-    expect(sentences().some((s) => /\bdelet(?:e|es|ing)\s+(?:its|the)\s+stage\b/i.test(s))).toBe(true);
+    expect(scanSentences().some((s) => /\bdelet(?:e|es|ing)\s+(?:its|the)\s+stage\b/i.test(s))).toBe(true);
     expect(
-      sentences().some((s) => /\bSwiss\b/.test(s) && /\b(?:loses?|losing)\s+a\s+board\b|\bremov\w*\s+(?:a\s+)?(?:boards?|match(?:es)?)\b/i.test(s)),
+      scanSentences().some((s) => /\bSwiss\b/.test(s) && /\b(?:loses?|losing)\s+a\s+board\b|\bremov\w*\s+(?:a\s+)?(?:boards?|match(?:es)?)\b/i.test(s)),
     ).toBe(true);
   });
 

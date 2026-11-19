@@ -64,11 +64,26 @@ describe("help: if a match is abandoned", () => {
     expect(checked).toBe(BRACKET_KINDS.size + DRAW_KINDS.size);
   });
 
-  it("the policies and the sports that can share the points are the engine's, under the editor's own labels", () => {
-    for (const policy of ["replay", "share", "award"] as const) expect(SECTION, policy).toContain(`**${ABANDON_LABELS[policy]}**`);
+  it("the policies and the sports that offer each are the engine's, under the editor's own labels (every row counted)", () => {
+    // Page name for each sport that declares abandon options. A sport the engine adds to the list fails here until the page
+    // table names it and this map does.
+    const PAGE_NAME: Record<string, string> = { football: "football", hockey: "field hockey", icehockey: "ice hockey", carrom: "carrom", generic: "generic" };
+    const declaring = builtinModules.filter((m) => (m.abandonOptions ?? []).length > 0).map((m) => m.key).sort();
+    expect(declaring, "the sports that declare an abandon option").toEqual(Object.keys(PAGE_NAME).sort());
+    const rows = SECTION.split("\n").filter((l) => l.startsWith("| **")).map((l) => l.split("|").map((c) => c.trim()));
+    let checked = 0;
+    for (const policy of ["replay", "award", "q4_stands", "share"] as const) {
+      const row = rows.find((r) => r[1] === `**${ABANDON_LABELS[policy]}**`);
+      expect(row, `a table row for ${policy} under the editor's label`).toBeDefined();
+      const offered = builtinModules.filter((m) => m.abandonOptions?.includes(policy)).map((m) => PAGE_NAME[m.key]!).sort();
+      expect(offered.length, `at least one sport offers ${policy}`).toBeGreaterThan(0);
+      const onPage = row![3]!.split(",").map((x) => x.trim()).sort();
+      expect(onPage, `the sports the page lists for ${policy}`).toEqual(offered);
+      checked++;
+    }
+    expect(checked, "four policies checked").toBe(4);
     const sharers = builtinModules.filter((m) => m.abandonOptions?.includes("share")).map((m) => m.key).sort();
-    expect(sharers, "the page says generic and carrom").toEqual(["carrom", "generic"]);
-    expect(SECTION).toContain("(generic and carrom)");
+    expect(sharers, "share is carrom and generic").toEqual(["carrom", "generic"]);
     const label = (rules: readonly { label: string }[], key: string) => (rules as { key: string; label: string }[]).find((r) => r.key === key)!.label;
     expect(SECTION).toContain(`**${label(GENERIC_RULES, "abandon")}**`);
     expect(SECTION).toContain(`**${label(GENERIC_RULES, "allowDraws")}**`);

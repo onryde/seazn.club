@@ -43,6 +43,8 @@ const SENTENCES = ARTICLE.replace(/\*\*|__|`/g, "")
   .map((s) => s.trim())
   .filter((s) => s.length > 0);
 
+/** The pad says "Void" (score.void), the older copy said "undo"; either word names the action these pins are about. */
+const VOIDED = /\b(?:undo|void)\b/i;
 const SHOW_QR = en["dlink.showQr"];
 const REISSUE = en["dlink.reissue"];
 const HAND_OVER = en["score.handOverDevice"];
@@ -127,12 +129,12 @@ const sentencesOf = (md: string) =>
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 /** An undo bounded by finalization: "until/before … the match is finalized". */
-const UNDO_UNTIL_FINAL = (s: string) => /\bundo\b/i.test(s) && /\b(until|before)\b[^.;]*\bfinali[sz]ed\b/i.test(s);
+const UNDO_UNTIL_FINAL = (s: string) => VOIDED.test(s) && /\b(until|before)\b[^.;]*\bfinali[sz]ed\b/i.test(s);
 const MOVES_ON = /moves the competition on/i;
 
 describe("the device's undo window ends when the result moves the competition on (scorer sheets §4.3)", () => {
   it("device-links.md: the undo sentence names the real bound, and each way a result moves on", () => {
-    const undo = SENTENCES.filter((s) => /\bundo\b/i.test(s) && /own entries/i.test(s));
+    const undo = SENTENCES.filter((s) => VOIDED.test(s) && /own entries/i.test(s));
     expect(undo, "no sentence says what the holder can undo").not.toHaveLength(0);
     expect(undo.every((s) => MOVES_ON.test(s)), undo.join(" | ")).toBe(true);
     // Each clause of the predicate, in words a reader recognises.
@@ -148,7 +150,7 @@ describe("the device's undo window ends when the result moves the competition on
 
   it("corrections.md: the device-link sentence names the moved-on bound; only a signed-in scorer's undo runs to finalization", () => {
     const sentences = sentencesOf(CORRECTIONS);
-    const device = sentences.filter((s) => /device link/i.test(s) && /\bundo\b/i.test(s));
+    const device = sentences.filter((s) => /device link/i.test(s) && VOIDED.test(s));
     expect(device, "corrections.md no longer says what a device link can undo").not.toHaveLength(0);
     expect(device.some((s) => MOVES_ON.test(s)), device.join(" | ")).toBe(true);
     // "Either way, undo only works before the match is finalized" covered BOTH
@@ -205,11 +207,11 @@ describe("every way a device link ends is on the page", () => {
 // Since Task 2 re-shows the same QR, two phones that scanned one card hold the
 // SAME link — so "never another device's entries" was false, and a pair of
 // umpires sharing a card could undo each other's taps without being told so.
-const SHEETS = readFileSync(join(process.cwd(), "content/help/scoring/scorer-sheets.md"), "utf8");
+const SHEETS = readFileSync(join(process.cwd(), "content/help/scoring/scorer-card-scan.md"), "utf8");
 const UNDO_SCOPED_PAGES: ReadonlyArray<readonly [string, string]> = [
   ["device-links.md", ARTICLE],
   ["corrections.md", CORRECTIONS],
-  ["scorer-sheets.md", SHEETS],
+  ["scorer-card-scan.md", SHEETS],
 ];
 
 describe("a device's undo is scoped to its link, not its phone", () => {
@@ -221,7 +223,7 @@ describe("a device's undo is scoped to its link, not its phone", () => {
     it(`${name}: says phones sharing one QR can undo each other's entries`, () => {
       const hits = sentencesOf(md).filter((s) => /\b(?:each|the) other's\b/i.test(s));
       expect(hits, `${name} never says who else can undo`).not.toHaveLength(0);
-      expect(hits.some((s) => /\bundo\b/i.test(s) && /\bsame (?:QR|card)\b|\bshare\b/i.test(s)), hits.join(" | ")).toBe(true);
+      expect(hits.some((s) => VOIDED.test(s) && /\bsame (?:QR|card)\b|\bshare\b/i.test(s)), hits.join(" | ")).toBe(true);
     });
   }
 });
