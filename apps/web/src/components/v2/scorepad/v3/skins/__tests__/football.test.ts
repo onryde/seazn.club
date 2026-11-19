@@ -22,9 +22,10 @@ import uiEn from "@/dictionaries/en/ui.json";
 import type { AnySportModule, PadAction, PadField } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
-import { initSquads } from "@seazn/engine/core";
+import { foldMatch, initSquads } from "@seazn/engine/core";
 import { football } from "@seazn/engine/sports/football";
 import { footballPadRules } from "@seazn/engine/pad";
+import { makeEnvelope } from "@seazn/engine/testkit";
 import { foldClient } from "../../../module-client";
 import { dedicatedEventTypes, squadStateOf, stampFor } from "../../pad-host";
 import { initClock, startClock } from "../../clock";
@@ -1539,6 +1540,63 @@ describe("buildDock", () => {
   it("withholds the attribution chips below band 2, keeping the two toggles — attribution is the band-2 timeline", () => {
     const dock = buildDock("football.goal", view({ band: 0 }), t, { by: "home-1" })!;
     expect(dock.chips.map((chip) => chip.id)).toEqual(["ownGoal", "penalty"]);
+  });
+
+  // Scoring-defects item 5 (2026-11-19): a goal on a match with NO lineup has nobody on the pitch to name as the scorer, and
+  // the dock used to open with its two flag chips and say nothing, where action-form / context-strip / guided-sheet /
+  // swap-sheet say "No roster available yet." (`scorepad.attribution.noRoster`, the same key).
+  describe("the goal dock of a match with no lineup (item 5)", () => {
+    const NO_ROSTER = "scorepad.attribution.noRoster";
+    /** A REAL fold with an empty lineup on both sides: the state the running pad hands the skin for a match whose
+     *  lineup was never set, never a hand-built `squads` literal. */
+    const rosterless = () => {
+      const c = footballCfg();
+      const lineups: LineupPair = { home: { entrantId: "H", slots: [] }, away: { entrantId: "A", slots: [] } };
+      return foldMatch(football, c, lineups, [makeEnvelope(0, { type: "core.start", payload: {} })]);
+    };
+
+    it("the producer is real: the folded no-lineup state has nobody on either pitch", () => {
+      const folded = rosterless() as unknown as { squads: { home: { onPitch: string[] }; away: { onPitch: string[] } } };
+      expect(folded.squads.home.onPitch).toEqual([]);
+      expect(folded.squads.away.onPitch).toEqual([]);
+    });
+
+    it.each([2, 3] as const)("says there is no roster at band %i, keeps the flag chips, offers no scorer", (band) => {
+      const dock = buildDock("football.goal", view({ state: rosterless(), band }), t, { by: "H" })!;
+      expect(dock.emptyNote, "the dock says why the step is missing, in the other surfaces' key").toBe(NO_ROSTER);
+      expect(dock.chips.map((chip) => chip.id), "the flags are still offered, and nobody else").toEqual(["ownGoal", "penalty"]);
+    });
+
+    it("the same for the away side", () => {
+      const dock = buildDock("football.goal", view({ state: rosterless() }), t, { by: "A" })!;
+      expect(dock.emptyNote).toBe(NO_ROSTER);
+    });
+
+    it("is the SAME key the other scorer surfaces use, and it has copy in every locale", () => {
+      expect(uiEn[NO_ROSTER as keyof typeof uiEn]).toBe("No roster available yet.");
+    });
+
+    // The negative pairs: the message claims the roster is missing, so it must not appear where the roster is not.
+    it("no message when a roster exists", () => {
+      expect(buildDock("football.goal", view(), t, { by: "home-1" })!.emptyNote).toBeUndefined();
+    });
+
+    it("no message on the ASSIST step when the scorer is the only player on the pitch: that roster exists", () => {
+      const v = view({ state: state({ squads: { home: footballSquad({ onPitch: ["h2"], bench: [] }), away: footballSquad({ onPitch: ["a1"] }) } }) });
+      const dock = buildDock("football.goal", v, t, { by: "home-1", scorer: "h2" })!;
+      expect(dock.chips.map((chip) => chip.id), "precondition: nobody to credit with the assist").toEqual(["ownGoal", "penalty"]);
+      expect(dock.emptyNote).toBeUndefined();
+    });
+
+    it("no message below band 2, where the dock never asks for a person at all", () => {
+      const dock = buildDock("football.goal", view({ state: rosterless(), band: 0 }), t, { by: "H" })!;
+      expect(dock.emptyNote).toBeUndefined();
+    });
+
+    it("no message once a scorer is on the payload", () => {
+      const dock = buildDock("football.goal", view({ state: rosterless() }), t, { by: "H", scorer: "x" })!;
+      expect(dock.emptyNote).toBeUndefined();
+    });
   });
 
   it("narrows the card's person chips by COLOUR — the engine refuses a second yellow to anyone without a first", () => {

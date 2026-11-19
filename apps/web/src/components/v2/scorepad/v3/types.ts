@@ -397,6 +397,14 @@ export interface DockSpec {
   title: string;
   chips: DockChip[];
   /**
+   * Scoring-defects item 5 (2026-11-19) — PRE-RESOLVED text saying why the dock has nobody to offer, for a dock whose
+   * person step came up empty (football's goal dock on a match with no lineup: no on-pitch player to pick as the scorer).
+   * The dock still opens with whatever chips it has (the goal's flags), so without this the only sign of the missing step
+   * was its absence — where every other scorer surface says "No roster available yet." in that case
+   * (`scorepad.attribution.noRoster`), and a skin passes that same key's text here. Absent is every dock as it was.
+   */
+  emptyNote?: string;
+  /**
    * W2d T18 (HK-TB-2, PS-7d; owner option A, 2026-10-20) — the payload field this event CANNOT be sent without.
    *
    * Every dock before this one was optional enrichment of a tap that had ALREADY committed: the tap is held for

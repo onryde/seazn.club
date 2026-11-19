@@ -1424,7 +1424,14 @@ export function buildDock(
       typeof payload?.scorer === "string" && payload.ownGoal !== true
         ? t("pad.football.dock.goal.assist.title")
         : t("pad.football.dock.goal.title");
-    return { title: goalTitle, chips };
+    // Scoring-defects item 5: the scorer step asked for and there is NOBODY on the pitch to pick (no lineup was set).
+    // Say so, in the words every other scorer surface uses, rather than leave the step silently absent. Only the SCORER
+    // step: an assist step with no one but the scorer on the pitch is a roster that exists, not one that is missing.
+    const noScorersToPick =
+      side !== null && view.band >= 2 && typeof payload?.scorer !== "string" && squadOf(state, side).onPitch.length === 0;
+    return noScorersToPick
+      ? { title: goalTitle, chips, emptyNote: t("scorepad.attribution.noRoster") }
+      : { title: goalTitle, chips };
   }
 
   // R3 review round — THE PENALTY'S OFFENCE, restored to the v3 pad.

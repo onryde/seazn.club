@@ -452,3 +452,49 @@ describe("the dock follows the PAYLOAD, not just the held id (R3 review round 4)
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Scoring-defects item 5 (2026-11-19) — `DockSpec.emptyNote`: the line a dock shows when its person step has nobody to offer
+// (football's goal dock on a match with no lineup). Rendered through the real `DetailDock`, never a helper, and followed
+// through `setSpec` the way the live dock follows the payload.
+// ---------------------------------------------------------------------------
+describe("DetailDock emptyNote — why there is nobody to pick (item 5)", () => {
+  const flag: DockChip = { id: "ownGoal", label: "pad.football.dock.ownGoal", kind: "flag", mutate: (p) => ({ ...p, ownGoal: true }) };
+  const props = (s: DockSpec) => ({
+    spec: s,
+    heldId: "held-1",
+    store: { mutateHeld: async () => true, releaseHeld: async () => undefined },
+    heldUntil: 6000,
+    t: (key: string) => (key === "pad.dock.clears" ? "clears" : `T:${key}`),
+    now: () => 0,
+  });
+  const note = (island: { tree: () => ReturnType<ReturnType<typeof renderIsland>["tree"]> }) => island.tree().find((el) => propsOf(el)["data-testid"] === "pad-dock-no-roster");
+
+  it("renders the note verbatim, as a line of its own, beside the chips it still has", () => {
+    const island = renderIsland(DetailDock, props({ title: "Goal detail", chips: [flag], emptyNote: "No roster available yet." }));
+    const el = note(island);
+    expect(el, "the note is on screen").toBeDefined();
+    expect(textOf(el!)).toBe("No roster available yet.");
+    expect(island.tree().filter((n) => n.type === "button").map((n) => textOf(n)), "the flag chip is still offered").toContain("T:pad.football.dock.ownGoal");
+  });
+
+  it("the negative pair: a dock with no emptyNote renders no note", () => {
+    expect(note(renderIsland(DetailDock, props({ title: "Goal detail", chips: [flag] })))).toBeUndefined();
+  });
+
+  it("follows the spec: a note that arrives with a later step appears, and one that leaves goes", () => {
+    const island = renderIsland(DetailDock, props({ title: "Goal detail", chips: [flag] }));
+    expect(note(island)).toBeUndefined();
+    island.rerender(props({ title: "Goal detail", chips: [flag], emptyNote: "No roster available yet." }));
+    expect(note(island), "the note appeared with the new spec").toBeDefined();
+    island.rerender(props({ title: "Goal detail", chips: [flag] }));
+    expect(note(island), "and left with it").toBeUndefined();
+  });
+
+  it("the controller reads it live, like chips and title", () => {
+    const controller = dockController({ title: "a", chips: [flag] }, "held-1", { mutateHeld: async () => true, releaseHeld: async () => undefined })!;
+    expect(controller.emptyNote).toBeUndefined();
+    controller.setSpec({ title: "a", chips: [flag], emptyNote: "x" });
+    expect(controller.emptyNote).toBe("x");
+  });
+});

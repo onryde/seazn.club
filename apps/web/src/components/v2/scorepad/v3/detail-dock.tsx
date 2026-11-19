@@ -116,6 +116,8 @@ export interface DockController {
    *  also silently reset every OTHER chip's own selection back to
    *  unselected. */
   readonly chips: DockChipView[];
+  /** `DockSpec.emptyNote`, live like `chips`: the line saying why there is nobody to pick, when the step has no one. */
+  readonly emptyNote?: string;
   /**
    * Apply `chipId`'s own `mutate` to the held payload — EXACTLY ONCE ever,
    * for the life of this controller instance. The id is claimed
@@ -178,6 +180,9 @@ export function dockController(spec: DockSpec | null, heldId: string, store: Doc
     },
     get chips(): DockChipView[] {
       return current.chips.map((chip) => ({ chip, selected: selectedIds.has(chip.id) }));
+    },
+    get emptyNote(): string | undefined {
+      return current.emptyNote;
     },
     setSpec(next: DockSpec): void {
       current = next;
@@ -595,6 +600,12 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
           </button>
         ))}
       </div>
+
+      {controller.emptyNote !== undefined && (
+        <p data-testid="pad-dock-no-roster" className="px-4 pb-2 text-xs text-slate-600">
+          {controller.emptyNote}
+        </p>
+      )}
 
       <div className="px-4 pb-3">
         <span className="text-xs font-medium text-slate-600" style={{ fontVariantNumeric: "tabular-nums" }}>
