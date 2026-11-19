@@ -122,12 +122,14 @@ const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
 
 async function readPublicDivisionDetailBefore(division: PublicDivision) {
   // `rules`: main's per-stage match rules (bb6523248), which landed on this read after the freeze; carried here so the
-  // diff is still T4's alone. (W2d's `table_points_rule` came and went the same way: T9 review m3.)
+  // diff is still T4's alone. (W2d's `table_points_rule` came and went the same way: T9 review m3.) `round_byes`: W5 T3
+  // (X-SF-4, 78f8477a54), the fixtures list's "Sits out" line, landed the same way and is carried likewise.
   const stages = await sql<(PublicStage & StageProgressionRow)[]>`
     select id, division_id, seq, kind, name, status,
            qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
            has_rank_overrides,
            (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules,
+           (select x.config->'round_byes' from stages x where x.id = public_stages_v.id) as round_byes,
            (select x.progression from stages x where x.id = public_stages_v.id) as progression
     from public_stages_v where division_id = ${division.id} order by seq`;
   // `table_rules`: W2d Task 9's one table-rules loader, which landed on this read after the freeze; carried likewise.
