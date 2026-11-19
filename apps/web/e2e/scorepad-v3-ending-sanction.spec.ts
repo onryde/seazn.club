@@ -155,6 +155,10 @@ async function seed(request: APIRequestContext, sportKey: string, surface: strin
     // No fixture lineup: nobody to ask "which player" in the sanction sheet (and the tennis skin's own rosterless fallback).
     skipLineups: sportKey === "tennis",
     emitCoreStart: true,
+    // A knockout final, not a league line: every flow here VOIDS the ending, and since W5 T8b (owner ruling 289; review I1) a
+    // disqualifying forfeit on a table stage withdraws the side from it, so its void is refused (409 UNDO_DQ_USE_REINSTATE - Reinstate
+    // is that undo). A bracket's disqualifying forfeit decides this match only and voids as before, which is the path under test.
+    stage: { kind: "knockout", name: "Cup" },
   });
 }
 
