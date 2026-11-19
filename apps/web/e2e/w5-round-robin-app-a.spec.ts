@@ -3,7 +3,7 @@ import { TAG, apiJson, competitionPath, divisionPath, expectInViewUnderHeader, e
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { waitForHydration } from "./directory-kit";
 import { showAllFixtures, stageFixtures, type Fx } from "./support/swiss-app-a-kit";
-import { dictString } from "./spectator-w2-kit";
+import { dictString, uiString } from "./spectator-w2-kit";
 import { LONG_NAME_SUFFIX, seedFinishedGroupsOnly } from "./support/pool-winners-kit";
 import { seedExpungedLeaver } from "./support/expunged-leaver-kit";
 import { registerLateArrival, seedStartedTable, tableLines } from "./support/table-late-entry-kit";
@@ -182,7 +182,8 @@ test.describe("X-CU-6 Generate adds the new players' pairs and nothing twice", (
     expect(refused.status).toBe(409);
     expect(refused.error?.code).toBe("RR_GENERATE_AFTER_START");
     // The sentence the server answers in is the en catalog's (W5 T6, 2aa2298ffa reworded it to point at the waiting strip), read, not typed.
-    expect(refused.error?.message).toBe(uiEn["roundrobin.refusal.RR_GENERATE_AFTER_START"]);
+    // uiString throws on a missing key, so an absent catalog entry cannot pass as toBe(undefined).
+    expect(refused.error?.message).toBe(uiString("en", "roundrobin.refusal.RR_GENERATE_AFTER_START"));
     const after = await stageFixtures(request, divisionId, stageId);
     expect(after.map((f) => f.id).sort(), "the refusal wrote nothing").toEqual(before.map((f) => f.id).sort());
   });
