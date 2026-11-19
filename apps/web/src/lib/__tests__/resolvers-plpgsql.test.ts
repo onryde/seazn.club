@@ -1,4 +1,4 @@
-// The `__org_has_feature_plpgsql.sql` delta (V533 when written; read by GLOB, never by number, so a renumber at merge
+// The `__org_has_feature_plpgsql.sql` delta (V537 when written; read by GLOB, never by number, so a renumber at merge
 // does not orphan this file). Four claims, each pinned against a source that is NOT the delta itself:
 //
 //  1. The resolvers changed LANGUAGE and nothing else. org_has_feature (both arities) and stage_qualification_meta are

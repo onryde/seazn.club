@@ -1,4 +1,4 @@
--- V533 — the per-request resolvers move from LANGUAGE sql to LANGUAGE plpgsql,
+-- V537 — the per-request resolvers move from LANGUAGE sql to LANGUAGE plpgsql,
 -- for its plan cache. Nothing they answer changes. Plus two lints the same
 -- measurement turned up: the realtime policies' per-row topic() and the
 -- billing_events replay sweep's seq scan.
@@ -284,7 +284,7 @@ create index if not exists billing_events_unprocessed_idx
 do $migrate$
 begin
   if not exists (select 1 from pg_namespace where nspname = 'realtime') then
-    raise notice 'V533: no realtime schema — skip (non-Supabase database)';
+    raise notice 'V537: no realtime schema — skip (non-Supabase database)';
     return;
   end if;
 
@@ -292,7 +292,7 @@ begin
     select 1 from pg_tables
     where schemaname = 'realtime' and tablename = 'messages'
   ) then
-    raise notice 'V533: realtime.messages missing — skip';
+    raise notice 'V537: realtime.messages missing — skip';
     return;
   end if;
 
@@ -326,7 +326,7 @@ begin
     $sql$;
   exception
     when insufficient_privilege then
-      raise notice 'V533: insufficient privilege on realtime.messages — skip (not owner)';
+      raise notice 'V537: insufficient privilege on realtime.messages — skip (not owner)';
   end;
 end
 $migrate$;
