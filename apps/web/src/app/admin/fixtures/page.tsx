@@ -1,5 +1,6 @@
 import Link from "@/components/ui/console-link";
 import { fixtureConfigPanel } from "@/server/usecases/admin-fixture-config";
+import { resnapshotBlockedText } from "@/lib/admin-fixture-copy";
 import { FixtureCaptureRecords } from "../capture-records/fixture-section";
 import { ResnapshotForm } from "./resnapshot-form";
 
@@ -116,7 +117,7 @@ export default async function AdminFixtureConfigPage({
             <p className="text-xs text-slate-500" data-testid="resnapshot-blocked">
               {panel.snapshot === null
                 ? "Nothing frozen to correct."
-                : `Not available — this fixture is ${panel.status}, and a ${panel.status} fixture takes no change.`}
+                : resnapshotBlockedText(panel.status)}
             </p>
           )}
         </div>

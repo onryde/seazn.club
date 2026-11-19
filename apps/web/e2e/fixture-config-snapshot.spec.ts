@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { resnapshotBlockedText } from "../src/lib/admin-fixture-copy";
 import {
   TAG,
   activeOrg,
@@ -164,7 +165,7 @@ test("staff can re-snapshot a reopened fixture, and the hatch holds at 375px", a
   }
 });
 
-test("a finalized fixture is refused until it is reopened", async ({ page, request }) => {
+test("a finalized fixture is refused, and the hatch says it takes no change", async ({ page, request }) => {
   const { fixtureId, lastSeq } = await seedDrawnFixture(request, "locked");
   const finalize = await apiJson(request, `/api/v1/fixtures/${fixtureId}/events`, "POST", {
     expected_seq: lastSeq,
@@ -190,7 +191,9 @@ test("a finalized fixture is refused until it is reopened", async ({ page, reque
     const panel = page.getByTestId("fixture-config-panel");
     await expect(panel).toBeVisible({ timeout: 20_000 });
     await expect(panel).toHaveAttribute("data-can-resnapshot", "no");
-    await expect(page.getByTestId("resnapshot-blocked")).toContainText(/reopen/i);
+    // The sentence the page builds (src/lib/admin-fixture-copy.ts), with the status read from the server, not typed here.
+    await expect(page.getByTestId("resnapshot-blocked")).toHaveText(resnapshotBlockedText(finalized.data!.status));
+    await expect(page.getByTestId("resnapshot-blocked"), "no reopen exists to point at").not.toContainText(/reopen/i);
     await expect(page.getByTestId("resnapshot-submit")).toHaveCount(0);
   } finally {
     await setOwnerStaffSql(org.id, false);
