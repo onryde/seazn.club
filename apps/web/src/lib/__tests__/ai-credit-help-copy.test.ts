@@ -114,11 +114,14 @@ describe("the joint worked example is the arithmetic quoteRun actually does", ()
     expect(article).toMatch(/budget is sized from the undiscounted total/i);
   });
 
-  it("warns that shared courts are matched by NAME — the only court identity there is", () => {
-    // Two divisions typing different labels for one physical court is the one
-    // way a joint run double-books in a way the engine cannot see, so the
-    // article has to say it in as many words.
-    expect(article).toMatch(/matched by name/i);
+  it("says shared courts are matched by the court itself, never by name", () => {
+    // Since P9 a joint run matches courts by their org-wide-unique id
+    // (competition-schedule-ai/pack.ts:26-32), so two courts that share a name
+    // are two courts. The page used to say "the same name is the same court";
+    // that is now false, and a reader who renamed a court to clear the warning
+    // would be told something that does nothing.
+    expect(article).toMatch(/matched by court, not by name/i);
+    expect(article).not.toMatch(/same name is the same court|make the names match/i);
   });
 });
 
@@ -141,7 +144,32 @@ const FLAT_RUN_PRICE_PATTERNS = [
   /\bspends?\s+(?:one|a)\s+(?:AI\s+)?credit\b/i,
 ];
 
+/** Every page of the AI Schedule section. The flat-price claim can be written on
+ *  any of them, not only the three that quote a price, so the scan covers all of
+ *  them (the six pages Task 11a split the article into, plus AI Officials). */
+const AI_HELP_PAGES = [
+  "scheduling/ai-scheduling",
+  "scheduling/ai-instructions",
+  "scheduling/ai-dates",
+  "scheduling/ai-review",
+  "scheduling/ai-credits",
+  "scheduling/ai-several-divisions",
+  "scheduling/ai-officials",
+] as const;
+const FLAT_PRICE_SCAN_PAGES = [...new Set<string>([...PRICING_ARTICLES, ...AI_HELP_PAGES])];
+
 describe("no help article still sells a flat one-credit run", () => {
+  it("scans every AI page and every pricing article (count pinned)", () => {
+    // 7 AI pages + billing/credits; ai-credits and ai-officials are in both lists.
+    expect(AI_HELP_PAGES.length).toBe(7);
+    expect(FLAT_PRICE_SCAN_PAGES.length).toBe(8);
+  });
+
+  it.each(AI_HELP_PAGES)("%s yields prose to scan", (slug) => {
+    const all = claimTexts(helpArticleBySlug(slug)).flatMap(sentences);
+    expect(all.length, `${slug}: no sentences to scan`).toBeGreaterThan(15);
+  });
+
   /**
    * The OTHER half of "this scan is not vacuous", and the one the self-check
    * below cannot give.
@@ -167,7 +195,7 @@ describe("no help article still sells a flat one-credit run", () => {
     ).toBeGreaterThan(2);
   });
 
-  it.each(PRICING_ARTICLES)("%s", (slug) => {
+  it.each(FLAT_PRICE_SCAN_PAGES)("%s", (slug) => {
     const faults: string[] = [];
     for (const block of claimTexts(helpArticleBySlug(slug))) {
       for (const sentence of sentences(block)) {
