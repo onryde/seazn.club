@@ -8741,6 +8741,8 @@ export type DictionaryKey =
   | "scorepad.queue.resyncing"
   | "scorepad.queue.synced"
   | "scorepad.queue.throttled"
+  | "scorepad.refusal.alreadyDecidedDevice"
+  | "scorepad.refusal.alreadyDecidedGuest"
   | "scorepad.refusal.carriedForward"
   | "scorepad.refusal.invalid"
   | "scorepad.refusal.missing"

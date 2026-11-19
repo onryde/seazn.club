@@ -33,7 +33,7 @@
 // .test.ts` pins the two lists against each other so a new server code cannot
 // arrive without copy.
 import type { MessageKey } from "@/lib/messages";
-import { engineErrorLabel, type MsgFn } from "@/lib/scoring-vocab";
+import { engineErrorLabel, type MsgFn, type RefusalSurface } from "@/lib/scoring-vocab";
 import type { RejectionInfo } from "./use-pad-pipeline";
 import { NEXT_MATCH_STARTED_CODE, nextMatchLabel } from "@/lib/next-match-started";
 
@@ -88,9 +88,9 @@ export const REFUSAL_FALLBACK: MessageKey = "scorepad.rejection.fallback";
  * own string. `null` in means "nothing was refused", which is the only case
  * that renders nothing at all.
  */
-export function refusalText(rejection: RejectionInfo | null, m: MsgFn): string | null {
+export function refusalText(rejection: RejectionInfo | null, m: MsgFn, surface: RefusalSurface = "console"): string | null {
   if (!rejection) return null;
-  const engine = engineErrorLabel(rejection.code, m, rejection.reason);
+  const engine = engineErrorLabel(rejection.code, m, rejection.reason, surface);
   if (engine !== null) return engine;
   // Owner ruling 2026-09-23: the refusal NAMES the match to void first — by
   // the label the schedule board shows it by (fix round 2 ruling): "F·1" for a

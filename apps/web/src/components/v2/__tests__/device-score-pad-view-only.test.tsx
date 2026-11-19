@@ -17,6 +17,10 @@ import type { SideInfo, SportInfo } from "@/components/v2/fixture-console";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 
 const dict = en as Record<string, string>;
+/** The ALREADY_DECIDED refusal as a scorer on this pad reads it: the dictionary's sentence for the surface, its control
+ *  filled from the dictionary too (the glyph is the button's own, drawn beside the label). Never the code's own output. */
+const decidedLine = (key: "scorepad.refusal.alreadyDecidedDevice" | "scorepad.refusal.alreadyDecidedGuest") =>
+  dict[key]!.replace("{control}", `⟲ ${dict["device.undoMine"]}`);
 const DEVICE_LINK_ID = "dl-1";
 const OWN: PadEventIn = {
   id: "ev-own",
@@ -922,14 +926,14 @@ describe("DeviceScorePad — a quick match's pad names no organiser (review Q1/Q
     expect(textOf(byTestId(island.tree(), "scan-view-only"))).toBe(dict[key]);
     expect(byTestId(island.tree(), "scan-confirm"), "no Confirm, no Start").toBeUndefined();
     expect(textOfTree(island.tree()), "the refusal's own words would be false here").not.toContain(
-      dict["engineError.ALREADY_DECIDED"],
+      decidedLine("scorepad.refusal.alreadyDecidedGuest"),
     );
   });
 
   it("the negative pair: a stale Start on a match now DECIDED keeps the refusal's own words", async () => {
     const island = await staleStart("decided");
     expect(byTestId(island.tree(), "scan-view-only"), "decided is no View-only").toBeUndefined();
-    expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
+    expect(textOfTree(island.tree())).toContain(decidedLine("scorepad.refusal.alreadyDecidedGuest"));
   });
 });
 
@@ -977,7 +981,7 @@ describe("DeviceScorePad — an ordinary pad's stale Start or Void on a match no
       expect(textOf(screen), "a quick match's line on an organiser's fixture would be false").not.toBe(dict[quickKey]);
       expect(byTestId(island.tree(), TRIGGERS[trigger].testId), "View-only offers no control to re-tap").toBeUndefined();
       expect(textOfTree(island.tree()), "the refusal's 'already has a result' would be false here").not.toContain(
-        dict["engineError.ALREADY_DECIDED"],
+        decidedLine("scorepad.refusal.alreadyDecidedDevice"),
       );
     },
   );
@@ -987,7 +991,7 @@ describe("DeviceScorePad — an ordinary pad's stale Start or Void on a match no
     async (trigger) => {
       const island = await staleWrite(trigger, "decided");
       expect(byTestId(island.tree(), "scan-view-only"), "decided is not locked: no View-only").toBeUndefined();
-      expect(textOfTree(island.tree())).toContain(dict["engineError.ALREADY_DECIDED"]);
+      expect(textOfTree(island.tree())).toContain(decidedLine("scorepad.refusal.alreadyDecidedDevice"));
     },
   );
 

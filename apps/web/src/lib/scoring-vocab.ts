@@ -1389,9 +1389,34 @@ export const FORFEIT_NOTHING_PLAYED_KEY: MessageKey = "forfeit.phase.nothingPlay
 const FORFEIT_WRONG_PHASE_NAMED_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named";
 const FORFEIT_WRONG_PHASE_BOTH_KEY: MessageKey = "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak";
 
+/**
+ * Where a refusal is READ. ALREADY_DECIDED tells the scorer how to score again, and the control that does it is not the
+ * same on every surface: the organiser's match console has "⟲ Void last entry" (any entry), a device link has only
+ * "⟲ Void my last entry" (its own entries) and an organiser to ask, and a quick match's guest has the same control and
+ * nobody to ask. Every other refusal reads the same everywhere, so only this one code looks at the surface.
+ */
+export type RefusalSurface = "console" | "device" | "quickMatch";
+export const ALREADY_DECIDED_KEY: Readonly<Record<RefusalSurface, MessageKey>> = {
+  console: "engineError.ALREADY_DECIDED",
+  device: "scorepad.refusal.alreadyDecidedDevice",
+  quickMatch: "scorepad.refusal.alreadyDecidedGuest",
+};
+/** The dictionary key of the control each surface's sentence points at — the label is read at render time, never typed
+ *  into a sentence, so a renamed button cannot leave the refusal naming one that is gone. */
+export const ALREADY_DECIDED_CONTROL_KEY: Readonly<Record<RefusalSurface, MessageKey>> = {
+  console: "score.voidLast",
+  device: "device.undoMine",
+  quickMatch: "device.undoMine",
+};
+/** The device pad draws its glyph beside the label (`device-score-pad.tsx`), where the console's label carries it. */
+const ALREADY_DECIDED_CONTROL_GLYPH: Readonly<Record<RefusalSurface, string>> = { console: "", device: "⟲ ", quickMatch: "⟲ " };
+export const alreadyDecidedText = (m: MsgFn, surface: RefusalSurface): string =>
+  m(ALREADY_DECIDED_KEY[surface], { control: ALREADY_DECIDED_CONTROL_GLYPH[surface] + m(ALREADY_DECIDED_CONTROL_KEY[surface]) });
+
 /** Localized copy for an engine refusal; null when the code isn't an engine one. */
-export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown): string | null => {
+export const engineErrorLabel = (code: string, m: MsgFn, reason?: unknown, surface: RefusalSurface = "console"): string | null => {
   if (!(code in ENGINE_ERROR_KEY)) return null;
+  if (code === "ALREADY_DECIDED") return alreadyDecidedText(m, surface);
   const byReason = ENGINE_ERROR_REASON_KEY[code as EngineErrorCode];
   if (byReason && typeof reason === "string" && Object.hasOwn(byReason, reason)) return m(byReason[reason]!);
   return m(ENGINE_ERROR_KEY[code as EngineErrorCode]);
@@ -1675,6 +1700,7 @@ export function scoringErrorText(
   fallback: MessageKey,
   extra?: Record<string, unknown> | null,
   locale: Locale = DEFAULT_LOCALE,
+  surface: RefusalSurface = "console",
 ): string {
   // W2b D11: STAGE_SEAT_DEPARTED names the entrant (by name) and the match (by the board's label) in the reader's
   // language. Without both on the wire it reads the code's own copy, never an id.
@@ -1697,7 +1723,7 @@ export function scoringErrorText(
         : m(FORFEIT_WRONG_PHASE_NAMED_KEY, { phase: m(phase), allowed });
     }
   }
-  const engine = code ? engineErrorLabel(code, m, extra?.reason) : null;
+  const engine = code ? engineErrorLabel(code, m, extra?.reason, surface) : null;
   if (engine !== null) return engine;
   if (code === "UNDO_WICKET_NOT_LATEST") return m("scorepad.refusal.undoWicketNotLatest");
   if (code === "UNDO_DQ_USE_REINSTATE") return m("scorepad.refusal.undoDqUseReinstate");
@@ -1717,7 +1743,7 @@ export const SCORING_VOCAB_KEYS: readonly MessageKey[] = [
   ...Object.values(EVENT_KEY), ...Object.values(ENGINE_ERROR_KEY),
   ...Object.values(ENGINE_ERROR_REASON_KEY).flatMap((byReason) => Object.values(byReason ?? {})), SEAT_DEPARTED_KEY,
   ...Object.values(POSITION_KEY), ...Object.values(PLAYER_STAT_KEY),
-  ...Object.values(AWARD_KEY),
+  ...Object.values(AWARD_KEY), ...Object.values(ALREADY_DECIDED_KEY), ...Object.values(ALREADY_DECIDED_CONTROL_KEY),
   ...Object.values(SQUAD_ROLE_KEY), ...Object.values(SQUAD_PROVENANCE_KEY),
   ...Object.values(CONFIG_KEY), ...PAD_LABEL_KEYS,
   ...Object.values(DECIDED_METHOD_KEY), "fixture.decidedBy.plain", "fixture.decidedBy.tie",

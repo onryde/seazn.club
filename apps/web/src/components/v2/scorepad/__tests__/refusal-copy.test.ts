@@ -281,3 +281,64 @@ describe("the wire-code list tracks the server's own statusCode() map", () => {
     }
   });
 });
+
+// Scoring-defects fix round 1, I-2. ALREADY_DECIDED tells the scorer how to score again, and the control is not the same
+// on every surface: the organiser's console has "⟲ Void last entry", a device link has only "⟲ Void my last entry" (its own
+// entries) and an organiser to ask, a quick match's guest has the same control and nobody to ask. Each surface's sentence is
+// read through the REAL refusalText, with the dictionary's own labels filled in at render time.
+describe("refusalText — ALREADY_DECIDED names the control of the surface it is read on", () => {
+  const DICTS = { en, es, fr, nl } as Record<string, Record<string, string>>;
+  const say = (d: Record<string, string>): MsgFn => (k, vars) => interpolate(d[k] ?? k, vars);
+  const ORGANISER: Record<string, RegExp> = { en: /organiser/i, es: /organizador/i, fr: /organisateur/i, nl: /organisator/i };
+  const rejection = { code: "ALREADY_DECIDED", message: "raw engine prose" };
+
+  it("each surface reads its own control and the three sentences are three different sentences, in every locale", () => {
+    let checked = 0;
+    for (const [loc, d] of Object.entries(DICTS)) {
+      const m = say(d);
+      const consoleLine = refusalText(rejection, m, "console")!;
+      const deviceLine = refusalText(rejection, m, "device")!;
+      const guestLine = refusalText(rejection, m, "quickMatch")!;
+      const consoleControl = d["score.voidLast"]!; // carries its own glyph
+      const ownControl = `⟲ ${d["device.undoMine"]}`; // the device pad draws the glyph beside the label
+      expect(consoleLine, `${loc} console`).toContain(consoleControl);
+      expect(consoleLine, `${loc} console is not told to use a control it does not have`).not.toContain(d["device.undoMine"]);
+      expect(deviceLine, `${loc} device`).toContain(ownControl);
+      expect(guestLine, `${loc} guest`).toContain(ownControl);
+      expect(deviceLine, `${loc} a device link has an organiser to ask`).toMatch(ORGANISER[loc]!);
+      expect(guestLine, `${loc} a quick match's guest has nobody to ask`).not.toMatch(ORGANISER[loc]!);
+      expect(deviceLine, `${loc} device never sends the scorer to a console it does not have`).not.toContain(consoleControl);
+      for (const line of [consoleLine, deviceLine, guestLine]) expect(line, `${loc}: nothing left to fill`).not.toMatch(/[{}]/);
+      expect(new Set([consoleLine, deviceLine, guestLine]).size, `${loc} three surfaces, three sentences`).toBe(3);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+  });
+
+  it("no surface's sentence is the default's: the surface argument is read, not ignored", () => {
+    const m = say(en as Record<string, string>);
+    expect(refusalText(rejection, m)).toBe(refusalText(rejection, m, "console"));
+    expect(refusalText(rejection, m, "device")).not.toBe(refusalText(rejection, m));
+    expect(refusalText(rejection, m, "quickMatch")).not.toBe(refusalText(rejection, m, "device"));
+  });
+
+  it("the control's name is filled from its dictionary key at render time: rename the label and the sentence follows", () => {
+    const renamed = { ...(en as Record<string, string>), "score.voidLast": "⟲ Take back", "device.undoMine": "Take mine back" };
+    const m = say(renamed);
+    expect(refusalText(rejection, m, "console")).toContain("⟲ Take back");
+    expect(refusalText(rejection, m, "device")).toContain("⟲ Take mine back");
+    expect(refusalText(rejection, m, "quickMatch")).toContain("⟲ Take mine back");
+  });
+
+  it("every other refusal reads the same on every surface (the surface only matters to the one code that names a control)", () => {
+    const m = say(en as Record<string, string>);
+    let checked = 0;
+    for (const code of ["WRONG_PHASE", "QUEUE_STALLED", "FORBIDDEN", "NOT_A_CODE"]) {
+      const r = { code, message: "raw" };
+      expect(refusalText(r, m, "device"), code).toBe(refusalText(r, m, "console"));
+      expect(refusalText(r, m, "quickMatch"), code).toBe(refusalText(r, m, "console"));
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+  });
+});

@@ -474,6 +474,8 @@ export function DeviceScorePad({
             // (`isOwnSanctionEnding`); a refusal of it carries no reason list either. Passed so the call reads as the
             // console's does.
             locale,
+            // ALREADY_DECIDED names the control that scores again, and this pad's is not the console's (alreadyDecidedText).
+            quickMatch ? "quickMatch" : "device",
           ));
         }
         return false;
@@ -481,7 +483,7 @@ export function DeviceScorePad({
         setBusy(false);
       }
     },
-    [authed, fixture.id, live.last_seq, resync, enterCarriedForward, msg, locale, rulesVersion, followCorrection],
+    [authed, fixture.id, live.last_seq, resync, enterCarriedForward, msg, locale, rulesVersion, followCorrection, quickMatch],
   );
 
   // G1 — this pad's own freshness floor (`useTabReturn`, whose doc carries the

@@ -53,7 +53,7 @@ import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict
 import { WithdrawalConsequence, type ConsequenceState } from "@/components/v2/withdrawal-consequence";
 import type { MessageKey } from "@/lib/messages";
 import { useLocalStorageItem, writeLocalStorageItem } from "@/lib/use-client-snapshot";
-import { type MsgFn } from "@/lib/scoring-vocab";
+import { type MsgFn, type RefusalSurface } from "@/lib/scoring-vocab";
 import { deepEqual } from "../pipeline";
 import { refusalText } from "../refusal-copy";
 import { terminalRefusalOf, type PadAuthMode, type PadTransport } from "../transport";
@@ -668,8 +668,14 @@ export function resolveSheet(sheetKey: string, sheets: Record<string, GuidedShee
  * itself is untouched: the fixture console and the device pad still want its
  * raw-message behaviour, and neither is the pad chassis.
  */
-export function rejectionText(rejection: RejectionInfo | null, m: MsgFn): string | null {
-  return refusalText(rejection, m);
+export function rejectionText(rejection: RejectionInfo | null, m: MsgFn, surface: RefusalSurface = "console"): string | null {
+  return refusalText(rejection, m, surface);
+}
+
+/** Which surface this pad is read on, for the one refusal that names a control (`alreadyDecidedText`): a device link's
+ *  scorer, a quick match's guest, or the organiser's console. Read from what the pad was handed, not from the page. */
+export function refusalSurfaceOf(auth: { kind: string }, quickMatch: boolean | undefined): RefusalSurface {
+  return auth.kind !== "device_link" ? "console" : quickMatch === true ? "quickMatch" : "device";
 }
 
 /**
@@ -2818,7 +2824,7 @@ export function PadHostV3(props: PadHostV3Props) {
   const choiceSpec = choosing !== null && softCommitPlanOrNull(choiceDock, choosing.payload) === "choose" ? choiceDock : null;
 
   // Blocker 1 — see rejectionText's own doc above.
-  const rejectionMsg = rejectionText(pipeline.lastRejection, msg);
+  const rejectionMsg = rejectionText(pipeline.lastRejection, msg, refusalSurfaceOf(props.auth, props.quickMatch));
   // See queueStatusText's own doc above — the durable queue's status, ported
   // from the legacy renderer and never rendered on v3 until now.
   const queueLabel = queueStatusText(pipeline, msg);

@@ -40,6 +40,7 @@ import {
   phasesWithTiles,
   queueStatusAttention,
   queueStatusText,
+  refusalSurfaceOf,
   rejectionText,
   resolveDockSpec,
   resolveInitialBand,
@@ -1510,5 +1511,32 @@ describe("ribbonUndoTarget", () => {
     it("offers a held tap on an empty ledger", () => {
       expect(ribbonUndoTarget([], "held-1", NOBODY, "link-1")).toBe("held-1");
     });
+  });
+});
+
+// Scoring-defects fix round 1, I-2 — which surface a pad reads its refusals on is decided from what it was handed: the
+// device-link door, and the quick match flag only that door can carry.
+describe("refusalSurfaceOf", () => {
+  const SESSION = { kind: "session" };
+  const DEVICE = { kind: "device_link", token: "t" };
+
+  it("the organiser's session is the console; a device link is a device pad; a device link on a quick match is the guest's", () => {
+    expect(refusalSurfaceOf(SESSION, undefined)).toBe("console");
+    expect(refusalSurfaceOf(DEVICE, undefined)).toBe("device");
+    expect(refusalSurfaceOf(DEVICE, false)).toBe("device");
+    expect(refusalSurfaceOf(DEVICE, true)).toBe("quickMatch");
+  });
+
+  it("a session is the console whatever the quick match flag says: that door has the console's own control", () => {
+    expect(refusalSurfaceOf(SESSION, true)).toBe("console");
+    expect(refusalSurfaceOf(SESSION, false)).toBe("console");
+  });
+
+  it("rejectionText resolves the surface it is given, through the real resolver (the default is the console)", () => {
+    const m = ((k: string, v?: Record<string, string | number>) => `${k}|${v?.control ?? ""}`) as Parameters<typeof rejectionText>[1];
+    const r = { code: "ALREADY_DECIDED", message: "raw" };
+    expect(rejectionText(r, m)).toBe("engineError.ALREADY_DECIDED|score.voidLast|");
+    expect(rejectionText(r, m, "device")).toBe("scorepad.refusal.alreadyDecidedDevice|⟲ device.undoMine|");
+    expect(rejectionText(r, m, "quickMatch")).toBe("scorepad.refusal.alreadyDecidedGuest|⟲ device.undoMine|");
   });
 });

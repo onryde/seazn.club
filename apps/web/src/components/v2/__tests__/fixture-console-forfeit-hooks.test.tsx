@@ -366,12 +366,12 @@ describe("UI-1: the organiser's forfeit dialog carries stable hooks and sends th
     const { island, el, dialogEl } = openConsole("in_play");
     expect(byTestid(island.tree(), "forfeit-refusal"), "no refusal before a send").toHaveLength(0);
     const r = (await (propsOf(el).forfeit as (p: unknown) => Promise<{ ok: boolean; message?: string }>)({ by: AWAY.id, reason: "retired" }));
-    expect(r).toEqual({ ok: false, message: en("engineError.ALREADY_DECIDED") });
+    expect(r).toEqual({ ok: false, message: en("engineError.ALREADY_DECIDED").replace("{control}", en("score.voidLast")) });
     (propsOf(dialogEl()!).onRefused as (m: string) => void)(r.message!);
     expect(dialogEl(), "the refusal closed the dialog").toBeUndefined();
     const line = byTestid(island.tree(), "forfeit-refusal");
     expect(line).toHaveLength(1);
-    expect(textOf(line[0]!)).toBe(en("engineError.ALREADY_DECIDED"));
+    expect(textOf(line[0]!)).toBe(en("engineError.ALREADY_DECIDED").replace("{control}", en("score.voidLast")));
     // Design audit 1.4: ONE red-banner treatment on the console — the refusal wears the console's own error banner
     // (fixture-console's `error` line), not a second bordered, rounded-lg, red-800 style. role=alert stays. The banner's
     // classes are READ from that line in the source, never typed here, so the two cannot drift apart.
