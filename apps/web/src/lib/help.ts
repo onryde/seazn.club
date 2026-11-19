@@ -44,6 +44,8 @@ export const HELP_ARTICLE_SLUGS = [
   "scheduling/ai-officials",
   "scheduling/timezones",
   "scheduling/officials",
+  "scheduling/officials-assign",
+  "scheduling/officials-my-assignments",
   "scheduling/official-marks",
   "scheduling/matchday-documents",
   "scheduling/match-day",

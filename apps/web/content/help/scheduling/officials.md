@@ -1,62 +1,55 @@
 ---
 title: Officials and referees
-description: Invite officials to claim their profiles, read accept/decline responses and blackout dates, and let them score straight from the fixture console.
+description: Add officials to your organisation's pool, give them roles, and invite them to claim their profile so they can accept matches and score.
 order: 6
+related: scheduling/officials-assign, scheduling/officials-my-assignments, scheduling/official-marks, players/invite-to-claim
 ---
 
-Officials are your umpire/scoring path: invite one, they claim their profile, accept the assignment on their `/me` home, and score the match on the same full fixture console you use — no separate scorer role, no device link to mint. Officials are an org-wide pool, managed from **Directory → Officials** — the same roster is shared across every competition and division, so you add and invite an official once and pick them on any schedule. A division's **schedule → Officials tab** stays where you assign them to fixtures: auto-assign, manual pick, phased sourcing from results, and blackout warnings. Inviting an official, their home view, accepting and declining, blackout dates, and scoring are **available on all plans**.
+Officials are your referees, umpires, judges and scorers. They live in one pool for the whole organisation, in **Directory** under **Officials**. You add an official once and pick them on any division's schedule. Adding, inviting and giving roles are free on every plan.
 
-**Assigning officials is free on every plan.** Add a *second* official to the same fixture — a referee and a line judge, say — on Community, Event Pass or Pro alike; there's no per-fixture cap. **Multiple roles on one official** (see below) is likewise available on every plan — it's about how many hats one person wears, not how many people cover a match. The one part that needs a paid plan is *automatic* (AI) officials assignment — **Pro, or an Event Pass on that competition**.
+![The Officials roster in the Directory with three officials. One shows Linked and has Edit roles, Marks and Delete buttons. One shows Invited and one has no label, and both of those also have an Invite button. The Add an official form is below.](/help/scheduling/officials.webp "The Officials roster: role chips, Linked and Invited labels, and the buttons on each row.")
 
-## Add and invite an official
+## Add an official
 
-In **Directory → Officials**, **Add official** creates a roster entry; pick their role(s) as chips (referee, umpire, judge, scorer and more — or add a custom one). **Multiple roles on one official are available on every plan** — pick as many chips as apply and they stack. Next to any official, choose **Invite** and enter their email. They get a claim link by email — the same claim system players use, so the rules match: opening the emailed link and tapping **Claim and sign in** signs the official in as the invited address and claims the profile in one step (for 72 hours after it is sent; after that they sign in first, like the copyable link), while the copyable link in your console makes them sign in first and **only an account signed in with the invited address can accept it**. Invites last 14 days, and re-inviting quietly withdraws the previous links. Once accepted the official shows a **Linked** chip; an outstanding invite shows **Invited**. **Invite all with email** re-invites everyone who has an address but no link yet.
+1. Open **Directory**, then **Officials**.
+2. Under **Add an official**, type the **Name**.
+3. Pick the **Roles**. Each role is a chip: referee, chair umpire, line umpire, linesman, scorekeeper, timekeeper, umpire, technical officer, reserve umpire, judge and scorer. Type a name under **Add a custom role…** and select **Add role** for one that is missing.
+4. Select **Add official**.
 
-## Edit roles or remove an official
+Pick as many roles as apply. One person can hold several, on every plan. Referee is already ticked when the form opens.
 
-On any roster row, **Edit roles** opens the same chip picker to change an existing official's roles, and **Delete** removes them after an explicit confirmation. Deleting removes the official from *this organisation only* — their roster entry, their fixture assignments and their availability dates here. It never touches their account: a linked official keeps their login, their `/me` home, any player profiles, and their officiating profiles with other organisations. If they should come back later, just add and invite them again.
+## Edit roles or delete an official
 
-## Assigning on a division's schedule
+Select **Edit roles** on a row, change the chips, then select **Save roles**.
 
-The schedule's **Officials tab** shows a compact roster strip (with a link back to the directory to manage it) plus the assignment tools: propose/apply an auto-assignment, phase officials in from results, or pick manually per fixture. Every official in the org-wide pool is available to every division — there's no separate roster per division. **Automatic officials assignment (propose/apply) needs Pro, or an Event Pass on that competition** — picking officials manually works on every plan, including a second official per fixture and multiple roles per person. To staff a whole timetable from one instruction, see [AI Officials](/help/scheduling/ai-officials).
+Select **Delete**. The page asks **Delete Marta Quinn?**, using the official's name, and says **Removes them from this organisation's officials pool, along with their fixture assignments and availability here. Their account and other organisations are not affected. This cannot be undone.** If they come back later, add and invite them again.
 
-## What the official sees
+## Invite an official
 
-A linked official gets an **Officiating** section on their personal home (`/me`, same login as any player profile they hold):
+1. On their row, select **Invite**.
+2. Type their **Email** and select **Send invite**.
 
-- **My assignments** — each fixture with competition, court and time (shown in the venue's timezone and their own).
-- **Accept / Decline** — declining asks for an optional reason. Once accepted, an assignment can't be self-declined; they'll need to ask you. A decline can be re-accepted up until matchday.
-- **Can't make these dates** — blackout dates that apply across every organisation they officiate for.
-- **Score this match** — once accepted, this opens the same full fixture console you score from — same login, no separate device link to mint. It also shows up on their **My matches** page, alongside anything a scorer seat has assigned them. A pending or declined assignment has no scoring door: only an accepted one opens the console.
+The official gets an email with a link to claim their profile. The row shows **Invited** until they do, then **Linked**.
 
-## Officiating for more than one organisation
+If the email does not go out straight away, the row says **The email didn't go out straight away. It may arrive late, or not at all — share the link below to be sure.** It shows **Claim link (shown once)** with a **Copy** button. Copy it before you select **Done**, because it is not shown again.
 
-Officials often work for several organisations, and each invite is its own one-claim-per-org link. If an invite is waiting on your login's email — whether or not you've linked an officiating profile yet — `/me` shows a **Pending invites** card: "*\<Org\> set up an officiating profile for \<Name\>*", with an **Accept** button right there. No token, no link to hunt down in your inbox: your signed-in email is what proves it's for you, exactly like clicking the emailed link would. Accepting one invite never touches the others — link as many organisations as you officiate for, whenever their invites arrive.
+### How the claim works
 
-## Responses on your console
+- The link lasts 14 days.
+- If you invite the same official again, the earlier links stop working. Only the newest one claims.
+- Opening the claim page while signed out shows **Continue with Google** or an email sign-in link.
+- Opening the emailed link and selecting **Claim and sign in** signs the official in as the invited address and claims the profile in one step. That works for 72 hours after the email is sent. After that the official signs in first.
+- A signed-in account can claim the profile only if it uses the invited email address. The page then reads **This is me — claim** and the official's name. Any other account sees **Wrong account for this invite**, with the invited address and the signed-in one partly hidden, and no claim button. The official signs out and signs in with the invited address.
 
-Each assignment chip on the Officials tab carries the response: **✓ accepted**, **· pending**, **✗ declined** (hover for the reason). A decline is a flag for you to re-pick manually — **nothing is reassigned automatically**, and your locked assignments never move.
+When the claim goes through, the official lands on their own home page. See [what an official sees](/help/scheduling/officials-my-assignments).
 
-Existing assignments from before this feature count as **accepted** — nothing lights up red on upgrade day.
+### Invite everyone at once
 
-## Blackout dates when assigning
+**Invite all with email** and a number appears above the roster. It sends an invite to every official who has an email address on record, has not claimed their profile and has no invite waiting.
 
-If an official marked a date unavailable, the assign picker suffixes their name with **unavailable** and assigned chips show a **⚠** on that date. It's a warning, not a block — you can still assign them if you've agreed it.
+> **Example**
+> You add Marta Quinn as a referee and an umpire. You select **Invite** and enter her email. Her row shows **Invited**. You select **Invite** again: the first link is withdrawn, and the newest link lasts 14 days. She opens the claim page while signed out and sees **CLAIM YOUR OFFICIATING PROFILE** with the sign-in choices. She signs in with the invited address and selects **This is me — claim Marta Quinn**. She lands on her home page, and her row shows **Linked**.
 
-## Booked-elsewhere warnings
+## Next
 
-An official who officiates for more than one organisation can end up double-booked without either organiser knowing — blackout dates only cover time the official marked off themselves, not time another organisation already assigned them. If a claimed official has a match around the same time in a *different* organisation, the assign picker suffixes their name with **booked elsewhere · \<time\>** and an assigned chip shows the same badge on that fixture. Like the blackout warning, this is informational only — nothing is blocked or auto-reassigned. **Privacy note:** the warning shows only a time. It never reveals which organisation, competition or match the official is booked with — your console can't see another organisation's roster, schedule or name, only that a clash exists.
-
-## Conflict signals on the schedule board and fixture page
-
-Two more places surface an official's response, both organiser-only:
-
-- **Schedule board conflict badges** — a fixture with a declined assignment shows **umpire declined**; one where the assigned official has a blackout date on that day shows **umpire unavailable**. Both sit alongside the board's other warnings (double-bookings, venue clashes) as non-blocking flags — nothing is auto-reassigned, exactly like the Officials tab's own response chips.
-- **Assigned-officials strip on the fixture page** — opening a fixture you can edit shows a small chip per assigned official (accepted/pending/declined), with the decline reason on hover. It's the fastest way to check who's covering a specific match without leaving the score console.
-
-## Emails officials receive
-
-- **You've been assigned** — sent when you assign them to new fixtures (manually or by applying an auto-proposal), with an accept/decline link.
-- **Assignment changed** — sent when a fixture they're assigned to moves time, court or venue.
-
-Both go to the official's email; nothing is sent for re-applying an unchanged assignment.
+To put officials on matches, see [assigning officials](/help/scheduling/officials-assign). To rate them afterwards, see [marking officials](/help/scheduling/official-marks).
