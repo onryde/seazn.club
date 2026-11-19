@@ -1168,6 +1168,44 @@ describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses 
   });
 });
 
+// Court device check (2026-11-19, finding C): Google's `authenticatedUserAccountSuspended` on the channel read is its own
+// landing — "YouTube has suspended this account" — never "YouTube didn't answer, try again"; every other failure keeps that.
+describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — a suspended YouTube account (finding C)", () => {
+  it("the channel read answers authenticatedUserAccountSuspended: lands `suspended` (its own sentence in all four languages), nothing connected, the grant not revoked; any other reason, or none, still lands `unavailable`", async () => {
+    const rows: [string, "youtube_unavailable" | "youtube_reconnect_needed", string | undefined, string][] = [
+      ["suspended (403)", "youtube_unavailable", "authenticatedUserAccountSuspended", "suspended"],
+      ["suspended, mapped as a reconnect", "youtube_reconnect_needed", "authenticatedUserAccountSuspended", "suspended"],
+      ["no reason", "youtube_unavailable", undefined, "unavailable"],
+      ["another reason (forbidden)", "youtube_unavailable", "forbidden", "unavailable"],
+      ["a near miss of the word", "youtube_unavailable", "authenticatedUserAccountSuspend", "unavailable"],
+    ];
+    let checked = 0;
+    for (const [name, code, reason, lands] of rows) {
+      const r = await rig();
+      const f = await begin(r);
+      fake.setChannels([{ id: channelId(), title: "Banned FC" }], f.state);
+      session.user = { id: r.userId };
+      jar.values.set(STATE_COOKIE, f.state);
+      jar.values.set(VERIFIER_COOKIE, f.verifier);
+      fake.failNext("listMyChannels", code, reason);
+      const revokesBefore = callsOf("revoke");
+      const { res } = await finish(f);
+      expect(landed(res), name).toEqual(LANDS(lands, null, r.slug));
+      expect(callsOf("revoke") - revokesBefore, `${name}: channels unknown, so the grant is not revoked`).toBe(0);
+      expect(await connectionCount(r.orgId), `${name}: nothing connected`).toBe(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row driven").toBe(rows.length);
+    // The copy, from the dictionaries (never the code under test): its own sentence, not the retry's, in every locale.
+    for (const loc of ["en", "es", "fr", "nl"] as const) {
+      const dict = (await import(`@/dictionaries/${loc}/ui.json`)).default as Record<string, string>;
+      expect(dict["streaming.youtube.landing.suspended"], loc).toBeTruthy();
+      expect(dict["streaming.youtube.landing.suspended"], loc).not.toBe(dict["streaming.youtube.landing.unavailable"]);
+    }
+    expect((await import("@/dictionaries/en/ui.json")).default["streaming.youtube.landing.suspended"]).toBe("YouTube has suspended this account. Connect a different Google account.");
+  });
+});
+
 // =====================================================================================================================================
 describe.skipIf(!HAS_DB)("secrets stay out of every URL the routes produce", () => {
   it("no landing, and no start redirect, carries the code, the refresh token or the verifier — across every exit", async () => {

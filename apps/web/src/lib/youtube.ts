@@ -297,6 +297,8 @@ export const YOUTUBE_LANDING_CODES = [
   "forbidden",
   "unavailable",
   "already_connected",
+  // Court device check (2026-11-19, finding C): Google answered that the account's YouTube is suspended — not a retry.
+  "suspended",
 ] as const;
 export type YoutubeLandingCode = (typeof YOUTUBE_LANDING_CODES)[number];
 

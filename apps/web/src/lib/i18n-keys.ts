@@ -10988,6 +10988,7 @@ export type DictionaryKey =
   | "streaming.youtube.landing.not_configured"
   | "streaming.youtube.landing.other_org"
   | "streaming.youtube.landing.scope_missing"
+  | "streaming.youtube.landing.suspended"
   | "streaming.youtube.landing.unavailable"
   | "streaming.youtube.madeForKids.hint"
   | "streaming.youtube.madeForKids.label"

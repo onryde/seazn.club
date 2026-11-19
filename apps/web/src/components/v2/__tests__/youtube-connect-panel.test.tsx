@@ -476,15 +476,16 @@ describe("the landing banner — the connect round trip's outcome as this page's
   /** The two success outcomes (a status, not an alert); every other code is a failure the person must act on. */
   const SUCCESS = ["connected", "already_connected"];
 
-  it("the source has the codes the brief names: twelve, eleven of them banners (T7 added `unavailable`, T9 review added `already_connected`, which only the picker lands); `pick` is the picker's", () => {
-    expect(YOUTUBE_LANDING_CODES).toHaveLength(12);
-    expect(BANNER_CODES).toHaveLength(11);
+  it("the source has the codes the brief names: thirteen, twelve of them banners (T7 added `unavailable`, T9 review added `already_connected`, which only the picker lands, the court device check `suspended`); `pick` is the picker's", () => {
+    expect(YOUTUBE_LANDING_CODES).toHaveLength(13);
+    expect(BANNER_CODES).toHaveLength(12);
     expect(YOUTUBE_LANDING_CODES).toContain("unavailable");
+    expect(YOUTUBE_LANDING_CODES).toContain("suspended");
     expect(YOUTUBE_LANDING_CODES).toContain("already_connected");
     expect(BANNER_CODES).not.toContain("pick");
   });
 
-  it("EVERY banner code renders its own sentence — ELEVEN checked, eleven distinct — success as a status, every failure as an alert", () => {
+  it("EVERY banner code renders its own sentence — TWELVE checked, twelve distinct — success as a status, every failure as an alert", () => {
     const seen = new Set<string>();
     let checked = 0;
     for (const code of BANNER_CODES) {
@@ -497,8 +498,8 @@ describe("the landing banner — the connect round trip's outcome as this page's
       seen.add(sentence!);
       checked++;
     }
-    expect(checked, "all eleven banner codes").toBe(11);
-    expect(seen.size, "no two codes share a sentence").toBe(11);
+    expect(checked, "all twelve banner codes").toBe(12);
+    expect(seen.size, "no two codes share a sentence").toBe(12);
   });
 
   it("already_connected reads, word for word, as the controller's ruling (M5): the channel was already connected, its visibility and audience settings are unchanged, change them in Settings", () => {
@@ -511,7 +512,7 @@ describe("the landing banner — the connect round trip's outcome as this page's
     expect(plain(html)).not.toContain(m("streaming.youtube.landing.connected"));
   });
 
-  it("every banner sentence is translated: es, fr and nl each have all eleven, none of them the English", () => {
+  it("every banner sentence is translated: es, fr and nl each have all twelve, none of them the English", () => {
     let checked = 0;
     for (const l of ["es", "fr", "nl"]) {
       const dict = localeDict(l);
@@ -523,7 +524,7 @@ describe("the landing banner — the connect round trip's outcome as this page's
         checked++;
       }
     }
-    expect(checked).toBe(33);
+    expect(checked).toBe(36);
   });
 
   it("Dismiss clears the query: the page is replaced with /streaming (no outcome left to re-show on a reload)", async () => {
@@ -2000,7 +2001,7 @@ describe("the panel with YouTube Connect", () => {
           checked++;
         }
       }
-      expect(checked, "eleven banner codes x editor and viewer").toBe(22);
+      expect(checked, "twelve banner codes x editor and viewer").toBe(24);
     });
 
     it("a pick opens the picker for THIS pending grant — for an editor only; a viewer gets neither picker nor banner", () => {
@@ -2130,7 +2131,7 @@ describe("T12 polish: the Streaming page", () => {
       checked++;
     }
     expect(checked, "every banner code").toBe(bannerCodes.length);
-    expect(checked).toBe(11);
+    expect(checked).toBe(12);
   });
 
   it("4. the logo appears ONLY as the channel row's link: the pasted-key row wears the neutral tile, the Connect buttons wear nothing", () => {
