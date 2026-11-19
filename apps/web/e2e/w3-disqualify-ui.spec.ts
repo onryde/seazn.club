@@ -297,6 +297,43 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
     await expect(dqTag(page.locator(`li[data-fixture-no="${theirs[0]!.fixture_no}"]`)), "a match that does not involve her").toHaveCount(0);
   });
 
+  // W5 T8b (owner ruling 289, RB5-W2/W4): a disqualification recorded IN a league match withdraws her from the league. Her lines
+  // count this match as played (RB5-W4): one of three, under half, so every result of hers is removed and the rest voided (RB5-W2)
+  // - the match she was disqualified in included, so it carries no disqualification tag and names no winner. Expected values
+  // from the rulebook's arithmetic, not read off the screen. One sport (generic): the cascade is sport-blind.
+  test("a league, disqualified in her first match: under half played, her results are removed and her lines read abandoned, with no disqualification tag (RB5-W2)", async ({ page, request }) => {
+    test.setTimeout(240_000);
+    const d = await division(request, "DQ In Match", 4);
+    const { stageId } = await createStageAndGenerate(request, d.divisionId, { kind: "league", name: "League" });
+    const started = await apiJson(request, `/api/v1/divisions/${d.divisionId}/start`, "POST");
+    expect(started.status, `start: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    const victim = d.ids[1]!;
+    const all0 = (await divisionFixtures(request, d.divisionId)).filter((f) => f.stage_id === stageId);
+    const mine = all0.filter((f) => f.home_entrant_id === victim || f.away_entrant_id === victim);
+    const theirs = all0.filter((f) => f.home_entrant_id !== victim && f.away_entrant_id !== victim);
+    expect(mine.length, "premise: she plays each of the other three once").toBe(3);
+    const board = mine[0]!;
+    const begun = await apiJson(request, `/api/v1/fixtures/${board.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    expect(begun.status, JSON.stringify(begun.error)).toBe(201);
+    const dq = await apiJson(request, `/api/v1/fixtures/${board.id}/events`, "POST", { expected_seq: 1, type: "core.forfeit", payload: { by: victim, reason: "disqualified" } });
+    expect(dq.status, JSON.stringify(dq.error)).toBe(201);
+
+    const mineNow = async () => (await divisionFixtures(request, d.divisionId)).filter((f) => mine.some((m) => m.id === f.id));
+    await expect.poll(async () => (await mineNow()).map((f) => f.status), { timeout: STEP_MS, message: "her three lines are expunged" }).toEqual(["abandoned", "abandoned", "abandoned"]);
+    const after = await mineNow();
+    expect(after.filter((f) => f.outcome?.kind === "award"), "no award survives on her lines, the disqualification's included").toEqual([]);
+    expect((await divisionFixtures(request, d.divisionId)).filter((f) => theirs.some((t) => t.id === f.id)).map((f) => f.status), "lines without her stand").toEqual(theirs.map(() => "scheduled"));
+
+    await page.goto(await divisionPath(request, d.divisionId, "?tab=fixtures"));
+    await showAllFixtures(page);
+    const line = page.locator(`li[data-fixture-no="${board.fixture_no}"]`);
+    await expect(line).toBeVisible({ timeout: STEP_MS });
+    await expect(line, "the line she was disqualified in reads abandoned").toContainText(uiEn["schedule.fstatus.abandoned"]!);
+    await expect(dqTag(line), "and carries no disqualification tag: its result was removed").toHaveCount(0);
+    const other = page.locator(`li[data-fixture-no="${theirs[0]!.fixture_no}"]`);
+    await expect(other, "a line without her does not").not.toContainText(uiEn["schedule.fstatus.abandoned"]!);
+  });
+
   // Ruling 261: Disqualify is offered only once the division has STARTED (the flag that hides Delete). Before the start a
   // disqualification is a bare flip that Delete and Withdraw already cover, and the third button pushed Delete under the scroll
   // fade at 768. So a setup division's row is Withdraw + Delete, a started one's is Withdraw + Disqualify.
