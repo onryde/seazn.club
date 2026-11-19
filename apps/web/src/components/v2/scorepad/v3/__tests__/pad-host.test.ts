@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { LineupPair, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
+import type { PadAuthMode } from "../../transport";
 import type { PadField, PadPanel, PadSpec } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { carrom } from "@seazn/engine/sports/carrom";
@@ -1517,8 +1518,8 @@ describe("ribbonUndoTarget", () => {
 // Scoring-defects fix round 1, I-2 — which surface a pad reads its refusals on is decided from what it was handed: the
 // device-link door, and the quick match flag only that door can carry.
 describe("refusalSurfaceOf", () => {
-  const SESSION = { kind: "session" };
-  const DEVICE = { kind: "device_link", token: "t" };
+  const SESSION: PadAuthMode = { kind: "session" };
+  const DEVICE: PadAuthMode = { kind: "device_link", token: "t" };
 
   it("the organiser's session is the console; a device link is a device pad; a device link on a quick match is the guest's", () => {
     expect(refusalSurfaceOf(SESSION, undefined)).toBe("console");
@@ -1530,6 +1531,12 @@ describe("refusalSurfaceOf", () => {
   it("a session is the console whatever the quick match flag says: that door has the console's own control", () => {
     expect(refusalSurfaceOf(SESSION, true)).toBe("console");
     expect(refusalSurfaceOf(SESSION, false)).toBe("console");
+  });
+
+  it("a door the type does not know is a compile error, not a quiet console (tsc is the assertion: the directive below fails if the call type-checks)", () => {
+    // @ts-expect-error - "magic_link" is not a PadAuthMode
+    const surface = refusalSurfaceOf({ kind: "magic_link" }, undefined);
+    expect(typeof surface, "at runtime the switch has no arm and returns the value it was handed").not.toBe("string");
   });
 
   it("rejectionText resolves the surface it is given, through the real resolver (the default is the console)", () => {

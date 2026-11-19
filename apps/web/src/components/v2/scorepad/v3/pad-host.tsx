@@ -674,8 +674,18 @@ export function rejectionText(rejection: RejectionInfo | null, m: MsgFn, surface
 
 /** Which surface this pad is read on, for the one refusal that names a control (`alreadyDecidedText`): a device link's
  *  scorer, a quick match's guest, or the organiser's console. Read from what the pad was handed, not from the page. */
-export function refusalSurfaceOf(auth: { kind: string }, quickMatch: boolean | undefined): RefusalSurface {
-  return auth.kind !== "device_link" ? "console" : quickMatch === true ? "quickMatch" : "device";
+export function refusalSurfaceOf(auth: PadAuthMode, quickMatch: boolean | undefined): RefusalSurface {
+  switch (auth.kind) {
+    case "session":
+      return "console";
+    case "device_link":
+      return quickMatch === true ? "quickMatch" : "device";
+    default: {
+      // A new door must say which surface it reads on: this stops compiling instead of quietly reading as the console.
+      const unreachable: never = auth;
+      return unreachable;
+    }
+  }
 }
 
 /**
