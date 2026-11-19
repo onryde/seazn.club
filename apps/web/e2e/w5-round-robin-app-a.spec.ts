@@ -1549,6 +1549,11 @@ test.describe("n1 the open-stages warning says completed, but", () => {
     const seedOf = new Map(added.data!.map((e, i) => [e.id, i + 1]));
     const groups = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 2 } } });
     expect(groups.status, JSON.stringify(groups.error)).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${groups.data!.id}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    // The cut gate holds BEFORE Start only (W5 T12b fix round 1, 974988a947): with this knockout already in place Start itself is
+    // refused (422 RR_CUT_EXCEEDS_FIELD, 7 asked of 6). So the knockout is added after Start, where neither its creation nor its
+    // Generate is gated, and the shortfall reaches the completion's proposal (the resolve backstop) - the path this test is about.
     const finals = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
       seq: 2,
       kind: "knockout",
@@ -1561,9 +1566,6 @@ test.describe("n1 the open-stages warning says completed, but", () => {
       },
     });
     expect(finals.status, JSON.stringify(finals.error)).toBe(201);
-    expect((await apiJson(request, `/api/v1/stages/${groups.data!.id}/generate`, "POST")).status).toBe(200);
-    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
-    // after Start a later stage's Generate is not gated, so the shortfall reaches the completion's proposal (the resolve backstop)
     const fin = await apiJson(request, `/api/v1/stages/${finals.data!.id}/generate`, "POST");
     expect(fin.status, JSON.stringify(fin.error)).toBe(200);
     const lines = (await stageFixtures(request, divisionId, groups.data!.id)) as Pairing[];
