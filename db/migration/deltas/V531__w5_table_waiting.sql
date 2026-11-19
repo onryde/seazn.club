@@ -1,4 +1,4 @@
--- V529 — W5 (format matrix: round robin) app-A Task 5 (rules X-CU-7, X-CU-8; rulebook RB5-L10; owner rulings 271, 276; spec
+-- V531 — W5 (format matrix: round robin) app-A Task 5 (rules X-CU-7, X-CU-8; rulebook RB5-L10; owner rulings 271, 276; spec
 -- docs/superpowers/specs/2026-11-05-format-matrix-w5-round-robin-design.md §4.1, §10): an entrant that ARRIVED AUTOMATICALLY in a
 -- division whose root league or group stage is running — a confirmed or paid registration, a waitlist promotion, an import, a
 -- Reinstate with no lines — is never placed by the app. It waits, flagged on the desk, until one organiser tap runs the late-entry

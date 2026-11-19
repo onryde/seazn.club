@@ -503,7 +503,7 @@ export async function getCompetitionDesk(
     const fixturesToday = await countFixturesToday(tx, competitionId, now);
     // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
     // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
-    // W5 T6 (X-CU-8): and those waiting to join a running root league or group (`table_waiting_stage_id`, V529) — `table`
+    // W5 T6 (X-CU-8): and those waiting to join a running root league or group (`table_waiting_stage_id`, V531) — `table`
     // says which, so the row reads "add to the table", not "add to bracket". An entrant waits on one stage at most (a
     // division's entry stage is one kind), so the two markers never count one entrant twice.
     const lateWaiting = ids.length
@@ -519,7 +519,7 @@ export async function getCompetitionDesk(
       : [];
     // W5 T6 fix round 1 (RB5-L8, L10): players who arrived after the division's root league or group FINISHED. A finished table
     // takes no one and marks no one (`markTableWaiting`), so this is DERIVED, never stored: the entry stage (lowest seq; a league
-    // or group drawing from the live roster — `isRootTableStage` spelt in SQL, as V529 spells it), complete, and drawn; every
+    // or group drawing from the live roster — `isRootTableStage` spelt in SQL, as V531 spells it), complete, and drawn; every
     // entrant still in the field seated in none of its fixtures. Placing them anywhere in it, or their leaving, clears it.
     const lateUnplaced = ids.length
       ? await tx<{ division_id: string; stage_name: string; names: string[] }[]>`
