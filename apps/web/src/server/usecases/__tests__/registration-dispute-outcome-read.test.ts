@@ -213,9 +213,9 @@ describe.skipIf(!HAS_DB)("RegistrationListRow.dispute - open, lost, won (registr
     expect(rows.find((r) => r.id === b.id)!.dispute, "the unpaid sibling has no payment to dispute").toBeNull();
   });
 
-  // Fix round 3 item 5 (V531): without these the list's per-row probe walked every ledger row of the competition (EXPLAIN: ~254 ms and
+  // Fix round 3 item 5 (V532): without these the list's per-row probe walked every ledger row of the competition (EXPLAIN: ~254 ms and
   // ~68,900 buffers at 500 entries x 7,400 events; ~7 ms and ~500 buffers with them). Pinned from pg_indexes, like migration-shape.test.ts.
-  it("V531's two partial indexes exist: by (competition, payment intent) for disputed/lost rows and by (competition, dispute id) for won rows", async () => {
+  it("V532's two partial indexes exist: by (competition, payment intent) for disputed/lost rows and by (competition, dispute id) for won rows", async () => {
     const rows = await sql<{ indexname: string; indexdef: string }[]>`
       select indexname, indexdef from pg_indexes
        where tablename = 'competition_events' and indexname in ('competition_events_reg_dispute_intent_idx', 'competition_events_reg_dispute_won_idx')`;

@@ -1,4 +1,4 @@
--- V531 — index the ledger rows a registrant's dispute state is read from. Renumber at merge if main has moved past.
+-- V532 — index the ledger rows a registrant's dispute state is read from. Renumber at merge if main has moved past.
 --
 -- WHY. The organiser's registrations list (`listRegistrations`) now reads each entry's chargeback state PER ENTRY PAYMENT
 -- (`disputeOutcomeSql`, registrations/disputes.ts, registration defects fix round 3): for every row it probes
