@@ -148,3 +148,46 @@ there was nothing to `git checkout`; `git status` was clean before and after. Ru
   tails and the 500 and the 7 busy refusals ran through a loaded machine; do not use them as the baseline for those three
   without a quiet re-run.
 - `B-slow-5` and `B-slow-10` at 200 players are open: not measured here, and the first needs a longer test budget.
+
+## Plan 2, Task 11 Step 1: local pre-check with the flags ON (2026-11-19)
+
+Not the gate (that is the staging round against real RealtimeKit). Branch `feat/checkin-rollout` (main `dab9750ff4` + runbook commits), same
+shape as the baseline's `B` run: `LOAD_BOARDS=100` (200 players), `LOAD_SCENARIO=B`, `LOAD_ARRIVAL_SPREAD_S=60 LOAD_OPENED_AGO_S=250`,
+cameras instant, standalone prod build, fixture vendors, fresh label database. Server env as the baseline plus
+`EXTERNAL_PLAY_PREMINT=1 EXTERNAL_PLAY_PRESENCE_PROOF=1`; runner `LOAD_PRESENCE_PROOF=1 LOAD_WEBHOOKS=1`.
+**`EXTERNAL_PLAY_WINDOW_DEFER=0` on this server**: the harness's own post-check demands it ("sweep deferred for an open check-in window:
+start the server with EXTERNAL_PLAY_WINDOW_DEFER=0"); it is the load server's setting, never production's.
+
+**Verdict: the run is RED (exit 1)** on the harness's room-read smoke guard (`room read p95 13367 ms`, bar 3000), on a machine whose 1-minute
+load average was 85-136 (another session's `next-build` at 120% CPU and Chrome) while it ran. The latency rows below are therefore NOT
+a baseline comparison. The call-count and presence rows are counts, not latencies, and are unaffected. A quiet-machine re-run is owed
+before the latency rows are read as the line's behaviour.
+
+| | Baseline `B` (flags off, `LOAD_WEBHOOKS=0`) | This run (premint + proof + webhooks on) |
+| --- | --- | --- |
+| Calls per board, whole run | 23 (2300) | **18.1** (1814) |
+| Check-in calls per player (harness `perPlayerCheckIn`) | 6 per stay (12 per board) | 5.9 |
+| RealtimeKit calls, busiest 5 min (ceiling 900) | 687 | 708 |
+| Time to seat p50 / p95 / max | 3.09 s / 29.1 s / 47.4 s | 34.9 s / 131.2 s / 141.8 s (machine load; not comparable) |
+| `lockWaitMs` p95 / max (gate decisions) | 21 ms / 440 ms (565) | 1189 ms / 2105 ms (606) (machine load) |
+| `gate lock busy` | 0 | **7** (machine load; the baseline's B-honest also saw 7 under spikes) |
+| `presenceFallbackCount` (`seat: ... fell back` lines) | n/a | **0** |
+| Webhooks | emitted 600, delivered 0 | emitted 600, **delivered 600**, failed 0 |
+| Plan 1 end-of-run presence checks | n/a | `allMeetingsEnded`, `openRows 0`, `leftDelivered 200`, `leftClosedByLeft 200`, uuids 600/600, shadow `verified 200 covered 200 missing 0 open 0 closedByEnded 0`: all pass |
+| Camera evidence settled | 200 | 200 (13 sweep passes) |
+| Seat answers | camera_required 200, seated 200, queued 166 | camera_required 200, seated 200, queued 213 |
+| Claims per player (min/max, total) | 2 / 12 (566) | 2 / 11 (613) |
+| Database peak connections | 5 | 5 |
+| Pre-mint `roomsMade` / `windowsOpen` / `deferred` | n/a | **not measured**: this harness drives the sweep, not `/api/cron/external-play-premint`; the sweep's `windowsOpen` was 0 on every pass (deferral off by the setting above) |
+
+Plainly: **latency is worse (seat p50 11x, room-read p95 and `lockWaitMs` p95 far above baseline) and the harness's own latency guard reds**,
+under heavy machine contention; whether any of it is the flags is not established by this run. Calls are lower (18.1 vs 23 per board) and
+presence is clean (0 fallbacks, 200/200 covered, 0 closed-by-end). The "bars at flag-on" carry was already met in the tree:
+`line-load.ts` `stayPriceMax(mode)` is 9 flag-on and 21 flag-off, pinned to `lineReservation` in `line-load.test.ts`; replacing it with a constant 21
+fails 2 of 61 tests.
+
+Environment faults hit and fixed on the way (not defects): `LICHESS_TOKEN_KEK` must be 64 hex (base64 aborts seeding); a
+killed server's listener survived and kept :3391, so the next run talked to the old server and its KEK (every seal failed
+`LICHESS_TOKEN_UNAVAILABLE`, 30-min timeout); a re-used database made the sweep scan the earlier runs' rooms (600 candidates, 22
+`not_found` failures per pass, camera evidence never settled): each run needs a fresh database; without `WINDOW_DEFER=0` the harness
+refuses the run.
