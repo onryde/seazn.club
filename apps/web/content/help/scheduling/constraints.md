@@ -1,60 +1,82 @@
 ---
 title: Scheduling constraints
-description: Play hours, rest gaps, court preferences — the rules Auto-schedule must respect.
+description: The rules Auto-schedule and AI Schedule play by — hours, courts, rest, a daily cap, blackouts — and the tools that check a day.
 order: 4
+related: scheduling/board, scheduling/locks, scheduling/ai-scheduling, scheduling/undo
 ---
 
-Constraints are the rules the auto-scheduler plays by. They live in the division's **schedule settings**. Courts, match length and the start/end dates are also asked once on the **Scheduling** step when you create the division — the settings panel is where you change them afterwards.
+Constraints are the rules the scheduler plays by. You set them once per division, and Auto-schedule and AI Schedule both obey them. Matches you place by hand are checked against them too. Every plan has them.
 
-## The basics (all plans)
+![The Constraints tab of a division's schedule. It shows the two rule boxes, Minimum rest, Max matches per day, Field fairness and Blackout windows.](/help/scheduling/constraints-panel.webp "The Constraints tab: the rule boxes and fields sit at the top, with Blackout windows, Bulk time shift and the Wait-time report below.")
 
-- **Play hours** — when the venue is yours, per day.
-- **Courts** — what your courts are called, and how many run in parallel.
-- **Match length** — how long a fixture blocks a court, derived from the sport but overridable.
+The rules live on three tabs of **Schedule**: **Settings**, **Courts** and **Constraints**.
 
-Every time on these screens is picked from a list rather than typed to the minute. On the settings and constraints screens that list is the **quarter hours** — 9:00, 9:15, 9:30 — the times a timetable is normally built from. Dates keep their usual calendar picker.
+## Hours, courts and match length
 
-When you set the time on an individual match — the **Schedule** button on a fixture, **Add match**, or the board's **Move** panel — the list is your division's own slots instead: with 40-minute matches and no gap it offers 9:00, 9:40, 10:20, and so on. Those are the times the rest of the board already sits on, so nudging one match by hand cannot leave it stranded between everyone else's.
+On the **Settings** tab you set:
 
-Registration opening and closing times are quarter hours too, plus **23:59**, so "entry closes at the end of Friday" stays sayable.
+- **Start date & time** and **End date**. The scheduler begins on the start date, and the end date bounds the days it may use.
+- **Play from** and **Play until**. Matches only land between these times each day. Leave them blank and any time of day is allowed.
+- **Match length (minutes)** and **Gap between matches (minutes)**. The gap is turnaround time on the same court, such as warm-up and teardown.
+- **Minimum rest per entrant (minutes)**.
 
-## Finer control (all plans)
+Set **Play from** and **Play until** before you run **Auto-schedule**. In a six-player league with no play hours, the first match landed at midnight, not at the start time we had picked. With play hours of 09:00 to 12:00, the first match landed at 09:00.
 
-- **Multiple courts** — run matches in parallel across a venue.
-- **Rest gaps** — minimum minutes between an entrant's matches.
-- **Unavailability** — "Rockets can't play before 10am Saturday".
-- **Court preferences** — finals on Court 1, wheelchairs on the accessible court.
-- **Describe it in words** — type "45 players, 2 courts, done by 6pm, nobody plays twice in a row" and the assistant proposes constraints; you review and apply, nothing is set silently.
+On the **Courts** tab you pick the courts this schedule can use.
 
-To go further and have the same plain-language instruction lay out the whole timetable, see [AI Schedule](/help/scheduling/ai-scheduling).
+## Rest between matches
 
-## Minimum rest is set in four places, and the strictest wins
+Rest is the one rule with more than one home. The scheduler takes the **largest** of these:
 
-Rest is the one setting with more than one home, so it is worth knowing which of them is in charge:
+- **Minimum rest per entrant** on the Settings tab.
+- **Minimum rest** on the Constraints tab.
+- **At least one break between a team's matches**, the box on the Constraints tab. It is not a number. A whole match has to fit in the gap, so it works out as the match length plus the gap between matches.
 
-- **Minimum rest per entrant** on the **Settings** tab.
-- **Minimum rest** on the **Constraints** tab.
-- **At least one break between a team's matches**, the checkbox below it.
-- A per-pool or per-division override, if your competition has one.
+Raising any of them raises the floor, and leaving one at 0 lets the others decide.
 
-They do not override one another and they are not ranked by how specific they are. The scheduler takes the **largest** of them. Put 30 in one and 10 in the other and entrants rest 30 — raising either raises the floor, and leaving one at 0 simply lets the others decide.
+When another setting outranks the field you are looking at, a line under it names the winner and the rest entrants get.
 
-The checkbox is the one that surprises people, because it is not a number. "At least one break" means a whole fixture has to fit in the gap, so it works out as **match length plus the gap between matches**. With 30-minute matches and a 5-minute changeover that is 35 minutes — more than a *Minimum rest* of 30, so the 30 stops mattering the moment you tick the box.
+> **Example**
+> Match length is 30 minutes and the gap between matches is 5. You tick **At least one break between a team's matches** and set **Minimum rest** to 20. The line under the field reads **Entrants will rest at least 35 min — set by “at least one break between a team’s matches”.** Set **Minimum rest** to 50 and the line disappears, because the field itself now wins.
 
-You do not have to work this out yourself. Whenever one of the other settings outranks the rest field you are looking at, a line appears under it naming the setting that won and the rest entrants will actually get.
+## Max matches per day
+
+**Max matches per day** caps how many of this division's matches land on one calendar day. The rest spill to the next available day. Leave it blank for no limit.
+
+> **Example**
+> A six-player league has 15 matches, two courts and a Max matches per day of 4. Auto-schedule puts 4, 4, 4 and 3 matches on four days in a row.
+
+## The two rule boxes
+
+- **A player is never in two matches at once**. The hint reads **A double-booking is always refused. This only decides whether the AI planner tries to avoid one.**
+- **At least one break between a team's matches**. The hint reads **No entrant plays two rounds running.**
+
+Both boxes start unticked.
 
 ## Field fairness
 
-Over a long day some entrants end up on the same court every round while others move about. **Field fairness** evens that out — but only as a tie-break.
+**Field fairness** is a tie-break between courts that are free at the same moment. It never delays a match.
 
-When the scheduler has two courts free at the same moment, it picks between them:
+- **Off** takes whichever court comes first.
+- **Balance courts** gives the entrant the court they have used least.
+- **Rotate every game** avoids the court they played on last.
 
-- **Balance courts** — give the entrant the court they have used least so far.
-- **Rotate every game** — avoid the court they played on last.
-- **Off** — take whichever court comes first.
+On a tight timetable it can change nothing. In a six-player league on two courts, all three choices gave the same board.
 
-Kick-off times always win. If the fairer court is only free later, the match goes on the earlier one anyway; no fixture is ever delayed to even out courts. So on a tight timetable with few spare courts, turning this on may change nothing at all.
+## Blackout windows
 
-## Diagnosing a day
+A blackout is a time when nothing can be scheduled, such as a lunch break or one court out of action. Select **Add blackout**, choose **Applies to** (**Whole division** or one court), set **From** and **To**, then select **Save blackout windows**. The times are shown in the zone named above the list. See [timezones](/help/scheduling/timezones).
 
-The **schedule report** shows each entrant's shortest and longest waits — the fastest way to spot the poor team sitting idle for three hours before you print anything.
+> **Example**
+> A six-player league has 15 matches on two courts, with play hours of 08:00 to 18:00. With no blackout, every match is on 5 December between 08:00 and 11:30. You add a blackout for the whole division from 09:00 to 10:00 on 5 December. With later days still open, Auto-schedule moves all 15 matches to 6 December, 08:00 to 11:30. With only 5 December open, they run from 10:00 to 13:30. A blackout for Court 1 only, on that one open day, leaves Court 1 empty from 09:00 to 10:00 while Court 2 still plays at 09:30.
+
+## Bulk time shift
+
+Type a number of minutes and select **Shift everything**. A window asks **Shift every fixture by 45 minutes?** and tells you that locked and decided matches stay put. Afterwards the screen says **Moved 15 matches.** Take it back with **Undo** on the History tab. See [undo and save points](/help/scheduling/undo).
+
+## Wait-time report
+
+Select **Check waits** for a table of the five entrants with the longest waits, worst first. The columns are **Entrant**, **Games**, **Longest wait** and **First to last**.
+
+> **Example**
+> In the six-player league, Dunmore played 5 games with a longest wait of 1h, from a first start to a last start 3h 30m apart. The report listed five of the six players.
