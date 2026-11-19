@@ -44,7 +44,7 @@ const SENTENCES = ARTICLE.replace(/\*\*|__|`/g, "")
   .filter((s) => s.length > 0);
 
 /** The pad says "Void" (score.void), the older copy said "undo"; either word names the action these pins are about. */
-const VOIDED = /\b(?:undo|void)\b/i;
+const VOIDED = /\bvoid\b/i;
 const SHOW_QR = en["dlink.showQr"];
 const REISSUE = en["dlink.reissue"];
 const HAND_OVER = en["score.handOverDevice"];

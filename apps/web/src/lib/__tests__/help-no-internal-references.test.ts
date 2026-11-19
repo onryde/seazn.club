@@ -69,7 +69,7 @@ const CASES: Record<LeakRule, { hit: string[]; clean: string[] }> = {
     hit: [
       "The engine builds the draw.",
       "A reducer folds the events.",
-      "The payload carries the score.",
+      "The reducer carries the score.",
       "stored as jsonb",
       "POST to the webhook",
       "A cron job runs nightly.",
@@ -253,10 +253,6 @@ const KNOWN: Known = {
   scheduling: {
     "scheduling/ai-officials": ["developer-word"],
     "scheduling/ai-scheduling": ["developer-word"],
-  },
-  scoring: {
-    // The import file's own field is named `payload`; the sample file and the line that describes it have to say so.
-    "scoring/batch-import": ["developer-word"],
   },
 };
 
