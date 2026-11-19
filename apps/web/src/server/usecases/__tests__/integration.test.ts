@@ -324,10 +324,18 @@ describe.skipIf(!HAS_DB)("/api/v1 service layer", () => {
     expect(completion.qualified?.entrants).toHaveLength(4);
     // Completion auto-generates the seeded stage: 2 semis + final.
     expect(completion.next_stage_fixtures).toBe(3);
-    // Re-complete is idempotent: same seeded list, no duplicate fixtures.
+    // Re-complete is a no-op that says so (W5 CS-1, X-BD-4 - the /stages/{id}/complete contract in api-v1/openapi.ts): it answers
+    // already_complete and emits nothing, and the seeded list and the knockout's lines stand exactly as the first Complete wrote them.
+    const koState = async () => ({
+      qualified: (await sql<{ q: unknown }[]>`select config -> 'qualified' as q from stages where id = ${knockout.id}`)[0]!.q,
+      lines: (await sql<{ id: string }[]>`select id from fixtures where stage_id = ${knockout.id} order by id`).map((f) => f.id),
+    });
+    const koBefore = await koState();
+    expect(koBefore.lines, "premise: the first Complete drew the knockout").toHaveLength(3);
     const again = await completeStage(auth, groups.id);
-    expect(again.qualified?.entrants).toEqual(completion.qualified?.entrants);
-    expect(again.next_stage_fixtures).toBe(0);
+    expect(again).toMatchObject({ completed: false, already_complete: true, events: [] });
+    expect(again.qualified, "the repeat seeds nothing").toBeUndefined();
+    expect(await koState(), "the seeded list and the knockout's lines stand").toEqual(koBefore);
 
     // Explicit re-generate is a no-op; fixtures came from the qualified order
     // (its order IS the seeding).

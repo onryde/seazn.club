@@ -68,7 +68,10 @@ describe.skipIf(!HAS_DB)("W4 B5b T18 fix I-1: a Plate never blocks a title rever
       const [a, b] = [final.home_entrant_id!, final.away_entrant_id!];
       await writeEntrantPatch(rig.auth, a, { status: "withdrawn" });
       await withdrawEntrantCascade(rig.auth, b, { as: "withdrawn" });
-      expect((await completeStage(rig.auth, rig.mainId)).completed, "premise: the vacant final completes the stage").toBe(true);
+      // The cascade's own auto-advance already completes the stage, so this Complete is W5 CS-1's no-op (`already_complete`); either
+      // way the premise is the stage's status.
+      await completeStage(rig.auth, rig.mainId);
+      expect(await stageStatus(rig.mainId), "premise: the vacant final completes the stage").toBe("complete");
       const plateBefore = await plateState(rig);
       await patchEntrant(rig.auth, a, { status: "confirmed" });
       const [row] = await sql<{ status: string; outcome: { kind?: string } | null }[]>`select status, outcome from fixtures where id = ${final.id}`;
