@@ -277,7 +277,9 @@ test("P6 task B fix round 3 (Critical 1), Match Day C3: a stage that already has
 
   await page.goto(await divisionPath(page.request, regenDivisionId, "?tab=fixtures"), { waitUntil: "load" });
 
-  const groupCard = page.locator("section.card", { hasText: "Groups" }).first();
+  // The stage card by its stage id: since W5 (X-BD-2) the division's format card above it says "Groups only", so a card found by the
+  // text "Groups" is the format card, which holds no rail.
+  const groupCard = stageCardOf(page, groupId);
   // Competition desk W3: below `md` the stage's edit controls fold into a bottom sheet behind `stage-rail-trigger`; at >= 768 the
   // rail is inline and the trigger itself is `md:hidden`. OPEN the fold rather than weakening the assertion below - gate the open
   // on the TOGGLE being visible, never on a width literal: clicking a hidden control throws.
