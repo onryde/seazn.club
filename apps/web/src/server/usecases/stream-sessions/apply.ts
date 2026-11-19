@@ -300,8 +300,9 @@ async function runRunnerEffect(s: Session, e: RunnerEffect, deps: SessionDeps): 
       // T5-a (Task 2C review concern 3, M5): the trigger carries no attempt, so the OUTCOME is fed to the row only while the
       // LOCKED row still names the Machine this call asked for. A create is slow; while it is out, C1 can lose the runner, the
       // destroy confirm and the retry persist attempt + 1 — and `creating × create_ok` would then adopt THIS attempt's Machine as
-      // the next one's (or `booting × create_ok` would throw). Names carry the attempt (machineNameFor), so name equality is
-      // attempt equality. Same name: every cell is designed for it (lost/destroyed × create_ok destroy the returned id).
+      // the next one's (or `booting × create_ok` carrying ANOTHER Machine's id would throw). Names carry the attempt
+      // (machineNameFor), so name equality is attempt equality. Same name: every cell is designed for it (lost/destroyed ×
+      // create_ok destroy the returned id).
       const stillOurs = (cur: Session) => cur.runner.name === s.runner.name;
       let handle: Awaited<ReturnType<typeof createRunner>>;
       try {
