@@ -3224,14 +3224,14 @@ describe.skipIf(!HAS_DB)("the OpenAPI checkpoint summary quotes the seeded quota
  *
  * TREE-WIDE for the reason `unmeteredFaultsAcrossTree` above is: the brief for
  * this task named six articles and MISSED four — `scoring/fidelity.md`,
- * `scoring/badminton.md`, `scoring/tabletennis.md` and `scoring/volleyball.md`
+ * `sports/badminton.md`, `sports/tabletennis.md` and `sports/volleyball.md` (then under `scoring/`)
  * — each of which told a reader in as many words that the finest level "needs a
  * plan that includes it". A guard scoped to a filename list would have shipped
  * all four. This one reds wherever the sentence lands, including in an article
  * nobody has written yet.
  *
  * SENTENCE-scoped, not article-scoped: `billing/plans.md` names every plan we
- * sell and `scoring/cricket.md` explains ball-by-ball scoring at length. Both
+ * sell and `sports/cricket.md` explains ball-by-ball scoring at length. Both
  * are true; only the two claims INSIDE ONE SENTENCE assert a price.
  */
 const scoringFreeFaultsAcrossTree = (

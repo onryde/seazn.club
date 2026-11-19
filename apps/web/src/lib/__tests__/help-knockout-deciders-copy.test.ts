@@ -21,7 +21,7 @@ const ROW_NAME: Record<string, string> = {
   cricket: "Cricket",
   hockey: "Field hockey",
   icehockey: "Ice hockey",
-  boardgame: "Chess and other board games",
+  boardgame: "Chess",
   carrom: "Carrom",
   generic: "Generic scoring",
   tennis: "Tennis, badminton, table tennis, volleyball",
