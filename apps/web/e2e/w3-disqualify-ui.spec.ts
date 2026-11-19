@@ -317,40 +317,71 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
     expect(tapped, "controls proven tappable (2 per width x 3 widths)").toBe(6);
   });
 
-  test("the forfeit dialog's disqualified reason says it decides this match only, at 1280 and 320; the walkover reason does not", async ({ page, request }) => {
-    test.setTimeout(240_000);
+  // Ruling 258's hint now holds on a BRACKET only. W5 T8b (owner ruling 289): on a table stage (league, group, Swiss) a disqualifying
+  // forfeit withdraws the side from the stage, so "this match only" would be false there - the dialog shows the withdrawal's own
+  // consequence (`withdrawal-consequence`, the cascade's preview) in the hint's place. Both are pinned, each on its own kind of stage.
+  test("the forfeit dialog's disqualified reason says it decides this match only on a knockout, and names the withdrawal on a Swiss (ruling 289), at 1280 and 320; the walkover reason says neither", async ({ page, request }) => {
+    test.setTimeout(300_000);
     const sw = await startedSwiss(request, "DQ Hint", 4, 2);
-    const board = (await sw.boards(1))[0]!;
-    const started = await apiJson(request, `/api/v1/fixtures/${board.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
-    expect(started.status, JSON.stringify(started.error)).toBeLessThan(300);
+    const swissBoard = (await sw.boards(1))[0]!;
+    const ko = await division(request, "DQ Hint KO", 4);
+    const koStage = await createStageAndGenerate(request, ko.divisionId, { kind: "knockout", name: "Cup" });
+    const koStarted = await apiJson(request, `/api/v1/divisions/${ko.divisionId}/start`, "POST");
+    expect(koStarted.status, JSON.stringify(koStarted.error)).toBeLessThan(300);
+    const koBoard = (await divisionFixtures(request, ko.divisionId)).find((f) => f.stage_id === koStage.stageId && f.home_entrant_id !== null && f.away_entrant_id !== null)!;
+    expect(koBoard, "premise: a seated knockout semi").toBeTruthy();
+    const surfaces = [
+      { kind: "knockout", divisionId: ko.divisionId, board: koBoard },
+      { kind: "swiss", divisionId: sw.divisionId, board: swissBoard },
+    ] as const;
+    for (const s of surfaces) {
+      const started = await apiJson(request, `/api/v1/fixtures/${s.board.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+      expect(started.status, `${s.kind}: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+    }
     let checked = 0;
     for (const width of [1280, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      await page.goto(await fixturePath(request, board.id));
-      await dismissCookieBanner(page);
-      await openMatchActions(page);
-      await page.getByTestId("score-forfeit").click({ timeout: STEP_MS });
-      const d = page.getByTestId("forfeit-dialog");
-      await expect(d).toBeVisible({ timeout: 10_000 });
-      const hint = d.getByTestId("forfeit-dq-scope-hint");
-      await expect(hint, `${width}: no side chosen, no hint`).toHaveCount(0);
-      await d.getByTestId("forfeit-who-home").click();
-      await expect(hint, `${width}: a side chosen, no reason yet`).toHaveCount(0);
-      await d.getByTestId("forfeit-why-walkover").check();
-      await expect(hint, `${width}: the walkover is not a disqualification`).toHaveCount(0);
-      await d.getByTestId("forfeit-why-disqualified").check();
-      await expect(hint, `${width}: the disqualification names its scope`).toHaveText(uiEn["forfeitDialog.dqScopeHint"]!);
-      await expect(hint, `${width}: and it is on screen`).toBeInViewport();
-      await expectNoHorizontalScroll(page);
-      await d.getByTestId("forfeit-why-walkover").check();
-      await expect(hint, `${width}: moving the choice off the disqualification takes it away`).toHaveCount(0);
-      // Leave without recording: the match stays open (Cancel closes the dialog).
-      await page.keyboard.press("Escape");
-      await expect(d).toBeHidden();
-      checked++;
+      for (const s of surfaces) {
+        const at = `${width} ${s.kind}`;
+        await page.goto(await fixturePath(request, s.board.id));
+        await dismissCookieBanner(page);
+        await openMatchActions(page);
+        await page.getByTestId("score-forfeit").click({ timeout: STEP_MS });
+        const d = page.getByTestId("forfeit-dialog");
+        await expect(d).toBeVisible({ timeout: 10_000 });
+        const hint = d.getByTestId("forfeit-dq-scope-hint");
+        const consequence = d.getByTestId("withdrawal-consequence");
+        await expect(hint, `${at}: no side chosen, no hint`).toHaveCount(0);
+        await d.getByTestId("forfeit-who-home").click();
+        await expect(hint, `${at}: a side chosen, no reason yet`).toHaveCount(0);
+        await d.getByTestId("forfeit-why-walkover").check();
+        await expect(hint, `${at}: the walkover is not a disqualification`).toHaveCount(0);
+        await expect(consequence, `${at}: nor does a walkover withdraw anyone`).toHaveCount(0);
+        await d.getByTestId("forfeit-why-disqualified").check();
+        if (s.kind === "knockout") {
+          await expect(hint, `${at}: the disqualification names its scope`).toHaveText(uiEn["forfeitDialog.dqScopeHint"]!);
+          await expect(hint, `${at}: and it is on screen`).toBeInViewport();
+          await expect(consequence, `${at}: a bracket's disqualification withdraws nobody`).toHaveCount(0);
+        } else {
+          await expect(hint, `${at}: "this match only" is not said where it is not true`).toHaveCount(0);
+          await expect(consequence, `${at}: the withdrawal it runs, read from the preview`).toHaveAttribute("data-state", "ready", { timeout: STEP_MS });
+          expect(await consequence.getByTestId("withdrawal-consequence-line").count(), `${at}: at least one consequence line`).toBeGreaterThan(0);
+          await expect(consequence, `${at}: and it is on screen`).toBeInViewport();
+        }
+        await expectNoHorizontalScroll(page);
+        await d.getByTestId("forfeit-why-walkover").check();
+        await expect(hint, `${at}: moving the choice off the disqualification takes it away`).toHaveCount(0);
+        await expect(consequence, `${at}: the consequence too`).toHaveCount(0);
+        // Leave without recording: the match stays open (Cancel closes the dialog).
+        await page.keyboard.press("Escape");
+        await expect(d).toBeHidden();
+        checked++;
+      }
     }
-    expect(checked).toBe(2);
-    const after = (await divisionFixtures(request, sw.divisionId)).find((f) => f.id === board.id)!;
-    expect(after.status, "nothing was recorded: the dialog only explained").toBe("in_play");
+    expect(checked, "2 widths x 2 kinds of stage").toBe(4);
+    for (const s of surfaces) {
+      const after = (await divisionFixtures(request, s.divisionId)).find((f) => f.id === s.board.id)!;
+      expect(after.status, `${s.kind}: nothing was recorded: the dialog only explained`).toBe("in_play");
+    }
   });
 });
