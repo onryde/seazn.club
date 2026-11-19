@@ -365,7 +365,16 @@ test.describe("W3 ruling 258 - Disqualify from the Entrants tab", () => {
         } else {
           await expect(hint, `${at}: "this match only" is not said where it is not true`).toHaveCount(0);
           await expect(consequence, `${at}: the withdrawal it runs, read from the preview`).toHaveAttribute("data-state", "ready", { timeout: STEP_MS });
-          expect(await consequence.getByTestId("withdrawal-consequence-line").count(), `${at}: at least one consequence line`).toBeGreaterThan(0);
+          // RB5-W11: the copy's numbers are the cascade's own. Round 1 of a two-round Swiss: her only seated line is this board, and
+          // an in-match disqualification counts its own match as played (RB5-W4) - one played, none left (round 2 is not paired).
+          // A Swiss result stands and a reinstated player rejoins from the next round (W3 T9, ruling 251). One sport (generic): the
+          // copy is sport-blind; league and group are pinned by the T8b unit renders (withdrawal-consequence-render.test.tsx).
+          const homeName = sw.nameOf.get(s.board.home_entrant_id!)!;
+          await expect(consequence.getByTestId("withdrawal-consequence-line"), `${at}: the Swiss consequence, line by line`).toHaveText([
+            fill("withdrawal.consequence.noRemaining", { name: homeName }),
+            fill("withdrawal.consequence.swiss", { name: homeName, played: 1 }),
+            fill("withdrawal.consequence.undo.rejoin"),
+          ]);
           await expect(consequence, `${at}: and it is on screen`).toBeInViewport();
         }
         await expectNoHorizontalScroll(page);
