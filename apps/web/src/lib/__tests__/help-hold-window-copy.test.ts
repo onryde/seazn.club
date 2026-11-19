@@ -111,13 +111,8 @@ function sentences(markdown: string): string[] {
  * list cannot rot: a row that matches nothing is dead, and a row that quotes
  * the hold window's own duration defeats the file's purpose.
  */
-const ALLOWED: readonly { slug: string; fragment: string; why: string }[] = [
-  {
-    slug: "sports/badminton",
-    fragment: "60-second break",
-    why: "BWF's interval at 11 — a rule of the sport, nothing to do with the pad's soft commit",
-  },
-];
+// Empty since the badminton rewrite dropped its "60-second break" sentence (a rule of the sport, not the soft commit).
+const ALLOWED: readonly { slug: string; fragment: string; why: string }[] = [];
 
 function scoringPages(): { slug: string; markdown: string }[] {
   return SCORING_DIRS.flatMap((dir) =>
