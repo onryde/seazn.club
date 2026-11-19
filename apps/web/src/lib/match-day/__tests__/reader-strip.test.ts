@@ -35,6 +35,14 @@ describe("matchDayForReader — the organiser's to-do list reaches organisers on
     expect(VIEW.results_owed).toBe(3);
   });
 
+  it("the online rounds are not the organiser's to-do list: every reader gets them as they are (the strip touches needs_you and results_owed only)", () => {
+    const online = [{ key: "s:1", division_id: "d-1" }] as unknown as MatchDayView["online_rounds"];
+    const withOnline = { ...VIEW, online_rounds: online };
+    expect(matchDayForReader(withOnline, true).online_rounds).toBe(online);
+    expect(matchDayForReader(withOnline, false).online_rounds).toBe(online);
+    expect(matchDayForReader(withOnline, false).online_rounds, "kept whole, not an emptied copy").toHaveLength(1);
+  });
+
   it("the predicate, per role: owner and admin are organisers; viewer and an API key (role null) are not", () => {
     const want: Record<OrgRole, boolean> = { owner: true, admin: true, viewer: false };
     let checked = 0;

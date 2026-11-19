@@ -467,6 +467,8 @@ export function isMatchDayView(v: unknown): v is MatchDayView {
   return (
     Array.isArray(o.courts) &&
     Array.isArray(o.playing_no_court) &&
+    // Match Day online: a view without the online block (a server older than the page) is not one this page can draw.
+    Array.isArray(o.online_rounds) &&
     typeof o.date === "string" &&
     typeof o.tz === "string" &&
     typeof o.now === "string"

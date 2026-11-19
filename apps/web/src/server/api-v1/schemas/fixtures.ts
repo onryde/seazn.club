@@ -196,6 +196,37 @@ export const MatchDayCourt = z.object({
   stream_link: MatchDayCourtStream.nullable(),
 });
 
+/** Match Day online: one row of the online block - one (division, stage, round) to show (types.ts `MatchDayOnlineRound`). `view`, `round` and
+ *  `needs_decision` are documented objects, not typed here: lib/open-round.ts `OpenRoundView` and lib/arbiter-view.ts `ArbiterRound` /
+ *  `ArbiterBoard` have no zod, and a plain z.object STRIPS an undeclared key on parse, so each is an open object (`z.looseObject`) that
+ *  keeps whatever the server sent - presence, camera and `joinable` on every board's sides, `hold_reason` on a held board. */
+export const MatchDayOnlineRound = z.object({
+  /** `${stage_id}:${round_no}` - the `?round=` param's value. */
+  key: z.string(),
+  division_id: Uuid,
+  division_name: z.string(),
+  division_slug: z.string(),
+  stage_id: Uuid,
+  stage_name: z.string(),
+  round_no: z.number().int(),
+  /** The division has more than one round row on the page: the row names the stage. */
+  multi_stage: z.boolean(),
+  /** `not_started`: the division has not started; `before`: paired, not opened; `checkin`: opened and a board still checking in; `playing`: opened, none checking in. */
+  phase: z.enum(["not_started", "before", "checkin", "playing"]),
+  /** Whether the club is offered online chess (the `online-chess` flag). */
+  offered: z.boolean(),
+  /** The venue zone the round's times are printed in. */
+  tz: z.string(),
+  /** The open-round reader's view of this (stage, round) (lib/open-round.ts OpenRoundView): the press, the pairings, the batches. Null when it has none for it, and for `not_started`. */
+  view: z.looseObject({}).nullable(),
+  /** The opened round whole (lib/arbiter-view.ts ArbiterRound), its `boards` carrying seats, check-in, sides (presence, camera, joinable), `flagCount` (flags are counted, never listed: `flags` is []) and `hold_reason`. Null before the open. */
+  round: z.looseObject({}).nullable(),
+  /** Held or flagged boards of the division NOT in `round.boards`, any round, each an ArbiterBoard with `stage_id`, `round_no` and `hold_reason`. A cancelled board is here only while it has an open flag. */
+  needs_decision: z.array(z.looseObject({})),
+  /** Boards the viewer plays on, left out of both lists. */
+  own_boards: z.number().int().nonnegative(),
+});
+
 export const MatchDayView = z.object({
   competition_id: Uuid,
   date: z.iso.date(),
@@ -221,6 +252,8 @@ export const MatchDayView = z.object({
   fixtures_today: z.number().int().nonnegative(),
   // Match Day E2 item 5: the venues where this competition has a match today (the venue filter's default selection).
   venues_today: z.array(Uuid),
+  // Match Day online: the competition's online chess rounds, after the courts; empty when it has none (or the feature is off).
+  online_rounds: z.array(MatchDayOnlineRound),
 });
 
 export const MatchDayCandidate = z.object({

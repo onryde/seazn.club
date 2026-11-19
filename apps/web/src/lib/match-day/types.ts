@@ -203,8 +203,9 @@ export type OnlineRoundPhase = "not_started" | "before" | "checkin" | "playing";
 export interface MatchDayBoardRow extends ArbiterBoard {
   stage_id: string;
   round_no: number;
-  /** Why a held board is held (`fixture_external_play.needs_reason`): set by `readOnlineRounds` for a board in `on_hold`, null
-   *  otherwise. Absent on a board that came from a round's own `boards` (the loader carries no reason there). Needs you routes on it
+  /** Why a held board is held (`fixture_external_play.needs_reason`): stamped by `readOnlineRounds` on EVERY board of the row, in
+   *  `round.boards` and in `needs_decision` alike (ruling MD-R6/R8) - the reason for a board in `on_hold`, null for any other. Optional
+   *  in the type only because a board that did not come through `readOnlineRounds` (a fixture's own) has none. Needs you routes on it
    *  (ruling MD-R2: a link hold, `lichess_unlinked` / `lichess_reconnect`, goes to the round panel's Open round, not the board's
    *  decisions); the row's WORD never reads it (`boardRowWord`: a hold is a hold). */
   hold_reason?: NeedsReason | null;
