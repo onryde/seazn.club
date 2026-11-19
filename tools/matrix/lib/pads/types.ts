@@ -28,7 +28,9 @@ export interface Fallback {
   readonly writes: readonly string[];
   readonly why: string;
   rowsFor(event: StreamEvent, ctx: TapAdapterContext): number;
-  judge?(event: StreamEvent, stored: readonly LedgerRow[]): FallbackJudgement;
+  /** `ctx` is the fixture the rows belong to (the replay passes it), for a judge whose answer is a per-fixture fact
+   *  (tennis's toss names THIS fixture's home entrant). Optional in the type so existing two-argument callers still compile. */
+  judge?(event: StreamEvent, stored: readonly LedgerRow[], ctx?: TapAdapterContext): FallbackJudgement;
 }
 
 /** One tap as the replay timed it (W1d item 15a), so a tap-wait timeout can say

@@ -115,10 +115,10 @@ export const TENNIS_TOSS_CHIP = "home";
 /** One adapter, with its own record of the sets each fixture has banked since core.start. */
 export function makeTennisPad(): MatrixPadAdapter {
   const taken = new Map<string, Taken>();
-  // The home entrant of every fixture this adapter has started: what the toss row's `serving` must name. The fallback's judge is
-  // handed the event and the stored rows only, never the fixture, so it reads this set - a toss naming anyone who was never a
-  // home entrant here (the away chip's id, in a replay of one fixture) is refused.
-  const homes = new Set<string>();
+  // The home entrant of each fixture this adapter has started, KEYED BY FIXTURE (the entrant pair): what that fixture's toss row's
+  // `serving` must name. The replay hands the judge the fixture's ctx, so a toss naming ANOTHER fixture's home entrant (a set
+  // shared across fixtures would accept it) or a fixture this adapter never started is refused.
+  const homes = new Map<string, string>();
   return {
     sport: "tennis",
     emits: ["core.start", TENNIS_SUMMARY],
@@ -131,14 +131,15 @@ export function makeTennisPad(): MatrixPadAdapter {
         writes: [TENNIS_TOSS, "core.start"],
         why: "start-match-control.tsx:93 - a tennis Start asks \"Who serves first?\" (startTossQuestion, tennis.tsx:1228) and its answer posts the toss and then core.start (runTossThenStart, lib/start-with-toss.ts:15): a tennis.toss row {serving: the chosen entrant} and an empty core.start row",
         rowsFor: () => 2,
-        judge(_event, stored) {
+        judge(_event, stored, ctx) {
           const [toss, start] = stored;
           if (stored.length !== 2 || toss === undefined || start === undefined) return { ok: false, note: `${stored.length} rows, where a tennis Start writes the toss and core.start` };
           if (toss.type !== TENNIS_TOSS) return { ok: false, note: `the first row is ${toss.type}, not ${TENNIS_TOSS} (the toss is written before the Start)` };
           if (start.type !== "core.start") return { ok: false, note: `the second row is ${start.type}, not core.start` };
           const tossKeys = Object.keys(asRecord(toss.payload));
           const serving = asRecord(toss.payload).serving;
-          if (tossKeys.length !== 1 || typeof serving !== "string" || !homes.has(serving)) {
+          const home = ctx === undefined ? undefined : homes.get(fixtureOf(ctx));
+          if (tossKeys.length !== 1 || typeof serving !== "string" || home === undefined || serving !== home) {
             return { ok: false, note: `${TENNIS_TOSS} ${show(toss.payload)}: the pad answers the home chip, so the payload is {serving: <the home entrant>} alone` };
           }
           if (Object.keys(asRecord(start.payload)).length !== 0) return { ok: false, note: `core.start carries ${show(start.payload)}, not an empty payload` };
@@ -149,7 +150,7 @@ export function makeTennisPad(): MatrixPadAdapter {
     stepsFor(event, ctx) {
       if (event.type === "core.start") {
         taken.set(fixtureOf(ctx), { home: 0, away: 0 });
-        homes.add(ctx.entrants.home);
+        homes.set(fixtureOf(ctx), ctx.entrants.home);
         return [{ kind: "testid", testid: START_MATCH_TESTID }, { kind: "chip", chipId: TENNIS_TOSS_CHIP }];
       }
       if (event.type === TENNIS_SUMMARY) return summarySteps(event.payload, ctx, taken);

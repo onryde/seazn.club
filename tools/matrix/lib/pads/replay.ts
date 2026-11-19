@@ -122,13 +122,13 @@ function rowsWanted(fallback: Fallback | null, ev: StreamEvent, ctx: TapAdapterC
  *  mismatch carries: a wrong type (the judge is not asked), no judge (an
  *  adapter built off the registry, which registerPads would refuse), a judge
  *  that throws, or a judge's refusal. */
-function judgeFallback(f: Fallback, ev: StreamEvent, rows: readonly LedgerRow[]): string | null {
+function judgeFallback(f: Fallback, ev: StreamEvent, rows: readonly LedgerRow[], ctx: TapAdapterContext): string | null {
   const alien = [...new Set(rows.filter((r) => !f.writes.includes(r.type)).map((r) => r.type))];
   if (alien.length > 0) return `FallbackRowType — stored ${alien.join(", ")}; the ${f.eventType} fallback writes ${f.writes.join(", ")}`;
   if (f.judge === undefined) return `FallbackUnjudged — the ${f.eventType} fallback declares no judge; a fallback is judged, never waved through`;
   let j: FallbackJudgement;
   try {
-    j = f.judge(ev, rows);
+    j = f.judge(ev, rows, ctx);
   } catch (e) {
     return `FallbackMismatch — the ${f.eventType} judge threw (${errorLine(e)})`;
   }
@@ -248,7 +248,7 @@ export async function replayEvents(page: PadPage, adapter: MatrixPadAdapter, eve
     tip = mine.at(-1)!.seq;
     out.stored.push(...mine);
     if (fallback !== null) {
-      const refused = judgeFallback(fallback, ev, mine);
+      const refused = judgeFallback(fallback, ev, mine, ctx);
       if (refused === null) {
         out.rows.push({ expected: ev, stored: mine, verdict: "fallback", note: fallback.why });
         continue;

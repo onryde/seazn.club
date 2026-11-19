@@ -1001,7 +1001,7 @@ describe("tennis Start: the toss is answered, then core.start (fix round 1, I-1)
     const r = req("tennis", cfg, { kind: "win", winner: "home" });
     const pad = makeTennisPad();
     pad.stepsFor(START, ctxOf(r)); // records the home entrant the toss must name
-    const judge = pad.fallbacks[0]!.judge!;
+    const judge = (e: typeof START, rows: readonly LedgerRow[]) => pad.fallbacks[0]!.judge!(e, rows, ctxOf(r));
     const row = (seq: number, type: string, payload: unknown): LedgerRow => ({ id: `r${seq}`, seq, type, payload });
     const toss = (payload: unknown) => row(1, "tennis.toss", payload);
     const start = row(2, "core.start", {});
@@ -1025,6 +1025,31 @@ describe("tennis Start: the toss is answered, then core.start (fix round 1, I-1)
       expect(j.note, name).toMatch(note);
     }
     expect(bad.length).toBe(10);
+  });
+
+  it("the Start's judge checks the fixture's OWN home side: a toss naming another fixture's home entrant is refused (B7 minor, Task 25 r1)", () => {
+    const cfg = resolveSportCfg("tennis", offlineBuilderDefault("tennis"));
+    const one = req("tennis", cfg, { kind: "win", winner: "home" });
+    // A second fixture on the same adapter: different entrants, so a different home side.
+    const other: TapAdapterContext = { cfg, entrants: { home: `${ctxOf(one).entrants.home}-other-home`, away: `${ctxOf(one).entrants.away}-other-away` } };
+    const pad = makeTennisPad();
+    pad.stepsFor(START, ctxOf(one));
+    pad.stepsFor(START, other); // both fixtures started on this adapter
+    const judge = pad.fallbacks[0]!.judge!;
+    const rows = (serving: string): LedgerRow[] => [{ id: "r1", seq: 1, type: "tennis.toss", payload: { serving } }, { id: "r2", seq: 2, type: "core.start", payload: {} }];
+    // each fixture's own home passes (anti-vacuity: the judge accepts something) ...
+    expect(judge(START, rows(ctxOf(one).entrants.home), ctxOf(one))).toEqual({ ok: true, note: null });
+    expect(judge(START, rows(other.entrants.home), other)).toEqual({ ok: true, note: null });
+    // ... the other fixture's home does not, in either direction.
+    const a = judge(START, rows(other.entrants.home), ctxOf(one));
+    const b = judge(START, rows(ctxOf(one).entrants.home), other);
+    expect(a.ok, "fixture one given fixture two's home").toBe(false);
+    expect(a.note).toMatch(/pad answers the home chip/);
+    expect(b.ok, "fixture two given fixture one's home").toBe(false);
+    expect(b.note).toMatch(/pad answers the home chip/);
+    // A fixture this adapter never started has no home side on record: refused, never waved through.
+    const never: TapAdapterContext = { cfg, entrants: { home: "never-h", away: "never-a" } };
+    expect(judge(START, rows("never-h"), never).ok).toBe(false);
   });
 });
 
