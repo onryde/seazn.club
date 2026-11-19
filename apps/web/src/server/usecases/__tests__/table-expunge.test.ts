@@ -653,7 +653,7 @@ describe.skipIf(!HAS_DB)("X-WDT-8 (RB5-W6): Reinstate reverses the expunge or th
   }, 240_000);
 });
 
-describe("Undo and the table-withdrawal rows", () => {
+describe.skipIf(!HAS_DB)("Undo and the table-withdrawal rows", () => {
   it("history lists an expunge and its Reinstate once each; the per-line rows never show", async () => {
     // differential: before the filter, Recent edits and API v1 history listed every write-ahead line row and its retirement
     // by raw type name — 2 per line — around the two real entries.
