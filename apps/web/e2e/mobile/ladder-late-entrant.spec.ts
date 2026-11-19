@@ -33,14 +33,37 @@ test("a late entrant is on the ladder's bottom rung and can be challenged, at th
   await rows.nth(3).scrollIntoViewIfNeeded();
   await expect(rows.nth(3).locator("td").nth(1), "the bottom rung's name is on screen").toBeVisible();
   await expectNoHorizontalScroll(page);
-  const { clipped } = await overflowingIn(page, "div.card.scroll-x", "td,th,span", "the ladder card was not in the DOM");
+  const { clipped, scrollable } = await overflowingIn(page, "div.card.scroll-x", "td,th,span", "the ladder card was not in the DOM");
   expect(clipped, "nothing in the ladder card is clipped (a reachable scroll is fine)").toEqual([]);
+  // Rule 23: a scrolling box is excused only if it really is the reachable kind - computed overflow-x auto/scroll. Assert it
+  // for EVERY box the helper excused (and for the card itself), so a later overflow-hidden wrapper cannot hide behind it.
+  const kinds = await page.locator("div.card.scroll-x").evaluateAll((els) =>
+    els.flatMap((card) => [card, ...Array.from(card.querySelectorAll("td,th,span"))])
+      .filter((el) => el.scrollWidth > el.clientWidth + 1)
+      .map((el) => getComputedStyle(el).overflowX),
+  );
+  for (const k of kinds) expect(k, "every overflowing box in the ladder card is a reachable scroller").toMatch(/^(auto|scroll)$/);
+  expect(kinds.length, `the helper excused ${scrollable.length} box(es); each was re-measured here`).toBe(scrollable.length);
 
   await expect(page.locator("select").filter({ hasText: LATE_NAME })).toHaveCount(2);
   const selects = page.locator("select");
+  // Real tap area: paint boxes lie, so hit-test the centre of each picker and of the Issue button (elementFromPoint must
+  // land on the control or inside it - not on an overlay, a sticky bar or a clipped ancestor).
+  const issue = page.getByRole("button", { name: /issue challenge/i });
+  for (const [label, target] of [["challenger picker", selects.nth(0)], ["opponent picker", selects.nth(1)], ["Issue challenge", issue]] as const) {
+    await target.scrollIntoViewIfNeeded();
+    const hit = await target.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return { width: r.width, height: r.height, ok: top !== null && (top === el || el.contains(top)) };
+    });
+    expect(hit.width, `${label} has a box`).toBeGreaterThan(0);
+    expect(hit.height, `${label} has a box`).toBeGreaterThan(0);
+    expect(hit.ok, `${label}: its centre point hits the control, not something over it`).toBe(true);
+  }
   await selects.nth(0).selectOption(late.data![0]!.id);
   await selects.nth(1).selectOption(ents.data![2]!.id);
-  await page.getByRole("button", { name: /issue challenge/i }).click();
+  await issue.click();
   await expect(page.locator("p.text-red-600")).toHaveCount(0);
   await expect
     .poll(async () => {
