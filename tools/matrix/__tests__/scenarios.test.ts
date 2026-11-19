@@ -2679,8 +2679,10 @@ describe("page_playoff_only: the field is the FORMAT's, not a fixed 8 (W1-drivin
     expect(kinds).toContain("knockout"); // the positive pair: the literal was read
     expect(kinds).not.toContain("page_playoff");
     const withdrawal = readFileSync(resolve(REPO, "apps/web/src/server/usecases/withdrawal.ts"), "utf8");
-    expect(withdrawal).toContain('if (PENDING.has(f.status)) plan.push({ update: { fixtureId: f.id, status: "void" }, fixture: f });');
-    expect(withdrawal).toContain('if (out.policy === "none" && plan.length > 0) out.policy = "walkover";');
+    // The open-format branch as rewritten for americano (2026-11-18): the pending-only void is counted, and the policy it
+    // reports is "expunge" once anything was voided (it read "walkover" over plan.length before).
+    expect(withdrawal).toContain('if (PENDING.has(f.status)) {\n            plan.push({ update: { fixtureId: f.id, status: "void" }, fixture: f });\n            voids++;');
+    expect(withdrawal).toContain('if (out.policy === "none" && voids > 0) out.policy = "expunge";');
   });
   it("empty case first: the old fixed 8 is refused by the engine's page playoff at Start — the harness red this task removes", async () => {
     const driver = new FakeKnockoutDriver({ pagePlayoff: true });
