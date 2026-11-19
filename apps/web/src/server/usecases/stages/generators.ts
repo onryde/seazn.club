@@ -104,13 +104,15 @@ export async function americanoGen(
   // players = the PERSONS behind the individual entrants
   const entrantIds = entrants.map((e) => e.id);
   if (entrantIds.length === 0) return [];
-  // INDIVIDUALS only: the division's active field also holds the `pair` entrants an earlier round minted
+  // NOT the `pair` entrants: the division's active field also holds the pairs an earlier round minted
   // (`pairEntrantsFor`), and counting a pair's members as players put the same person twice in a mexicano's second
   // round (a [a, a] pair: duplicate `entrant_members` key) and made an americano's regenerate rotate a larger field.
+  // Only `pair` is excluded, not "everything but individual": a team entrant still reads as its (one arbitrary) member,
+  // as it always has, so a sport whose default entrant kind is `team` keeps its americano.
   const memberRows = await tx<{ entrant_id: string; person_id: string }[]>`
     select em.entrant_id, em.person_id from entrant_members em
     join entrants e on e.id = em.entrant_id
-    where em.entrant_id in ${tx(entrantIds)} and e.kind = 'individual'`;
+    where em.entrant_id in ${tx(entrantIds)} and e.kind <> 'pair'`;
   const personOf = new Map(memberRows.map((r) => [r.entrant_id, r.person_id]));
   const players = entrantIds
     .map((id) => personOf.get(id))

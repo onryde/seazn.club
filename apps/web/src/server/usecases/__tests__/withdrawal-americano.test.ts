@@ -315,3 +315,34 @@ describe.skipIf(!HAS_DB)("withdrawing an individual from a mexicano", () => {
     expect(activeCount - playing.size, "the byes: everyone still in who is not playing").toBe(3);
   });
 });
+
+// The member read that keeps minted `pair` entrants out of the players must not also drop a TEAM entrant: a sport whose
+// default entrant kind is `team` (football, hockey...) builds its americano over team entrants with a linked person each,
+// and an "individual only" filter turned that into STAGE_NOT_READY (award-abandon-no-draw.test.ts seeds exactly this).
+describe.skipIf(!HAS_DB)("an americano over TEAM entrants", () => {
+  it("still generates its rounds from the teams' persons, and a minted pair is not counted as a player on the next generate", async () => {
+    const { auth } = await seedOrg("pro");
+    await setOrgPlan(auth.orgId, "pro");
+    await invalidateOrgEntitlements(auth.orgId);
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Teams " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
+    const division = await createDivision(auth, comp.id, { name: "Padel", slug: "padel", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    const persons: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      const [p] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, consent) values (${auth.orgId}, ${"Tm " + (i + 1)}, ${sql.json({})}) returning id`;
+      persons.push(p!.id);
+    }
+    await createEntrants(
+      auth,
+      division.id,
+      persons.map((person_id, i) => ({ kind: "team" as const, display_name: `Team ${i + 1}`, seed: i + 1, members: [{ person_id, is_captain: false, roles: [] }] })),
+    );
+    const [stage] = await createStages(auth, division.id, { seq: 1, kind: "americano" as never, name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 3 } });
+    const first = await generateStageFixtures(auth, stage!.id);
+    expect(first.created, "premise: the teams were read as players (a filter that dropped them is STAGE_NOT_READY)").toBeGreaterThan(0);
+    const before = (await fixtures(stage!.id)).length;
+    const again = await generateStageFixtures(auth, stage!.id);
+    expect(again.created, "a second generate over the same field plans nothing new: the pairs round 1 minted are not players").toBe(0);
+    expect((await fixtures(stage!.id)).length).toBe(before);
+  });
+});
