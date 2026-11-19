@@ -152,7 +152,8 @@ describe.skipIf(!HAS_DB)("stage config writes merge server-side (design §T2)", 
     // A JS-side spread writes the pre-lock snapshot back and erases `rules`.
     expect(row!.config.rules).toEqual({ bestOf: 3 });
     // …while still doing its own job, and without dropping the untouched key.
-    expect(row!.config.rank_overrides).toEqual([{ entrant_id: entrants[0]!, rank: 1 }]);
+    // A pin names its place in ONE pool's table (W5 T13, X-PO-3 <- RB5-P5); a league's one table has no pool, so `pool_id: null`.
+    expect(row!.config.rank_overrides).toEqual([{ entrant_id: entrants[0]!, rank: 1, pool_id: null }]);
     expect(row!.config.rounds).toBe(5);
   }, 30_000);
 
