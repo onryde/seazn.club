@@ -37,6 +37,16 @@ export async function missingFromLadder(tx: Tx, divisionId: string, order: reado
  *  live field, newcomers included - and a finished ladder is left as it ended. Idempotent: a second call finds
  *  everyone held and writes nothing. */
 export async function appendToLadderOrder(tx: Tx, divisionId: string): Promise<void> {
+  // A division with no RUNNING ladder order has nothing to append to, and this runs on EVERY door that admits an entrant:
+  // it must not queue them on the division lock (swiss-late-entry.test.ts: an arrival into a started ladder that nobody has
+  // challenged yet never waits on it). A stage's kind never changes. A ladder whose first challenge initialises the order
+  // concurrently with this read writes it from the field it can see, which may not hold a newcomer still uncommitted here:
+  // `issueChallenge`'s backstop appends them at the next challenge, before it judges it.
+  const [anyOrder] = await tx<{ n: number }[]>`
+    select count(*)::int as n from stages
+    where division_id = ${divisionId} and kind = 'ladder' and status <> 'complete'
+      and jsonb_typeof(config->'ladder_order') = 'array'`;
+  if (anyOrder!.n === 0) return;
   // The same lock `issueChallenge` and the Swiss/knockout late-entry doors take, before the stage row is read.
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
   const stages = await tx<{ id: string; config: { ladder_order?: unknown } }[]>`
