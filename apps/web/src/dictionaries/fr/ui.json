@@ -2094,8 +2094,6 @@
   "tips.learnMore": "En savoir plus",
   "tips.division.visibility.title": "Qui peut voir une division",
   "tips.division.visibility.body": "Une division suit sa compétition : Privé est réservé à l'équipe, Lien uniquement signifie que toute personne disposant du lien y accède, Public est listé et trouvable sur Google une fois la compétition publiée.",
-  "tips.scoring.seq-conflict.title": "Quelqu'un a marqué en premier",
-  "tips.scoring.seq-conflict.body": "Deux marqueurs ont mis à jour le même match en même temps. L'appli s'est actualisée au dernier score — ressaisissez votre point s'il manque toujours.",
   "tips.entrants.kinds.title": "Équipes, individus et paires",
   "tips.entrants.kinds.body": "Une division inscrit un seul type de participant : des équipes entières, des joueurs individuels ou des paires fixes (double). Choisissez le type qui correspond à qui dispute une rencontre.",
   "tips.persons.merge.title": "Fusionner les joueurs en double",

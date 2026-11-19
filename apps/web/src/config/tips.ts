@@ -16,11 +16,6 @@ export const TIPS = {
     body: "A division follows its competition: Private is team-only, Link only means anyone with the link, Public is listed and findable on Google once the competition is published.",
     helpSlug: "sharing/visibility",
   },
-  "scoring.seq-conflict": {
-    title: "Someone else scored first",
-    body: "Two scorers updated the same match at once. The app refreshed to the latest score — re-enter your point if it's still missing.",
-    helpSlug: "scoring/conflicts",
-  },
   "entrants.kinds": {
     title: "Teams, individuals and pairs",
     body: "A division registers one kind of entrant: whole teams, individual players, or fixed pairs (doubles). Pick the kind that matches who plays a fixture.",

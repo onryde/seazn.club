@@ -11676,8 +11676,6 @@ export type DictionaryKey =
   | "tips.schedule.save-points.title"
   | "tips.schedule.undo-watermark.body"
   | "tips.schedule.undo-watermark.title"
-  | "tips.scoring.seq-conflict.body"
-  | "tips.scoring.seq-conflict.title"
   | "tips.settings.brand-colour.body"
   | "tips.settings.brand-colour.title"
   | "tips.slideshow.url.body"
