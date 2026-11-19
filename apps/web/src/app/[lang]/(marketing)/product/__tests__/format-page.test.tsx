@@ -8,6 +8,7 @@ import nl from "@/dictionaries/nl/marketing.json";
 import uiEn from "@/dictionaries/en/ui.json";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { FORMAT_NAME_KEY, bestFitSlug, rankFormats } from "@/lib/format-recommend";
+import { stageNeedsAdvancedFormatsGate } from "@/server/usecases/format-gates";
 import { FORMAT_DEMO_START, FREE_FORMATS, PRO_FORMAT } from "@/components/marketing/product/format-demo-config";
 import { h1Of, renderPage, sectionOrder, textOf } from "./_render";
 
@@ -51,12 +52,30 @@ describe("/product/format", () => {
     expect(html).toMatch(new RegExp(`data-testid="format-card-${best}"[^>]*data-best="true"|data-best="true"[^>]*data-testid="format-card-${best}"`));
   });
 
-  it("what it says is on every plan, and what it says is Pro, is what the format catalogue says", () => {
-    const pro = new Set(FORMAT_FAMILIES.filter((f) => f.pro).map((f) => f.slug));
-    expect(FREE_FORMATS.length).toBeGreaterThanOrEqual(4);
-    for (const slug of FREE_FORMATS) expect(pro.has(slug), `${slug} is claimed free`).toBe(false);
-    expect(pro.has(PRO_FORMAT), `${PRO_FORMAT} is claimed Pro`).toBe(true);
-    for (const slug of [...FREE_FORMATS, PRO_FORMAT]) expect(FORMAT_FAMILIES.some((f) => f.slug === slug), slug).toBe(true);
+  // DERIVED from the server gate, never typed: a family is Pro exactly when one of its stage kinds needs
+  // `formats.advanced` (usecases/format-gates.ts). Double elimination and the page playoff are on every plan (V393;
+  // builder-template-locks-live.test.ts reads the plan rows), so the page may not call them Pro.
+  const needsAdvanced = (slug: string) => FORMAT_FAMILIES.find((f) => f.slug === slug)!.kinds.some((kind) => stageNeedsAdvancedFormatsGate({ kind }));
+
+  it("what it says is on every plan, and what it says is Pro, is what the server gate and the catalogue say", () => {
+    expect(FREE_FORMATS.length).toBeGreaterThanOrEqual(5);
+    for (const slug of [...FREE_FORMATS, PRO_FORMAT]) expect(FORMAT_FAMILIES.some((f) => f.slug === slug), `${slug} is a catalogue family`).toBe(true);
+    for (const slug of FREE_FORMATS) {
+      expect(needsAdvanced(slug), `${slug} is claimed free but the gate needs formats.advanced`).toBe(false);
+      expect(FORMAT_FAMILIES.find((f) => f.slug === slug)!.pro, `${slug} is claimed free but the catalogue flags it Pro`).toBeUndefined();
+    }
+    expect(needsAdvanced(PRO_FORMAT), `${PRO_FORMAT} is claimed Pro but the gate lets every plan have it`).toBe(true);
+    expect(FORMAT_FAMILIES.find((f) => f.slug === PRO_FORMAT)!.pro).toBe(true);
+    expect(FREE_FORMATS as readonly string[], "double elimination is on every plan and the page says so").toContain("double_elim");
+  });
+
+  it.each(LOCALES.map((l) => [l]))("%s: the Pro stub names a gated format and its small print names no free one", async (lang) => {
+    const text = textOf(await renderPage(Page, { lang }));
+    const stub = DICTS[lang]!["product.format.ticket.stubBottom"]!;
+    expect(text).toContain(stub);
+    // The retired claim named the page playoff here; it is free, so no locale may list it as a rarer, paid format.
+    expect(stub).not.toMatch(/page playoff/i);
+    expect(DICTS[lang]!["product.format.ticket.body"]!.toLowerCase(), "the body names double elimination among the free formats").toMatch(/doubl|dubbel|doble/);
   });
 
   it.each(LOCALES.map((l) => [l]))("%s: quotes no price", async (lang) => {
