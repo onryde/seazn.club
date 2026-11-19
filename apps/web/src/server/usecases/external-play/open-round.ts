@@ -251,8 +251,8 @@ type Decision =
 type LinkHold = "lichess_unlinked" | "lichess_reconnect";
 const LINK_HOLDS: readonly LinkHold[] = ["lichess_unlinked", "lichess_reconnect"];
 
-/** The boards this open holds back for a link, by why: a seat with no resolvable Lichess link (or no single player to hold one) is
- *  `lichess_unlinked`; a link `lichessGrantPlays` refuses (identity-only, short of a play scope - the seat gate's own verdict, via
+/** The boards this open holds back for a link, by why: a one-account seat with no resolvable Lichess link is
+ *  `lichess_unlinked` (a team seat or a person with no account is not judged: nobody to ask); a link `lichessGrantPlays` refuses (identity-only, short of a play scope - the seat gate's own verdict, via
  *  `lichessLinkStatesByUser`) is `lichess_reconnect`. A board with both is reported unlinked. */
 async function lichessHeldBoards(boards: readonly Board[]): Promise<Map<string, LinkHold>> {
   const userIds = boards.flatMap((b) => b.seats.flatMap((s) => (s.player.userId === null ? [] : [s.player.userId])));
@@ -262,9 +262,13 @@ async function lichessHeldBoards(boards: readonly Board[]): Promise<Map<string, 
     let hold: LinkHold | null = null;
     for (const seat of b.seats) {
       const { userId, lichess } = seat.player;
-      // A seat with no single linked player, or no link row to read (`lichess === null` even where a `user_external_accounts` row
-      // exists is `loadSide`'s "not one resolvable account"), is unlinked: nothing to challenge.
-      const state = userId === null || lichess === null ? undefined : states.get(userId);
+      // Only a seat that resolves to ONE account is judged: `loadSide` leaves `userId` null for a team seat (several linked members is
+      // not a chess seat - chess is individual-only) and for a person with no account at all, and a link nobody can be asked for
+      // is not a reason to park the board. The invite path then answers for such a seat as it always did (its own recipients, or
+      // `send_failed` when it has none).
+      if (userId === null) continue;
+      // `lichess === null` with an account on the seat is "unlinked" too, even where a link row exists: nothing to challenge.
+      const state = lichess === null ? undefined : states.get(userId);
       if (state === undefined) hold = "lichess_unlinked";
       else if (state === "reconnect" && hold === null) hold = "lichess_reconnect";
     }
@@ -464,24 +468,6 @@ export async function openRound(
          where fixture_external_play.challenge_id is null and fixture_external_play.create_sent_at is null
            and (fixture_external_play.status = 'pending' or fixture_external_play.needs_reason in ${tx([...LINK_HOLDS])})`;
     }
-    // What the organiser reads for each: the link reason - unless this is a running window the board's own batch has closed, where a
-    // re-open cannot help and the truth is `window_closed` (the sweep's, not the link's).
-    const heldReport = async (open: RoundOpenRow): Promise<OpenRoundSkip[]> => {
-      if (heldNow.length === 0) return [];
-      const ranks = new Map(
-        (
-          await tx<{ id: string; rank: number; extraMs: number }[]>`
-            select f.id, ${boardRankSql(tx)} as rank, ${boardExtraSql(tx)} as "extraMs"
-              from fixtures f left join fixture_external_play ep on ep.fixture_id = f.id
-             where f.id in ${tx(heldNow.map((b) => b.f.fixtureId))}`
-        ).map((r) => [r.id, r] as const),
-      );
-      return heldNow.map((b): OpenRoundSkip => {
-        const r = ranks.get(b.f.fixtureId);
-        const closed = r !== undefined && roomPhase(now, boardAnchor(open.roundOpenedAt, r.rank, open.staggered, r.extraMs)) === "closed";
-        return { fixtureId: b.f.fixtureId, reason: closed ? "window_closed" : heldBoards.get(b.f.fixtureId)! };
-      });
-    };
     const pending: { board: Board; seats: InviteSeat[] }[] = [];
     for (const board of takes) {
       const open = board.seats.filter((s) => !invitedFor(board.f.fixtureId, s.colour));
@@ -544,7 +530,10 @@ export async function openRound(
       kind = "opened";
       await retireBoardsMeetings(tx, ids, now, "first");
     } else if (pending.length === 0) {
-      return { kind: "nothing", skipped: await heldReport(existing) };
+      // Nobody left to invite: not an early return, so the held boards below are reported against the board's own anchor
+      // (the one reader of it, `anchorOf`), exactly as a re-invite's are.
+      open = existing;
+      kind = "reinvited";
     } else if (!anyInvited || !otherBoundStillPlayable) {
       // Nobody this round was invited (a re-pair deleted the rows, or every
       // send failed), or — D17 — the only boards still playable are the ones
@@ -603,6 +592,13 @@ export async function openRound(
       return boardAnchor(open.roundOpenedAt, placed.rank, open.staggered, rearmed.has(fixtureId) && kind !== "reinvited" ? 0 : placed.extraMs);
     };
 
+    // What the organiser reads for each held board: the link reason - unless this is a running window the board's own batch has closed,
+    // where a re-open cannot help and the truth is `window_closed` (the sweep's, not the link's).
+    const heldReport = (): OpenRoundSkip[] =>
+      heldNow.map((b): OpenRoundSkip => ({
+        fixtureId: b.f.fixtureId,
+        reason: kind === "reinvited" && roomPhase(now, anchorOf(b.f.fixtureId)) === "closed" ? "window_closed" : heldBoards.get(b.f.fixtureId)!,
+      }));
     // A re-open into a window that is already running (nobody-invited and re-arm re-stamped above): a board whose OWN batch
     // window has closed is not invited - it is the sweep's now - while a board whose has not is still invited (§3.2.1).
     const closedSkips: OpenRoundSkip[] = [];
@@ -614,7 +610,7 @@ export async function openRound(
           pending.splice(i, 1);
         }
       }
-      if (pending.length === 0) return { kind: "nothing", skipped: [...closedSkips, ...(await heldReport(open)).filter((h) => !closedSkips.some((c) => c.fixtureId === h.fixtureId))] };
+      if (pending.length === 0) return { kind: "nothing", skipped: [...closedSkips, ...heldReport()] };
     }
 
     // D17: the re-arm, only now that the board WILL be invited (a reset answered `window_closed` would hand it to the
@@ -691,7 +687,7 @@ export async function openRound(
       // (as releaseSeat does for a seat it clears) - or "every send failed" would leave the round reading "someone was invited".
       if (queueFailed.has(fixtureId)) await unbindIfUnstamped(tx, fixtureId, open.id);
     }
-    return { kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...(await heldReport(open))] };
+    return { kind, open, claims, queueFailed: [...queueFailed], retireBoards: [...new Set(retireBoards)], closedSkips: [...closedSkips, ...heldReport()] };
   });
 
   if (decision.kind === "nothing") {

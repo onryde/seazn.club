@@ -3261,6 +3261,19 @@ describe.skipIf(!HAS_DB)("openRound — a board whose player has no Lichess link
     expect(await open(r, 1, new Date(t0.getTime() + 2 * MIN))).toEqual({ opened: false, reason: "already_open", skipped: [] });
   });
 
+  it("NO ACCOUNT: a seat whose person has no Seazn account is NOT held for a link - nobody on it can be asked to link; the invite path answers (send_failed), the other seat is not parked", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2, scheduledAt: null });
+    const [a, b] = r.boards;
+    // The person keeps their row and name but is tied to no account: `loadSide` resolves no userId, no link, no recipient for the seat.
+    await unlink(a!.away.userId);
+    await sql`update persons set user_id = null where user_id = ${a!.away.userId}`;
+    const out = await open(r, 1, new Date(Date.now() - 2 * MIN));
+    const reasons = ("skipped" in out ? out.skipped : []).map((s) => s.reason);
+    expect(reasons, "no link reason: a link nobody can make is not a hold - the invite path's own answer stands").toEqual(["send_failed"]);
+    expect(await bridgeOf(a!.fixtureId), "no hold row was written for it").not.toMatchObject({ needs_reason: "lichess_unlinked" });
+    expect(sentTo(), "the untouched board is invited as ever").toEqual(expect.arrayContaining([b!.home.email, b!.away.email]));
+  });
+
   it("RECONNECT-REQUIRED (a grant short of a play scope): held as lichess_reconnect; the reconnect re-opens it", async () => {
     const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 2, scheduledAt: null });
     const [a, b] = r.boards;
