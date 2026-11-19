@@ -2,7 +2,7 @@
 title: Officials who score
 description: An official with an accepted assignment scores that match from their own account and sees nothing else of your competition.
 order: 4
-related: scheduling/officials, scoring/device-links, scoring/corrections
+related: scheduling/officials, scheduling/officials-my-assignments, scoring/device-links, scoring/corrections
 ---
 
 An **official** is someone from your officials pool, such as a referee or umpire, who is assigned to a match and has accepted. They sign in with their own account, score that match, and cannot see the rest of your competition. There is no separate "scorer" role on your team any more. Team roles are **owner**, **admin** and **viewer**, and an official is not on your team.

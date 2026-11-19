@@ -19,7 +19,7 @@ Select **Draft the duty spread**. **The first pass runs on the solver, without t
 
 The result shows **Role coverage**, such as **6/6** and **Fully covered**, then each match with its court, time, official and role.
 
-The draft does not avoid an official's blackout dates. It can place an official on a day they marked off. When it does, the console flags each one with a line that names the official and the blackout date, counts them as blocking, and says **2 blocking — left for manual assignment**.
+The draft does not avoid an official's blackout dates. It can place an official on a day they marked off. When it does, the console flags each one with a line that names the official and the blackout date, counts them as blocking, and says **2 blocking — left for manual assignment**. Apply still saves those officials, like all the others. Check the **⚠** chips on the Officials tab afterwards.
 
 ## Steer it with a sentence
 
@@ -28,7 +28,7 @@ Type in **Adjust the officials plan**, or add a wish: **Senior refs on finals**,
 The result lists any match it could not staff as **Unfilled**, and **Role coverage** shows the gap, for example **5/6** and **1 unfilled**. In the example below, the match left without an official stayed unfilled.
 
 > **Example**
-> A four-team league has six matches on two courts, three rounds at 08:00, 09:00 and 10:00. Ola Brandt has marked that day off. **Draft the duty spread** gives all six matches a referee. It puts Ola on two of them, and flags both: **2 blocking — left for manual assignment**. You then write "Put Marta Quinn on every match she can, and keep Sven Ito off the last round." and select **Re-plan officials**. The summary says it assigned Marta to three matches, one in each round, and kept Sven off the 10:00 round. It says Ola is unavailable. **Role coverage** reads **5/6** with **1 unfilled**, the 10:00 match on Court 1.
+> A four-team league has six matches on two courts, three rounds at 08:00, 09:00 and 10:00. Ola Brandt has marked that day off. **Draft the duty spread** gives all six matches a referee. It puts Ola on two of them, and flags both: **2 blocking — left for manual assignment**. You then write "Put Marta Quinn on every match she can, and keep Sven Ito off the last round." and select **Re-plan officials**. The summary says it assigned Marta to three matches, one in each round, and kept Sven off the 10:00 round. It says Ola is unavailable. **Role coverage** reads **5/6** with **1 unfilled**, the 10:00 match on Court 1. **Review & apply** reads **Officials assigned to 5 matches**, and on Pro those five are saved as pending.
 
 ## What a run costs
 
@@ -38,9 +38,11 @@ Officials runs have their own limit of 5 an hour for each division, apart from t
 
 ## Review and apply
 
-Select **Review & apply**. The step reads **Apply the proposal to the board.**, for example **6 fixtures placed on the board** and **Officials assigned to 6 matches**, and says **A restore point is saved first, so you can undo in one tap.** Choose **Apply schedule + officials**, **Apply schedule only** or **Discard**.
+Select **Review & apply**. The step reads **Apply the proposal to the board.**, for example **6 fixtures placed on the board** and **Officials assigned to 5 matches**, and says **A restore point is saved first, so you can undo in one tap.** Choose **Apply schedule + officials**, **Apply schedule only** or **Discard**.
 
-On Pro, the console then says **Applied. The board is updated.** and **Officials were assigned too.** The officials are saved as pending, so each one still accepts or declines. Only the matches that got an official are saved: in the example, that is five.
+On Pro, the console then says **Applied. The board is updated.** and **Officials were assigned too.** The card counts assignments, so it says 5 matches where the example left one **Unfilled**. The officials are saved as pending, so each one still accepts or declines.
+
+Apply saves every official in the draft, the flagged ones included. It also replaces every assignment in the division, including the ones you picked by hand. A match the draft left **Unfilled** ends with no official, even if you had picked one. An official keeps their reply only when the same official comes back to the same match in the same role. This is the same as **Apply** on the [Officials tab](/help/scheduling/officials-assign).
 
 On Community, the schedule applies, then the console says **Schedule applied, but the officials couldn't be saved — assign them again.** No officials are saved. Assign them yourself on the Officials tab, which is free on every plan.
 

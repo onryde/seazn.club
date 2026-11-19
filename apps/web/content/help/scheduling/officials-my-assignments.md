@@ -37,7 +37,7 @@ Two rules limit changes:
 
 ## Dates they can't make
 
-Under **Can't make these dates**, the official selects a date, adds an optional note and selects **Add date**. **Remove** takes it off again. The box says **Organisers see these dates when assigning matches.**
+Under **Can't make these dates**, the official selects a date, adds an optional note and selects **Add date**. Each date shows as a chip with a **✕**. Select the **✕** to take it off again. The box says **Organisers see these dates when assigning matches.**
 
 A date applies to every organisation the official works for. On the organiser's Officials tab it shows as **— unavailable** in the picker and a **⚠** on a match that day.
 

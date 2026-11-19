@@ -46,6 +46,6 @@ If two player records share a name, the run treats them as one person. Nothing i
 
 Choose **Skip to apply**, or **Assign officials** first. The apply step says **Apply the proposal to the board.** and, for the league above, **15 fixtures placed on the board**. It adds **A restore point is saved first, so you can undo in one tap.**
 
-Choose **Apply schedule only**, **Apply schedule + officials** or **Discard**. After applying, the console says **Applied. The board is updated.** and **Restore point saved — undo the AI changes in one tap.** Choose **Undo** and it says **Reverted to before the AI changes.** In the league above, all 15 matches went back to the tray.
+Choose **Apply schedule only**, **Apply schedule + officials** or **Discard**. **Apply schedule + officials** saves the officials only on Pro, Enterprise or an Event Pass. On Community it applies the schedule and does not save them. See [AI officials](/help/scheduling/ai-officials). After applying, the console says **Applied. The board is updated.** and **Restore point saved — undo the AI changes in one tap.** Choose **Undo** and it says **Reverted to before the AI changes.** In the league above, all 15 matches went back to the tray.
 
 The restore point is listed under **AI restore points** on the History tab, and the newest three are kept. See [undo and save points](/help/scheduling/undo).

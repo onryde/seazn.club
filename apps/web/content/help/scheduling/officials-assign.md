@@ -30,7 +30,7 @@ A decline is a flag for you. Nothing is reassigned for you. Pick someone else yo
 ## Warnings
 
 - **Blackout dates.** When an official has marked a date as one they can't make, the picker shows **— unavailable** after their name for matches on that day, and an assigned chip shows **⚠**. It is a warning only. You can still assign them.
-- **Booked elsewhere.** When an official who works for more than one organisation has a match around the same time somewhere else, the picker shows **booked elsewhere** and the time. Only the time is shown. It never says which organisation, competition or match.
+- **Booked elsewhere.** When an official has claimed their profile and is also on a match in another organisation on the same day, the picker shows **booked elsewhere** and the time. Same day means the same calendar day in the venue's time zone. An assignment the official declined does not count. Officials who have not claimed their profile never show it. Only the time is shown. It never says which organisation, competition or match.
 - **On the board.** On the [schedule board](/help/scheduling/board), a match on a court shows **umpire declined** when its official declined, and **umpire unavailable** when the official has a blackout on that day. A match that has no court yet shows neither.
 - **On the match page.** Open a match and its **OFFICIALS** strip shows each official with their role and reply, for example **Marta Quinn**, **Referee**, **Accepted**.
 
@@ -47,7 +47,7 @@ A decline is a flag for you. Nothing is reassigned for you. Pick someone else yo
 
 ### What Apply does
 
-Apply replaces every assignment in the division that is not locked, including the ones you picked by hand. An official keeps their reply only on a match where the same official and the same role come back. Everyone else starts at pending.
+Apply replaces every assignment in the division, including the ones you picked by hand. An official keeps their reply only when the same official comes back to the same match in the same role. Everyone else starts at pending.
 
 Propose can place an official on a date they marked off. The **⚠** appears afterwards, so check the chips after you apply.
 
@@ -56,4 +56,6 @@ Propose can place an official on a date they marked off. The **⚠** appears aft
 
 ## Emails
 
-An official with an email address on record gets **New officiating assignment** when you assign them new matches, by hand or with Apply. They get **Match moved** when one of their matches changes time, court or venue. Applying an assignment that did not change sends nothing.
+An official with an email address on record gets an email when you assign them new matches, by hand or with Apply. Its subject reads, for example, **New officiating assignment at Riverside Club**.
+
+They get a second email when you move one match to another time or court. Its subject reads **Match moved — your assignment at Riverside Club**. A call on Match Day, **Auto-schedule**, **Re-flow unlocked** and an applied AI schedule send no such email. Applying an assignment that did not change sends nothing.

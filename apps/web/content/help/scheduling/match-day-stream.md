@@ -2,7 +2,7 @@
 title: Stream a court
 description: Link one phone to a court on Match Day, and every match you switch on streams to your YouTube channel with nobody touching the phone.
 order: 10.5
-related: scheduling/match-day, scoring/device-links
+related: scheduling/match-day, scheduling/match-day-scorers, scoring/device-links
 ---
 
 One phone on a tripod can stream every match on a court, one YouTube video per match. You set it up once for the day, on **Match Day**.
@@ -16,6 +16,8 @@ One phone on a tripod can stream every match on a court, one YouTube video per m
 The code works until the end of the day. Select **Show court QR** to bring it back. A court streams to one channel a day: **This court already streams to another channel today.**
 
 Once the court is linked, its row and its panel read **No phone yet**, then the channel's name, **Works until 23:59 today**, **Show court QR** and **Stop streaming** with the court's name. People who can only view the competition see the same state, without the buttons.
+
+![A court panel on Match Day after the court is linked. A grey No phone yet badge, the channel Riverside Club channel, Works until 23:59 today, then Show court QR and Stop streaming Court 1. Below it the current match has a Stream switch, switched off.](/help/scheduling/match-day-stream.webp "A linked court that has no phone yet, with a Stream switch on its match.")
 
 ## Scan it on the phone
 
