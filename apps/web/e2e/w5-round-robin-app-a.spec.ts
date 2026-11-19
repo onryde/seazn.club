@@ -1337,7 +1337,9 @@ test.describe("X-BD-2 the builder makes a groups-only division", () => {
     await expect(format).not.toContainText(uiEn["format.template.groups_ko.label"]!);
 
     await page.getByTestId("division-builder-create").click();
-    await page.waitForURL(/\/d\/[^/?]+/, { timeout: 60_000 });
+    // The builder itself lives at /d/new, which `/\/d\/[^/?]+/` already matches: that wait resolved at once and the read below raced
+    // the Create (CI: zero divisions, twice). Wait for the division's own page instead.
+    await page.waitForURL(/\/d\/(?!new(?:[/?#]|$))[^/?#]+/, { timeout: 60_000 });
     // The record: the division holds ONE stage, a group stage of three pools, nothing fed into it.
     const divisions = await apiJson<{ id: string }[]>(request, `/api/v1/competitions/${comp.data!.id}/divisions`);
     expect(divisions.status, JSON.stringify(divisions.error)).toBe(200);
