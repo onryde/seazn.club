@@ -416,6 +416,17 @@ const markedDuringCreate = (r: Runner, now: Date, endReason: RunnerEndReason): R
 const destroyLateCreate: Cell = (r, t) =>
   (t.type === "create_ok" ? { next: { ...r, state: "lost", machineId: t.machineId }, effects: [FORCE_DESTROY], signal: null } : stay(r));
 
+/** Prod 2026-11-19 (session 8a3acf4e — "create_ok is not legal from booting", unhandled): the create call's own create_ok
+ *  returning AFTER a reconcile already ADOPTED the Machine under our name — `creating × create_ok` (reconcileSession's
+ *  list-adopt, with the id) or `creating × observed` found (no id) — and the runner moved on (booting, then playing,
+ *  stopping, exited while the call was still out). The same Machine: benign — the id recorded when none was held, nothing
+ *  else (no effect, no signal). A DIFFERENT id beside a held one is two Machines under one attempt's name, which this table
+ *  does not model: refused exactly as the null cell refused it. */
+const adoptedLateCreate: Cell = (r, t) => {
+  if (t.type !== "create_ok" || (r.machineId !== null && r.machineId !== t.machineId)) throw new InvalidRunnerTransition(r.state, t.type);
+  return stay(r.machineId === null ? { ...r, machineId: t.machineId } : r);
+};
+
 /** F-007: the observation is an in-place restart still inside its bound. A restart with no instant (a provider that gave
  *  none) cannot be timed here; the composed stale window is its backstop. */
 function restartInFlight(t: Extract<RunnerTrigger, { type: "observed" }>, now: Date): boolean {
@@ -547,7 +558,8 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     destroy_ok: null, orphan_listed: null,
   },
   booting: {
-    create_started: null, create_ok: null, create_failed: null,
+    // the prod row: adopted by a reconcile, then the create call's own return
+    create_started: null, create_ok: adoptedLateCreate, create_failed: null,
     callback_playing: (r) => ({ next: { ...r, state: "playing" }, effects: [], signal: { type: "went_live" } }),
     callback_stopped: stoppedWhileActive,
     callback_crashed: crashedWhileActive,
@@ -559,7 +571,8 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     grace_expired: null, destroy_ok: null, orphan_listed: null,
   },
   playing: {
-    create_started: null, create_ok: null, create_failed: null,
+    // the adopted Machine beat `playing` while the create call was still out
+    create_started: null, create_ok: adoptedLateCreate, create_failed: null,
     // F16: idempotent, and the RECOVERY for a beat the session had to ignore (one that arrived before
     // `provisioned`). went_live is a no-op on a live session and takes a warming one live, once.
     callback_playing: (r) => ({ next: r, effects: [], signal: { type: "went_live" } }),
@@ -573,7 +586,8 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     grace_expired: null, destroy_ok: null, orphan_listed: null,
   },
   stopping: {
-    create_started: null, create_ok: null, create_failed: null,
+    // a stop or the deadline reached the adopted runner while the create call was still out
+    create_started: null, create_ok: adoptedLateCreate, create_failed: null,
     callback_playing: (r) => stay(r),
     callback_stopped: (r) => ({ next: { ...r, state: "exited" }, effects: [], signal: null }),
     callback_crashed: (r) => stay(r),                              // R2003: our stop is ending it — record only, never counted
@@ -585,7 +599,8 @@ export const RUNNER_TABLE: Record<RunnerState, Record<RunnerTrigger["type"], Run
     orphan_listed: null,
   },
   exited: {
-    create_started: null, create_ok: null, create_failed: null, callback_playing: null,
+    // …and that stop's exit was seen before the call returned
+    create_started: null, create_ok: adoptedLateCreate, create_failed: null, callback_playing: null,
     callback_stopped: (r) => stay(r), callback_crashed: (r) => stay(r), callback_restarted: (r) => stay(r),
     observed: (r, t) => (t.type === "observed" && t.state === "destroyed" ? { next: { ...r, state: "destroyed" }, effects: [], signal: { type: "completed" } } : stay(withExit(r, t))),
     stale_beat: (r) => stay(r), deadline: (r) => stay(r), session_stop: (r) => stay(r),
