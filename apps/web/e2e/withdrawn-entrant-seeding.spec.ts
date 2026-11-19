@@ -167,9 +167,9 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
   // RB4-V6 (W4 rulebook §5, OWNER 274): a departed qualifier from a TABLE
   // source is replaced by the next-ranked eligible entrant of THAT table. Her
   // table is her pool of 2, so her pool-mate — read off the rig's own group
-  // fixture, never off the proposal — takes her place, and the vacancy moves
-  // to the pool-mate's old seat (a pool of 2 has nobody below the cut). The
-  // table is one row shorter and nobody from another pool moves.
+  // fixture, never off the proposal — is promoted, and the vacancy moves to
+  // the runners-up (a pool of 2 has nobody below the cut). Since W5 the
+  // promotion is a re-proposal over her table with her ranked last (below).
   const groupFixtures = await apiJson<{ stage_id: string; home_entrant_id: string | null; away_entrant_id: string | null }[]>(
     request,
     `/api/v1/divisions/${rig.divisionId}/fixtures`,
@@ -190,12 +190,19 @@ test("the seeding proposal screen does not offer a withdrawn qualifier", async (
     els.map((el) => (el as HTMLSelectElement).selectedOptions[0]?.textContent?.trim() ?? ""),
   );
   expect(namesAfter).not.toContain(departingName);
-  // Her place taken by her pool-mate, the pool-mate's old row gone, every
-  // other row unchanged: neither the pre-W4 removal (her row dropped, nobody
-  // promoted) nor a whole-table reshuffle reads this way.
-  expect(namesAfter).toEqual(
-    namesBefore.filter((n) => n !== mateName).map((n) => (n === departingName ? mateName! : n)),
-  );
+  // W5 (rulebook RB5-W1, OWNER 277; RB5-K6, OWNER S5): she stays in her pool's table RANKED LAST, and her departure stales the
+  // proposal, which is proposed again from the tables before the knockout starts. Her pool-mate is therefore now her pool's
+  // WINNER: he joins the winners' block (rank_order seats every pool's 1st before any pool's 2nd), and within it he comes last -
+  // he lost the pool's one match, 0 points against every other winner's 3. The runners-up keep their order without him. Neither the
+  // pre-W4 removal (her row dropped, nobody promoted) nor a whole-table reshuffle reads this way.
+  const [winnersBefore, runnersUpBefore] = [namesBefore.slice(0, 4), namesBefore.slice(4)];
+  expect(winnersBefore, "premise: she was a pool winner").toContain(departingName);
+  expect(runnersUpBefore, "premise: her pool-mate was its runner-up").toContain(mateName);
+  expect(namesAfter).toEqual([
+    ...winnersBefore.filter((n) => n !== departingName),
+    mateName!,
+    ...runnersUpBefore.filter((n) => n !== mateName),
+  ]);
 
   // …and she is not OFFERED either. The row that named her is gone, but every
   // remaining row's <select> lists candidates for its own slot, and that list
