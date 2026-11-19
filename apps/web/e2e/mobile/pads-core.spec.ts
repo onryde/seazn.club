@@ -1256,3 +1256,41 @@ test("hockey v3 pad (W2d T18): the goal-type question holds the 44px floor, hit-
   expect(events.data!.filter((e) => e.type === "hockey.goal"), "a cancelled question writes no goal").toEqual([]);
   console.log(`[hockey goal-type ${projectWidth}px] ${here.length} controls hit-tested; scrollWidth ${widths.scroll}/${widths.client}`);
 });
+
+// Scoring-defects fix round 1, m8 (item 5). A football match with NO lineup: the goal dock says "No roster available yet."
+// where it used to say nothing. At every phone and tablet width the line is on screen, fits, nothing clips and nothing
+// scrolls, and the same dock with a lineup shows no such line (the negative pair, so the message is not just always there).
+test("football v3 pad: the goal dock of a match with no lineup says there is no roster, and nothing clips or scrolls", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(request, { ...v3SkinSeed("football", "FBR"), emitCoreStart: true, skipLineups: true });
+  const projectWidth = page.viewportSize()!.width;
+  const dock = page.getByTestId("score-pad").locator('[data-role="v3-dock"]');
+  const note = dock.getByTestId("pad-dock-no-roster");
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await padTile(page, "goal-home").click();
+  await expect(dock, "a goal tap opens the dock").toBeVisible({ timeout: 20_000 });
+  await expect(note, `the dock says there is no roster at ${projectWidth}`).toHaveText("No roster available yet.");
+  await expect(dock.locator('[data-testid^="pad-dock-chip-scorer:"]'), "and offers no scorer chip").toHaveCount(0);
+  const clip = await overflowingIn(page, '[data-role="v3-dock"]', "*", "the goal dock is missing");
+  expect(clip.clipped, `nothing in the dock is clipped at ${projectWidth}`).toEqual([]);
+  expect(clip.scrollable, `the dock has no scroll rail at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const box = await note.boundingBox();
+  const vp = page.viewportSize()!;
+  expect(box, "the line is laid out").not.toBeNull();
+  expect(box!.x + box!.width, `the line fits inside the ${projectWidth}px screen`).toBeLessThanOrEqual(vp.width);
+
+  // The negative pair: a match WITH a lineup offers its scorers and never shows the line.
+  const withRoster = await seedRosteredFixture(request, { ...v3SkinSeed("football", "FBW"), emitCoreStart: true });
+  await page.goto(await fixturePath(page.request, withRoster.fixtureId), { waitUntil: "load" });
+  await padTile(page, "goal-home").click();
+  await expect(dock).toBeVisible({ timeout: 20_000 });
+  await expect(dock.locator('[data-testid^="pad-dock-chip-scorer:"]').first(), "a rostered dock offers its scorers").toBeVisible();
+  await expect(note, "and no roster message").toHaveCount(0);
+  console.log(`[football no-roster dock ${projectWidth}px] scrollWidth ${await page.evaluate(() => document.documentElement.scrollWidth)}`);
+});

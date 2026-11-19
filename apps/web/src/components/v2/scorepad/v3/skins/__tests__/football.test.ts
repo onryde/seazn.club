@@ -19,6 +19,9 @@
 // callers.
 import { describe, expect, it } from "vitest";
 import uiEn from "@/dictionaries/en/ui.json";
+import uiEs from "@/dictionaries/es/ui.json";
+import uiFr from "@/dictionaries/fr/ui.json";
+import uiNl from "@/dictionaries/nl/ui.json";
 import type { AnySportModule, PadAction, PadField } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
@@ -1574,6 +1577,14 @@ describe("buildDock", () => {
 
     it("is the SAME key the other scorer surfaces use, and it has copy in every locale", () => {
       expect(uiEn[NO_ROSTER as keyof typeof uiEn]).toBe("No roster available yet.");
+      let checked = 0;
+      for (const [loc, d] of Object.entries({ en: uiEn, es: uiEs, fr: uiFr, nl: uiNl }) as [string, Record<string, string>][]) {
+        const text = d[NO_ROSTER];
+        expect(typeof text === "string" && text.length > 8, `${loc} has the line`).toBe(true);
+        if (loc !== "en") expect(text, `${loc} is translated, not the English line`).not.toBe(uiEn[NO_ROSTER as keyof typeof uiEn]);
+        checked += 1;
+      }
+      expect(checked, "anti-vacuity: four locales").toBe(4);
     });
 
     // The negative pairs: the message claims the roster is missing, so it must not appear where the roster is not.
@@ -1588,8 +1599,10 @@ describe("buildDock", () => {
       expect(dock.emptyNote).toBeUndefined();
     });
 
-    it("no message below band 2, where the dock never asks for a person at all", () => {
-      const dock = buildDock("football.goal", view({ state: rosterless(), band: 0 }), t, { by: "H" })!;
+    // Band 1 is the edge: the first band that is not the person-attributing one. A `>= 1` here would say "no roster" on a
+    // dock that never asks for a person, so band 0 alone cannot tell the two apart.
+    it.each([0, 1] as const)("no message at band %i, where the dock never asks for a person at all", (band) => {
+      const dock = buildDock("football.goal", view({ state: rosterless(), band }), t, { by: "H" })!;
       expect(dock.emptyNote).toBeUndefined();
     });
 
