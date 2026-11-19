@@ -77,11 +77,24 @@ import { SETS_LABEL_KEY, type SetsUnit } from "./sets-vocabulary";
  * every other motion this surface ships (`globals.css`'s reduced-motion
  * list).
  */
+interface RailBox {
+  getBoundingClientRect(): { left: number; right: number };
+}
 export function scrollActiveTabIntoView(
-  el: Pick<HTMLElement, "scrollIntoView"> | null | undefined,
+  el: (RailBox & { parentElement: (RailBox & { scrollBy(o: ScrollToOptions): void }) | null }) | null | undefined,
   prefersReducedMotion: boolean,
 ): void {
-  el?.scrollIntoView({ inline: "nearest", block: "nearest", behavior: prefersReducedMotion ? "auto" : "smooth" });
+  // The RAIL scrolls, on X only. `el.scrollIntoView` also scrolls every
+  // scrollable ANCESTOR on Y — on mount it dragged the whole page up to bring
+  // the rail into a short phone viewport, which tucked the breadcrumb under the
+  // sticky site header (visual gate public-fixture/fixture-320). "nearest"
+  // semantics are kept: nothing moves when the tab is already fully visible.
+  const rail = el?.parentElement;
+  if (!el || !rail) return;
+  const tab = el.getBoundingClientRect();
+  const box = rail.getBoundingClientRect();
+  const left = tab.left < box.left ? tab.left - box.left : tab.right > box.right ? tab.right - box.right : 0;
+  if (left !== 0) rail.scrollBy({ left, behavior: prefersReducedMotion ? "auto" : "smooth" });
 }
 
 /** Exported alongside `scrollActiveTabIntoView` so the hub's own

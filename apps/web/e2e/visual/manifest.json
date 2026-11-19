@@ -28,7 +28,10 @@
             ],
             "inline": [],
             "offscreen": [
-              "button[data-testid=mc-tab-info]"
+              "button[data-testid=mc-tab-info]",
+              "button[data-testid=mc-tab-sets]",
+              "button[data-testid=mc-tab-summary]",
+              "button[data-testid=mc-tab-timeline]"
             ]
           }
         },

@@ -215,25 +215,46 @@ describe("TabRail — the 'sets' tab label reads the sport's OWN unit, not a fix
 // contract (`{ scrollIntoView(options) }`) a real button element carries,
 // without needing jsdom to prove the call.
 describe("scrollActiveTabIntoView (R11 fix round, C6)", () => {
-  class FakeTabButton {
-    scrollIntoView(): void {}
+  // The rail scrolls on X only. `Element.scrollIntoView` also scrolls every
+  // scrollable ANCESTOR on Y, so on mount it dragged the whole page ~40-80px
+  // to bring the rail into a 568px phone viewport, leaving the breadcrumb under
+  // the sticky site header (visual gate public-fixture/fixture-320: "a tap at
+  // the centre reaches something else"). The doubles carry NO scrollIntoView,
+  // so a regression to it throws.
+  function fakeRail(rail: { left: number; right: number }, tab: { left: number; right: number }) {
+    const scrollBy = vi.fn();
+    const el = {
+      parentElement: { getBoundingClientRect: () => rail, scrollBy },
+      getBoundingClientRect: () => tab,
+    };
+    return { el, scrollBy };
   }
 
-  it("scrolls the element into view with inline/block 'nearest' and a SMOOTH behaviour by default", () => {
-    FakeTabButton.prototype.scrollIntoView = vi.fn();
-    const el = new FakeTabButton();
+  it("scrolls the RAIL left by the overhang when the tab is clipped on the left, smoothly by default", () => {
+    const { el, scrollBy } = fakeRail({ left: 0, right: 300 }, { left: -40, right: 50 });
     scrollActiveTabIntoView(el, false);
-    expect(el.scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(el.scrollIntoView).toHaveBeenCalledWith({ inline: "nearest", block: "nearest", behavior: "smooth" });
+    expect(scrollBy).toHaveBeenCalledTimes(1);
+    expect(scrollBy).toHaveBeenCalledWith({ left: -40, behavior: "smooth" });
+  });
+
+  it("scrolls the rail right by the overhang when the tab is clipped on the right", () => {
+    const { el, scrollBy } = fakeRail({ left: 0, right: 300 }, { left: 250, right: 372 });
+    scrollActiveTabIntoView(el, false);
+    expect(scrollBy).toHaveBeenCalledWith({ left: 72, behavior: "smooth" });
+  });
+
+  it("does not move the rail at all when the tab is already fully visible ('nearest')", () => {
+    const { el, scrollBy } = fakeRail({ left: 0, right: 300 }, { left: 10, right: 100 });
+    scrollActiveTabIntoView(el, false);
+    expect(scrollBy).not.toHaveBeenCalled();
   });
 
   // Mutant: drop the `prefersReducedMotion ? "auto" : "smooth"` ternary
   // (always "smooth") → this reds.
   it("suppresses the smooth animation — behaviour 'auto' — when prefers-reduced-motion is set", () => {
-    FakeTabButton.prototype.scrollIntoView = vi.fn();
-    const el = new FakeTabButton();
+    const { el, scrollBy } = fakeRail({ left: 0, right: 300 }, { left: 250, right: 372 });
     scrollActiveTabIntoView(el, true);
-    expect(el.scrollIntoView).toHaveBeenCalledWith({ inline: "nearest", block: "nearest", behavior: "auto" });
+    expect(scrollBy).toHaveBeenCalledWith({ left: 72, behavior: "auto" });
   });
 
   it("does nothing (never throws) when the element is null or undefined — the ref before it attaches", () => {
