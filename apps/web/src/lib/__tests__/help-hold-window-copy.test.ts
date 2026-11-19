@@ -47,7 +47,7 @@
 // implied: before R8 the import reached the failure STRING and nothing else,
 // so the constant could move without moving a single assertion.
 //
-// SCOPE is `content/help/scoring/` only, deliberately. Elsewhere in the tree a
+// SCOPE is `content/help/scoring/` and `content/help/sports/` only, deliberately. Elsewhere in the tree a
 // duration beside the word "undo" is legitimate and unrelated — e.g.
 // `players/duplicates.md` says a merge undo "works as well next month as it
 // does thirty seconds later", which is a claim about there being NO time
@@ -65,7 +65,8 @@ import { join } from "node:path";
 
 import { HOLD_MS_DEFAULT } from "@/components/v2/scorepad/queue";
 
-const SCORING_DIR = join(process.cwd(), "content/help/scoring");
+// The per-sport pages moved to their own section (`sports/`); both folders are still scanned.
+const SCORING_DIRS = ["scoring", "sports"] as const;
 
 /** A quantity of seconds: "six seconds", "12 seconds", "~6s", "6 s".
  *
@@ -112,19 +113,21 @@ function sentences(markdown: string): string[] {
  */
 const ALLOWED: readonly { slug: string; fragment: string; why: string }[] = [
   {
-    slug: "scoring/badminton",
+    slug: "sports/badminton",
     fragment: "60-second break",
     why: "BWF's interval at 11 — a rule of the sport, nothing to do with the pad's soft commit",
   },
 ];
 
 function scoringPages(): { slug: string; markdown: string }[] {
-  return readdirSync(SCORING_DIR)
-    .filter((f) => f.endsWith(".md"))
-    .map((f) => ({
-      slug: `scoring/${f.replace(/\.md$/, "")}`,
-      markdown: readFileSync(join(SCORING_DIR, f), "utf8"),
-    }));
+  return SCORING_DIRS.flatMap((dir) =>
+    readdirSync(join(process.cwd(), "content/help", dir))
+      .filter((f) => f.endsWith(".md"))
+      .map((f) => ({
+        slug: `${dir}/${f.replace(/\.md$/, "")}`,
+        markdown: readFileSync(join(process.cwd(), "content/help", dir, f), "utf8"),
+      })),
+  );
 }
 
 /** Whether an allowlist row covers this sentence on this page. */
@@ -158,7 +161,7 @@ describe("scoring help copy ⇄ the soft-commit hold window", () => {
     const pages = scoringPages();
     expect(pages.length).toBeGreaterThan(5);
     // The page this guard was written for must be among them.
-    expect(pages.map((p) => p.slug)).toContain("scoring/cricket");
+    expect(pages.map((p) => p.slug)).toContain("sports/cricket");
   });
 
   it("reads quantities of seconds, not ordinals", () => {
@@ -183,7 +186,7 @@ describe("scoring help copy ⇄ the soft-commit hold window", () => {
         if (!hit) continue;
         if (allowedFor(slug, sentence)) continue;
         faults.push(
-          `${slug}: quotes "${hit[0].trim()}". No page under content/help/scoring/ may put a ` +
+          `${slug}: quotes "${hit[0].trim()}". No page under content/help/scoring/ or content/help/sports/ may put a ` +
             `quantity of seconds in prose: the soft-commit window is ${HOLD_MS_DEFAULT}ms by ` +
             `default and environment-tunable, so a duration a reader takes for it cannot stay ` +
             `true — and this rule is deliberately not scoped to sentences that mention undoing, ` +

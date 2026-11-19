@@ -1,7 +1,7 @@
 ---
-title: Scoring volleyball
+title: Volleyball
 description: Rally by rally with the serve, the rotation number, time-outs, sanctions and the libero exchange — indoor or beach.
-order: 19
+order: 10
 ---
 
 Volleyball divisions score rally by rally: tap the half of the side that won the rally and the point is recorded. Two formats — **Indoor** (best of five, sets to 25, deciding set to 15, six on court with a bench) and **Beach** (pairs, best of three, sets to 21, deciding set to 15, and no substitutions at all). Neither format sets a ceiling on a set, so win-by-two can carry a set to 26-24 or 30-28.

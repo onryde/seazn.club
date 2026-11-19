@@ -1,7 +1,7 @@
 ---
-title: Scoring cricket
+title: Cricket
 description: Ball by ball — runs, extras and wickets in one tap each, with who's batting and bowling set once at the top.
-order: 7
+order: 4
 ---
 
 Cricket divisions score ball by ball: one tap per delivery, with the striker, non-striker and bowler held at the top of the pad so you never re-enter them. Overs and wickets build the score; the format you picked for the division decides the rest — **T20**, **One-day**, **The Hundred** (five-ball overs) or **Test** (two innings a side, with declarations and the follow-on).

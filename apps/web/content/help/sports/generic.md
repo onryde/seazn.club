@@ -1,7 +1,7 @@
 ---
-title: Scoring a generic sport
+title: Any other sport
 description: The pad for every sport that isn't modelled — a running tally you tap during play, or a single result at the end.
-order: 23
+order: 11
 ---
 
 **Generic** is a sport you can pick like any other, and it's the scoring surface for everything this app doesn't model on its own — netball, squash, padel, kabaddi and the rest. It states exactly what it knows and nothing more: two sides and a number, or two sides and a winner. There's no "goal", no "rally", no periods, because none of those would mean the same thing across every sport that lands here.

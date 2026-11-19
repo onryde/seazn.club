@@ -1,12 +1,12 @@
 ---
-title: Scoring field hockey
+title: Field hockey
 description: Quarters, cards that make the team play short, penalty corners and shoot-outs.
-order: 6
+order: 5
 ---
 
 Field hockey is scored on a pad built around quarters, cards and shoot-outs. Pick a format when you create the division: **FIH outdoor** is the default — eleven a side, four fifteen-minute quarters, draws standing, 3/1/0 points. **FIH shoot-out** is the same game and settles a drawn match with a shoot-out rather than letting it stand. **Youth** is a different game, not just a shorter one: seven a side, four ten-minute quarters, and its own shorter cards.
 
-Ice hockey shares the same underlying clock and period model but almost nothing else on the scoresheet — it has assists, a seven-class penalty ladder and game-winning shots. It has [its own page](/help/scoring/icehockey).
+Ice hockey shares the same underlying clock and period model but almost nothing else on the scoresheet — it has assists, a seven-class penalty ladder and game-winning shots. It has [its own page](/help/sports/icehockey).
 
 ## Goals
 
@@ -40,4 +40,4 @@ Teams level on points are split by matches won, goal difference and goals for; t
 
 **A player got a second card?** The pad flags a prior green card when you pick the same player again — the usual escalation is yellow.
 
-**I'm scoring ice hockey, not field hockey.** That's a different pad and a different page — see [scoring ice hockey](/help/scoring/icehockey).
+**I'm scoring ice hockey, not field hockey.** That's a different pad and a different page — see [scoring ice hockey](/help/sports/icehockey).

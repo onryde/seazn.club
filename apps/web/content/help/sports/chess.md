@@ -1,7 +1,7 @@
 ---
-title: Scoring chess
+title: Chess and other board games
 description: Tap the winner, say how it ended, and record the board and colours on a pairing card.
-order: 22
+order: 3
 ---
 
 Chess divisions record one thing: the result, and how the game got there. A win is worth a point, a draw half a point, and the standings show them that way. Pick a time-control family when you create the division — **Classical**, **Rapid** or **Blitz**; it's recorded as a label on the fixture and doesn't change how anything is scored.

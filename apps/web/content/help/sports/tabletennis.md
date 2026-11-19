@@ -1,7 +1,7 @@
 ---
-title: Scoring table tennis
+title: Table tennis
 description: Rally by rally with the serve rotation, 1st and 2nd serve, time-outs and the expedite system — or just each game's final score.
-order: 18
+order: 8
 ---
 
 Table tennis divisions score rally by rally: tap the half of the side that won the rally and the point is recorded. Pick a format when you create the division — **Bo5** (games to 11, win by two, no cap — deuce runs 12-10, 15-13 and on), **Bo7** for knockouts and finals, or **Hardbat 21** (games to 21) for legacy and social play.

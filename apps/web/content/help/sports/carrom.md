@@ -1,7 +1,7 @@
 ---
-title: Scoring carrom
+title: Carrom
 description: One entry a board — who won it, the coins left, and whether the queen was covered — with games and the match tallied for you.
-order: 21
+order: 2
 ---
 
 Carrom divisions score a board at a time. A match is best of three games, a game is first to 25 points or the leader once eight boards are done, and the queen is worth 3 until the winning side reaches 22 — the **ICF** default. A division can run **Club 29** instead: games to 29, the queen worth 5, and its bonus lapsing at 24.

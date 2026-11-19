@@ -1,7 +1,7 @@
 ---
-title: Scoring badminton
+title: Badminton
 description: Tap the side that won the rally — the serve, the service court and the interval all work themselves out — or record each game's final score.
-order: 17
+order: 1
 ---
 
 Badminton divisions score rally by rally, and the board itself is the button: tap the half of the side that won the rally, and that's the whole entry. Pick a format when you create the division — **BWF** (games to 21, win by two, hard cap at 30) or **Short** (games to 11, cap 15) for junior and social play. Either way, a match is best of three games.

@@ -1,7 +1,7 @@
 ---
-title: Scoring tennis
+title: Tennis
 description: Point-by-point with real tennis scoring — deuce, tie-breaks and match tie-breaks — or per-set totals.
-order: 5
+order: 9
 ---
 
 Tennis divisions score with real tennis rules: points build to games, games to sets, with deuce and advantage handled for you. Pick a format when you create the division — **Tour** (best of 3, tie-break sets), **Grand slam** (best of 5, 10-point tie-break in the deciding set), **Fast4** (short sets to 4) or **Doubles no-ad** (a 10-point match tie-break replaces the deciding set).

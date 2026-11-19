@@ -9,14 +9,14 @@ You score a match on its **pad**, the panel of tiles on the fixture page. The pa
 
 ## Pick your sport
 
-- [Tennis](/help/scoring/tennis): points, games and sets, with deuce and tie-breaks worked out for you.
-- [Badminton](/help/scoring/badminton), [table tennis](/help/scoring/tabletennis) and [volleyball](/help/scoring/volleyball): rally by rally, with the serve worked out from what you have already recorded.
-- [Cricket](/help/scoring/cricket): ball by ball, with overs and wickets.
-- [Football](/help/scoring/football): goals, cards, substitutions and shoot-outs.
-- [Field hockey](/help/scoring/hockey): quarters, cards that leave a team short, penalty corners and shoot-outs. [Ice hockey](/help/scoring/icehockey) has its own page for assists, the penalty ladder and game-winning shots.
-- [Carrom](/help/scoring/carrom): a board at a time, coins and the queen.
-- [Chess and other board games](/help/scoring/boardgame): who won, and how it ended.
-- [Everything else](/help/scoring/generic): a running tally you tap during play, or a plain result at the end.
+- [Tennis](/help/sports/tennis): points, games and sets, with deuce and tie-breaks worked out for you.
+- [Badminton](/help/sports/badminton), [table tennis](/help/sports/tabletennis) and [volleyball](/help/sports/volleyball): rally by rally, with the serve worked out from what you have already recorded.
+- [Cricket](/help/sports/cricket): ball by ball, with overs and wickets.
+- [Football](/help/sports/football): goals, cards, substitutions and shoot-outs.
+- [Field hockey](/help/sports/hockey): quarters, cards that leave a team short, penalty corners and shoot-outs. [Ice hockey](/help/sports/icehockey) has its own page for assists, the penalty ladder and game-winning shots.
+- [Carrom](/help/sports/carrom): a board at a time, coins and the queen.
+- [Chess and other board games](/help/sports/chess): who won, and how it ended.
+- [Everything else](/help/sports/generic): a running tally you tap during play, or a plain result at the end.
 
 ## The flow
 

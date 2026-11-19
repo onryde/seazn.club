@@ -1,7 +1,7 @@
 ---
-title: Scoring football
+title: Football
 description: Goals, cards and subs per side on one pad, then extra time or a shoot-out when a knockout can't end level.
-order: 16
+order: 6
 ---
 
 Football divisions score by half — two halves by default, or four quarters for mini-soccer — with one pad for goals, cards and substitutions per side. Extra time and a penalty shoot-out are both optional deciders you turn on for a stage that can't finish level (see [knockout deciders](/help/scoring/knockout-deciders)); a league or group stage without them simply records a draw.
