@@ -338,6 +338,53 @@ describe.skipIf(!HAS_DB)("a late add that commits while a ladder result is being
     expect(before).toHaveLength(3);
   });
 
+  // The REVERSE direction: the swap is in flight (it holds the stage row's lock), the append reads the pre-swap order and
+  // writes while it waits, the swap commits. A literal `[...order, newcomer]` write would put the pre-swap order back and
+  // lose the swap. The swap is emulated by the very write the hook makes (the order with two rungs exchanged), held in an
+  // open transaction - scoreEvent itself cannot be paused mid-statement.
+  it("an append that reads the order BEFORE a swap commits does not undo the swap", async () => {
+    const r = await ladder(3);
+    const before = await startTheLadder(r); // [L1, L2, L3]
+    expect(before).toEqual([r.ids[0]!, r.ids[1]!, r.ids[2]!]);
+    const swapped = [r.ids[2]!, r.ids[1]!, r.ids[0]!];
+
+    let releaseSwap!: () => void;
+    const swapHeld = new Promise<void>((res) => (releaseSwap = res));
+    let swapWritten!: () => void;
+    const swapWrittenSignal = new Promise<void>((res) => (swapWritten = res));
+    const swapTx = sql.begin(async (tx) => {
+      await tx`update stages set config = config || ${tx.json({ ladder_order: swapped } as never)} where id = ${r.stageId}`;
+      swapWritten();
+      await swapHeld;
+    });
+    await swapWrittenSignal;
+
+    // The newcomer's own admission + append, in a second transaction: it reads the committed (pre-swap) order, then its
+    // write waits on the swap's row lock.
+    let lateId = "";
+    const appendTx = sql.begin(async (tx) => {
+      const [e] = await tx<{ id: string }[]>`
+        insert into entrants (division_id, org_id, kind, display_name, seed)
+        values (${r.divisionId}, ${r.auth.orgId}, 'individual', 'Late behind a swap', 99) returning id`;
+      lateId = e!.id;
+      await appendToLadderOrder(tx, r.divisionId);
+    });
+    // Anti-vacuity: the append really is waiting on the swap's lock (otherwise nothing interleaved).
+    let blocked = false;
+    for (let i = 0; i < 100 && !blocked; i++) {
+      const [row] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity where wait_event_type = 'Lock' and query ilike '%update stages%ladder_order%'`;
+      blocked = row!.n > 0;
+      if (!blocked) await new Promise((res) => setTimeout(res, 50));
+    }
+    expect(blocked, "the append's write is waiting on the swap's row lock").toBe(true);
+    releaseSwap();
+    await swapTx;
+    await appendTx;
+
+    expect(await storedOrder(r.stageId), "the swap landed AND the newcomer is on the ladder at the bottom").toEqual([...swapped, lateId]);
+  });
+
   it("a result where the holder wins swaps nothing (the SQL guard: winner below loser), and a later add still lands at the bottom", async () => {
     const r = await ladder(3);
     await startTheLadder(r);
