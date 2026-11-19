@@ -121,7 +121,14 @@ async function playRound(r: Rig, n: number): Promise<number> {
   return round.length;
 }
 
-const VOID = (status: string) => ["abandoned", "cancelled", "void"].includes(status);
+/** The cascade's void is an EXPUNGED abandon: fixture status `abandoned` plus one `core.abandon{expunge:true}` ledger row,
+ *  written by `withdrawal_cascade` with reason `withdrew` - never a recorded (scorer) abandon, never a cancel. */
+async function abandonRows(fixtureId: string): Promise<{ reason: unknown; expunge: unknown }[]> {
+  const rows = await sql<{ payload: { reason?: unknown; expunge?: unknown } }[]>`
+    select payload from score_events where fixture_id = ${fixtureId} and type = 'core.abandon' order by seq`;
+  return rows.map((r) => ({ reason: r.payload.reason, expunge: r.payload.expunge }));
+}
+const EXPUNGED = [{ reason: "withdrew", expunge: true }];
 
 describe.skipIf(!HAS_DB)("withdrawing an individual from an americano", () => {
   it("voids their unplayed matches, leaves every other match and their played results alone", async () => {
@@ -143,8 +150,13 @@ describe.skipIf(!HAS_DB)("withdrawing an individual from an americano", () => {
     const after = await fixtures(r.stageId);
     for (const f of after) {
       const was = before.find((b) => b.id === f.id)!;
-      if (theirUnplayed.some((u) => u.id === f.id)) expect(VOID(f.status), `their unplayed match ${f.id} voided (was ${was.status}, now ${f.status})`).toBe(true);
-      else expect(f.status, `match ${f.id} is not theirs to lose and keeps its status`).toBe(was.status);
+      if (theirUnplayed.some((u) => u.id === f.id)) {
+        expect(f.status, `their unplayed match ${f.id} is abandoned (was ${was.status})`).toBe("abandoned");
+        expect(await abandonRows(f.id), `match ${f.id} carries exactly one expunging cascade abandon`).toEqual(EXPUNGED);
+      } else {
+        expect(f.status, `match ${f.id} is not theirs to lose and keeps its status`).toBe(was.status);
+        expect(await abandonRows(f.id), `match ${f.id} was not touched`).toEqual([]);
+      }
     }
   });
 
@@ -167,20 +179,42 @@ describe.skipIf(!HAS_DB)("withdrawing an individual from an americano", () => {
   it("a second withdrawal voids only their own matches; a match holding both withdrawn players is voided once", async () => {
     const r = await rig();
     await playRound(r, 1);
-    const first = await withdrawEntrantCascade(r.auth, r.ids[0]!);
-    const mid = await fixtures(r.stageId);
-    const secondPerson = r.persons[1]!;
-    // Anti-vacuity: the two players really do share an unplayed match, and the second has matches the first did not void.
-    const shared = mid.filter((f) => f.status === "scheduled" && f.people.includes(secondPerson) && f.people.includes(r.persons[0]!));
-    const stillTheirs = mid.filter((f) => f.status === "scheduled" && f.people.includes(secondPerson));
-    expect(shared.length, "premise: the first withdrawal left no match naming them (they were voided together)").toBe(0);
-    expect(stillTheirs.length, "premise: the second player still has unplayed matches").toBeGreaterThan(0);
+    const before = await fixtures(r.stageId);
+    // The second leaver is a player who SHARES an unplayed match with the first (partner or opponent) - found from the
+    // generated rotation, never assumed.
+    const firstPerson = r.persons[0]!;
+    const unplayedWithFirst = before.filter((f) => f.status === "scheduled" && f.people.includes(firstPerson));
+    const secondIdx = r.persons.findIndex((p, i) => i !== 0 && unplayedWithFirst.some((f) => f.people.includes(p)));
+    expect(secondIdx, "premise: some player shares an unplayed match with the first leaver").toBeGreaterThan(0);
+    const secondPerson = r.persons[secondIdx]!;
+    const shared = unplayedWithFirst.filter((f) => f.people.includes(secondPerson));
+    expect(shared.length, "premise: at least one match holds both").toBeGreaterThan(0);
+    const secondOnly = before.filter((f) => f.status === "scheduled" && f.people.includes(secondPerson) && !f.people.includes(firstPerson));
+    expect(secondOnly.length, "premise: the second player has matches the first did not touch").toBeGreaterThan(0);
 
-    const second = await withdrawEntrantCascade(r.auth, r.ids[1]!);
-    expect(second.voided).toBe(stillTheirs.length);
-    expect(first.voided, "the first report is not rewritten").toBeGreaterThan(0);
+    const first = await withdrawEntrantCascade(r.auth, r.ids[0]!);
+    expect(first.voided).toBe(unplayedWithFirst.length);
+    for (const f of shared) expect(await abandonRows(f.id), "the shared match is voided by the first withdrawal").toEqual(EXPUNGED);
+
+    const second = await withdrawEntrantCascade(r.auth, r.ids[secondIdx]!);
+    expect(second.voided, "only the second player's OWN remaining matches: the shared one is already void").toBe(secondOnly.length);
+    for (const f of shared) expect(await abandonRows(f.id), "the shared match is voided ONCE, not again").toEqual(EXPUNGED);
+    for (const f of secondOnly) expect(await abandonRows(f.id)).toEqual(EXPUNGED);
     const after = await fixtures(r.stageId);
-    expect(after.filter((f) => f.status === "scheduled" && (f.people.includes(secondPerson) || f.people.includes(r.persons[0]!)))).toEqual([]);
+    expect(after.filter((f) => f.status === "scheduled" && (f.people.includes(secondPerson) || f.people.includes(firstPerson)))).toEqual([]);
+  });
+
+  it("a match already in play is not yet finished, so it is voided too (the same pending rule every format's withdrawal uses)", async () => {
+    const r = await rig();
+    await playRound(r, 1);
+    const live = (await fixtures(r.stageId)).find((f) => f.status === "scheduled" && f.people.includes(r.persons[0]!))!;
+    await scoreEvent(r.auth, live.id, { expected_seq: 0, type: "core.start", payload: {} });
+    expect((await fixtures(r.stageId)).find((f) => f.id === live.id)!.status, "premise: the match is in play").toBe("in_play");
+
+    const out = await withdrawEntrantCascade(r.auth, r.ids[0]!);
+    expect(out.voided).toBeGreaterThan(1);
+    expect((await fixtures(r.stageId)).find((f) => f.id === live.id)!.status).toBe("abandoned");
+    expect(await abandonRows(live.id)).toEqual(EXPUNGED);
   });
 
   it("withdrawing the same player twice is refused 409 and voids nothing more", async () => {
@@ -262,13 +296,22 @@ describe.skipIf(!HAS_DB)("withdrawing an individual from a mexicano", () => {
     const theirs = round1.find((f) => f.people.includes(r.persons[0]!))!;
     const out = await withdrawEntrantCascade(r.auth, r.ids[0]!);
     expect(out).toMatchObject({ policy: "expunge", voided: 1 });
+    expect(await abandonRows(theirs.id), "their round-1 match is expunged").toEqual(EXPUNGED);
     // play the rest of round 1
     for (const f of round1.filter((x) => x.id !== theirs.id)) await play(r.auth, f.id, 24, 18);
 
     await generateStageFixtures(r.auth, r.stageId);
     const after = await fixtures(r.stageId);
     const round2 = after.filter((f) => f.round_no === 2);
-    expect(round2.length, "the voided match must not hold the next round back").toBeGreaterThan(0);
-    expect(round2.some((f) => f.people.includes(r.persons[0]!)), "the withdrawn player is not paired again").toBe(false);
+    // The field for round 2 is the 7 who are still in. A match is 4 players (two pairs of two), so the rule - not the
+    // generator - says 7 players fill floor(7/4) = 1 match and 3 sit out.
+    const activeCount = (await sql<{ n: number }[]>`
+      select count(*)::int as n from entrants where division_id = ${r.divisionId} and kind = 'individual' and status in ('registered','confirmed')`)[0]!.n;
+    expect(activeCount, "premise: 7 of the 8 are still in").toBe(7);
+    expect(round2.length, "7 players fill floor(7/4) matches").toBe(Math.floor(activeCount / 4));
+    const playing = new Set(round2.flatMap((f) => f.people));
+    expect(playing.size, "each match seats 4 distinct players").toBe(round2.length * 4);
+    expect(playing.has(r.persons[0]!), "the withdrawn player is not paired again").toBe(false);
+    expect(activeCount - playing.size, "the byes: everyone still in who is not playing").toBe(3);
   });
 });

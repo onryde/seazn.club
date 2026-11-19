@@ -111,7 +111,7 @@ const CLAIMS: Record<string, Claim> = {
     openFormatsWas: "In a ladder or americano, remaining games are voided and earned standings stand.",
     ladderVoided: /in a ladder or americano/i,
     ladderAwarded: /open challenges they issued or received are awarded to the other player as walkovers/i,
-    americanoVoided: /in an americano or mexicano, their unplayed matches are voided and the points they earned stand/i,
+    americanoVoided: /in an americano or mexicano, their matches not yet finished are voided, so the other players in those matches lose that game; the points they earned stand, and reinstating them does not bring the voided matches back/i,
   },
   es: {
     retiredBody:
@@ -130,7 +130,7 @@ const CLAIMS: Record<string, Claim> = {
     openFormatsWas: "En una escalera o un americano, los partidos restantes se anulan y la clasificación lograda se mantiene.",
     ladderVoided: /en una escalera o un americano/i,
     ladderAwarded: /desafíos abiertos que lanzaron o recibieron se otorgan al otro jugador/i,
-    americanoVoided: /en un americano o un mexicano, sus partidos sin jugar se anulan y los puntos conseguidos se mantienen/i,
+    americanoVoided: /en un americano o un mexicano, sus partidos sin terminar se anulan, así que los demás jugadores de esos partidos pierden ese encuentro; los puntos conseguidos se mantienen y reincorporarlo no recupera los partidos anulados/i,
   },
   fr: {
     retiredBody:
@@ -149,7 +149,7 @@ const CLAIMS: Record<string, Claim> = {
     openFormatsWas: "Dans une échelle ou un americano, les matchs restants sont invalidés et le classement acquis est conservé.",
     ladderVoided: /dans une échelle ou un americano/i,
     ladderAwarded: /défis ouverts qu['’]ils ont lancés ou reçus sont attribués par forfait à l['’]autre joueur/i,
-    americanoVoided: /dans un americano ou un mexicano, leurs matchs non joués sont invalidés et les points acquis sont conservés/i,
+    americanoVoided: /dans un americano ou un mexicano, leurs matchs non terminés sont invalidés, donc les autres joueurs de ces matchs perdent cette rencontre ; les points acquis sont conservés, et réintégrer le joueur ne rétablit pas les matchs invalidés/i,
   },
   nl: {
     retiredBody:
@@ -168,7 +168,7 @@ const CLAIMS: Record<string, Claim> = {
     openFormatsWas: "In een ladder of americano worden resterende wedstrijden ongeldig verklaard en blijft de behaalde stand staan.",
     ladderVoided: /in een ladder of americano/i,
     ladderAwarded: /openstaande uitdagingen die ze hebben gedaan of gekregen als walk-over aan de andere speler toegekend/i,
-    americanoVoided: /in een americano of mexicano worden hun nog niet gespeelde wedstrijden ongeldig verklaard en blijven de behaalde punten staan/i,
+    americanoVoided: /in een americano of mexicano worden hun nog niet afgeronde wedstrijden ongeldig verklaard, waardoor de andere spelers in die wedstrijden die wedstrijd verliezen; de behaalde punten blijven staan en terugzetten brengt de ongeldige wedstrijden niet terug/i,
   },
 };
 

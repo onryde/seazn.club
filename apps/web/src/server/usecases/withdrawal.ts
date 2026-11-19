@@ -495,7 +495,8 @@ export async function withdrawEntrantCascade(
           }
         }
       } else {
-        // americano: their unplayed matches void (expunged, D5); played results and the standings they earned stand.
+        // americano: their matches not yet finished (scheduled or in play - the same PENDING set every format's withdrawal
+        // reads) void (expunged, D5); played results and the standings they earned stand.
         let voids = 0;
         for (const f of mine) {
           if (PENDING.has(f.status)) {
