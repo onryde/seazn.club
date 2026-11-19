@@ -1481,11 +1481,43 @@ test("B5 G2 the waiting strip's Rebuild: its outcome comes into view on a phone;
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toContainText("It deletes 12 fixtures.");
   await expectNoHorizontalScroll(page);
+  // Fix round 1 (CI red at 768: the notice was in view, then a hit test on it landed on something else). The notice is said and
+  // scrolled to BEFORE the redraw's router.refresh() lands, so a reflow while that refresh is in flight can carry the line off the
+  // screen. The refresh is held here, the page above the line grows meanwhile, and once the refresh lands the line must be back in
+  // view - the panel re-checks it then. Only the RSC re-read is held, never the Rebuild's own POST.
+  let releaseRefresh: () => void = () => undefined;
+  const refreshHeld = new Promise<void>((r) => (releaseRefresh = r));
+  let heldReads = 0;
+  await page.route("**/*", async (route) => {
+    const req = route.request();
+    if (req.method() === "GET" && req.headers()["rsc"] === "1") {
+      heldReads++;
+      await refreshHeld;
+    }
+    await route.fallback();
+  });
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
   const notice = page.getByTestId("schedule-notice");
   await expect(notice).toContainText(`${who} is in: the stage was drawn again with them in it.`, { timeout: 20_000 });
   if (await expectOutcomeInView(page, notice, width, "the Rebuild's notice")) inView++;
+  await expect.poll(() => heldReads, { message: "the redraw re-reads the page (router.refresh)", timeout: 20_000 }).toBeGreaterThan(0);
+  // The reflow: everything above the line grows by more than a screen (a style on <main>, which React does not manage).
+  const shiftPx = vp!.height + 400;
+  await page.evaluate((px) => {
+    const main = document.querySelector("main");
+    if (main) main.style.paddingTop = `${px}px`;
+  }, shiftPx);
+  await expect.poll(() => notice.evaluate((el) => el.getBoundingClientRect().top > window.innerHeight), {
+    message: "premise: the reflow carried the notice below the fold",
+  }).toBe(true);
+  releaseRefresh();
   await expect(page.getByTestId("table-waiting"), "drawn in: the strip goes").toHaveCount(0, { timeout: 20_000 });
+  if (await expectOutcomeInView(page, notice, width, "the Rebuild's notice, once the refresh has landed")) inView++;
+  await page.unroute("**/*");
+  await page.evaluate(() => {
+    const main = document.querySelector("main");
+    if (main) main.style.paddingTop = "";
+  });
   await expectNoHorizontalScroll(page);
 
   const stale = await kit.seedStartedTable(request, { label: `Stale ${width}`, n: 5, play: false });
@@ -1504,6 +1536,6 @@ test("B5 G2 the waiting strip's Rebuild: its outcome comes into view on a phone;
   if (await expectOutcomeInView(page, refusal, width, "the stale Rebuild's refusal")) inView++;
   await expect(page.getByTestId("table-waiting-row"), "she still waits").toHaveCount(1);
   await expectNoHorizontalScroll(page);
-  // Anti-vacuity: both in-view proofs ran, at every width (fix round 1).
-  expect(inView, `in-view proofs at ${width}`).toBe(2);
+  // Anti-vacuity: all three in-view proofs ran, at every width (fix round 1; the after-refresh one, e2e fix round 1).
+  expect(inView, `in-view proofs at ${width}`).toBe(3);
 });

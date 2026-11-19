@@ -668,11 +668,19 @@ function scrollUnderHeader(el: HTMLElement) {
 /** B5 fix wave fix round 1 (controller ruling: the organiser SEES the outcome at every width): from `md` up, bring `el` into view
  *  only when it is not fully visible between the sticky header and the bottom of the window, and then by the least scroll
  *  (`block: "nearest"`, clearing the header by 8px). A line already in view never moves the page (T17c's "no needless scroll"). */
+/** How long after an outcome is said the refreshed data may still re-check it (W5 e2e fix round 1): long enough for a slow
+ *  router.refresh() to land, short enough that a later live update never moves the page. */
+const OUTCOME_RECHECK_MS = 15_000;
+
 function scrollIntoViewIfHidden(el: HTMLElement) {
   const under = headerBottom();
   const r = el.getBoundingClientRect();
   if (r.top >= under && r.bottom <= window.innerHeight) return;
   el.style.scrollMarginTop = `${Math.ceil(under) + 8}px`;
+  // W5 e2e fix round 1: a line brought up from BELOW the fold is aligned to the window's bottom edge, and on a fractional layout
+  // (top 492.39 at 320) that left it 0.39px past the fold - "not fully visible" by this function's own test. Clear the bottom by
+  // the same 8px as the header.
+  el.style.scrollMarginBottom = "8px";
   const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
 }
@@ -780,6 +788,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   // the lines announce themselves (role="status" / "alert").
   const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches;
   const [outcomeScroll, setOutcomeScroll] = useState(0);
+  // Until when the refreshed data re-checks the outcome line (W5 e2e fix round 1, the effect below the scroll's own).
+  const recheckOutcomeUntil = useRef(0);
   // B5 fix wave G2 (batch review I2): the same scroll for every outcome said OUTSIDE `act` / `swissStageWrite` — the waiting strips'
   // place, Rebuild and handed-over refusal, and the card's own Rebuild — whose line also lands at the top of the page.
   // Fix round 1: every width bumps; the effect decides how far to move (a phone: to the top; `md` up: only an off-screen line).
@@ -797,7 +807,23 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     if (!line) return;
     if (isPhone()) scrollUnderHeader(line);
     else scrollIntoViewIfHidden(line);
+    recheckOutcomeUntil.current = Date.now() + OUTCOME_RECHECK_MS;
   }, [outcomeScroll]);
+  // W5 e2e fix round 1 (CI, B5 G2 at 768; controller ruling): the scroll above runs as the outcome is SAID, before the
+  // router.refresh() that follows each of these actions lands, so a reflow while that refresh is in flight can carry the line under
+  // the sticky header or below the fold. When the refreshed data arrives, the same check runs ONCE more, at every width: into view
+  // only if hidden, by the least scroll. Bounded by OUTCOME_RECHECK_MS so a later, unrelated refresh (a live update) never pulls the
+  // reader back to an old line.
+  useEffect(() => {
+    if (recheckOutcomeUntil.current === 0 || typeof document === "undefined") return;
+    const due = Date.now() <= recheckOutcomeUntil.current;
+    recheckOutcomeUntil.current = 0;
+    if (!due) return;
+    const line = document.querySelector<HTMLElement>("[data-outcome-line]");
+    if (line) scrollIntoViewIfHidden(line);
+    // Keyed on the two props every refresh re-sends and nothing else changes (`tableWaiting` / `knockoutWaiting` default to a new
+    // `[]` each render, which would fire this in the bump's own commit and spend the re-check before the refresh lands).
+  }, [fixtures, stages]);
   // m2 (fix round 2): the sheet's Add match opens its form inside the card, behind the scrim - on a phone it closes the sheet and
   // brings the form into view the same way.
   const [addMatchScroll, setAddMatchScroll] = useState(0);
