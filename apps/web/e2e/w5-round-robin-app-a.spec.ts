@@ -1705,7 +1705,17 @@ test.describe("X-CU-7 / X-CU-11 a late player joins a running group from the des
     await expect(pool.locator("option")).toHaveText([/^Group A · 4 entrants · 4 matches to play/, /^Group B · 4 entrants · 4 matches to play/]);
     await pool.selectOption("B");
     const name = `Late Westgate Wanderers Badminton Club ${TAG}`;
-    await form.getByLabel("Name", { exact: true }).fill(name);
+    // The shared e2e org accumulates teams from other specs, and a division that takes a team kind opens the form in "Existing team"
+    // mode once any exist (AddEntrantForm's canExisting) - which has no Name field. Pin the "New entrant" mode first; only the mode
+    // pinning is retried, never the add (the swiss-pre-start-field-change walkthrough's pattern).
+    const modeToggle = form.getByRole("button", { name: uiEn["entrants.add.mode.new"]!, exact: true });
+    const nameBox = form.getByLabel("Name", { exact: true });
+    await expect(async () => {
+      if (await modeToggle.isVisible().catch(() => false)) await modeToggle.click({ timeout: 3_000 }).catch(() => undefined);
+      await expect(nameBox).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 30_000, intervals: [250, 500, 1_000, 2_000] });
+    await expect(pool, "pinning the mode kept the Group pick").toHaveValue("B");
+    await nameBox.fill(name);
     const answered = page.waitForResponse((r) => r.url().endsWith(`/api/v1/divisions/${t.divisionId}/entrants`) && r.request().method() === "POST");
     await form.getByRole("button", { name: "Add entrant" }).click();
     const res = await answered;
