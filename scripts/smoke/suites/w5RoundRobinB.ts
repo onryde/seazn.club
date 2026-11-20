@@ -36,7 +36,8 @@ export async function w5RoundRobinBSuite(): Promise<void> {
   // Task 2: 1 (a 3-of-5 leaver: the preview, the walkovers and the hub footnote all say 3 of 5).
   // Task 3: 1 (two late players in a started league of four: rounds 4-7 in seed order, then 8-11 and the first late player at 12).
   // Task 4: 2 (Check 1's proposal stores the engine's basis on the best-Nth slots; the Standings tab prints it under the tables).
-  const EXPECTED_CHECKS = 7;
+  // Task 5: 1 (three pools' top two into the quarter-finals: the stored draw seed, A1 and B1 on byes, C2 v A2 and C1 v B2).
+  const EXPECTED_CHECKS = 8;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -321,6 +322,75 @@ export async function w5RoundRobinBSuite(): Promise<void> {
     w5Check(
       "w5b X-CU-3/5: two late players in a started league of four - L1 plays the seeds in rounds 4-7 in seed order, L2 plays them in 8-11 and L1 in 12, no pair twice" +
         (ok ? "" : ` - div ${dRes.status}, field ${field.length}, start ${started.status}, begun ${begun.status}, L1 ${l1.status} ${l1.late?.late_entry?.case} [${linesOf(l1.late?.id).join(",")}], L2 ${l2.status} ${l2.late?.late_entry?.case} [${linesOf(l2.late?.id).join(",")}], lines ${all.length}, distinct pairs ${new Set(pairs).size}`),
+      ok,
+    );
+  }
+
+  // Check 8 - Task 5 (FX-G5, ruling 281; X-PD-1 <- RB5-D1, X-PD-6 <- RB5-D6): the groups_ko card's drafts, 12 into 3 pools, Top 6, on the
+  // setup path. Snake: A = seeds 1,6,7,12; B = 2,5,8,11; C = 3,4,9,10; the better seed wins every meeting, so A1 = 1, A2 = 6, B1 = 2,
+  // B2 = 5, C1 = 3, C2 = 4. Each pool wins by its own margin (A 4-0, B 3-0, C 2-0): with one margin m a pool's winner is +3m and its
+  // runner-up +m, so the cross-pool order is A1, B1, C1, A2, B2, C2 with NO tie - a uniform score ties the winners across pools, and
+  // the stored seed then draws their order (X-PD-3), which is not this check's question. The engine plan's X-PD-1 row (W5 engine T6): A1, B1, C1, A2, B2, C2 into 8 is drawn A1, B1, C1, A2, C2, B2 -
+  // A1 and B1 on byes, C2 v A2 and C1 v B2, i.e. entrant seeds {4, 6} and {3, 5}. differential: the fold's own 8-draw pairs draw seeds
+  // 3 v 6 = C1 v C2 (entrant seeds {3, 4}), pool-mates in the quarter-finals.
+  {
+    // Its own competition: the owner's plan caps the divisions one competition holds, and Checks 1-5 have used the first's.
+    const xRes = await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR B cross ${tag}`, visibility: "private" });
+    const xComp = v1data<{ id: string } | undefined>(xRes);
+    const dRes = await v1(owner, `/api/v1/competitions/${xComp?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Cross pools",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 12 }, (_, i) => ({ kind: "individual", display_name: `Xp${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const seedOf = new Map(field.map((e, i) => [e.id, i + 1]));
+    const drafts = buildTemplateStages("groups_ko", { qualified: 6, poolCount: 3, swissRounds: 3, legs: 1 });
+    const stages = v1data<{ id: string; kind: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression }))),
+    ) ?? [];
+    const groupId = stages.find((x) => x.kind === "group")?.id;
+    const koId = stages.find((x) => x.kind === "knockout")?.id;
+    const gens = [(await v1(owner, `/api/v1/stages/${koId}/generate`, "POST")).status, (await v1(owner, `/api/v1/stages/${groupId}/generate`, "POST")).status];
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const fixtures = async () => v1data<(Fx & { round_no: number })[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [];
+    const groupLines = (await fixtures()).filter((x) => x.stage_id === groupId);
+    const bestOf = new Map<string, number>();
+    for (const f of groupLines) for (const id of [f.home_entrant_id, f.away_entrant_id]) {
+      const k = f.pool_id ?? "";
+      bestOf.set(k, Math.min(bestOf.get(k) ?? 99, seedOf.get(id ?? "") ?? 99));
+    }
+    const marginOf = new Map([...bestOf.entries()].sort((a, b) => a[1] - b[1]).map(([k], i) => [k, 4 - i] as const));
+    const scored: number[] = [];
+    for (const f of groupLines) {
+      const homeWins = (seedOf.get(f.home_entrant_id ?? "") ?? 99) < (seedOf.get(f.away_entrant_id ?? "") ?? 99);
+      const m = marginOf.get(f.pool_id ?? "") ?? 1;
+      scored.push((await v1(owner, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: 0, type: "generic.result", payload: homeWins ? { p1Score: m, p2Score: 0 } : { p1Score: 0, p2Score: m } })).status);
+    }
+    const done = await v1(owner, `/api/v1/stages/${groupId}/complete`, "POST");
+    const pRes = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+    const proposal = v1data<{ id: string; computed?: { crossPoolDraw?: { seed?: unknown; refused?: unknown } } } | undefined>(pRes);
+    const conf = await v1(owner, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal?.id });
+    const ko = (await fixtures()).filter((f) => f.stage_id === koId);
+    const first = Math.min(...ko.map((f) => f.round_no));
+    const r1 = ko.filter((f) => f.round_no === first);
+    const pairs = r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null)
+      .map((f) => [seedOf.get(f.home_entrant_id!), seedOf.get(f.away_entrant_id!)].sort((a, b) => (a ?? 0) - (b ?? 0)).join("v")).sort();
+    const byes = r1.filter((f) => (f.home_entrant_id === null) !== (f.away_entrant_id === null))
+      .map((f) => seedOf.get((f.home_entrant_id ?? f.away_entrant_id)!)).sort();
+    const ok =
+      xRes.status === 201 && dRes.status === 201 && field.length === 12 && stages.length === 2 && gens.join(",") === "200,200" && started.status === 200 &&
+      [...marginOf.values()].join(",") === "4,3,2" && scored.length === 18 && scored.every((x) => x === 201) && done.status === 200 && pRes.status === 201 &&
+      typeof proposal?.computed?.crossPoolDraw?.seed === "number" && proposal.computed.crossPoolDraw.refused === undefined && conf.status === 200 &&
+      pairs.join(",") === "3v5,4v6" && byes.join(",") === "1,2";
+    w5Check(
+      "w5b X-PD-1: three pools' top two into the quarter-finals - drawn with a stored seed, A1 and B1 on byes, C2 v A2 and C1 v B2, no pool-mates" +
+        (ok ? "" : ` - comp ${xRes.status}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, generate ${gens.join(",")}, start ${started.status}, scored ${scored.length} ${[...new Set(scored)].join(",")}, complete ${done.status}, proposal ${pRes.status} ${JSON.stringify(proposal?.computed?.crossPoolDraw ?? null)}, confirm ${conf.status}, round one pairs [${pairs.join(",")}] byes [${byes.join(",")}]`),
       ok,
     );
   }
