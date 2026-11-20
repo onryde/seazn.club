@@ -788,15 +788,17 @@ describe.skipIf(!HAS_DB)("the key pool's reuse guard (post-T3 amendment): a key 
 
 describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 table, R3)", () => {
   it("each port refusal at each step leaves no 'created'/'bound' row and deletes what YouTube got (checked === 20)", async () => {
-    const w = await world();
-    const f = w.fixtures[0]!;
+    // One fixture per step: a step's six cases make six broadcast rows, and the per-fixture ceiling (Phase 0, 10 an hour) would refuse the 11th.
+    const w = await world(4);
+    const f = w.fixtures[3]!;   // the last step's fixture, for the positive pair below
     // Ordered so each step is REACHED: insertStream runs only while the pool is empty, so its cases come before the first
     // insertBroadcast case pools a key; insertBroadcast and bind then use that free key.
     const steps = ["accessToken", "insertStream", "insertBroadcast", "bind"] as const;
     let checked = 0;
     let flipped = 0;
     let liveRecorded = 0;
-    for (const step of steps) {
+    for (const [stepIndex, step] of steps.entries()) {
+      const f = w.fixtures[stepIndex]!;
       for (const code of YOUTUBE_CODES) {
         const calledBefore = callsOf(w.fake, step);
         const rowsBefore = (await rowsOf(f)).length;

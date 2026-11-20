@@ -43,7 +43,7 @@ import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
 import { siteOrigin } from "@/lib/site-origin";
 import {
-  YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy,
+  YOUTUBE_MAX_BROADCASTS_PER_FIXTURE_PER_HOUR, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy,
   type YoutubeRefusalCode,
 } from "@/lib/youtube";
 import type { StartCause } from "@/server/relay/domain/session";
@@ -358,12 +358,25 @@ async function liveKeyCount(tx: Tx, ctx: Ctx): Promise<number> {
   return n;
 }
 
-type Pick = { kind: "busy" } | { kind: "fixture_taken" } | { kind: "row"; rowId: string; keyId: string | null };
+/** The fixture's broadcast rows created in the 60 minutes before `now`, in any state (a failed or finished one still counts: the
+ *  ceiling bounds how fast a fixture may MAKE broadcasts at YouTube). Only prepareYoutubeBroadcast's new-broadcast path adds a row, so
+ *  a reuse, a pasted key and a Seazn session are never counted. */
+export async function recentBroadcastCount(exec: Tx | typeof sql, fixtureId: string, now: Date): Promise<number> {
+  const [{ n }] = await exec<{ n: number }[]>`
+    select count(*)::int as n from youtube_broadcasts
+     where fixture_id = ${fixtureId} and created_at > ${plusMinutes(now, -60)}`;
+  return n;
+}
+
+type Pick = { kind: "busy" } | { kind: "ceiling" } | { kind: "fixture_taken" } | { kind: "row"; rowId: string; keyId: string | null };
 
 /** Step 3's transaction: under the connection lock, a free key (or room for one), and the broadcast row `created`. */
 async function pickAndInsert(ctx: Ctx, title: string): Promise<Pick> {
   return sql.begin(async (tx): Promise<Pick> => {
     await lockConnection(tx, ctx);
+    // Seazn's own runaway guard, under the connection lock so concurrent admissions on a channel count one at a time. No row, no call
+    // to YouTube; the refusal is thrown by createNew outside its try, so failRow (and the automatic backoff) never sees it.
+    if ((await recentBroadcastCount(tx, ctx.fixtureId, ctx.now)) >= YOUTUBE_MAX_BROADCASTS_PER_FIXTURE_PER_HOUR) return { kind: "ceiling" };
     const keyId = await freeKey(tx, ctx);
     if (keyId === null && !((await liveKeyCount(tx, ctx)) < MAX_LIVE_KEYS_PER_CHANNEL)) return { kind: "busy" };
     // The row is stamped with ctx.madeForKids - the very value `createNew` hands insertBroadcast to send YouTube (one source: it was read
@@ -392,6 +405,7 @@ async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
   const { title, description, locale } = await textsFor(ctx);   // the row's title is NOT NULL: computed before the transaction
   const pick = await pickAndInsert(ctx, title);
   if (pick.kind === "busy") throw youtubeRefusal("youtube_channel_busy", ctx.connectionId);
+  if (pick.kind === "ceiling") throw youtubeRefusal("youtube_limit_reached", ctx.connectionId);
   if (pick.kind === "fixture_taken") {
     // A concurrent admission inserted this fixture's row first: re-read and reuse it (R3).
     if (!reread) throw youtubeRefusal("youtube_unavailable", ctx.connectionId);
