@@ -29,7 +29,8 @@ const MARK: Record<Exclude<PresenceMark, null>, string> = {
   away: "rounded-full border border-slate-400 bg-white",
 };
 
-function Mark({ mark, dict }: { mark: PresenceMark; dict: Dict }) {
+/** The mark itself (the board panel draws it beside each seat too: one spelling of the dot, its words and its test ids). */
+export function Mark({ mark, dict }: { mark: PresenceMark; dict: Dict }) {
   const text = presenceText(dict, mark);
   if (mark === null || text === null) return null;
   return (

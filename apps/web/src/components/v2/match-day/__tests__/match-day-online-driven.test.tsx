@@ -45,7 +45,7 @@ import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 import { CourtFocus } from "../court-focus";
 import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { OnlineList } from "../online-list";
-import { OnlineBoardPanel } from "../online-focus";
+import { BoardFocus } from "../board-focus";
 import { RoundFocus } from "../round-focus";
 import { arbiterRound, checkinRound, earlier, held, live, onlineView, pairedRound, round, withState } from "./_online-fixtures";
 
@@ -86,7 +86,7 @@ const at = (n: number) => `2026-11-19T18:0${n}:00.000Z`;
 /** What the shell handed its children, read off the element tree. */
 function parts(tree: ReactElement[]) {
   const list = tree.find((e) => e.type === OnlineList);
-  const boardPanel = tree.find((e) => e.type === OnlineBoardPanel);
+  const boardPanel = tree.find((e) => e.type === BoardFocus);
   const roundPanel = tree.find((e) => e.type === RoundFocus);
   const listBox = tree.find((e) => propsOf(e)["data-testid"] === "md-list")!;
   const lost = tree.find((e) => propsOf(e)["data-testid"] === "md-lost");

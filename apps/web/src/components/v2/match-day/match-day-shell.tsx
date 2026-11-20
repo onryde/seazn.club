@@ -72,8 +72,8 @@ import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band
 import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
+import { BoardFocus } from "./board-focus";
 import { OnlineList } from "./online-list";
-import { OnlineBoardPanel } from "./online-focus";
 import { RoundFocus } from "./round-focus";
 import { levelWords } from "@/lib/score/levels";
 import { VenueFilter } from "./venue-filter";
@@ -599,14 +599,18 @@ export function MatchDayShell({
             />
           )}
           {focusedBoard !== null && (
-            <OnlineBoardPanel
+            <BoardFocus
               key={focusedBoard.board.fixtureId}
               ctx={ctx}
               round={focusedBoard.round}
               row={focusedBoard.board}
               reader={readerOf(focusedBoard.round)}
+              nowMs={clock}
+              refreshKey={lastOkAt}
               backLabel={onlineBackLabel}
               onBack={() => setPhoneOpen(false)}
+              onChanged={refreshQuiet}
+              onFrozen={onFrozen}
               hiddenOnPhone={!phoneCourt}
             />
           )}
