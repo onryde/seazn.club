@@ -26,10 +26,14 @@ import {
   boardWord,
   boardsPlaying,
   earlierRoundChip,
+  isOwnRound,
+  nameParts,
+  needsDecisionHeading,
   onlineRoundMeta,
   onlineRoundTitle,
   presenceText,
   roundWordLines,
+  RING_TAIL_MAX,
 } from "@/lib/match-day/online-copy";
 import { boardRowWord, roundRowWord } from "@/lib/match-day/online";
 import {
@@ -131,7 +135,7 @@ describe("the rows, in spec §5.2's order", () => {
     const byId = Object.fromEntries(rowsOf(html, "md-board-row").map((r) => [attr(r, "data-fixture-id")!, r]));
     expect(Object.keys(byId).sort()).toEqual(["n-1", "n-2", "n-3", "n-4", "n-5"]);
     expect(text(byId["n-1"]!)).toBe("Board 1 Wh1 Present v Bl1 Present, camera off Live · move 23");
-    expect(text(byId["n-2"]!)).toContain("On hold 1 flag");
+    expect(text(byId["n-2"]!)).toContain("On hold 1 report");
     expect(text(byId["n-3"]!)).toContain("1-0");
     expect(text(byId["n-4"]!)).toContain("Checking in");
     expect(text(byId["n-5"]!)).toContain("No result");
@@ -219,6 +223,106 @@ describe("a selected row, and the boards of earlier rounds", () => {
     expect(rows[1]).not.toContain("md-round-chip");
     // The positive pair: with nothing held in an earlier round the sub-group is absent.
     expect(list([checkinRound("stage-1:3")])).not.toContain("md-board-subgroup");
+  });
+});
+
+describe("the 'Needs a decision' heading says 'earlier rounds' only when it is true (ruling MD-R25)", () => {
+  const sub = (r: MatchDayOnlineRound, d: Dict = dict, locale: Locale = "en") => {
+    const html = list([r], { d, locale });
+    const at = html.indexOf('data-testid="md-board-subgroup"');
+    return at < 0 ? null : text(html.slice(html.lastIndexOf("<li", at), html.indexOf("</li>", at)));
+  };
+  const own = (over: Partial<MatchDayBoardRow> = {}) => earlier(3, { fixtureId: "own-1", ...over });
+
+  it("only boards of EARLIER rounds: the suffix; only boards of the LISTED round: the plain heading; a mix: the plain heading", () => {
+    expect(sub(checkinRound("stage-1:3", { needs_decision: [earlier(2), earlier(1, { fixtureId: "old-2" })] }))).toBe("Needs a decision · earlier rounds");
+    expect(sub(checkinRound("stage-1:3", { needs_decision: [own()] }))).toBe("Needs a decision");
+    expect(sub(checkinRound("stage-1:3", { needs_decision: [earlier(2), own()] }))).toBe("Needs a decision");
+    expect(sub(checkinRound("stage-1:3", { needs_decision: [own(), earlier(2)] }), dict), "order does not matter").toBe("Needs a decision");
+    // Nothing held: no heading at all (the positive pair of the three above).
+    expect(sub(checkinRound("stage-1:3"))).toBeNull();
+  });
+
+  it("a board of the listed round's NUMBER in another STAGE is not the listed round's: still 'earlier'", () => {
+    expect(sub(checkinRound("stage-1:3", { needs_decision: [earlier(3, { stage_id: "stage-0" })] }))).toBe("Needs a decision · earlier rounds");
+    expect(isOwnRound(earlier(3), { stage_id: "stage-1", round_no: 3 })).toBe(true);
+    expect(isOwnRound(earlier(3, { stage_id: "stage-0" }), { stage_id: "stage-1", round_no: 3 })).toBe(false);
+    expect(isOwnRound(earlier(2), { stage_id: "stage-1", round_no: 3 })).toBe(false);
+  });
+
+  it("the heading is the locale's own text, and the plain key is not the suffixed one in any locale (4 locales swept)", () => {
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const d = DICTS[locale];
+      expect(sub(checkinRound("stage-1:3", { needs_decision: [own()] }), d, locale)).toBe(t(d, "matchDay.online.needsDecisionPlain"));
+      expect(sub(checkinRound("stage-1:3", { needs_decision: [earlier(2)] }), d, locale)).toBe(t(d, "matchDay.online.needsDecision"));
+      expect(t(d, "matchDay.online.needsDecisionPlain")).not.toBe(t(d, "matchDay.online.needsDecision"));
+      expect(t(d, "matchDay.online.needsDecision").startsWith(t(d, "matchDay.online.needsDecisionPlain")), `${locale}: the suffixed heading extends the plain one`).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four locales").toBe(4);
+    expect(needsDecisionHeading(dict, { stage_id: "stage-1", round_no: 3, needs_decision: [] })).toBeNull();
+  });
+
+  it("the own-round board still wears its round chip and counts in the round row's boards (m1): the row says 6 where it shows 6", () => {
+    const r = checkinRound("stage-1:3", { needs_decision: [own({ boardNo: 9 })] });
+    const html = list([r]);
+    expect(rowsOf(html, "md-board-row").length, "2 listed boards + 1 own-round board under the heading").toBe(3);
+    expect(text(rowsOf(html, "md-round-row")[0]!)).toContain("Swiss · 10+5 · 3 boards");
+    // An earlier round's board is not THIS round's: the row says 2 although 3 rows sit under it.
+    const e = checkinRound("stage-1:3", { needs_decision: [earlier(2)] });
+    expect(rowsOf(list([e]), "md-board-row").length).toBe(3);
+    expect(text(rowsOf(list([e]), "md-round-row")[0]!)).toContain("Swiss · 10+5 · 2 boards");
+  });
+});
+
+describe("a player's presence ring stays with the last word of the name (controller finding V1)", () => {
+  it("nameParts: the last word is the tail, the rest the head; one word is all tail; a long last word keeps only its last RING_TAIL_MAX characters", () => {
+    expect(nameParts("Gus Martin")).toEqual({ head: "Gus ", tail: "Martin" });
+    expect(nameParts("Maximiliana Featherstonehaugh-Wolstenh ac48")).toEqual({ head: "Maximiliana Featherstonehaugh-Wolstenh ", tail: "ac48" });
+    expect(nameParts("Ana")).toEqual({ head: "", tail: "Ana" });
+    expect(nameParts("")).toEqual({ head: "", tail: "" });
+    expect(nameParts("Kai Dubois  ")).toEqual({ head: "Kai ", tail: "Dubois" });
+    const long = "A".repeat(RING_TAIL_MAX + 9);
+    expect(nameParts(`Pia ${long}`)).toEqual({ head: `Pia ${"A".repeat(9)}`, tail: "A".repeat(RING_TAIL_MAX) });
+    // The cap is exact: a word of exactly RING_TAIL_MAX is not split.
+    expect(nameParts(`Pia ${"B".repeat(RING_TAIL_MAX)}`)).toEqual({ head: "Pia ", tail: "B".repeat(RING_TAIL_MAX) });
+    // Code points: an emoji is never cut in half, and head + tail always reads back as the (trimmed) name.
+    const emoji = nameParts(`Zo ${"😀".repeat(RING_TAIL_MAX + 1)}`);
+    expect(Array.from(emoji.tail)).toHaveLength(RING_TAIL_MAX);
+    expect(emoji.head + emoji.tail).toBe(`Zo ${"😀".repeat(RING_TAIL_MAX + 1)}`);
+  });
+
+  /** The unit around each ring in the markup: the nowrap span that holds the name's tail and its `md-presence`. */
+  const units = (html: string) => [...html.matchAll(/<span class="whitespace-nowrap"><span data-md-name-tail="true">([^<]*)<\/span><span data-testid="md-presence" data-mark="([^"]*)"/g)].map((m) => ({ tail: m[1]!, mark: m[2]! }));
+
+  it("every ring sits in a whitespace-nowrap unit with ITS name's last word, White's and Black's, across the five presence cells", () => {
+    const names = (n: number) => ({ white: { name: `Wh${n} Hoffmann`, personId: null }, black: { name: `Bl${n} Maximiliana Featherstonehaugh-Wolstenh ac48`, personId: null } });
+    const html = list([
+      round("stage-1:3", "playing", arbiterRound([
+        live(1, { ...names(1), sides: { home: present(), away: present("off") } }),
+        live(2, { ...names(2), sides: { home: board().sides.home, away: board().sides.away } }),
+        live(3, { ...names(3), whiteSide: "away", sides: { home: present(), away: board().sides.away } }),
+      ])),
+    ]);
+    // 3 boards x 2 seats = 6 rings, each bound to its own player's last word.
+    expect(units(html)).toEqual([
+      { tail: "Hoffmann", mark: "here" },
+      { tail: "ac48", mark: "off" },
+      { tail: "Hoffmann", mark: "away" },
+      { tail: "ac48", mark: "away" },
+      { tail: "Hoffmann", mark: "away" },
+      { tail: "ac48", mark: "here" },
+    ]);
+    // The rest of the name still wraps: it is outside the unit, in the row's own overflow-wrap:anywhere line.
+    expect(html).toContain("Bl1 Maximiliana Featherstonehaugh-Wolstenh <span");
+  });
+
+  it("no mark, no unit: a policy-off board's names are plain text, so nothing is bound for nothing", () => {
+    const html = list([round("stage-1:3", "playing", arbiterRound([live(1, { cameraPolicy: "off", sides: { home: present(), away: present() } })]))]);
+    expect(html).not.toContain("whitespace-nowrap");
+    expect(html).not.toContain("md-presence");
+    expect(units(html)).toEqual([]);
   });
 });
 
@@ -334,18 +438,18 @@ describe("clicks (the harness drives what static markup cannot): a row opens ITS
 describe("the words as data (online-copy.ts)", () => {
   const rowOf = (b: ReturnType<typeof board>): MatchDayBoardRow => ({ ...b, stage_id: "s", round_no: 1 });
 
-  it("a board's word, state by state, with a hold's and a cancelled board's flags on a second line (one/other plural)", () => {
+  it("a board's word, state by state, with a hold's and a cancelled board's reports on a second line (ruling MD-R28: the desk's word) (one/other plural)", () => {
     const word = (b: ReturnType<typeof board>) => boardWord(dict, "en", boardRowWord(rowOf(b)));
     expect(word(board())).toEqual({ text: "Checking in", sub: null, tone: "wait" });
     expect(word(withState({ kind: "starting" }))).toEqual({ text: "Starting", sub: null, tone: "wait" });
     expect(word(live(12))).toEqual({ text: "Live · move 12", sub: null, tone: "live" });
     expect(word(held(0))).toEqual({ text: "On hold", sub: null, tone: "hold" });
-    expect(word(held(1))).toEqual({ text: "On hold", sub: "1 flag", tone: "hold" });
-    expect(word(held(2))).toEqual({ text: "On hold", sub: "2 flags", tone: "hold" });
+    expect(word(held(1))).toEqual({ text: "On hold", sub: "1 report", tone: "hold" });
+    expect(word(held(2))).toEqual({ text: "On hold", sub: "2 reports", tone: "hold" });
     expect(word(done("½-½"))).toEqual({ text: "½-½", sub: null, tone: "done" });
     expect(word(done(null))).toEqual({ text: "Finished", sub: null, tone: "quiet" });
     expect(word(withState({ kind: "result", score: null, noResult: true }))).toEqual({ text: "No result", sub: null, tone: "quiet" });
-    expect(word(withState({ kind: "cancelled" }, { flagCount: 1 }))).toEqual({ text: "Cancelled", sub: "1 flag", tone: "hold" });
+    expect(word(withState({ kind: "cancelled" }, { flagCount: 1 }))).toEqual({ text: "Cancelled", sub: "1 report", tone: "hold" });
   });
 
   it("a round's word, kind by kind: closes + here, playing, paired, not started, over; and nothing for a round of the viewer's own boards", () => {
@@ -365,8 +469,8 @@ describe("the words as data (online-copy.ts)", () => {
     expect(boardName(dict, { boardNo: 4, white: { name: "Chen", personId: null }, black: { name: "Silva", personId: null } })).toBe("Board 4 · Chen v Silva");
     expect(boardName(DICTS.es, { boardNo: 4, white: { name: "Chen", personId: null }, black: { name: "Silva", personId: null } })).toBe("Tablero 4 · Chen contra Silva");
     expect(earlierRoundChip(dict, 2)).toEqual({ code: "R2", label: "Round 2", coded: false });
-    expect(onlineRoundMeta(dict, "en", { stage_name: "Swiss", multi_stage: false, round: arbiterRound([live()]) })).toBe("Swiss · 10+5 · 1 board");
-    expect(onlineRoundMeta(dict, "en", { stage_name: "Swiss", multi_stage: false, round: null })).toBe("Swiss");
+    expect(onlineRoundMeta(dict, "en", round("stage-1:3", "playing", arbiterRound([live()])))).toBe("Swiss · 10+5 · 1 board");
+    expect(onlineRoundMeta(dict, "en", round("stage-1:3", "before", null))).toBe("Swiss");
   });
 
   it("presenceText: the three marks have words, no mark has none", () => {

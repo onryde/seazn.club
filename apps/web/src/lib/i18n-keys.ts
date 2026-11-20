@@ -4360,6 +4360,7 @@ export type DictionaryKey =
   | "matchDay.online.mark.here"
   | "matchDay.online.mark.off"
   | "matchDay.online.needsDecision"
+  | "matchDay.online.needsDecisionPlain"
   | "matchDay.online.round"
   | "matchDay.online.roundN"
   | "matchDay.online.roundStage"

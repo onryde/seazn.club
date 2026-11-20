@@ -263,9 +263,9 @@ export function MatchDayShell({
   /** What the online panels read for who may press what (`mayPress`): the viewer's role, the club's flag (the round's own) and the
    *  competition's billing freeze (the `frozen` prop, the flag that hides Call and Undo). */
   const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen });
-  /** The phone's way back from a round or a board: the courts' noun while courts are listed; a day of boards alone, "All boards";
-   *  anything else, the list. */
-  const onlineBackLabel = t(dict, courts.length > 0 ? `matchDay.back.${noun}` : noCourt.length === 0 ? "matchDay.back.board" : "matchDay.back.list");
+  /** The phone's way back from a round or a board (ruling MD-R27): the list, on every day. A board is not a court, so the courts' noun
+   *  ("All courts") stays with the courts' own panels. */
+  const onlineBackLabel = t(dict, "matchDay.back.list");
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 

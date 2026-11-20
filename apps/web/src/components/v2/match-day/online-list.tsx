@@ -1,14 +1,15 @@
 "use client";
 // Match Day's online block (spec 2026-11-05 §5.1, §5.2, §5.5; owner pick: mock Option A): the third block of the list, after the courts and
 // the "Playing, no court" rows. For every online round one round row, its boards directly under it in board order, and - on the
-// division's first row - a "Needs a decision" sub-group of the held or flagged boards of EARLIER rounds, each with its round chip. The
+// division's first row - a "Needs a decision" sub-group of the held or flagged boards no round lists (earlier rounds, or a cancelled board
+// of the listed round that still has a report), each with its round chip; the heading says "earlier rounds" only when that is true. The
 // rounds are in `orderOnlineRounds` order (check-in or in progress, then paired, then over). Nothing at all - no heading, no card - when
 // the day has no online round, so a day of courts is exactly the page it was.
 import { useId } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { orderOnlineRounds, type OnlineOpened } from "@/lib/match-day/online";
-import { earlierRoundChip } from "@/lib/match-day/online-copy";
+import { earlierRoundChip, needsDecisionHeading } from "@/lib/match-day/online-copy";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
 import type { MatchDayBoardRow, MatchDayOnlineRound } from "@/lib/match-day/types";
 import { BoardRow } from "./board-row";
@@ -62,7 +63,7 @@ export function OnlineList({
             ? []
             : [
                 <li key={`${r.key}:needs`} data-testid="md-board-subgroup" className="bg-red-50 px-4 py-1.5 text-xs font-semibold text-red-800 [overflow-wrap:anywhere]">
-                  {t(dict, "matchDay.online.needsDecision")}
+                  {needsDecisionHeading(dict, r)}
                 </li>,
                 ...r.needs_decision.map((b) => (
                   <BoardRow

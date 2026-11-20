@@ -20,10 +20,22 @@ export function onlineRoundTitle(dict: Dict, r: Pick<MatchDayOnlineRound, "divis
     : t(dict, "matchDay.online.round", { division: r.division_name, round: r.round_no });
 }
 
+/** Is this board of the round the row stands for? A board of the "Needs a decision" group can be of the listed round itself (a cancelled
+ *  board with an open flag is dropped from the round's own boards by the loader) or of an earlier round or stage. */
+export function isOwnRound(b: Pick<MatchDayBoardRow, "stage_id" | "round_no">, r: Pick<MatchDayOnlineRound, "stage_id" | "round_no">): boolean {
+  return b.stage_id === r.stage_id && b.round_no === r.round_no;
+}
+
 /** The round row's second line: "Swiss · 10+5 · 6 boards". The stage leads only when the title does not already carry it, and a round
- *  with no board on screen (every board the viewer's own, or not opened yet) names no count of boards. */
-export function onlineRoundMeta(dict: Dict, locale: Locale, r: Pick<MatchDayOnlineRound, "stage_name" | "multi_stage" | "round">): string {
-  const boards = r.round?.boards.length ?? 0;
+ *  with no board on screen (every board the viewer's own, or not opened yet) names no count of boards. The count is the round's OWN boards
+ *  as the list shows them: its listed boards plus those of its own held or flagged boards the "Needs a decision" group carries (a
+ *  cancelled board with an open flag), never an earlier round's. */
+export function onlineRoundMeta(
+  dict: Dict,
+  locale: Locale,
+  r: Pick<MatchDayOnlineRound, "stage_name" | "multi_stage" | "round" | "stage_id" | "round_no" | "needs_decision">,
+): string {
+  const boards = (r.round?.boards.length ?? 0) + r.needs_decision.filter((b) => isOwnRound(b, r)).length;
   return [
     r.multi_stage ? null : r.stage_name,
     r.round?.timeControl ?? null,
@@ -31,6 +43,29 @@ export function onlineRoundMeta(dict: Dict, locale: Locale, r: Pick<MatchDayOnli
   ]
     .filter((p): p is string => p !== null && p !== "")
     .join(" · ");
+}
+
+/** The heading over a round's "Needs a decision" group (ruling MD-R25): "· earlier rounds" only when it is TRUE, which is when every board
+ *  under it is of another round than the row's. A board of the listed round itself (or a mix) reads the plain heading. Null for a group
+ *  with no board (no heading is drawn). */
+export function needsDecisionHeading(dict: Dict, r: Pick<MatchDayOnlineRound, "stage_id" | "round_no" | "needs_decision">): string | null {
+  if (r.needs_decision.length === 0) return null;
+  return t(dict, r.needs_decision.every((b) => !isOwnRound(b, r)) ? "matchDay.online.needsDecision" : "matchDay.online.needsDecisionPlain");
+}
+
+/** How much of a long last word the presence mark is bound to (see `nameParts`). */
+export const RING_TAIL_MAX = 16;
+
+/** A player's name in two pieces for the board row: everything before the last word, and the last word, which the presence mark is bound
+ *  to (a `whitespace-nowrap` unit) so a wrapped name never leaves its ring alone on a line. A last word longer than `RING_TAIL_MAX`
+ *  characters binds only its final `RING_TAIL_MAX`, so one very long word still wraps instead of widening the row. Code points, not UTF-16
+ *  units, so an emoji is never cut in half; trailing space is not part of the name. */
+export function nameParts(name: string): { head: string; tail: string } {
+  const cps = Array.from(name.trimEnd());
+  let start = cps.length;
+  while (start > 0 && !/\s/u.test(cps[start - 1]!)) start--;
+  if (cps.length - start > RING_TAIL_MAX) start = cps.length - RING_TAIL_MAX;
+  return { head: cps.slice(0, start).join(""), tail: cps.slice(start).join("") };
 }
 
 /** What the round row says on the right: a main line, and a quieter one under it (check-in: "closes 19:58" over "9 of 12 here"). Null
