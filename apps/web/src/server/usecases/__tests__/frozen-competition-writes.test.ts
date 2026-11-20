@@ -28,7 +28,9 @@ import { stubOutboxEnv } from "./_invite-mail";
 
 // The AI preview's own doors before the freeze: its PostHog flag (fail-open, but never a live call from a test) — and the model,
 // present only to prove it is never reached (a preview that got past the freeze would spend a credit).
-vi.mock("@/lib/posthog-server", () => ({ isServerFeatureEnabled: async () => true, captureServer: () => {} }));
+// `flag.answer` is what every flag asks answer: on, except in the one block that puts online chess OFF for a club (`flagOff` below).
+const flag = vi.hoisted(() => ({ answer: true }));
+vi.mock("@/lib/posthog-server", () => ({ isServerFeatureEnabled: async () => flag.answer, captureServer: () => {} }));
 vi.mock("@anthropic-ai/sdk", () => ({
   default: class Anthropic {
     messages = {
@@ -58,11 +60,11 @@ beforeEach(() => {
 
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { PaymentRequiredError } from "@/lib/errors";
+import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { CreateStage } from "@/server/api-v1/schemas";
 import { seedBracket, type SeededBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { applyCompetitionSchedule } from "../competition-schedule-apply";
-import { createCompetition, patchCompetition } from "../competitions";
+import { patchCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { frozenCompetitionIds } from "../entitlement-freeze";
@@ -77,10 +79,12 @@ import { extendCheckin, extendRoundCheckin } from "../external-play/checkin-exte
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { resendExternalPlayNotice } from "../external-play/invite";
 import { openRound } from "../external-play/open-round";
+import { forgetOnlineChessFlagCache, onlineChessOffered } from "../external-play/online-chess-flag";
 import { resolveExternalPlay } from "../external-play/resolve";
 import { holdForOrganiser } from "../external-play/result";
 import { chessSeatRef } from "../external-play/seat-stamp";
-import { seedLinkedPair, seedOnlineChessRound, type SeedOnlineChessRoundResult } from "./_external-play-seed";
+import { seedOnlineChessRound, type SeedOnlineChessRoundResult } from "./_external-play-seed";
+import { seedSecondOnlineRound } from "./_second-online-round-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -400,26 +404,7 @@ describe.skipIf(!HAS_DB)("Match Day O4 — an online round's START writes obey t
   it("the freeze is per COMPETITION: while one competition of the org is frozen, another competition of the same org still opens its round", async () => {
     const a = await seedOnlineChessRound({ fixtures: 1 });
     // A second competition of the SAME org, with an online division and a started round of its own, built before any limit applies.
-    const competition = await createCompetition(a.owner, {
-      name: "Second Cup",
-      visibility: "public",
-      branding: {},
-      starts_on: "2026-10-01",
-      ends_on: "2026-10-02",
-    });
-    const division = await createDivision(a.owner, competition.id, {
-      name: "Open",
-      slug: "open-" + randomUUID().slice(0, 8),
-      sport_key: "boardgame",
-      variant_key: "classical",
-      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 900, increment: 10 } },
-    });
-    const pair = await seedLinkedPair(a.owner, division.id);
-    const [stage] = await createStages(a.owner, division.id, { seq: 1, kind: "league", name: "RR", config: {} });
-    await sql`
-      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id, scheduled_at)
-      values (${stage!.id}, ${division.id}, ${a.orgId}, 1, 1, ${"o4-" + randomUUID().slice(0, 8)}, 'scheduled', ${pair.home.entrantId}, ${pair.away.entrantId}, ${OPEN_AT})`;
-    await startDivision(a.owner, division.id);
+    const second = await seedSecondOnlineRound(a, { scheduledAt: OPEN_AT });
 
     // One active competition too many: the OLDEST (a's, which nothing has scored in) is the one frozen, b's is not.
     await setLimit(a.orgId, 1);
@@ -432,9 +417,93 @@ describe.skipIf(!HAS_DB)("Match Day O4 — an online round's START writes obey t
     expect(isFreeze(frozen), String(frozen)).toBe(true);
     expect(await sql`select 1 from stage_round_opens where stage_id = ${a.stageId}`, "the frozen competition's round was not opened").toHaveLength(0);
 
-    const other = await openRound({ stageId: stage!.id, roundNo: 1, actorUserId: a.ownerUserId }, { now: OPEN_AT });
+    const other = await openRound({ stageId: second.stageId, roundNo: 1, actorUserId: a.ownerUserId }, { now: OPEN_AT });
     expect(other, "the competition that is not frozen opens as ever").toEqual({ opened: true, invited: 2, retrying: 0, skipped: [] });
-    expect(await sql`select 1 from stage_round_opens where stage_id = ${stage!.id}`).toHaveLength(1);
+    expect(await sql`select 1 from stage_round_opens where stage_id = ${second.stageId}`).toHaveLength(1);
+  }, 120_000);
+});
+
+describe.skipIf(!HAS_DB)("Match Day O4 — where the freeze's 402 sits in each START write's order: after the club's flag and the caller's own refusals, before the round-state 409s", () => {
+  const siteOf = (name: string): StartSite => {
+    const found = START_SITES.filter((s) => s.site.endsWith(`#${name}`));
+    expect(found, `the START site ${name} is in the table exactly once`).toHaveLength(1);
+    return found[0]!;
+  };
+  /** What the call threw, or an Error naming that it was accepted. */
+  const outcomeOf = (attempt: () => Promise<unknown>): Promise<unknown> =>
+    attempt().then(
+      () => new Error("accepted"),
+      (e: unknown) => e,
+    );
+  const isRefusal = (e: unknown, status: number, code: string): boolean => e instanceof HttpError && e.status === status && e.code === code;
+
+  /** Run `fn` with online chess NOT offered to the club: no `ONLINE_CHESS_ALWAYS` override, no kept answer, and the PostHog flag answering off. */
+  async function flagOff<T>(orgId: string, fn: () => Promise<T>): Promise<T> {
+    vi.stubEnv("ONLINE_CHESS_ALWAYS", undefined);
+    flag.answer = false;
+    forgetOnlineChessFlagCache();
+    try {
+      expect(await onlineChessOffered({ orgId, userId: null }), "premise: online chess is not offered to this club").toBe(false);
+      return await fn();
+    } finally {
+      flag.answer = true;
+      vi.unstubAllEnvs();
+      stubOutboxEnv();
+      forgetOnlineChessFlagCache();
+    }
+  }
+
+  it("a frozen competition whose club is not offered online chess: an open and a resend answer 403 ONLINE_CHESS_DISABLED (a stranger to the club's billing learns nothing of it), and write nothing; with the flag on the same call is the freeze's 402", async () => {
+    let driven = 0;
+    for (const s of [siteOf("openRound"), siteOf("resendExternalPlayNotice")]) {
+      const r = await s.arrange();
+      await freeze(r);
+      const start = await startRows(r);
+
+      const off = await flagOff(r.orgId, () => outcomeOf(() => s.attempt(r)));
+      expect(isRefusal(off, 403, "ONLINE_CHESS_DISABLED"), `${s.site}: flag off + frozen is the flag's refusal, got ${String(off)}`).toBe(true);
+      expect(isFreeze(off), `${s.site}: and not the freeze's`).toBe(false);
+      expect(await startRows(r), `${s.site}: nothing written`).toEqual(start);
+
+      // the positive pair: the flag on, the competition still frozen - now it is the freeze's 402
+      const on = await outcomeOf(() => s.attempt(r));
+      expect(isFreeze(on), `${s.site}: flag on + frozen is the freeze's 402, got ${String(on)}`).toBe(true);
+      driven++;
+    }
+    expect(driven, "anti-vacuity: the two sites that ask the flag").toBe(2);
+  }, 120_000);
+
+  it("a frozen competition whose round is NOT opened: a resend, a +5 on a board and a +5 to the round answer the freeze's 402, not 409 ROUND_NOT_OPEN (unfrozen, the same call IS that 409), and write nothing", async () => {
+    let driven = 0;
+    for (const s of [siteOf("resendExternalPlayNotice"), siteOf("extendCheckin"), siteOf("extendRoundCheckin")]) {
+      const r = await seedOnlineChessRound({ fixtures: 1 }); // never opened
+      expect([...(await frozenCompetitionIds(r.orgId))], `${s.site}: premise, nothing frozen`).toEqual([]);
+
+      const unfrozen = await outcomeOf(() => s.attempt(r));
+      expect(isRefusal(unfrozen, 409, "ROUND_NOT_OPEN"), `${s.site}: premise, unfrozen the unopened round is the 409, got ${String(unfrozen)}`).toBe(true);
+
+      await freeze(r);
+      const start = await startRows(r);
+      const frozen = await outcomeOf(() => s.attempt(r));
+      expect(isFreeze(frozen), `${s.site}: frozen outranks the round's state, got ${String(frozen)}`).toBe(true);
+      expect(await startRows(r), `${s.site}: nothing written`).toEqual(start);
+      driven++;
+    }
+    expect(driven, "anti-vacuity: the three sites with a round-state 409").toBe(3);
+  }, 120_000);
+
+  it("a frozen competition, an organiser who plays on the board: +5 on that board is 403 ARBITER_PLAYS_THIS_BOARD (the caller's own refusal), not the freeze's 402", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    const fixtureId = r.boards[0]!.fixtureId;
+    const player = { ...r.owner, userId: r.boards[0]!.home.userId } as typeof r.owner;
+    const attempt = () => extendCheckin(player, fixtureId, { now: () => PRESS_AT, publish: quiet });
+
+    const unfrozen = await outcomeOf(attempt);
+    expect(isRefusal(unfrozen, 403, "ARBITER_PLAYS_THIS_BOARD"), `premise: unfrozen it is the caller's refusal, got ${String(unfrozen)}`).toBe(true);
+    await freeze(r);
+    const frozen = await outcomeOf(attempt);
+    expect(isRefusal(frozen, 403, "ARBITER_PLAYS_THIS_BOARD"), `frozen: still the caller's refusal, got ${String(frozen)}`).toBe(true);
+    expect(isFreeze(frozen)).toBe(false);
   }, 120_000);
 });
 

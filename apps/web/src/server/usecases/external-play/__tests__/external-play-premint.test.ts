@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { isSwissByeShellExtKey, SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN } from "@/lib/swiss-shell";
 import { ROUND_WINDOW_TAIL_MS } from "@/server/external-play/window";
@@ -25,6 +26,7 @@ import { effectivePolicy, type CameraPolicy } from "@/server/external-play/camer
 import { endMeeting, ensureMeeting } from "@/server/external-play/video/realtimekit";
 import { REALTIMEKIT_FIXTURE_ENV, startRealtimeKitFixtureServer, type RealtimeKitFixtureServer } from "../../../../../e2e/realtimekit-fixture-server";
 import { unpairSwissRound } from "../../stages";
+import { frozenCompetitionIds } from "../../entitlement-freeze";
 import { openRound } from "../open-round";
 import { seatPlayer } from "../preflight";
 import {
@@ -48,6 +50,7 @@ import {
   type SeedOnlineChessRoundOpts,
   type SeedOnlineChessRoundResult,
 } from "../../__tests__/_external-play-seed";
+import { seedSecondOnlineRound } from "../../__tests__/_second-online-round-seed";
 
 const DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
@@ -174,8 +177,8 @@ describe.skipIf(!DB)("premint candidates (the set)", () => {
     await unseat(ids(r));
     const rows = await rowsOf([r.orgId]);
     expect(rows).toEqual([
-      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, side: "away" },
-      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, side: "home" },
+      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, competitionId: r.competitionId, side: "away" },
+      { fixtureId: r.boards[0]!.fixtureId, orgId: r.orgId, competitionId: r.competitionId, side: "home" },
     ]);
   });
 
@@ -1020,4 +1023,62 @@ describe.skipIf(!DB)("premint (Task 8)", () => {
     expect(roomsB.map((m) => m.meeting_id), "its row is gone and a fresh room stands").not.toContain(stale.meetingId);
     expect(roomsB.map((m) => m.side)).toEqual(["away"]);
   });
+});
+
+// ─── Match Day O4, ruling MD-R16 (2026-11-20): a billing-frozen competition's unopened round is not pre-minted ───────────────────
+// A frozen competition cannot open a round (402, open-round.ts), so a room made for it is vendor spend on a round that cannot start. The pass
+// asks `frozenCompetitionIds` once per org and defers a frozen competition's rows - NOT a `frozen_at` predicate in the candidate SQL, because the
+// mark is stored lazily (the first read that finds the org over its limit chooses and stores it). The deferred rows keep their place: they stay
+// candidates (the sweep's teardown must not end the rooms already made for them), and the first pass after the freeze lifts makes them.
+describe.skipIf(!DB)("premint pass - a billing-frozen competition's unopened round (MD-R16)", () => {
+  /** Pin the org's `competitions.max_active` (the override the freeze sweeps use): a limit under the org's active count freezes the overflow. */
+  async function setLimit(orgId: string, limit: number): Promise<void> {
+    await sql`
+      insert into org_entitlement_overrides (org_id, feature_key, int_value)
+      values (${orgId}, 'competitions.max_active', ${limit})
+      on conflict (org_id, feature_key) do update set int_value = ${limit}, bool_value = null`;
+    await invalidateOrgEntitlements(orgId);
+  }
+  /** The create titles a pass makes for these boards: one per (board, side), the product's own naming (`seazn-fixture-<board>-<side>`). */
+  const titles = (fixtureIds: string[]) => bothSides(fixtureIds).map((k) => titleFor({ fixtureId: k.split("/")[0]!, side: k.split("/")[1] as "home" | "away" })).sort();
+
+  it("a frozen competition's rows are deferred while the same org's other competition and another org are made in the SAME pass; a second pass makes nothing more; once the freeze lifts the next pass makes them", async () => {
+    const a = await seedRound(1); // the OLDER competition of its org: the one a limit of 1 freezes
+    const b = await seedSecondOnlineRound(a, { scheduledAt: new Date("2026-10-01T12:00:00.000Z"), cameraPolicy: "optional" });
+    const other = await seedRound(1); // another org, nothing frozen there
+    const aIds = ids(a);
+    const bIds = b.boards.map((x) => x.fixtureId);
+    const otherIds = ids(other);
+    const orgs = [a.orgId, other.orgId];
+
+    // premise: three boards, both sides each, all candidates before anything is frozen (so "deferred" below is the freeze's doing)
+    expect(keysOf(await rowsOf(orgs)).sort(), "premise: all three boards are candidates").toEqual(bothSides([...aIds, ...bIds, ...otherIds]).sort());
+    expect(await frozenCompetitionIds(a.orgId), "premise: nothing is frozen yet").toEqual(new Set());
+
+    await setLimit(a.orgId, 1);
+    expect([...(await frozenCompetitionIds(a.orgId))], "premise: exactly the older competition is frozen").toEqual([a.competitionId]);
+    expect(await frozenCompetitionIds(other.orgId), "premise: the other org has nothing frozen").toEqual(new Set());
+
+    // the pass: a's two rows are deferred, the other four are made - one create per (board, side)
+    const report = await run(orgs);
+    expect(report).toEqual({ skipped: 0, disabled: 0, scanned: 6, roomsMade: 4, deferred: 2, failed: 0, windowsOpen: 0, failures: [] });
+    expect(createsFor(aIds), "the frozen competition: no vendor call").toEqual([]);
+    expect(await roomsOf(aIds), "the frozen competition: no room on file").toEqual([]);
+    expect(createsFor(bIds).sort(), "the same org's other competition: made").toEqual(titles(bIds));
+    expect(createsFor(otherIds).sort(), "the other org: made").toEqual(titles(otherIds));
+    expect(await roomsOf(bIds), "b's rooms are on file").toHaveLength(2);
+
+    // the SEQUENCE: still frozen, a second pass - the rows are still candidates, still deferred, and the vendor is still not asked
+    const mark = fx.calls.length;
+    expect(keysOf(await rowsOf(orgs)).sort(), "the deferred rows keep their place: still candidates").toEqual(bothSides(aIds).sort());
+    expect(await run(orgs), "a second frozen pass").toMatchObject({ scanned: 2, roomsMade: 0, deferred: 2, failed: 0 });
+    expect(fx.calls.length, "and it makes no vendor call at all").toBe(mark);
+
+    // the freeze lifts: the next pass makes them
+    await setLimit(a.orgId, 50);
+    expect(await frozenCompetitionIds(a.orgId), "premise: the freeze has lifted").toEqual(new Set());
+    expect(await run(orgs), "the pass after the thaw").toMatchObject({ scanned: 2, roomsMade: 2, deferred: 0, failed: 0 });
+    expect(createsFor(aIds).sort(), "the thawed competition's rooms are made").toEqual(titles(aIds));
+    expect(await roomsOf(aIds)).toHaveLength(2);
+  }, 120_000);
 });
