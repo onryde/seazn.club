@@ -32,7 +32,7 @@ A post for the **Whole organisation** is public. A post for one competition foll
 A division can write drafts for you. Open the division's **Settings** tab and find **News auto-drafts**. It reads **Draft a news post automatically when a result lands or a round completes.** Switch **Draft a news post when results land** on. The setting is Off until you change it.
 
 - A scored match gets an **Auto** draft headed with the score, for example **Amber Ward 3–1 Dunmore Park**.
-- A finished round gets a recap, for example **Round 1 recap: Singles League**, with **Results**, **Standings** and **Biggest result**.
+- A finished round gets a recap, for example **Round 1 recap: Singles League**, with **Results**, and **Standings**, **Biggest result** and **Leaders** when there is something to show.
 - A draft waits under **Drafts** until you publish it. Nothing publishes by itself.
 - Void or re-decide a match and its draft carries a **Result changed** chip. The words are not rewritten. Read the draft and fix it before you publish.
 

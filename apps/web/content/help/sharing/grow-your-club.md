@@ -13,9 +13,9 @@ Your public pages carry sharing buttons. A division page has **Share on WhatsApp
 
 ## The Powered by line
 
-Your public pages, your news feed and your embeds end with a small line: **Powered by Seazn Club · Run your own free →**. The link goes to the free sign-up. Everyone who opens a page of yours sees it.
+Your organisation page, your news feed and your match pages end with a small line: **Powered by Seazn Club · Run your own free →**. An embed shows **Run your own free →** only, and the **Present** board shows none. The link goes to the free sign-up.
 
-A Community organisation and a Pro organisation both keep the line. Removing it is part of Enterprise. See [plans at a glance](/help/billing/plans) and [Pricing](/pricing).
+A Community organisation and a Pro organisation both keep the line. Removing it, from those pages and from the embed, is part of Enterprise. See [plans at a glance](/help/billing/plans) and [Pricing](/pricing).
 
 ## Showcase on seazn.club
 

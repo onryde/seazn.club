@@ -14,7 +14,7 @@ Every deal with a payment has an invoice. The sponsor opens it from a link, with
 The invoice page shows:
 
 - **From** the club, **Invoice** with its **Number** and **Date**, and **Billed to** the sponsor.
-- A stamp for its state: **Paid**, **Unpaid**, **Refunded**, **Cancelled**, **Written off** or **Ended**.
+- A stamp for its state: **Paid**, **Unpaid**, **Refunded**, **Cancelled**, **Written off** or **Ended**. **Write off** on a deal, for money you will not collect, gives the **Written off** stamp.
 - A **Description** line and the **Amount**, then the **Total**.
 - **What's included**: the **Tier**, the **Competitions**, **Where you show** (**The club's public pages**) and **On the live stream** (**Yes** or **No**).
 - **Download PDF** and **Print** buttons.
@@ -29,11 +29,9 @@ An online invoice has a **Pay by card** button. The sponsor pays on Stripe's sec
 
 ## Send it, and send it again
 
-A new deal makes its invoice at once. Nothing reaches the sponsor until you select **Send invoice** on the deal's row or page. **Resend invoice** sends it again.
+A new deal makes its invoice at once. For an **Online invoice** deal the button is **Send invoice**, and the invoice is emailed when you select it. If Stripe does not answer, the deal is saved as a draft, or as live with its payment pending, and **Send invoice** on its row or page tries again. For an offline deal nothing reaches the sponsor until you select **Send invoice** on its row or page. **Resend invoice** sends it again.
 
 Each send makes a new link. The old link stops opening and shows **This invoice link doesn't open anything**, with the line **It may be mistyped, or the club has sent a newer one. Ask the club for the latest link.** Ending a deal that is not yet paid also stops its payment link.
-
-A second invoice for the same package asks **Send a second invoice?** first. A link already sent stays payable, so the sponsor could pay twice.
 
 ## Numbers
 

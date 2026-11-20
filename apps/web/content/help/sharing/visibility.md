@@ -29,11 +29,11 @@ The choice applies alike to the competition page, its division pages, the **Pres
 
 ## Changing it later
 
-You can go public later, and back. Switch a competition to **Private** and its public pages return a not-found page at once. An embed on another website can keep showing for up to a minute, because its copy is cached. Switch **Private** back to **Link only** and the pages open again.
+You can go public later, and back. Switch a competition to **Private** and its public pages return a not-found page at once. An embed on another website can keep showing for up to a minute. Switch **Private** back to **Link only** and the pages open again.
 
 ## Plan limit on public competitions
 
-A plan limits how many competitions can be **Public** or **Link only** at once. On Community the limit is {{plan:dashboard.public.max:community}}. On Pro it is {{plan:dashboard.public.max:pro}}. When your plan has no slot free, a new competition is made **Private**. The form reads **This one will be created private** and **Created as private for now: your plan has no public or link-only slot free.** Make room by switching another one to **Private**.
+A plan limits how many competitions can be **Public** or **Link only** at once. On Community the limit is {{plan:dashboard.public.max:community}}. On Pro it is {{plan:dashboard.public.max:pro}}. Only competitions that are live and not yet passed count. When your plan has no slot free, a new competition is made **Private**. Switching an existing competition to **Public** or **Link only** is refused instead, with a line such as **Your plan hosts 2 public dashboards at a time — archive a finished one, or upgrade.** For a new one the form reads **This one will be created private** and **Created as private for now: your plan has no public or link-only slot free.** Make room by switching another one to **Private**.
 
 ## Youth divisions
 

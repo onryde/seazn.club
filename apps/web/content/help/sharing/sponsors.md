@@ -30,7 +30,7 @@ On a Pro organisation, a competition's public page shows:
 
 The page for a single match shows the same sponsors block.
 
-On a Community organisation the page shows one **Sponsors** strip with every sponsor, with no tiers.
+On a Community organisation the page shows one **Sponsors** strip with every sponsor, with no tiers. An [Event Pass](/help/billing/event-pass) competition is tiered too.
 
 Sponsors do not show on a division's page, on your organisation's public page, on the **Present** board or on the registration page. On the slideshow you open from your console, a **Sponsors** strip stays on screen under the slides. See [the TV slideshow](/help/sharing/slideshow).
 
@@ -46,7 +46,7 @@ A Title sponsor can have a poster. Select the pencil on its row, or **Edit** on 
 
 ## Clicks
 
-Each sponsor's logo on your public pages is a tracked link. A tap goes through to the sponsor's website and adds one to its count. The row reads **1 click**, or **0 clicks** before the first one. Overview on the [Sponsors hub](/help/sharing/sponsors-hub) breaks the clicks down by period.
+A sponsor with a **Link** is tracked. A tap on its logo or its name goes through to the sponsor's website and adds one to its count. A sponsor with no **Link** has no link and no count. The row reads **1 click**, or **0 clicks** before the first one. Overview on the [Sponsors hub](/help/sharing/sponsors-hub) breaks the clicks down by period.
 
 ## Take a sponsor off your pages
 
@@ -64,4 +64,4 @@ Owners and admins add, edit and archive sponsors. A Viewer sees the **Overview**
 A Community organisation can add sponsors and show them as Partners, and can use complimentary and offline deals. Gold, Silver and Title tiers, a deal for one competition and online invoices need Pro, or an Event Pass for that competition. See [plans at a glance](/help/billing/plans).
 
 > **Example**
-> You add **Quay Tyres** with a link and no logo. Its row reads **No deal** and the competition page lists it under **Partners**. You select **Add deal** and give it a Gold package straight away. The row reads **Live** and a Gold panel appears on the competition page. A visitor taps the logo and the row reads **1 click**. You select **End now**. The Gold panel goes and the sponsor comes off your pages. You select **Show on site again** and its name is back.
+> You add **Quay Tyres** with a logo and a link. Its row reads **No deal** and the competition page lists it under **Partners**. You select **Add deal** and give it a Gold package straight away. The row reads **Live** and a Gold panel appears on the competition page. A visitor taps the logo and the row reads **1 click**. You select **End now**. The Gold panel goes and the sponsor comes off your pages. You select **Show on site again** and its name is back.

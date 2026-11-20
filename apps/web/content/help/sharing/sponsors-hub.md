@@ -19,7 +19,7 @@ Adding sponsors, packages and deals have their own pages: [sponsors](/help/shari
 - **Show sponsors on the stream.** The switch turns the rotation on or off for that scope. Before you set anything the tab reads **The rotation is off. Tick a sponsor below to switch it on at Normal.**
 - **How often.** **Light** shows sponsors at the big breaks only. **Normal** reads **The big breaks, and every third small one.** **Busy** shows them at every break the sport has.
 - **Where it shows.** **Small breaks show a lower third for 8 seconds. Big breaks show a banner for 15 seconds.**
-- **Sponsors in the rotation.** Tick the sponsors that should air. On Pro, **Higher tiers take more turns.**
+- **Sponsors in the rotation.** Tick the sponsors that should air. On Pro, **Higher tiers take more turns.** A tick applies only to a sponsor with no live deal. A sponsor whose deal is live reads **Set by the live deal** and cannot be ticked here, and one that is not active reads **Not active**.
 
 A package with **Includes On stream** puts its sponsor on the stream when its deal goes live.
 
@@ -48,4 +48,4 @@ A sponsor with deals, invoices or payments on record cannot be deleted. Archive 
 - Once you have an archived sponsor, **Show archived (1)** appears above the list. **Unarchive** on the sponsor's page brings it back.
 
 > **Example**
-> You switch **Show sponsors on the stream** on for **The whole organisation** and tick **Quay Tyres**, **Ridge Physio** and **Oakfield Dental**. You leave **How often** on **Normal**. In a match, half time is a big break and a banner shows for 15 seconds. A small break takes a lower third for 8 seconds, and every third one carries a sponsor. Quay Tyres has a Gold package, so it takes 2 turns to each Partner's 1.
+> You switch **Show sponsors on the stream** on for **The whole organisation** and tick **Ridge Physio** and **Oakfield Dental**, who have no deal. **Quay Tyres** has a live Gold deal, so its row reads **Set by the live deal** and its place comes from its package's **Includes On stream**. You leave **How often** on **Normal**. Breaks differ by sport. In a football match, half time is a big break and a banner shows for 15 seconds. A small break takes a lower third for 8 seconds, and every third one carries a sponsor. Quay Tyres has a Gold package, so it takes 2 turns to each Partner's 1.

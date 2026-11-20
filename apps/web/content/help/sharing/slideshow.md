@@ -36,11 +36,11 @@ A **Sponsors** strip stays on screen under the slides. It is not a slide of its 
 
 On Pro, your organisation's brand colour tints the board. A competition's own **Brand color** takes priority. On Community the board has no colour. See [your public dashboard](/help/sharing/dashboard).
 
-The board polls for new results about every 45 seconds. With the realtime scoreboard, a score appears the moment a scorer taps it. The realtime scoreboard needs Pro, or an [Event Pass](/help/billing/event-pass) on that competition. Without it the board still cycles and still refreshes itself, so a venue screen is never blank.
+With the realtime scoreboard, a score appears the moment a scorer taps it, and the board checks again every 5 minutes as a safety net. The realtime scoreboard needs Pro, or an [Event Pass](/help/billing/event-pass) on that competition. Without it the board polls for new results about every 45 seconds, still cycles and still refreshes itself, so a venue screen is never blank.
 
-## On a phone
+## On a phone or tablet
 
-A phone shows **This board is made for a TV**, with **Open the live page** and **Show the board anyway**.
+A screen narrower than 1024 px shows **This board is made for a TV**, with **Open the live page** and **Show the board anyway**.
 
 ## Keep the TV awake
 

@@ -19,7 +19,7 @@ The board has a **Back** link, the title and a clock.
 
 ## What it shows
 
-Three slides cycle about every 9 seconds: the standings, **Latest results** and **Coming up**. Sponsors do not appear on it. On a phone the board reads **This board is made for a TV**, with **Open the live page** and **Show the board anyway**.
+Slides cycle about every 9 seconds: the standings, **Latest results** and **Coming up**, a bracket slide for a knockout stage, and **In play** while matches are live. Sponsors do not appear on it. On a screen narrower than 1024 px, a phone or a tablet, the board reads **This board is made for a TV**, with **Open the live page** and **Show the board anyway**.
 
 The board wears your public branding: on Pro your brand colour tints it. It is written in your organisation's **Public language**. See [languages](/help/sharing/languages).
 

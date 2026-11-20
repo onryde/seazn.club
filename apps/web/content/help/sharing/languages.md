@@ -17,7 +17,7 @@ Seazn Club comes in **English**, **Français**, **Español** and **Nederlands**.
 2. Under **Public language**, choose a language.
 3. Select **Save**.
 
-Everyone who opens your public pages sees them in that language: the competition page, the **Present** board, the news feed, an embed and a sponsor's invoice. A visitor who chose another language in the site footer still reads your club's pages in yours. Amounts follow the language too: an invoice for 250 reads **250,00 £GB** in French.
+Everyone who opens your public pages sees them in that language: the competition page, the **Present** board, the news feed, an embed and a sponsor's invoice. A visitor who chose another language in the site footer still reads your club's pages in yours. The slideshow you open from your console is not one of them: its labels stay in English. Amounts follow the language too: an invoice for 250 reads **250,00 £GB** in French.
 
 Your own words stay as you typed them. Organisation, competition and division names, news posts and descriptions are not translated. For a bilingual event, write the names in the language your audience expects.
 
