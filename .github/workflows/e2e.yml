@@ -940,6 +940,11 @@ jobs:
       # rollout. Pinned by e2e-ci-wiring.test.ts, with the runbook recipe and ci-local.sh's e2e_env.
       EXTERNAL_PLAY_PREMINT: "1"
       EXTERNAL_PLAY_PRESENCE_PROOF: "1"
+      # Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; the flag is removed by Task 10 with the arbiter page): Match Day's online
+      # block, the per-board Needs-you rows and the board and round panels are drawn only with the server's MATCH_DAY_ONLINE exactly "1".
+      # competition-desk-actions.spec.ts walks the two per-board rows to their destination, so the server it runs on carries the flag. Pinned by
+      # e2e-ci-wiring.test.ts, with the runbook recipe and ci-local.sh's e2e_env; e2e-serial leaves it OFF, as production does until Task 10.
+      MATCH_DAY_ONLINE: "1"
 
     steps:
       - uses: actions/checkout@v5
@@ -2103,6 +2108,9 @@ jobs:
       # reading lichess.org unauthenticated. Video stays unconfigured here (no
       # REALTIMEKIT_* credentials ⇒ no call). Pinned by e2e-ci-wiring.test.ts.
       LICHESS_BASE_URL: "http://127.0.0.1:4321"
+      # Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; removed with the flag by Task 10): mobile/match-surfaces.spec.ts's online
+      # block test needs Match Day to draw the online rows, which it does only with MATCH_DAY_ONLINE exactly "1". Pinned by e2e-ci-wiring.test.ts.
+      MATCH_DAY_ONLINE: "1"
       # CI-only dummy keypair (kid e2e-ci-dummy-es256). Previous inlined JWK
       # rotated out. Pass through every Start server / Playwright step; do
       # not introduce SUPABASE_JWT_PRIVATE_KEY.

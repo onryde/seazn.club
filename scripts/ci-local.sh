@@ -344,6 +344,9 @@ e2e_env() {
   # pre-minted round from the video fixture's call log, and a pre-mint pass answers `disabled: 1` unless the flag is exactly "1".
   export EXTERNAL_PLAY_PREMINT=1
   export EXTERNAL_PLAY_PRESENCE_PROOF=1
+  # e2e.yml's e2e-parallel and e2e-mobile also draw Match Day's online rows (Match Day online Task 6): the per-board Needs-you rows and the
+  # online block are off unless the flag is exactly "1". Removed with the flag by Task 10.
+  export MATCH_DAY_ONLINE=1
 }
 
 # ===========================================================================

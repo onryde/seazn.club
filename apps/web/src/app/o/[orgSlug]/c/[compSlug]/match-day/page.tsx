@@ -12,6 +12,8 @@ export const dynamic = "force-dynamic";
 // server refuses both with a 402. The fact is the one the competition page reads (`getCompetition(…).frozen`).
 //
 // `?court=<id>` opens that court (B4: Needs you's "Find a court" names the free court whose candidates it means).
+// `?board=<fixture id>` and `?round=<stage id>:<round no>` open an online chess board or round the same way (Match Day online, behind
+// MATCH_DAY_ONLINE until the arbiter page is gone): a value that names a listed row opens it, any other value is ignored.
 // `?venue=<id>,<id>` (or `all`) is the venue filter's choice (E2 item 5); absent, the venues with a match today.
 import { requireCompetitionPage } from "@/server/page-auth";
 import { searchOf } from "@/lib/routes";
@@ -37,6 +39,8 @@ export default async function MatchDayPage({
   const { orgSlug, compSlug } = await params;
   const query = await searchParams;
   const court = query.court;
+  const board = query.board;
+  const round = query.round;
   const venue = query.venue;
   const page = await requireCompetitionPage(orgSlug, compSlug, { tail: "/match-day", search: searchOf(query) });
   const id = page.competition.id;
@@ -81,6 +85,10 @@ export default async function MatchDayPage({
         frozen={competition.frozen === true}
         frozenNames={frozenNames}
         focusCourtId={typeof court === "string" ? court : null}
+        focusBoardId={typeof board === "string" ? board : null}
+        focusRoundKey={typeof round === "string" ? round : null}
+        // The same flag `getMatchDay` reads for `online_rounds` (Task 10 removes both with the arbiter page).
+        onlineEnabled={process.env.MATCH_DAY_ONLINE === "1"}
         venueParam={venue ?? null}
       />
     </main>

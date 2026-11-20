@@ -19,6 +19,7 @@ import {
   matchRoomPathBySql,
 } from "../helpers";
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "../match-room-kit";
+import { cancelFlaggedSql, holdNoShowSql } from "../arbiter-column-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -941,4 +942,89 @@ test("arbiter round column: below md the column leads the page; from md it is th
     `[arbiter-column ${width}px] data-phase=${phase}; ${relations.length}/${expectedRelations} layout relations held (${relations.join("; ")}); ${counts.join("; ")}; ` +
       `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length}, waiting list ${inWaiting(here!).length} vs ${inWaiting(desk!).length})`,
   );
+});
+
+// Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; owner pick: mock Option A, boards are rows; MATCH_DAY_ONLINE=1 on the
+// server, e2e.yml's e2e-mobile job and the runbook's recipe): the online block of Match Day's list at this project's REAL width. One round,
+// four boards in four states (a game on file, two held for the organiser, one cancelled with a report to review), every player a realistic
+// 43-character name (a long name is what breaks a row). Asserted: the block is the third block of the list and has one round row and a row
+// per board; nothing scrolls the page sideways or clips inside it; every row is a 44px target that is HIT-TESTED; below md a tapped board
+// opens full-screen over the list with a way back that says where it goes, from md it opens beside the list; "left the list" is the
+// shell's driven suite's, the one poll it needs cannot be waited out here. The control set of the block is the one 1280 shows.
+test("match day online block: boards are rows of the list; a row opens its panel full-screen below md and beside the list from md; no horizontal scroll; 44px rows", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(300_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const phone = width < 768;
+  const r = await seedOnlineRound(request, Array.from({ length: 8 }, () => longName()), { camera: "optional", stage: "swiss" });
+  // A Swiss stage pairs ONE round at a time: the list has this round and no other (a round-robin would list its paired later rounds too).
+  expect(r.boards.length, "premise: four boards").toBe(4);
+  const [playing, held, noShow, flagged] = r.boards as [typeof r.boards[number], typeof r.boards[number], typeof r.boards[number], typeof r.boards[number]];
+  await roundGameSql(playing, { moves: ["e2e4", "e7e5"] });
+  await roundGameSql(held, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
+  await holdNoShowSql(noShow.fixtureId);
+  await cancelFlaggedSql(r.orgId, flagged.fixtureId);
+
+  const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
+  await page.goto(matchDay, { waitUntil: "load" });
+  const block = page.getByTestId("md-online");
+  await expect(block, "the online block is on the page").toBeVisible({ timeout: 30_000 });
+  await expect(block.getByTestId("md-round-row"), "one round row").toHaveCount(1);
+  const rows = block.getByTestId("md-board-row");
+  await expect(rows, "a row for each board").toHaveCount(r.boards.length);
+  // The three blocks' order (spec §5.2): the online block is the LAST of the list column, and it is inside it.
+  await expect(page.getByTestId("md-list").getByTestId("md-online"), "the block is in the list column").toHaveCount(1);
+  const ids = await rows.evaluateAll((els) => els.map((e) => e.getAttribute("data-fixture-id")));
+  expect(new Set(ids), "each seeded board is one row, once").toEqual(new Set(r.boards.map((b) => b.fixtureId)));
+
+  // ── the default: a phone shows the LIST (nothing was opened); from md the first row of the list is focused beside it ────────────
+  if (phone) {
+    await expect(page.getByTestId("md-focus"), "a phone opens on the list").toBeHidden();
+  } else {
+    await expect(page.getByTestId("md-focus"), "from md the first row is focused beside the list").toBeVisible();
+    await expect(page.getByTestId("md-focus")).toHaveAttribute("data-online", "round");
+  }
+
+  // ── nothing scrolls sideways, nothing is clipped inside the block ────────────────────────────────────────────────────────────────
+  await expectNoHorizontalScroll(page);
+  const { clipped, scrollable } = await overflowingIn(page, '[data-testid="md-online"]', "button,li,span,p,h2,div", "the online block was not in the DOM");
+  expect(clipped, `the online block clips content at ${width}px`).toEqual([]);
+  for (const box of scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+
+  // ── every row is a 44px target, hit-tested ───────────────────────────────────────────────────────────────────────────────────────
+  await assertTapFloor(block.getByTestId("md-round-row"), "the round row");
+  for (let i = 0; i < r.boards.length; i += 1) await assertTapFloor(rows.nth(i), `board row ${i + 1}`);
+
+  // ── a tap opens THAT board ───────────────────────────────────────────────────────────────────────────────────────────────────────
+  const target = page.locator(`[data-testid="md-board-row"][data-fixture-id="${held.fixtureId}"]`);
+  await target.scrollIntoViewIfNeeded();
+  await target.click();
+  const focus = page.getByTestId("md-focus");
+  await expect(focus).toBeVisible();
+  await expect(focus).toHaveAttribute("data-online", "board");
+  await expect(focus).toHaveAttribute("data-fixture-id", held.fixtureId);
+  await expect(target).toHaveAttribute("aria-current", "true");
+  const focusScan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div", "the board panel was not in the DOM");
+  expect(focusScan.clipped, `the board panel clips content at ${width}px`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const back = page.getByTestId("md-back");
+  if (phone) {
+    // Full-screen over the list: the list is hidden, and the way back is a 44px target that says where it goes.
+    await expect(page.getByTestId("md-list"), "below md the list gives way to the panel").toBeHidden();
+    await assertTapFloor(back, "the way back");
+    // A day of online boards alone (no court, no match on none): the merged label is the one that reads "All boards".
+    await expect(back).toContainText(uiEn["matchDay.back.board"]!);
+    await back.click();
+    await expect(page.getByTestId("md-list")).toBeVisible();
+    await expect(focus, "back on the list").toBeHidden();
+  } else {
+    // From md both are on screen: the list stays beside the panel.
+    await expect(page.getByTestId("md-list"), "from md the list stays beside the panel").toBeVisible();
+  }
+
+  console.log(`[match-day online ${width}px] ${r.boards.length} board rows + 1 round row; clipped ${clipped.length}; ${phone ? "phone: full-screen panel and back" : "tablet: panel beside the list"}`);
 });
