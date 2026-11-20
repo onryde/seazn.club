@@ -28,7 +28,9 @@ import { buildOpenApiDocument } from "../openapi";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** Every `(Pro|Pro Plus) \`feature.key\`` claim in a published summary. */
+/** Every `(Pro|Pro Plus) \`feature.key\`` claim in a published summary, and every "paid plans and the Event Pass,
+ *  \`feature.key\`" one (the audit route's wording since 2026-11-19: Enterprise and both Event Pass rungs have it too, so
+ *  "Pro" alone would be false). The second shape's plan label is "Paid". */
 function planClaims(
   doc: Record<string, unknown>,
 ): { where: string; plan: string; key: string }[] {
@@ -38,11 +40,11 @@ function planClaims(
   )) {
     for (const [method, op] of Object.entries(methods)) {
       for (const m of (op.summary ?? "").matchAll(
-        /(Pro Plus|Pro) `([a-z_.]+)`/g,
+        /(Pro Plus|Pro|paid plans and the Event Pass,) `([a-z_.]+)`/g,
       )) {
         out.push({
           where: `${method.toUpperCase()} ${path}`,
-          plan: m[1],
+          plan: m[1].startsWith("paid") ? "Paid" : m[1],
           key: m[2],
         });
       }
@@ -73,6 +75,13 @@ describe.skipIf(!HAS_DB)(
       ).toBeGreaterThan(5);
     });
 
+    // The floor above is a count of claims of EITHER shape. Pin each shape on its own too, so a regex that kept matching
+    // one and lost the other cannot hide behind the total (the audit summary moved from the first shape to the second).
+    it("finds at least one claim of each shape: 'Pro `key`' and 'paid plans and the Event Pass, `key`'", () => {
+      expect(claims.filter((c) => c.plan === "Pro").length, "no 'Pro `key`' claim parsed").toBeGreaterThan(0);
+      expect(claims.filter((c) => c.plan === "Paid").length, "no 'paid plans and the Event Pass' claim parsed").toBeGreaterThan(0);
+    });
+
     it("every claimed feature key exists in the matrix", async () => {
       for (const { where, key } of claims) {
         const [row] = await sql<{ n: number }[]>`
@@ -96,6 +105,23 @@ describe.skipIf(!HAS_DB)(
           granted.has("pro"),
           `${where} bills \`${key}\` as Pro, but pro does NOT grant it — a Pro subscriber following this doc gets 402`,
         ).toBe(true);
+      }
+    });
+
+    // "Paid plans and the Event Pass" is the whole catalogue but Community: read from `plans`, never typed here.
+    it("a 'paid plans and the Event Pass' claim means community does NOT have it and every other plan DOES", async () => {
+      const plans = (await sql<{ key: string }[]>`select key from plans`).map((p) => p.key);
+      const paid = claims.filter((c) => c.plan === "Paid");
+      expect(plans.length, "anti-vacuity: the catalogue has plans").toBeGreaterThan(2);
+      expect(paid.length, "anti-vacuity: a claim of this shape is on the page").toBeGreaterThan(0);
+      for (const { where, key } of paid) {
+        const granted = await grantedOn(key);
+        expect(granted.has("community"), `${where} says paid plans, but community grants \`${key}\``).toBe(false);
+        expect(
+          plans.filter((k) => k !== "community" && !granted.has(k)),
+          `${where} says paid plans and the Event Pass, but these plans do not grant \`${key}\``,
+        ).toEqual([]);
+        expect([...granted].some((k) => k.startsWith("event_pass")), `${where}: the Event Pass rungs grant \`${key}\``).toBe(true);
       }
     });
 
