@@ -239,6 +239,8 @@ export const MatchDayOnlineRound = z.object({
   ),
   /** Boards the viewer plays on that no list shows: the row's own round's and, on the division's first row, the held boards of earlier rounds. A board only flagged in an earlier round and the viewer's own is in no count. */
   own_boards: z.number().int().nonnegative(),
+  /** The Swiss round this row's stage would pair next (the lowest round with an unseated board), the same on every row of the stage; null for any other stage and for a Swiss with every round seated. The round panel offers "Pair next round" from it once the round is over. */
+  pair_next_round: z.number().int().positive().nullable().meta({ description: "The Swiss round this row's stage would pair next (the lowest round with an unseated board), the same on every row of the stage. Null for any other kind of stage and for a Swiss with every round seated." }),
 });
 
 export const MatchDayView = z.object({

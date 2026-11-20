@@ -244,6 +244,11 @@ export interface MatchDayOnlineRound {
    *  held boards of earlier rounds the viewer plays on. A board that is only FLAGGED in an earlier round and the viewer's own is in no
    *  count at all (the flagged list gives a count, not ids): such a board is simply not shown. */
   own_boards: number;
+  /** The Swiss round this row's stage would pair next (`nextUnseatedSwissRound`, the one rule the stage rail's "Pair next round" reads): the
+   *  round the panel's "Pair next round" would seat once this round is over (owner MD-R15, 2026-11-20). Null for any other kind of stage and
+   *  for a Swiss stage with every round seated; a stage-level fact, stamped on every row of the stage by `readOnlineRounds`. Optional in the
+   *  type only, so a row built without the producer (a test fixture) reads as null - the way `hold_reason` is. */
+  pair_next_round?: number | null;
 }
 
 /** The focused board's position, from the bridge's moves (`fenAfter`): the read-only chess board's whole input. */

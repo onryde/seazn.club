@@ -28,6 +28,7 @@ import { withTenant, sql } from "@/lib/db";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { openWindowBoards } from "@/lib/round-column";
 import { latestOpenedRoundNos, onlineRoundKey, onlineRoundPhase } from "@/lib/match-day/online";
+import { nextUnseatedSwissRound } from "@/lib/swiss-shell";
 import type { MatchDayOnlineRound } from "@/lib/match-day/types";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import type { OpenRoundView } from "@/lib/open-round";
@@ -44,7 +45,7 @@ import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { listOpenRounds } from "./external-play/open-round-view";
 import { listNeedsOrganiserExternalPlay } from "./external-play/queue";
 
-type StageRow = { id: string; division_id: string; name: string; seq: number };
+type StageRow = { id: string; division_id: string; name: string; seq: number; kind: string };
 
 /** The competition's online chess rounds, after the courts in the list (`MatchDayView.online_rounds`): divisions in competition order, and
  *  inside a division its stages and rounds in play order. Empty when the competition has no online division. */
@@ -60,7 +61,7 @@ export async function readOnlineRounds(
   // The club's answer, once for the whole competition (a remote call kept 60 s, `onlineChessOffered`).
   const offered = await onlineChessOffered(auth);
   const ids = divisions.map((d) => d.id);
-  const { days, tzs, stages } = await withTenant(auth.orgId, async (tx) => {
+  const { days, tzs, stages, pairNext } = await withTenant(auth.orgId, async (tx) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const orgTz = org?.timezone ?? null;
     const days = await divisionDays(tx, orgTz, now, tx`d.id = any(${ids}::uuid[])`);
@@ -68,8 +69,17 @@ export async function readOnlineRounds(
       select division_id, tz from schedule_settings where division_id = any(${ids}::uuid[])`;
     const tzs = new Map(divisions.map((d) => [d.id, resolveVenueTz(settings.find((s) => s.division_id === d.id)?.tz ?? null, orgTz)]));
     const stages = await tx<StageRow[]>`
-      select id, division_id, name, seq from stages where division_id = any(${ids}::uuid[]) order by division_id, seq, id`;
-    return { days: new Map(days.map((x) => [x.division_id, x])), tzs, stages };
+      select id, division_id, name, seq, kind from stages where division_id = any(${ids}::uuid[]) order by division_id, seq, id`;
+    // MD-R15: the round each Swiss stage would pair next (the stage rail's own rule over the stage's fixtures), one read for every stage.
+    const swissIds = stages.filter((s) => s.kind === "swiss").map((s) => s.id);
+    const shells =
+      swissIds.length === 0
+        ? []
+        : await tx<{ stage_id: string; round_no: number; home_entrant_id: string | null; away_entrant_id: string | null; outcome: unknown; ext_key: string | null }[]>`
+            select stage_id, round_no, home_entrant_id, away_entrant_id, outcome, ext_key
+              from fixtures where stage_id = any(${swissIds}::uuid[])`;
+    const pairNext = new Map(swissIds.map((id) => [id, nextUnseatedSwissRound(shells.filter((f) => f.stage_id === id))]));
+    return { days: new Map(days.map((x) => [x.division_id, x])), tzs, stages, pairNext };
   });
   // The sealed read, once for every online division: which (stage, round) have been opened, and when.
   const opens = await roundOpensOfDivisions(sql, ids);
@@ -82,6 +92,7 @@ export async function readOnlineRounds(
         day: days.get(d.id)!,
         stages: stages.filter((s) => s.division_id === d.id),
         opens,
+        pairNext,
       }),
     ),
   );
@@ -95,6 +106,8 @@ type DivisionCtx = {
   day: DivisionDay;
   stages: readonly StageRow[];
   opens: Awaited<ReturnType<typeof roundOpensOfDivisions>>;
+  /** Each Swiss stage's next round to pair (`nextUnseatedSwissRound`); a stage of any other kind is not in it. */
+  pairNext: ReadonlyMap<string, number | null>;
 };
 
 /** The latest opened round of each of the division's stages (stage order), from the one read of every open. "Latest" is
@@ -117,7 +130,7 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
     // Not started: nothing is paired to open yet. The first stage names the row; a division with no stage has nothing to name.
     const first = ctx.stages[0];
     if (first === undefined) return [];
-    return [{ ...common, ...rowShell(first, 1), multi_stage: false, phase: "not_started", view: null, round: null, needs_decision: [], own_boards: 0 }];
+    return [{ ...common, ...rowShell(first, 1, ctx.pairNext), multi_stage: false, phase: "not_started", view: null, round: null, needs_decision: [], own_boards: 0 }];
   }
 
   // O2: the held and flagged boards come from the two listers, read beside the rest.
@@ -152,7 +165,7 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
     roundNo: o.roundNo,
     row: {
       ...common,
-      ...rowShell(o.stage, o.roundNo),
+      ...rowShell(o.stage, o.roundNo, ctx.pairNext),
       multi_stage: false,
       phase: onlineRoundPhase({ view: o.view, round: o.round, phase: "playing" }, null),
       view: o.view,
@@ -169,7 +182,7 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
     rows.push({
       stage,
       roundNo: v.roundNo,
-      row: { ...common, ...rowShell(stage, v.roundNo), multi_stage: false, phase: "before", view: v, round: null, needs_decision: [], own_boards: 0 },
+      row: { ...common, ...rowShell(stage, v.roundNo, ctx.pairNext), multi_stage: false, phase: "before", view: v, round: null, needs_decision: [], own_boards: 0 },
     });
   }
   rows.sort((a, b) => a.stage.seq - b.stage.seq || a.roundNo - b.roundNo);
@@ -198,11 +211,13 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
   return out.map((r) => ({ ...r, multi_stage: multi }));
 }
 
-const rowShell = (stage: StageRow, roundNo: number) => ({
+const rowShell = (stage: StageRow, roundNo: number, pairNext: ReadonlyMap<string, number | null>) => ({
   key: onlineRoundKey(stage.id, roundNo),
   stage_id: stage.id,
   stage_name: stage.name,
   round_no: roundNo,
+  /** MD-R15: the stage's own fact (the same on every row of it), null for any stage that is not a Swiss with a round still to pair. */
+  pair_next_round: pairNext.get(stage.id) ?? null,
 });
 
 /** A board of either list with its hold reason: the held lister's own word for a board that IS on hold, null for any other. The lister
