@@ -999,6 +999,29 @@ test("match day online block: boards are rows of the list; a row opens its panel
   await assertTapFloor(block.getByTestId("md-round-row"), "the round row");
   for (let i = 0; i < r.boards.length; i += 1) await assertTapFloor(rows.nth(i), `board row ${i + 1}`);
 
+  // ── a presence ring never stands alone on a line (controller finding V1): each ring is on the line of the LAST client rect of its name's last
+  // word. The 43-character names wrap at every phone width; before the fix the ring wrapped onto a line of its own. Read while the list is on screen.
+  const rings = await page.evaluate(() => {
+    const out: { name: string; ringTop: number; ringBottom: number; lastTop: number; lastBottom: number }[] = [];
+    for (const mark of document.querySelectorAll('[data-testid="md-online"] [data-testid="md-presence"]')) {
+      const tail = mark.previousElementSibling; // the name's last word, in the same nowrap unit as the ring
+      if (!(tail instanceof HTMLElement) || !tail.hasAttribute("data-md-name-tail")) { out.push({ name: "NO-TAIL", ringTop: 0, ringBottom: 0, lastTop: 1, lastBottom: 1 }); continue; }
+      const range = document.createRange();
+      range.selectNodeContents(tail);
+      const rects = [...range.getClientRects()];
+      const last = rects[rects.length - 1];
+      const ring = mark.getBoundingClientRect();
+      out.push({ name: tail.textContent ?? "", ringTop: ring.top, ringBottom: ring.bottom, lastTop: last?.top ?? NaN, lastBottom: last?.bottom ?? NaN });
+    }
+    return out;
+  });
+  expect(rings.length, "anti-vacuity: the seeded round draws presence rings (4 boards x 2 seats)").toBeGreaterThan(0);
+  for (const g of rings) {
+    expect(g.name, "every ring follows its name's last word").not.toBe("NO-TAIL");
+    expect(g.ringTop, `ring of "${g.name}" is above its word's last line`).toBeGreaterThanOrEqual(g.lastTop - 1);
+    expect(g.ringBottom, `ring of "${g.name}" stands alone below its word's last line`).toBeLessThanOrEqual(g.lastBottom + 1);
+  }
+
   // ── a tap opens THAT board ───────────────────────────────────────────────────────────────────────────────────────────────────────
   const target = page.locator(`[data-testid="md-board-row"][data-fixture-id="${held.fixtureId}"]`);
   await target.scrollIntoViewIfNeeded();
@@ -1016,8 +1039,8 @@ test("match day online block: boards are rows of the list; a row opens its panel
     // Full-screen over the list: the list is hidden, and the way back is a 44px target that says where it goes.
     await expect(page.getByTestId("md-list"), "below md the list gives way to the panel").toBeHidden();
     await assertTapFloor(back, "the way back");
-    // A day of online boards alone (no court, no match on none): the merged label is the one that reads "All boards".
-    await expect(back).toContainText(uiEn["matchDay.back.board"]!);
+    // Ruling MD-R27: a board is not a court, so a round or board panel's way back reads "Back to the list" on every day (this one has no court).
+    await expect(back).toContainText(uiEn["matchDay.back.list"]!);
     await back.click();
     await expect(page.getByTestId("md-list")).toBeVisible();
     await expect(focus, "back on the list").toBeHidden();
@@ -1026,5 +1049,5 @@ test("match day online block: boards are rows of the list; a row opens its panel
     await expect(page.getByTestId("md-list"), "from md the list stays beside the panel").toBeVisible();
   }
 
-  console.log(`[match-day online ${width}px] ${r.boards.length} board rows + 1 round row; clipped ${clipped.length}; ${phone ? "phone: full-screen panel and back" : "tablet: panel beside the list"}`);
+  console.log(`[match-day online ${width}px] ${r.boards.length} board rows + 1 round row; ${rings.length} rings on their word's line; clipped ${clipped.length}; ${phone ? "phone: full-screen panel and back" : "tablet: panel beside the list"}`);
 });

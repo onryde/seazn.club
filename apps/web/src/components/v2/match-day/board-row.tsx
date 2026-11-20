@@ -6,7 +6,7 @@
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { boardRowWord, presenceMark, type PresenceMark } from "@/lib/match-day/online";
-import { boardLabel, boardWord, presenceText } from "@/lib/match-day/online-copy";
+import { boardLabel, boardWord, nameParts, presenceText } from "@/lib/match-day/online-copy";
 import type { MatchDayBoardRow, MatchDayRound } from "@/lib/match-day/types";
 import { MatchRoundChip } from "./round-chip";
 import { WORD_TONE } from "./online-tone";
@@ -35,6 +35,24 @@ function Mark({ mark, dict }: { mark: PresenceMark; dict: Dict }) {
   return (
     <span data-testid="md-presence" data-mark={mark} title={text} className={`mx-1 inline-block h-[7px] w-[7px] align-middle ${MARK[mark]}`}>
       <span className="sr-only">{text}</span>
+    </span>
+  );
+}
+
+/** A player's name and the presence mark that follows it. The mark is bound to the name's LAST word in a `whitespace-nowrap` unit, so when
+ *  the name wraps at 320 the ring wraps WITH its word instead of standing alone on a line (controller finding V1); the rest of the name
+ *  still wraps, as before. No mark, no unit: the name is plain text. */
+function Seat({ name, mark, dict, seat }: { name: string; mark: PresenceMark; dict: Dict; seat: "white" | "black" }) {
+  const { head, tail } = nameParts(name);
+  const attr = seat === "white" ? { "data-md-board-white": "" } : { "data-md-board-black": "" };
+  if (mark === null) return <span {...attr}>{name}</span>;
+  return (
+    <span {...attr}>
+      {head}
+      <span className="whitespace-nowrap">
+        <span data-md-name-tail>{tail}</span>
+        <Mark mark={mark} dict={dict} />
+      </span>
     </span>
   );
 }
@@ -78,11 +96,9 @@ export function BoardRow({
             <span className="min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">{boardLabel(dict, board)}</span>
           </span>
           <span className="block min-w-0 text-xs text-slate-600 [overflow-wrap:anywhere]">
-            <span data-md-board-white>{board.white.name}</span>
-            <Mark mark={presenceMark(board, board.whiteSide)} dict={dict} />
+            <Seat name={board.white.name} mark={presenceMark(board, board.whiteSide)} dict={dict} seat="white" />
             {` ${t(dict, "matchDay.online.versus")} `}
-            <span data-md-board-black>{board.black.name}</span>
-            <Mark mark={presenceMark(board, blackSide)} dict={dict} />
+            <Seat name={board.black.name} mark={presenceMark(board, blackSide)} dict={dict} seat="black" />
           </span>
         </span>
         <span className="max-w-[9rem] shrink-0 text-right">

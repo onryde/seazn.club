@@ -295,12 +295,25 @@ describe("the phone's way back says where it goes", () => {
     return text(html.slice(at, html.indexOf("</button>", at))).replace(/^‹\s*/, "");
   };
 
-  it("with courts on the page it is the courts' own word; boards alone, 'All boards'; a match on no court beside them, 'Back to the list'", () => {
+  it("a round or a board says 'Back to the list' on EVERY kind of day (ruling MD-R27); a court's own panel keeps the courts' word", () => {
     const r = checkinRound("stage-1:3");
-    expect(backOf(open(onlineView([r], { courts: [court("c-1", "Court 1")] })))).toBe(t(dict, "matchDay.back.court"));
-    expect(backOf(open(onlineView([r])))).toBe(t(dict, "matchDay.back.board"));
-    expect(backOf(open(onlineView([r], { playing_no_court: [match("m-1")] })))).toBe(t(dict, "matchDay.back.list"));
-    expect(t(dict, "matchDay.back.board")).toBe("All boards");
+    const days = {
+      "courts beside the round": onlineView([r], { courts: [court("c-1", "Court 1")] }),
+      "boards alone": onlineView([r]),
+      "a match on no court beside the round": onlineView([r], { playing_no_court: [match("m-1")] }),
+    };
+    expect(Object.keys(days).length, "anti-vacuity: three kinds of day").toBe(3);
+    for (const [kind, v] of Object.entries(days)) {
+      expect(backOf(open(v)), `${kind}: the round's back`).toBe(t(dict, "matchDay.back.list"));
+      // A board in focus reads the same (`?board=` of a listed board).
+      const board = v.online_rounds[0]!.round!.boards[0]!;
+      expect(backOf(shell(v, { ...on, focusBoardId: board.fixtureId })), `${kind}: the board's back`).toBe(t(dict, "matchDay.back.list"));
+    }
+    expect(t(dict, "matchDay.back.list")).toBe("Back to the list");
+    // The positive pair: the court's own panel, on the same day, still says the courts' word.
+    const withCourt = onlineView([r], { courts: [court("c-1", "Court 1")] });
+    expect(backOf(shell(withCourt, on))).toBe(t(dict, "matchDay.back.court"));
+    expect(t(dict, "matchDay.back.court")).toBe("All courts");
   });
 });
 

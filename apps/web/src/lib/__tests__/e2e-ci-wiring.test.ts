@@ -2104,6 +2104,12 @@ describe("the online-chess fixture servers' wiring", () => {
     const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
     expect(runbook, "docs/runbooks/e2e-local.md's server recipe").toMatch(new RegExp(`^${K}=1 \\\\$`, "m"));
     expect(runbook, "docs/runbooks/e2e-local.md's var table names it").toContain(`\`${K}=1\``);
+    // The recipe also carries what the online specs' seeds need beside it (a server started from the recipe alone must run them): the online
+    // chess override, and the court-stream build floor match-day.spec.ts links on (the same value e2e.yml's Start server sets).
+    expect(runbook, "the recipe's ONLINE_CHESS_ALWAYS").toMatch(/^ONLINE_CHESS_ALWAYS=1 \\$/m);
+    expect(runbook, "the recipe's COURT_MIN_APP_VERSION").toMatch(/^COURT_MIN_APP_VERSION=\d+\.\d+\.\d+-\d+ \\$/m);
+    expect(runbook, "the var table names ONLINE_CHESS_ALWAYS").toContain("| `ONLINE_CHESS_ALWAYS=1` |");
+    expect(runbook, "the var table names COURT_MIN_APP_VERSION").toContain("| `COURT_MIN_APP_VERSION=");
     expect(body, "ci-local.sh's e2e_env").toMatch(new RegExp(`^\\s*export ${K}=1\\s*$`, "m"));
     let on = 0;
     for (const [name, next] of [["e2e-parallel", "e2e-serial"], ["e2e-mobile", null]] as const) {
