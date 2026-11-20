@@ -155,12 +155,20 @@ describe.skipIf(!HAS_DB)("best-Nth across unequal pools (W5 app PR B Task 4)", (
         select payload->>'policy' as policy from division_events where division_id = ${s.divId} and type = 'table_withdrawal' and payload->>'entrant_id' = ${leaver}`;
       expect(ledger?.policy, "RB5-W2: under half played, so expunged").toBe("expunge");
       expect([...(await sourceOf(s)).expunged], "both builders' source read names her").toEqual([leaver]);
-      const done = await completeStage(s.auth, s.srcId);
-      expect(done.completed).toBe(true);
       if (timing === "on_complete") {
-        expect(done.qualified!.entrants.slice(2), "B2 seated").toEqual([B[1]]);
+        // Task 5 part 3 (owed item 1): the on_complete knockout is drawn across the pools, and B2 - the best runner-up - would meet
+        // B1 in the 4-draw with no way out (RB5-D10, X-PD-4, owner 288). The refusal names pool B supplying two of the three seats:
+        // B2 is the runner-up the engine chose, read by the draw's own rule.
+        const err = await completeStage(s.auth, s.srcId).then(
+          () => null,
+          (e: unknown) => e as { code?: string; extra?: Record<string, unknown> },
+        );
+        expect(err?.code, "completed, but the seeding is refused by name").toBe("STAGE_COMPLETED_SEEDING_FAILED");
+        expect(err?.extra, "B2 is the best runner-up: pool B supplies two seats").toMatchObject({ cause: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", pool: "B", count: 2, entrants: 3, shape: "single_elim" });
         return;
       }
+      const done = await completeStage(s.auth, s.srcId);
+      expect(done.completed).toBe(true);
       const [slot] = await bestNthSlots(s);
       expect(slot!.entrantId).toBe(B[1]);
       expect(slot!.basis, "k = 0: nothing dropped").toEqual({ nth: 2, matchesCounted: 3, dropped: [], levelWith: [] });

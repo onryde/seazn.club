@@ -191,8 +191,12 @@ describe.skipIf(!HAS_DB)("no app path reaches pool_results_missing or SEEDING_BE
     // differential: drop the results on the on_complete builder (`tablesForCompletedStage`) and its leg is refused
     // SEEDING_POOL_RESULTS_MISSING (formerly swallowed silently, K19); on 9.x every unequal shape refused SEEDING_BESTNTH_UNEQUAL_POOLS
     // unless the take carried the flag.
+    // Task 5 part 3 (owed item 1): the on_complete leg draws across the pools too, so RB5-D10 (X-PD-4, owner 288) refuses it by
+    // name whenever the best runner-up must meet her own pool's winner (the winners keep their places, the runner-up has one seat).
+    // That refusal comes AFTER the resolver seated the field from results on every pool, so it still proves this sweep's seam; it is
+    // read by its own rule (one pool supplying two of poolCount + 1 seats in a single_elim) and counted, never excused silently.
     const t = publicT("en");
-    let checked = 0, unequal = 0, footnotes = 0;
+    let checked = 0, unequal = 0, footnotes = 0, seededOnComplete = 0, refusedOnComplete = 0;
     for (const poolCount of [2, 3, 4]) {
       for (const entrants of [2 * poolCount, 2 * poolCount + 1, 5 * poolCount - 1, 5 * poolCount]) {
         const sizes = snakeSizes(entrants, poolCount);
@@ -207,12 +211,22 @@ describe.skipIf(!HAS_DB)("no app path reaches pool_results_missing or SEEDING_BE
           try {
             done = await completeStage(s.auth, s.srcId);
           } catch (e) {
-            const err = e as { code?: string; extra?: { cause?: string } };
+            const err = e as { code?: string; extra?: { cause?: string; entrants?: number; count?: number; shape?: string } };
+            if (timing === "on_complete" && err.code === "STAGE_COMPLETED_SEEDING_FAILED" && err.extra?.cause === "SEEDING_POOL_SEPARATION_IMPOSSIBLE") {
+              expect({ entrants: err.extra.entrants, count: err.extra.count, shape: err.extra.shape }, `${label}: RB5-D10's own shape`).toEqual({ entrants: poolCount + 1, count: 2, shape: "single_elim" });
+              const [src] = await sql<{ status: string }[]>`select status from stages where id = ${s.srcId}`;
+              expect(src!.status, `${label}: the completion stands`).toBe("complete");
+              refusedOnComplete++;
+              checked++;
+              if (isUnequal) unequal++;
+              continue;
+            }
             throw new Error(`${label}: refused ${err.code} (cause ${err.extra?.cause}): ${String(e)}`);
           }
           expect(done.completed, label).toBe(true);
           if (timing === "on_complete") {
             expect(done.qualified?.entrants, `${label}: the knockout was seeded`).toHaveLength(poolCount + 1);
+            seededOnComplete++;
           } else {
             const proposal = await getSeedProposal(s.auth, s.koId);
             expect(proposal?.status, label).toBe("draft");
@@ -241,5 +255,10 @@ describe.skipIf(!HAS_DB)("no app path reaches pool_results_missing or SEEDING_BE
     expect(checked, "anti-vacuity: every shape on both paths").toBe(3 * 4 * 2);
     expect(unequal, "the sweep saw unequal shapes").toBe(3 * 2 * 2);
     expect(footnotes, "an unequal setup shape shows its footnote").toBe(3 * 2);
+    // anti-vacuity on the on_complete leg: every leg is one or the other, and each kind was met.
+    expect(seededOnComplete + refusedOnComplete, "every on_complete leg judged").toBe(3 * 4);
+    expect(seededOnComplete, "on_complete legs seeded").toBeGreaterThan(0);
+    expect(refusedOnComplete, "on_complete legs refused by RB5-D10").toBeGreaterThan(0);
+    console.log(`X-UP-1 sweep: on_complete seeded ${seededOnComplete}, refused by RB5-D10 ${refusedOnComplete}`);
   }, 240_000);
 });

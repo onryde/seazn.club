@@ -12,6 +12,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { shuffle } from "@seazn/engine/core";
+import { swissDrawSeed } from "@/lib/swiss-draw";
 import { seedPositions, nextPowerOfTwo } from "@seazn/engine/scheduling";
 import { completeStage, computeSeedProposal, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
 import { createCompetition } from "../competitions";
@@ -50,7 +51,7 @@ interface Built {
 /** A generic division: `entrants` seeded 1..n, a group of `pools` pools (or a league), then the destination `kind` fed from it
  *  (`take`, rank_order, setup timing: its TBD lines exist before the source is played). The source is played out with `score`
  *  (the lower seed wins every meeting) but NOT completed. */
-async function build(o: { entrants: number; pools: number | "league"; kind: string; take: unknown[]; score: Score }): Promise<Built> {
+async function build(o: { entrants: number; pools: number | "league"; kind: string; take: unknown[]; score: Score; timing?: "setup" | "on_complete" }): Promise<Built> {
   const { auth } = await seedOrg("pro");
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "XPD", visibility: "private", branding: {} });
   const [variant] = await sql<{ key: string; config: Record<string, unknown> }[]>`
@@ -60,9 +61,11 @@ async function build(o: { entrants: number; pools: number | "league"; kind: stri
   const source = o.pools === "league" ? { kind: "league", config: { legs: 1 } } : { kind: "group", config: { legs: 1, pools: { count: o.pools } } };
   const [src, ko] = await createStages(auth, div.id, [
     { seq: 1, ...source, name: "Groups" },
-    { seq: 2, kind: o.kind, name: "Finals", config: o.kind === "knockout" ? { thirdPlace: false } : {}, progression: { sources: [{ stage: "previous", take: o.take }], placement: "rank_order", timing: "setup" } },
+    { seq: 2, kind: o.kind, name: "Finals", config: o.kind === "knockout" ? { thirdPlace: false } : {}, progression: { sources: [{ stage: "previous", take: o.take }], placement: "rank_order", timing: o.timing ?? "setup" } },
   ] as never);
-  await generateStageFixtures(auth, ko!.id);
+  // An on_complete destination has no lines until its source completes: `seedNextStage` writes `config.qualified`, then completion
+  // generates it.
+  if ((o.timing ?? "setup") === "setup") await generateStageFixtures(auth, ko!.id);
   await generateStageFixtures(auth, src!.id);
   await startDivision(auth, div.id);
   const seedOf = new Map((await sql<{ id: string; seed: number }[]>`select id, seed from entrants where division_id = ${div.id}`).map((e) => [e.id, e.seed]));
@@ -306,5 +309,98 @@ describe.skipIf(!HAS_DB)("F11 a draft made before the bump (Review Focus 4)", ()
     const out = await confirmSeedProposal(b.auth, b.koId, { proposalId: draft!.id });
     expect(out.proposalId).toBe(draft!.id);
     expect(out.filled).toBe(4);
+  });
+});
+
+// Task 5 part 3 (owed item 1): the `timing: "on_complete"` path - `seedNextStage` resolves the qualifiers at the source's completion
+// and writes them to `config.qualified`, whose order IS the seeding Generate lays out (`seed: i + 1` on the engine's bracket
+// geometry). An API or legacy knockout fed from groups that way is drawn across the pools exactly as a setup proposal is.
+describe.skipIf(!HAS_DB)("FX-G5 on_complete: the knockout seeded at the source's completion crosses the pools too", () => {
+  /** The fold an on_complete knockout seated before the draw - rank, then pool (A1, B1, C1, A2, B2, C2) - read off the scene's own
+   *  results: under `decisive` the lower entrant seed wins every meeting, so a pool's place-k entrant is its k-th lowest seed. */
+  const fold = (b: Built, perPool: number) => {
+    const pools = [...new Set(b.poolOf.values())].sort();
+    const ranked = new Map(pools.map((p) => [p, [...b.poolOf.entries()].filter(([, q]) => q === p).map(([id]) => id).sort((x, y) => b.seedOf.get(x)! - b.seedOf.get(y)!)] as const));
+    return Array.from({ length: perPool }, (_, k) => pools.map((p) => ranked.get(p)![k]!)).flat();
+  };
+  const qualifiedOf = async (koId: string) => {
+    const [row] = await sql<{ q: string[] | null }[]>`select config->'qualified' as q from stages where id = ${koId}`;
+    return row?.q ?? null;
+  };
+
+  it("X-PD-1 three pools top two: no pool-mates in the real round one; byes to the pool winners (X-PD-6)", async () => {
+    const b = await build({ entrants: 12, pools: 3, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive, timing: "on_complete" });
+    expect((await completeStage(b.auth, b.srcId)).completed).toBe(true);
+    const today = fold(b, 2);
+    // differential: today `config.qualified` is the fold, and the engine's own geometry pairs C1 with C2 at seeds 3 and 6.
+    const pos = seedPositions(nextPowerOfTwo(6));
+    const foldPairs: [string, string][] = [];
+    for (let i = 0; i < pos.length; i += 2) if (pos[i]! <= 6 && pos[i + 1]! <= 6) foldPairs.push([today[pos[i]! - 1]!, today[pos[i + 1]! - 1]!]);
+    expect(foldPairs.some(([x, y]) => b.poolOf.get(x) === b.poolOf.get(y)), "the premise: the fold seats a same-pool pair").toBe(true);
+    const qualified = await qualifiedOf(b.koId);
+    expect(new Set(qualified), "the same six qualify").toEqual(new Set(today));
+    const r1 = await roundOne(b);
+    expect(r1.pairs, "6 into 8: two real round-one matches").toHaveLength(2);
+    for (const [x, y] of r1.pairs) expect(b.poolOf.get(x), `${label(b, x)} v ${label(b, y)}`).not.toBe(b.poolOf.get(y));
+    // RB5-D6: the byes go to the top qualifiers - two of the pool winners, the draw's tier 1 holding its places (seeds 1, 2).
+    expect(r1.byes.map((id) => b.seedOf.get(id)).sort(), "byes to the top seeds").toEqual([1, 2]);
+  });
+
+  it("X-PD-3 a rank tie across pools is drawn with the stage's stored seed (minted from the stage, W4 K5); the ledger records it", async () => {
+    // uniform: A1 and B1 are level on every key and played, so the tier-1 run is shuffled with the stage's seed.
+    const b = await build({ entrants: 8, pools: 2, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: uniform, timing: "on_complete" });
+    await completeStage(b.auth, b.srcId);
+    const winners = fold(b, 1); // pool order: A1 (seed 1), B1 (seed 2)
+    const seed = swissDrawSeed(b.koId);
+    const expectedTop = shuffle(seed, winners.map((entrantId) => ({ entrantId }))).map((s) => s.entrantId);
+    expect((await qualifiedOf(b.koId))!.slice(0, 2), "the stage's seed's shuffle of the level winners").toEqual(expectedTop);
+    const [ev] = await sql<{ payload: { crossPoolDraw?: { seed: number } } }[]>`
+      select payload from division_events where division_id = ${b.divId} and type = 'stage_seeded' and payload->>'stageId' = ${b.koId}`;
+    expect(ev?.payload.crossPoolDraw, "the draw seed is recorded with the seeding").toEqual({ seed });
+  });
+
+  it("X-PD-4 RB5-D10: two pools, the winners and Group B's runner-up into a 4-draw - refused by name, nothing seated", async () => {
+    // 7 into 2 (A = 1,4,5; B = 2,3,6,7). decisive: B2 (seed 3) is the best runner-up once B's bottom row is dropped, so the 4-draw
+    // pairs B1 v B2 with no ordering out (tier 1 holds its places, tier 2 has one seat).
+    const b = await build({ entrants: 7, pools: 2, kind: "knockout", take: [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }], score: decisive, timing: "on_complete" });
+    const err = await completeStage(b.auth, b.srcId).then(
+      () => null,
+      (e: unknown) => e as HttpError,
+    );
+    expect(err?.status, "the completion stands; its seeding half is refused").toBe(409);
+    expect(err?.code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
+    expect(err?.extra).toMatchObject({ cause: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", pool: "B", count: 2, entrants: 3, shape: "single_elim" });
+    const [src] = await sql<{ status: string }[]>`select status from stages where id = ${b.srcId}`;
+    expect(src!.status).toBe("complete");
+    expect(await qualifiedOf(b.koId), "never seated silently").toBeNull();
+    const lines = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${b.koId}`;
+    expect(lines[0]!.n, "nothing drawn").toBe(0);
+  });
+
+  it("a `picks` take is the organiser's own seat order: never drawn, on either path (setup and on_complete)", async () => {
+    // doc 05 §2.3's cross-pool template: the organiser lists A1, B2, B1, A2. Its tiers go down along the list, which the engine's
+    // draw refuses (`tiers_out_of_order`); the organiser placed every seat, so the draw is not run (as `seeded_map`).
+    // differential: drawn, both paths refuse SEEDING_CROSS_POOL_DRAW_INVALID {reason: tiers_out_of_order} and nobody is seated.
+    const picks = [{ kind: "picks", picks: [{ pool: "A", rank: 1 }, { pool: "B", rank: 2 }, { pool: "B", rank: 1 }, { pool: "A", rank: 2 }] }];
+    // snake 8 into 2: A = 1,4,5,8; B = 2,3,6,7 - decisive: A1 = 1, A2 = 4, B1 = 2, B2 = 3
+    const listed = [1, 3, 2, 4];
+    const on = await build({ entrants: 8, pools: 2, kind: "knockout", take: picks, score: decisive, timing: "on_complete" });
+    expect((await completeStage(on.auth, on.srcId)).completed).toBe(true);
+    expect((await qualifiedOf(on.koId))!.map((id) => on.seedOf.get(id)), "on_complete: the listed order").toEqual(listed);
+    const set = await build({ entrants: 8, pools: 2, kind: "knockout", take: picks, score: decisive });
+    expect((await completeStage(set.auth, set.srcId)).completed).toBe(true);
+    const p = await getSeedProposal(set.auth, set.koId);
+    expect(p!.computed.crossPoolDraw, "setup: no draw").toBeUndefined();
+    expect((await seats(set)).map((id) => set.seedOf.get(id)), "setup: the listed order").toEqual(listed);
+  });
+
+  it("K23 a one-pool group seeded on_complete keeps today's order (no draw, no seed recorded)", async () => {
+    const b = await build({ entrants: 6, pools: 1, kind: "knockout", take: [{ kind: "rankRange", from: 1, to: 4 }], score: decisive, timing: "on_complete" });
+    await completeStage(b.auth, b.srcId);
+    expect((await qualifiedOf(b.koId))!.map((id) => b.seedOf.get(id))).toEqual([1, 2, 3, 4]);
+    const [ev] = await sql<{ payload: Record<string, unknown> }[]>`
+      select payload from division_events where division_id = ${b.divId} and type = 'stage_seeded' and payload->>'stageId' = ${b.koId}`;
+    expect(ev, "seeded").toBeDefined();
+    expect(ev!.payload.crossPoolDraw).toBeUndefined();
   });
 });

@@ -8,7 +8,7 @@ import "server-only";
 // qualifiers is the whole of the wiring - no line is redrawn.
 //
 // Served only where it means something (N6/K23): a `knockout`, `stepladder` or `page_playoff` destination, placed `rank_order`
-// (an organiser's `seeded_map` is theirs; `snake` never reaches a bracket), from ONE source's pools with at least two distinct
+// (an organiser's `seeded_map` or `picks` list is theirs; `snake` never reaches a bracket), from ONE source's pools with at least two distinct
 // pools (`pooledSeeds`). Anything else - a league-sourced stepladder, a one-pool group, a plate - keeps today's seats and never
 // calls the draw.
 import { HttpError } from "@/lib/errors";
@@ -53,7 +53,7 @@ export async function drawAcrossPools<Q extends CrossPoolEntry & { seed: number 
   draw: typeof crossPoolDraw = crossPoolDraw,
 ): Promise<{ qualifiers: Q[]; seed: number; refused?: CrossPoolRefused } | null> {
   const shape = CROSS_POOL_SHAPES[stage.kind];
-  if (shape === undefined || progression.placement !== "rank_order") return null;
+  if (shape === undefined || progression.placement !== "rank_order" || organiserPlaced(progression)) return null;
   const ordered = [...qualifiers].sort((a, b) => a.seed - b.seed);
   const seeded = pooledSeeds(ordered, tables);
   if (seeded === null) return null;
@@ -74,6 +74,12 @@ export async function drawAcrossPools<Q extends CrossPoolEntry & { seed: number 
     throw new Error(`cross-pool draw for stage ${stage.id} did not return the field it was handed`);
   }
   return { qualifiers: qualifiers.map((q) => ({ ...q, seed: seatOf.get(q.entrantId)! })), seed };
+}
+
+/** A `picks` take is the organiser's own list of seats in order (doc 05 §2.3's "A1 v B2" template): like a `seeded_map`, every seat
+ *  is placed, so it is never drawn - the engine would refuse its listed order anyway when a tier goes down (`tiers_out_of_order`). */
+function organiserPlaced(progression: ProgressionSpec): boolean {
+  return progression.sources.some((s) => s.take.some((t) => t.kind === "picks"));
 }
 
 /** K22: the engine's cross-pool refusals as named 422s (copy in errors.json `seeding.*`). Null for anything else. */

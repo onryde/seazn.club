@@ -4,11 +4,12 @@
 // order, recorded (tie semantics are W4/W5's rulebook, not ours).
 import type { StagePostBody } from "../catalogue.ts";
 import { RefusedCall, type FixtureRow, type SeedProposalRef, type StageRef } from "../driver/types.ts";
-import { toObservedOutcome, winnerOf, type ObservedRun, type ObservedStage } from "../observed.ts";
+import { toObservedOutcome, winnerOf, type ObservedFixture, type ObservedRun, type ObservedStage } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
 import { assertion, type Item } from "./assertions.ts";
 import type { Recorder, StagePlay } from "./common.ts";
 import type { ScenarioContext } from "./types.ts";
+import { BRACKET_OF } from "./terminal-finals.ts";
 
 /** Pinned at Task 6 Step 0 from usecases/stages/seed-proposal.ts confirmSeedProposal (a
  *  flagged tie with no edit or tiePick; multi-stage.test.ts reads it from the
@@ -268,4 +269,80 @@ export function advanceSeededAsDeclared(plays: readonly StagePlay[], observed: P
   });
   const reason = items.length > 0 ? null : plays.length <= 1 ? "single-stage row — no later stage to seed" : "no later stage was confirmed";
   return assertion("advance-seeded-as-declared", items, reason);
+}
+
+/** W5 app PR B Task 5 (FX-G5, ruling 281; RB5-D1, X-PD-1, X-PD-7): the destination kinds the product draws across a source's
+ *  pools - apps/web `CROSS_POOL_SHAPES` (knockout, stepladder, page playoff). A group destination has no round-one pairs to draw. */
+export const CROSS_POOL_KINDS: readonly string[] = Object.freeze(["knockout", "stepladder", "page_playoff"]);
+/** The take kinds a pooled source seats by rank tier (`topNPerGroup` places, `bestNth` best places) - the field the draw is handed.
+ *  A `picks` take is the organiser's own seat list and is never drawn; a `rankRange` reads one table. */
+const POOLED_TAKES: ReadonlySet<string> = new Set(["topNPerGroup", "bestNth"]);
+
+/** The real round-one pairs of a bracket stage as the product stored them: the lowest round of its lines (a third-place match is
+ *  nobody's first), both sides seated - a bye line seats one side and is no pair. */
+export function roundOnePairs(fixtures: readonly Pick<ObservedFixture, "roundNo" | "home" | "away" | "thirdPlace">[]): [string, string][] {
+  const lines = fixtures.filter((f) => f.thirdPlace !== true && f.roundNo !== null);
+  if (lines.length === 0) return [];
+  const first = Math.min(...lines.map((f) => f.roundNo!));
+  return lines.filter((f) => f.roundNo === first && f.home !== null && f.away !== null).map((f) => [f.home!, f.away!]);
+}
+
+const pairKey = ([x, y]: readonly [string, string]) => [x, y].sort().join(" v ");
+
+/** The round-one pairs the ENGINE's own generator lays out for `field` in seed order (`BRACKET_OF`, the table Start calls) - the
+ *  placement the product made before the cross-pool draw existed, and still makes for a field with no pools. */
+function engineRoundOne(kind: string, field: readonly string[], config: Record<string, unknown>): [string, string][] {
+  const gen = (BRACKET_OF as Readonly<Record<string, (f: readonly string[], c: Record<string, unknown>) => { fixtures: readonly { round: number; home?: string; away?: string; thirdPlace?: boolean }[] }>>)[kind];
+  if (gen === undefined) throw new Error(`advance: no bracket generator for '${kind}'`);
+  return roundOnePairs(gen(field, config).fixtures.map((f) => ({ roundNo: f.round, home: f.home ?? null, away: f.away ?? null, thirdPlace: f.thirdPlace })));
+}
+
+/** The advance's draw check (FX-G5): every stage the run seeded INTO a knockout, stepladder or page playoff is judged on its real round one.
+ *  - From a POOLED source (two or more pools, a rank-tier take): no real round-one pair holds two entrants of one source pool - a
+ *    same-pool pair is a red by name (RB5-D1 / X-PD-1). Pools are read off the source's own final tables.
+ *  - From a LEAGUE (one table, a rank-range take; the `group_stepladder` / `group_playoffs` rows): there are no pools to separate, so the
+ *    stage seats exactly as before the draw - its round one is the engine's own generator's over the league's finishing order (N6, X-PD-7).
+ *    A stage short of its take (FP-2: a departed qualifier's seat left empty) is not laid out by the generator and is left to
+ *    advance-seeded-as-declared.
+ *  Any other source (a bracket, a Swiss, an americano) is not this check's. Nothing judged is an abstain with its reason, never a pass. */
+export function advanceRoundOneCrossesPools(plays: readonly StagePlay[], observed: Pick<ObservedRun, "stages">): CheckResult {
+  const items: Item[] = [];
+  for (let i = 1; i < plays.length; i++) {
+    const p = plays[i];
+    const a = p.advance;
+    if (a === null || a.status !== 200 || !CROSS_POOL_KINDS.includes(p.stage.kind)) continue;
+    const prev = plays[i - 1];
+    const src = observed.stages.find((s) => s.id === prev.stage.id);
+    const dst = observed.stages.find((s) => s.id === p.stage.id);
+    if (src === undefined || dst === undefined) {
+      items.push({ ok: false, note: `stage ${p.stage.seq}: stage ${src === undefined ? prev.stage.seq : p.stage.seq} was not observed - its round one cannot be judged` });
+      continue;
+    }
+    const poolOf = new Map<string, string>();
+    for (const t of src.standings) if (t.poolId !== null) for (const r of t.rows) poolOf.set(r.entrantId, t.poolId);
+    const pooled = new Set(poolOf.values()).size >= 2;
+    const pairs = roundOnePairs(dst.fixtures);
+    if (pooled && a.takes.length > 0 && a.takes.every((t) => POOLED_TAKES.has(String(t.kind)))) {
+      if (pairs.length === 0) items.push({ ok: false, note: `stage ${p.stage.seq}: seeded from ${new Set(poolOf.values()).size} pools but no real round-one pair to judge` });
+      for (const [x, y] of pairs) {
+        const [px, py] = [poolOf.get(x), poolOf.get(y)];
+        if (px === undefined || py === undefined) items.push({ ok: false, note: `stage ${p.stage.seq}: round one ${x} v ${y} seats an entrant no source pool holds` });
+        else if (px === py) items.push({ ok: false, note: `stage ${p.stage.seq}: same-pool round-one pair ${x} v ${y} (pool ${px}) - RB5-D1 / X-PD-1` });
+        else items.push({ ok: true, note: `stage ${p.stage.seq}: round one ${x} v ${y} across pools` });
+      }
+      continue;
+    }
+    if (src.kind === "league" && !pooled && a.takes.every((t) => t.kind === "rankRange")) {
+      if (a.seeded.length !== a.declared) continue;
+      const seeded = new Set(a.seeded);
+      // The league's finishing order: its one table's rows by rank, as served (a level row keeps the wire's order).
+      const table = src.standings.flatMap((t) => t.rows);
+      const order = table.map((r, at) => ({ r, at })).sort((u, v) => (u.r.rank ?? Infinity) - (v.r.rank ?? Infinity) || u.at - v.at).map(({ r }) => r.entrantId).filter((e) => seeded.has(e));
+      const want = engineRoundOne(p.stage.kind, order, dst.config).map(pairKey).sort();
+      const got = pairs.map(pairKey).sort();
+      items.push({ ok: want.length > 0 && JSON.stringify(got) === JSON.stringify(want), note: `stage ${p.stage.seq}: a league-fed ${p.stage.kind} seats as the league finished - round one ${got.join(", ") || "(none)"}, the engine lays out ${want.join(", ") || "(none)"}` });
+    }
+  }
+  const reason = items.length > 0 ? null : plays.length <= 1 ? "single-stage row - no later stage to seed" : "no knockout, stepladder or page playoff was seeded from a group or a league";
+  return assertion("advance-round-one-crosses-pools", items, reason);
 }

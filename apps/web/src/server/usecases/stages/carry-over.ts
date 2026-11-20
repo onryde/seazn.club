@@ -3,6 +3,7 @@ import "server-only";
 // placement tables a progression resolves against, and `seedNextStage`.
 
 import { withTenant } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
 import { carryDeltas, placementTable, type BracketFixture, type PoolTable, type ProgressionSpec, type SourceShape, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
 import { parseExtKey, bracketWinnerLoser } from "@/server/engine-db/competition";
@@ -18,6 +19,7 @@ import { cutEligiblePools, departedLoseBestNth, resolveProgressionSource, source
 import { bestNthSourceOf, withPoolResults } from "../pool-results";
 import { STAGE_COLS, REAL_TABLE_KINDS, BRACKET_KINDS, type Tx, type StageRow } from "./types";
 import { departedEntrantIds } from "./helpers";
+import { drawAcrossPools } from "./cross-pool-draw";
 
 // F6 (#625) — carry-over has TWO application paths now: seedNextStage (below,
 // `timing:"on_complete"`) and the propose/confirm pair (computeSeedProposal /
@@ -366,7 +368,15 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     );
     // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
     await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
-    const entrants = qualifiers.map((q) => q.entrantId);
+    // W5 app PR B T5 (FX-G5, ruling 281; owed item 1): `config.qualified`'s order IS the seeding Generate lays out (`seed: i + 1`),
+    // so a knockout fed from two or more pools is drawn across them here, exactly as the setup proposal is (`drawAcrossPools`: null
+    // - today's order - for any other field). A refused draw (RB5-D4, RB5-D10) seats nobody: the named refusal leaves this
+    // transaction unwritten and completion says "completed, but" by name, as the setup path's confirm refuses its draft.
+    const drawn = await drawAcrossPools(tx, next, progression, qualifiers, sourceTables);
+    if (drawn?.refused !== undefined) {
+      throw new HttpError(422, "no ordering of the qualifiers keeps pool-mates apart in round one", drawn.refused.code, drawn.refused.vars);
+    }
+    const entrants = (drawn === null ? qualifiers : [...drawn.qualifiers].sort((a, b) => a.seed - b.seed)).map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
       "qualification_resolved",
@@ -436,7 +446,7 @@ export async function seedNextStage(auth: AuthCtx, completedStageId: string): Pr
     await tx`
       insert into division_events (division_id, seq, type, payload)
       values (${current.division_id}, ${last + 1}, 'stage_seeded',
-              ${tx.json({ stageId: next.id, from: completedStageId, entrants } as never)})`;
+              ${tx.json({ stageId: next.id, from: completedStageId, entrants, ...(drawn !== null ? { crossPoolDraw: { seed: drawn.seed } } : {}) } as never)})`;
     let seq = last + 1;
     if (carriedDeltas !== undefined && carriedMode !== undefined) {
       // auditable carry (Jul3/05 §3)

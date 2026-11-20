@@ -147,6 +147,8 @@ const NAMED_FIELDS = [5, 6, 7, 9, 17];
 const SEEDED_QS = [3, 4];
 /** A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket. Each known one is tied to the cases it
  *  covers - a label pattern AND an exact count - so a new refusing size or template fails instead of matching a loose regex. */
+/** Marks the one rule whose count is measured per run (`auditRefusals`' `d10`), not declared. */
+const D10_FROM_DRAFTS = -1;
 const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
   {
     re: /^page_playoff n=\d+: generate page_playoff refused \(page playoffs need exactly 4 entrants, got \d+\)$/,
@@ -187,18 +189,22 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     re: /^groups_ko n=\d+ q=3 .*refused \(no ordering of the qualifiers keeps pool-mates apart in round one\)$/,
     // W5 app PR B T5 (RB5-D10, OWNER 288 REC-12): two pools' winners plus the best runner-up into a 4-draw is refused, and stays
     // refused, exactly when that runner-up shares the second winner's pool (round one is seed 2 v seed 3; tier 1 keeps its places,
-    // tier 2 has one seat). Measured: the sweep meets it once, n=8 (4/4), where its results make B2 the best runner-up.
-    expected: 1,
+    // tier 2 has one seat). At n=8 (4/4) the sweep's results make B2 the best runner-up AND leave A1 and B1 level, so the stage's
+    // stored draw seed orders the winners (RB5-D3) and decides whether B1 lands on seed 2: the case refuses on about half the seeds.
+    // Part 3 (a 72-of-73 red met in a scoped run): the count is therefore read off the drafts the sweep made - every draft whose draw
+    // the engine refused (`computed.crossPoolDraw.refused`, RB5-D10-shaped, asserted below) - never typed as a constant.
+    expected: D10_FROM_DRAFTS,
     why: "RB5-D10: groups_ko, two pools, Top 3 - the best runner-up from the second winner's pool cannot be kept off her in round one",
   },
 ];
 
 /** Every problem with a list of refusals: a rule that covered the wrong number of cases, and a refusal no rule has read. Empty = clean. */
-function auditRefusals(refused: readonly string[]): { problems: string[] } {
+function auditRefusals(refused: readonly string[], d10: number): { problems: string[] } {
   const problems: string[] = [];
   for (const k of KNOWN_REFUSALS) {
     const got = refused.filter((r) => k.re.test(r)).length;
-    if (got !== k.expected) problems.push(`known refusal "${k.why}" covered ${got} cases, expected ${k.expected}`);
+    const expected = k.expected === D10_FROM_DRAFTS ? d10 : k.expected;
+    if (got !== expected) problems.push(`known refusal "${k.why}" covered ${got} cases, expected ${expected}`);
   }
   for (const r of refused) if (!KNOWN_REFUSALS.some((k) => k.re.test(r))) problems.push(`unread refusal: ${r}`);
   return { problems };
@@ -230,6 +236,8 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
    *  (CONFIG_INVALID `third_place_needs_two_semis`, named KO_THIRD_PLACE_TOO_FEW by B4 T9 / D3) - at Generate for a field of 2 or 3. Counted apart from `refused`: it is
    *  the rule working, judged below against the rule's arithmetic (fewer than 4 entrants, fewer than 2 real semis). */
   const thirdRefused: Array<{ label: string; entrants: number; code: unknown }> = [];
+  /** Part 3: every draft the cross-pool draw ran on (`computed.crossPoolDraw`), and its refusal if the engine refused it. */
+  const crossPoolDrafts: Array<{ label: string; refused: { code: string; vars: Record<string, string | number> } | undefined }> = [];
   /** W4 T24: every (wide template, field, q, third) the seeded pass asked, so a field cannot drop out of the widened sweep unnoticed. */
   const wideAsked: Array<{ key: string; n: number; q: number; third: boolean }> = [];
 
@@ -307,6 +315,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
           }
         }
         const proposal = firstLossPlate ? (await getSeedProposal(auth, stageIds[i + 1]!))! : await computeSeedProposal(auth, stageIds[i + 1]!);
+        if (proposal.computed.crossPoolDraw !== undefined) crossPoolDrafts.push({ label, refused: proposal.computed.crossPoolDraw.refused });
         const ties = proposal.computed.ties.map((t) => ({ slots: t.slots, order: [...t.entrantIds].sort((a, b) => (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99)) }));
         await confirmSeedProposal(auth, stageIds[i + 1]!, { proposalId: proposal.id, ...(ties.length > 0 ? { tiePicks: ties } : {}) });
       } catch (e) {
@@ -445,7 +454,16 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     expect(seen.some((c) => c.label.includes("third=true") && c.kind === "knockout"), "a third-place knockout was drawn where the engine allows it").toBe(true);
 
     // A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket (see `auditRefusals`).
-    const audit = auditRefusals(refused);
+    // RB5-D10's count is the drafts the engine's draw refused, each RB5-D10-shaped: a groups_ko Top 3 from two pools, one pool supplying
+    // two of the three seats of a single_elim (the refusal's own numbers).
+    expect(crossPoolDrafts.length, "anti-vacuity: the seeded pass drew across pools").toBeGreaterThan(0);
+    const d10 = crossPoolDrafts.filter((d) => d.refused !== undefined);
+    for (const d of d10) {
+      expect(d.label, "a refused draw is a groups_ko Top 3").toMatch(/^groups_ko n=\d+ q=3 /);
+      expect({ code: d.refused!.code, count: d.refused!.vars.count, entrants: d.refused!.vars.entrants, shape: d.refused!.vars.shape }, `${d.label}: RB5-D10's shape`).toEqual({ code: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", count: 2, entrants: 3, shape: "single_elim" });
+    }
+    console.info(`cross-pool drafts: ${crossPoolDrafts.length} drawn, ${d10.length} refused by RB5-D10`);
+    const audit = auditRefusals(refused, d10.length);
     expect(audit.problems, `refusals: ${refused.length} read`).toEqual([]);
     expect(refused.length, "anti-vacuity: the sweep did meet refusals (the known ones)").toBeGreaterThan(0);
   });
@@ -483,7 +501,7 @@ describe("the sweep's refusal audit (no database)", () => {
     // 35 cuts: 16 day one + 19 seeded.
     expect(CUTS.length).toBe(35);
     expect(today().length).toBe(73);
-    expect(auditRefusals(today()).problems).toEqual([]);
+    expect(auditRefusals(today(), 1).problems).toEqual([]);
   });
 
   it("rejects every way the refusals can drift: a new size, a new template, a different size of the same refusal, one fewer, an unread text", () => {
@@ -512,9 +530,12 @@ describe("the sweep's refusal audit (no database)", () => {
     ];
     let rejected = 0;
     for (const [what, list] of cases) {
-      expect(auditRefusals(list).problems.length, what).toBeGreaterThan(0);
+      expect(auditRefusals(list, 1).problems.length, what).toBeGreaterThan(0);
       rejected++;
     }
     expect(rejected, "anti-vacuity: every drift reached").toBe(cases.length);
+    // Part 3: the RB5-D10 count is the refused drafts' - a confirm refusal with no refused draft, or a refused draft never said, drifts.
+    expect(auditRefusals(today(), 0).problems.length, "a D10 refusal no draft refused").toBeGreaterThan(0);
+    expect(auditRefusals(today(), 2).problems.length, "a refused draft the confirm never said").toBeGreaterThan(0);
   });
 });

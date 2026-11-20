@@ -2,7 +2,7 @@
 // the public table. No canary — its assertions are the shared ones.
 import { fieldSizeFor } from "../field-size.ts";
 import type { ConfigEditObs } from "../observed.ts";
-import { advanceSeededAsDeclared } from "./advance.ts";
+import { advanceRoundOneCrossesPools, advanceSeededAsDeclared } from "./advance.ts";
 import { bracketDeciderExercised, builtAsPosted, drawPathExercised, entrantsEditAccepted, foldParity, formatEditRefusedNamed, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted } from "./assertions.ts";
 import { completeAgain, completeTwiceNoop } from "./complete-twice.ts";
 import { Recorder, configProbe, dateFirstRound, drawsDeclaredOnReached, playDivision, setUpDivision, snapshot } from "./common.ts";
@@ -56,6 +56,8 @@ export const lifecycle: Scenario = {
         completeTwiceNoop(repeats),
         loopBounded(rec, observed),
         advanceSeededAsDeclared(plays, observed, rec.withdrawn),
+        // W5 app PR B T5 (FX-G5): a knockout-shaped stage seeded from pools never pairs pool-mates in round one; one from a league seats as before.
+        advanceRoundOneCrossesPools(plays, observed),
         lineupsPut(rec, setup),
       ],
     };
