@@ -19,13 +19,12 @@ export interface BestNthSource {
 }
 
 /** A table source's cross-group rules and pool results, from one load of the stage (`loadBestNthSource`: the rules' game-points
- *  reader pays exactly these results). The fold keys a pool by its uuid; this translates it to the spec-facing key exactly as
- *  `sourceStandingsTables` translates a snapshot's `pool_id` (a uuid with no `pools` row keeps the uuid), so a table's pools and
- *  their results meet on one key. */
-export async function bestNthSourceOf(tx: Tx, stageId: string): Promise<BestNthSource> {
+ *  reader pays exactly these results). The fold keys a pool by its uuid; this translates it to the spec-facing key with the
+ *  caller's own `keyOf` (pool uuid -> key, read once by the builder for its snapshots: `sourcePoolKeys`), exactly as the
+ *  snapshot's `pool_id` is translated (a uuid with no `pools` row keeps the uuid), so a table's pools and their results meet on
+ *  one key. */
+export async function bestNthSourceOf(tx: Tx, stageId: string, keyOf: ReadonlyMap<string, string>): Promise<BestNthSource> {
   const { crossGroup, poolResults } = await loadBestNthSource(tx, stageId);
-  const poolRows = await tx<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${stageId}`;
-  const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
   return {
     crossGroup,
     results: new Map([...poolResults].map(([pool, results]) => [pool === "" ? "" : (keyOf.get(pool) ?? pool), results])),

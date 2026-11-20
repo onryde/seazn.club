@@ -22,6 +22,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { bestNthSourceOf } from "../pool-results";
+import { sourcePoolKeys } from "../stage-seeding";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import { completeStage, createStages, generateStageFixtures, getSeedProposal } from "../stages";
@@ -222,7 +223,7 @@ describe.skipIf(!HAS_DB)("pool results reach best-Nth on both seeding paths (W5 
     expect(await declaredCrossGroup("generic"), "generic's declared cross-group order").toEqual(["points", "diff", "for", "lots"]);
     const [A, B] = s.pools.map((p) => p.members) as [string[], string[]];
     // The results ARE present: both pools hand the comparison their six results each.
-    const handed = await withTenant(s.auth.orgId, (tx) => bestNthSourceOf(tx, s.srcId));
+    const handed = await withTenant(s.auth.orgId, async (tx) => bestNthSourceOf(tx, s.srcId, await sourcePoolKeys(tx, s.srcId)));
     expect([...handed.results].map(([k, r]) => [k, r.length]).sort(), "each pool's counted results").toEqual([["A", 6], ["B", 6]]);
     const done = await completeStage(s.auth, s.srcId);
     expect(done.completed).toBe(true);
@@ -231,11 +232,14 @@ describe.skipIf(!HAS_DB)("pool results reach best-Nth on both seeding paths (W5 
     expect(bestNth, "RB5-U6: equal pools compare full rows").toEqual([A[1]]);
   });
 
-  it("X-UP-1 seam: a boardgame source (Sonneborn-Berger on the table) recomputes a reduced row's SB from the results the same fold paid", async () => {
+  it("X-UP-1 seam: a boardgame source (Sonneborn-Berger on the table) hands best-Nth only results its own game-points rule paid (same-load identity)", async () => {
     // The second sport: boardgame's round-robin cascade ranks by Sonneborn-Berger, so every pool row carries `metrics.sberger`
     // and each reduced row's SB is recomputed over the remaining results in the stage's game points (engine normalisedRow). Its
     // game-points reader is identity-keyed on the results ONE load of the stage paid (gamePointsReader): the results the source
-    // hands best-Nth must come from that same load, or the recompute asks for a result the reader never paid.
+    // hands best-Nth must come from that same load, or the recompute asks for a result the reader never paid (mutant M5).
+    // What this proves is that identity, not the SB VALUE: every candidate's SB is 0 reduced AND unreduced (a 3-pool
+    // runner-up's one win is over a bottom row that scored nothing), so a wrong SB number would not move the seats (Task 0
+    // review m1). The recompute's value is the engine's own normalisedRow suite's to prove.
     // 3-pools: 0 beats 1 and 2, 1 beats 2. 2-pools: 0 beats 1. Compared without each 3-pool runner-up's win over its bottom row
     // (RB5-U1), every runner-up has 0 points, 0 wins and SB 0: level on every key before `lots`, so the source's stored rngSeed
     // draws the order (`shuffle(lotSeed(rngSeed, sorted ids), sorted ids)`, the engine's lots). The rngSeed is chosen so the
@@ -272,7 +276,7 @@ describe.skipIf(!HAS_DB)("pool results reach best-Nth on both seeding paths (W5 
     expect(rows.length, "source rows").toBe(10);
     expect(rows.filter((r) => r.metrics["sberger"] !== undefined).length, "rows carrying Sonneborn-Berger").toBe(10);
     // Every result the source hands best-Nth is one its own game-points rule paid.
-    const handed = await withTenant(s.auth.orgId, (tx) => bestNthSourceOf(tx, s.srcId));
+    const handed = await withTenant(s.auth.orgId, async (tx) => bestNthSourceOf(tx, s.srcId, await sourcePoolKeys(tx, s.srcId)));
     const results = [...handed.results.values()].flat();
     expect(results.length, "results handed").toBe(3 + 3 + 1 + 1);
     expect(handed.crossGroup.gamePoints, "the source's game-points rule is forwarded").toBeDefined();

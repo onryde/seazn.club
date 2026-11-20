@@ -23,7 +23,7 @@ import { putStageRules } from "@/server/usecases/stage-rules";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { addFixture, completeStage, generateStageFixtures, issueChallenge, rebuildStageFixtures } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedFootballCatalog } from "@/server/usecases/__tests__/_seed";
-import { loadCrossGroupRules, recomputeStandings } from "../competition";
+import { loadBestNthSource, recomputeStandings } from "../competition";
 import { loadTableRules, persistLotsDraws, pinStageTableRules, repinStageOwnRules, tableRulesOf } from "../table-rules";
 import { between, genericResult, seatedFixtures, stageRules, tableRulesRowOf, tableScene, unpin } from "./helpers/w2d-table-rig";
 import { post } from "./helpers/w2b-rig";
@@ -669,14 +669,15 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     const literal = (key: string) => JSON.parse(new RegExp(`'${key}',\\s*'([^']+)'::jsonb`).exec(text)![1]!) as unknown;
     return { cross: literal("crossGroup") as TiebreakerKey[], sources: literal("sources") as Record<string, string> };
   };
-  const loaded = (stageId: string) => sql.begin((tx) => loadCrossGroupRules(tx, stageId));
+  // The real reader both seeding builders call (`bestNthSourceOf` -> `loadBestNthSource`); its cross-group half.
+  const loaded = (stageId: string) => sql.begin(async (tx) => (await loadBestNthSource(tx, stageId)).crossGroup);
   const across = (rows: readonly StandingsRow[], rules: CrossGroupRules) =>
     crossGroupOrder(rows, rules.order, rules.lotsDraws, {
       ...(rules.seeds === undefined ? {} : { seeds: rules.seeds }),
       ...(rules.rngSeed === undefined ? {} : { rngSeed: rules.rngSeed }),
     }).rows.map((r) => r.entrantId);
 
-  it("X-TB-7 crossGroup: loadCrossGroupRules reads the source's PINNED cross-group order — a V475-migrated pin (points, diff, for, wins) keeps best-Nth where it was, the stage's own order moves it — with the stage's seeds and its stored cross-group draws (pool null)", async () => {
+  it("X-TB-7 crossGroup: loadBestNthSource reads the source's PINNED cross-group order — a V475-migrated pin (points, diff, for, wins) keeps best-Nth where it was, the stage's own order moves it — with the stage's seeds and its stored cross-group draws (pool null)", async () => {
     const { cross: MIGRATED_CROSS, sources: MIGRATED_SOURCES } = v475();
     const s = await tableScene({ stages: { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } } });
     const stageId = s.stageIds[0]!;
@@ -798,7 +799,7 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     expect([...stored[0]!.members].sort()).toEqual([tie.W1, tie.W2].sort());
     expect(tie.done.qualified?.entrants).toEqual(stored[0]!.drawn_order);
     // The loader hands the stored draw back for the next resolution.
-    const rules = await sql.begin((tx) => loadCrossGroupRules(tx, tie.groupId));
+    const rules = await sql.begin(async (tx) => (await loadBestNthSource(tx, tie.groupId)).crossGroup);
     expect(rules.lotsDraws?.get([tie.W1, tie.W2].sort().join(","))?.order).toEqual(stored[0]!.drawn_order);
   }, 300_000);
 
@@ -823,7 +824,7 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
 
   // The seam the whole way (AGENTS.md class 1): no pin written by hand. The organiser's save (putStageRules) is the
   // producer, the start (pending) or the re-pin (started) carries it into the pin, and completion's best-Nth
-  // (seedNextStage / computeSeedProposal → loadCrossGroupRules → resolveProgression) is the consumer. W1 won 3-1 (GD +2,
+  // (seedNextStage / computeSeedProposal → bestNthSourceOf → loadBestNthSource → resolveProgression) is the consumer. W1 won 3-1 (GD +2,
   // GF 3), W2 won 5-4 (GD +1, GF 5): the derived order (generic: points, diff, for, lots — the stage order without its
   // head-to-head) seats W1 first, the saved FOR_FIRST seats W2 first, so the seats witness which order was read.
   const GROUP_ORDER = generic.defaultTiebreakers("group", generic.configSchema.parse(GENERIC_CONFIG));

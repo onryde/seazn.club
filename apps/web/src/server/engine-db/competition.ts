@@ -677,24 +677,19 @@ function toTableStage(
 }
 
 /**
- * W2d T12 (spec §5.9, ST-G4, X-TB-7): how a source stage compares entrants from DIFFERENT groups, for
- * `SourceTables.crossGroup` — its effective `crossGroup` order (the pin once active: a B1-migrated pin's is the pre-W2d
- * list, so its seats do not move), its seeds, rngSeed and `winsCount`, and the cross-group draws stored under its "" pool
- * (`crossGroupRulesOf`). The one reading a seeding path hands `resolveProgression`; the draws best-Nth makes come back as
- * its `newLotsDraws`, stored with `persistLotsDraws(tx, stageId, null, …)` under the division lock.
- */
-export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<CrossGroupRules> {
-  const inputs = await loadStageInputs(tx, stageId);
-  return crossGroupRulesOf(toTableStage(inputs, await loadLotsDraws(tx, stageId)));
-}
-
-/**
- * W5 app PR B T0 (G4; RB5-U1, X-UP-1): what best-Nth reads of a source stage, from ONE load of it — its cross-group rules
- * (`crossGroupRulesOf`, as `loadCrossGroupRules`) and each pool's counted results as the stage's own fold makes them
- * (`completeTableStage`'s `PoolTable.results`: the paid results of the pool's decided and walked-over fixtures), keyed by the
- * fold's pool key — the pool's uuid, "" for a table with no pools. Since engine 10 (ruling 286) best-Nth compares a larger
- * pool's candidate without its results against the pool's bottom k, and refuses a pool with k > 0 that hands none
- * (STAGE_NOT_READY `pool_results_missing`).
+ * What best-Nth reads of a source stage, from ONE load of it — the one reader both seeding builders hand `resolveProgression`
+ * (`bestNthSourceOf`, usecases/pool-results.ts):
+ * - W2d T12 (spec §5.9, ST-G4, X-TB-7): how the stage compares entrants from DIFFERENT groups, for `SourceTables.crossGroup`
+ *   — its effective `crossGroup` order (the pin once active: a B1-migrated pin's is the pre-W2d list, so its seats do not
+ *   move), its seeds, rngSeed and `winsCount`, and the cross-group draws stored under its "" pool (`crossGroupRulesOf`). The
+ *   draws best-Nth makes come back as its `newLotsDraws`, stored with `persistLotsDraws(tx, stageId, null, …)` under the
+ *   division lock.
+ * - W5 app PR B T0 (G4; RB5-U1, X-UP-1): each pool's counted results as the stage's own fold makes them
+ *   (`completeTableStage`'s `PoolTable.results`: the paid results of the pool's decided and walked-over fixtures), keyed by
+ *   the fold's pool key — the pool's uuid. Since engine 10 (ruling 286) best-Nth compares a larger pool's candidate without
+ *   its results against the pool's bottom k = size − min, and refuses a pool with k > 0 that hands none (STAGE_NOT_READY
+ *   `pool_results_missing`). A stage whose fixtures name ONE table (a league, a Swiss, a one-pool group) has k = 0 by
+ *   definition and is not folded: its map is empty (Task 0 review m2).
  *
  * One load, because the rules' `gamePoints` reader is identity-keyed on the very result objects that load paid
  * (`gamePointsReader`): a reduced row's Sonneborn-Berger, recomputed over results from a second load, would ask for results
@@ -706,8 +701,10 @@ export async function loadBestNthSource(
 ): Promise<{ crossGroup: CrossGroupRules; poolResults: ReadonlyMap<string, readonly FixtureResult[]> }> {
   const inputs = await loadStageInputs(tx, stageId);
   const stage = toTableStage(inputs, await loadLotsDraws(tx, stageId));
+  const crossGroup = crossGroupRulesOf(stage);
+  if (new Set(inputs.tableFixtures.map((f) => f.poolId ?? "")).size <= 1) return { crossGroup, poolResults: new Map() };
   const { tables } = completeTableStage(stage, inputs.tableFixtures);
-  return { crossGroup: crossGroupRulesOf(stage), poolResults: new Map(tables.pools.map((p) => [p.pool, p.results ?? []])) };
+  return { crossGroup, poolResults: new Map(tables.pools.map((p) => [p.pool, p.results ?? []])) };
 }
 
 /**

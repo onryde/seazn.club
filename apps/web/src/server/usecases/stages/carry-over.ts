@@ -14,7 +14,7 @@ import { attachFeedRefs, engineRoundOf, laneDepthOf } from "@/server/engine-db/b
 import { personalPointsLeaderboard } from "../americano";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
-import { cutEligiblePools, departedLoseBestNth, resolveProgressionSource, sourceShapeOf, persistCrossGroupDraws } from "../stage-seeding";
+import { cutEligiblePools, departedLoseBestNth, resolveProgressionSource, sourceShapeOf, persistCrossGroupDraws, sourcePoolKeys } from "../stage-seeding";
 import { bestNthSourceOf, withPoolResults } from "../pool-results";
 import { STAGE_COLS, REAL_TABLE_KINDS, BRACKET_KINDS, type Tx, type StageRow } from "./types";
 import { departedEntrantIds } from "./helpers";
@@ -256,14 +256,13 @@ async function tablesForCompletedStage(
   divisionId: string,
 ): Promise<SourceTables> {
   let pools: PoolTable[];
-  if (stage.kind === "americano") {
+  // Pool uuid -> spec-facing key, read once: the snapshots and the fold's pool results both take it (Task 0 review m2).
+  const keyOf = stage.kind === "americano" ? undefined : await sourcePoolKeys(tx, stage.id);
+  if (keyOf === undefined) {
     pools = await americanoPlacementTables(tx, stage.id, divisionId);
   } else {
     // Ranked tables from the completion snapshot(s); translate pool uuids
     // back to their spec-facing keys.
-    const poolRows = await tx<{ id: string; key: string }[]>`
-      select id, key from pools where stage_id = ${stage.id}`;
-    const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
     const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
       select pool_id, rows from standings_snapshots where stage_id = ${stage.id}`;
     if (snapshots.length === 0) {
@@ -278,7 +277,7 @@ async function tablesForCompletedStage(
   }
   // W5 app PR B T0 (G4, RB5-U1): a real table's pools carry their counted results, as on the setup path (`sourcesToTables`), so
   // best-Nth compares a larger pool's candidate without its results against the pool's bottom k; the rules come from the same load.
-  const real = REAL_TABLE_KINDS.has(stage.kind) ? await bestNthSourceOf(tx, stage.id) : undefined;
+  const real = REAL_TABLE_KINDS.has(stage.kind) && keyOf !== undefined ? await bestNthSourceOf(tx, stage.id, keyOf) : undefined;
   if (real !== undefined) pools = withPoolResults(pools, real.results);
   // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
   // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`); since W4

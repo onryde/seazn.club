@@ -373,15 +373,24 @@ export function poolTableRowsAcrossSources(tables: readonly SourceTables[]): Poo
   return tables.flatMap((t, i) => t.pools.map((p) => ({ pool: `${i}:${p.pool}`, rows: p.rows })));
 }
 
+/** A stage's pool uuid -> spec-facing key ('A'…), the one translation a snapshot's `pool_id` and the fold's pool results both
+ *  take (`sourceStandingsTables`, `bestNthSourceOf`): read once per source by a builder that needs both. */
+export async function sourcePoolKeys(tx: Tx, stageId: string): Promise<ReadonlyMap<string, string>> {
+  const poolRows = await tx<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${stageId}`;
+  return new Map(poolRows.map((p) => [p.id, p.key]));
+}
+
 /** The source stage's standings, as PoolTableRows keyed by pool KEY ('A'…,
  *  "" for the overall/ungrouped table) — mirrors seedNextStage's own
- *  pool-uuid -> key translation. Throws SEEDING_SOURCE_INCOMPLETE if nothing
- *  has been snapshotted yet (the source stage may exist but have no
+ *  pool-uuid -> key translation (`keyOf`: the caller's own read of `sourcePoolKeys`, else read here). Throws
+ *  SEEDING_SOURCE_INCOMPLETE if nothing has been snapshotted yet (the source stage may exist but have no
  *  results). */
-export async function sourceStandingsTables(tx: Tx, source: { id: string }): Promise<PoolTableRows[]> {
-  const poolRows = await tx<{ id: string; key: string }[]>`
-    select id, key from pools where stage_id = ${source.id}`;
-  const keyOf = new Map(poolRows.map((p) => [p.id, p.key]));
+export async function sourceStandingsTables(
+  tx: Tx,
+  source: { id: string },
+  keyOf: ReadonlyMap<string, string> | undefined = undefined,
+): Promise<PoolTableRows[]> {
+  keyOf ??= await sourcePoolKeys(tx, source.id);
   const snapshots = await tx<{ pool_id: string | null; rows: StandingsRow[] }[]>`
     select pool_id, rows from standings_snapshots where stage_id = ${source.id}`;
   if (snapshots.length === 0) {
@@ -469,14 +478,15 @@ export async function sourcesToTables(
     // ids the next stage's roster does not contain. Shares the on_complete
     // path's reader rather than re-deriving it (see its doc comment,
     // stages/).
+    const keyOf = source.kind === "americano" ? undefined : await sourcePoolKeys(tx, source.id);
     const standings =
-      source.kind === "americano"
+      keyOf === undefined
         ? await americanoPlacementTables(tx, source.id, target.division_id)
-        : await sourceStandingsTables(tx, source);
+        : await sourceStandingsTables(tx, source, keyOf);
     // W5 app PR B T0 (G4, RB5-U1): a real table's pools carry their counted results from here on, so every copy below (the
     // departed cut, the earned table `keepExhaustedSeatsDead` restores, a lucky loser's cut) keeps them, and best-Nth compares a
     // larger pool's candidate without its results against the pool's bottom k. Its cross-group rules come from the same load.
-    const real = REAL_TABLE_KINDS.has(source.kind) ? await bestNthSourceOf(tx, source.id) : undefined;
+    const real = REAL_TABLE_KINDS.has(source.kind) && keyOf !== undefined ? await bestNthSourceOf(tx, source.id, keyOf) : undefined;
     const read = real === undefined ? standings : withPoolResults(standings, real.results);
     // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills) — and since
     // W4 T13 a league's or a group's (RB4-V6). A knockout source's departed qualifier takes a lucky loser in her place
@@ -559,7 +569,7 @@ async function luckyLoserOrderFor(
 
 /** W2d T12 (spec §5.9, X-TB-7): store the cross-group draws best-Nth made, each under its source stage's pool null
  *  (`stage_lots_draws.pool_id` null; a pooled stage has no "" table of its own, and a one-pool source never ties across
- *  groups), where `loadCrossGroupRules` reads them back — so a re-proposal or a re-complete seats the same order. The
+ *  groups), where `loadBestNthSource` reads them back — so a re-proposal or a re-complete seats the same order. The
  *  caller holds the division lock. */
 export async function persistCrossGroupDraws(
   tx: Tx,

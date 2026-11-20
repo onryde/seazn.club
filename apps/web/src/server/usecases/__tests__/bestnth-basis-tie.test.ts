@@ -15,7 +15,7 @@
 //              then id") on the neither class.
 // Each case is built through the REAL setup path: real stages/fixtures, a constructed standings snapshot per pool (the cases
 // need candidates LEVEL on every metric step, which no honest result set produces on three sports), the real
-// computeSeedProposal (sourcesToTables -> loadCrossGroupRules -> resolveProgression -> persistCrossGroupDraws).
+// computeSeedProposal (sourcesToTables -> bestNthSourceOf -> loadBestNthSource -> resolveProgression -> persistCrossGroupDraws).
 //
 // Expected values are derived from the case's declared inputs and the engine's own declarations (`defaultCrossGroup`,
 // `lotSeed`, `shuffle`), never from the resolver under test. Every case chooses its ids, seeds and rngSeed so that the right
@@ -371,12 +371,13 @@ function pickSeed(ok: (s: number) => boolean, what: string): number {
   throw new Error(`no rngSeed in 1..5000 gives ${what}`);
 }
 
-/** The cross-group order the APP hands the engine for a stage (`loadCrossGroupRules`) — read through its own door. */
+/** The cross-group order the APP hands the engine for a stage — read through the real reader both seeding builders call
+ *  (`bestNthSourceOf` -> `loadBestNthSource`). */
 async function loadedOrderOf(auth: AuthCtx, stageId: string): Promise<readonly string[]> {
-  const { loadCrossGroupRules } = await import("@/server/engine-db/competition");
+  const { loadBestNthSource } = await import("@/server/engine-db/competition");
   const { withTenant } = await import("@/lib/db");
-  const rules = await withTenant(auth.orgId, (tx) => loadCrossGroupRules(tx, stageId));
-  return rules.order as readonly string[];
+  const { crossGroup } = await withTenant(auth.orgId, (tx) => loadBestNthSource(tx, stageId));
+  return crossGroup.order as readonly string[];
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -430,7 +431,7 @@ describe.skipIf(!HAS_DB)("X-PD-8 a best-Nth basis tie across pools falls to the 
           it(`X-PD-8 ${row} x ${P} pools, ${cls.name} cascade (${cls.sport}${cls.pin ? ", legacy migrated pin" : ""}), ${shape}`, async () => {
             const r = await runCase({ row, P, cls, shape });
             // The class's own declared cascade is what the app handed the engine.
-            expect(r.loadedOrder, "loadCrossGroupRules carries the stage's declared cross-group order").toEqual(r.declaredOrder);
+            expect(r.loadedOrder, "loadBestNthSource carries the stage's declared cross-group order").toEqual(r.declaredOrder);
             expect(r.expected, "premise: P - 1 best-Nth seats are asserted").toHaveLength(P - 1);
             expect(r.seats, `the best-Nth seats are the ${cls.name} cascade's`).toEqual(r.expected);
             expect(r.second, "a second proposal (the store now answering) seats the same entrants in the same order").toEqual(r.expected);
