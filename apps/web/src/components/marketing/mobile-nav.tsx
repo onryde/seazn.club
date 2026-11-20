@@ -11,6 +11,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Menu, X } from "lucide-react";
+import { useSessionHint } from "@/components/marketing/nav-session-swap";
 
 export interface MobileNavLink {
   href: string;
@@ -37,6 +38,7 @@ export function MarketingMobileNav({
   openLabel,
   closeLabel,
   auth = [],
+  authSignedIn,
 }: {
   /** Rendered above `links`, each under its own heading. */
   groups?: MobileNavGroup[];
@@ -47,7 +49,15 @@ export function MarketingMobileNav({
    *  actions are in the bar itself, so showing them twice would put two
    *  "Start free" controls on one screen. */
   auth?: MobileNavAuthLink[];
+  /**
+   * Only for a page that cannot read the session on the server (MarketingNav `auth="client"`): `auth` is then the
+   * signed-out set, and these replace it once the browser carries the signed-in hint (nav-session-swap.tsx).
+   * Left out, `auth` is final, as the server decided it.
+   */
+  authSignedIn?: MobileNavAuthLink[];
 }) {
+  const hinted = useSessionHint();
+  const shownAuth = authSignedIn && hinted ? authSignedIn : auth;
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -135,12 +145,12 @@ export function MarketingMobileNav({
             {l.label}
           </Link>
         ))}
-        {auth.length > 0 && (
+        {shownAuth.length > 0 && (
           // `sm:hidden` because from `sm` up these actions are in the bar
           // itself — without it a 640-767px viewport (where the hamburger is
           // still shown) would carry two "Start free" controls at once.
           <div className="sm:hidden mt-1 border-t border-purple-100 pt-1">
-            {auth.map((a) => (
+            {shownAuth.map((a) => (
               <Link
                 key={a.href}
                 role="menuitem"

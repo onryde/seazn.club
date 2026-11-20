@@ -17,6 +17,7 @@ export function MarketingShell({
   variant = "light",
   lang = "en",
   hideBackButton = false,
+  auth = "server",
   children,
 }: {
   variant?: "night-scroll" | "light";
@@ -32,11 +33,13 @@ export function MarketingShell({
    *  all, it's a top-level page. Every other MarketingShell caller keeps the
    *  button (default false). */
   hideBackButton?: boolean;
+  /** `"client"` keeps the shell free of any session read, so the page stays cacheable (MarketingNav). Default `"server"`. */
+  auth?: "server" | "client";
   children: React.ReactNode;
 }) {
   return (
     <div className={`${displayFont.variable} flex min-h-screen flex-col`}>
-      <MarketingNav variant={variant} lang={lang} />
+      <MarketingNav variant={variant} lang={lang} auth={auth} />
       {showBackButton(variant, hideBackButton) ? (
         <div className="mx-auto w-full max-w-6xl px-4 pt-4">
           <BackButton />

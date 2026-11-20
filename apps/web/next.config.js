@@ -98,7 +98,7 @@ const nextConfig = {
   // logs dataset for the project.
   serverExternalPackages: ["pdfkit", "exceljs", "pino"],
   outputFileTracingIncludes: {
-    "/*": ["src/lib/email-templates/html/**/*", "content/help/**/*"],
+    "/*": ["src/lib/email-templates/html/**/*", "content/help/**/*", "content/blog/**/*"],
   },
   // PostHog reverse proxy: front analytics through our own origin so
   // ad-blockers don't drop events. Client posts to /ingest (see

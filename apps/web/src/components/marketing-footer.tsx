@@ -28,6 +28,7 @@ const COLS: Array<{ headKey: string; links: FooterLink[] }> = [
       { key: "footer.link.liveNow", href: "/live" },
       { key: "footer.link.games", href: "/games" },
       { key: "footer.link.help", href: "/help" },
+      { key: "nav.blog", href: "/blog" },
       // Only while the Revshare program is live (NEXT_PUBLIC_REVSHARE_ENABLED=1) —
       // see footerCols(); the /affiliates page 404s otherwise.
       { key: "footer.link.affiliates", href: "/affiliates", requiresRevshare: true },

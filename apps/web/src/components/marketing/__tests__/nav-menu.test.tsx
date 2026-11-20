@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { NavMenu } from "../nav-menu";
 import { MarketingMobileNav } from "../mobile-nav";
-import { NAV_GROUPS, PRODUCT_LINKS, SPORT_LINKS, TOP_LINKS, navHrefs } from "@/lib/marketing/product-nav";
+import { HELP_LINK, NAV_GROUPS, PRODUCT_LINKS, SPORT_LINKS, TOP_LINKS, navHrefs } from "@/lib/marketing/product-nav";
 import { LOCALES } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/marketing.json";
 import fr from "@/dictionaries/fr/marketing.json";
@@ -29,13 +29,17 @@ describe("product nav ledger", () => {
     expect(hrefs).not.toContain("/scheduling");
     expect(hrefs).toContain("/pricing");
     expect(hrefs).toContain("/live");
+    // Blog is a top-level link between the Sports menu and Pricing; Help is the icon beside the sign-in actions (owner, 2026-11-19).
+    expect(TOP_LINKS.map((l) => l.href)).toEqual(["/blog", "/pricing", "/live"]);
+    expect(hrefs).toContain("/blog");
+    expect(hrefs).toContain("/help");
     expect(new Set(hrefs).size).toBe(hrefs.length);
-    expect(hrefs.length).toBe(PRODUCT_LINKS.length + SPORT_LINKS.length + TOP_LINKS.length);
+    expect(hrefs.length).toBe(PRODUCT_LINKS.length + SPORT_LINKS.length + TOP_LINKS.length + 1);
   });
 
   it("every label key exists in every locale", () => {
     let checked = 0;
-    const keys = [...NAV_GROUPS.map((g) => g.key), ...NAV_GROUPS.flatMap((g) => g.links.map((l) => l.key)), ...TOP_LINKS.map((l) => l.key)];
+    const keys = [...NAV_GROUPS.map((g) => g.key), ...NAV_GROUPS.flatMap((g) => g.links.map((l) => l.key)), ...TOP_LINKS.map((l) => l.key), HELP_LINK.key];
     for (const lang of LOCALES) for (const k of keys) {
       expect(DICTS[lang]![k], `${lang} ${k}`).toBeTruthy();
       checked++;
@@ -98,7 +102,7 @@ describe("NavMenu", () => {
 describe("mobile nav groups", () => {
   it("lists every nav href once, under its group heading", () => {
     const groups = NAV_GROUPS.map((g) => ({ label: en[g.key as keyof typeof en], links: g.links.map((l) => ({ href: l.href, label: en[l.key as keyof typeof en] })) }));
-    const top = TOP_LINKS.map((l) => ({ href: l.href, label: en[l.key as keyof typeof en] }));
+    const top = [...TOP_LINKS, HELP_LINK].map((l) => ({ href: l.href, label: en[l.key as keyof typeof en] }));
     const html = renderToStaticMarkup(<MarketingMobileNav groups={groups} links={top} openLabel="Open menu" closeLabel="Close menu" />);
     let checked = 0;
     for (const href of navHrefs()) {

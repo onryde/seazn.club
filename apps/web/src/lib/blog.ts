@@ -58,3 +58,62 @@ export const BLOG_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export function blogUrl(slug: string): string {
   return `/blog/${slug}`;
 }
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] as const;
+
+/**
+ * An ISO `YYYY-MM-DD` the way a person reads it: "20 November 2026" (`long`) or "20 Nov 2026" (`short`).
+ * Hand-built from the ISO parts, never `Intl`: the short month's spelling ("Sept" or "Sep") differs between ICU
+ * releases, and a date is stated in UTC, so a reader in another time zone never sees the day before.
+ */
+export function formatBlogDate(iso: string, style: "long" | "short" = "long"): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  const month = m ? MONTHS[Number(m[2]) - 1] : undefined;
+  if (!m || !month) throw new Error(`blog date: '${iso}' is not YYYY-MM-DD`);
+  return `${Number(m[3])} ${style === "short" ? month.slice(0, 3) : month} ${m[1]}`;
+}
+
+/** The dictionary key (marketing namespace) of a topic's name. */
+export const blogTopicKey = (topic: BlogTopic): string => `blog.topic.${topic}`;
+
+/** One post as the index draws it. Everything a reader sees is already text here. */
+export interface BlogIndexPost {
+  slug: string;
+  title: string;
+  /** ISO date, for the `datetime` attribute. */
+  date: string;
+  dateLabel: string;
+  /** `"all"`: shown under every sport chip. */
+  sports: "all" | SportKey[];
+  /** The sport names the post is tagged with; empty for an every-sport post (the index prints one "Every sport" mark). */
+  tags: string[];
+}
+
+export interface BlogIndexGroup {
+  topic: BlogTopic;
+  label: string;
+  posts: BlogIndexPost[];
+}
+
+export interface BlogSportChip {
+  key: SportKey;
+  label: string;
+  /** Posts shown under the chip: the ones that name the sport, and every every-sport post. */
+  count: number;
+}
+
+/** The words the index island prints; resolved on the server from the marketing dictionary. */
+export interface BlogIndexLabels {
+  filterLabel: string;
+  allSports: string;
+  everySport: string;
+  topics: string;
+  postOne: string;
+  postMany: string;
+  empty: string;
+}
+
+/** Whether a post shows under a sport chip: a post for every sport shows under all of them. */
+export function blogPostShowsFor(post: Pick<BlogIndexPost, "sports">, sport: SportKey): boolean {
+  return post.sports === "all" || post.sports.includes(sport);
+}
