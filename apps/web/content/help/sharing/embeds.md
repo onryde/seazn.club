@@ -1,30 +1,36 @@
 ---
 title: Embeds for your website
-description: Paste one snippet into your club site — live standings, schedule or bracket, always current.
+description: Paste a snippet into your club's website to show live standings, a schedule or a bracket from one division.
 order: 4
+related: sharing/visibility, sharing/dashboard, billing/plans
 ---
 
-Pro orgs can **embed** live standings, a schedule or a bracket into any website — WordPress, Squarespace, a hand-written club page.
+An embed puts a live widget from one division on your own website: the standings, the schedule or the bracket. It works on any site that accepts HTML, such as WordPress or Squarespace. It is on Pro, Enterprise and the Event Pass, and it keeps itself up to date.
+
+![The Sharing and embed panel with tabs for Standings, Schedule and Bracket, a code snippet and a Copy snippet button.](/help/sharing/embed-panel.webp "Sharing and embed, in a division's settings.")
 
 ## Get the snippet
 
-Open the division's **Settings tab → Sharing & embed**, pick what to embed, and copy the snippet. It's a single iframe:
+1. Open the division, then **Settings**, then **Sharing & embed**.
+2. Under **Embed on your website**, choose **Standings**, **Schedule** or **Bracket**.
+3. Select **Copy snippet**.
+4. Paste it where your site takes HTML.
 
-```
-<iframe src="https://seazn.club/embed/divisions/…/standings"
-        style="width:100%;border:0" loading="lazy"></iframe>
-```
+The snippet has two parts: an `<iframe>` that shows the widget, and a short `<script>` that fits the widget's height to its content. Paste both. The panel reads **Paste this snippet into your club site — it stays in sync by itself.**
 
-Paste it wherever your site accepts HTML. The widget sizes its own height and keeps itself up to date — you never touch it again.
+A division without a knockout stage reads **No bracket stage in this division.** in the **Bracket** widget.
 
-## What it respects
+## What an embed follows
 
-- **Visibility** — embeds of private divisions show nothing; link-only ones work.
-- **Youth privacy** — shortened names, same as the dashboard.
-- **Your branding** — the widget carries your accent colour.
+- **Visibility.** A **Private** competition has no embed. The widget returns not found. A **Link only** or **Public** competition works. After a switch to **Private**, an embed already on your site can keep showing for up to a minute.
+- **Youth privacy.** Players in a youth division show with shortened names.
+- **Colour.** The widget carries only the **competition's own brand colour**. Your organisation's brand colour does not reach it.
+- **Language.** It is written in your organisation's **Public language**. See [languages](/help/sharing/languages).
+- **Attribution.** Every widget ends with **Run your own free →**, on every plan.
 
-## Common questions
+## Plans
 
-**Why is my embed empty?** The division's competition is Private — switch it to Link only or Public.
+On Community the panel shows **PRO ✦** and **Embedding live widgets on your own website is on Pro and the Event Pass.** with an **Upgrade →** link. The widget addresses return not found.
 
-**Does it slow my site?** It lazy-loads and weighs less than most images.
+> **Example**
+> **Singles League** is **Link only**. You copy the **Standings** snippet, paste it into your club's results page and the table appears with the club's standings, ending in **Run your own free →**. You change **Singles League** to **Private**. After a minute the widget on your site no longer shows the table.
