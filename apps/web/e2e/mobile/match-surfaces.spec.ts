@@ -17,9 +17,11 @@ import {
   seedRosteredFixture,
   overflowingIn,
   matchRoomPathBySql,
+  withDb,
 } from "../helpers";
-import { longName, roundGameSql, seedOnlineRound, uiEn } from "../match-room-kit";
-import { cancelFlaggedSql, holdNoShowSql } from "../arbiter-column-kit";
+import { longName, roundGameSql, seedOnlineRound, seedSeatInvite, uiEn } from "../match-room-kit";
+import { backdateOpenSql, cancelFlaggedSql, holdNoShowSql } from "../arbiter-column-kit";
+import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../../src/server/external-play/window";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import {
   HIT_TARGET_FLOOR_PX,
@@ -1050,4 +1052,68 @@ test("match day online block: boards are rows of the list; a row opens its panel
   }
 
   console.log(`[match-day online ${width}px] ${r.boards.length} board rows + 1 round row; ${rings.length} rings on their word's line; clipped ${clipped.length}; ${phone ? "phone: full-screen panel and back" : "tablet: panel beside the list"}`);
+});
+
+// Match Day online, Task 7 fix round (review M6): the ROUND PANEL at this project's real width, with the names that break a row. One Swiss
+// round open for check-in, three boards, every player a 43-character name (the same shape as the list cell above): the waiting list's rows
+// ("Not here yet" - a board's names, Resend, +5) and the link-hold block (a board held for a Lichess link: its names, its reason, "Open round N
+// again") are where a name meets a button. Asserted at 320..834: nothing scrolls the page sideways, nothing clips inside the panel, every
+// press is a 44px target hit-tested; with the window run out and another board bound, the closed sentence replaces the press, still clean.
+test("match day round panel: 43-character names on the check-in rows and the link-hold block do not clip or scroll sideways; presses are 44px targets", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(420_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const r = await seedOnlineRound(request, Array.from({ length: 6 }, () => longName()), { camera: "optional", stage: "swiss", open: true });
+  expect(r.boards.length, "premise: three boards in round 1").toBe(3);
+  const heldBoard = r.boards[0]!;
+  // What the open's own skip leaves on a board whose player has not linked Lichess (open-round.ts `heldBoards`).
+  await withDb(
+    (sql) => sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'lichess_unlinked', updated_at = now() where fixture_id = ${heldBoard.fixtureId}`,
+  );
+  const url = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day?round=${r.stageId}:1`;
+  await page.goto(url, { waitUntil: "load" });
+  const panel = page.getByTestId("md-focus");
+  await expect(panel, "the round panel is on screen").toBeVisible({ timeout: 30_000 });
+  await expect(panel).toHaveAttribute("data-online", "round");
+  await expect(panel).toHaveAttribute("data-state", "checkin");
+
+  // ── the check-in rows: the two boards still waiting, each seat's name ────────────────────────────────────────────────────────────
+  const rows = page.getByTestId("arbiter-waiting-row");
+  await expect(rows, "the two boards that are not held are waited on").toHaveCount(2);
+  const checkinRows = await rows.count();
+  // ── the link-hold block: the held board, its reason, and the round's own press ───────────────────────────────────────────────────
+  const block = page.getByTestId("md-round-linkhold");
+  await expect(block).toBeVisible();
+  await expect(block.getByTestId("md-round-linkhold-board")).toHaveCount(1);
+  const again = page.getByTestId("md-round-reopen-cta");
+  await expect(again, "nobody is bound to the open: the press is offered, under the reason").toHaveCount(1);
+  await expect(block.getByTestId("md-round-reopen-cta"), "and it stands inside the block").toHaveCount(1);
+
+  const check = async (state: string): Promise<{ clipped: number }> => {
+    await expectNoHorizontalScroll(page);
+    const scan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div", "the round panel was not in the DOM");
+    expect(scan.clipped, `the round panel clips content at ${width}px (${state})`).toEqual([]);
+    for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+    return { clipped: scan.clipped.length };
+  };
+  const first = await check("check-in rows and a running link hold");
+  await assertTapFloor(again, "Open round 1 again");
+  await assertTapFloor(rows.first().getByTestId("arbiter-waiting-extend"), "a board's +5");
+  await assertTapFloor(page.getByTestId("arbiter-extend-round-cta"), "the round's +5");
+
+  // ── the window run out with another board bound: the closed sentence replaces the press ──────────────────────────────────────────
+  await seedSeatInvite(r.boards[1]!.fixtureId, "white", "sent");
+  await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS + 120_000);
+  await page.reload({ waitUntil: "load" });
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("md-round-linkhold-board")).toHaveAttribute("data-window-closed", "true");
+  await expect(page.getByTestId("md-round-linkhold-closed"), "the closed word is said").toBeVisible();
+  await expect(page.getByTestId("md-round-reopen-cta"), "and there is no press to loop on").toHaveCount(0);
+  const second = await check("the link hold's window closed");
+
+  console.log(`[match day round panel ${width}px] ${checkinRows} check-in rows, 1 link hold; clipped ${first.clipped}/${second.clipped}`);
 });

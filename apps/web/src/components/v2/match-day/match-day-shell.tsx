@@ -187,6 +187,10 @@ export function MatchDayShell({
   const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
   /** A press in the round panel changed the day: the quiet read, with a stable identity (the panel's runners are built over it). */
   const refreshQuiet = useCallback(() => void refresh(), [refresh]);
+  /** MD-R30: a press in the round panel was answered 402. The `frozen` prop is read when the page loads and never lifts, so a freeze that lands under an
+   *  open page would leave every press standing until a reload; this keeps what the server just said and folds it into the reader (`readerOf`). */
+  const [freezeSeen, setFreezeSeen] = useState(false);
+  const onFrozen = useCallback(() => setFreezeSeen(true), []);
   /** A court's tail countdown ended: quiet, and one read per second however many countdowns end on the same tick. */
   const lastTailRead = useRef(0);
   const tailTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -265,7 +269,7 @@ export function MatchDayShell({
         : null;
   /** What the online panels read for who may press what (`mayPress`): the viewer's role, the club's flag (the round's own) and the
    *  competition's billing freeze (the `frozen` prop, the flag that hides Call and Undo). */
-  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen });
+  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozen || freezeSeen });
   /** The phone's way back from a round or a board (ruling MD-R27): the list, on every day. A board is not a court, so the courts' noun
    *  ("All courts") stays with the courts' own panels. */
   const onlineBackLabel = t(dict, "matchDay.back.list");
@@ -588,6 +592,7 @@ export function MatchDayShell({
               backLabel={onlineBackLabel}
               onBack={() => setPhoneOpen(false)}
               onChanged={refreshQuiet}
+              onFrozen={onFrozen}
               onOpenBoard={openBoard}
               onOpenRound={openRound}
               hiddenOnPhone={!phoneCourt}

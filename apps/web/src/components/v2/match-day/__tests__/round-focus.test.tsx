@@ -26,7 +26,7 @@ import { NEEDS_REASONS } from "@/server/external-play/types";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
 import type { MatchDayCtx } from "../court-focus";
 import { OpenRoundBlockView, RoundFocus, WaitingList, type RoundFocusProps } from "../round-focus";
-import { arbiterRound, board, done, iso, live, NOW, openWindow, overRound, playingRound, round, withState } from "./_online-fixtures";
+import { arbiterRound, board, done, held, iso, live, NOW, openWindow, overRound, playingRound, round, withState } from "./_online-fixtures";
 
 type Call = { url: string; json?: unknown; resolve: (v: unknown) => void; reject: (e: unknown) => void };
 const net = vi.hoisted(() => ({ calls: [] as Call[] }));
@@ -97,6 +97,7 @@ const props = (r: MatchDayOnlineRound, o: Partial<RoundFocusProps> = {}): RoundF
   backLabel: "All rounds",
   onBack: noop,
   onChanged: noop,
+  onFrozen: noop,
   onOpenBoard: noop,
   onOpenRound: noop,
   ...o,
@@ -118,6 +119,22 @@ const textIn = (h: string, testid: string): string | null => {
   while ((m = re.exec(h)) !== null) {
     depth += m[1] === "/" ? -1 : 1;
     if (depth === 0) return h.slice(from, m.index).replace(/<[^>]+>/g, "");
+  }
+  return null;
+};
+
+/** The inner HTML of the first element with this test id (tags kept): where a thing STANDS is asserted on what its container holds. */
+const innerOf = (h: string, testid: string): string | null => {
+  const open = new RegExp(`<([a-z0-9]+)\\b[^>]*data-testid="${testid}"[^>]*>`).exec(h);
+  if (!open) return null;
+  const re = new RegExp(`<(/?)${open[1]}\\b[^>]*>`, "g");
+  re.lastIndex = open.index + open[0].length;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  const from = open.index + open[0].length;
+  while ((m = re.exec(h)) !== null) {
+    depth += m[1] === "/" ? -1 : 1;
+    if (depth === 0) return h.slice(from, m.index);
   }
   return null;
 };
@@ -548,19 +565,280 @@ describe("RoundFocus: Pair next round - the stage rail's own route, one request,
     expect(textIn(h, "md-round-pair-notice"), "the answer stays said").toContain(t("matchDay.round.pairedNotice", { round: 4 }));
   });
 
-  it("a refusal says what the server said; the freeze says the freeze", async () => {
+  it("a refusal says what the server said; a 402 is a PLAN LIMIT in generic words, never the freeze sentence (MD-R32: the generate route has no freeze guard)", async () => {
     const r = overRound("stage-1:3", { pair_next_round: 4 });
     const ui = renderIsland(RoundFocus, props(r));
     pairProps(ui)!.onPair(4);
-    net.calls[0]!.reject(new ApiV1Error("frozen", 402, "PAYMENT_REQUIRED", { feature_key: "competitions.max_active" }));
+    net.calls[0]!.reject(new ApiV1Error("plan", 402, "PAYMENT_REQUIRED", { feature_key: "stages.max" }));
     await flush();
     expect(pairProps(ui)!.state.notice).toMatchObject({ kind: "failed", code: "PAYMENT_REQUIRED" });
     const el = ui.tree().find((e) => typeof propsOf(e).onPair === "function")!;
-    expect(underEnglish(el)).toContain(esc(en["runsheet.round.err.frozen"]!));
+    expect(underEnglish(el)).toContain(esc(en["matchDay.round.pairPlanLimit"]!));
+    expect(underEnglish(el), "not the sentence about active competitions").not.toContain(esc(en["runsheet.round.err.frozen"]!));
+    expect(en["matchDay.round.pairPlanLimit"], "the two sentences really differ").not.toBe(en["runsheet.round.err.frozen"]);
     // an unreadable failure is the panel's own sentence
     pairProps(ui)!.onPair(4);
     net.calls[1]!.reject(new Error("network"));
     await flush();
     expect(underEnglish(ui.tree().find((e) => typeof propsOf(e).onPair === "function")!)).toContain(esc(en["matchDay.round.pairFailed"]!));
+  });
+});
+
+// ---- Task 7 fix round 1: MD-R30 / MD-R31 / MD-R32 and the review's minors (M1, M3, M5) -------------------------------------------
+
+describe("RoundFocus: MD-R31 - no 'X of N playing' above 'N boards finished'", () => {
+  it("EMPTY CASE FIRST: a round with no board on screen prints no count at all", () => {
+    const none = round("stage-1:3", "playing", arbiterRound([]));
+    expect(count(html(none), "arbiter-column-playing")).toBe(0);
+    expect(count(html(none), "arbiter-column-finished")).toBe(0);
+  });
+
+  it("every board over: the finished line stands alone; any board still playing, held or waiting to restart keeps the playing line", () => {
+    const allOver = html(round("stage-1:3", "playing", arbiterRound([done("1-0"), done("0-1")])));
+    expect(count(allOver, "arbiter-column-playing"), "all over: no playing line").toBe(0);
+    expect(textIn(allOver, "arbiter-column-finished")).toBe(pl("arbiter.column.finished", 2));
+    const cases: [string, MatchDayOnlineRound, number][] = [
+      ["one still plays", round("stage-1:3", "playing", arbiterRound([done("1-0"), live()])), 1],
+      ["one is held", round("stage-1:3", "playing", arbiterRound([done("1-0"), done("0-1"), held()])), 0],
+    ];
+    for (const [why, r, playing] of cases) {
+      const h = html(r);
+      expect(textIn(h, "arbiter-column-playing"), why).toBe(pl("arbiter.column.playing", r.round!.boards.length, { count: playing, total: r.round!.boards.length }));
+    }
+    expect(cases.length, "anti-vacuity: both negatives are read").toBe(2);
+    // a board owed its invite again is "waiting to restart", not finished: the round is NOT all over, so the line stays
+    const owedView = VIEW({ state: "open", press: "reinvite", pairings: [P(1, { fixtureId: "o-1", owedSeats: 2 })] });
+    const waiting = html(round("stage-1:3", "playing", arbiterRound([done("1-0", { fixtureId: "o-1" }), done("0-1")]), { view: owedView }));
+    expect(count(waiting, "arbiter-column-playing"), "a board waiting to restart keeps it").toBe(1);
+  });
+});
+
+describe("RoundFocus: MD-R30 - a 402 on a guarded press tells the shell the competition froze", () => {
+  const waiting = (ui: ReturnType<typeof renderIsland<RoundFocusProps>>) => propsOf(ui.tree().find((e) => e.type === WaitingList)!) as unknown as { on: { extendBoard(id: string): void }; openRound: { resend(id: string): void } };
+  const block = (ui: ReturnType<typeof renderIsland<RoundFocusProps>>) => propsOf(ui.tree().find((e) => e.type === OpenRoundBlockView)!) as unknown as BlockProps;
+  const frozen402 = () => new ApiV1Error("frozen", 402, "PAYMENT_REQUIRED", { feature_key: "competitions.max_active" });
+
+  it("each of the four guarded presses (open, resend, a board's +5, the round's +5) reports it once, and a poll's new row object does not report it again", async () => {
+    type Flow = { ui: ReturnType<typeof renderIsland<RoundFocusProps>>; r: MatchDayOnlineRound };
+    const flows: [string, (onFrozen: () => void) => Flow][] = [
+      [
+        "open",
+        (onFrozen) => {
+          const r = paired("stage-1:3", VIEW());
+          const ui = renderIsland(RoundFocus, props(r, { onFrozen }));
+          block(ui).on.ask();
+          block(ui).on.open();
+          return { ui, r };
+        },
+      ],
+      [
+        "resend",
+        (onFrozen) => {
+          const r = checkinFixture().r;
+          const ui = renderIsland(RoundFocus, props(r, { onFrozen }));
+          waiting(ui).openRound.resend("c-1");
+          return { ui, r };
+        },
+      ],
+      [
+        "a board's +5",
+        (onFrozen) => {
+          const r = checkinFixture().r;
+          const ui = renderIsland(RoundFocus, props(r, { onFrozen }));
+          waiting(ui).on.extendBoard("c-2");
+          return { ui, r };
+        },
+      ],
+      [
+        "the round's +5",
+        (onFrozen) => {
+          const r = checkinFixture().r;
+          const ui = renderIsland(RoundFocus, props(r, { onFrozen }));
+          const hero = ui.tree().find((e) => propsOf(e).roundExtend !== undefined)!;
+          (propsOf(propsOf(hero).roundExtend as ReactElement).onExtend as () => void)();
+          return { ui, r };
+        },
+      ],
+    ];
+    for (const [name, start] of flows) {
+      net.calls.length = 0;
+      const onFrozen = vi.fn();
+      const { ui, r } = start(onFrozen);
+      expect(net.calls, `${name}: one request is out`).toHaveLength(1);
+      expect(onFrozen, `${name}: nothing is reported before the answer`).not.toHaveBeenCalled();
+      net.calls[0]!.reject(frozen402());
+      await flush();
+      expect(onFrozen, `${name}: the 402 is reported`).toHaveBeenCalledTimes(1);
+      // a poll hands the panel a NEW row object with the same key: the answer still stands, and the shell is not told twice
+      ui.rerender(props({ ...r }, { onFrozen }));
+      await flush();
+      expect(onFrozen, `${name}: a poll's new row object does not report it again`).toHaveBeenCalledTimes(1);
+    }
+    expect(flows.length, "anti-vacuity: four presses").toBe(4);
+  });
+
+  it("an answer that is not the freeze reports nothing: a success, an unreadable failure, and Pair next's 402 (a plan limit, MD-R32)", async () => {
+    const reported = vi.fn();
+    const ui = renderIsland(RoundFocus, props(paired("stage-1:3", VIEW()), { onFrozen: reported }));
+    block(ui).on.ask();
+    block(ui).on.open();
+    net.calls[0]!.resolve({ opened: true, invited: 2, retrying: 0, skipped: [] });
+    await flush();
+    const other = renderIsland(RoundFocus, props(checkinFixture().r, { onFrozen: reported }));
+    waiting(other).on.extendBoard("c-1");
+    net.calls[1]!.reject(new Error("network"));
+    await flush();
+    const over = renderIsland(RoundFocus, props(overRound("stage-1:3", { pair_next_round: 4 }), { onFrozen: reported }));
+    const pairEl = over.tree().find((e) => typeof propsOf(e).onPair === "function")!;
+    (propsOf(pairEl).onPair as (round: number) => void)(4);
+    net.calls[2]!.reject(frozen402());
+    await flush();
+    expect(net.calls, "anti-vacuity: all three answers were driven").toHaveLength(3);
+    expect(reported).not.toHaveBeenCalled();
+  });
+});
+
+describe("RoundFocus: M1 - the window's closed sentence is never said beside the press that restarts the window", () => {
+  const closed = { ...openWindow(), canExtend: false, refusal: "closed" as const, deadlineAt: iso(NOW - 60_000) };
+  const heldRow = (press: OpenRoundView["press"]) => {
+    const b = withState({ kind: "on_hold" }, { fixtureId: "h-1", boardNo: 7, checkin: closed });
+    (b as { hold_reason?: string }).hold_reason = "lichess_unlinked";
+    return round("stage-1:3", "playing", arbiterRound([live(), b]), { view: VIEW({ state: "open", press, pairings: [P(1), P(7, { fixtureId: "h-1" })] }) });
+  };
+
+  it("no press (server none, or a reader who may not press): the sentence is said; the press offered: it is not (the board's own flag stays true)", () => {
+    const sentence = en[OPEN_ROUND_SKIP_KEYS.window_closed]!;
+    const none = html(heldRow("none"));
+    expect(textIn(none, "md-round-linkhold-closed")).toBe(sentence);
+    expect(count(none, "md-round-reopen-cta")).toBe(0);
+    let checked = 0;
+    for (const press of ["reopen", "reinvite"] as const) {
+      const h = html(heldRow(press));
+      expect(tagOf(h, "md-round-linkhold-board"), press).toContain('data-window-closed="true"');
+      expect(count(h, "md-round-linkhold-closed"), `${press}: the sentence would contradict the press`).toBe(0);
+      expect(count(h, "md-round-reopen-cta"), `${press}: positive pair, the press is offered`).toBe(1);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+    // a reader who may not press (frozen) is offered no press, so the sentence is what tells them why the board waits
+    const frozen = html(heldRow("reopen"), { reader: FROZEN });
+    expect(count(frozen, "md-round-reopen-cta"), "frozen: no press").toBe(0);
+    expect(textIn(frozen, "md-round-linkhold-closed"), "frozen: no press, so the sentence stays").toBe(sentence);
+  });
+});
+
+describe("RoundFocus: M3 - 'Open round N again' says the same thing in its dialog and stands beside its reason", () => {
+  const linkRow = (phase: "checkin" | "playing") => {
+    const b = withState({ kind: "on_hold" }, { fixtureId: "h-1", boardNo: 4, checkin: openWindow(), flagCount: 0 });
+    (b as { hold_reason?: string }).hold_reason = "lichess_unlinked";
+    const view = VIEW({ state: "open", press: "reopen", pairings: [P(1, { fixtureId: "c-1" }), P(4, { fixtureId: "h-1" })] });
+    const boards = phase === "checkin" ? [board({ fixtureId: "c-1", boardNo: 1, seats: { white: here, black: away } }), b] : [live(5, { fixtureId: "c-1", boardNo: 1 }), b];
+    return round("stage-1:3", phase, arbiterRound(boards), { view });
+  };
+  /** The round press's confirmation: in the playing phase it is a child of the status; in check-in it is a part of the `press` prop. */
+  const dialogOf = (r: MatchDayOnlineRound) => {
+    const ui = renderIsland(RoundFocus, props(r));
+    const tree = ui.tree();
+    const direct = tree.find((e) => propsOf(e).testId === "arbiter-column-reinvite-dialog");
+    if (direct !== undefined) return propsOf(direct) as unknown as { title: string; confirmLabel: string };
+    const holder = tree.find((e) => propsOf(e).press !== undefined)!;
+    return propsOf((propsOf(holder).press as { dialog: ReactElement }).dialog) as unknown as { title: string; confirmLabel: string };
+  };
+
+  it("the dialog is titled and confirmed with the press's own words, in both phases; a plain reinvite and a plain reopen keep the run sheet's", () => {
+    for (const phase of ["checkin", "playing"] as const) {
+      const d = dialogOf(linkRow(phase));
+      expect(d.title, phase).toBe(t("matchDay.round.openAgainTitle", { round: 3 }));
+      expect(d.confirmLabel, phase).toBe(t("matchDay.round.openAgain", { round: 3 }));
+    }
+    // no link hold: the other two branches are as they were (the negatives need their positive pair)
+    const owed = [P(1, { owedSeats: 2 }), P(2, { owedSeats: 2 })];
+    const reinvite = dialogOf(round("stage-1:3", "playing", arbiterRound([live(), live(9)]), { view: VIEW({ state: "open", press: "reinvite", pairings: owed }) }));
+    expect(reinvite.title).toBe(t("runsheet.round.confirmTitleReinvite", { round: 3 }));
+    expect(reinvite.confirmLabel).toBe(pl("runsheet.round.inviteCta", 4));
+    const reopen = dialogOf(round("stage-1:3", "playing", arbiterRound([live(), live(9)]), { view: VIEW({ state: "open", press: "reopen", pairings: owed }) }));
+    expect(reopen.title).toBe(t("arbiter.column.reopenConfirmTitle", { round: 3 }));
+    expect(reopen.confirmLabel).toBe(pl("arbiter.column.reopenConfirmCta", 4));
+  });
+
+  it("the press stands INSIDE the link-hold block, not in the hero or the status; with no hold it is where it was", () => {
+    for (const phase of ["checkin", "playing"] as const) {
+      const h = html(linkRow(phase));
+      expect(count(innerOf(h, "md-round-linkhold")!, "md-round-reopen-cta"), `${phase}: beside the reasons`).toBe(1);
+      expect(count(h, "md-round-reopen-cta"), `${phase}: exactly one`).toBe(1);
+      const home = innerOf(h, phase === "checkin" ? "arbiter-checkin-hero" : "arbiter-column-status")!;
+      expect(count(home, "md-round-reopen-cta"), `${phase}: not also up in the ${phase === "checkin" ? "hero" : "status"}`).toBe(0);
+    }
+    const reinvite = html(round("stage-1:3", "checkin", arbiterRound([board({ fixtureId: "c-1", boardNo: 1 })]), { view: VIEW({ state: "open", press: "reinvite", pairings: [P(1, { fixtureId: "c-1" })] }) }));
+    expect(count(innerOf(reinvite, "arbiter-checkin-hero")!, "arbiter-column-reinvite"), "no hold: the hero's own press").toBe(1);
+    expect(count(reinvite, "md-round-linkhold")).toBe(0);
+  });
+});
+
+describe("RoundFocus: M5 - one card after Pair next round, a full-width press, and no unprompted 'can't extend' line", () => {
+  const over = () => overRound("stage-1:3", { pair_next_round: 4 });
+  const nextRow = () => paired("stage-1:4", VIEW({ roundNo: 4 }), { round_no: 4 });
+  const pairEl = (ui: ReturnType<typeof renderIsland<RoundFocusProps>>) => ui.tree().find((e) => typeof propsOf(e).onPair === "function")!;
+  const readyEl = (ui: ReturnType<typeof renderIsland<RoundFocusProps>>) => ui.tree().find((e) => typeof e.type === "function" && (e.type as { name?: string }).name === "ReadyLine");
+
+  it("right after the pair answers, ONE card says the round is paired and carries the go-to press; reloaded, the ready line is the card", async () => {
+    const onOpenRound = vi.fn();
+    const next = nextRow();
+    // reloaded (no answer standing) with round 4 paired: the ready line, and no pair card at all
+    const reloaded = renderIsland(RoundFocus, props({ ...over(), pair_next_round: null }, { next, onOpenRound }));
+    expect(readyEl(reloaded), "reloaded: the ready line is drawn").toBeDefined();
+    expect(underEnglish(pairEl(reloaded)), "an empty pair block").toBe("");
+    // the real sequence: round 3 is over and round 4 is not paired (no next row); the press pairs it; the poll then brings round 4 as the next row
+    const ui = renderIsland(RoundFocus, props(over(), { next: null, onOpenRound }));
+    expect(readyEl(ui), "before the press there is no next round to be ready").toBeUndefined();
+    (propsOf(pairEl(ui)).onPair as (round: number) => void)(4);
+    net.calls[0]!.resolve({ created: 2, existing: 0, swiss_paired_round: 4 });
+    await flush();
+    ui.rerender(props({ ...over(), pair_next_round: null }, { next, onOpenRound }));
+    expect(readyEl(ui), "after the answer: no second card").toBeUndefined();
+    const card = underEnglish(pairEl(ui));
+    expect(textIn(card, "md-round-pair-notice")).toContain(t("matchDay.round.pairedNotice", { round: 4 }));
+    expect(textIn(card, "md-round-ready-go"), "the go-to press is in the same card").toBe(t("matchDay.round.readyGo", { round: 4 }));
+    expect(count(card, "md-round-ready"), "and it is not a ready card").toBe(0);
+    (propsOf(pairEl(ui)).go as { onOpenRound(key: string): void; next: MatchDayOnlineRound }).onOpenRound("stage-1:4");
+    expect(onOpenRound).toHaveBeenCalledWith("stage-1:4");
+    // the answer is about round 4: a next row for any OTHER round does not borrow it (the ready line stays, the card has no go-to press)
+    const other = renderIsland(RoundFocus, props(over(), { next: null }));
+    (propsOf(pairEl(other)).onPair as (round: number) => void)(4);
+    net.calls[1]!.resolve({ created: 2, existing: 0, swiss_paired_round: 4 });
+    await flush();
+    other.rerender(props({ ...over(), pair_next_round: null }, { next: paired("stage-1:6", VIEW({ roundNo: 6 }), { round_no: 6 }) }));
+    expect(readyEl(other), "another round's ready line stays").toBeDefined();
+    expect(count(underEnglish(pairEl(other)), "md-round-ready-go"), "and the paired card has no go-to press for it").toBe(0);
+    // a reader who may not press sees the answer and no go-to press, in the card
+    const frozen = renderIsland(RoundFocus, props(over(), { next: null, reader: EDITOR }));
+    (propsOf(pairEl(frozen)).onPair as (round: number) => void)(4);
+    net.calls[2]!.resolve({ created: 2, existing: 0, swiss_paired_round: 4 });
+    await flush();
+    frozen.rerender(props({ ...over(), pair_next_round: null }, { next, reader: FROZEN }));
+    expect(count(underEnglish(pairEl(frozen)), "md-round-ready-go"), "frozen: no press").toBe(0);
+    expect(textIn(underEnglish(pairEl(frozen)), "md-round-pair-notice"), "the answer is still said").toContain(t("matchDay.round.pairedNotice", { round: 4 }));
+  });
+
+  it("Pair next round is a block-width press like Open round (no `items-start` shrinking it), under the reader's own width rules", () => {
+    const h = html(over());
+    expect(tagOf(h, "md-round-pair")).not.toMatch(/items-start/);
+    expect(tagOf(h, "md-round-pair-next")).toMatch(/\bw-full\b/);
+    // the Open round block, the one it is made to match, has the same shape: a stretch column and a w-full press
+    const open = html(paired("stage-1:3", VIEW()));
+    expect(tagOf(open, "arbiter-column-open")).not.toMatch(/items-start/);
+    expect(tagOf(open, "md-round-open-cta")).toMatch(/\bw-full\b/);
+  });
+
+  it("a closed check-in prints no 'Can't extend check-in' line of its own; an open one still has its press", () => {
+    const closedWindow = { ...openWindow(), canExtend: false, refusal: "closed" as const, deadlineAt: iso(NOW - 60_000) };
+    const closed = round("stage-1:3", "checkin", arbiterRound([board({ fixtureId: "c-1", boardNo: 1, checkin: closedWindow })], { extendableBoards: 0 }), {
+      view: VIEW({ state: "open", press: "none", pairings: [P(1, { fixtureId: "c-1" })] }),
+    });
+    const h = html(closed);
+    expect(count(h, "arbiter-extend-round-why"), "no unprompted reason").toBe(0);
+    expect(h, "and none of the reasons' words anywhere").not.toContain(esc(en["externalPlay.checkinExtend.why.closed"]!));
+    expect(count(h, "arbiter-extend-round-cta"), "nothing to press on a closed round").toBe(0);
+    expect(count(html(checkinFixture().r), "arbiter-extend-round-cta"), "positive pair: an open round still has its +5").toBe(1);
   });
 });

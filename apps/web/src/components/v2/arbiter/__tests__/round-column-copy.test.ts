@@ -332,7 +332,7 @@ describe("the list cannot fall behind the column", () => {
     }
     // The column's bodies moved to match-day/round-focus.tsx (the helper sweep below reads them); what stays is the queue and the shell of
     // the column, so the floor is what these files hold now.
-    expect(checked, "anti-vacuity: literals checked").toBeGreaterThanOrEqual(12);
+    expect(checked, "anti-vacuity: literals checked (14 measured at the T7 fix round)").toBeGreaterThanOrEqual(14);
   });
 
   it("the scan itself catches a key added to the column (a scratch copy with one more literal fails the check)", () => {
@@ -362,7 +362,7 @@ describe("the list cannot fall behind the column", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: helper literals checked").toBeGreaterThanOrEqual(30);
+    expect(checked, "anti-vacuity: helper literals checked (120 measured at the T7 fix round)").toBeGreaterThanOrEqual(120);
   });
 
   it("every state word boardStateWord can return is listed (the seven arbiter.state.* keys come from the function, not from a typed list)", () => {
@@ -380,7 +380,7 @@ describe("the list cannot fall behind the column", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: map values checked").toBeGreaterThanOrEqual(60);
+    expect(checked, "anti-vacuity: map values checked (79 measured at the T7 fix round)").toBeGreaterThanOrEqual(79);
     // The two maps the plan names, by name: their values are listed in full.
     expect(Object.values(INVITE_WORD_KEYS).every((k) => LISTED.has(k))).toBe(true);
     expect(Object.values(HELD_TITLE_KEYS).every((k) => LISTED.has(k))).toBe(true);
