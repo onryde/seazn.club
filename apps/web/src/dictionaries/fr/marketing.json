@@ -1578,7 +1578,6 @@
   "blog.index.postOne": "{n} article",
   "blog.index.postMany": "{n} articles",
   "blog.index.empty": "Pas encore d’article pour ce sport.",
-  "blog.post.back": "Retour au blog",
   "blog.post.updated": "Mis à jour le {date}",
   "blog.post.handlesTitle": "Comment Seazn s’en occupe",
   "blog.post.handlesBody": "Le centre d’aide montre où le trouver dans Seazn et comment le régler.",

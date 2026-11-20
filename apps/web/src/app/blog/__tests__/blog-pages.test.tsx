@@ -157,7 +157,7 @@ describe("the post page with related posts and an update (fixtures, through the 
         parts={[{ kind: "html", html: "<p>Body.</p>" }]} toc={[]}
         handles={{ href: "/help/sports/football", title: "How Seazn handles it", body: "b", linkLabel: "Open" }}
         related={related.map((r) => ({ href: blogUrl(r.slug), title: r.title, topic: "t" }))}
-        labels={{ blog: "Blog", back: "Back", related: "Related posts", swipe: "swipe" }}
+        labels={{ blog: "Blog", related: "Related posts", swipe: "swipe" }}
       />,
     );
     const hrefs = [...out.matchAll(/href="(\/blog\/[^"]+)"/g)].map((m) => m[1]);

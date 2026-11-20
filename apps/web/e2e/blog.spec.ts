@@ -83,7 +83,7 @@ test.describe("signed out", () => {
 
   test("the page declares its feed, a canonical and an article card, and the byline says Seazn", async ({ page }) => {
     await visit(page, POST, 1280);
-    await expect(page.locator('link[rel="alternate"][type="application/rss+xml"]')).toHaveAttribute("href", "/blog/rss.xml");
+    await expect(page.locator('link[rel="alternate"][type="application/rss+xml"]')).toHaveAttribute("href", "https://seazn.club/blog/rss.xml");
     await expect(page.locator('link[rel="canonical"]')).toHaveAttribute("href", /\/blog\/how-standings-points-work$/);
     await expect(page.locator('meta[property="og:type"]')).toHaveAttribute("content", "article");
     await expect(page.locator('meta[property="article:author"]')).toHaveAttribute("content", "Seazn");
@@ -141,11 +141,14 @@ test.describe("signed in", () => {
     await expect(bar.getByRole("link", { name: /Dashboard/ })).toBeVisible();
     await expect(bar.getByRole("link", { name: /Log in/ })).toHaveCount(0);
     await expect(bar.getByRole("link", { name: /Start free/ })).toHaveCount(0);
-    // The same page for a stranger (no cookies) carries no trace of a user.
+    // The served markup is the static, signed-out one whoever asks: it renders no dashboard link and does render the sign-in
+    // actions. ("Dashboard" may sit in the serialised client-component props, so the probe is on rendered anchors.)
     const stranger = await playwright.request.newContext({ baseURL: baseURL! });
     const raw = await stranger.get("/blog");
     expect(raw.status()).toBe(200);
-    expect(await raw.text()).not.toContain("Dashboard");
+    const html = await raw.text();
+    expect(html).not.toMatch(/<a [^>]*href="\/dashboard"/);
+    expect(html).toMatch(/<a [^>]*href="\/login[^"]*"/);
     await stranger.dispose();
   });
 

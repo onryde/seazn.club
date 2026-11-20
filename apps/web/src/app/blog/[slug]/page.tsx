@@ -64,7 +64,7 @@ export default async function BlogPostPage({ params }: Props) {
         toc={toc}
         handles={handles}
         related={related}
-        labels={{ blog: t(d, "nav.blog"), back: t(d, "blog.post.back"), related: t(d, "blog.post.related"), swipe: t(d, "blog.example.swipe") }}
+        labels={{ blog: t(d, "nav.blog"), related: t(d, "blog.post.related"), swipe: t(d, "blog.example.swipe") }}
       />
     </main>
   );

@@ -6,7 +6,7 @@
 //    below 768 the same two are rows of the phone panel (class 22: the panel is OPENED, gated on the toggle being visible);
 //  - the Help icon's tap area is at least 44px and is what a tap at its centre HITS (elementFromPoint, not paint);
 //  - /blog and a post: no sideways page scroll, nothing clipped, axe finds nothing serious;
-//  - the example table scrolls inside a focusable, named region that breaks out to the full phone width;
+//  - the example table scrolls inside a focusable, named region that fits the page column;
 //  - "On this page" is folded under the lede below 1100 and opens;
 //  - a signed-in visitor sees Dashboard in the bar (tablets) or the panel (phones), and a signed-out one does not.
 // Not serial: no test reads state another writes (AGENTS.md class 21).
@@ -60,7 +60,7 @@ test.describe("signed out", () => {
     });
   }
 
-  test("the example table is a focusable, named region as wide as the phone, scrolling inside itself", async ({ page }) => {
+  test("the example table is a focusable, named region that fits the page column, scrolling inside itself", async ({ page }) => {
     await visit(page, POST);
     const region = page.getByRole("region", { name: /What one finished match is worth/ });
     await expect(region).toBeVisible();
@@ -68,18 +68,24 @@ test.describe("signed out", () => {
     const vw = width();
     const box = (await region.boundingBox())!;
     const m = await region.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-    // The table is 40rem wide at least; no project here is wider than that.
-    expect(m.scroll).toBeGreaterThan(m.client);
+    // The table is 40rem (640px) wide at least. A phone column is narrower, so the box scrolls; from 768 the column is 44rem
+    // minus the gutters (702px), the table fits, and the box has nothing to scroll.
     if (vw < 768) {
-      expect(box.x, "breaks out to the screen edge on a phone").toBeLessThanOrEqual(1);
-      expect(box.x + box.width).toBeGreaterThanOrEqual(vw - 1);
+      expect(m.scroll).toBeGreaterThan(m.client);
+      // Inside the page gutters (16px a side), never wider than the screen: the box scrolls, the page does not.
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(vw);
       await expect(page.getByText("Swipe sideways to see the whole table")).toBeVisible();
     } else {
       await expect(page.getByText("Swipe sideways to see the whole table")).toBeHidden();
     }
-    await region.focus();
-    await page.keyboard.press("ArrowRight");
-    await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+    if (vw < 768) {
+      await region.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => region.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+    } else {
+      expect(m.scroll, "nothing hidden: the table fits its box").toBeLessThanOrEqual(m.client + 1);
+    }
     await expectNoHorizontalScroll(page);
   });
 

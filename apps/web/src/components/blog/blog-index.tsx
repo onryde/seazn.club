@@ -28,7 +28,7 @@ export function BlogIndex({ groups, chips, total, labels }: { groups: BlogIndexG
           <div
             role="group"
             aria-labelledby="blog-sport-filter"
-            className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-2 [scrollbar-width:none] md:mx-0 md:flex-wrap md:overflow-visible md:px-0 md:pb-0 [&::-webkit-scrollbar]:hidden"
+            className="flex gap-2 overflow-x-auto pb-2 [scrollbar-width:none] md:flex-wrap md:overflow-visible md:pb-0 [&::-webkit-scrollbar]:hidden"
           >
             {[{ key: ALL, label: labels.allSports, count: total }, ...chips].map((c) => (
               <button

@@ -666,7 +666,6 @@ export type DictionaryKey =
   | "blog.index.postOne"
   | "blog.index.title"
   | "blog.index.topics"
-  | "blog.post.back"
   | "blog.post.handlesBody"
   | "blog.post.handlesLink"
   | "blog.post.handlesTitle"

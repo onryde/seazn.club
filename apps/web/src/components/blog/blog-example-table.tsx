@@ -3,8 +3,8 @@
 // rendered (blog/examples/types.ts).
 //
 // The table scrolls INSIDE its own box, never the page (AGENTS.md class 23): the box is a focusable, named region, so a
-// keyboard user can scroll it and axe's scrollable-region-focusable is satisfied. Below `md` it breaks out to the full
-// phone width, and a one-line hint says it swipes. The first column stays in view while the rest scrolls.
+// keyboard user can scroll it and axe's scrollable-region-focusable is satisfied. Below `md` a one-line hint says it
+// swipes. The first column stays in view while the rest scrolls.
 import { BlogDiagram } from "@/components/blog/blog-diagram";
 import type { ExampleResult } from "@/blog/examples/types";
 
@@ -13,15 +13,15 @@ export function BlogExample({ id, result, swipeHint }: { id: string; result: Exa
   return (
     <>
       {table ? (
-        <figure className="my-8 max-md:-mx-4" data-testid="blog-example" data-example={id}>
-          <figcaption id={`blog-example-${id}-cap`} className="mb-2 text-sm text-slate-600 max-md:px-4">
+        <figure className="my-8" data-testid="blog-example" data-example={id}>
+          <figcaption id={`blog-example-${id}-cap`} className="mb-2 text-sm text-slate-600">
             {table.caption}
           </figcaption>
           <div
             role="region"
             aria-labelledby={`blog-example-${id}-cap`}
             tabIndex={0}
-            className="overflow-x-auto border-slate-200 bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-500 max-md:border-y md:rounded-xl md:border"
+            className="overflow-x-auto border-slate-200 bg-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-500 rounded-xl border"
           >
             <table className="w-full min-w-[40rem] border-collapse text-left text-sm">
               <thead>
