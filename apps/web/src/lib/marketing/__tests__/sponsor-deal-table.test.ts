@@ -1,5 +1,5 @@
 // The Sponsoring page's demo walks a table of deal states built from the PRODUCT's own deal rules (lib/sponsor-deals.ts).
-// Expected paths here are the ones the help page promises (content/help/sharing/sponsors.md, "Deals"), never read back
+// Expected paths here are the ones the help page promises (content/help/sharing/sponsor-deals.md), never read back
 // from the builder under test.
 import { describe, expect, it } from "vitest";
 import { buildDealTable, type DemoNode, type DemoStep } from "../sponsor-deal-table";

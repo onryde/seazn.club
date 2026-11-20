@@ -87,7 +87,6 @@ const KNOWN: Record<string, string> = {
   "billing/groups": `${PRICE} ($14.99, $6.99, $128.99, $63.99, $384.95, $644.95) + ${FEE} + an illustrative 60%-off coupon`,
   "billing/plans": `${PRICE} ($11.99, $14.99, $6.99) + ${FEE} (the fee ladder table and four inline fees)`,
   "getting-started/create-your-organisation": FEE,
-  "sharing/sponsors": "flat 5% sponsorship fee, the same on every plan (not a per-plan figure); the billing task decides whether it becomes a token",
 };
 
 describe("help articles type no plan figures", () => {

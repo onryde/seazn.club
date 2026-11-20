@@ -23,7 +23,7 @@ export async function generateMetadata({ params }: { params: Promise<{ lang: str
 /**
  * Sponsoring: the feature-page shape (docs/superpowers/specs/2026-11-16-product-pages-design.md §4). The demo walks a
  * table of deal states built here, on the server, from the product's own deal rules; the tiers and their turns on the
- * stream are the product's own lists. Plan facts in the ticket are the help page's (content/help/sharing/sponsors.md).
+ * stream are the product's own lists. Plan facts in the ticket are the help page's (content/help/sharing/sponsors-packages.md and sponsor-deals.md).
  */
 export default async function SponsoringProductPage({ params }: { params: Promise<{ lang: string }> }) {
   const { lang } = await params;

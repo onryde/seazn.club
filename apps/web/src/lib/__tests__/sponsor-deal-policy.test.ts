@@ -52,15 +52,15 @@ describe("placementNeedsTiers — spec §10 Q1 (one predicate for sponsors, pack
   });
 });
 
-// Owner ruling 2026-11-16: a sponsorship paid by card carries a FIXED cut, on every plan. The number is typed in two
-// places a person reads (the package list's note, in four languages, and the help article), so each is read back
-// against the constant the checkout charges.
+// Owner ruling 2026-11-16: a sponsorship paid by card carries a FIXED cut, on every plan. The number is typed in one
+// place a person reads (the package list's note, in four languages), so each is read back against the constant the
+// checkout charges. The help article types no figure: it names the fee and links to Pricing, so there is nothing to drift.
 describe("the fixed sponsorship fee is the one the copy states", () => {
   it("is 5%, and is not the entry-fee rate of any self-serve paid plan", () => {
     expect(SPONSOR_PLATFORM_FEE_PERCENT).toBe(5);
   });
 
-  it("every locale's package note and the help article quote it", async () => {
+  it("every locale's package note quotes it, and the help article names the fee without typing it", async () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const quoted = new RegExp(`(?<![\\d.])${SPONSOR_PLATFORM_FEE_PERCENT}\\s?%`);
@@ -70,8 +70,12 @@ describe("the fixed sponsorship fee is the one the copy states", () => {
       expect(ui["sponsors.pkg.onlineNote"], locale).toMatch(quoted);
       checked++;
     }
-    expect(readFileSync(join(process.cwd(), "content/help/sharing/sponsors.md"), "utf8")).toMatch(quoted);
-    expect(checked + 1).toBe(5);
+    const help = readFileSync(join(process.cwd(), "content/help/sharing/sponsors-packages.md"), "utf8");
+    // The help page states the fee exists and sends the reader to Pricing, with no figure beside it to go stale.
+    expect(help).toMatch(/platform fee/i);
+    expect(help).toMatch(/\]\(\/pricing\)/);
+    expect(help).not.toMatch(/\d\s?%/);
+    expect(checked).toBe(4);
   });
 
   // Owner, 2026-11-17 ("not in pricing page"): the Pricing table ticked sponsor monetization and never said what it costs.
