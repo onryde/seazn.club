@@ -24,6 +24,12 @@
 //  - a view-only member (`readOnly`) gets the same page with nothing that writes, and without the Needs-you list;
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
+//
+// Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; behind `onlineEnabled`, the page's MATCH_DAY_ONLINE flag): the
+// view's online chess rounds are a third block of the list after the courts and the no-court rows (online-list.tsx), and a round or a
+// board opens in the focus column exactly as a court does - on a phone full-screen, with the merged back label, and "left the list"
+// (never another row) when a poll takes it away. `?board=` and `?round=` read like `?court=`: a value naming a listed row opens it, any
+// other is ignored with no notice (a board the viewer plays on is never listed). Needs you's board and round rows open in place.
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "@/components/ui/console-link";
@@ -33,12 +39,15 @@ import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import type { Severity } from "@/lib/division-phase";
 import type { FrozenNames } from "@/lib/match-day/frozen-names";
-import type { MatchDayView } from "@/lib/match-day/types";
+import type { MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
+import { orderOnlineRounds, resolveOnlineFocus, type OnlineOpened, type Reader } from "@/lib/match-day/online";
+import { boardName, onlineRoundTitle } from "@/lib/match-day/online-copy";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
   filterByVenues,
   filterCourts,
   filterNoCourt,
+  filterOnlineRounds,
   headerCountParts,
   initialVenueSelection,
   isLive,
@@ -48,9 +57,10 @@ import {
   needsYouTone,
   noCourtNoun,
   courtsAtClock,
+  openedFromParams,
   orderCourts,
   parseVenueParam,
-  resolveFocus,
+  resolveDayFocus,
   scopeCourtNames,
   sharedNoun,
   venueOptions,
@@ -62,11 +72,16 @@ import { browserBandPollDeps, startBandPolling } from "@/components/v2/desk/band
 import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
+import { OnlineList } from "./online-list";
+import { OnlineBoardPanel, OnlineRoundPanel } from "./online-focus";
 import { levelWords } from "@/lib/score/levels";
 import { VenueFilter } from "./venue-filter";
 import { MatchDayCodeSheet } from "./match-day-code-sheet";
 import { RefreshLine } from "./refresh-line";
 import { useDayRefresh } from "./use-day-refresh";
+
+/** The online rounds of a page with the flag off: one array, so what is memoised on it does not re-run. */
+const NO_ONLINE: MatchDayOnlineRound[] = [];
 
 /** How often the page re-reads the closures against its clock: a break is minutes, so a minute is exact enough (m1). */
 const CLOCK_TICK_MS = 60_000;
@@ -100,6 +115,13 @@ export interface MatchDayShellProps {
   focusCourtId?: string | null;
   /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
   venueParam?: string | readonly string[] | null;
+  /** Match Day online (MATCH_DAY_ONLINE, until Task 10 removes it): the view's online rounds are listed and their rows open. Off, the
+   *  page is the page it was, whatever the view carries. */
+  onlineEnabled?: boolean;
+  /** `?board=<fixture id>`: the board to open first, read as `focusCourtId` is. Ignored when not on the list. */
+  focusBoardId?: string | null;
+  /** `?round=<stage id>:<round no>`: the round to open first (`onlineRoundKey`), read as `focusCourtId` is. Ignored when not on the list. */
+  focusRoundKey?: string | null;
 }
 
 /** How long after a tail countdown reaches 0 the day is read once more (the server's stop lands after it). */
@@ -122,13 +144,20 @@ export function MatchDayShell({
   frozenNames,
   focusCourtId = null,
   venueParam = null,
+  onlineEnabled = false,
+  focusBoardId = null,
+  focusRoundKey = null,
 }: MatchDayShellProps) {
   const [view, setView] = useState<MatchDayView>(initial);
-  /** The court the organiser opened (its name kept to say so if it leaves the list); null until one is. */
-  const [opened, setOpened] = useState<Opened | null>(() => {
-    const court = focusCourtId === null ? undefined : initial.courts.find((c) => c.court_id === focusCourtId);
-    return court === undefined ? null : { kind: "court", id: court.court_id, name: court.court_name };
-  });
+  /** What the organiser opened - a court, a match on no court, an online round or board (its name kept to say so if it leaves the
+   *  list); null until one is. A `?court=`, `?board=` or `?round=` that names a listed row opens it; any other value opens nothing. */
+  const [opened, setOpened] = useState<Opened | null>(() =>
+    openedFromParams(
+      dict,
+      { courts: initial.courts, online_rounds: onlineEnabled ? initial.online_rounds : [] },
+      { court: focusCourtId, board: focusBoardId, round: focusRoundKey },
+    ),
+  );
   /** On a phone: the list (false) or one court full-screen (true). Desktop shows both and ignores it. A `?court=` that names a
    *  court on the list opens it full-screen, as tapping it would. */
   const [phoneOpen, setPhoneOpen] = useState(() => opened !== null);
@@ -178,7 +207,9 @@ export function MatchDayShell({
     };
   }, []);
 
-  const live = isLive(view);
+  /** The online rounds the page may draw: the view's own, only behind the flag. */
+  const online = onlineEnabled ? view.online_rounds : NO_ONLINE;
+  const live = isLive({ courts: view.courts, playing_no_court: view.playing_no_court, online_rounds: online });
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
 
   // The clock (fix round 1, m1): a closure is true at the view's `now`, and a poll is 90 seconds or a quiet day's minutes away, so
@@ -202,9 +233,14 @@ export function MatchDayShell({
     [allCourts, venues, venueFilterOn, filter],
   );
   const noCourt = useMemo(() => filterNoCourt(view.playing_no_court, filter), [view.playing_no_court, filter]);
-  const focus = resolveFocus(courts, noCourt, opened);
+  // The online block: the division chips narrow it, `orderOnlineRounds` lists it (check-in or in progress, paired, over), and it is the
+  // LAST place the default focus looks - a court first, then a match on no court, then the first round.
+  const onlineRounds = useMemo(() => orderOnlineRounds(filterOnlineRounds(online, filter), clock), [online, filter, clock]);
+  const focus = resolveDayFocus(courts, noCourt, onlineRounds, opened);
   const focused = focus.kind === "court" ? focus.court : null;
   const focusedMatch = focus.kind === "match" ? focus.fixture : null;
+  const focusedRound = focus.kind === "round" ? focus.round : null;
+  const focusedBoard = focus.kind === "board" ? focus : null;
   // A phone whose court left the list is back on the list (review M6b): it stays there when the court returns, rather than
   // jumping back into a court the organiser was told had gone. React's render-phase adjustment, not an effect.
   if (phoneOpen && focus.kind === "lost") setPhoneOpen(false);
@@ -212,11 +248,24 @@ export function MatchDayShell({
   // so rows arriving later bring the button back closed rather than reopening the list unasked. A view-only reader never has it.
   const needsYou = readOnly ? [] : view.needs_you;
   if (needsOpen && needsYou.length === 0) setNeedsOpen(false);
-  /** A phone shows one court (or match) full-screen only while what it opened is still there. */
-  const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null);
+  /** A phone shows one court (a match, a round, a board) full-screen only while what it opened is still there. */
+  const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null || focusedRound !== null || focusedBoard !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
   const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now, onTailEnd: refreshOnTailEnd };
   const words = levelWords(scoreDict);
+  /** The round or board in focus, for the list's highlight (`aria-current`). */
+  const selectedOnline: OnlineOpened | null =
+    focusedBoard !== null
+      ? { kind: "board", id: focusedBoard.board.fixtureId, name: boardName(dict, focusedBoard.board) }
+      : focusedRound !== null
+        ? { kind: "round", key: focusedRound.key, name: onlineRoundTitle(dict, focusedRound) }
+        : null;
+  /** What the online panels read for who may press what (`mayPress`): the viewer's role, the club's flag (the round's own) and the
+   *  competition's billing freeze (the `frozen` prop, the flag that hides Call and Undo). */
+  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen });
+  /** The phone's way back from a round or a board: the courts' noun while courts are listed; a day of boards alone, "All boards";
+   *  anything else, the list. */
+  const onlineBackLabel = t(dict, courts.length > 0 ? `matchDay.back.${noun}` : noCourt.length === 0 ? "matchDay.back.board" : "matchDay.back.list");
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
@@ -231,6 +280,28 @@ export function MatchDayShell({
   };
   const openMatch = (f: MatchDayView["playing_no_court"][number]) => {
     setOpened({ kind: "match", id: f.id, name: matchLabel(dict, f) });
+    setNotice(null);
+    setPhoneOpen(true);
+    toTop();
+  };
+  /** A division's chip is added when the chips would hide what is being opened: Needs you names a board whatever the filter says, and
+   *  opening it must show it, never "left the list" for a row that was only filtered out. */
+  const showDivision = (divisionId: string) =>
+    setChosen((prev) => (prev.size === 0 || prev.has(divisionId) ? prev : new Set([...prev, divisionId])));
+  /** An online round opened from the list, Needs you or the address, by its key. */
+  const openRound = (key: string) => {
+    const round = online.find((r) => r.key === key);
+    setOpened({ kind: "round", id: key, name: round === undefined ? key : onlineRoundTitle(dict, round) });
+    if (round !== undefined) showDivision(round.division_id);
+    setNotice(null);
+    setPhoneOpen(true);
+    toTop();
+  };
+  /** An online board opened from the list or Needs you, by its fixture id (never by the row object: a poll hands a new one each time). */
+  const openBoard = (fixtureId: string) => {
+    const found = resolveOnlineFocus(online, { kind: "board", id: fixtureId, name: "" });
+    setOpened({ kind: "board", id: fixtureId, name: found.kind === "board" ? boardName(dict, found.board) : fixtureId });
+    if (found.kind === "board") showDivision(found.round.division_id);
     setNotice(null);
     setPhoneOpen(true);
     toTop();
@@ -287,7 +358,7 @@ export function MatchDayShell({
             <DotLine
               testId="md-counts"
               className="mt-0.5 text-sm text-slate-600"
-              parts={headerCountParts(dict, locale, noun, courts, noCourt)}
+              parts={headerCountParts(dict, locale, noun, courts, noCourt, onlineRounds)}
             />
             {readOnly && (
               <p data-testid="md-read-only" className="mt-2 text-xs text-slate-600">
@@ -372,6 +443,22 @@ export function MatchDayShell({
                 dict={dict}
                 items={needsYouOrder(needsYou)}
                 onAlt={(it) => findCourt(it.alt?.court_id ?? null)}
+                onOpenBoard={
+                  onlineEnabled
+                    ? (fixtureId) => {
+                        setNeedsOpen(false);
+                        openBoard(fixtureId);
+                      }
+                    : undefined
+                }
+                onOpenRound={
+                  onlineEnabled
+                    ? (key) => {
+                        setNeedsOpen(false);
+                        openRound(key);
+                      }
+                    : undefined
+                }
               />
             )}
           </div>
@@ -419,7 +506,7 @@ export function MatchDayShell({
         />
       )}
 
-      {courts.length === 0 && noCourt.length === 0 ? (
+      {courts.length === 0 && noCourt.length === 0 && onlineRounds.length === 0 ? (
         <div data-testid="md-empty" className="card p-6">
           <p className="font-semibold text-slate-900">{t(dict, "matchDay.empty.title")}</p>
           <p className="mt-1 text-sm text-slate-600">
@@ -453,6 +540,7 @@ export function MatchDayShell({
               openLabel={t(dict, readOnly ? "matchDay.focus.openMatch" : "matchDay.focus.openPad")}
               onSelect={openMatch}
             />
+            <OnlineList rounds={onlineRounds} selected={selectedOnline} dict={dict} locale={locale} nowMs={clock} onOpenRound={openRound} onOpenBoard={openBoard} />
           </div>
           {focused !== null && (
             <CourtFocus
@@ -483,6 +571,30 @@ export function MatchDayShell({
               backLabel={t(dict, courts.length > 0 ? `matchDay.back.${noun}` : "matchDay.back.list")}
               onBack={() => setPhoneOpen(false)}
               onChanged={() => void refresh()}
+              hiddenOnPhone={!phoneCourt}
+            />
+          )}
+          {focusedRound !== null && (
+            <OnlineRoundPanel
+              key={focusedRound.key}
+              ctx={ctx}
+              round={focusedRound}
+              reader={readerOf(focusedRound)}
+              nowMs={clock}
+              backLabel={onlineBackLabel}
+              onBack={() => setPhoneOpen(false)}
+              hiddenOnPhone={!phoneCourt}
+            />
+          )}
+          {focusedBoard !== null && (
+            <OnlineBoardPanel
+              key={focusedBoard.board.fixtureId}
+              ctx={ctx}
+              round={focusedBoard.round}
+              row={focusedBoard.board}
+              reader={readerOf(focusedBoard.round)}
+              backLabel={onlineBackLabel}
+              onBack={() => setPhoneOpen(false)}
               hiddenOnPhone={!phoneCourt}
             />
           )}

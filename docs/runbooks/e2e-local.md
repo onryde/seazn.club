@@ -108,6 +108,7 @@ REALTIMEKIT_ARBITER_PRESET=e2e_chess_arbiter \
 EXTERNAL_PLAY_WINDOW_DEFER=0 \
 EXTERNAL_PLAY_PREMINT=1 \
 EXTERNAL_PLAY_PRESENCE_PROOF=1 \
+MATCH_DAY_ONLINE=1 \
 LICHESS_TOKEN_KEK=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
 CRON_SECRET=e2e-local-cron-secret \
   node .next/standalone/apps/web/server.js
@@ -131,6 +132,7 @@ CRON_SECRET=e2e-local-cron-secret \
 | `EXTERNAL_PLAY_WINDOW_DEFER=0` | **Required for the chess walkthrough.** The external-play sweep and the pre-mint job defer their housekeeping (room teardown, camera evidence, pre-making rooms) while any board of the platform is inside a check-in window, and the cron route takes no `orgIds`: on a shared e2e server the walkthrough's cron-driven teardowns would wait on other specs' open windows. Exactly `"0"` switches the deferral off; unset, or anything else, leaves it on. |
 | `EXTERNAL_PLAY_PREMINT=1` | **Required for the chess walkthrough.** The pre-mint job (`POST /api/cron/external-play-premint`) makes the video rooms of every board of an unopened round ahead of the open, and is OFF unless this is exactly `1`: with it unset (or `true`) a pass answers `disabled: 1` and makes no vendor call, so the walkthrough's pre-minted-round assertions fail naming this variable. |
 | `EXTERNAL_PLAY_PRESENCE_PROOF=1` | **Required for the chess walkthrough.** The seat's camera read becomes one peer-report call (`GET /sessions/peer-report/:peer`) on the presence the join webhooks wrote, instead of today's three-call session read; off unless exactly `1`. The walkthrough's cost assertions (the board's calls since the open, by route) and its camera-on steps (a camera is on file and 1.5 s old before a claim can seat it) assume it. |
+| `MATCH_DAY_ONLINE=1` | **Required for `competition-desk-actions.spec.ts` (its two per-board rows) and `mobile/match-surfaces.spec.ts` (the online block).** Match Day's online rounds and boards, the per-board Needs-you rows (`board_held`, `board_flagged`) and the board and round panels are drawn only with this exactly `1`; without it the page is the courts' page and those rows never appear. Removed with the arbiter page (Match Day online, Task 10). |
 | `LICHESS_TOKEN_KEK`, `CRON_SECRET` | The chess walkthrough seals each player's Lichess token and fires the external-play sweep itself, so the RUNNER needs the server's values too (step 5 carries them): the CI ones are in `scripts/ci-local.sh`'s `common_env` and e2e.yml (`CRON_SECRET` in e2e.yml only). `AUTH_SECRET` likewise: the runner mints the players' room links, and refuses to mint without it. A KEK that differs between the two is not an environment red the spec can name for you: the server cannot open the sealed tokens, never calls the Lichess fixture, and the walkthrough's poll then prints the bridge row's `last_error`. |
 
 `NEXT_PUBLIC_*` values are baked at **build** time — set them for step 2 as well

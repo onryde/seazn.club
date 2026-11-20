@@ -2092,6 +2092,32 @@ describe("the online-chess fixture servers' wiring", () => {
     for (const k of FLAGS) expect(spec, `the walkthrough names ${k} where a disabled pass is reported`).toContain(k);
   });
 
+  // Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6): Match Day's online block, the per-board Needs-you rows and the board and
+  // round panels are drawn only with the server's MATCH_DAY_ONLINE exactly "1" (Task 10 removes the flag with the arbiter page). The two specs
+  // that walk them - competition-desk-actions.spec.ts (e2e-parallel) and mobile/match-surfaces.spec.ts (e2e-mobile) - need a server that
+  // carries it, so a job without it reads as "the row was never raised" rather than as a missing flag.
+  it("e2e-parallel and e2e-mobile switch MATCH_DAY_ONLINE on (exactly \"1\"), the runbook's recipe and ci-local.sh carry it, and e2e-serial leaves it off", () => {
+    const K = "MATCH_DAY_ONLINE";
+    const runbook = readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8");
+    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
+    const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
+    expect(runbook, "docs/runbooks/e2e-local.md's server recipe").toMatch(new RegExp(`^${K}=1 \\\\$`, "m"));
+    expect(runbook, "docs/runbooks/e2e-local.md's var table names it").toContain(`\`${K}=1\``);
+    expect(body, "ci-local.sh's e2e_env").toMatch(new RegExp(`^\\s*export ${K}=1\\s*$`, "m"));
+    let on = 0;
+    for (const [name, next] of [["e2e-parallel", "e2e-serial"], ["e2e-mobile", null]] as const) {
+      expect(jobEnv(job(name, next)).get(K), `${name}'s job-level env`).toBe("1");
+      on++;
+    }
+    expect(on, "jobs that carry it").toBe(2);
+    expect(jobEnv(job("e2e-serial", "e2e-mobile")).has(K), "e2e-serial leaves it off").toBe(false);
+    // The specs' own premise: each names the variable where its rows would otherwise read as never raised.
+    const desk = readFileSync(join(E2E_DIR, "competition-desk-actions.spec.ts"), "utf8");
+    expect(desk, "the desk spec's per-board rows name the flag").toContain(K);
+    const mobile = readFileSync(join(E2E_DIR, "mobile/match-surfaces.spec.ts"), "utf8");
+    expect(mobile, "the mobile spec's online test names the flag").toContain(K);
+  });
+
   // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray
   // reconcile — a future mobile test that resigns, say — is refused on the runner instead of sending an
   // unauthenticated export read to lichess.org. Video stays unconfigured there (no credentials ⇒ no call at all), which

@@ -8,6 +8,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ATTENTION_SEVERITY, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
 import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
+import { cancelFlaggedSql, holdNoShowSql } from "./arbiter-column-kit";
+import { seedOnlineRound } from "./match-room-kit";
 
 /** The SHIPPED English strings, read the way `board-v3.spec.ts` reads them —
  *  a JSON `import` needs an import attribute Playwright's loader does not
@@ -56,6 +58,8 @@ const P_SETUP = {
 const P_ON_COMPLETE = { ...P_SETUP, timing: "on_complete" };
 
 type Rig = { compSlug: string; divSlug: string;
+  /** The board a per-board row (`board_held`, `board_flagged`) is about: its fixture id. The landing page must have opened THAT board. */
+  boardId?: string;
   /** Something the LANDING page must show, proving it holds the work this
    *  row is about and not merely the right URL. */
   landText?: string };
@@ -223,14 +227,6 @@ const E2E_UNREACHABLE: Record<string, string> = {
   // self-withdraw-after-start.test.ts force the throw against a real DB and read the desk's row; desk-ssr.test.tsx pins its action
   // ("Open entrants", the Entrants tab) in all four locales.
   withdrawal_owed: "in-match-dq-cascade.test.ts raises it against a real DB; desk-ssr.test.tsx pins its Entrants door",
-  // Match Day online (T4): the two per-board kinds need an online chess round with a held or flagged board, which this file's rigs (an
-  // API-built league or knockout) cannot make; the hold and the flag are written by the arbiter and the open-round press. Pinned instead,
-  // against a real database through the real producers: competition-desk-online.test.ts (a real openRound link hold, a real camera
-  // flag) reads each row and its action target off the desk, and needs-you-boards.test.tsx pins the rows in all four locales and the
-  // click. The e2e door - the board panel opening from `?board=` and the round panel from `?round=` - is the Match Day shell's
-  // (T6/T7 walkthrough), where the panels live.
-  board_held: "competition-desk-online.test.ts raises it from a real openRound link hold; needs-you-boards.test.tsx pins the row and press",
-  board_flagged: "competition-desk-online.test.ts raises it from a real camera flag; needs-you-boards.test.tsx pins the row and press",
 };
 
 type Row = {
@@ -246,7 +242,9 @@ type Row = {
    *  sniffed off the page: a build that stops (or starts) being a match day reds the helper instead of quietly switching. */
   matchDay?: true;
   /** What the landing page must offer for the work the row names. */
-  land: (page: Page) => Promise<void>;
+  land: (page: Page, rig: Rig) => Promise<void>;
+  /** Other kinds the same rig must ALSO raise on the same list (each exactly once, looked at before the click): one rig, two rows. */
+  alsoRaises?: Attention["kind"][];
 };
 
 const ROWS: Row[] = [
@@ -575,7 +573,59 @@ const ROWS: Row[] = [
       await assertUsable(page, '[data-testid="entrant-row-withdraw"]', "the entrants tab offers Withdraw on the rows");
     },
   },
+  // Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; MATCH_DAY_ONLINE=1 on the server, e2e.yml / the runbook): the two per-board
+  // kinds, from a REAL online round (the product's own seed: a public competition, a chess division played online, Start, the open) with the
+  // hold and the flag written by SQL where no API writes them (arbiter-column-kit.ts says why for each). The row's action opens the board in
+  // Match Day's own focus column - `md-focus` of THAT fixture - and the list's row for it is the current one.
+  {
+    // A board held for the organiser, DATED in the past: the round's open already makes today a match day, and a board that should have been
+    // played by now raises `result_missing` too, so one rig lists both rows and the test looks at both (`alsoRaises`).
+    id: "board_held",
+    kind: "board_held",
+    // A board that should have been played by now makes today a match day: its Needs-you list is Match Day's (B1), not the page's.
+    matchDay: true,
+    // Board 1 of a round with one board: the label is the dictionary's template with the seed's own board number.
+    label: en["desk.needsYou.board.action"]!.replace("{board}", "1"),
+    alsoRaises: ["result_missing"],
+    build: async (request) => {
+      const r = await seedOnlineRound(request, [`Held White ${TAG}`, `Held Black ${TAG}`], { camera: "optional" });
+      expect(r.boards.length, "premise: one board").toBe(1);
+      const board = r.boards[0]!;
+      await holdNoShowSql(board.fixtureId);
+      await setFixtureScheduledAtSql(board.fixtureId, new Date(Date.now() - 3 * 3600_000).toISOString());
+      return { compSlug: r.slugs.comp, divSlug: r.slugs.div, boardId: board.fixtureId };
+    },
+    land: async (page, rig) => landOnBoard(page, rig, "on_hold"),
+  },
+  {
+    // A board cancelled with an open flag (the one case O1 lists a cancelled board): its report is the organiser's to review.
+    id: "board_flagged",
+    kind: "board_flagged",
+    label: en["desk.needsYou.board.action"]!.replace("{board}", "1"),
+    build: async (request) => {
+      const r = await seedOnlineRound(request, [`Flag White ${TAG}`, `Flag Black ${TAG}`], { camera: "optional" });
+      expect(r.boards.length, "premise: one board").toBe(1);
+      const board = r.boards[0]!;
+      await cancelFlaggedSql(r.orgId, board.fixtureId);
+      return { compSlug: r.slugs.comp, divSlug: r.slugs.div, boardId: board.fixtureId };
+    },
+    land: async (page, rig) => landOnBoard(page, rig, "cancelled"),
+  },
 ];
+
+/** Match Day opened the board the row named, in its own focus column: the panel is THAT fixture's, in the state the seed left it, and the
+ *  list's row for it is the selected one (a second board of the day, or none, would not make this pass). */
+async function landOnBoard(page: Page, rig: Rig, state: "on_hold" | "cancelled") {
+  expect(rig.boardId, "a per-board rig names its board").toBeTruthy();
+  const focus = page.getByTestId("md-focus");
+  await expect(focus).toHaveAttribute("data-online", "board");
+  await expect(focus).toHaveAttribute("data-fixture-id", rig.boardId!);
+  await expect(focus).toHaveAttribute("data-state", state);
+  const listed = page.locator(`[data-testid="md-board-row"][data-fixture-id="${rig.boardId}"]`);
+  await expect(listed, "the board is a row of the list").toHaveCount(1);
+  await expect(listed).toHaveAttribute("aria-current", "true");
+  await expect(page.getByTestId("md-lost"), "opened, not 'left the list'").toHaveCount(0);
+}
 
 test.describe("competition desk: every action label lands on the control it names", () => {
   test("the table covers every action a desk row can offer — a dropped row fails here", () => {
@@ -604,6 +654,10 @@ test.describe("competition desk: every action label lands on the control it name
       // wrong page state is worse than a red one.
       const rowEl = needs.locator(`[data-attention="${row.kind}"]`);
       await expect(rowEl, `${row.kind} was never raised — the fixture built a different state`).toHaveCount(1);
+      // One rig, more than one row: every kind it must ALSO raise is on the same list, exactly once, before anything is pressed.
+      for (const also of row.alsoRaises ?? []) {
+        await expect(needs.locator(`[data-attention="${also}"]`), `${row.id}: the rig must raise ${also} as well`).toHaveCount(1);
+      }
       // Dual mobile/desktop DOM: `:visible` picks whichever copy renders.
       const action = rowEl.locator("a:visible").first();
       await expect(action, `${row.kind} action label`).toHaveText(row.label);
@@ -623,7 +677,7 @@ test.describe("competition desk: every action label lands on the control it name
         await expect(inDom.filter({ visible: true }).first(),
           `${row.kind}: "${rig.landText}" is in the DOM but no copy of it is visible`).toBeVisible();
       }
-      await row.land(page);
+      await row.land(page, rig);
     });
   }
 });
