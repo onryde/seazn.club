@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Migration numbers: V538, V539, V540.** The spec's "next is V531" is stale: this branch already has V531–V537 (no V533). Re-check `ls db/migration/deltas | sort -V | tail -3` at each rebase and renumber if main has moved.
-- **Three server flags, all off by default**, read in `apps/web/src/server/relay/config.ts`, the one place relay numbers and settings live, and parsed the way `STREAM_SRT_ENABLED` is (`"true"`/`"false"`, anything else throws): `SEAZN_HOSTED_LIVE` (Phase 1), `SEAZN_HOSTED_REPLAY` (Phase 2, which needs LIVE), `SEAZN_HOSTED_COST` (Phase 3). With LIVE off, no reader lists, picks, resolves or admits a `seazn` row, and the product behaves exactly as it does today.
+- **Three server flags, all off by default**, read in `apps/web/src/server/relay/config.ts`, the one place relay numbers and settings live, and parsed the way `STREAM_SRT_ENABLED` is (`"true"`/`"false"`, anything else throws): `SEAZN_HOSTED_LIVE` (Phase 1), `SEAZN_HOSTED_REPLAY` (Phase 2, which needs LIVE), `SEAZN_HOSTED_COST` (Phase 3). With LIVE off, no reader lists, picks, resolves or admits a `seazn` row, so no new Seazn stream can start. Controller ruling (2026-11-20): a fixture that already streamed to Seazn keeps showing its Seazn live and replay whatever LIVE is. The flag gates new picks and starts, never playback of what exists.
 - G1, the anti-goal: a Seazn session creates no `youtube_broadcasts` row, prepares no broadcast, adds no Cloudflare output and reads no key. A non-Seazn session's path does not change by one byte. Every task that touches start, apply or tick carries a regression test for a pasted-key session and a YouTube session.
 - G5: **all Seazn playback is signed.** That covers the Cloudflare programme input (`recording.requireSignedURLs: true`, `allowedOrigins` = the Seazn hosts) and the Bunny CDN (token authentication, with the library's allowed domains set to the Seazn hosts). The camera input stays unsigned, because the phone's `playbackUrl` (`capture-phone.ts:269`) reads it.
 - `ingest-cf.ts:10-15`: never send an update that changes `recording` on a live input. The signed settings are part of the create body, and `setInputEnabled` re-sends exactly what the create sent.
@@ -268,7 +268,7 @@ The adapter changes in Task 6 rest on three vendor behaviours that the docs leav
 **Interfaces — Produces:**
 
 - `type PublicFixtureVideo = { live: { src: string; expiresAt: string } | null; replay: { partNo: number; src: string; expiresAt: string }[] }`. `replay` stays `[]` until Task 19.
-- `seaznFixtureVideo(fixtureId: string, now: Date): Promise<PublicFixtureVideo>`. The fixture must be readable through `public_fixtures_v`, the same redaction `replayParts` relies on (`server/youtube/parts.ts:38`); if not, it returns `{live:null, replay:[]}`. `live` is set only when the fixture's latest session has `destination_kind = 'seazn'` and `state = 'live'`; `src` is signed for its programme input uid (`readFirstInput(tx, sid, "programme")`). LIVE off returns `{live:null, replay:[]}`.
+- `seaznFixtureVideo(fixtureId: string, now: Date): Promise<PublicFixtureVideo>`. The fixture must be readable through `public_fixtures_v`, the same redaction `replayParts` relies on (`server/youtube/parts.ts:38`); if not, it returns `{live:null, replay:[]}`. `live` is set only when the fixture's latest session has `destination_kind = 'seazn'` and `state = 'live'`; `src` is signed for its programme input uid (`readFirstInput(tx, sid, "programme")`). The LIVE flag is not read here: a Seazn session that exists keeps playing (controller ruling).
 - `seaznFixtureVideoForOrg(orgId, fixtureId, now)`: the same answer, org-scoped, for Match Day and the organiser panel. It covers private competitions (spec G5).
 - `GET /api/v1/public/fixtures/{id}/video` returns 200 `PublicFixtureVideo` with `Cache-Control: private, no-store`, so a signed URL is never cached at the edge.
 
@@ -276,7 +276,7 @@ The adapter changes in Task 6 rest on three vendor behaviours that the docs leav
   - A Seazn live session gives `live.src` matching `/^https:\/\/playback\.fake\.invalid\/[^/?]+\/manifest\/video\.m3u8$/`.
   - Each of these gives `live: null`: state `warming`, `ending` or `completed`; a YouTube session; a private competition through the public read. The org read of the private one is set.
   - The route answers `no-store` and hits the rate limit like its sibling.
-  - LIVE off gives `live: null` for a live Seazn session.
+  - LIVE off still gives `live.src` for a Seazn session that is live (the controller ruling).
 - [ ] **Step 2: Run them and see them fail.** `cd apps/web && npx vitest run src/server/video/__tests__/seazn-video.test.ts "src/app/api/v1/public/fixtures/[id]/video" --reporter=json --outputFile=$SCRATCH/t8.json`.
 - [ ] **Step 3: Implement.** Then run `npm run openapi:gen`.
 - [ ] **Step 4: Run the Step 2 command again.** Expect PASS.
@@ -292,10 +292,9 @@ The adapter changes in Task 6 rest on three vendor behaviours that the docs leav
 - Create: `apps/web/src/components/public-site/match-centre/seazn-video-schedule.ts` (pure: when to fetch next)
 - Modify: `apps/web/src/app/(public)/live/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx:265,472`. When `seaznVideoPlan(fixtureId)` answers `"seazn"`, the page mounts `<SeaznVideoIsland fixtureId>` in the `replay` slot instead of `<ReplayEmbed>`. Every other fixture keeps today's slot byte for byte (spec §5.1).
 - Create: `apps/web/src/server/video/seazn-video-plan.ts`: `seaznVideoPlan(fixtureId: string): Promise<"seazn" | "external">`, decided from the fixture's OWN facts, never from `fixtureStreamTarget` (`stream-codes.ts:496-509` answers `{id,label,source}` with no kind):
-  - LIVE off → `external`;
-  - any session of the fixture with `destination_kind = 'seazn'`, or any non-deleted `fixture_video_replays` row (Phase 2) → `seazn`;
+  - any session of the fixture with `destination_kind = 'seazn'` → `seazn`, **whatever LIVE is** (controller ruling: LIVE off stops new Seazn streams only). Phase 1 reads `fixture_stream_sessions` alone; the replay-rows arm is added in Task 19, once V539 exists;
   - any other session, or the fixture decided → `external`;
-  - no session at all and not decided → `seazn` only when the fixture's resolved target row has `kind = 'seazn'` (saved, or the org's default). The island then renders nothing until the route answers live.
+  - no session at all and not decided → `seazn` only when LIVE is on and the fixture's resolved target row has `kind = 'seazn'` (saved, or the org's default). The island then renders nothing until the route answers live. With LIVE off this arm answers `external`.
 
   Plan decision: the last arm is the one use of the default pick, and only for a fixture that has never streamed and is not over. A viewer who opens the page before kick-off still gets the player at live without reloading (Review Focus 3), and a past YouTube fixture with no saved choice can never flip, because it has sessions.
 
@@ -316,6 +315,7 @@ The adapter changes in Task 6 rest on three vendor behaviours that the docs leav
 - [ ] **Step 1: Write the failing tests.**
   - Schedule: `null` gives 30 000. Live with an expiry 60 min away gives 55 min (Review Focus 3). Live with an expiry 2 min away gives 30 000.
   - Page: a YouTube fixture renders `ReplayEmbed` and no `data-testid="seazn-video"`. A Seazn fixture renders the island and no YouTube markup (anchor the assertion on `="`).
+  - `seaznVideoPlan` with LIVE off: a fixture with an ended Seazn session answers `seazn`, and the page renders the island, never `ReplayEmbed` (the ruling). An unstarted fixture whose default would be Seazn answers `external`.
   - `seaznVideoPlan` with LIVE on: a past YouTube fixture with no saved choice (its org's default now resolves Seazn) answers `external`, and the page renders `ReplayEmbed` with its parts (the blocker regression). An unstarted fixture whose default is Seazn answers `seazn`. A fixture with one Seazn session answers `seazn` even after the org's default changes.
   - Player: rendering `<SeaznPlayer>` with `src` A then `src` B (a token refresh) keeps the same `<video>` element instance (same node; a ref counter of mounts stays at 1), and hls.js `loadSource` is called with B without `destroy()` (spy on a mocked hls.js).
   - e2e, fake driver: pick Seazn and Go live → the public page shows `[data-testid=seazn-player] video` with a `src` or `data-src` on the fake host, with no reload between warming and live. At 320, 768 and 1280: no horizontal scroll.
@@ -606,7 +606,8 @@ export interface ReplayHost {
 
 **Files:**
 
-- Modify: `apps/web/src/server/video/seazn-video.ts` (`replay` is filled from `public_fixture_seazn_replays_v`, each part's `src` from `signedPlaylist`; the org read reads the table)
+- Modify: `apps/web/src/server/video/seazn-video.ts` (`replay` is filled from `public_fixture_seazn_replays_v`, each part's `src` from `signedPlaylist`; the org read reads the table). The REPLAY flag gates moving, not playing: a playable replay plays whatever LIVE or REPLAY is.
+- Modify: `apps/web/src/server/video/seazn-video-plan.ts` (Task 9): add the arm "any non-deleted `fixture_video_replays` row → `seazn`", flag-independent like the session arm.
 - Modify: `seazn-video-island.tsx` (with no live and a non-empty replay, it renders the parts in `partNo` order, "Part 1", "Part 2" when there are two or more, one `<SeaznPlayer>` at a time, the same part picker shape as `ReplayEmbed`'s)
 - Modify: `apps/web/src/proxy.ts` (add `https://${BUNNY_CDN_HOST}` to `connect-src` and `media-src`)
 - Create: `apps/web/src/server/video/organiser-replays.ts`: `fixtureSeaznReplays(orgId, fixtureId): Promise<{ id: string; partNo: number; state: "processing" | "playable" | "failed"; lengthSeconds: number | null }[]>`
@@ -617,6 +618,7 @@ export interface ReplayHost {
   - Two playable rows give `replay` of length 2 in `recorded_at` order, and each `src` contains `token_path=%2F<guid>%2F`.
   - A `processing` row is not public.
   - A replay of a private competition is absent from the public read and present in the org read.
+  - LIVE off (and REPLAY off): a fixture with an ended Seazn session and a playable replay answers `seazn` from `seaznVideoPlan`, the page renders the Seazn replay player, never `ReplayEmbed`, and the route lists the part (the controller ruling).
   - e2e: after Stop, `fake.advance` and a tick, the page shows Part 1 and Part 2 for a stop/restart match.
 - [ ] **Step 2: Run them and see them fail.**
 - [ ] **Step 3: Implement.**
