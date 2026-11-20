@@ -132,8 +132,9 @@ export interface CompetitionDesk {
   /** Match Day B1 (spec 2026-10-31 §9): how many of this competition's matches are today — Match Day's own count, A2's
    *  `countFixturesToday` (match-day.ts), read in this desk's transaction at this desk's `now` (controller ruling R2: one count,
    *  two surfaces). Each match is today on its own division's day (venue zone, else the organisation's, else UTC); a match in
-   *  play counts whatever day it was planned for; a cancelled match and an archived division's never do. The competition
-   *  page's match-day gate: above zero, it shows Open Match Day and the Needs-you list lives in Match Day (`needsYouHome`). */
+   *  play counts whatever day it was planned for, and so does a board of an online round that makes the day (opened in it, a live
+   *  check-in window or a game on file: no planned time of its own); a cancelled match and an archived division's never do. The
+   *  competition page's match-day gate: above zero, it shows Open Match Day and the Needs-you list lives in Match Day (`needsYouHome`). */
   fixtures_today: number;
   divisions: Map<string, DeskDivision>;
   /** Same instant every division's phase was resolved against (SSR-stable).
@@ -455,8 +456,10 @@ export async function getCompetitionDesk(
   const ids = divisions.map((d) => d.id);
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
-  const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed } = await withTenant(auth.orgId, async (tx) => {
+  const { countFixturesToday, withRoundOpensToday } = await import("./match-day");
+  // `withRoundOpensToday`, not `withTenant`: the count of today's matches reads the sealed round opens in this transaction's
+  // privileged prelude (an online night is a match day), so its `fixtures_today` is the same number Match Day and the org home read.
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed } = await withRoundOpensToday(auth.orgId, now, async (tx, opens) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -611,7 +614,7 @@ export async function getCompetitionDesk(
              and dl.revoked_at is null
              and (dl.expires_at is null or dl.expires_at > ${now})`
       : [];
-    const fixturesToday = await countFixturesToday(tx, competitionId, now);
+    const fixturesToday = await countFixturesToday(tx, competitionId, now, opens);
     // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
     // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
     // W5 T6 (X-CU-8): and those waiting to join a running root league or group (`table_waiting_stage_id`, V535) — `table`

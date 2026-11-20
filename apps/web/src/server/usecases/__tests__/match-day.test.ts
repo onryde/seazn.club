@@ -32,7 +32,7 @@ import { resolvePositions } from "@seazn/engine/sport";
 import { badminton, setBasedServeContext, type SetBasedState } from "@seazn/engine/sports/setbased";
 import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
-import { sql, withTenant } from "@/lib/db";
+import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
@@ -89,7 +89,7 @@ import { createDivision, listDivisions } from "../divisions";
 import { createEntrants } from "../entrants";
 import { createStages, generateStageFixtures } from "../stages";
 import { callFixtureToCourt, undoCall } from "../match-day-call";
-import { __setBoardReadHookForTests, countFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
+import { __setBoardReadHookForTests, competitionFixturesToday, findCourtForDivision, getMatchDay, matchDayCandidates } from "../match-day";
 import { loadFixtureMatchRules } from "../fixtures";
 import { putScheduleSettings } from "../schedule";
 import { createCourt } from "../venues";
@@ -109,6 +109,7 @@ import {
 } from "./_match-day-seed";
 import { makeCommunityRig } from "./_rig";
 import { seedOnlineChessFixture } from "./_external-play-seed";
+import { openStamp, seedOnlineDivisionIn } from "./_match-day-online-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -1172,7 +1173,7 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     await setStatus(cancelled, "cancelled"); // Sat 7 Nov, cancelled
 
     // The division declares no zone of its own, so its day is the organisation's (Amsterdam).
-    const count = (isoAt: string) => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, new Date(isoAt)));
+    const count = (isoAt: string) => competitionFixturesToday(day.auth, day.comp.id, new Date(isoAt));
     const days: [string, number][] = [
       ["2026-11-06T12:00:00.000Z", 0], // the day before
       ["2026-11-07T12:00:00.000Z", 1], // the day of: 11:00, not the cancelled 12:00, not 00:30 tomorrow
@@ -1213,7 +1214,7 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     const C = between(day.comp, p1, p3).id; // 10:30Z Sun 8: Amsterdam Sun 11:30 (tomorrow), Auckland Sun 23:30 — today
     const D = between(day.comp, p2, p4).id; // no court, 05:00Z Sun 8: Amsterdam Sun 06:00 (a later day), Auckland Sun 18:00 — today
     const E = between(day.comp, p1, p4).id; // no court, 11:00Z Sun 8: Auckland Mon 9 Nov 00:00 — a later day
-    const count = () => withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, now));
+    const count = () => competitionFixturesToday(day.auth, day.comp.id, now);
     const deskPhase = async () => (await getCompetitionDesk(day.auth, day.comp.id, now)).divisions.get(day.comp.divisionId);
 
     await place(day, A, minutesTo("2026-11-07T08:00:00.000Z"), day.courts.c1);
@@ -1278,7 +1279,7 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     expect(view.courts.map((c) => c.court_id)).toEqual([day.courts.c1]);
     expect(courtOf(view, day.courts.c1)).toMatchObject({ state: "playing", current: { id: f34 }, queue: [] });
     expect(view.fixtures_today).toBe(0);
-    expect(await withTenant(day.orgId, (tx) => countFixturesToday(tx, day.comp.id, at(10)))).toBe(0);
+    expect(await competitionFixturesToday(day.auth, day.comp.id, at(10))).toBe(0);
     expect(await matchDayCandidates(day.auth, day.comp.id, day.courts.c1, at(10))).toEqual([]);
 
     // Another competition's board: both matches in play hold their courts. Court 1 is held until max(10, 0 + 30) = 30, so
@@ -1287,6 +1288,30 @@ describe.skipIf(!HAS_DB)("countFixturesToday", () => {
     expect(courtOf(theirs, day.courts.c1)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
     expect(courtOf(theirs, day.courts.c2)).toMatchObject({ state: "in_use_elsewhere", in_use_by: day.comp.name });
     expect(queueOf(courtOf(theirs, day.courts.c1))).toEqual([[xy, 20, 30]]);
+  });
+
+  // Match Day online, Task 5: an online chess division beside an in-hall one in the SAME competition. The online boards carry no
+  // planned time, so only an opened round makes them today's (the arms are tested alone in match-day-home-today.test.ts); here they
+  // must ADD to the in-hall count and leave it alone otherwise. One sport on the online side (online play is chess-only: openRound
+  // refuses any other); the in-hall side is `seedDay`'s generic division, whose own cases above are unchanged.
+  it("an online division's opened round adds its boards to the in-hall matches today; an unopened round and an archived division add nothing", async () => {
+    const day = await seedDay();
+    const { p1, p2 } = pairs(day);
+    await place(day, between(day.comp, p1, p2).id, 0, day.courts.c1); // Sat 7 Nov 11:00 in Amsterdam: the one in-hall match today
+    const rapid = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid", fixtures: 2 });
+    const blitz = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Blitz", fixtures: 3 });
+    const now = at(10);
+    const count = () => competitionFixturesToday(day.auth, day.comp.id, now);
+    const reads = async () => [await count(), (await getCompetitionDesk(day.auth, day.comp.id, now)).fixtures_today, (await getMatchDay(day.auth, day.comp.id, now)).fixtures_today];
+    expect(await reads(), "before any round is opened: the in-hall match alone, on every surface").toEqual([1, 1, 1]);
+
+    const owner = (stageId: string) => ({ stageId, orgId: day.orgId, ownerUserId: day.auth.userId! });
+    await openStamp(owner(rapid.stageId), 1, at(5)); // opened five minutes into the day; Blitz stays paired and unopened
+    expect(await reads(), "Rapid's two boards join the in-hall match; Blitz's three do not").toEqual([3, 3, 3]);
+
+    await sql`update divisions set archived_at = now() where id = ${rapid.divisionId}`;
+    expect(await reads(), "an archived division is gone from the competition, its opened round with it").toEqual([1, 1, 1]);
+    expect(blitz.boards, "premise: the unopened division has boards of its own").toHaveLength(3);
   });
 });
 

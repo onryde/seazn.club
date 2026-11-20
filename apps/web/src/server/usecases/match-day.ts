@@ -64,6 +64,7 @@ import { readRounds, roundOf } from "./match-day-rounds";
 import { courtStreamsForDay } from "./court-streams";
 import { openStreamStates } from "./stream-sessions";
 import { readOnlineRounds } from "./match-day-online";
+import { roundOpensToday, type RoundOpenToday } from "@/server/external-play/round-open";
 import { kickoffsOf } from "@/server/engine-db/kickoff";
 import { servingSideOf, sportReadsServe } from "@/server/engine-db/serving";
 import { log } from "@/server/logger";
@@ -85,15 +86,58 @@ const wholeMinutes = (ms: number): number => Math.max(0, Math.floor(ms / MS_PER_
  * How many of this competition's matches are today, at `now`. Each match is on its OWN division's day: the division's venue
  * zone, else the organisation's, else UTC (`divisionDays` — the zone the desk's match_day phase reads that division in, so the
  * two agree; controller ruling I2: no zone parameter, because there is no one zone to pass). Counted: a match planned within
- * its division's day, and a match in play whatever its planned day (a match being played is a match today; ruling m5). Not
- * counted: a cancelled match, or any match of an archived division (I1). Shared with the competition desk (ruling R2): one
- * count, two surfaces.
+ * its division's day, and a match in play whatever its planned day (a match being played is a match today; ruling m5), and a
+ * BOARD of an online round that makes the day (below). Not counted: a cancelled match, or any match of an archived division (I1).
+ * Shared with the competition desk (ruling R2): one count, two surfaces.
+ *
+ * An online board has no planned time, so the rules above never reach it. A board (both sides seated, not cancelled) of a round
+ * that has a `stage_round_opens` row is today's when that round (a) was opened within its division's day, or (b) still has a live
+ * window at `now` (the round's bound, `roundWindowBoundSql`, so a round opened at 23:50 is still the night at 00:10), or (c) the board
+ * has a game on file that has not finished. `opens` is the sealed half of that, read by `withRoundOpensToday`: the table has no
+ * `app_user` grant, so it cannot be read in `tx`.
  */
-export async function countFixturesToday(tx: Tx, competitionId: string, now: Date): Promise<number> {
+export async function countFixturesToday(tx: Tx, competitionId: string, now: Date, opens: readonly RoundOpenToday[]): Promise<number> {
   const [org] = await tx<{ timezone: string | null }[]>`
     select o.timezone from competitions c join organizations o on o.id = c.org_id where c.id = ${competitionId}`;
-  const read = await countTodayByCompetition(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId}`);
+  const read = await countTodayByCompetition(tx, org?.timezone ?? null, now, tx`d.competition_id = ${competitionId}`, opens);
   return read.get(competitionId)?.n ?? 0;
+}
+
+/**
+ * `withTenant` for a read that asks whether a match is today. The online half of the answer lives in `stage_round_opens`, which is
+ * SEALED (V451: no `app_user` grant; a read as the tenant role is refused 42501), so it is read FIRST, on this transaction's own
+ * connection and before the role drops (`privilegedPrelude`, the door `withTenant` has for exactly that), and handed to `fn` beside
+ * the transaction. No pooled read is made inside the tenant transaction (the pool would deadlock under load, lib/db.ts), and the
+ * sealed rows and the tenant rows are one snapshot. A caller that reaches `countFixturesToday` any other way has no `opens` to give.
+ */
+export async function withRoundOpensToday<T>(
+  orgId: string,
+  now: Date,
+  fn: (tx: Tx, opens: readonly RoundOpenToday[]) => Promise<T>,
+): Promise<T> {
+  let opens: readonly RoundOpenToday[] | undefined;
+  return withTenant(
+    orgId,
+    (tx) => {
+      if (opens === undefined) throw new Error("withRoundOpensToday: the sealed read of the round opens did not run before the role dropped");
+      return fn(tx, opens);
+    },
+    {
+      privilegedPrelude: async (ptx) => {
+        opens = await roundOpensToday(ptx, orgId, now);
+      },
+    },
+  );
+}
+
+/** The opened rounds as a table to join a board's round on: `ro(stage_id, round_no, opened_at, live)`. Values travel as text and are
+ *  cast, as `dayTable`'s do. The window flag is `1`/`0`, NOT a boolean: a text array cast `::boolean[]` reads every element as false
+ *  through this client (measured: `['true', 'false']::boolean[]` gives `[false, false]`), and a JS boolean array is refused outright. */
+function roundOpensTable(tx: Tx, opens: readonly RoundOpenToday[]): postgres.Fragment {
+  return tx`unnest(${opens.map((o) => o.stageId)}::uuid[],
+                   ${opens.map((o) => String(o.roundNo))}::int[],
+                   ${opens.map((o) => o.openedAt.toISOString())}::timestamptz[],
+                   ${opens.map((o) => (o.windowLive ? "1" : "0"))}::int[]) as ro(stage_id, round_no, opened_at, live)`;
 }
 
 /** The match a competition's day is headlined by on the org home's deck (C7 review M2): one of TODAY's matches, both sides
@@ -125,9 +169,22 @@ async function countTodayByCompetition(
   orgTz: string | null,
   now: Date,
   where: postgres.Fragment,
+  opens: readonly RoundOpenToday[],
 ): Promise<Map<string, { n: number; headline: TodayHeadlineRaw | null }>> {
   const days = await divisionDays(tx, orgTz, now, tx`${where} and d.archived_at is null`);
   if (days.length === 0) return new Map();
+  // The online arm, beside the in-play arm: a board of a round that has an open row (`opens`, the sealed read) that was opened in
+  // the division's day, or whose window is live, or that has a game on file. Half-open like the day itself: an open at the very
+  // midnight that ends one day is the next day's. The bridge table is the tenant's own (RLS), so arm (c) reads it here.
+  const onlineBoard = tx`(
+    f.home_entrant_id is not null and f.away_entrant_id is not null
+    and exists (
+      select 1 from ${roundOpensTable(tx, opens)}
+       where ro.stage_id = f.stage_id and ro.round_no = f.round_no
+         and (ro.live = 1
+              or (ro.opened_at >= w.day_from and ro.opened_at < w.day_to)
+              or exists (select 1 from fixture_external_play ep
+                          where ep.fixture_id = f.id and ep.challenge_id is not null and ep.status <> 'finished'))))`;
   const rows = await tx<
     {
       competition_id: string;
@@ -158,7 +215,7 @@ async function countTodayByCompetition(
         left join entrants he on he.id = f.home_entrant_id
         left join entrants ae on ae.id = f.away_entrant_id
        where f.status <> ${CANCELLED}
-         and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY})
+         and ((f.scheduled_at >= w.day_from and f.scheduled_at < w.day_to) or f.status = ${IN_PLAY} or ${onlineBoard})
     ) x
     where x.rk = 1`;
   return new Map(
@@ -200,17 +257,18 @@ export interface CompetitionsToday {
 }
 
 /**
- * `countFixturesToday` for a whole list of competitions: ONE tenant transaction and at most four statements however long the
- * list (the organisation's zone, the divisions' days, one read of today's counts and headlines, and — only when a headline has
- * a court — the court labels) - never a query per card. Every read is under the tenant's RLS, so a competition of another
- * organisation is never counted even when its id is asked for.
+ * `countFixturesToday` for a whole list of competitions: ONE tenant transaction and at most five statements however long the
+ * list (the sealed round opens, read first in the transaction's privileged prelude and scoped to this organisation; the
+ * organisation's zone, the divisions' days, one read of today's counts and headlines, and — only when a headline has a court — the
+ * court labels) - never a query per card. Every tenant read is under the tenant's RLS, so a competition of another organisation is
+ * never counted even when its id is asked for.
  */
 export async function competitionsFixturesToday(
   auth: AuthCtx,
   competitionIds: readonly string[],
   now: Date = new Date(),
 ): Promise<CompetitionsToday> {
-  return withTenant(auth.orgId, async (tx) => {
+  return withRoundOpensToday(auth.orgId, now, async (tx, opens) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const orgTz = org?.timezone ?? null;
     const tz = resolveVenueTz(null, orgTz);
@@ -218,7 +276,7 @@ export async function competitionsFixturesToday(
     const read =
       competitionIds.length === 0
         ? new Map<string, { n: number; headline: TodayHeadlineRaw | null }>()
-        : await countTodayByCompetition(tx, orgTz, now, tx`d.competition_id = any(${[...competitionIds]}::uuid[])`);
+        : await countTodayByCompetition(tx, orgTz, now, tx`d.competition_id = any(${[...competitionIds]}::uuid[])`, opens);
     const courtNames = [...read.values()].some((r) => r.headline?.court_id) ? await courtNamesById(tx) : new Map<string, string>();
     const counts = new Map<string, number>();
     const next = new Map<string, TodayHeadline>();
@@ -238,7 +296,7 @@ export async function competitionsFixturesToday(
  * asks `needsYouHome` of it, exactly as the competition page asks it of the desk's `fixtures_today`.
  */
 export async function competitionFixturesToday(auth: AuthCtx, competitionId: string, now: Date = new Date()): Promise<number> {
-  return withTenant(auth.orgId, (tx) => countFixturesToday(tx, competitionId, now));
+  return withRoundOpensToday(auth.orgId, now, (tx, opens) => countFixturesToday(tx, competitionId, now, opens));
 }
 
 interface CompRow {
