@@ -23,6 +23,9 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { currentBudgetKey, RealtimeKitDeferred, RealtimeKitError, type ParticipantToken } from "@/server/external-play/video/realtimekit";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
+import { builtinModules } from "@seazn/engine/sports";
+import { fenAfter } from "@/server/external-play/fen";
+import { NEEDS_REASONS } from "@/server/external-play/types";
 import { stampFixtureCheckIn } from "../me";
 import { scoreEvent } from "../scoring";
 import { mintOrgOwnerAuth } from "../external-play/auth";
@@ -36,6 +39,7 @@ import {
   leaveAsArbiter,
   loadArbiterRound,
   listFlaggedExternalPlay,
+  loadMatchDayBoard,
   readPlayerPresence,
   overrideVideoAsOrganiser,
   resyncExternalPlay,
@@ -45,6 +49,7 @@ import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { CAMERA_REPORT_STALE_MS } from "@/components/public-site/match-room/room-snapshot";
 import { reportedCameras } from "../external-play/camera-reported";
 import { configureRealtimeKit } from "./_external-play-rtk-fake";
+import { bridgeRow, openFlag } from "./_match-day-online-seed";
 import { clearBucket, putStay, setBucket, stubBucket } from "./_external-play-line";
 import { linePool } from "@/server/external-play/seat-line";
 import { putVideoMeeting, putVideoParticipant, seedOnlineChessRound, seedOwner, seedPlayer, type SeedOnlineChessRoundResult } from "./_external-play-seed";
@@ -95,9 +100,10 @@ async function openRound(r: SeedOnlineChessRoundResult, roundNo = r.roundNo, at 
 async function bridge(
   fixtureId: string,
   orgId: string,
-  b: { status: string; moves?: number; whiteMs?: number; blackMs?: number; reason?: string | null; startedAt?: Date | null },
+  b: { status: string; moves?: number | readonly string[]; whiteMs?: number; blackMs?: number; reason?: string | null; startedAt?: Date | null },
 ): Promise<void> {
-  const moves = Array.from({ length: b.moves ?? 0 }, (_, i) => (i % 2 === 0 ? "g1f3" : "g8f6"));
+  // A number is that many FILLER plies (g1f3 g8f6 ... - not a legal game past the second ply); a list is the game's own UCI moves.
+  const moves = typeof b.moves === "object" ? [...b.moves] : Array.from({ length: b.moves ?? 0 }, (_, i) => (i % 2 === 0 ? "g1f3" : "g8f6"));
   const game = b.status !== "pending";
   await sql`
     insert into fixture_external_play (
@@ -2342,5 +2348,410 @@ describe.runIf(HAS_DB)("joinAsArbiter - a participant the vendor no longer has (
     const down = fakeVideo({ refreshParticipantToken: vi.fn(async () => { throw new RealtimeKitError(503, "unavailable", "down"); }) });
     await expect(joinAsArbiter(r.owner, b.fixtureId, "home", { video: down.video })).rejects.toBeTruthy();
     expect((await arbiterRows(b.fixtureId)).filter((x) => x.removed_at === null)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Match Day online Task 3: the focused board's read (`loadMatchDayBoard`).
+// Single-sport by construction: online play is chess-only (`boardgame`, guard.ts). The one test that varies the sport sweeps the registry
+// (every other sport's fixture is NOT FOUND here); everything else needs a board that plays on Lichess.
+//
+// Expected values come from the seed and from chess itself: the UCI lists below are LEGAL games typed here, and the FENs are the positions
+// those games reach, written out as literals (not read back from `fenAfter`, which is the code the position is derived with).
+// ---------------------------------------------------------------------------
+/** 1.e4 e5 2.Nf3 Nc6 3.Bb5 a6 4.Ba4 Nf6 5.O-O Be7 6.Re1 b5 - twelve plies, White to move. */
+const RUY_12 = ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6", "e1g1", "f8e7", "f1e1", "b7b5"] as const;
+const FEN_AFTER_12 = "r1bqk2r/2ppbppp/p1n2n2/1p2p3/B3P3/5N2/PPPP1PPP/RNBQR1K1 w kq - 0 7";
+/** After the seventh ply (4.Ba4), Black to move. */
+const FEN_AFTER_7 = "r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 1 4";
+/** 1.h4 g5 2.hxg5 h6 3.gxh6 Nf6 4.h7 Ng8 5.hxg8=Q - nine plies, the last one a promotion (five characters in UCI). */
+const PROMO_9 = ["h2h4", "g7g5", "h4g5", "h7h6", "g5h6", "g8f6", "h6h7", "f6g8", "h7g8q"] as const;
+const FEN_AFTER_PROMO = "rnbqkbQr/pppppp2/8/8/8/8/PPPPPPP1/RNBQKBNR b KQkq - 0 5";
+const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+/** A one-board opened round whose board has a game on file with `moves` played. */
+async function playedBoard(moves: readonly string[], o: { status?: string; reason?: string; cameraPolicy?: "required" | "off" } = {}) {
+  const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: o.cameraPolicy ?? "required" });
+  await openRound(r);
+  const b = r.boards[0]!;
+  await bridge(b.fixtureId, r.orgId, { status: o.status ?? "live", moves, reason: o.reason ?? null });
+  return { r, b, other: r.boards[1]! };
+}
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - the empty case first", () => {
+  it("an id that is no board answers NOT FOUND (an unknown uuid, a malformed id), reading nothing about a board", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(r);
+    let checked = 0;
+    for (const id of [randomUUID(), "not-a-uuid", ""]) {
+      const before = statementTexts().length;
+      expect(await codeOf(loadMatchDayBoard(r.owner, id)), id).toEqual([404, "NOT_FOUND"]);
+      expect(textsNaming(before, "fixture_video_presence") + textsNaming(before, "camera_reported"), `${id}: no presence or camera read`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("another club's board is NOT FOUND to a stranger, and the same board reads for its own club (the positive pair)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(r);
+    const fixtureId = r.boards[0]!.fixtureId;
+    const stranger = await seedOwner();
+    expect(await codeOf(loadMatchDayBoard(stranger, fixtureId))).toEqual([404, "NOT_FOUND"]);
+    expect(await loadMatchDayBoard(r.owner, fixtureId)).toMatchObject({ fixtureId, boardNo: 1 });
+  });
+
+  it("an unpaired seat (one entrant, no opponent) is not a board: NOT FOUND", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, unpaired: true });
+    await openRound(r);
+    expect(await codeOf(loadMatchDayBoard(r.owner, r.unpairedFixtureId!))).toEqual([404, "NOT_FOUND"]);
+    expect(await loadMatchDayBoard(r.owner, r.boards[0]!.fixtureId)).toMatchObject({ boardNo: 1 });
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - the position, from the bridge's moves by the public read's own derivation", () => {
+  it("a live board with twelve plies: the position those plies reach, the twelfth ply's two squares as the last move, White to move", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(board.state).toEqual({ kind: "live", moveNo: 7 });
+    expect(board.position).toEqual({ fen: FEN_AFTER_12, lastMove: ["b7", "b5"], turn: "white" });
+    // The same answer the public read's replay gives for the same list (one rule, two readers).
+    expect(board.position!.fen).toBe(fenAfter(RUY_12).fen);
+  });
+
+  it("a ledger whose 8th ply chess.js refuses: the board stands after the 7th and the LAST REPLAYED ply is its last move - never the list's tail", async () => {
+    // Plies 1-7 are legal; the 8th (e7e5, a pawn already there) is refused; three more follow that cannot be replayed either.
+    const moves = [...RUY_12.slice(0, 7), "e7e5", "g8f6", "e1g1", "f8e7"];
+    const { r, b } = await playedBoard(moves);
+    const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(board.position).toEqual({ fen: FEN_AFTER_7, lastMove: ["b5", "a4"], turn: "black" });
+    expect(board.position!.lastMove, "the list's tail is not the last move").not.toEqual(["f8", "e7"]);
+    expect(board.position!.lastMove, "nor is the refused ply").not.toEqual(["e7", "e5"]);
+  });
+
+  it("a promotion as the last ply: the last move is two squares (the promotion piece is dropped), Black to move after nine plies", async () => {
+    const { r, b } = await playedBoard(PROMO_9);
+    expect((await loadMatchDayBoard(r.owner, b.fixtureId)).position).toEqual({ fen: FEN_AFTER_PROMO, lastMove: ["h7", "g8"], turn: "black" });
+  });
+
+  it("a game on file with no move yet: the start position, no last move, White to move (the empty list, stated)", async () => {
+    const { r, b } = await playedBoard([], { status: "ready" });
+    const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(board.state.kind).toBe("starting");
+    expect(board.position).toEqual({ fen: START_FEN, lastMove: null, turn: "white" });
+  });
+
+  it("no game at Lichess yet: the position is null - whether the board has no bridge row, a pending one, or is held for a link before any game", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 3 });
+    await openRound(r);
+    const [none, pending, linkHold] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0], (typeof r.boards)[0]];
+    await bridge(pending.fixtureId, r.orgId, { status: "pending" });
+    // The hold row `openRound` writes for a player with no Lichess link: held, no game, no challenge.
+    await bridgeRow(linkHold.fixtureId, r.orgId, { status: "needs_organiser", reason: "lichess_unlinked", hold: true });
+    let checked = 0;
+    for (const [why, id, kind] of [
+      ["no bridge row", none.fixtureId, "checking_in"],
+      ["a pending bridge row", pending.fixtureId, "checking_in"],
+      ["a link hold with no game", linkHold.fixtureId, "on_hold"],
+    ] as const) {
+      const board = await loadMatchDayBoard(r.owner, id);
+      expect(board.state.kind, why).toBe(kind);
+      expect(board.position, why).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a finished board still answers with its FINAL position (the bridge closed; the fixture decided)", async () => {
+    const { r, b } = await playedBoard(RUY_12, { status: "finished" });
+    const finished = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(finished.state.kind).toBe("result");
+    expect(finished.position).toEqual({ fen: FEN_AFTER_12, lastMove: ["b7", "b5"], turn: "white" });
+    // The fixture itself settled (a result entered on the console): the same board, the same position.
+    await sql`update fixtures set status = 'decided' where id = ${b.fixtureId}`;
+    const decided = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(decided.state.kind).toBe("result");
+    expect(decided.position).toEqual(finished.position);
+  });
+
+  it("the sequence: a second read follows the ledger - a ply arrives, the board moves on, the turn flips", async () => {
+    const { r, b } = await playedBoard(RUY_12.slice(0, 7));
+    const first = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(first.position).toEqual({ fen: FEN_AFTER_7, lastMove: ["b5", "a4"], turn: "black" });
+    const eight = RUY_12.slice(0, 8);
+    await sql`update fixture_external_play set moves_uci = ${sql.json([...eight])}, move_count = ${eight.length} where fixture_id = ${b.fixtureId}`;
+    const second = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(second.position).toMatchObject({ lastMove: ["g8", "f6"], turn: "white" });
+    expect(second.position!.fen, "the board moved").not.toBe(first.position!.fen);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - composed exactly as the arbiter loader composes the board (MD-R1: presence, camera, joinable, seats)", () => {
+  const at = (m: number) => new Date(OPENED.getTime() + m * 60_000);
+
+  /** Board 1 of two, still checking in: home's player has ARRIVED (room, player participant, a counted check-in), is present and has a
+   *  live camera; away has nothing. */
+  async function arrivedHome() {
+    const r = await seedOnlineChessRound({ fixtures: 2, cameraPolicy: "required" });
+    await openRound(r);
+    const b = r.boards[0]!;
+    await meeting(b.fixtureId, r.orgId, { sides: ["home"], arrived: true });
+    const participantId = await playerOf(b.fixtureId, "home");
+    await presenceRow(b.fixtureId, "home", { participantId, custom: b.home.personId, joinedAt: at(5) });
+    const now = at(10);
+    await sql`update fixture_video_participants set camera_reported = 'live', camera_reported_at = ${new Date(now.getTime() - 5_000)}
+               where fixture_id = ${b.fixtureId} and side = 'home' and preset = 'player'`;
+    return { r, b, now };
+  }
+
+  it("a board in check-in: the same board the round view paints, whole - and the focus adds only the position, the stage, the round and the hold", async () => {
+    const { r, b, now } = await arrivedHome();
+    const focused = await loadMatchDayBoard(r.owner, b.fixtureId, { now });
+    const inRound = (await loadArbiterRound(r.owner, r.divisionId, { now }))!.boards.find((x) => x.fixtureId === b.fixtureId)!;
+    const { position, stage_id, round_no, hold_reason, ...board } = focused;
+    expect(board, "the round view's board, every key").toEqual(inRound);
+    expect({ position, stage_id, round_no, hold_reason }).toEqual({ position: null, stage_id: r.stageId, round_no: r.roundNo, hold_reason: null });
+    // The seams, by value: the player is here, on camera, and the arbiter may join this side; the other side has nobody.
+    expect(focused.sides.home).toMatchObject({
+      state: "open",
+      presence: { present: true, since: at(5).toISOString(), leftAt: null },
+      camera: { state: "live" },
+      joinable: true,
+    });
+    expect(focused.sides.away).toMatchObject({ state: "none", presence: { present: false }, camera: { state: "unknown" }, joinable: false });
+    // Pass 2 of the composition: a board in check-in carries its seats and its check-in window.
+    expect(focused.seats, "seats attached").not.toBeNull();
+    const here = focused.whiteSide === "home" ? focused.seats!.white : focused.seats!.black;
+    const there = focused.whiteSide === "home" ? focused.seats!.black : focused.seats!.white;
+    expect([here.here, there.here], "home's player is here, away's is not").toEqual([true, false]);
+    expect(focused.checkin, "check-in window").not.toBeNull();
+  });
+
+  it("`joinable` reads the presence-proof flag: the same seed answers false with the flag off and true with it on (the flag's own differential)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const b = r.boards[0]!;
+    await bridge(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+    // A room, a player participant and a presence row - and NO counted check-in.
+    await putVideoMeeting({ fixtureId: b.fixtureId, orgId: r.orgId, side: "home" });
+    await putVideoParticipant({ fixtureId: b.fixtureId, side: "home", personId: b.home.personId });
+    await presenceRow(b.fixtureId, "home", { participantId: await playerOf(b.fixtureId, "home"), custom: b.home.personId });
+    const joinable = async (flag: "" | "1") => {
+      vi.stubEnv("EXTERNAL_PLAY_PRESENCE_PROOF", flag);
+      return (await loadMatchDayBoard(r.owner, b.fixtureId)).sides.home.joinable;
+    };
+    expect([await joinable(""), await joinable("1")]).toEqual([false, true]);
+  });
+
+  it("a held board carries WHY it is held, for every reason in the vocabulary; a live board carries null", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1 });
+    await openRound(r);
+    const b = r.boards[0]!;
+    await bridge(b.fixtureId, r.orgId, { status: "needs_organiser", reason: NEEDS_REASONS[0], moves: 2 });
+    let checked = 0;
+    for (const reason of NEEDS_REASONS) {
+      await sql`update fixture_external_play set needs_reason = ${reason} where fixture_id = ${b.fixtureId}`;
+      const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+      expect(board.state.kind, reason).toBe("on_hold");
+      expect(board.hold_reason, reason).toBe(reason);
+      checked++;
+    }
+    expect(checked, "reasons checked").toBe(NEEDS_REASONS.length);
+    await sql`update fixture_external_play set status = 'live', needs_reason = null where fixture_id = ${b.fixtureId}`;
+    expect((await loadMatchDayBoard(r.owner, b.fixtureId)).hold_reason).toBeNull();
+  });
+
+  it("a board settled on the console whose bridge row still reads held is a RESULT and carries NO reason (the reason follows the board's state, not the row's column)", async () => {
+    const { r, b } = await playedBoard(RUY_12.slice(0, 4), { status: "needs_organiser", reason: "no_show_white" });
+    await sql`update fixtures set status = 'decided' where id = ${b.fixtureId}`;
+    const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect([board.state.kind, board.hold_reason]).toEqual(["result", null]);
+  });
+
+  it("the sequence: a hold settled between two reads - the second read is live and carries NO reason", async () => {
+    const { r, b } = await playedBoard(RUY_12.slice(0, 4), { status: "needs_organiser", reason: "no_show_white" });
+    const held = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect([held.state.kind, held.hold_reason]).toEqual(["on_hold", "no_show_white"]);
+    await sql`update fixture_external_play set status = 'live', needs_reason = null where fixture_id = ${b.fixtureId}`;
+    const settled = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect([settled.state.kind, settled.hold_reason]).toEqual(["live", null]);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - the flags, built in full", () => {
+  it("a connection-problems flag carries its seconds and stamps from the guard's own record (the card is built, not counted)", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    await sql`update fixture_external_play set started_at = '2026-10-12T19:18:00Z', game_over_at = '2026-10-12T19:39:00Z' where fixture_id = ${b.fixtureId}`;
+    await meeting(b.fixtureId, r.orgId, { sides: ["home"] });
+    await sql`insert into fixture_video_guard_faults (fixture_id, side, person_id, started_at, ended_at) values
+      (${b.fixtureId}, 'home', ${b.home.personId}, '2026-10-12T19:20:00Z', '2026-10-12T19:20:40Z'),
+      (${b.fixtureId}, 'home', ${b.home.personId}, '2026-10-12T19:25:00Z', '2026-10-12T19:25:50Z')`;
+    const flagId = await openFlag(r.orgId, b.fixtureId, { kind: "camera_connection_problems", personId: b.home.personId, openedAt: new Date("2026-10-12T19:42:00Z") });
+    const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(board.flagCount).toBe(1);
+    expect(board.flags).toEqual([
+      { id: flagId, kind: "camera_connection_problems", at: "2026-10-12T19:42:00.000Z", personName: "P1W", seconds: 90, stamps: 2 },
+    ]);
+  });
+
+  it("the sequence: the organiser lets the game go on - the second read has no flag and a count of 0", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const one = await openFlag(r.orgId, b.fixtureId, { openedAt: new Date("2026-10-12T19:38:00Z") });
+    const two = await openFlag(r.orgId, b.fixtureId, { openedAt: new Date("2026-10-12T19:39:00Z") });
+    const before = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect([before.flagCount, before.flags.map((f) => f.id)]).toEqual([2, [one, two]]);
+    expect(await closeExternalPlayFlags(r.owner, b.fixtureId, [one, two])).toEqual({ closed: 2, stillOpen: 0 });
+    const after = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect([after.flagCount, after.flags]).toEqual([0, []]);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - who may read it", () => {
+  it("a board the viewer plays on is refused 403 ARBITER_PLAYS_THIS_BOARD, for either colour, and the same viewer reads the round's other board", async () => {
+    const { r, b, other } = await playedBoard(RUY_12);
+    const home = await seatedAdmin(r, b.home.userId);
+    const away = await seatedAdmin(r, b.away.userId);
+    let checked = 0;
+    for (const [why, who] of [["home", home], ["away", away]] as const) {
+      expect(await codeOf(loadMatchDayBoard(who, b.fixtureId)), why).toEqual([403, "ARBITER_PLAYS_THIS_BOARD"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The positive pair: the refusal is the board, not the viewer.
+    expect(await loadMatchDayBoard(home, other.fixtureId)).toMatchObject({ fixtureId: other.fixtureId });
+    expect(await loadMatchDayBoard(r.owner, b.fixtureId)).toMatchObject({ fixtureId: b.fixtureId });
+  });
+
+  it("the refusal is `isSeatedOn`'s whole breadth: a player re-seated off the roster who still holds a player camera participant is still refused", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const player = await seatedAdmin(r, b.home.userId);
+    await meeting(b.fixtureId, r.orgId);
+    await playerParticipant(b.fixtureId, b.home.personId);
+    await replaceMember(b.home.entrantId, r.orgId);
+    expect(await codeOf(loadMatchDayBoard(player, b.fixtureId))).toEqual([403, "ARBITER_PLAYS_THIS_BOARD"]);
+  });
+
+  it("a signed-in member with the VIEWER role reads it (no editor check), and an API key - which plays nowhere - reads it and is never asked whom it plays for", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const viewer = { ...r.owner, role: "viewer" } as AuthCtx;
+    expect(await loadMatchDayBoard(viewer, b.fixtureId)).toMatchObject({ fixtureId: b.fixtureId, position: { turn: "white" } });
+    const key = { orgId: r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] } as AuthCtx;
+    const before = statementTexts().length;
+    expect(await loadMatchDayBoard(key, b.fixtureId)).toMatchObject({ fixtureId: b.fixtureId, position: { turn: "white" } });
+    expect(textsNaming(before, "fixture_availability"), "a key is never asked whom it plays for").toBe(0);
+    // The positive pair: a session IS asked (the guard's own statement names fixture_availability).
+    const mark = statementTexts().length;
+    await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(textsNaming(mark, "fixture_availability"), "a session is asked").toBeGreaterThan(0);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - a cancelled board is read only while it has an open flag (owner O1)", () => {
+  it("a cancelled board with no flag is NOT FOUND - and so is its own player's read (the board left the list; there is nothing to refuse)", async () => {
+    const { r, b, other } = await playedBoard(RUY_12);
+    await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
+    expect(await codeOf(loadMatchDayBoard(r.owner, b.fixtureId))).toEqual([404, "NOT_FOUND"]);
+    const player = await seatedAdmin(r, b.home.userId);
+    expect(await codeOf(loadMatchDayBoard(player, b.fixtureId))).toEqual([404, "NOT_FOUND"]);
+    // The positive pair: the round's other board is not cancelled and reads.
+    expect(await loadMatchDayBoard(r.owner, other.fixtureId)).toMatchObject({ fixtureId: other.fixtureId });
+  });
+
+  it("the sequence: a cancelled board with open flags reads with its cards; once every flag is closed the same read is NOT FOUND", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const flags = [
+      await openFlag(r.orgId, b.fixtureId, { openedAt: new Date("2026-10-12T19:38:00Z") }),
+      await openFlag(r.orgId, b.fixtureId, { openedAt: new Date("2026-10-12T19:39:00Z") }),
+    ];
+    await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
+    const open = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(open.state).toEqual({ kind: "cancelled" });
+    expect(open.flags.map((f) => f.id), "its flag cards").toEqual(flags);
+    expect(open.flagCount).toBe(2);
+    expect(await closeExternalPlayFlags(r.owner, b.fixtureId, flags)).toEqual({ closed: 2, stillOpen: 0 });
+    expect(await codeOf(loadMatchDayBoard(r.owner, b.fixtureId))).toEqual([404, "NOT_FOUND"]);
+  });
+
+  it("a board voided or withdrawn (abandoned) is still read, as No result with its position and no flag", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    await sql`update fixtures set status = 'abandoned' where id = ${b.fixtureId}`;
+    const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(board.state).toEqual({ kind: "result", score: null, noResult: true });
+    expect(board.position).toEqual({ fen: FEN_AFTER_12, lastMove: ["b7", "b5"], turn: "white" });
+    expect([board.flagCount, board.flags]).toEqual([0, []]);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - online play is chess-only: a fixture of every other sport is NOT FOUND", () => {
+  it("a paired, opened, in-play board of each registry sport but boardgame - even with onlinePlay stored as lichess - is NOT FOUND; boardgame's own reads (the control)", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const keys = builtinModules.map((m) => m.key);
+    expect(keys, "the registry names boardgame (the one online sport) and others").toContain("boardgame");
+    let swept = 0;
+    for (const key of keys.filter((k) => k !== "boardgame")) {
+      const [variant] = await sql<{ key: string }[]>`select key from sport_variants where sport_key = ${key} order by is_system desc, key limit 1`;
+      expect(variant, `a system variant of ${key}`).toBeDefined();
+      const division = await createDivision(r.owner, r.competitionId, { name: `Other ${key}`, sport_key: key, variant_key: variant!.key, config: {} });
+      // A stored `lichess` on a sport that cannot play online is possible only below the doors; the board rule must still refuse it.
+      await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb where id = ${division.id}`;
+      const [stage] = await sql<{ id: string }[]>`insert into stages (division_id, seq, kind, name, status) values (${division.id}, 1, 'league', ${`S ${key}`}, 'active') returning id`;
+      await sql`insert into stage_round_opens (stage_id, org_id, round_no, opened_at, opened_by) values (${stage!.id}, ${r.orgId}, 1, ${OPENED}, ${r.ownerUserId})`;
+      const [fixture] = await sql<{ id: string }[]>`
+        insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id)
+        values (${stage!.id}, ${division.id}, ${r.orgId}, 1, 1, ${`sweep-${key}-${randomUUID().slice(0, 6)}`}, 'in_play', ${b.home.entrantId}, ${b.away.entrantId})
+        returning id`;
+      await bridge(fixture!.id, r.orgId, { status: "live", moves: RUY_12 });
+      expect(await codeOf(loadMatchDayBoard(r.owner, fixture!.id)), key).toEqual([404, "NOT_FOUND"]);
+      swept++;
+    }
+    expect(swept, "sports swept (the registry minus boardgame)").toBe(keys.length - 1);
+    expect(swept, "anti-vacuity: at least one other sport").toBeGreaterThan(0);
+    expect(await loadMatchDayBoard(r.owner, b.fixtureId)).toMatchObject({ fixtureId: b.fixtureId });
+  });
+
+  it("a chess division switched back to over-the-board play stops answering for its boards (the same rule, the same 404)", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    expect(await loadMatchDayBoard(r.owner, b.fixtureId)).toMatchObject({ fixtureId: b.fixtureId });
+    await sql`update divisions set config = config - 'onlinePlay' where id = ${r.divisionId}`;
+    expect(await codeOf(loadMatchDayBoard(r.owner, b.fixtureId))).toEqual([404, "NOT_FOUND"]);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - what one read costs (a per-call statement census)", () => {
+  /** The statements one WARM read issues (the privileged `sql` tag's own log, `statementTexts`). The first read of a process also asks
+   *  Postgres for its array types (one `pg_type` statement, postgres.js), which is no cost of the read: it is done once, before counting. */
+  async function census(auth: AuthCtx, fixtureId: string) {
+    await loadMatchDayBoard(auth, fixtureId);
+    const before = statementTexts().length;
+    await loadMatchDayBoard(auth, fixtureId);
+    const texts = statementTexts().slice(before);
+    return { n: texts.length, naming: (what: string) => texts.filter((t) => t.includes(what)).length, texts };
+  }
+  const keyOf = (r: SeedOnlineChessRoundResult) => ({ orgId: r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] }) as AuthCtx;
+
+  it("a live board nobody has joined: 8 statements for a session, 7 for a key - and the move list rides the one board statement, never a statement of its own", async () => {
+    const { r, b } = await playedBoard(RUY_12);
+    const session = await census(r.owner, b.fixtureId);
+    // The division and its clock; the board; its open flags; whom the viewer plays for; the camera policy; the players' presence; the two sides.
+    expect(session.n, session.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(8);
+    expect(session.naming("moves_uci"), "the moves are read by the board's own statement").toBe(1);
+    expect(session.naming("fixture_video_presence"), "ONE presence statement").toBe(1);
+    expect((await census(keyOf(r), b.fixtureId)).n, "a key is never asked whom it plays for").toBe(7);
+  });
+
+  it("a board in check-in with both players arrived and a connection flag: 17 statements, each fact read ONCE - presence, cameras, check-ins, the invite mail", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
+    await openRound(r);
+    const b = r.boards[0]!;
+    await meeting(b.fixtureId, r.orgId, { arrived: true });
+    for (const side of ["home", "away"] as const) {
+      await presenceRow(b.fixtureId, side, { participantId: await playerOf(b.fixtureId, side), custom: (side === "home" ? b.home : b.away).personId, joinedAt: new Date(OPENED.getTime() + 300_000) });
+    }
+    await openFlag(r.orgId, b.fixtureId, { kind: "camera_connection_problems", personId: b.home.personId });
+    const c = await census(r.owner, b.fixtureId);
+    expect(c.n, c.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(17);
+    expect(c.naming("fixture_video_presence"), "ONE presence statement").toBe(1);
+    expect(c.naming("camera_reported"), "ONE camera statement").toBe(1);
+    expect(c.naming("checked_in_at"), "ONE check-in statement, shared with the seats").toBe(1);
   });
 });

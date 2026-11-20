@@ -209,6 +209,8 @@ const RULES: RouteRule[] = [
   { method: "PUT", path: "/fixtures/:id/lineups/:entrantId", scope: "manage", pin: "fixture" },
   { method: "PATCH", path: "/fixtures/:id/officials", scope: "manage", pin: "fixture" },
   { method: "GET", path: "/fixtures/:id/state", scope: "read", pin: "fixture" },
+  // Match Day online: the focused board's read - the board as its panel paints it, read-only, any member who may read the competition.
+  { method: "GET", path: "/fixtures/:id/match-day-board", scope: "read", pin: "fixture" },
   // W5 T8b (ruling 289): what a disqualification recorded in this match would do — read before the scorer confirms it, so the
   // door is the scorer's (requireFixtureActor "score")
   { method: "GET", path: "/fixtures/:id/withdrawal-preview", scope: "score", pin: "fixture" },

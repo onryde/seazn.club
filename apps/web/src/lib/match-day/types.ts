@@ -253,6 +253,16 @@ export interface BoardPosition {
   turn: "white" | "black";
 }
 
+/** The focused board, as GET /api/v1/fixtures/{id}/match-day-board answers it (`loadMatchDayBoard`): the board as the arbiter's round
+ *  view paints it - the same composition, so its sides carry presence, camera and `joinable` and a board in check-in its seats - with
+ *  every open flag built in full (`flags`, not a count) and the position of its game: null while no game is on file. `stage_id` and
+ *  `round_no` say where it sits; `hold_reason` is stamped on EVERY read (the reason of a board in `on_hold`, null otherwise: ruling
+ *  MD-R8), where the list's boards carry it optionally. */
+export interface MatchDayBoard extends MatchDayBoardRow {
+  hold_reason: NeedsReason | null;
+  position: BoardPosition | null;
+}
+
 /** GET /api/v1/competitions/{id}/match-day. */
 export interface MatchDayView {
   competition_id: string;

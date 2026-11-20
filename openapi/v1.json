@@ -71866,6 +71866,339 @@
         ]
       }
     },
+    "/api/v1/fixtures/{id}/match-day-board": {
+      "get": {
+        "summary": "Match Day: the board in focus, as the arbiter's round view paints it - `state`, `clock`, each side's presence, camera and `joinable`, the seats of a board in check-in, `checkin`, every open flag built in full (`flags`, with `flagCount`) - plus `position` (the game's replayed position: `fen`, the last replayed ply's two squares as `lastMove`, `turn`; null while no game is on file), `stage_id`, `round_no` and `hold_reason` (why a board in `on_hold` is held; null otherwise). Reads only: any member who may read the competition, or a read-scope key. 404 NOT_FOUND for a fixture that is not an online board of this club - another club's, another sport's, an unpaired seat - and for a cancelled board with no open flag (it has left every list); 403 ARBITER_PLAYS_THIS_BOARD for a board the signed-in caller plays on",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixtureId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "position": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "fen": {
+                                  "type": "string"
+                                },
+                                "lastMove": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "prefixItems": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "turn": {
+                                  "type": "string",
+                                  "enum": [
+                                    "white",
+                                    "black"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fen",
+                                "lastMove",
+                                "turn"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "round_no": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "hold_reason": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fixtureId",
+                        "position",
+                        "stage_id",
+                        "round_no",
+                        "hold_reason"
+                      ],
+                      "additionalProperties": {},
+                      "description": "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` built in full, `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`."
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "fixtureId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "position": {
+                      "fen": "example",
+                      "lastMove": [
+                        "example",
+                        "example"
+                      ],
+                      "turn": "white"
+                    },
+                    "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "round_no": -9007199254740991,
+                    "hold_reason": "example"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
     "/api/v1/fixtures/{id}/withdrawal-preview": {
       "get": {
         "summary": "What a disqualification recorded IN this match would do to `entrant` (W5, owner ruling 289): the body of /entrants/{id}/withdrawal-preview with this match counted as played, read before the pad's sanction ending is confirmed. Any actor who may score the fixture (an organiser, an accepted official, its device link). `cascade` false on a bracket fixture (its disqualification is that match's forfeit, nothing more). 404 when `entrant` does not sit on this fixture; 422 without `entrant`",
