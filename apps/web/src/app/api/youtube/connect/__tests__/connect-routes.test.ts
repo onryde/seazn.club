@@ -1493,6 +1493,20 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — the channel's cr
     expect(callsOf("channelCreatedAt")).toBe(1);
   });
 
+  it("a reconnect of the org's existing connection reads nothing and keeps the stored date", async () => {
+    const r = await rig();
+    const live = await liveConnection(r);
+    const kept = new Date("2023-01-02T03:04:05.000Z");
+    await sql`update org_youtube_connections set channel_created_at = ${kept} where id = ${live.connectionId}`;
+    const f = await begin(r);
+    fake.setChannels([{ id: live.channel, title: "Seeded FC" }], f.state);
+    fake.setChannelCreatedAt(live.channel, new Date("2026-11-19T00:00:00.000Z"));   // a read now would store THIS
+    const { res } = await finish(f);
+    expect(landed(res)).toEqual(LANDS("already_connected"));
+    expect(callsOf("channelCreatedAt"), "a reconnect makes no channelCreatedAt call").toBe(0);
+    expect((await createdAtOf(r.orgId)).map((d) => d?.toISOString() ?? null)).toEqual([kept.toISOString()]);
+  });
+
   it("a refused read stores null and the connect still lands connected", async () => {
     const r = await rig();
     const f = await begin(r);

@@ -16,7 +16,7 @@ import "server-only";
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_CALL_BOUND_MS, YouTubeError, lifeOfCycle, type BroadcastLifeInfo, type LifeCycle, type StreamHealth,
+  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_CALL_BOUND_MS, YouTubeError, lifeOfCycle, type BroadcastLifeInfo, type BroadcastSpan, type LifeCycle, type StreamHealth,
   type StreamListing, type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
@@ -290,8 +290,8 @@ export class GoogleYouTube implements YouTubePort {
    *  `nextPageToken`. Only `snippet.actualStartTime` / `actualEndTime` are read; a broadcast with no actual start (never went live) is
    *  skipped, and so is one that started before `since`. Google's page promises no order, so no item ends the reading: it stops at the
    *  last page, at a page token that repeats, or after RECENT_BROADCAST_PAGES pages, and what was read by then is the answer. */
-  async recentBroadcasts(at: string, since: Date): Promise<{ startedAt: Date; endedAt: Date | null }[]> {
-    const out: { startedAt: Date; endedAt: Date | null }[] = [];
+  async recentBroadcasts(at: string, since: Date): Promise<BroadcastSpan[]> {
+    const out: BroadcastSpan[] = [];
     const seen = new Set<string>();
     let pageToken: string | null = null;
     for (let page = 0; page < RECENT_BROADCAST_PAGES; page++) {

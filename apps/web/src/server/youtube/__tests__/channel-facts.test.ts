@@ -151,6 +151,30 @@ describe.skipIf(!HAS_DB)("a new connection stores the channel's creation date (V
     expect(stored?.toISOString()).toBe(created.toISOString());
   });
 
+  it("a reconnect (the same channel picked again in the same org) reads nothing and keeps the stored date", async () => {
+    const o = await org();
+    const ch = { id: channelId(), title: "Reconnect Rovers" };
+    const f = new FakeYouTube({ now: () => NOW });
+    const first = new Date("2025-03-04T05:06:07.000Z");
+    f.setChannelCreatedAt(ch.id, first);
+    const p1 = await grant(o, { channels: [ch] });
+    f.seedGrant({ refreshToken: p1.token, channelId: ch.id, channelTitle: ch.title });
+    const made = await pickYoutubeChannel(o.auth, o.orgId, { pendingId: p1.id, channelId: ch.id }, f);
+    expect(made.existing, "PREMISE: the first pick is new").toBe(false);
+    const callsAfterFirst = f.calls.filter((c) => c.method === "channelCreatedAt").length;
+    expect(callsAfterFirst, "PREMISE: the first pick read the date").toBe(1);
+
+    f.setChannelCreatedAt(ch.id, new Date("2026-11-19T00:00:00.000Z"));   // a read now would store THIS
+    const p2 = await grant(o, { channels: [ch] });
+    f.seedGrant({ refreshToken: p2.token, channelId: ch.id, channelTitle: ch.title });
+    const again = await pickYoutubeChannel(o.auth, o.orgId, { pendingId: p2.id, channelId: ch.id }, f);
+    expect(again).toMatchObject({ existing: true, connectionId: made.connectionId });
+    expect(f.calls.filter((c) => c.method === "channelCreatedAt").length, "a reconnect makes no channelCreatedAt call").toBe(callsAfterFirst);
+    const [row] = await sql<{ channel_created_at: Date | null }[]>`
+      select channel_created_at from org_youtube_connections where id = ${made.connectionId}`;
+    expect(row!.channel_created_at?.toISOString()).toBe(first.toISOString());
+  });
+
   it("a failed read stores null and the connect still succeeds", async () => {
     const { saved, stored } = await pick((f, ch) => {
       f.setChannelCreatedAt(ch, new Date("2025-03-04T05:06:07.000Z"));

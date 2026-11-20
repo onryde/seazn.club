@@ -39,7 +39,7 @@ import { createHash } from "node:crypto";
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import {
-  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, lifeOfCycle, type BroadcastLife, type BroadcastLifeInfo, type LifeCycle,
+  LIFE_CYCLES, LIST_BUDGET_SPENT, STREAM_HEALTHS, STREAM_STATUSES, YOUTUBE_ERROR_CODES, YouTubeError, lifeOfCycle, type BroadcastLife, type BroadcastLifeInfo, type BroadcastSpan, type LifeCycle,
   type StreamHealth, type StreamListing, type StreamStatus, type StreamStatusInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort,
 } from "./port";
 
@@ -160,7 +160,7 @@ export class FakeYouTube implements YouTubePort {
   /** channel id → when YouTube says it was created (`setChannelCreatedAt`); a channel never seeded has no date. */
   private createdAtOf = new Map<string, Date>();
   /** channel id → broadcasts it ran BEFORE this fake existed (`addBroadcastHistory`), beside the ones the fake runs itself. */
-  private history = new Map<string, { startedAt: Date; endedAt: Date | null }[]>();
+  private history = new Map<string, BroadcastSpan[]>();
   private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; channels: Channel[] | null; sub: string | null | undefined; used: boolean }>();
 
   constructor(o: { channels?: Channel[]; now?: () => Date } = {}) {
@@ -269,7 +269,7 @@ export class FakeYouTube implements YouTubePort {
 
   /** A broadcast the channel ran in the past, outside this fake (`endedAt` null: still live): `recentBroadcasts` lists it beside the
    *  broadcasts the fake ran itself. */
-  addBroadcastHistory(channelId: string, b: { startedAt: Date; endedAt: Date | null }): void {
+  addBroadcastHistory(channelId: string, b: BroadcastSpan): void {
     const list = this.history.get(channelId) ?? [];
     list.push({ startedAt: new Date(b.startedAt.getTime()), endedAt: copyOf(b.endedAt) });
     this.history.set(channelId, list);
@@ -529,7 +529,7 @@ export class FakeYouTube implements YouTubePort {
 
   /** The token's channel's broadcasts that started at or after `since`, newest first: the seeded history, and every broadcast the fake
    *  itself took live (its actual start and end). One page; no other channel's. */
-  async recentBroadcasts(at: string, since: Date): Promise<{ startedAt: Date; endedAt: Date | null }[]> {
+  async recentBroadcasts(at: string, since: Date): Promise<BroadcastSpan[]> {
     this.enter("recentBroadcasts", this.channelOfAccess(at));
     const who = this.who(at);
     const own = [...this.broadcasts.values()]

@@ -5,15 +5,11 @@
 import {
   YOUTUBE_SHORT_BROADCAST_MINUTES, YOUTUBE_SHORT_BROADCAST_WARN_COUNT, YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS, YOUTUBE_YOUNG_CHANNEL_DAYS,
 } from "@/lib/youtube";
+import type { BroadcastSpan } from "./port";
 
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * MINUTE_MS;
 
-/** One of the channel's broadcasts: when it actually started, and when it ended (null while it is still live). */
-export interface BroadcastSpan {
-  startedAt: Date;
-  endedAt: Date | null;
-}
 
 /** `young`: created fewer than YOUTUBE_YOUNG_CHANNEL_DAYS before `now` (an unknown creation date is not young). `shortRecent`: broadcasts
  *  that started within the last YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS and ended within YOUTUBE_SHORT_BROADCAST_MINUTES of their start (one
