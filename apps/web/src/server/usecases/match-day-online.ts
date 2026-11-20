@@ -27,7 +27,7 @@ import "server-only";
 import { withTenant, sql } from "@/lib/db";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { openWindowBoards } from "@/lib/round-column";
-import { onlineRoundPhase } from "@/lib/match-day/online";
+import { latestOpenedRoundNos, onlineRoundKey, onlineRoundPhase } from "@/lib/match-day/online";
 import type { MatchDayOnlineRound } from "@/lib/match-day/types";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import type { OpenRoundView } from "@/lib/open-round";
@@ -97,18 +97,16 @@ type DivisionCtx = {
   opens: Awaited<ReturnType<typeof roundOpensOfDivisions>>;
 };
 
-/** The latest opened round of each of the division's stages (stage order), from the one read of every open. */
+/** The latest opened round of each of the division's stages (stage order), from the one read of every open. "Latest" is
+ *  `latestOpenedRoundNos`' word, the very one the competition desk's re-open asks (MD-R22): a round it names is a row listed here. */
 function latestOpened(ctx: DivisionCtx): { stage: StageRow; roundNo: number; openedAt: Date }[] {
+  const latest = latestOpenedRoundNos(ctx.opens.keys());
   const out: { stage: StageRow; roundNo: number; openedAt: Date }[] = [];
   for (const stage of ctx.stages) {
-    let best: { roundNo: number; openedAt: Date } | null = null;
-    for (const [key, open] of ctx.opens) {
-      const at = key.lastIndexOf(":");
-      if (key.slice(0, at) !== stage.id) continue;
-      const roundNo = Number(key.slice(at + 1));
-      if (best === null || roundNo > best.roundNo) best = { roundNo, openedAt: open.roundOpenedAt };
-    }
-    if (best !== null) out.push({ stage, ...best });
+    const roundNo = latest.get(stage.id);
+    if (roundNo === undefined) continue;
+    // The round number was read out of `ctx.opens`' own keys, and `parseOnlineRoundKey` is `onlineRoundKey`'s pinned inverse: its open is there.
+    out.push({ stage, roundNo, openedAt: ctx.opens.get(onlineRoundKey(stage.id, roundNo))!.roundOpenedAt });
   }
   return out;
 }
@@ -147,7 +145,7 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
     if (today || moving || decisionIds.size > 0) opened.push({ stage: l.stage, roundNo: l.roundNo, round, view });
   });
   const inRound = new Set(rounds.flatMap((r) => (r === null ? [] : r.boards.map((b) => b.fixtureId))));
-  const openedKeys = new Set(latest.map((l) => `${l.stage.id}:${l.roundNo}`));
+  const openedKeys = new Set(latest.map((l) => onlineRoundKey(l.stage.id, l.roundNo)));
 
   const rows: { stage: StageRow; roundNo: number; row: MatchDayOnlineRound }[] = opened.map((o) => ({
     stage: o.stage,
@@ -165,7 +163,7 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
   }));
   // (b): a paired round not opened yet. A view in state `open` is (a)'s round or nothing.
   for (const v of views) {
-    if (v.state !== "paired" || openedKeys.has(`${v.stageId}:${v.roundNo}`)) continue;
+    if (v.state !== "paired" || openedKeys.has(onlineRoundKey(v.stageId, v.roundNo))) continue;
     const stage = ctx.stages.find((s) => s.id === v.stageId);
     if (stage === undefined) continue;
     rows.push({
@@ -193,15 +191,15 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
     // the viewer plays on. A board that is only FLAGGED in an earlier round and the viewer's own is in no count and in no list: the flagged
     // list gives a count, not ids, and a count cannot be told from the listed round's own boards. A round is told apart by its stage's ID
     // (names are not unique), the way `key` spells it.
-    const roundsOwn = new Set(rounds.flatMap((r, i) => (r === null ? [] : [`${latest[i]!.stage.id}:${latest[i]!.roundNo}`])));
-    first.own_boards += held.filter((h) => h.seated && !roundsOwn.has(`${h.stageId}:${h.roundNo}`)).length;
+    const roundsOwn = new Set(rounds.flatMap((r, i) => (r === null ? [] : [onlineRoundKey(latest[i]!.stage.id, latest[i]!.roundNo)])));
+    first.own_boards += held.filter((h) => h.seated && (h.roundNo === null || !roundsOwn.has(onlineRoundKey(h.stageId, h.roundNo)))).length;
   }
   const multi = out.length > 1;
   return out.map((r) => ({ ...r, multi_stage: multi }));
 }
 
 const rowShell = (stage: StageRow, roundNo: number) => ({
-  key: `${stage.id}:${roundNo}`,
+  key: onlineRoundKey(stage.id, roundNo),
   stage_id: stage.id,
   stage_name: stage.name,
   round_no: roundNo,

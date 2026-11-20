@@ -19,6 +19,27 @@ export function onlineRoundKey(stageId: string, roundNo: number): string {
   return `${stageId}:${roundNo}`;
 }
 
+/** The inverse of `onlineRoundKey`. A key this cannot read is refused by name: every key comes from `onlineRoundKey` (the opened-round
+ *  read keys its map through it), so an unreadable one is a drift to be heard, not a round to skip. */
+export function parseOnlineRoundKey(key: string): { stageId: string; roundNo: number } {
+  const m = /^(.+):(\d+)$/.exec(key);
+  if (m === null) throw new Error(`not a round key: ${JSON.stringify(key)}`);
+  return { stageId: m[1]!, roundNo: Number(m[2]) };
+}
+
+/** Each stage's LATEST opened round number, from the keys of the opened-round read (`roundOpensOfDivisions`): the round Match Day lists
+ *  for that stage (`readOnlineRounds`, its (a) rows) and the only one of the stage a "re-open" can name (MD-R22). A stage with no opened
+ *  round is not in the map. Round NUMBERS are compared, never their spellings. */
+export function latestOpenedRoundNos(keys: Iterable<string>): Map<string, number> {
+  const latest = new Map<string, number>();
+  for (const key of keys) {
+    const { stageId, roundNo } = parseOnlineRoundKey(key);
+    const seen = latest.get(stageId);
+    if (seen === undefined || roundNo > seen) latest.set(stageId, roundNo);
+  }
+  return latest;
+}
+
 // ---- phase and order (§5.2) -------------------------------------------------------------------------------------------------------
 
 /** The server's `phase`, re-read from `round.boards` (the poll is up to 20 s apart): a division not started stays `not_started`; every

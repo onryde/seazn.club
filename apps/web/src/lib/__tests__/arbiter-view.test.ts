@@ -6,11 +6,13 @@
 // I5, external-play-sweep.test.ts job 5); the real producer → this parser
 // round trip is asserted inside those two suites.
 import { describe, expect, it } from "vitest";
+import { NEEDS_REASONS } from "@/server/external-play/types";
 import {
   type ArbiterFlag,
   boardMoveNo,
   flagsForReader,
   fullMoveOf,
+  holdReasonForReader,
   parseCameraLostNote,
   parseMultipleDevicesNote,
   parseOutOfBandNote,
@@ -257,5 +259,25 @@ describe("flagsForReader - the evidence is the organiser's", () => {
     expect(flagsForReader(WHOLE, true), "the cards were not blanked in place").toEqual(WHOLE);
     expect(flagsForReader([], false)).toEqual([]);
     expect(flagsForReader([], true)).toEqual([]);
+  });
+});
+
+// MD-R21: why a board is held names the players' conduct (`fair_play`, the no-shows), so it is the organiser's like the flags are: the ONE
+// strip every door applies. The vocabulary is the server's own list, never one typed here.
+describe("holdReasonForReader - a hold's reason is the organiser's", () => {
+  it("an editor's role gets the reason as it is; anyone else gets null - for EVERY reason of the vocabulary", () => {
+    let checked = 0;
+    for (const reason of NEEDS_REASONS) {
+      expect(holdReasonForReader(reason, true), `${reason}: editor`).toBe(reason);
+      expect(holdReasonForReader(reason, false), `${reason}: reader`).toBeNull();
+      checked++;
+    }
+    expect(NEEDS_REASONS.length, "premise: the vocabulary is not empty").toBeGreaterThan(0);
+    expect(checked, "anti-vacuity: every reason swept").toBe(NEEDS_REASONS.length);
+  });
+
+  it("the empty case: a board that is not held has no reason for either reader, and the answer is null, not undefined", () => {
+    expect(holdReasonForReader(null, true)).toBeNull();
+    expect(holdReasonForReader(null, false)).toBeNull();
   });
 });

@@ -20,6 +20,7 @@ import { captureError } from "@/lib/sentry";
 import {
   boardMoveNo,
   flagsForReader,
+  holdReasonForReader,
   parseCameraLostNote,
   parseMultipleDevicesNote,
   parseOutOfBandNote,
@@ -329,7 +330,8 @@ export async function loadBoardsByIds(
  * `stage_round_opens` would otherwise read as `checking_in`: no list shows such a board, so no link points here). No editor check to READ:
  * any member who may read the competition may read the board and its state, and a key (no user) plays nowhere and is never asked - but the
  * flags are evidence about a named player and travel whole to an editor's role only (MD-R13, `flagsForReader`): anyone else gets each
- * flag's id, kind and opening time, `flagCount` unchanged.
+ * flag's id, kind and opening time, `flagCount` unchanged. The hold's reason is the same kind of fact and goes the same way (MD-R21,
+ * `holdReasonForReader`): null for anyone else - the board is still `on_hold`, only WHY is withheld.
  */
 export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: { now?: Date } = {}): Promise<MatchDayBoard> {
   const now = opts.now ?? new Date();
@@ -374,7 +376,8 @@ export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: 
     stage_id: row.stageId,
     // `fixtures.round_no` is NOT NULL (V214): the row type is the loose one the round view's left joins share, the column never is null.
     round_no: row.roundNo!,
-    hold_reason: board.state.kind === "on_hold" ? readNeedsReason(row.needsReason) : null,
+    // The reason names the players' conduct: an editor's fact like the flags (MD-R21, `holdReasonForReader`).
+    hold_reason: holdReasonForReader(board.state.kind === "on_hold" ? readNeedsReason(row.needsReason) : null, isEditorRole(auth.role)),
     position: positionOf(row),
   };
 }

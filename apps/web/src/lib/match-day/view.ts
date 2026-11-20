@@ -7,6 +7,7 @@ import { fmtPublicTime } from "@/lib/format";
 import { venueNoun, type VenueNoun } from "@/lib/venue";
 import { liveLabel, scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/score/levels";
 import type { Attention, Severity } from "@/lib/division-phase";
+import { holdReasonForReader } from "@/lib/arbiter-view";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
 import { needsYouKey } from "@/components/v2/desk/needs-you";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview, type CallWarning } from "./call";
@@ -14,6 +15,7 @@ import { closedNow, closureAtClock } from "./closure";
 import type {
   CourtClosure,
   MatchDayCandidate,
+  MatchDayBoardRow,
   MatchDayCourt,
   MatchDayFindCourt,
   MatchDayFixture,
@@ -639,12 +641,32 @@ export function needsYouTone(items: readonly Pick<NeedsYouItem, "severity">[]): 
   return best;
 }
 
+/** One held board for a reader (MD-R21): its reason, as `holdReasonForReader` says. Every other key of the board is the input's. */
+function boardForReader(b: MatchDayBoardRow, canEdit: boolean): MatchDayBoardRow {
+  return { ...b, hold_reason: holdReasonForReader(b.hold_reason ?? null, canEdit) };
+}
+
 /** Match Day as THIS reader may receive it (task G5; PB2 item 3): an organiser (`canEdit`, an editor's role) gets the view
  *  whole; anyone else — a view-only member, an API key — gets no Needs-you rows and no owed-result count, the organiser's
- *  to-do list. The ONE strip both doors use: the page's first paint (which is serialised into the response) and the poll that
+ *  to-do list, and no WHY on a held online board (MD-R21: `hold_reason`, on each round's boards and on `needs_decision`, is
+ *  null - the board is still listed, still held; the reason names the players' conduct, as a flag's evidence does, MD-R13).
+ *  The ONE strip both doors use: the page's first paint (which is serialised into the response) and the poll that
  *  follows it every few seconds. The rest of the board is the organiser's. */
-export function matchDayForReader<V extends Pick<MatchDayView, "needs_you" | "results_owed">>(view: V, canEdit: boolean): V {
-  return canEdit ? view : { ...view, needs_you: [], results_owed: 0 };
+export function matchDayForReader<V extends Pick<MatchDayView, "needs_you" | "results_owed"> & { online_rounds?: MatchDayView["online_rounds"] }>(
+  view: V,
+  canEdit: boolean,
+): V {
+  if (canEdit) return view;
+  const stripped = { ...view, needs_you: [], results_owed: 0 };
+  if (view.online_rounds === undefined) return stripped;
+  return {
+    ...stripped,
+    online_rounds: view.online_rounds.map((r) => ({
+      ...r,
+      round: r.round === null ? null : { ...r.round, boards: r.round.boards.map((b) => boardForReader(b as MatchDayBoardRow, false)) },
+      needs_decision: r.needs_decision.map((b) => boardForReader(b, false)),
+    })),
+  };
 }
 
 /** How many things need the organiser, by the header's own count (fix round 1, m1): every list row that is NOT an owed result,

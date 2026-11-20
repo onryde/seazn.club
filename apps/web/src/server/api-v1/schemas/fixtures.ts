@@ -227,14 +227,14 @@ export const MatchDayOnlineRound = z.object({
     .looseObject({})
     .meta({
       description:
-        "The opened round whole (ArbiterRound): `boards` (each an ArbiterBoard with `state`, `seats`, `checkin`, `sides` - presence, camera, `joinable` - `flagCount`, an always-empty `flags`, and `hold_reason`), `ownBoards` and `current`. Null before the open.",
+        "The opened round whole (ArbiterRound): `boards` (each an ArbiterBoard with `state`, `seats`, `checkin`, `sides` - presence, camera, `joinable` - `flagCount`, an always-empty `flags`, and `hold_reason` - null for a view-only member or an API key), `ownBoards` and `current`. Null before the open.",
     })
     .nullable(),
   /** Held or flagged boards of the division NOT in `round.boards`, any round, each an ArbiterBoard with `stage_id`, `round_no` and `hold_reason`. A cancelled board is here only while it has an open flag. */
   needs_decision: z.array(
     z.looseObject({}).meta({
       description:
-        "An ArbiterBoard (as in `round.boards`) with `stage_id`, `round_no` and `hold_reason`: a held or flagged board of the division that is not in `round.boards`. Carried on the division's FIRST row only.",
+        "An ArbiterBoard (as in `round.boards`) with `stage_id`, `round_no` and `hold_reason` (null for a view-only member or an API key): a held or flagged board of the division that is not in `round.boards`. Carried on the division's FIRST row only.",
     }),
   ),
   /** Boards the viewer plays on that no list shows: the row's own round's and, on the division's first row, the held boards of earlier rounds. A board only flagged in an earlier round and the viewer's own is in no count. */
@@ -295,12 +295,12 @@ export const MatchDayBoard = z
     stage_id: Uuid,
     round_no: z.number().int(),
     /** Why the board is held (the `needs_reason` vocabulary, the server's one list - `NEEDS_REASONS`) while it is `on_hold`; null in any
-     *  other state. */
+     *  other state, and null for a reader without an editor's role (MD-R21: the reason names the players' conduct). */
     hold_reason: z.enum(NEEDS_REASONS).nullable(),
   })
   .meta({
     description:
-      "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` - whole for an owner or an admin, kind and time only for a view-only member or a key - `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`.",
+      "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` - whole for an owner or an admin, kind and time only for a view-only member or a key - `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason` (why the board is held: whole for an owner or an admin, null for a view-only member or a key).",
   });
 
 export const MatchDayCandidate = z.object({

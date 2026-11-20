@@ -329,8 +329,9 @@ export type Attention =
    *  (null for anyone else: the desk is served to viewers and keys, and a fair-play ending is an accusation about named players,
    *  ruling MD-R13). `reopen`: the hold is a LINK hold (`lichess_unlinked` / `lichess_reconnect`, ruling MD-R2: nobody was invited, so
    *  the board is no no-show and its only way back to play is the round's re-open) AND this viewer may press that START now
-   *  (`mayPress(…, "start")`: an editor, the club offered online chess, the competition not billing-frozen) - the row then opens the
-   *  round panel's Open round press; any other hold opens the board's own decisions. */
+   *  (`mayPress(…, "start")`: an editor, the club offered online chess, the competition not billing-frozen) AND the hold sits in its
+   *  stage's LATEST opened round (ruling MD-R22: the one round of a stage Match Day lists) - the row then opens the round panel's Open
+   *  round press; any other hold opens the board's own decisions. */
   | {
       kind: "board_held";
       fixtureId: string;
