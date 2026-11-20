@@ -20,11 +20,13 @@ import { boardIsOver } from "@/lib/arbiter-view";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
 import { emptyExtendTally, inExtendWindow } from "@/lib/checkin-extend";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
+import { roundKey as serverRoundKey } from "@/server/external-play/round-open";
 import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import type { MatchDayBoardRow, MatchDayOnlineRound, OnlineRoundPhase } from "../types";
 import {
   boardRowWord,
   mayPress,
+  onlineRoundKey,
   onlineRoundPhase,
   orderOnlineRounds,
   presenceMark,
@@ -711,5 +713,33 @@ describe("mayPress - the ONE online press rule for Match Day and the division pa
       }
     }
     expect(checked).toBe(12);
+  });
+});
+
+// ---- the round's key: ONE spelling (fix round 1, m6) ------------------------------------------------------------------------------
+
+describe("onlineRoundKey: the one spelling of a round's key", () => {
+  const STAGE = "5b1f0c2e-7d34-4c6a-9a51-0e2f8c3d4b67";
+
+  it("is `stage:round` - the `?round=` value, MatchDayOnlineRound.key and the Needs-you row's round_key - for every round number it is given (incl. 0 and a wide one)", () => {
+    const rounds = [0, 1, 2, 9, 10, 128];
+    for (const n of rounds) expect(onlineRoundKey(STAGE, n), `round ${n}`).toBe(`${STAGE}:${n}`);
+    expect(rounds.length, "anti-vacuity: rounds checked").toBe(6);
+  });
+
+  it("is the SAME function the server's opened-round key calls: one stage-and-round pair, one key, in both readers", () => {
+    for (const n of [1, 2, 7]) expect(serverRoundKey(STAGE, n)).toBe(onlineRoundKey(STAGE, n));
+  });
+
+  it("two different rounds of one stage, or one round of two stages, never share a key", () => {
+    const other = "0a9e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c";
+    const keys = new Set([onlineRoundKey(STAGE, 1), onlineRoundKey(STAGE, 2), onlineRoundKey(other, 1), onlineRoundKey(other, 2)]);
+    expect(keys.size).toBe(4);
+  });
+
+  it("the desk's Needs-you builder does not spell the key itself (a second spelling is how the two drift)", () => {
+    const src = readFileSync(join(__dirname, "../../../components/v2/desk/needs-you.tsx"), "utf8");
+    expect(src, "the builder reads the one function").toContain("onlineRoundKey(");
+    expect(src, "and holds no `${...stageId}:${...}` template of its own").not.toMatch(/\$\{[^}]*stageId\}:\$\{/);
   });
 });
