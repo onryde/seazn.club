@@ -4215,6 +4215,19 @@
                                 "type": "integer",
                                 "minimum": 0,
                                 "maximum": 9007199254740991
+                              },
+                              "pair_next_round": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The Swiss round this row's stage would pair next (the lowest round with an unseated board), the same on every row of the stage. Null for any other kind of stage and for a Swiss with every round seated."
                               }
                             },
                             "required": [
@@ -4232,7 +4245,8 @@
                               "view",
                               "round",
                               "needs_decision",
-                              "own_boards"
+                              "own_boards",
+                              "pair_next_round"
                             ],
                             "additionalProperties": false
                           }
@@ -4445,7 +4459,8 @@
                         "needs_decision": [
                           {}
                         ],
-                        "own_boards": 0
+                        "own_boards": 0,
+                        "pair_next_round": 1
                       }
                     ]
                   },

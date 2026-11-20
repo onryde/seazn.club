@@ -7,7 +7,9 @@
 // The round-column rules (lib/round-column.ts) are the one authority for the check-in clock, the tallies and what "playing" means; this
 // file asks them over `round.boards` (an `ArbiterBoard[]`, so no adaptation) and never re-derives a window edge or a count.
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
+import { liveExtendRefusal } from "@/lib/checkin-extend";
 import { boardsOwedAnInvite, checkinClock, checkinTally, playingTally, roundColumnPhase } from "@/lib/round-column";
+import type { NeedsReason } from "@/server/external-play/types";
 import type { MatchDayBoardRow, MatchDayOnlineRound, OnlineRoundPhase } from "./types";
 
 // ---- the round's key -------------------------------------------------------------------------------------------------------------
@@ -83,6 +85,61 @@ export function orderOnlineRounds(rounds: readonly MatchDayOnlineRound[], nowMs:
     .map((r, i) => ({ r, i, g: groupOf(r, nowMs) }))
     .sort((a, b) => a.g - b.g || a.i - b.i)
     .map((x) => x.r);
+}
+
+// ---- the round panel (Task 7) -----------------------------------------------------------------------------------------------------
+
+/** The shell's `next` for a round: the row of the SAME STAGE whose round number is this one's + 1, while it is paired and not opened
+ *  (phase `before`). The stage is compared by its id and the number as a number - never by `key`'s spelling or a row's position - so
+ *  two stages of one division, each with a round 2, never borrow each other's. Null when there is none: the panel then says nothing
+ *  about a next round. A successor already opened is that round's own row to open (the list has it), not something "ready to open". */
+export function nextRoundOf(rounds: readonly MatchDayOnlineRound[], r: Pick<MatchDayOnlineRound, "stage_id" | "round_no">): MatchDayOnlineRound | null {
+  return rounds.find((x) => x.stage_id === r.stage_id && x.round_no === r.round_no + 1 && onlineRoundPhase(x, null) === "before") ?? null;
+}
+
+/** MD-R15: the round "Pair next round" would seat from this row's panel, or null when the panel offers none. Offered when this round is
+ *  opened and OVER (every board decided and none owed its invite again: `roundIsOver`, so a round with no board on screen is never over),
+ *  and its stage is a Swiss whose next round to pair is exactly this one's + 1 (`pair_next_round`: a stage that already pairs round + 2
+ *  has round + 1 paired, which is `nextRoundOf`'s "ready to open", and never both). The press itself is the stage rail's own
+ *  (`POST /stages/{id}/generate`): nothing here decides whether the SERVER would pair - it answers its own refusals, which the panel says. */
+export function pairNextRound(r: Pick<MatchDayOnlineRound, "round" | "view" | "round_no" | "pair_next_round">): number | null {
+  if (r.round === null) return null;
+  const next = r.pair_next_round ?? null;
+  if (next === null || next !== r.round_no + 1) return null;
+  return roundIsOver(r.round, boardsOwedAnInvite(r.view)) ? next : null;
+}
+
+/** The two reasons `fixture_external_play.needs_reason` carries for a board held for a Lichess LINK (server/usecases/external-play/
+ *  open-round.ts `heldBoards`): nobody was invited and the board is not a no-show - the organiser re-opens the round once the player has
+ *  linked. Typed here, beside the rule that reads them, and pinned to the server's own skip reasons by round-panel.test.ts. */
+const LINK_HOLD_REASONS = ["lichess_unlinked", "lichess_reconnect"] as const satisfies readonly NeedsReason[];
+export type LinkHoldReason = (typeof LINK_HOLD_REASONS)[number];
+
+/** A board of the round on screen held for a Lichess link: the board, why (an editor's fact - a non-editor's read has no reason, MD-R21),
+ *  and whether the board's own check-in window has run out (then a re-open cannot invite it: the server answers `window_closed`, and
+ *  the panel says that instead of promising the link would help). */
+export type LinkHold = { board: ArbiterBoard; reason: LinkHoldReason; windowClosed: boolean };
+
+/** The reason a board's hold carries: `readOnlineRounds` stamps it on every board of a row (`hold_reason`, MD-R8), though `ArbiterBoard`
+ *  does not declare it. Null for a board with none. */
+function holdReasonOf(b: ArbiterBoard): NeedsReason | null {
+  return (b as { hold_reason?: NeedsReason | null }).hold_reason ?? null;
+}
+
+/** Every link hold of the round on screen, in board order (MD-R2/R22: a row's `round` IS its stage's latest opened round, so a re-open
+ *  named here is always one the server will take). A board counts only while its own state is `on_hold`: a stamp left on a board that
+ *  went on to play is not a hold. `nowMs` null (before the clock): the snapshot's word stands, as `checkinClock` reads it. */
+export function linkHolds(r: Pick<MatchDayOnlineRound, "round">, nowMs: number | null): LinkHold[] {
+  if (r.round === null) return [];
+  const holds: LinkHold[] = [];
+  for (const board of r.round.boards) {
+    const reason = holdReasonOf(board);
+    if (board.state.kind !== "on_hold" || reason === null) continue;
+    if (!(LINK_HOLD_REASONS as readonly NeedsReason[]).includes(reason)) continue;
+    const windowClosed = board.checkin !== null && (nowMs === null ? board.checkin.refusal === "closed" : liveExtendRefusal(board.checkin, nowMs) === "closed");
+    holds.push({ board, reason: reason as LinkHoldReason, windowClosed });
+  }
+  return holds.sort((a, b) => a.board.boardNo - b.board.boardNo);
 }
 
 // ---- the words (§5.1) -------------------------------------------------------------------------------------------------------------
