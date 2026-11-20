@@ -14,6 +14,8 @@ import "server-only";
 import { HttpError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
 import { swissDrawSeed } from "@/lib/swiss-draw";
+import { crossPoolSeparable } from "@/lib/cross-pool-separable";
+import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { CROSS_POOL_SHAPES, pooledSeeds, type CrossPoolEntry } from "@/lib/cross-pool-ties";
 import { crossPoolDraw } from "@seazn/engine/scheduling";
 import type { ProgressionSpec, SourceTables } from "@seazn/engine/competition";
@@ -36,7 +38,7 @@ export async function storedCrossPoolSeed(tx: Tx, stageId: string): Promise<numb
 /** A draw the engine refused (RB5-D4, RB5-D10): stored on the draft beside the fold's seats, so the source's Standings and the
  *  draft still read, the stage card says why in a red band (R24 pick 18 A) and the confirm refuses it by name. */
 export interface CrossPoolRefused {
-  code: "SEEDING_POOL_SEPARATION_IMPOSSIBLE" | "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR";
+  code: "SEEDING_POOL_SEPARATION_IMPOSSIBLE" | "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR" | "SEEDING_CROSS_POOL_DRAW_TOO_LARGE";
   vars: Record<string, string | number>;
 }
 
@@ -60,6 +62,24 @@ export async function drawAcrossPools<Q extends CrossPoolEntry & { seed: number 
   const seeded = pooledSeeds(ordered, tables);
   if (seeded === null) return null;
   const seed = opts.seed ?? (await storedCrossPoolSeed(tx, stage.id));
+  // D-B2-2 (live matrix): the engine decides a refusal by trying every ordering (5 pools Top 31 held a confirm 196 s), and past
+  // the builder's bounds even a draw it finds can search for minutes (12 pools Top 49: past 90 s). So a refusal is settled from the
+  // engine's own rule before its search (`crossPoolSeparable`, exact over the builder's whole space), and a field the draw was
+  // never measured over - more pools or qualifiers than the builder offers - is refused by name rather than searched.
+  const { separable } = crossPoolSeparable(seeded, shape, seed);
+  if (separable === false) {
+    const supplies: Record<string, number> = {};
+    for (const s of seeded) supplies[s.pool] = (supplies[s.pool] ?? 0) + 1;
+    return { qualifiers: [...qualifiers], seed, refused: { code: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", vars: poolSeparationVars(supplies, seeded.length, shape) } };
+  }
+  const pools = new Set(seeded.map((s) => s.pool)).size;
+  if (separable === true && (pools > FORMAT_BOUNDS.pools.max || seeded.length > FORMAT_BOUNDS.qualify.max)) {
+    return {
+      qualifiers: [...qualifiers],
+      seed,
+      refused: { code: "SEEDING_CROSS_POOL_DRAW_TOO_LARGE", vars: { pools, entrants: seeded.length, maxPools: FORMAT_BOUNDS.pools.max, maxEntrants: FORMAT_BOUNDS.qualify.max } },
+    };
+  }
   let order: string[];
   try {
     order = draw(seeded, shape, seed).order;
@@ -89,9 +109,7 @@ export function crossPoolRefusal(e: unknown): HttpError | null {
   if (!(e instanceof EngineError) || e.code !== "CONFIG_INVALID") return null;
   const data = (e.data ?? {}) as { reason?: unknown; supplies?: unknown; entrants?: unknown; shape?: unknown; entrantId?: unknown };
   if (data.reason === "pool_separation_impossible") {
-    const supplies = Object.entries((data.supplies ?? {}) as Record<string, number>).sort(([a, x], [b, y]) => y - x || a.localeCompare(b));
-    const [pool, count] = supplies[0] ?? ["", 0];
-    return new HttpError(422, e.message, "SEEDING_POOL_SEPARATION_IMPOSSIBLE", { pool, count, entrants: Number(data.entrants), shape: String(data.shape) });
+    return new HttpError(422, e.message, "SEEDING_POOL_SEPARATION_IMPOSSIBLE", poolSeparationVars((data.supplies ?? {}) as Record<string, number>, Number(data.entrants), String(data.shape)));
   }
   if (data.reason === "page_playoff_needs_four") {
     return new HttpError(422, e.message, "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR", { entrants: Number(data.entrants) });
@@ -100,6 +118,13 @@ export function crossPoolRefusal(e: unknown): HttpError | null {
     return new HttpError(422, e.message, "SEEDING_CROSS_POOL_DRAW_INVALID", { reason: data.reason, ...(typeof data.entrantId === "string" ? { entrantId: data.entrantId } : {}) });
   }
   return null;
+}
+
+/** SEEDING_POOL_SEPARATION_IMPOSSIBLE's numbers from the draw's `supplies` (qualifiers per pool): the largest supplier (ties by pool
+ *  key), how many it supplies, of how many, on which shape - the engine's refusal and the pre-search one read alike. */
+function poolSeparationVars(supplies: Record<string, number>, entrants: number, shape: string): Record<string, string | number> {
+  const [pool, count] = Object.entries(supplies).sort(([a, x], [b, y]) => y - x || a.localeCompare(b))[0] ?? ["", 0];
+  return { pool, count, entrants, shape };
 }
 
 /** The draw's own input refusals (`crossPoolDraw`): the app builds that input, so each is a wiring fault, named rather than raw. */

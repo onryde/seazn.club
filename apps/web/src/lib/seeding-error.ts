@@ -124,6 +124,7 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
   "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
   "SEEDING_CROSS_POOL_DRAW_INVALID",
+  "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 
@@ -138,9 +139,16 @@ export const BEST_NTH_REFUSAL_CODES: ReadonlySet<string> = new Set(["SEEDING_BES
 /** W5 app PR B T5 (K22; ruling 281, RB5-D4): the cross-pool draw's refusals (`crossPoolRefusal`, usecases/stages/cross-pool-draw.ts).
  *  SEEDING_POOL_SEPARATION_IMPOSSIBLE: no ordering of the rank tiers keeps pool-mates apart in round one ({pool} the largest supplier,
  *  {count} of {entrants}). SEEDING_PAGE_PLAYOFF_NEEDS_FOUR: a page playoff fed {entrants}. SEEDING_CROSS_POOL_DRAW_INVALID: the draw's
- *  own input refusals ({reason}: tier_invalid, duplicate_entrant, ...) - the app builds that input, so these name a wiring fault. A
+ *  own input refusals ({reason}: tier_invalid, duplicate_entrant, ...) - the app builds that input, so these name a wiring fault.
+ *  SEEDING_CROSS_POOL_DRAW_TOO_LARGE (D-B2-2): a field of {pools} pools / {entrants} qualifiers past the builder's bounds
+ *  ({maxPools}, {maxEntrants}) - the draw's search was measured over that space only, and past it can run for minutes. A
  *  completion that trips one carries the code as `cause` inside STAGE_COMPLETED_SEEDING_FAILED, as the best-Nth ones do. */
-export const CROSS_POOL_REFUSAL_CODES: ReadonlySet<string> = new Set(["SEEDING_POOL_SEPARATION_IMPOSSIBLE", "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR", "SEEDING_CROSS_POOL_DRAW_INVALID"]);
+export const CROSS_POOL_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
+  "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
+  "SEEDING_CROSS_POOL_DRAW_INVALID",
+  "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
+]);
 
 function isSeedingErrorCode(code: string): code is SeedingErrorCode {
   return (SEEDING_ERROR_CODES as readonly string[]).includes(code);

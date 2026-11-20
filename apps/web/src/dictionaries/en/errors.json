@@ -23,6 +23,7 @@
   "seeding.SEEDING_POOL_SEPARATION_IMPOSSIBLE": "Round one can't avoid a same-group match: Group {pool} supplies {count} of the {entrants} qualifiers. Change how many go through from each group, or add a group.",
   "seeding.SEEDING_PAGE_PLAYOFF_NEEDS_FOUR": "A page playoff needs exactly 4 qualifiers, and this one has {entrants}. Change how many go through.",
   "seeding.SEEDING_CROSS_POOL_DRAW_INVALID": "The draw across the groups could not be made from these qualifiers ({reason}). Recompute the proposal; if it happens again, contact support.",
+  "seeding.SEEDING_CROSS_POOL_DRAW_TOO_LARGE": "A draw across the groups takes at most {maxPools} groups and {maxEntrants} qualifiers, and this one has {pools} groups and {entrants} qualifiers. Use fewer groups or qualifiers, or list the seats yourself.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Both players must be on this ladder. Refresh the page — the ladder may have changed since you opened it.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "That player has withdrawn from this division, so they can neither issue nor receive a challenge.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "You can only challenge someone ranked above you.",

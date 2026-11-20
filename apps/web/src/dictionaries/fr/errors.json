@@ -23,6 +23,7 @@
   "seeding.SEEDING_POOL_SEPARATION_IMPOSSIBLE": "Le premier tour ne peut pas éviter un match entre membres du même groupe : le groupe {pool} fournit {count} des {entrants} qualifiés. Changez le nombre de qualifiés par groupe, ou ajoutez un groupe.",
   "seeding.SEEDING_PAGE_PLAYOFF_NEEDS_FOUR": "Un playoff Page demande exactement 4 qualifiés, et celui-ci en a {entrants}. Changez le nombre de qualifiés.",
   "seeding.SEEDING_CROSS_POOL_DRAW_INVALID": "Le tirage entre les groupes n'a pas pu être fait avec ces qualifiés ({reason}). Recalculez la proposition ; si cela se reproduit, contactez le support.",
+  "seeding.SEEDING_CROSS_POOL_DRAW_TOO_LARGE": "Un tirage entre les groupes accepte au plus {maxPools} groupes et {maxEntrants} qualifiés, et celui-ci compte {pools} groupes et {entrants} qualifiés. Utilisez moins de groupes ou de qualifiés, ou indiquez vous-même les places.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Les deux joueurs doivent figurer sur cette échelle. Actualisez la page : l'échelle a pu changer depuis son ouverture.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Ce joueur s'est retiré de cette division : il ne peut ni lancer ni recevoir de défi.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Vous ne pouvez défier qu'un joueur classé au-dessus de vous.",

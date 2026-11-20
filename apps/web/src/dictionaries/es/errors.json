@@ -23,6 +23,7 @@
   "seeding.SEEDING_POOL_SEPARATION_IMPOSSIBLE": "La primera ronda no puede evitar un partido entre rivales del mismo grupo: el grupo {pool} aporta {count} de los {entrants} clasificados. Cambia cuántos pasan de cada grupo o añade un grupo.",
   "seeding.SEEDING_PAGE_PLAYOFF_NEEDS_FOUR": "Un playoff Page necesita exactamente 4 clasificados y este tiene {entrants}. Cambia cuántos pasan.",
   "seeding.SEEDING_CROSS_POOL_DRAW_INVALID": "No se pudo hacer el sorteo entre grupos con estos clasificados ({reason}). Vuelve a calcular la propuesta; si se repite, contacta con soporte.",
+  "seeding.SEEDING_CROSS_POOL_DRAW_TOO_LARGE": "Un sorteo entre grupos admite como máximo {maxPools} grupos y {maxEntrants} clasificados, y este tiene {pools} grupos y {entrants} clasificados. Usa menos grupos o clasificados, o indica tú mismo las plazas.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Ambos jugadores deben estar en esta escalera. Actualiza la página: la escalera puede haber cambiado desde que la abriste.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Ese jugador se ha retirado de esta división, así que no puede lanzar ni recibir retos.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Solo puedes retar a alguien clasificado por encima de ti.",

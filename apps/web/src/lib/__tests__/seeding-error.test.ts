@@ -70,6 +70,8 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
       "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
       "SEEDING_CROSS_POOL_DRAW_INVALID",
+      // W5 app PR B D-B2-2: a cross-pool draw past the builder's bounds, refused by name before the engine's search.
+      "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
@@ -81,7 +83,7 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
       it(`${locale}: ${code} resolves to real copy — never the raw code, never the PREFIXED dictionary key, never empty, no leftover {placeholder}`, () => {
         // W5 app PR B T4: the two best-Nth refusals carry the engine's numbers (rank, available, pool); every code is given them
         // and a code that names none ignores them, so the leftover-{placeholder} check still catches a misspelt name.
-        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK", { rank: 3, available: 2, pool: "A", count: 5, entrants: 8, reason: "tier_invalid" });
+        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK", { rank: 3, available: 2, pool: "A", count: 5, entrants: 8, reason: "tier_invalid", pools: 9, maxPools: 8, maxEntrants: 32 });
         expect(out).not.toBe("SHOULD_NOT_SEE_FALLBACK");
         expect(out).not.toBe(code);
         // A genuinely missing dictionary entry does NOT fall back to the bare
