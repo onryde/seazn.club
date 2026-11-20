@@ -348,7 +348,7 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 - `create table seazn_locked_videos (cf_video_id text primary key, input_row_id uuid not null references fixture_stream_inputs(id) on delete restrict, locked_at timestamptz not null default now())`, RLS as in V430: the mark that Task 13 has set `requireSignedURLs: true` on a recording (C3), so it is set once. `fixture_stream_inputs` also gains `recordings_locked_at timestamptz null`: Task 13's mark that every recording of a finished programme input is locked, so the input is never listed again.
 - Drop and recreate `fixture_stream_sessions_one_active_target` (V479 `:285-289`) with an added `and destination_kind is distinct from 'seazn'`. `destination_kind` is written once at insert and never updated, so the predicate is stable.
 
-  Plan decision: rows are created by trigger rather than lazily on read. `fixtureStreamTarget` is documented as writing nothing, and RULES.md is greenfield, so no backfill concern applies.
+  Plan decision: rows are created by trigger rather than lazily on read. `fixtureStreamTarget` is documented as writing nothing. The insert for existing orgs above is REQUIRED (it is the only backfill); RULES.md being greenfield means no other data needs migrating.
 
 - [ ] **Step 1: Write the failing tests.**
   - A new org gets exactly one `seazn` row.
@@ -357,9 +357,10 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
   - Two `live` sessions on one `seazn` target insert. Two on one pasted target still fail 23505.
   - The RLS state of `org_stream_targets` is unchanged (`rls-static.test.ts`), and `seazn_held_alerts` and `seazn_locked_videos` are listed.
   - An organisation inserted under `set local role app_user` (the app role) commits and gets its `seazn` row. Run it once with the function as invoker to see it fail, then as definer.
+  - Existing suites that read an org's raw `org_stream_targets` rows now also see its `seazn` row: `server/youtube/__tests__/connections.test.ts` (`targetRows`, ~:56), `relay/__tests__/secret-columns.test.ts` (~:147), `relay/__tests__/token-store.test.ts` (~:110), `server/youtube/__tests__/connect-routes.test.ts` (~:1334). Where a test means external destinations, filter `kind <> 'seazn'`; never weaken an assertion otherwise. Re-grep `org_stream_targets` under `__tests__` for any other raw read.
 - [ ] **Step 2: Run them and see them fail** (table shape missing). `cd apps/web && npx vitest run src/server/relay/__tests__/seazn-destination-migration.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/rls-static.test.ts --reporter=json --outputFile=$SCRATCH/t9.json`.
 - [ ] **Step 3: Write V540.** Apply it to a fresh local schema per the `seazn-local-env` skill (`db:apply` then `sync:sports`). Never apply it to a shared database.
-- [ ] **Step 4: Run the Step 2 command again.** Expect PASS.
+- [ ] **Step 4: Run the Step 2 command again, plus the four existing suites named in Step 1** (`connections.test.ts`, `secret-columns.test.ts`, `token-store.test.ts`, `connect-routes.test.ts`, and any other the re-grep found). Expect PASS.
 - [ ] **Step 5: Commit** `feat(db): V540 Seazn destination row`.
 
 ### Task 10: Destination reads and writes know Seazn
@@ -500,7 +501,7 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 
 - `signLivePlayback(deps, inputUid: string, now: Date): Promise<{ src: string; expiresAt: string }>`. `src` is `https://${streamPlaybackHost()}/${token}/manifest/video.m3u8` (under the fake driver, `https://playback.fake.invalid/…`), with `exp = now + SEAZN_LIVE_TOKEN_TTL_SECONDS`.
 - `signDownload(deps, videoUid: string, now: Date, ttlSeconds: number): Promise<string>` for Phase 2: a `downloadable: true` token, returning `https://<host>/<token>/downloads/default.mp4` (C5).
-- Both read an in-process cache keyed by `(uid, downloadable)`: a cached token is reused while more than `SEAZN_TOKEN_REFRESH_BEFORE_SECONDS` of its life is left, else a new one is minted. The token is the same for every viewer, so the cache holds no viewer data.
+- Both read a cache keyed by `(uid, downloadable)`: a cached token is reused while more than `SEAZN_TOKEN_REFRESH_BEFORE_SECONDS` of its life is left, else a new one is minted. The token is the same for every viewer, so the cache holds no viewer data. The cache is passed in `deps.tokenCache` (production wires one module-level instance; `createPlaybackTokenCache()` makes a fresh one), so every test builds its own empty cache and no test depends on run order.
 
   Plan decision: Cloudflare's token endpoint, not a key of our own (C1). The cache bounds the calls by live inputs, not viewers, so there is no per-page-view call and no rate-limit exposure to an audience.
 
@@ -588,7 +589,7 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
   - `seaznVideoPlan` with LIVE off: a fixture with an ended Seazn session answers `seazn`, and the page renders the island, never `ReplayEmbed` (the ruling). An unstarted fixture whose default would be Seazn answers `external`.
   - `seaznVideoPlan` with LIVE on: a past YouTube fixture with no saved choice (its org's default now resolves Seazn) answers `external`, and the page renders `ReplayEmbed` with its parts (the blocker regression). An unstarted fixture whose default is Seazn answers `seazn`. A fixture with one Seazn session answers `seazn` even after the org's default changes.
   - Player: rendering `<SeaznPlayer>` with `src` A then `src` B (a token refresh) keeps the same `<video>` element instance (same node; a ref counter of mounts stays at 1), and hls.js `loadSource` is called with B without `destroy()` (spy on a mocked hls.js).
-  - e2e, fake driver: pick Seazn and Go live → the public page shows `[data-testid=seazn-player] video` with a `src` or `data-src` on the fake host, with no reload between warming and live. At 320, 768 and 1280: no horizontal scroll.
+  - e2e, fake driver: pick Seazn and Go live → the public page shows `[data-testid=seazn-player] video` with a `src` or `data-src` on the fake host, with no reload between warming and live. The island re-reads on its own 30 s timer, so this one assertion carries an explicit `{ timeout: 45_000 }` (longer than one re-read) rather than the default; no other wait. At 320, 768 and 1280: no horizontal scroll.
 - [ ] **Step 2: Run them and see them fail.** `cd apps/web && npx vitest run src/components/public-site/match-centre/__tests__/seazn-video-schedule.test.ts src/components/public-site/match-centre/__tests__/seazn-video-island.test.tsx "src/app/(public)/live" --reporter=json --outputFile=$SCRATCH/t15.json`; `npx playwright test e2e/public-fixture.spec.ts e2e/mobile/public-pages.spec.ts` (whole files).
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run both commands again.** Expect PASS. Take screenshots at the three widths and open each one.
@@ -641,7 +642,7 @@ in-app player. So the phone needs the page's address and nothing else: no playba
   URL with no query and no fragment, so it can carry no token.
 - Modify: `apps/web/src/server/usecases/match-day-code-view.ts` (`MatchDayCodeRowView` and `codeRowViews`, about lines
   35-57 and 339-361). `codeRowViews` takes a `ReadonlyMap<fixtureId, watchUrl>` of the rows that are live on Seazn.
-  `getMatchDayForCode` builds that map. A row gets `{ watch_url }` exactly when its fixture has a live Seazn session.
+  `getMatchDayForCode` builds that map. A row gets `{ watch_url }` exactly when its fixture has a live Seazn session AND its public page is readable (the fixture is in `public_fixtures_v`; a private competition's page answers `live: null`, Task 14) AND `siteOrigin()` is https. Otherwise `null`: a local dev server on `http://localhost` gives no link rather than a value the strict contract refuses.
   That is the same predicate the board's `live_seazn: true` uses (above), on the same playing ids (the courts' playing
   `current` and `playingNoCourt`). The value is `` `${siteOrigin()}${routes.publicFixture(orgSlug, compSlug, divSlug, fixtureId)}` ``
   (`lib/site-origin.ts`, `lib/routes.ts:180`), the public match page on this deployment's own host
@@ -669,10 +670,11 @@ in-app player. So the phone needs the page's address and nothing else: no playba
   - Phone day read (`match-day-code-view.test.ts`): a Seazn live match on a playing court gives
     `live_seazn: { watch_url: "<siteOrigin>/live/<org>/<comp>/<div>/fixtures/<id>" }`. A YouTube live match, a match
     that is not live, a queued row and a finished row all give `live_seazn: null`. The day read's JSON contains no
-    `playback.fake.invalid` and no `?`.
+    `playback.fake.invalid` and no `?`. The test pins the origin with `vi.stubEnv("NEXT_PUBLIC_BASE_URL", "https://seazn.club")` and builds the expected URL from that literal, not from `siteOrigin()`.
+  - A Seazn live match of a private competition gives `live_seazn: null`. With `NEXT_PUBLIC_BASE_URL` stubbed to `http://localhost:3000`, a Seazn live match gives `null`.
   - Contract (`capture-contract.test.ts`): `valid-live-seazn` validates and `invalid-live-seazn-query` is refused.
     The day read built by the use case validates against the regenerated `capture-matchday-day.v1.json`.
-- [ ] **Step 2: Run them and see them fail.**
+- [ ] **Step 2: Run them and see them fail.** `cd apps/web && npx vitest run src/components/v2/match-day/__tests__/match-day-ssr.test.tsx src/server/usecases/__tests__/match-day-code-view.test.ts src/server/api-v1/__tests__/capture-contract.test.ts <the match-day*.test.ts that covers live_video> --reporter=json --outputFile=$SCRATCH/t17.json`; `npx playwright test e2e/match-day.spec.ts e2e/mobile/match-surfaces.spec.ts` (whole files).
 - [ ] **Step 3: Implement.** Then run `npm run openapi:gen` and `node --experimental-strip-types scripts/gen-capture-contracts.ts`.
 - [ ] **Step 4: Run them again.** Expect PASS.
 - [ ] **Step 5: Commit** `feat(match-day): Seazn live preview`.
@@ -854,7 +856,7 @@ export interface ReplayHost {
   - `cf_deleted_at timestamptz null`, `playable_at timestamptz null`, `bunny_cleaned_at timestamptz null` (a deleted row whose Bunny copies have all been removed);
   - `deleted_at timestamptz null`, `deleted_by uuid null`, `deleted_reason text null check (deleted_reason in ('organiser','org_deleted'))`;
   - `created_at timestamptz not null default now()`.
-- Index on `(state, next_attempt_at)` where `state not in ('playable','deleted')`. Index on `(fixture_id, recorded_at)`.
+- Index on `(state, next_attempt_at)` where `state not in ('playable','deleted') or cf_deleted_at is null or bunny_cleaned_at is null` (it must cover every row the mover claims: a `playable` row still on Cloudflare, a `deleted` row awaiting cleanup). Index on `(fixture_id, recorded_at)`.
 - Check: `bunny_video_id is not null or state in ('found','downloading','fetching','failed','deleted')`.
 - `fixture_stream_inputs` gains `replays_discovered_at timestamptz null`: discovery's mark that it has listed this programme input's finished recordings for good.
 - `bunny_webhook_events (event_id text primary key, received_at timestamptz not null default now())`: the dedupe mark for Bunny's `EventId` (B6, Task 27).
@@ -893,14 +895,14 @@ export interface ReplayHost {
 
     Plan decision: 30 min. The guid comes back in the fetch's own answer, so a row left in `fetching` means that answer was lost (a crash or a timeout after Bunny accepted). The lost first copy is removed when its webhook names a guid no row holds (Task 27);
 
-  - `encoding` → `poll_state`, at most once per `SEAZN_POLL_BACKSTOP_MINUTES = 15` (a poll that is still `processing` sets `next_attempt_at = now + 15 min`). The webhook (Task 27) is the primary signal; this poll catches a webhook Bunny dropped (B6). `playable` sets `playable_at`; `failed` removes the guid, clears `bunny_video_id` and sets state `failed`;
+  - `encoding` → `poll_state`, at most once per `SEAZN_POLL_BACKSTOP_MINUTES = 15` (a poll that is still `processing` sets `next_attempt_at = now + 15 min`). The webhook (Task 27) is the primary signal; this poll catches a webhook Bunny dropped (B6). `playable` sets `playable_at`; `failed` removes the guid, clears `bunny_video_id` and sets state `failed`; `absent` (the guid is gone) clears `bunny_video_id` and goes back to `found`;
   - `playable` with `cf_deleted_at` null → `delete_cf`;
   - `deleted` with `bunny_cleaned_at` null → `cleanup`: `remove` the row's `bunny_video_id` if any, delete the Cloudflare copy if still there, then set `bunny_cleaned_at`. A guid that lands after the delete is removed by the mover that holds it, or by the webhook (Task 27).
   - A failure sets `attempts+1` and `next_attempt_at = now + min(2^attempts, 60) minutes`.
   - `failed` retries from `found` while `now - recorded_at < 30 days`.
 - `discoverSeaznRecordings(deps, now)`: for each programme input of a Seazn session that ended more than `FINALISATION_GRACE_SECONDS` ago and whose `replays_discovered_at` is null, calls `listInputVideos(programme)`. Each listed video whose own `inputId` is not that programme input is skipped and counted (C6). It inserts a `found` row per remaining video (`on conflict (cf_video_id) do nothing`, `part_no` assigned as V541 says). When every one of them is finished (`inProgress === false`), it sets `replays_discovered_at`, and the input is never listed again.
 - `moveSeaznRecordings(deps, { now, budgetMs })`. Concurrency and idempotency rules:
-  - Rows are claimed in a short transaction, `select … where next_attempt_at <= now and state not in ('playable') … for update skip locked limit 10` (plus deleted rows awaiting cleanup), so two overlapping ticks never take one row.
+  - Rows are claimed in a short transaction: `select … where next_attempt_at <= now and (state not in ('playable','deleted') or (state = 'playable' and cf_deleted_at is null) or (state = 'deleted' and bunny_cleaned_at is null)) … for update skip locked limit 10`. The same transaction sets `next_attempt_at = now + SEAZN_CLAIM_LEASE_SECONDS (= 120)` on every claimed row and commits, so a run starting after that commit does not claim the row again; a crashed run's rows come back after the lease.
   - The next state is written and committed BEFORE the provider call (`found → downloading`, `downloading → fetching` before `fetchFromUrl`), so a crash after the call is resumed by the stale timeout, never by a blind second fetch.
   - Every state update is conditional: `update … set state = $next, state_at = now() where id = $id and state = $expected`. Zero rows updated means another actor moved it (an organiser delete, or the webhook), and the pass drops the row; a guid the fetch just answered is then `remove`d, so nothing is left on Bunny.
   - The org's collection id is read from `org_video_collections`, or created by `createCollection` and inserted under that row's lock.
@@ -916,7 +918,9 @@ export interface ReplayHost {
     - `deleteVideo` is never called before `playable`. Assert the call order: `deleteVideo` index > `state→playable` index;
     - **C6** (Review Focus 11): `listInputVideos` seeded to answer, beside the programme's own video, two videos of other inputs (one an external session's programme input of the same org). No row is inserted for them, and no `createDownload`, `fetchFromUrl` or `deleteVideo` call ever names them;
     - REPLAY off gives zero discover and zero move calls;
-    - overlap: two `moveSeaznRecordings` runs started together on one `found` row make exactly one `createDownload` and one `fetchFromUrl` call;
+    - overlap: run A claims a `found` row and blocks inside the fake port's `createDownload` on a gate (a promise the test resolves); run B then runs to completion and makes no provider call for that row; the test releases the gate. Exactly one `createDownload` in total. No "started together" timing;
+    - a `playable` row with `cf_deleted_at` null (the webhook's `deleteVideo` answered `in_progress`) is claimed on the next run and `deleteVideo` of its stored `cf_video_id` sets `cf_deleted_at`;
+    - poll answers `absent` (the guid is gone on Bunny): the row clears `bunny_video_id` and goes back to `found`;
     - a `fetching` row with no guid, 31 min old (fake clock), goes back to `downloading` and is fetched again;
     - poll backstop: an `encoding` row whose poll answers `processing` is not polled again until 15 min later (fake clock);
     - an organiser-deleted row with a guid: `cleanup` removes the guid and the Cloudflare copy and sets `bunny_cleaned_at`;
@@ -948,7 +952,7 @@ export interface ReplayHost {
   - A `processing` row is not public.
   - A replay of a private competition is absent from the public read and present in the org read.
   - LIVE off (and REPLAY off): a fixture with an ended Seazn session and a playable replay answers `seazn` from `seaznVideoPlan`, the page renders the Seazn replay player, never `ReplayEmbed`, and the route lists the part (the controller ruling).
-  - e2e: after Stop, `fake.advance` and a tick, the page shows Part 1 and Part 2 for a stop/restart match.
+  - e2e: a fixture seeded with two `playable` `seazn_replays` rows (parts 1 and 2, as the e2e seed writes other rows) shows Part 1 and Part 2. No Stop, tick or grace wait in the browser: discovery and the mover across a stop/restart are already pinned by Task 24's fake-clock usecase test (Review Focus 4).
 - [ ] **Step 2: Run them and see them fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run them again.** Expect PASS. Take screenshots at 320, 768 and 1280.
@@ -1000,7 +1004,8 @@ Bunny calls a library's webhook on every status change (B6). It is the primary "
   - A guid a row holds:
     - `playable`: a conditional update `encoding → playable` (sets `playable_at`, `state_at`), then `deleteVideo` of the row's stored `cf_video_id` (never from a listing, C6); `deleted` sets `cf_deleted_at`, and `in_progress` or a throw leaves it null for the tick's `delete_cf`.
     - `failed`: `remove` the guid, clear `bunny_video_id`, set state `failed`, `attempts+1` and the backoff; the mover retries from `found` (Task 24).
-  - A guid no row holds: `video(guid).title`. A title of the form `seazn:{sessionId}:{cfVideoId}` is ours and stray (a lost fetch answer, Task 24, or a fetch that landed after a delete), so the guid is `remove`d; a row still `fetching` re-fetches on its own timeout. A title not of that form is `ignored` and never removed: the library may hold other videos. Plan decision: remove rather than adopt, so there is one recovery path, the timeout, and it needs no test of a rare race.
+  - A guid no row holds, on an event whose `webhookOutcome` is `ignore` (Bunny's early statuses 0–2, which can arrive before the mover has written the guid): `ignored`, no lookup, no removal.
+  - A guid no row holds, on a `playable` or `failed` outcome: `video(guid).title`. If a row still in `fetching` names that title's `cfVideoId`, it is `ignored` (the mover's own answer is about to land). Otherwise a title of the form `seazn:{sessionId}:{cfVideoId}` is ours and stray (a lost fetch answer, Task 24, or a fetch that landed after a delete), so the guid is `remove`d; a row still `fetching` re-fetches on its own timeout. A title not of that form is `ignored` and never removed: the library may hold other videos. Plan decision: remove rather than adopt, so there is one recovery path, the timeout, and it needs no test of a rare race.
 - Route: `POST`. A failed signature answers 401 with no detail and no write. REPLAY off answers 200 `{ ignored: true }` with no write (the poll catches up when it is turned on). An apply that throws answers 500, so Bunny retries; everything else answers 200. The keys and the raw body are never logged.
 
 - [ ] **Step 1: Write the failing tests.**
