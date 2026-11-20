@@ -5,7 +5,7 @@
 // says how it stands.
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { onlineRoundPhase, roundRowWord } from "@/lib/match-day/online";
-import { onlineRoundMeta, onlineRoundTitle, roundWordLines } from "@/lib/match-day/online-copy";
+import { onlineRoundMeta, onlineRoundTitleParts, roundWordLines } from "@/lib/match-day/online-copy";
 import type { MatchDayOnlineRound } from "@/lib/match-day/types";
 import { WORD_TONE } from "./online-tone";
 
@@ -27,6 +27,8 @@ export function RoundRow({
 }) {
   const lines = roundWordLines(dict, locale, round.tz, roundRowWord(round, nowMs));
   const meta = onlineRoundMeta(dict, locale, round);
+  // "Round 3" is one unbreakable piece (the 768 list's narrow title track once wrapped it "Round / 3"); the division and stage before it wrap.
+  const title = onlineRoundTitleParts(dict, round);
   return (
     <li>
       <button
@@ -42,7 +44,10 @@ export function RoundRow({
       >
         <span aria-hidden className="h-2.5 w-2.5 shrink-0 rounded-[3px] bg-purple-600" />
         <span className="min-w-0">
-          <span className="block min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">{onlineRoundTitle(dict, round)}</span>
+          <span className="block min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">
+            {title.lead}
+            {title.tail !== "" && <span className="whitespace-nowrap">{title.tail}</span>}
+          </span>
           {meta !== "" && <span className="block truncate text-xs text-slate-600">{meta}</span>}
         </span>
         <span className="max-w-[9rem] shrink-0 text-right">

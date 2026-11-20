@@ -40,7 +40,7 @@ import { routes } from "@/lib/routes";
 import type { Severity } from "@/lib/division-phase";
 import type { FrozenNames } from "@/lib/match-day/frozen-names";
 import type { MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
-import { orderOnlineRounds, resolveOnlineFocus, type OnlineOpened, type Reader } from "@/lib/match-day/online";
+import { nextRoundOf, orderOnlineRounds, resolveOnlineFocus, type OnlineOpened, type Reader } from "@/lib/match-day/online";
 import { boardName, onlineRoundTitle } from "@/lib/match-day/online-copy";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import {
@@ -73,7 +73,8 @@ import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
 import { OnlineList } from "./online-list";
-import { OnlineBoardPanel, OnlineRoundPanel } from "./online-focus";
+import { OnlineBoardPanel } from "./online-focus";
+import { RoundFocus } from "./round-focus";
 import { levelWords } from "@/lib/score/levels";
 import { VenueFilter } from "./venue-filter";
 import { MatchDayCodeSheet } from "./match-day-code-sheet";
@@ -184,6 +185,8 @@ export function MatchDayShell({
   // One read of the day for the poll, the Refresh button and a court's tail countdown reaching 0 (use-day-refresh.ts).
   const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, setView);
   const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
+  /** A press in the round panel changed the day: the quiet read, with a stable identity (the panel's runners are built over it). */
+  const refreshQuiet = useCallback(() => void refresh(), [refresh]);
   /** A court's tail countdown ended: quiet, and one read per second however many countdowns end on the same tick. */
   const lastTailRead = useRef(0);
   const tailTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -575,14 +578,18 @@ export function MatchDayShell({
             />
           )}
           {focusedRound !== null && (
-            <OnlineRoundPanel
+            <RoundFocus
               key={focusedRound.key}
               ctx={ctx}
               round={focusedRound}
+              next={nextRoundOf(online, focusedRound)}
               reader={readerOf(focusedRound)}
               nowMs={clock}
               backLabel={onlineBackLabel}
               onBack={() => setPhoneOpen(false)}
+              onChanged={refreshQuiet}
+              onOpenBoard={openBoard}
+              onOpenRound={openRound}
               hiddenOnPhone={!phoneCourt}
             />
           )}

@@ -418,4 +418,15 @@ export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   "externalPlay.queue.reviewed",
   "externalPlay.queue.reviewedNew",
   "externalPlay.queue.where",
+  // Match Day's round panel (Task 7, components/v2/match-day/round-focus.tsx - it carries the moved bodies and joins the swept helper files):
+  // the billing freeze's answer to an open, a resend and a +5; the "ready to open" line; the link hold's block and press; Pair next round
+  "runsheet.round.err.frozen",
+  "matchDay.round.ready",
+  "matchDay.round.readyGo",
+  "matchDay.round.openAgain",
+  "matchDay.round.linkHold.title",
+  "matchDay.round.pairHint",
+  "matchDay.round.pairedNotice",
+  "matchDay.round.pairFailed",
+  "schedule.pairNext",
 ];

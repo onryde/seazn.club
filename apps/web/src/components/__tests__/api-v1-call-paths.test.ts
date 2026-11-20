@@ -115,6 +115,13 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // the cards only ever call `runner.goOn`, which posts `/api/v1/fixtures/${id}/external-play/flags/close` with `{ ids }` (a POST
   // route that exists, src/app/api/v1/fixtures/[id]/external-play/flags/close) for a cancelled flagged board's "Mark as reviewed".
   "src/components/v2/arbiter/round-queue-cards.tsx": 1,
+  // Match Day's round panel (Task 7): ONE module-level `post = (path, body) => apiV1(path, …)` handed to the panel's `+5 min` runners
+  // (round-presses.ts `boardExtendRunner`, checkin-extend-ui.ts `roundExtendRunner`) and to `pairNextRunner`. The paths they build are
+  // `extendBoardPath` = `/api/v1/fixtures/${id}/external-play/extend-checkin`, `extendRoundPath` = `/api/v1/stages/${stageId}/extend-checkin`
+  // and `pairNextPath` = `/api/v1/stages/${stageId}/generate` (all POST routes that exist: src/app/api/v1/fixtures/[id]/external-play/
+  // extend-checkin, src/app/api/v1/stages/[id]/extend-checkin, src/app/api/v1/stages/[id]/generate). The open's and the resend's POSTs are
+  // `useOpenRoundWith`'s, counted under desk/use-open-round.ts above.
+  "src/components/v2/match-day/round-focus.tsx": 1,
 };
 
 describe("apiV1 call paths", () => {

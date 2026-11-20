@@ -320,7 +320,10 @@ describe("a player's presence ring stays with the last word of the name (control
 
   it("no mark, no unit: a policy-off board's names are plain text, so nothing is bound for nothing", () => {
     const html = list([round("stage-1:3", "playing", arbiterRound([live(1, { cameraPolicy: "off", sides: { home: present(), away: present() } })]))]);
-    expect(html).not.toContain("whitespace-nowrap");
+    // Nothing binds a name's tail to a ring (the row's own "Round 3" is a no-wrap unit since Task 7: that one is the title's, asserted here
+    // so the probe is not blind to it - the old whole-markup `not.toContain("whitespace-nowrap")` could no longer tell the two apart).
+    expect(html).not.toContain('<span class="whitespace-nowrap"><span data-md-name-tail');
+    expect(html).toContain('<span class="whitespace-nowrap">Round 3</span>');
     expect(html).not.toContain("md-presence");
     expect(units(html)).toEqual([]);
   });

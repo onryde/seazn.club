@@ -5,6 +5,7 @@
 //
 // Pure TypeScript, no React: the reducers and the runner are tested without a DOM (apps/web vitest is node-only).
 import { ApiV1Error } from "@/lib/client-v1";
+import { BILLING_FROZEN_CODE } from "@/lib/open-round";
 import {
   CHECKIN_EXTEND_MAX,
   CHECKIN_EXTEND_STEP_MINUTES,
@@ -125,6 +126,7 @@ export function extendRoundLines(r: CheckinExtendRoundResult, c: ExtendCopy): st
 
 /** Why a press was refused, by the door's own code. Anything else is a failure to try again. */
 export function extendFailureText(code: string, c: ExtendCopy): string {
+  if (code === BILLING_FROZEN_CODE) return c.t("runsheet.round.err.frozen");
   const refusal = EXTEND_REFUSALS.find((r) => EXTEND_REFUSAL_CODES[r] === code);
   if (refusal !== undefined) return c.t(EXTEND_REFUSAL_KEYS[refusal]);
   if (code === "ARBITER_PLAYS_THIS_BOARD") return c.t("externalPlay.checkinExtend.refused.playsThis");
