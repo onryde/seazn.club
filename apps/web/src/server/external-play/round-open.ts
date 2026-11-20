@@ -197,6 +197,43 @@ export async function anyCheckinWindowOpen(
   return row?.open === true;
 }
 
+/** One opened round as Match Day's "today" rule reads it (match-day.ts `countTodayByCompetition`): which (stage, round), when its open
+ *  was stamped, and whether its window bound (`roundWindowBoundSql`) was still ahead at the `now` it was read. */
+export interface RoundOpenToday {
+  stageId: string;
+  roundNo: number;
+  openedAt: Date;
+  windowLive: boolean;
+}
+
+/** How far back an open is read for "today": two days, which is longer than any division's calendar day (a day is at most 25 hours
+ *  with a clock change, and a division's zone can be up to a day ahead of or behind UTC, so a day that contains `now` began less than
+ *  25 hours before it) and longer than a window can still be live (`ROUND_WINDOW_SCAN_LOOKBACK_MS`, the bound `anyCheckinWindowOpen`
+ *  stops at). The table holds every round ever opened and the window bound counts each row's fixtures, so the read is cut here. */
+export const ROUND_OPENS_TODAY_LOOKBACK_MS = Math.max(2 * 24 * 60 * 60_000, ROUND_WINDOW_SCAN_LOOKBACK_MS);
+
+/** The rounds of ONE organisation that can make a board "today" for Match Day: every round opened within `ROUND_OPENS_TODAY_LOOKBACK_MS`
+ *  of `now`, and every older round that still has a game on file (a challenge on a bridge row that is not `finished`: a board kept
+ *  open however long ago its round was opened). `windowLive` is `roundWindowBoundSql` against `now`: the ONE spelling of the bound.
+ *  A superset by construction: the caller decides which board of which division a row makes today's.
+ *
+ *  `stage_round_opens` is sealed, so `db` must run with the pool's own privileges: the privileged `sql`, or a transaction BEFORE its
+ *  role drops (`withTenant`'s `privilegedPrelude`). Scoped to `orgId` in SQL, because the privileged role sees every tenant. */
+export async function roundOpensToday(db: AnySql, orgId: string, now: Date): Promise<RoundOpenToday[]> {
+  const since = new Date(now.getTime() - ROUND_OPENS_TODAY_LOOKBACK_MS);
+  return db<RoundOpenToday[]>`
+    select o.stage_id as "stageId", o.round_no as "roundNo", o.opened_at as "openedAt", (${roundWindowBoundSql(db)} > ${now}) as "windowLive"
+      from stage_round_opens o
+     where o.org_id = ${orgId}
+       and (o.opened_at > ${since}
+            or (o.stage_id, o.round_no) in (
+                 select f.stage_id, f.round_no
+                   from fixture_external_play ep
+                   join fixtures f on f.id = ep.fixture_id
+                  where ep.org_id = ${orgId} and ep.challenge_id is not null and ep.status <> 'finished'))
+     order by o.opened_at, o.stage_id, o.round_no`;
+}
+
 /** The sweep's and the pre-mint's open-window deferral is ON unless `EXTERNAL_PLAY_WINDOW_DEFER` is exactly "0" (the e2e server's
  *  setting, whose specs share one platform-wide window state, and an operator's rollback lever). Read at call time. */
 export function windowDeferralOn(): boolean {

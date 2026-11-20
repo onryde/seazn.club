@@ -283,8 +283,9 @@ export interface MatchDayView {
   needs_you: NeedsYouItem[];
   /** How many matches owe a result: the desk's `result_missing` attentions, summed (`resultsOwedOf`); 0 when not a match day. */
   results_owed: number;
-  /** This competition's matches today, each on its own division's day, plus those in play (`countFixturesToday`, read once per
-   *  poll: the competition desk's own `fixtures_today`). */
+  /** This competition's matches today, each on its own division's day, plus those in play, plus the boards of an online round that
+   *  makes the day (opened in it, a live check-in window, or a game on file: an online board has no planned time) (`countFixturesToday`,
+   *  read once per poll: the competition desk's own `fixtures_today`). */
   fixtures_today: number;
   /** The venues where THIS competition has a match today (Match Day E2 item 5): the venue of every court one of its matches today
    *  is on — played, playing, queued or called — whatever the match's state. The venue filter's default selection; empty when
