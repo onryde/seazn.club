@@ -73,6 +73,7 @@ import { NeedsYou } from "@/components/v2/desk/needs-you";
 import { CourtFocus, NoCourtFocus, fixtureHref, type MatchDayCtx } from "./court-focus";
 import { CourtList, NoCourtList } from "./court-list";
 import { BoardFocus } from "./board-focus";
+import { meetingKeysOf, useArbiterJoins } from "./online/arbiter-joins";
 import { OnlineList } from "./online-list";
 import { RoundFocus } from "./round-focus";
 import { levelWords } from "@/lib/score/levels";
@@ -270,6 +271,10 @@ export function MatchDayShell({
   /** What the online panels read for who may press what (`mayPress`): the viewer's role, the club's flag (the round's own) and the
    *  competition's billing freeze (the `frozen` prop, the flag that hides Call and Undo). */
   const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozen || freezeSeen });
+  /** The board in focus's cameras (Task 9): the joins live HERE, keyed on the focused board's watchable sides and the day's own poll, so a poll
+   *  that hands the panel a new board object keeps the same keys and re-joins nothing, and leaving the board leaves both meetings. */
+  const cameraKeys = focusedBoard === null ? [] : meetingKeysOf(focusedBoard.board, readerOf(focusedBoard.round));
+  const joins = useArbiterJoins(cameraKeys, lastOkAt);
   /** The phone's way back from a round or a board (ruling MD-R27): the list, on every day. A board is not a court, so the courts' noun
    *  ("All courts") stays with the courts' own panels. */
   const onlineBackLabel = t(dict, "matchDay.back.list");
@@ -607,6 +612,7 @@ export function MatchDayShell({
               reader={readerOf(focusedBoard.round)}
               nowMs={clock}
               refreshKey={lastOkAt}
+              joins={joins}
               backLabel={onlineBackLabel}
               onBack={() => setPhoneOpen(false)}
               onChanged={refreshQuiet}

@@ -11,14 +11,47 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 
-const net = vi.hoisted(() => ({ calls: [] as string[], next: null as unknown }));
+const net = vi.hoisted(() => ({
+  calls: [] as string[],
+  next: null as unknown,
+  /** The join route's POSTs (`/external-play/arbiter`), kept apart from `calls` so the day's own reads are counted on their own. */
+  joins: [] as { url: string; side: string }[],
+  /** What the join route answers: a token by default; a test sets a refusal. */
+  joinRefusal: null as null | { code: string; status: number },
+}));
 vi.mock("@/lib/client-v1", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/client-v1")>();
   return {
     ...actual,
-    apiV1: (url: string) => {
+    apiV1: (url: string, options?: { json?: { side: string } }) => {
+      if (url.includes("/external-play/arbiter")) {
+        net.joins.push({ url, side: options!.json!.side });
+        if (net.joinRefusal !== null) return Promise.reject(new actual.ApiV1Error(net.joinRefusal.code, net.joinRefusal.status, net.joinRefusal.code));
+        return Promise.resolve({ authToken: `tok|${url}|${options!.json!.side}`, participantId: "p", side: options!.json!.side, players: ["pl"], reused: false });
+      }
       net.calls.push(url);
       return Promise.resolve(net.next);
+    },
+  };
+});
+/** The SDK at its one boundary: a join that succeeds and leaves, counted. The real chain (serial, keys, ladder) runs over it. */
+const sdk = vi.hoisted(() => ({ connects: [] as string[], leaves: [] as string[], open: new Map<string, number>() }));
+vi.mock("../online/arbiter-camera", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../online/arbiter-camera")>();
+  return {
+    ...actual,
+    joinArbiter: async ({ authToken }: { authToken: string }) => {
+      sdk.connects.push(authToken);
+      sdk.open.set(authToken, (sdk.open.get(authToken) ?? 0) + 1);
+      return {
+        tile: () => ({ present: true, live: true, track: null }),
+        onChange: () => () => undefined,
+        onFault: () => () => undefined,
+        leave: async () => {
+          sdk.leaves.push(authToken);
+          sdk.open.set(authToken, (sdk.open.get(authToken) ?? 1) - 1);
+        },
+      };
     },
   };
 });
@@ -38,6 +71,7 @@ vi.mock("@/components/v2/desk/band-poll", () => ({
 import en from "@/dictionaries/en/ui.json";
 import publicEn from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
+import type { ArbiterBoard } from "@/lib/arbiter-view";
 import type { MatchDayCourt, MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
 import { mayPress, type Reader } from "@/lib/match-day/online";
 import { NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
@@ -47,7 +81,7 @@ import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { OnlineList } from "../online-list";
 import { BoardFocus } from "../board-focus";
 import { RoundFocus } from "../round-focus";
-import { arbiterRound, checkinRound, earlier, held, live, onlineView, pairedRound, round, withState } from "./_online-fixtures";
+import { arbiterRound, checkinRound, earlier, held, live, onlineView, pairedRound, present, round, withState } from "./_online-fixtures";
 
 const court = (id: string, name: string): MatchDayCourt => ({
   court_id: id,
@@ -107,6 +141,11 @@ function parts(tree: ReactElement[]) {
 
 beforeEach(() => {
   net.calls = [];
+  net.joins = [];
+  net.joinRefusal = null;
+  sdk.connects = [];
+  sdk.leaves = [];
+  sdk.open = new Map();
   net.next = null;
   poll.tick = null;
   poll.live = null;
@@ -433,5 +472,147 @@ describe("the poll cadence: an online night polls as a live one", () => {
     await settle();
     island.tree();
     expect(poll.live).toBe(true);
+  });
+});
+
+// ---- the cameras of the board in focus, produced by the REAL chain (Task 9) -----------------------------------------------------------------
+// shell -> meetingKeysOf -> useArbiterJoins -> browserSerial -> the join route (doubled at apiV1) -> the SDK (doubled at joinArbiter). Nothing
+// below the shell is a fixture: the keys, the POSTs and the leaves are what the real code produces from a board the day's own view carried.
+
+describe("the board in focus's cameras: only a watchable side is joined, only for an editor, and a board left is a board let go", () => {
+  const joinable = (camera: "live" | "off" = "live") => ({ ...present(camera), joinable: true });
+  /** The pre-minted room: open, a player participant on file, nobody counted in (the join would refuse it). */
+  const preMinted = () => present("live");
+  const camBoard = (id: string, sides: ArbiterBoard["sides"]) =>
+    live(5, { fixtureId: id, boardNo: 1, white: { name: "Chen", personId: null }, black: { name: "Silva", personId: null }, cameraPolicy: "required", sides });
+  const nightOf = (boards: ArbiterBoard[], now = at(0)): MatchDayView => ({ ...onlineView([round("stage-1:3", "playing", arbiterRound(boards))]), now });
+  const both = () => ({ home: joinable(), away: joinable() });
+  const drive = async (island: ReturnType<typeof renderIsland<MatchDayShellProps>>, boards: ArbiterBoard[], polls: number, tweak: (v: MatchDayView) => MatchDayView = (v) => v) => {
+    for (let i = 1; i <= polls; i += 1) {
+      net.next = tweak(nightOf(boards, at(i)));
+      poll.tick!();
+      await settle();
+    }
+  };
+
+  it("EMPTY CASE FIRST: no board focused is no join at all - however many polls, whatever the boards' sides say", async () => {
+    const boards = [camBoard("cam-0", both())];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards)));
+    await settle();
+    await drive(island, boards, 3);
+    expect(parts(island.tree()).board, "nothing opened").toBeNull();
+    expect(net.joins, "no POST").toEqual([]);
+    expect(sdk.connects).toEqual([]);
+    island.unmount();
+  });
+
+  it("a board whose rooms are pre-minted but whose players have not arrived POSTs NOTHING across three polls; the pair (both arrived) POSTs once a side and never again", async () => {
+    const waiting = [camBoard("cam-pre", { home: preMinted(), away: preMinted() })];
+    const a = renderIsland(MatchDayShell, props(nightOf(waiting), { focusBoardId: "cam-pre" }));
+    await settle();
+    await drive(a, waiting, 3);
+    expect(net.joins, "open but not joinable: nothing to join").toEqual([]);
+    expect((parts(a.tree()).board!.joins as { views: Map<string, unknown> }).views.size).toBe(0);
+    a.unmount();
+
+    const here = [camBoard("cam-here", both())];
+    const b = renderIsland(MatchDayShell, props(nightOf(here), { focusBoardId: "cam-here" }));
+    await settle();
+    expect(net.joins.map((j) => j.side).sort(), "one POST for each player's meeting").toEqual(["away", "home"]);
+    await drive(b, here, 3);
+    expect(net.joins, "three polls later still two").toHaveLength(2);
+    expect(sdk.connects, "and two SDK joins").toHaveLength(2);
+    const views = (parts(b.tree()).board!.joins as { views: Map<string, { kind: string }> }).views;
+    expect([...views.values()].map((v) => v.kind)).toEqual(["watching", "watching"]);
+    b.unmount();
+  });
+
+  it("(pair) a side that arrives on a LATER poll is joined then, and only that side", async () => {
+    const early = [camBoard("cam-late", { home: joinable(), away: preMinted() })];
+    const island = renderIsland(MatchDayShell, props(nightOf(early), { focusBoardId: "cam-late" }));
+    await settle();
+    expect(net.joins.map((j) => j.side)).toEqual(["home"]);
+    await drive(island, [camBoard("cam-late", both())], 1);
+    expect(net.joins.map((j) => j.side), "the home side was not asked again").toEqual(["home", "away"]);
+    island.unmount();
+  });
+
+  it("a view-only member and a club not offered online chess never join, whatever the board's sides say (the pair above joins)", async () => {
+    const boards = [camBoard("cam-viewer", both())];
+    let checked = 0;
+    for (const [label, over] of [["view-only", { readOnly: true }], ["not offered", {}]] as const) {
+      // The club's flag is the ROUND's (`offered`), and every poll carries it too.
+      const tweak = (v: MatchDayView): MatchDayView => (label === "not offered" ? { ...v, online_rounds: v.online_rounds.map((r) => ({ ...r, offered: false })) } : v);
+      const island = renderIsland(MatchDayShell, props(tweak(nightOf(boards)), { focusBoardId: "cam-viewer", ...over }));
+      await settle();
+      await drive(island, boards, 2, tweak);
+      expect(net.joins, label).toEqual([]);
+      expect(sdk.connects, label).toEqual([]);
+      island.unmount();
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("SEQUENCE: open board A, then B, then A again - A's two meetings are left when B opens, B's when A returns, no meeting is ever joined twice at once, and the return POSTs nothing", async () => {
+    const boards = [camBoard("cam-A", both()), { ...camBoard("cam-B", both()), boardNo: 2 }];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards)));
+    const open = async (id: string) => {
+      (parts(island.tree()).list!.onOpenBoard as (id: string) => void)(id);
+      await settle();
+      await settle();
+    };
+    const maxOpen = () => Math.max(0, ...sdk.open.values());
+    await open("cam-A");
+    expect(net.joins).toHaveLength(2);
+    expect([...sdk.open.values()].reduce((a, b) => a + b, 0), "A's two meetings are live").toBe(2);
+    await open("cam-B");
+    expect(net.joins, "B: two more POSTs").toHaveLength(4);
+    expect(sdk.leaves.filter((l) => l.includes("cam-A")), "A's meetings were left").toHaveLength(2);
+    expect([...sdk.open.entries()].filter(([k, n]) => k.includes("cam-A") && n > 0), "no A meeting stays joined").toEqual([]);
+    await open("cam-A");
+    expect(net.joins, "back to A: the kept tokens, no new POST").toHaveLength(4);
+    expect(sdk.leaves.filter((l) => l.includes("cam-B")), "B's meetings were left").toHaveLength(2);
+    expect(sdk.connects, "A, B, A again: six SDK joins").toHaveLength(6);
+    expect(maxOpen(), "no meeting was ever joined twice at once").toBe(1);
+    island.unmount();
+    await settle();
+    expect([...sdk.open.values()].reduce((a, b) => a + b, 0), "the page going away left everything").toBe(0);
+  });
+
+  it("SEQUENCE through the shell's own poll: refused NOT_STARTED -> the day's next poll while the side is still watchable -> joined, with no press (the poll key reaches the hook)", async () => {
+    net.joinRefusal = { code: "VIDEO_MEETING_NOT_STARTED", status: 409 };
+    const boards = [camBoard("cam-flip", both())];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards), { focusBoardId: "cam-flip" }));
+    await settle();
+    const kinds = () => [...(parts(island.tree()).board!.joins as { views: Map<string, { kind: string }> }).views.values()].map((v) => v.kind);
+    expect(kinds(), "refused: the player has not arrived as far as the route knows").toEqual(["notStarted", "notStarted"]);
+    expect(net.joins).toHaveLength(2);
+    net.joinRefusal = null; // the flag flipped: the loader's `joinable` was right
+    await drive(island, boards, 1);
+    expect(kinds()).toEqual(["watching", "watching"]);
+    expect(net.joins, "exactly one more POST a side, from the poll").toHaveLength(4);
+    island.unmount();
+  });
+
+  it("VIDEO_BUSY from the join route is a `busy` tile that waits, not an error: the panel is handed `busy` for both sides", async () => {
+    net.joinRefusal = { code: "VIDEO_BUSY", status: 503 };
+    const boards = [camBoard("cam-busy", both())];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards), { focusBoardId: "cam-busy" }));
+    await settle();
+    const views = (parts(island.tree()).board!.joins as { views: Map<string, { kind: string }> }).views;
+    expect([...views.values()].map((v) => v.kind)).toEqual(["busy", "busy"]);
+    expect(sdk.connects, "nothing joined").toEqual([]);
+    island.unmount();
+  });
+
+  it("VIDEO_UNAVAILABLE (the vendor is down) reaches the panel as `unavailable` - the one answer the outage card keys on", async () => {
+    net.joinRefusal = { code: "VIDEO_UNAVAILABLE", status: 503 };
+    const boards = [camBoard("cam-down", both())];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards), { focusBoardId: "cam-down" }));
+    await settle();
+    const views = (parts(island.tree()).board!.joins as { views: Map<string, { kind: string }> }).views;
+    expect([...views.values()].map((v) => v.kind)).toEqual(["unavailable", "unavailable"]);
+    island.unmount();
   });
 });

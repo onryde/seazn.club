@@ -18,7 +18,7 @@
 import { describe, expect, it } from "vitest";
 import { makeJoinOwnCamera } from "@/components/public-site/match-room/camera-loader";
 import { fakeRealtimeKit, type FakeMeeting } from "@/components/public-site/match-room/__tests__/_fake-realtimekit";
-import { ARBITER_MAX_ATTEMPTS, ArbiterGuardError, makeJoinArbiter, type ArbiterCameras, type ArbiterReport } from "../arbiter-camera";
+import { ARBITER_MAX_ATTEMPTS, ArbiterGuardError, makeJoinArbiter, type ArbiterCameras, type ArbiterReport } from "../online/arbiter-camera";
 
 const W = { peer: "w-peer", user: "rtk-white" };
 const B = { peer: "b-peer", user: "rtk-black" };

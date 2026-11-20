@@ -19,15 +19,27 @@
  *   6. A view-only member: the same flagged, held board reads with the flags stripped to their kind and time (chips, no details), no reason
  *      card, no decisions, nothing to press - and the organiser's page, the pair, has all of them.
  *
+ * Task 9 (both players' cameras in the board panel) adds the describe at the foot of this file, run against the REAL producer - the loader's
+ * `sides`, the shell's joins and the join route - never a fixture prop:
+ *   7. A live board whose division REQUIRES cameras, both players here: the page asks the join route for BOTH meetings, White's first; the tiles
+ *      say what the real route answered (the local server has no video vendor, so VIDEO_UNAVAILABLE) and the outage card is offered; letting the
+ *      board play without video takes the cameras away.
+ *   8. A view-only member of the same organisation reads the board and never asks the join route for anything.
+ *   9. VIDEO_BUSY (the join route answered in the browser - the local server has no vendor budget, so it cannot answer BUSY itself): the tile
+ *      waits ("Waiting for capacity"), is never an error, and the client's own ladder asks again until the route answers something else.
+ *  10. Board A, then B, then A: each visit asks once per meeting, and nothing is asked for a board that has been left.
+ *  11. MD-R33 with cameras: a HELD board with cameras, flags and a 168-character reason still has its whole decision on a 1280 x 800 screen.
+ *
  * Expected copy comes from the dictionaries and the declared constants, never from the page. Not covered here, on purpose: the phone widths
- * (e2e/mobile/match-surfaces.spec.ts), and the camera panes (Task 9: `cameras` is a seam this panel mounts when given).
+ * (e2e/mobile/match-surfaces.spec.ts), and a SUCCESSFUL video join (RealtimeKit is unreachable locally; the unit suites run the real join chain
+ * over an SDK double - match-day/__tests__/match-day-online-driven.test.tsx).
  */
 import { test, expect, type Browser, type Page } from "@playwright/test";
-import { randomUUID } from "node:crypto";
 import { formatClock } from "../src/components/public-site/match-room/clock-math";
 import { TAG, apiJson, expectNoHorizontalScroll, invalidateOrgEntitlements, loginUi, setEntitlementOverrideSql, setOrgPlanBySql, withDb } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
 import { cancelFlaggedSql } from "./arbiter-column-kit";
+import { putArrival } from "./match-day-kit";
 import { CLOCK, fill, roundGameSql, seedOnlineRound, uiEn, type RoundBoard, type SeededRound } from "./match-room-kit";
 
 // ── budget (class 20): a derived ceiling, never one flat number ──────────────────────────────────────────────────────────────────
@@ -43,38 +55,13 @@ const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5", "c
 type Day = { orgId: string; round: SeededRound; matchDay: string };
 
 /** The organiser's own organisation on Pro, one online division of four players (two boards a round). */
-async function seedDay(page: Page, label: string, opts: { stage: "swiss" | "league"; camera?: "optional" }): Promise<Day> {
+async function seedDay(page: Page, label: string, opts: { stage: "swiss" | "league"; camera?: "optional" | "required" }): Promise<Day> {
   const { orgId } = await freshOrg(page, label);
   await dismissConsent(page);
   await setOrgPlanBySql({ orgId }, "pro");
   await invalidateOrgEntitlements(page.request, orgId);
   const round = await seedOnlineRound(page.request, NAMES, { stage: opts.stage, open: true, ...(opts.camera ? { camera: opts.camera } : {}) });
   return { orgId, round, matchDay: `/o/${round.slugs.org}/c/${round.slugs.comp}/match-day` };
-}
-
-/** One side's ARRIVAL as the presence read sees it (arbiter.ts `readPlayerPresence`): the room, the player on file in it, and a webhook presence
- *  row. `cameraOff` also stamps the browser's own fresh report "off" on the player's participant (the pill's word, `reportedCamera`). */
-async function putArrival(fixtureId: string, orgId: string, side: "home" | "away", personId: string, opts: { cameraOff?: boolean } = {}): Promise<void> {
-  await withDb(async (sql) => {
-    const meetingId = `e2e-mtg-${side}-${randomUUID().slice(0, 8)}`;
-    const room = await sql`
-      insert into fixture_video_meetings (fixture_id, side, org_id, meeting_id, home_entrant_id, away_entrant_id)
-      select f.id, ${side}, ${orgId}, ${meetingId}, f.home_entrant_id, f.away_entrant_id from fixtures f where f.id = ${fixtureId}`;
-    expect(room.count, `room ${side} for ${fixtureId}`).toBe(1);
-    const participantId = `e2e-pp-${side}-${randomUUID().slice(0, 8)}`;
-    const player = opts.cameraOff
-      ? await sql`
-          insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id, camera_reported, camera_reported_at)
-          values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId}, 'off', now())`
-      : await sql`
-          insert into fixture_video_participants (fixture_id, side, person_id, preset, participant_id)
-          values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId})`;
-    expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
-    const presence = await sql`
-      insert into fixture_video_presence (meeting_id, peer_id, fixture_id, side, participant_id, custom_participant_id, joined_at, source)
-      values (${meetingId}, ${`e2e-peer-${side}-${randomUUID().slice(0, 8)}`}, ${fixtureId}, ${side}, ${participantId}, ${personId}, now(), 'webhook')`;
-    expect(presence.count, `the ${side} player's presence row for ${fixtureId}`).toBe(1);
-  });
 }
 
 /** A board's two flags, in their producers' note formats (arbiter-panel.spec.ts says the same): out-of-band play and a camera gap. */
@@ -443,6 +430,199 @@ test.describe("Match Day online - the board panel", () => {
     }
     // The viewer wrote nothing: both flags are still open.
     expect((await flagRows(held.fixtureId)).map((f) => f.closed), "a view-only member closed nothing").toEqual([false, false]);
+  });
+});
+
+// ── Task 9: both players' cameras in the board panel ─────────────────────────────────────────────────────────────────────────────
+
+/** Every POST the page makes to the join route, in the order it makes them: the fixture (by id) and the side it asked for. */
+function joinPosts(page: Page): { fixtureId: string; side: string }[] {
+  const posts: { fixtureId: string; side: string }[] = [];
+  page.on("request", (req) => {
+    if (req.method() !== "POST") return;
+    const m = /\/api\/v1\/fixtures\/([^/]+)\/external-play\/arbiter$/.exec(new URL(req.url()).pathname);
+    if (m) posts.push({ fixtureId: m[1]!, side: (req.postDataJSON() as { side: string }).side });
+  });
+  return posts;
+}
+const cameras = (page: Page) => page.getByTestId("md-cameras");
+const tiles = (page: Page) => page.getByTestId("md-camera-tile");
+const tileOf = (page: Page, colour: "white" | "black") => page.locator(`[data-testid="md-camera-tile"][data-colour="${colour}"]`);
+const wordOf = (page: Page, colour: "white" | "black") => tileOf(page, colour).getByTestId("md-camera-word");
+
+test.describe("Match Day online - the cameras in the board panel (Task 9)", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+
+  /** A live board of a division that REQUIRES cameras, both players here (rooms, participants and presence on file: what the loader calls joinable). */
+  async function liveWithArrivals(page: Page, label: string) {
+    const day = await seedDay(page, label, { stage: "swiss", camera: "required" });
+    const live = day.round.boards[0]!;
+    await roundGameSql(live, { moves: LINE });
+    await putArrival(live.fixtureId, day.orgId, "home", live.home.personId);
+    await putArrival(live.fixtureId, day.orgId, "away", live.away.personId);
+    return { ...day, live };
+  }
+
+  test("a live board that requires cameras, both players here: the page asks the join route for BOTH meetings, White's first; the tiles say what the real route answered; the outage card is offered and letting the board play without video takes the cameras away", async ({ page }) => {
+    test.setTimeout(budget(2, 6));
+    const { round: r, matchDay, live } = await liveWithArrivals(page, `mdc1${TAG}`.slice(0, 14));
+    const posts = joinPosts(page);
+    await page.goto(`${matchDay}?board=${live.fixtureId}`);
+    await expect(panel(page)).toHaveAttribute("data-fixture-id", live.fixtureId, { timeout: 30_000 });
+    await expect(page.getByTestId("md-board-position"), "the board is drawn beside the cameras").toBeVisible({ timeout: 30_000 });
+    await expect(cameras(page)).toBeVisible();
+    await expect(tiles(page)).toHaveCount(2);
+    await expect(tiles(page).first(), "White is the left tile").toHaveAttribute("data-colour", "white");
+    await expect(tileOf(page, "white")).toContainText(live.home.name);
+    await expect(tileOf(page, "black")).toContainText(live.away.name);
+    // The real producer: the loader's `sides` -> the shell's keys -> the join route. White plays the home side (roundGameSql), so it is asked for first.
+    await expect.poll(() => posts.map((p) => `${p.fixtureId === live.fixtureId ? "live" : p.fixtureId}:${p.side}`), { timeout: 30_000, message: "one POST per meeting, White's first" }).toEqual(["live:home", "live:away"]);
+    // The local server has no video vendor, so the route's own answer is VIDEO_UNAVAILABLE: a tile word, never a thrown error.
+    await expect(wordOf(page, "white")).toHaveText(uiEn["arbiter.tile.unavailable"]!, { timeout: 15_000 });
+    await expect(wordOf(page, "black")).toHaveText(uiEn["arbiter.tile.unavailable"]!);
+    await expect(tileOf(page, "white")).toHaveAttribute("data-view", "unavailable");
+    // ... and it is the produced answer that offers the outage card (the seam T8 left for this task).
+    const outage = page.getByTestId("arbiter-outage");
+    await expect(outage, "the vendor is down: the card that lets the board play without video").toBeVisible();
+    // The vendor being down is not retried by the ladder (only a busy vendor is): two seconds later, still two POSTs.
+    await page.waitForTimeout(2_000);
+    expect(posts, "no ladder for an unavailable vendor").toHaveLength(2);
+    await outage.getByRole("button", { name: uiEn["arbiter.outage.cta"] }).click();
+    // The board is let go without video: the panel re-reads, and no cameras are offered for it any more.
+    await expect(page.getByTestId("md-board-cameras"), "let go without video: no cameras").toHaveCount(0, { timeout: 30_000 });
+    await expect(outage).toHaveCount(0);
+    await expect(page.getByTestId("md-board-position"), "the board is still there").toBeVisible();
+    expect(r.boards.length).toBe(2);
+  });
+
+  test("a view-only member reads the same board and never asks the join route for anything; the organiser's page, the pair, does", async ({ page, browser }) => {
+    test.setTimeout(budget(3, 2));
+    const { orgId, matchDay, live } = await liveWithArrivals(page, `mdc2${TAG}`.slice(0, 14));
+    const url = `${matchDay}?board=${live.fixtureId}`;
+    const posts = joinPosts(page);
+    await page.goto(url);
+    await expect(tiles(page)).toHaveCount(2, { timeout: 30_000 });
+    await expect.poll(() => posts.length, { timeout: 30_000, message: "the organiser's page joins both meetings" }).toBe(2);
+
+    const viewer = await viewerPage(browser, orgId);
+    try {
+      const vp = viewer.page;
+      const viewerPosts = joinPosts(vp);
+      await vp.goto(url);
+      await expect(panel(vp)).toHaveAttribute("data-fixture-id", live.fixtureId, { timeout: 45_000 });
+      await expect(vp.getByTestId("md-board-position"), "the game is the viewer's to watch").toBeVisible({ timeout: 30_000 });
+      await expect(vp.getByTestId("md-cameras"), "no cameras for a view-only member").toHaveCount(0);
+      await expect(vp.getByTestId("md-board-cameras")).toHaveCount(0);
+      await vp.waitForTimeout(3_000);
+      expect(viewerPosts, "a view-only member asks the join route for nothing").toEqual([]);
+    } finally {
+      await viewer.close();
+    }
+  });
+
+  test("VIDEO_BUSY (route answered in the browser): the tiles wait - never an error, no retry button - and the client's own ladder asks again by itself until the route says something else", async ({ page }) => {
+    test.setTimeout(budget(2, 3));
+    const { matchDay, live } = await liveWithArrivals(page, `mdc3${TAG}`.slice(0, 14));
+    // STUBBED, and why: the join route only answers VIDEO_BUSY when a vendor budget exists (the check-in line has first call on it), and the local server
+    // has none. The first two asks of each meeting are answered BUSY, every later one VIDEO_UNAVAILABLE - the client's own ladder (500 ms, 1 s) walks them.
+    const asked: Record<string, number> = { home: 0, away: 0 };
+    await page.route(/\/external-play\/arbiter$/, async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      const { side } = route.request().postDataJSON() as { side: "home" | "away" };
+      asked[side] = (asked[side] ?? 0) + 1;
+      const code = asked[side]! <= 2 ? "VIDEO_BUSY" : "VIDEO_UNAVAILABLE";
+      return route.fulfill({ status: 503, json: { ok: false, error: { code, message: code } } });
+    });
+    await page.goto(`${matchDay}?board=${live.fixtureId}`);
+    await expect(tiles(page)).toHaveCount(2, { timeout: 30_000 });
+    await expect(tileOf(page, "white")).toHaveAttribute("data-view", "busy", { timeout: 15_000 });
+    await expect(wordOf(page, "white")).toHaveText(uiEn["arbiter.tile.busy"]!);
+    await expect(wordOf(page, "black")).toHaveText(uiEn["arbiter.tile.busy"]!);
+    await expect(page.getByText(uiEn["arbiter.tile.error"]!, { exact: true }), "a busy vendor is not 'Video couldn't load'").toHaveCount(0);
+    await expect(page.getByTestId("md-camera-retry"), "nothing to press: it asks again by itself").toHaveCount(0);
+    await expect(page.getByTestId("arbiter-outage"), "busy is not the outage").toHaveCount(0);
+    // The ladder: 500 ms and 1 s later each meeting has asked a third time and got the vendor's other answer.
+    await expect(wordOf(page, "white")).toHaveText(uiEn["arbiter.tile.unavailable"]!, { timeout: 15_000 });
+    await expect(wordOf(page, "black")).toHaveText(uiEn["arbiter.tile.unavailable"]!);
+    expect(asked, "three asks a side: BUSY, BUSY, then the answer").toEqual({ home: 3, away: 3 });
+    await expect(page.getByTestId("arbiter-outage"), "now the vendor is down, the card is offered").toBeVisible();
+  });
+
+  test("board A, then B, then A: each visit asks once per meeting, in order, and nothing is asked for the board that was left", async ({ page }) => {
+    test.setTimeout(budget(3, 6));
+    const day = await seedDay(page, `mdc4${TAG}`.slice(0, 14), { stage: "swiss", camera: "required" });
+    const [a, b] = day.round.boards as [RoundBoard, RoundBoard];
+    for (const board of [a, b]) {
+      await roundGameSql(board, { moves: LINE });
+      await putArrival(board.fixtureId, day.orgId, "home", board.home.personId);
+      await putArrival(board.fixtureId, day.orgId, "away", board.away.personId);
+    }
+    const posts = joinPosts(page);
+    const seen = () => posts.map((p) => `${p.fixtureId === a.fixtureId ? "A" : p.fixtureId === b.fixtureId ? "B" : p.fixtureId}:${p.side}`);
+    await page.goto(`${day.matchDay}?board=${a.fixtureId}`);
+    await expect(panel(page)).toHaveAttribute("data-fixture-id", a.fixtureId, { timeout: 30_000 });
+    await expect.poll(seen, { timeout: 30_000 }).toEqual(["A:home", "A:away"]);
+    await rowOf(page, b).click();
+    await expect(panel(page)).toHaveAttribute("data-fixture-id", b.fixtureId, { timeout: 15_000 });
+    await expect.poll(seen, { timeout: 30_000 }).toEqual(["A:home", "A:away", "B:home", "B:away"]);
+    await expect(tileOf(page, "white")).toContainText(b.home.name);
+    await rowOf(page, a).click();
+    await expect(panel(page)).toHaveAttribute("data-fixture-id", a.fixtureId, { timeout: 15_000 });
+    // A's meetings are asked for again (a refusal is never kept), once each - and B is not asked for again after it was left.
+    await expect.poll(seen, { timeout: 30_000 }).toEqual(["A:home", "A:away", "B:home", "B:away", "A:home", "A:away"]);
+    await page.waitForTimeout(2_000);
+    expect(seen(), "two seconds later: no extra ask").toHaveLength(6);
+  });
+
+  test("(MD-R33 with cameras) a HELD board with cameras, two flags and a LONG reason - the 168-character account change as well as the short mismatch - keeps its whole decision on a 1280 x 800 screen, the cameras at the right column's top", async ({ page }) => {
+    test.setTimeout(budget(4, 4));
+    const day = await seedDay(page, `mdc5${TAG}`.slice(0, 14), { stage: "swiss", camera: "required" });
+    const [longHeld, shortHeld] = day.round.boards as [RoundBoard, RoundBoard];
+    let flagged = 0;
+    for (const [board, hold] of [[longHeld, "account_changed"], [shortHeld, "mismatch"]] as const) {
+      await roundGameSql(board, { moves: LINE.slice(0, 6), hold });
+      await flagBoard(day.orgId, board);
+      await putArrival(board.fixtureId, day.orgId, "home", board.home.personId);
+      await putArrival(board.fixtureId, day.orgId, "away", board.away.personId);
+      flagged += 1;
+    }
+    expect(flagged).toBe(2);
+    const box = (id: string) =>
+      page.getByTestId(id).first().evaluate((el) => {
+        const b = el.getBoundingClientRect();
+        return { left: b.left + window.scrollX, top: b.top + window.scrollY, right: b.right + window.scrollX, bottom: b.bottom + window.scrollY, scrollY: window.scrollY };
+      });
+    let checked = 0;
+    for (const [board, label] of [[longHeld, "a 168-character reason"], [shortHeld, "a short reason"]] as const) {
+      await page.goto(`${day.matchDay}?board=${board.fixtureId}`);
+      await expect(panel(page)).toHaveAttribute("data-fixture-id", board.fixtureId, { timeout: 30_000 });
+      await expect(page.getByTestId("md-board-position")).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
+      await expect(decision(page)).toBeVisible();
+      await expect(cameras(page), `${label}: the cameras are on the board`).toBeVisible();
+      await expect(cameras(page), "a held board opens with its cameras folded").toHaveAttribute("data-folded", "true");
+      await expectNoHorizontalScroll(page);
+      if (board === longHeld) {
+        const reason = await page.getByTestId("md-board-hold").innerText();
+        expect(reason.length, "premise: the reason is the long one").toBeGreaterThan(160);
+      }
+      const dec = await box("arbiter-decision");
+      expect(dec.scrollY, "measured from the top of the page").toBe(0);
+      expect(dec.bottom, `${label}: the decision ends inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800);
+      // The right column reads: state, cameras, why it is held, the decision, the flags - each starts below the one before.
+      const left = await box("md-board-left");
+      const rows = [await box("md-online-state"), await box("md-board-cameras"), await box("md-board-hold"), await box("arbiter-decision"), await box("md-board-flags")];
+      expect(rows.map((r) => Math.round(r.top)), `${label}: state, cameras, why, decision, flags`).toEqual([...rows.map((r) => Math.round(r.top))].sort((x, y) => x - y));
+      expect(new Set(rows.map((r) => Math.round(r.top))).size, "five distinct rows").toBe(5);
+      expect(rows[1]!.left, "the cameras are in the right column, beside the board").toBeGreaterThanOrEqual(left.right - 1);
+      checked += 1;
+    }
+    expect(checked, "both reasons were measured").toBe(2);
+    // The toggle: unfolded the tiles are video boxes; folded again they are status lines.
+    await page.getByTestId("md-cameras-toggle").click();
+    await expect(cameras(page)).toHaveAttribute("data-folded", "false");
+    await page.getByTestId("md-cameras-toggle").click();
+    await expect(cameras(page)).toHaveAttribute("data-folded", "true");
   });
 });
 

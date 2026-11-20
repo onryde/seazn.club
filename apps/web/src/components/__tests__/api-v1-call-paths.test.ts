@@ -91,7 +91,7 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // `const path = `/api/v1/orgs/${orgId}/stream-targets/${t.id}`` — one literal
   // shared by the row's Remove (DELETE) and Rename/Replace (PATCH)
   "src/components/v2/stream-destinations-panel.tsx": 2,
-  // Online chess (traced 2026-10-13, re-traced D16). (1) `makeArbiterSerial({ join, connect })` (arbiter-watch.ts) — `join` POSTs
+  // Online chess (traced 2026-10-13, re-traced D16). (1) `makeArbiterSerial({ join, connect })` (arbiter-watch.ts; the browser's instance is `browserSerial`, match-day/online/arbiter-joins.ts) — `join` POSTs
   // `/api/v1/fixtures/${id}/external-play/arbiter` with `{ side }` (the route exists). The browser sends no DELETE any more
   // (re-traced plan 3 Task 2: the DELETE route is explicit revocation only), so the count fell from 3 to 2.
   // (2) `decisionRunner({ post: (path, body) => apiV1(path, …) })` — arbiter-decision.ts builds every path as

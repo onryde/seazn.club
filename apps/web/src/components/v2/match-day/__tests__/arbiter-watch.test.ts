@@ -2,9 +2,9 @@
 // succeeded, and a close that is the SDK leave only - the browser sends no DELETE, ever. Driven through the REAL helper with
 // deferred ports (every step a promise the test settles by hand), so order is read off a log the test controls.
 import { describe, expect, it } from "vitest";
-import { ArbiterGuardError, type ArbiterCameras } from "../arbiter-camera";
+import { ArbiterGuardError, type ArbiterCameras } from "../online/arbiter-camera";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "../arbiter-watch";
+import { makeArbiterSerial, type ArbiterJoinAnswer, type ArbiterSide } from "../online/arbiter-watch";
 
 const flush = async () => {
   for (let i = 0; i < 30; i += 1) await Promise.resolve();

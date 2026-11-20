@@ -114,7 +114,7 @@ const realLater = (fn: () => void, ms: number) => {
 
 type Meeting = RealtimeKitClient;
 /** The SDK module as both loaders use it (this one and the arbiter's,
- *  components/v2/arbiter-camera.ts). */
+ *  components/v2/match-day/online/arbiter-camera.ts). */
 export type RealtimeKitSdk = { default: { init(o: { authToken: string; defaults: { audio: boolean; video: boolean } }): Promise<Meeting> } };
 type SdkModule = RealtimeKitSdk;
 

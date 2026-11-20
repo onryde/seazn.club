@@ -18,11 +18,14 @@
 // would not draw.
 //
 // The decisions are the Arbiter Panel's, MOVED to `board-decision.tsx` (its reducer `arbiter-decision.ts`, its runner `decisionRunner`, its
-// cards `arbiter-flag-cards.tsx` stay where the surviving surfaces import them), test ids unchanged. The cameras are Task 9's: `cameras` is
-// the seam, a node that takes the top panel when given.
+// cards `arbiter-flag-cards.tsx` stay where the surviving surfaces import them), test ids unchanged. The cameras (Task 9, board-cameras.tsx)
+// are the shell's joins (`joins`: what `useArbiterJoins` answered for this board's two meetings) drawn as two tiles at the top of the right
+// column, beside the board and not instead of it; below lg, where the panel is one column, a Cameras / Board switch picks which of the two shows.
 import { useCallback, useEffect, useId, useMemo, useReducer, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type SettleChoice } from "../arbiter-decision";
+import { BoardCameras, anyUnavailable } from "./board-cameras";
+import { camerasOffered, defaultCameraMode, type JoinViews, type MeetingKey } from "./online/arbiter-joins";
 import { CARD, CHIP_NEUTRAL, FlagCard, MUTED, SOFT, useFmt } from "../arbiter-flag-cards";
 import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
 import { boardIsOver, type ArbiterFlag } from "@/lib/arbiter-view";
@@ -87,7 +90,8 @@ type Read = { answer: MatchDayBoard | null; failed: boolean };
  *  a read that fails or answers something else only raises `failed`, and an answer that arrives after a newer read began is dropped.
  *  One failure is not a failure: a 404 on a RE-read (an answer is in hand) says the board is gone - a press can take it away, a settle that
  *  voids the game, an organiser deleting the match elsewhere - so the last answer stays and no "could not read" line is raised over a board
- *  that is leaving; the day's own read drops the row and the shell closes the panel. A 404 on the FIRST read has nothing to keep: failed. */
+ *  that is leaving (and one raised by an earlier failed read is taken down: the board is gone, not unreadable); the day's own read drops the
+ *  row and the shell closes the panel. A 404 on the FIRST read has nothing to keep: failed. */
 function useBoardRead(fixtureId: string, refreshKey: number | null, reloadKey: number): Read {
   const [read, setRead] = useState<Read>({ answer: null, failed: false });
   useEffect(() => {
@@ -102,7 +106,7 @@ function useBoardRead(fixtureId: string, refreshKey: number | null, reloadKey: n
       })
       .catch((e: unknown) => {
         if (!current) return;
-        if (e instanceof ApiV1Error && e.status === 404) setRead((prev) => (prev.answer !== null ? prev : { answer: null, failed: true }));
+        if (e instanceof ApiV1Error && e.status === 404) setRead((prev) => (prev.answer !== null ? { answer: prev.answer, failed: false } : { answer: null, failed: true }));
         else fail();
       });
     return () => {
@@ -133,12 +137,13 @@ export type BoardFocusProps = {
   onChanged: () => void;
   /** MD-R30: an answer said the competition is billing-frozen. */
   onFrozen: () => void;
-  /** The two cameras (Task 9): takes the top panel when given. */
-  cameras?: ReactNode;
-  /** The join answered that the video vendor is down (Task 9 sets it): the one condition of "let this board play without video". */
-  videoUnavailable?: boolean;
+  /** The shell's joins for this board (`useArbiterJoins`): what each of its two meetings answered, and the tile's "Try again". Absent: no
+   *  cameras (the flag is off, or the shell keeps none). Whether this reader sees tiles at all is `camerasOffered`'s, asked here. */
+  joins?: { views: JoinViews; retry(key: MeetingKey): void };
   hiddenOnPhone?: boolean;
 };
+
+export type CameraMode = "cameras" | "board";
 
 export function BoardFocus(p: BoardFocusProps) {
   const { row, reader, refreshKey, onChanged, onFrozen } = p;
@@ -148,6 +153,10 @@ export function BoardFocus(p: BoardFocusProps) {
   const board = read.answer ?? row;
 
   const [decision, dispatch] = useReducer(arbiterDecision, id, initialArbiterDecision);
+  // Below lg the cameras and the chess board share the screen: the organiser's pick, else the default (cameras while there is something to
+  // watch, the board otherwise), which follows the board's state until the organiser picks.
+  const [pickedMode, setPickedMode] = useState<CameraMode | null>(null);
+  const cameraMode = pickedMode ?? defaultCameraMode(board, reader);
   // A press re-reads the board straight away AND refreshes the day: the panel's own answer must not wait for the day's read to succeed.
   const refresh = useCallback(() => {
     setReloadKey((n) => n + 1);
@@ -203,8 +212,9 @@ export function BoardFocus(p: BoardFocusProps) {
       backLabel={p.backLabel}
       onBack={p.onBack}
       hiddenOnPhone={p.hiddenOnPhone}
-      cameras={p.cameras}
-      videoUnavailable={p.videoUnavailable}
+      joins={p.joins}
+      cameraMode={cameraMode}
+      onCameraMode={setPickedMode}
     />
   );
 }
@@ -225,8 +235,11 @@ export type BoardPanelViewProps = {
   backLabel: string;
   onBack: () => void;
   hiddenOnPhone?: boolean;
-  cameras?: ReactNode;
-  videoUnavailable?: boolean;
+  /** What the shell's joins answered for this board; undefined = no cameras. */
+  joins?: { views: JoinViews; retry(key: MeetingKey): void };
+  /** Which of the cameras and the board shows below lg (both show from lg). Only read where both exist. */
+  cameraMode: CameraMode;
+  onCameraMode(mode: CameraMode): void;
 };
 
 /** The chip a flag wears for a reader who has no editor's role: the kind and nothing of what it found or whom it names. A kind added to
@@ -256,11 +269,11 @@ export function BoardPanelView(p: BoardPanelViewProps) {
   const blackSide = board.whiteSide === "home" ? "away" : "home";
   const marks = { white: presenceMark(board, board.whiteSide), black: presenceMark(board, blackSide) };
 
-  // The top panel: the cameras when Task 9 hands them over, else the position, else why there is none.
+  // The cameras (Task 9): offered to a reader who may watch a board whose division requires them; drawn from what the shell's joins answered.
+  const cameras = p.joins !== undefined && camerasOffered(board, reader) ? p.joins : null;
+  // The left cell: the position, else why there is none.
   let top: ReactNode;
-  if (p.cameras != null) {
-    top = <div data-testid="md-board-cameras">{p.cameras}</div>;
-  } else if (position !== null) {
+  if (position !== null) {
     const label = f.t(boardIsOver(board.state) ? "externalPlay.room.board.final" : position.turn === "white" ? "externalPlay.room.board.whiteToMove" : "externalPlay.room.board.blackToMove");
     top = <BoardPosition position={position} white={board.white.name} black={board.black.name} clock={board.clock} nowMs={nowMs} label={label} />;
   } else if (answer !== null) {
@@ -278,11 +291,19 @@ export function BoardPanelView(p: BoardPanelViewProps) {
       </p>
     );
   }
-  const showsPosition = p.cameras == null && position !== null;
-  // The second column exists only for a board to put in it (a position drawn, not the cameras seam: Task 9 decides that cell).
+  const showsPosition = position !== null;
+  // The second column exists only for a board to put in it (a position drawn).
   const twoCol = showsPosition;
+  // Below lg the cameras and the board share one column, so a switch picks one; from lg both show (cameras at the right column's top).
+  const hasSwitch = cameras !== null && showsPosition;
+  const hideBoardBelowLg = hasSwitch && p.cameraMode === "cameras";
+  const hideCamerasBelowLg = hasSwitch && p.cameraMode === "board";
   // The seats: always while there is no board to name them (the check-in's words belong here), else only to carry a presence mark.
   const showSeats = !showsPosition || marks.white !== null || marks.black !== null;
+  // The tiles carry each player's name, colour and presence mark, so the seat cards say nothing the tiles do not - except in a board's check-in,
+  // where the seat is also its check-in and invite words. Redundant where the tiles show: from lg always, below lg when the cameras are.
+  const seatsRedundant = cameras !== null && board.seats === null;
+  const seatsHidden = !seatsRedundant ? "" : hasSwitch && p.cameraMode === "board" ? " lg:hidden" : " hidden";
 
   // The reason is the ANSWER's once there is one (null = not held, or not an editor's to read): `??` would paint a lifted hold from the list's
   // stale row. The row's reason is what shows only before the first answer.
@@ -315,10 +336,11 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           top, the board's cell spanning both rows (the extra height of a tall board lands in the stretchy second row, never between the right's
           blocks), and the rest, which re-sorts with `lg:order-*` into why, decision, outage card, THEN flags (the decision is what the
           organiser came for). With no position there is no left column at all: the notes (loading, no game, read failed) span the width. The
-          cameras slot (Task 9) is the same cell, which replaces the board today; Task 9 puts the tiles at the right column's top. */}
+          cameras (Task 9) are the first block of the rest, so they sit at the right column's top from lg and between the board and the reason
+          below it; below lg a Cameras / Board switch (in the head) hides whichever of the two is not picked, from lg both show. */}
       <div
         data-testid="md-board-grid"
-        className={`grid min-w-0 gap-4${twoCol ? " lg:grid-cols-[minmax(0,min(420px,42%))_1fr] lg:grid-rows-[auto_1fr] lg:items-start" : ""}`}
+        className={`grid min-w-0 gap-4${twoCol ? " lg:grid-cols-[minmax(0,min(420px,42%))_1fr] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-y-3" : ""}`}
       >
         <div data-testid="md-board-head" className={`flex min-w-0 flex-col gap-4${twoCol ? " lg:col-start-2 lg:row-start-1" : ""}`}>
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -333,8 +355,27 @@ export function BoardPanelView(p: BoardPanelViewProps) {
             )}
           </div>
 
+          {hasSwitch && (
+            <div role="group" aria-label={f.t("matchDay.cameras.switch")} data-testid="md-camera-switch" className="grid grid-cols-2 gap-1 rounded-xl bg-[#f3effc] p-1 lg:hidden">
+              {(["cameras", "board"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  data-mode={mode}
+                  aria-pressed={p.cameraMode === mode}
+                  onClick={() => p.onCameraMode(mode)}
+                  className={`min-h-11 cursor-pointer rounded-lg px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed] ${
+                    p.cameraMode === mode ? "bg-white text-[#2e1065] shadow-sm" : "text-[#5b21b6]"
+                  }`}
+                >
+                  {f.t(mode === "cameras" ? "matchDay.cameras.viewCameras" : "matchDay.cameras.viewBoard")}
+                </button>
+              ))}
+            </div>
+          )}
+
           {showSeats && (
-            <ul data-testid="md-board-seats" className="m-0 grid min-w-0 list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
+            <ul data-testid="md-board-seats" className={`m-0 grid min-w-0 list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2${seatsHidden}`}>
               {(["white", "black"] as const).map((colour) => {
                 const mark = marks[colour];
                 const seat = board.seats?.[colour] ?? null;
@@ -379,7 +420,10 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           )}
 
         </div>
-        <div data-testid="md-board-left" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-1 lg:row-span-2 lg:row-start-1" : ""}`}>
+        <div
+          data-testid="md-board-left"
+          className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-1 lg:row-span-2 lg:row-start-1" : ""}${hideBoardBelowLg ? " max-lg:hidden" : ""}`}
+        >
           {top}
           {p.readFailed && (
             <p data-testid="md-board-read-failed" role="status" className={NOTE}>
@@ -388,7 +432,13 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           )}
 
         </div>
-        <div data-testid="md-board-rest" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-2 lg:row-start-2" : ""}`}>
+        <div data-testid="md-board-rest" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-2 lg:row-start-2 lg:gap-3" : ""}`}>
+          {cameras !== null && (
+            <div data-testid="md-board-cameras" className={`min-w-0${hideCamerasBelowLg ? " max-lg:hidden" : ""}`}>
+              <BoardCameras board={board} views={cameras.views} f={f} dict={ctx.dict} onRetry={cameras.retry} />
+            </div>
+          )}
+
           {holdBody !== null && holdReason !== null && (
             <section data-testid="md-board-hold" data-reason={holdReason} className={`flex flex-col gap-1.5 ${CARD_BOX} border-[#f1c4c0] lg:order-1`}>
               <span className="self-start rounded-full bg-[#fde8e6] px-2.5 py-[3px] text-xs font-semibold text-[#7f1d1d]">{f.t(HELD_TITLE_KEYS[holdReason])}</span>
@@ -435,7 +485,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
             headingId={decideId}
             className={`flex flex-col gap-2 ${CARD_BOX} lg:order-2`}
           />
-          {may.finish && outageOffered(board, p.videoUnavailable === true) && (
+          {may.finish && outageOffered(board, cameras !== null && anyUnavailable(board, cameras.views)) && (
             <OutageCard
               busy={decision.busy !== null}
               overriding={decision.busy?.kind === "override"}
