@@ -7,6 +7,7 @@
 // Two predicates (pre-flight C18): `canEdit` decides the card and the run sheet's chip links (the panel's own 404 predicate), so
 // a billing-frozen organiser keeps both; `editable` decides the controls and the queue, so that organiser gets neither.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -98,7 +99,7 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: async () => ({}) }));

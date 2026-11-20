@@ -5,6 +5,7 @@
 // raise a pending ban with the rules off (F7, 2026-10-27); and nothing is counted for a viewer. Same harness as pending-seed-proposal-badge.test.tsx (no jsdom here): the async server component is
 // called directly and its element tree walked, reading PROPS — an absent prop is simply absent, never "$undefined".
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -76,7 +77,7 @@ vi.mock("@/server/usecases/discipline", () => disc);
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 

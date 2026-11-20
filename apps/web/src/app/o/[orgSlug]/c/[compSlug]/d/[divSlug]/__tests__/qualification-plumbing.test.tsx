@@ -26,6 +26,7 @@
 // instead of the viewer's locale (→ the French case); the entrant names not
 // handed to the builder (→ the cut test's what-if lines, which name the rival).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
@@ -111,7 +112,7 @@ const tx = (strings: unknown, ...values: unknown[]) =>
   );
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 

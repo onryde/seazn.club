@@ -6,6 +6,7 @@
 // is rendered on its own. Scene: Ada and Bo play rounds 1-2, Cyd joins at round 3 (rounds 1-2 are hers to miss) where Bo sits
 // out on the pairing bye.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { builtinModules } from "@seazn/engine/sports";
@@ -90,7 +91,7 @@ const tx = (strings: unknown, ...values: unknown[]) =>
   );
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 
