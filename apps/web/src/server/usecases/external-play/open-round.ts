@@ -58,6 +58,7 @@ import type { OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
 import { EDITOR_ROLES } from "@/lib/types";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { LINK_HOLD_REASONS, type LinkHoldReason } from "@/server/external-play/types";
 import { stageCameraPolicy } from "@/server/external-play/camera-policy";
 import { boardExtraSql, boardRankSql, roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
@@ -248,8 +249,8 @@ type Decision =
       closedSkips: OpenRoundSkip[];
     };
 
-type LinkHold = "lichess_unlinked" | "lichess_reconnect";
-const LINK_HOLDS: readonly LinkHold[] = ["lichess_unlinked", "lichess_reconnect"];
+type LinkHold = LinkHoldReason;
+const LINK_HOLDS: readonly LinkHold[] = LINK_HOLD_REASONS;
 
 /** The boards this open holds back for a link, by why: a one-account seat with no resolvable Lichess link is
  *  `lichess_unlinked` (a team seat or a person with no account is not judged: nobody to ask); a link `lichessGrantPlays` refuses (identity-only, short of a play scope - the seat gate's own verdict, via

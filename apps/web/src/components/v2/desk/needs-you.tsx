@@ -1,5 +1,6 @@
 import Link from "@/components/ui/console-link";
 import { ChevronRight } from "lucide-react";
+import type { MouseEvent } from "react";
 // The pure runtime, not `@/lib/i18n` (server-only): Match Day's client shell renders this same list (task A4) — reused, never
 // copied. Only `t`/`plural` were ever read from there, and `@/lib/i18n` re-exports them from this module.
 import { t, plural } from "@/lib/i18n-runtime";
@@ -8,6 +9,7 @@ import { routes } from "@/lib/routes";
 import { ATTENTION_SEVERITY, type Attention, type DrawDoor, type Severity } from "@/lib/division-phase";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
+import { HELD_TITLE_KEYS } from "@/components/v2/external-play-held-copy";
 
 export interface NeedsYouItem {
   key: string;
@@ -20,12 +22,20 @@ export interface NeedsYouItem {
    *  lib/match-day/view.ts, set by the server). `court_id` is the court it opens (null: the page's list). The desk never sets
    *  one, so the competition page's rows are unchanged. */
   alt?: { label: string; href: string; court_id: string | null };
+  /** The board a PER-BOARD row (`board_held`, `board_flagged`; Match Day online, T4) is about: its fixture id. Set on those two kinds
+   *  only. Where `action` opens that board (`?board=`), `NeedsYou`'s `onOpenBoard` handles the press in place. */
+  fixture_id?: string;
+  /** The round a per-board row's `action` opens instead of the board (ruling MD-R2: a LINK hold's way back is the round's re-open, which
+   *  lives on the round panel), `${stage_id}:${round_no}`, the `?round=` value. Set only on such a row; `NeedsYou`'s `onOpenRound`
+   *  handles it in place. A row with this set never opens the board in place: its action is not the board's. */
+  round_key?: string;
 }
 
-/** A Needs-you row's key: one row per division and kind. The ONE spelling, so a reader that adds to a division's row (Match Day's
- *  "Find a court", `withFindCourt`) finds it by the same function that named it, never by parsing the key. */
-export function needsYouKey(divisionId: string, kind: Attention["kind"]): string {
-  return `${divisionId}:${kind}`;
+/** A Needs-you row's key: one row per division and kind - or, for the two PER-BOARD kinds, per board (`fixtureId`, a third part: two
+ *  held boards of one division are two rows). The ONE spelling, so a reader that adds to a division's row (Match Day's "Find a
+ *  court", `withFindCourt`) finds it by the same function that named it, never by parsing the key. */
+export function needsYouKey(divisionId: string, kind: Attention["kind"], fixtureId?: string): string {
+  return fixtureId === undefined ? `${divisionId}:${kind}` : `${divisionId}:${kind}:${fixtureId}`;
 }
 
 /**
@@ -244,6 +254,41 @@ export function needsYouItems(
             action: { label: t(dict, "withdrawal.owed.action"), href: routes.division(org, comp, d.slug, "entrants") },
           });
           break;
+        // Match Day online (T4, spec 2026-11-05 §5.4): ONE ROW PER BOARD, its fixture id on the item. Both open Match Day on the board
+        // (`?board=`; the page's `?board=` reader is Task 6, so until it lands the link opens Match Day itself).
+        //
+        // A held board's sub is the held reason's own chip word (external-play-held-copy.ts, the one table), and the generic sentence
+        // only when the reason is not known (null: a reader who is no editor is never told why a board is held, ruling MD-R13).
+        //
+        // Ruling MD-R2: a LINK hold (`reopen`, set by the desk only when the viewer may also press START) is no decision - nobody was
+        // invited and the board is no no-show; its way back to play is the round's re-open, which lives on the ROUND panel. So that
+        // row's action opens the round (`?round=`, the round row's key) and carries `round_key`; every other hold keeps "Review board N".
+        case "board_held": {
+          const matchDay = routes.competitionMatchDay(org, comp);
+          const reopenRound = a.reopen ? a.roundNo : null;
+          const roundKey = `${a.stageId}:${a.roundNo}`;
+          items.push({
+            key: needsYouKey(d.id, "board_held", a.fixtureId), severity: sev, kind: a.kind, fixture_id: a.fixtureId,
+            ...(reopenRound !== null ? { round_key: roundKey } : {}),
+            title: t(dict, "desk.needsYou.board_held", { division: d.name, board: a.boardNo, home: a.home, away: a.away }),
+            sub: a.reason === null ? t(dict, "desk.needsYou.board_held.sub") : t(dict, HELD_TITLE_KEYS[a.reason]),
+            action: reopenRound !== null
+              ? { label: t(dict, "desk.needsYou.board.openRound", { round: reopenRound }), href: `${matchDay}?round=${encodeURIComponent(roundKey)}` }
+              : { label: t(dict, "desk.needsYou.board.action", { board: a.boardNo }), href: `${matchDay}?board=${encodeURIComponent(a.fixtureId)}` },
+          });
+          break;
+        }
+        case "board_flagged":
+          items.push({
+            key: needsYouKey(d.id, "board_flagged", a.fixtureId), severity: sev, kind: a.kind, fixture_id: a.fixtureId,
+            title: t(dict, "desk.needsYou.board_flagged", { division: d.name, board: a.boardNo, home: a.home, away: a.away }),
+            sub: plural(dict, "desk.needsYou.board_flagged.sub", a.flags, locale),
+            action: {
+              label: t(dict, "desk.needsYou.board.action", { board: a.boardNo }),
+              href: `${routes.competitionMatchDay(org, comp)}?board=${encodeURIComponent(a.fixtureId)}`,
+            },
+          });
+          break;
         // W4 T21 (AN-1, X-CH-8): a bracket played out and never completed. The action is the fixtures tab's own
         // Complete stage — its label is that button's key, so the row and the button it points at cannot drift.
         case "final_decided":
@@ -343,18 +388,46 @@ export function resultsOwedOf(desk: Pick<CompetitionDesk, "divisions">): number 
   return owed;
 }
 
+/** The press a link makes: left click, no modifier. Anything else (a new tab, a download, a middle click) is the browser's. */
+const isPlainClick = (e: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; button: number }): boolean =>
+  !(e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0);
+
 export function NeedsYou({
   dict,
   items,
   onAlt,
+  onOpenBoard,
+  onOpenRound,
 }: {
   dict: Dict;
   items: NeedsYouItem[];
   /** A client island's own handling of a row's `alt` (Match Day opens the court in place); the link's `href` still works
    *  without it — opened in a new tab, or before the island hydrates. */
   onAlt?: (item: NeedsYouItem) => void;
+  /** The per-board kinds' twin of `onAlt` (same modifier-key rule): when given, the ACTION link of a row that opens a board
+   *  (`fixture_id` set, no `round_key`) is handled in place - `preventDefault`, then the handler - and its `href` still works opened
+   *  another way. The desk passes none and navigates; the Match Day shell passes its `openBoard`, because the shell builds what is
+   *  `opened` once from its focus props and a same-page `?board=` navigation would open nothing. */
+  onOpenBoard?: (fixtureId: string) => void;
+  /** The same for a row whose action opens a ROUND (`round_key`, ruling MD-R2): a link hold's way back is the round's re-open. */
+  onOpenRound?: (roundKey: string) => void;
 }) {
   if (items.length === 0) return null;
+  // What a click on the ACTION does in place, or nothing (the link navigates): a round row asks the round handler, a board row the
+  // board handler - never the other, whatever `fixture_id` says.
+  const inPlace = (it: NeedsYouItem): (() => void) | null => {
+    if (it.round_key !== undefined) return onOpenRound === undefined ? null : () => onOpenRound(it.round_key!);
+    return it.fixture_id === undefined || onOpenBoard === undefined ? null : () => onOpenBoard(it.fixture_id!);
+  };
+  const actionClick = (it: NeedsYouItem) => {
+    const open = inPlace(it);
+    if (open === null) return undefined;
+    return (e: MouseEvent) => {
+      if (!isPlainClick(e)) return;
+      e.preventDefault();
+      open();
+    };
+  };
   const altLink = (it: NeedsYouItem, className: string) =>
     it.alt === undefined ? null : (
       <Link
@@ -364,7 +437,7 @@ export function NeedsYou({
           onAlt === undefined
             ? undefined
             : (e) => {
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                if (!isPlainClick(e)) return;
                 e.preventDefault();
                 onAlt(it);
               }
@@ -395,6 +468,7 @@ export function NeedsYou({
               <p className="mt-1 text-xs text-slate-600">{it.sub}</p>
               <Link
                 href={it.action.href}
+                onClick={actionClick(it)}
                 className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} mt-3 flex w-full items-center justify-center py-3 text-sm`}
               >
                 {it.action.label}
@@ -417,7 +491,7 @@ export function NeedsYou({
                 it,
                 "inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 text-xs font-medium text-purple-700 underline-offset-2 hover:underline lg:min-h-0 lg:py-1.5",
               )}
-              <Link href={it.action.href} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} min-h-11 shrink-0 px-3 py-1.5 text-xs lg:min-h-0`}>
+              <Link href={it.action.href} onClick={actionClick(it)} className={`btn ${it.severity === "red" ? "btn-primary" : "btn-ghost"} min-h-11 shrink-0 px-3 py-1.5 text-xs lg:min-h-0`}>
                 {it.action.label}
               </Link>
             </div>

@@ -1,6 +1,7 @@
 // Competition Desk (spec 2026-09-02 §"The shared model"): a division's phase is
 // DERIVED from stage + fixture + status facts, never stored. Pure so the same
 // answer renders on server and client and the matrix is unit-testable.
+import type { NeedsReason } from "@/server/external-play/types";
 
 export type DivisionStatus = "setup" | "scheduled" | "active" | "completed";
 
@@ -317,7 +318,33 @@ export type Attention =
   // of it. A finished table takes no one, so there is no tap: the row names them for the organiser to place elsewhere or refund.
   | { kind: "late_unplaced"; count: number; stageName: string; names: readonly string[] }
   // W5 T8b review I2 (b): a withdrawal or an in-match disqualification whose cascade failed — the entrant is still seated.
-  | { kind: "withdrawal_owed"; count: number; names: readonly string[] };
+  | { kind: "withdrawal_owed"; count: number; names: readonly string[] }
+  // Match Day online (T4, spec 2026-11-05 §5.4): the two PER-BOARD kinds, ONE ROW PER BOARD with the board's fixture id as the row's
+  // target, raised by `competition-desk.ts` for an online chess division from the two listers the division page's Held | Flagged queue
+  // reads (`listNeedsOrganiserExternalPlay`, `listFlaggedExternalPlay`: one source). `resolveAttention` never raises them: it reads
+  // fixture status, and an online hold is a bridge fact (`fixture_external_play.status = needs_organiser`) no fixture status carries.
+  // A board the viewer plays on raises neither (the listers leave it out; another organiser settles it).
+  /** An online board ON HOLD (a decision owed: no-show, fair-play ending, a link that must be made again ...). `stageId` + `roundNo`
+   *  name its round (the `?round=` key `${stageId}:${roundNo}`). `reason` is the bridge row's `needs_reason`: read for an EDITOR only
+   *  (null for anyone else: the desk is served to viewers and keys, and a fair-play ending is an accusation about named players,
+   *  ruling MD-R13). `reopen`: the hold is a LINK hold (`lichess_unlinked` / `lichess_reconnect`, ruling MD-R2: nobody was invited, so
+   *  the board is no no-show and its only way back to play is the round's re-open) AND this viewer may press that START now
+   *  (`mayPress(…, "start")`: an editor, the club offered online chess, the competition not billing-frozen) - the row then opens the
+   *  round panel's Open round press; any other hold opens the board's own decisions. */
+  | {
+      kind: "board_held";
+      fixtureId: string;
+      stageId: string;
+      roundNo: number | null;
+      boardNo: number;
+      home: string;
+      away: string;
+      reason: NeedsReason | null;
+      reopen: boolean;
+    }
+  /** An online board with an OPEN flag (a camera report to review), whatever state the board is in - a report lands after the game,
+   *  and a cancelled board is listed only while a flag is open (owner O1). `flags` is how many are open, never what they say. */
+  | { kind: "board_flagged"; fixtureId: string; roundNo: number | null; boardNo: number; home: string; away: string; flags: number };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -355,6 +382,11 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   late_unplaced: "amber",
   // AMBER: her remaining matches are still drawn against her and can be played meanwhile; the organiser's Withdraw finishes it.
   withdrawal_owed: "amber",
+  // RED, `needs_decision`'s reason: an online board on hold cannot go on (or its round cannot be run) until the organiser acts,
+  // and nothing else on the desk asks - the hold is a bridge fact, no fixture status says it.
+  board_held: "red",
+  // AMBER: a report to review never stops a game - the game carried on; it is review work, like a missing result.
+  board_flagged: "amber",
   registrations_waiting: "slate",
 };
 
@@ -430,6 +462,10 @@ const KIND_ORDER: Attention["kind"][] = [
   "needs_fixtures",
   // W2a: beside the two stage-blocking rows, for the same reason — the bracket stops here until the organiser acts.
   "needs_decision",
+  // Match Day online (T4): directly after it, and the position is the MEANING - the same failure (a decision owed before play can go
+  // on) at the board rather than the bracket. A kind missing from this array ranks -1, FIRST in its band, silently: the tie-break
+  // test pairs it with a kind that must beat it (a needs_decision), because a pair it would win either way proves nothing.
+  "board_held",
   // W4 T21: the last of the stage-level reds — the stage is played out, only its completion is owed.
   "final_decided",
   "no_scorer",
@@ -443,6 +479,8 @@ const KIND_ORDER: Attention["kind"][] = [
   "not_recording",
   "unscheduled",
   "result_missing",
+  // Match Day online (T4): the last of the MATCH ambers - a board's report to review is about a match, and it never blocks one.
+  "board_flagged",
   // W4 T11: after the match ambers — it is about people, not a match — and before bans: a late player's bye or slot
   // closes as round 1 is played, so this one runs on the bracket's clock.
   "late_players_waiting",
@@ -1082,7 +1120,16 @@ export function resolveAttention(input: PhaseInput): Attention[] {
     const owed = input.withdrawalOwed ?? [];
     if (owed.length > 0) out.push({ kind: "withdrawal_owed", count: owed.length, names: owed });
   }
-  return out.sort(
+  return sortAttentions(out);
+}
+
+/** The ledger order of one division's attentions: red first, then amber, then slate, a tie inside a band broken by `KIND_ORDER`.
+ *  ONE comparator for every producer of a division's list - `resolveAttention` and the desk, which appends the two per-board kinds
+ *  (`board_held`, `board_flagged`) it reads from the listers and sorts the whole again, so an online hold sits where its meaning puts
+ *  it and not wherever it was appended. Stable: boards of one kind keep the order they were read in. Sorts in place, as `Array.sort`
+ *  does, and returns the same array. */
+export function sortAttentions(list: Attention[]): Attention[] {
+  return list.sort(
     (a, b) =>
       SEVERITY_ORDER.indexOf(ATTENTION_SEVERITY[a.kind]) - SEVERITY_ORDER.indexOf(ATTENTION_SEVERITY[b.kind]) ||
       KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind),

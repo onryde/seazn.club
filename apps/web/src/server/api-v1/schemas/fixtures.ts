@@ -260,6 +260,11 @@ export const MatchDayView = z.object({
       // B4: Match Day's "Find a court" on an unscheduled row — only when the division has a ready match with no court; the
       // court it opens (the first free one that match may use), or null for the page's list.
       alt: z.object({ label: z.string(), href: z.string(), court_id: Uuid.nullable() }).optional(),
+      // Match Day online (T4): the two PER-BOARD kinds (`board_held`, `board_flagged`) carry the board's fixture id; `round_key`
+      // (`${stage_id}:${round_no}`, the `?round=` value) is set only on a link hold whose action opens its ROUND (ruling MD-R2).
+      // Declared, because a plain z.object strips an undeclared key on parse and the poll body would lose what the shell needs.
+      fixture_id: Uuid.optional(),
+      round_key: z.string().optional(),
     }),
   ),
   results_owed: z.number().int().nonnegative(),

@@ -6,7 +6,7 @@ import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { ProgressionPanel, type SeedProposal } from "@/components/v2/progression-panel";
 import { statusLine, finalDecidedStageName } from "@/lib/division-status-line";
 import { leadingAttention,
-  ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, resolveAttention, resolvePhase,
+  ATTENTION_SEVERITY, DIVISION_PHASES, DRAW_DOORS, resolveAttention, resolvePhase, sortAttentions,
   type Attention, type DivisionPhase, type DrawDoor, type PhaseFixture, type PhaseInput, type PhaseStage,
 } from "@/lib/division-phase";
 import { competitionPhase, type CompetitionDesk, type DeskDivision } from "@/server/usecases/competition-desk";
@@ -102,6 +102,13 @@ const UNREACHABLE: Record<string, string> = {
   // W5 T8b review I2 (b): an owed withdrawal exists only after Start, over a drawn table. A started division reads setting_up
   // by rule 6 only while nothing is dated or played — and then its undated lines raise `unscheduled`, which leads (KIND_ORDER).
   "setting_up/withdrawal_owed": "after Start a drawn table with nothing dated raises unscheduled, which leads",
+  // Match Day online (T4): a held board is a LIVE fixture (`scheduled`/`in_play` - the lister reads no other), and rule 2 refuses
+  // `finished` while any fixture is live. A flagged board is the opposite case (a decided board with an open flag IS a finished
+  // division's attention), so it is covered below.
+  "finished/board_held": "a held board is a live fixture, which blocks rule 2",
+  // ...while `setting_up` beside a started division means rule 4's red row or rule 6's undated lines, and `unscheduled` is ordered
+  // before `board_flagged` (KIND_ORDER), so the flag row can never be the one that leads there.
+  "setting_up/board_flagged": "setting_up means a red row or unscheduled leads, both ahead of board_flagged",
 };
 
 type Shape = {
@@ -119,6 +126,12 @@ type Shape = {
   lateUnplaced?: PhaseInput["lateUnplaced"];
   /** W5 T8b review I2 (b): entrants owed a withdrawal that did not finish. */
   withdrawalOwed?: PhaseInput["withdrawalOwed"];
+  /**
+   * Match Day online (T4): the PER-BOARD attentions the desk APPENDS to `resolveAttention`'s list (competition-desk.ts), then sorts
+   * the whole with the same `sortAttentions`. They are no function of the division's fixtures (an online hold is a bridge row), so
+   * a shape names them; the resolved list is built the way the desk builds it, never by this file's own ordering.
+   */
+  boardAttention?: Attention[];
   entrants?: number;
 };
 
@@ -143,6 +156,11 @@ const fxt = (o: Partial<PhaseFixture> = {}): PhaseFixture => ({
 });
 const awaitsDraw = (o: Partial<PhaseFixture> = {}) =>
   fxt({ id: "tbd1", stageId: "fin", awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
+
+const BOARD_HELD: Attention = {
+  kind: "board_held", fixtureId: "a", stageId: "s1", roundNo: 1, boardNo: 1, home: "Alpha", away: "Bravo", reason: "no_show_white", reopen: false,
+};
+const BOARD_FLAGGED: Attention = { kind: "board_flagged", fixtureId: "a", roundNo: 1, boardNo: 1, home: "Alpha", away: "Bravo", flags: 1 };
 
 const SHAPES: Shape[] = [
   {
@@ -373,6 +391,45 @@ const SHAPES: Shape[] = [
     fixtures: [fxt({ id: "a" })],
     withdrawalOwed: ["Rae Registrant"],
   },
+  // Match Day online (T4): the two per-board kinds, in each phase they can lead. The held board is red, so it outranks the phase and
+  // every amber; the flagged one is amber and leads only where nothing red and no earlier amber stands before it.
+  {
+    why: "setting_up/board_held — an online round opened and its boards still undated, one held on a link",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: null })],
+    boardAttention: [BOARD_HELD],
+  },
+  {
+    why: "scheduled/board_held — an online round dated for next week, one board already held",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: FUTURE })],
+    boardAttention: [BOARD_HELD],
+  },
+  {
+    why: "match_day/board_held — online boards being played today, one held",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true }), fxt({ id: "b", status: "scheduled", scheduledAt: TODAY })],
+    boardAttention: [BOARD_HELD],
+  },
+  {
+    why: "scheduled/board_flagged — a dated online round; the previous one carries a camera report",
+    stages: [st()],
+    fixtures: [fxt({ id: "a" }), fxt({ id: "b", status: "scheduled", scheduledAt: FUTURE })],
+    boardAttention: [BOARD_FLAGGED],
+  },
+  {
+    why: "match_day/board_flagged — online boards being played today, one with a camera report",
+    stages: [st()],
+    fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true })],
+    boardAttention: [BOARD_FLAGGED],
+  },
+  {
+    why: "finished/board_flagged — every board decided and one still carries a camera report to review",
+    stages: [st({ status: "complete" })],
+    fixtures: [fxt({ id: "a" })],
+    divisionStatus: "completed",
+    boardAttention: [BOARD_FLAGGED],
+  },
   {
     why: "finished/none — a completed season",
     stages: [st({ status: "complete" })],
@@ -395,7 +452,7 @@ function resolve(shape: Shape) {
     withdrawalOwed: shape.withdrawalOwed ?? [],
   };
   const phase = resolvePhase(input);
-  const attention = resolveAttention(input);
+  const attention = sortAttentions([...resolveAttention(input), ...(shape.boardAttention ?? [])]);
   const leading: Leading = attention[0]?.kind ?? "none";
   const played = shape.fixtures.filter((f) => PLAYED.has(f.status)).length;
   const needsDraw = attention.find((a) => a.kind === "needs_draw");

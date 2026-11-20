@@ -124,6 +124,8 @@ describe("PhasePill", () => {
     ["no_scorer", "No scorer", { kind: "no_scorer", count: 1, fixtureIds: ["f"], minutesSinceKickoff: 4 }],
     ["needs_decision", "Needs a decision", { kind: "needs_decision", count: 1, fixtureIds: ["f"] }],
     ["final_decided", "Final decided", { kind: "final_decided", stageName: "Knockout" }],
+    // Match Day online (T4): an online board on hold names itself on its division's pill, as needs_decision does.
+    ["board_held", "Board on hold", { kind: "board_held", fixtureId: "f", stageId: "s", roundNo: 1, boardNo: 3, home: "A", away: "B", reason: null, reopen: false }],
   ] as const)("RED_PILL_KEY, alone: %s prints its own word", (kind, word, attention) => {
     const html = renderToStaticMarkup(<PhasePill dict={en} phase="scheduled" attention={[attention as Attention]} />);
     expect(html).toContain(`data-pill="${kind}"`);

@@ -14,8 +14,12 @@ import { describe, expect, it } from "vitest";
 
 const SRC = join(process.cwd(), "src");
 
-/** The surfaces that list held and flagged boards. Task 4 appends `server/usecases/competition-desk.ts`. */
-const CONSUMERS = ["app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx", "server/usecases/match-day-online.ts"] as const;
+/** The surfaces that list held and flagged boards: the division page's queue, Match Day's rounds, and (Task 4) the desk's per-board attentions. */
+const CONSUMERS = [
+  "app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "server/usecases/match-day-online.ts",
+  "server/usecases/competition-desk.ts",
+] as const;
 const LISTERS = ["listNeedsOrganiserExternalPlay", "listFlaggedExternalPlay"] as const;
 /** The words a held / flagged query names. */
 const SECOND_QUERY_WORDS = ["fixture_play_flags", "needs_organiser"] as const;
@@ -40,6 +44,27 @@ function matchDayFiles(): string[] {
 /** The source with its comments removed (a word in prose is no query). Strings are left alone: a template literal is the thing to read. */
 function withoutComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/** The tag of the template that opens at `start`: the identifier before it, and BEFORE its type arguments when it has some - the
+ *  repo writes its SQL as ``tx<Row[]>`...` ``, ``sql<{ id: string }[]>`...` ``, so the character before the backtick is `>`, which a plain
+ *  `(\w+)\s*$` read as "no tag" and left every typed query out of the scan. Walks back over the balanced `<...>` (an arrow `=>` inside is
+ *  no closer). */
+function tagBefore(code: string, start: number): string {
+  let i = start - 1;
+  while (i >= 0 && /\s/.test(code[i]!)) i--;
+  if (code[i] === ">") {
+    let depth = 0;
+    for (; i >= 0; i--) {
+      if (code[i] === ">" && code[i - 1] !== "=") depth++;
+      else if (code[i] === "<" && --depth === 0) break;
+    }
+    i--;
+    while (i >= 0 && /\s/.test(code[i]!)) i--;
+  }
+  const end = i + 1;
+  while (i >= 0 && /\w/.test(code[i]!)) i--;
+  return code.slice(i + 1, end);
 }
 
 /** Every template literal of `code` (comments already gone) as its tag and its own text, the text of `${ … }` expressions left out and
@@ -70,7 +95,7 @@ function templatesOf(code: string): { tag: string; text: string }[] {
     return i;
   };
   const template = (start: number): number => {
-    const tag = /(\w+)\s*$/.exec(code.slice(Math.max(0, start - 40), start))?.[1] ?? "";
+    const tag = tagBefore(code, start);
     let text = "";
     let i = start + 1;
     while (i < code.length) {
@@ -122,6 +147,16 @@ describe("the detector (proved before it is trusted)", () => {
     expect(secondQueryWords("await sql`select ${a} from fixtures where id in ${sql([...ids])}`")).toEqual([]);
   });
 
+  it("finds a TYPED query - the repo's own spelling, tx<Row[]>`...` and sql<{ id: string }[]>`...` - which the tag read used to skip", () => {
+    expect(secondQueryWords("const rows = await tx<{ id: string; at: Date | null }[]>`select 1 from fixture_play_flags`;")).toEqual(["fixture_play_flags"]);
+    expect(secondQueryWords("await sql<Row[]>`select 1 where status = 'needs_organiser'`")).toEqual(["needs_organiser"]);
+    expect(secondQueryWords("await sql <Map<string, number>>`select 1 from fixture_play_flags`")).toEqual(["fixture_play_flags"]);
+    expect(secondQueryWords("const f = (a: number) => a; await db<(x: number) => void>`select 1 from fixture_play_flags`")).toEqual(["fixture_play_flags"]);
+    // An untyped, untagged template and a typed non-SQL tag stay silent.
+    expect(secondQueryWords("const t = css<Props>`color: red; /* fixture_play_flags */`;")).toEqual([]);
+    expect(templatesOf("x<A>`a` + y`b`").map((t) => t.tag)).toEqual(["x", "y"]);
+  });
+
   it("is silent for the same words in a comment, a plain string or an untagged template (no query there)", () => {
     expect(secondQueryWords("// reads fixture_play_flags\nconst a = 1;")).toEqual([]);
     expect(secondQueryWords("/* needs_organiser */ const a = 1;")).toEqual([]);
@@ -131,8 +166,9 @@ describe("the detector (proved before it is trusted)", () => {
 });
 
 describe("owner O2: one source for the held and the flagged boards", () => {
-  it("every consumer calls BOTH listers (and the list names at least the division page and Match Day)", () => {
-    expect(CONSUMERS.length, "consumers named").toBeGreaterThanOrEqual(2);
+  it("every consumer calls BOTH listers (and the list names the division page, Match Day and the desk)", () => {
+    expect(CONSUMERS.length, "consumers named").toBeGreaterThanOrEqual(3);
+    expect(CONSUMERS, "the desk's per-board attentions are a consumer").toContain("server/usecases/competition-desk.ts");
     let checked = 0;
     for (const file of CONSUMERS) {
       const source = withoutComments(readFileSync(join(SRC, file), "utf8"));
@@ -153,5 +189,14 @@ describe("owner O2: one source for the held and the flagged boards", () => {
     }
     const offenders = files.flatMap((f) => secondQueryWords(readFileSync(f, "utf8")).map((w) => `${relative(SRC, f)}: ${w}`));
     expect(offenders).toEqual([]);
+  });
+
+  it("the desk is no second source either: competition-desk.ts holds no SQL template naming fixture_play_flags or needs_organiser", () => {
+    // The desk reads a great deal of SQL of its own (fixtures, stages, bans); the two words are the held and the flagged queries, and
+    // the desk takes both from the listers (the test above). Match Day's file scan above does not reach it, so it is read here.
+    const source = readFileSync(join(SRC, "server/usecases/competition-desk.ts"), "utf8");
+    expect(withoutComments(source).length, "the desk's source was read (anti-vacuity)").toBeGreaterThan(1000);
+    expect(templatesOf(withoutComments(source)).filter((t) => ["sql", "tx", "db"].includes(t.tag)).length, "SQL templates scanned").toBeGreaterThan(0);
+    expect(secondQueryWords(source)).toEqual([]);
   });
 });

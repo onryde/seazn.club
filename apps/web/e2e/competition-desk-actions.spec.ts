@@ -223,6 +223,14 @@ const E2E_UNREACHABLE: Record<string, string> = {
   // self-withdraw-after-start.test.ts force the throw against a real DB and read the desk's row; desk-ssr.test.tsx pins its action
   // ("Open entrants", the Entrants tab) in all four locales.
   withdrawal_owed: "in-match-dq-cascade.test.ts raises it against a real DB; desk-ssr.test.tsx pins its Entrants door",
+  // Match Day online (T4): the two per-board kinds need an online chess round with a held or flagged board, which this file's rigs (an
+  // API-built league or knockout) cannot make; the hold and the flag are written by the arbiter and the open-round press. Pinned instead,
+  // against a real database through the real producers: competition-desk-online.test.ts (a real openRound link hold, a real camera
+  // flag) reads each row and its action target off the desk, and needs-you-boards.test.tsx pins the rows in all four locales and the
+  // click. The e2e door - the board panel opening from `?board=` and the round panel from `?round=` - is the Match Day shell's
+  // (T6/T7 walkthrough), where the panels live.
+  board_held: "competition-desk-online.test.ts raises it from a real openRound link hold; needs-you-boards.test.tsx pins the row and press",
+  board_flagged: "competition-desk-online.test.ts raises it from a real camera flag; needs-you-boards.test.tsx pins the row and press",
 };
 
 type Row = {
