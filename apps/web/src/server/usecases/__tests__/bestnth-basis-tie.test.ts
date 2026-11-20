@@ -305,6 +305,9 @@ async function runCase(c: CaseInput): Promise<CaseResult> {
     rank,
   });
   // Both `won` and `points` carry the strength (points = 3 x won), whichever measure the sport's first key reads.
+  // W5 app PR B Task 1: the generate now stores each pool's LEVEL table (the seating, engine 10 `TableStage.pools`); the constructed
+  // tables below replace them.
+  await sql`delete from standings_snapshots where stage_id = ${src.id}`;
   for (const [pi, p] of pools.entries()) {
     const others = p.members.slice(1);
     const rows: StandingsRow[] = [];

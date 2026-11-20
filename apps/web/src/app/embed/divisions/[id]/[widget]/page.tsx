@@ -16,7 +16,7 @@ import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-fac
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { Schedule } from "@/components/public-site/schedule";
-import { publicScheduleCopy } from "@/server/public-site/schedule-copy";
+import { publicScheduleCopy, publicSitsOutLines } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
 import { AttributionLink } from "@/components/attribution-link";
 import type { StandingsRow } from "@seazn/engine/competition";
@@ -189,6 +189,8 @@ export default async function EmbedWidgetPage({ params }: Props) {
         roundLabels={roundLabels}
         stageOrder={stageOrder}
         stageNames={stageNames}
+        // W5 app PR B Task 1 (K8; X-SF-4): the round's "Sits out" line, as the division page prints it (one helper, one read).
+        sitsOut={publicSitsOutLines(dict, stages, entrantNames, entrantStatuses)}
         copy={scheduleCopy}
         locale={orgLocale}
       />

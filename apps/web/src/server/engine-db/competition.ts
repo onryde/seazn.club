@@ -54,6 +54,7 @@ import { attachFeedRefs, engineRoundOf, laneDepthOf } from "./bracket-rounds";
 import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
 import { rootBracketOrder } from "./knockout-draw";
 import { locksThatFit } from "@/lib/rank-override";
+import { stageSeatingOf, type StageSeating } from "./stage-seating";
 
 type Tx = postgres.TransactionSql;
 
@@ -368,6 +369,10 @@ interface StageInputs {
   /** W3 T8 (X-SW-8): a Swiss stage's per-entrant unpaired rounds (`swissAbsentRounds`), for `TableStage.swissAbsentRounds`.
    *  Empty for every other kind, and for a Swiss nobody has missed a round of. */
   swissAbsentRounds: ReadonlyMap<string, readonly number[]>;
+  /** W5 app PR B Task 1 (X-PO-1; C10, C11): a group stage's seating, off EVERY stored line whatever its status
+   *  (`stageSeatingOf`) - handed to the fold as `TableStage.pools` when `seated`, so a pool's table lists its members from the
+   *  first fold. `unpooled` and `held` (a stored seating the engine would refuse, C11) keep engine 9's membership. */
+  seating: StageSeating;
 }
 
 // Load a stage's fixtures and turn each decided fixture into a StandingsDelta
@@ -544,6 +549,12 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     if (f.away_entrant_id) entrantSet.add(f.away_entrant_id);
   }
   const entrants = [...entrantSet];
+  // X-PO-1: every seat on a stored line, the same rows `entrants` reads (so every seated entrant is a declared one).
+  const seating = stageSeatingOf(stage.kind, fixtures);
+  if (seating.kind === "held") {
+    // C11: never a 422 on a score write for a draw the app stored; named, so a census of the log finds the stage.
+    log.warn({ event: "pool_seating_held", stageId, reason: seating.reason, entrantId: seating.entrantId, pool: seating.pool }, "pooled stage folds without its seating");
+  }
 
   const seeds = new Map<string, number>();
   const field = new Set<string>();
@@ -575,6 +586,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     // W3 T8 (X-SW-8): keyed by the table's entrants (`entrants`: every entrant holding a seat), never by the roster - a
     // case-(c) latecomer with no seat yet is not on the table and the engine refuses a key that is not.
     swissAbsentRounds: kind === "swiss" ? swissAbsentRounds(fixtures, entrants) : new Map(),
+    seating,
   };
 }
 
@@ -624,6 +636,9 @@ function toTableStage(
   lotsDraws: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>,
 ): TableStage {
   const gamePoints = inputs.gamePoints;
+  // W5 app PR B Task 1 (X-PO-1, ruling 279): a seated group's pools ride the fold - every fold of the stage goes through here
+  // (the snapshot, completion, best-Nth's source, the Swiss score groups' points), so all of them rank the same members.
+  const seating = inputs.seating.kind === "seated" ? inputs.seating.pools : undefined;
   const fields = {
     id: inputs.stage.id,
     // americano rides the league fold (Jul3/08 §3)
@@ -642,10 +657,12 @@ function toTableStage(
       : {}),
     ...(Array.isArray(inputs.stage.config?.rank_overrides)
       ? {
-          // W5 T13 fix round 1 (ST-G14): a pin waits until its pool holds enough results to place it (`locksThatFit`).
+          // W5 T13 fix round 1 (ST-G14): a pin waits until its pool holds enough results to place it (`locksThatFit`) - since
+          // PR B Task 1 (C12), enough SEATS when the stage is seated.
           rankLocks: locksThatFit(
             (inputs.stage.config.rank_overrides as { entrant_id: string; rank: number }[]).map((o) => ({ entrantId: o.entrant_id, rank: o.rank })),
             inputs.tableFixtures,
+            seating,
           ),
         }
       : {}),
@@ -653,6 +670,7 @@ function toTableStage(
     // W2d T12 (ST-G12, IH-TB-2): the schedule the head-to-head steps need complete, and the sport's order when it is not.
     scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),
     ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),
+    ...(seating === undefined ? {} : { pools: seating }),
   };
   if (inputs.stage.kind !== "swiss") return fields;
   // W3 (ruling R4; X-SW-7; engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the stage's merged cfg
@@ -788,9 +806,9 @@ async function writeSnapshot(
  * `isLevelTable`: "No rows is no table"):
  * - `"write"` (default): stored like any other, as every caller before W2d did.
  * - `"skip"`: not written. The generate's and a seed confirm's refold (usecases/stages/helpers.ts `refoldStageTable`): fixtures
- *   may seat nobody yet (a Swiss mint's shells), and a pooled stage's pool membership comes from results
- *   (`entrantsOfPool`), so before the first one every pool folds to nothing. Written, either would replace the public
- *   page's "No standings yet" with a table of no rows.
+ *   may seat nobody yet (a Swiss mint's shells, a fed group's TBD lines). Written, it would replace the public page's "No
+ *   standings yet" with a table of no rows. A drawn group's pools are NOT skipped since PR B Task 1 (X-PO-1): the seating makes
+ *   every member a row from the first fold, zero played, so each pool's level table is written like a league's.
  * - `"drop"`: not written, AND every stored table of the stage the fold did not just write is deleted — so the stored
  *   tables are exactly the fold's non-empty pools. A write that UNSEATS entrants without a result passes it (a roster
  *   delete, Unpair): the fold no longer places the departed, and a table it no longer produces must not keep their rows

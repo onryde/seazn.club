@@ -50,6 +50,7 @@ import {
   poolCount,
   generateForStage,
   roundRobinStagePlan,
+  seededSnake,
   type RoundBye,
 } from "./generators";
 import { reconcileRoundRobinLines, writeRoundByes } from "./roundrobin-reconcile";
@@ -57,7 +58,8 @@ import { isEmptySwissReshape } from "./swiss-reconcile";
 import { swissActiveEntrants, swissGen } from "./swiss-gen";
 import { lockBoardsRefusingOnlineGames } from "./swiss-boards";
 import { stageAttachmentCounts } from "./roster-drift";
-import { poolRemedy, poolSizeIssue } from "@/lib/pool-size-gate";
+import { c38SuggestedOf, poolRemedy } from "@/lib/pool-size-gate";
+import { validatePoolSizes } from "@seazn/engine/competition";
 import { fillSlot, resolveBracketSeats } from "./bracket-seats";
 import { dropPinsOfChangedPools, readPoolMembers } from "../rank-override";
 
@@ -532,9 +534,9 @@ export async function generateStageFixturesTx(
   if ((stage.kind === "group" || stage.kind === "league") && gen.length === 0 && !hasTable) {
     const groups = stage.kind === "group" ? poolCount(stage.config) : 1;
     const required = Math.max(2, groups * 2);
-    // W5 T12 (X-BD-1, PO-1): the group count that works, from the one rule the builder's Next reads (lib/pool-size-gate.ts). A single
-    // league (or one pool) has no count to offer: its remedy is entrants, so it carries null.
-    const suggested = groups > 1 ? (poolSizeIssue(entrants.length, groups)?.suggested ?? null) : null;
+    // W5 T12 (X-BD-1, PO-1): the group count that works - since PR B Task 1 (X-PO-2) the engine's own floor over the seating this
+    // draw deals (`drawFloorSuggested`). A single league (or one pool) has no count to offer: its remedy is entrants, so it carries null.
+    const suggested = groups > 1 ? drawFloorSuggested(entrants, groups) : null;
     throw new EngineError(
       "STAGE_NOT_READY",
       groups > 1
@@ -559,8 +561,8 @@ export async function generateStageFixturesTx(
     if (stranded.length > 0) {
       const groups = poolCount(stage.config);
       const required = groups * 2;
-      // W5 T12 (X-BD-1, PO-1): the count that works rides on this throw too, from the same rule as the empty-draw throw above.
-      const suggested = poolSizeIssue(entrants.length, groups)?.suggested ?? null;
+      // W5 T12 (X-BD-1, PO-1): the count that works rides on this throw too, from the same engine floor as the empty-draw throw above.
+      const suggested = drawFloorSuggested(entrants, groups);
       throw new EngineError(
         "STAGE_NOT_READY",
         `not enough entrants to fill ${groups} groups — each group needs at least 2 (have ${entrants.length}, need ${required}); ${poolRemedy(suggested)}`,
@@ -1194,4 +1196,26 @@ export async function wireCrossFeeds(tx: Tx, divisionId: string): Promise<void> 
       }
     }
   }
+}
+
+/**
+ * W5 app PR B Task 1 (X-PO-2 <- RB5-E4/P2; K5): C38's `suggested`, from the ENGINE's floor (`validatePoolSizes`) over the very
+ * seating this first draw deals (`seededSnake`, pool keys A..), read through `c38SuggestedOf` (one pool is a League: no group
+ * count). The builder's early read (`poolSizeIssue`) answers every field the same (the 161-field parity sweep,
+ * pooled-membership.test.ts). A seating the engine accepts has no count to offer (null). Any other engine refusal is not a
+ * floor and is not C38's to word: it propagates.
+ */
+function drawFloorSuggested(entrants: readonly ActiveEntrant[], groups: number): number | null {
+  const seating = new Map<string, string>();
+  seededSnake(entrants, groups).forEach((members, i) => {
+    for (const e of members) seating.set(e.id, POOL_KEYS[i]!);
+  });
+  try {
+    validatePoolSizes(seating);
+  } catch (err) {
+    const data = err instanceof EngineError ? (err.data as { reason?: unknown; suggestedPools?: number | null } | undefined) : undefined;
+    if (data?.reason !== "pool_too_small") throw err;
+    return c38SuggestedOf(data.suggestedPools ?? null);
+  }
+  return null;
 }

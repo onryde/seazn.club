@@ -5,7 +5,8 @@
 // say the same numbers (`size`) and offer the same count (`suggested`). Pure and client-safe: `apps/web` vitest is node-only.
 //
 // The pools a seeded snake deals `entrants` into hold floor(entrants / pools) or one more, so the smallest pool is
-// floor(entrants / pools). PR B maps the engine's `validatePoolSizes().suggestedPools` onto this.
+// floor(entrants / pools). PR B (Task 1) reads Generate's count off the engine's `validatePoolSizes().suggestedPools` through
+// `c38SuggestedOf`; this function stays the builder's early read, and the two agree on every field (pooled-membership.test.ts).
 
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 
@@ -37,4 +38,14 @@ export function poolSizeIssue(entrants: number, pools: number, min: number = MIN
 /** The server's English remedy clause for a refusal (C38's message; the screens say it in the reader's language from `suggested`). */
 export function poolRemedy(suggested: number | null): string {
   return suggested === null ? "add entrants" : `use ${suggested} groups or add entrants`;
+}
+
+/**
+ * W5 app PR B Task 1 (X-PO-2, K5): C38's `suggested` from the engine's own floor refusal (`validatePoolSizes`' `pool_too_small`
+ * `suggestedPools`). The engine counts down to ONE pool; one pool is a League, under the pools knob's minimum, so it is no group
+ * count: null, and every screen says "add entrants" - the answer `poolSizeIssue` gives the same field (the 161-field parity
+ * sweep, pooled-membership.test.ts, finds the two disagree only there: 2 or 3 entrants, any pool count).
+ */
+export function c38SuggestedOf(suggestedPools: number | null): number | null {
+  return suggestedPools === null || suggestedPools < FORMAT_BOUNDS.pools.min ? null : suggestedPools;
 }

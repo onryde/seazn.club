@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { builtinModules } from "@seazn/engine/sports";
+import { isLevelTable, type StandingsRow } from "@seazn/engine/competition";
 import { sql, withTenant } from "@/lib/db";
 import { isoWeekKeyUtc } from "@/server/news/enrichment";
 import { log } from "@/server/logger";
@@ -867,8 +868,10 @@ describe.skipIf(!HAS_DB)("X-SF-2 the round recap lists every pool of a pooled st
   it("X-SF-2 a pool with nothing counted yet is no block in the recap (pool B untouched), and a league's recap keeps its single un-headed block", async () => {
     const s = await pooledPlay(BADMINTON, 2, [0]);
     // the round is open (pool B's match is undecided), so draft the recap by deciding it after the table of A alone is read
-    const [untouched] = await sql<{ rows: unknown[] }[]>`select rows from standings_snapshots where stage_id = ${s.r.stageId} and pool_id = ${s.pools[1]!.id}`;
-    expect(untouched?.rows ?? [], "premise: pool B has no counted result, so no rows to rank").toEqual([]);
+    const [untouched] = await sql<{ rows: StandingsRow[] }[]>`select rows from standings_snapshots where stage_id = ${s.r.stageId} and pool_id = ${s.pools[1]!.id}`;
+    // W5 app PR B Task 1: a pool is its seating, so pool B stores its two seats from Start - LEVEL (nothing counted), no place to print.
+    expect(untouched!.rows, "premise: pool B lists its two seats").toHaveLength(2);
+    expect(isLevelTable(untouched!.rows), "premise: pool B has no counted result, so its table is level").toBe(true);
     const sections = await withTenant(s.r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: s.r.stageId, division_name: "Open" }]));
     expect(sections.map((x) => x.poolLabel), "a one-table pooled stage still names its pool").toEqual([groupLabel("en", "A")]);
 
@@ -988,11 +991,12 @@ describe.skipIf(!HAS_DB)("X-SF-2 a pooled fixture's movement and climber read it
 
 // ---------------------------------------------------------------------------
 // Task 21 fix round 1: a leaver in a pool's post (RB5-W1, W2, W3; owner ruling 277) and a repeated post. RB5-W1: a withdrawn or disqualified
-// entrant stays in the table, ranked LAST, on every surface. RB5-W2: under half played, her results are removed - she is not in the table.
-// RB5-W3: half or more played, her results stand - she stays, but ranked last. So a post never lists a leaver above a competing entrant, and
-// an expunged leaver is not listed at all. The expected positions come from the rulebook (last = pool size; absent), never from the code.
+// entrant stays in the table, ranked LAST, on every surface. RB5-W2: under half played, her results are removed. RB5-W3: half or more
+// played, her results stand. Either way she stays, ranked last (W5 app PR B Task 1: a pool is its seating, so the expunged leaver is a row
+// too, as in a league). So a post never lists a leaver above a competing entrant. The expected positions come from the rulebook (last =
+// pool size), never from the code.
 // ---------------------------------------------------------------------------
-describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never crowned, an expunged one is not listed; a repeated post repeats nothing", () => {
+describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never crowned, walked over or expunged; a repeated post repeats nothing", () => {
   /** A group of two pools of FOUR (badminton). Every line of both pools is played (home wins) except `target`'s, which plays `targetPlays` of her three. */
   async function poolOfFour(targetPlays: number) {
     const r = await rig({ n: 8, kind: "group", pools: 2, sport: BADMINTON });
@@ -1049,20 +1053,28 @@ describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never cro
     expect(block.slice(0, 3).some((l) => l.includes(targetName))).toBe(false);
   });
 
-  it("X-SF-2 RB5-W2: a leaver under half played is expunged - she is in no table and in no post at all", async () => {
+  // W5 app PR B Task 1 (X-WDT-7, RB5-W1): the pool is its SEATING now, so an expunged leaver stays a row of her pool (nothing counted,
+  // ranked last), as she always did in a league - and a post lists her as the walkover leaver above: never in the top three, LAST and
+  // marked in the recap block (was: "in no table and in no post at all", which held only while a pool's members were its results).
+  it("X-SF-2 RB5-W2 + W1: a leaver under half played is expunged - her results are gone, she stays LAST in her pool's table, never in the top 3, marked last in the recap", async () => {
     const { r, pools, target, targetName, firstRoundLine } = await poolOfFour(0);
     await withdrawEntrantCascade(r.auth, target);
-    const [{ rows }] = await sql<{ rows: { entrantId: string }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id = ${pools[0]!.id}`;
-    expect(rows.map((x) => x.entrantId), "premise: the expunged leaver has no row").not.toContain(target);
-    expect(rows.length, "premise: the other three are still ranked").toBe(3);
+    const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number; played: number }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id = ${pools[0]!.id}`;
+    expect(rows, "the pool's four seats").toHaveLength(4);
+    expect(rows.find((x) => x.entrantId === target), "RB5-W2: nothing of hers counts; RB5-W1: ranked last of four").toMatchObject({ rank: 4, played: 0 });
     const sections = await withTenant(r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: r.stageId, division_name: "Open" }]));
     expect(sections.length, "both pools are listed").toBe(2);
-    expect(JSON.stringify(sections)).not.toContain(targetName);
+    expect(sections.flatMap((x) => x.top3.map((t) => t.name)), "never in a top 3").not.toContain(targetName);
     await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
     await withTenant(r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, firstRoundLine, true));
     const recap = (await listPosts(r.auth, r.auth.orgId)).find((p) => p.kind === "round_recap");
     expect(recap, "premise: the round recapped after the cascade").toBeDefined();
-    expect(recap!.bodyMd).not.toContain(targetName);
+    const lines = recap!.bodyMd.split("\n");
+    const head = lines.findIndex((l) => l === `**Standings — ${groupLabel("en", "A")}**`);
+    const block = lines.slice(head + 1).filter((l) => /^\d\. /.test(l)).slice(0, 4);
+    expect(block, "pool A's block lists four").toHaveLength(4);
+    expect(block[3], "she is the LAST line, position 4, marked").toMatch(new RegExp(`^4\\. ${targetName} \\(${publicDict("en")["table.withdrawn"]}\\) — `));
+    expect(block.slice(0, 3).some((l) => l.includes(targetName))).toBe(false);
   });
 
   it("X-SF-2 a repeated post repeats nothing: the digest run twice makes two independent drafts, each with every pool once; the recap fired twice stays one", async () => {
@@ -1307,7 +1319,9 @@ describe.skipIf(!HAS_DB)("B5 fix round 2 m4 a climber climbs on a result step, n
     return sections.filter((x) => x.climber !== undefined).map((x) => x.climber!);
   };
 
-  it("m4 the re-review's probe (football, a group pool of four): A and B draw; B then beats newcomer C - B climbs 2 -> 1 though C's row is new", async () => {
+  // W5 app PR B Task 1: a pool is its SEATING now, so all four are rows from Start - C's row is no longer new at B's win, but the probe's
+  // point stands (the step is the result's and names its climber); premises re-read for four rows.
+  it("m4 the re-review's probe (football, a group pool of four): A and B draw; B then beats C, who had not played - B climbs 2 -> 1", async () => {
     const r = await rig({ n: 8, kind: "group", pools: 2, sport: FOOTBALL });
     await startDivision(r.auth, r.divisionId);
     const lines = await sql<{ id: string; pool_id: string; home_entrant_id: string; away_entrant_id: string }[]>`
@@ -1318,7 +1332,7 @@ describe.skipIf(!HAS_DB)("B5 fix round 2 m4 a climber climbs on a result step, n
     await post(r.auth, first.id, "football.period", { phase: "HT" });
     await post(r.auth, first.id, "football.period", { phase: "FT" });
     const before = await poolTable(r.stageId, first.pool_id);
-    expect(before?.rows.length, "premise: the pool table lists only the two who played").toBe(2);
+    expect(before?.rows.length, "premise: the pool table lists its four seats").toBe(4);
     const b = before!.rows.find((x) => x.rank === 2)!.entrantId;
     const a = before!.rows.find((x) => x.rank === 1)!.entrantId;
     // B's next line in the pool, against someone who has not played (C).
@@ -1330,8 +1344,9 @@ describe.skipIf(!HAS_DB)("B5 fix round 2 m4 a climber climbs on a result step, n
     const [{ outcome }] = await sql<{ outcome: { winner?: string } }[]>`select outcome from fixtures where id = ${next.id}`;
     expect(outcome.winner, "premise: B won").toBe(b);
     const after = await poolTable(r.stageId, first.pool_id);
-    expect(after!.rows.map((x) => x.entrantId), "premise: B 1st, A 2nd, C new and 3rd").toEqual([b, a, c]);
-    expect(after!.previous_rows?.length, "premise: the step is the result's - C is not in the table before it").toBe(2);
+    expect(after!.rows.slice(0, 2).map((x) => x.entrantId), "premise: B 1st, A 2nd").toEqual([b, a]);
+    expect(after!.rows.map((x) => x.entrantId), "premise: C is still a row").toContain(c);
+    expect(after!.previous_rows?.find((x) => x.entrantId === b)?.rank, "premise: the step is the result's - B was 2nd before it").toBe(2);
     // differential: at 36eff19653 no climber (the row-count rule).
     expect(await climberOf(r)).toEqual([expect.objectContaining({ from: 2, to: 1 })]);
     const [{ display_name }] = await sql<{ display_name: string }[]>`select display_name from entrants where id = ${b}`;

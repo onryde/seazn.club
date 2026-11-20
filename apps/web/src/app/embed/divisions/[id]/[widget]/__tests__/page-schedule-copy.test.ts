@@ -331,3 +331,39 @@ describe("embed schedule widget — rounds by name, phrases in the org's locale 
     );
   });
 });
+
+// W5 app PR B Task 1 (K8; X-SF-4, parked from app PR A T3 m6): the embed's schedule widget prints a round's "Sits out" line, as
+// the division page does - the same helper (`publicSitsOutLines`) over the same stored byes (`config.round_byes`). differential:
+// before, the embed read no `round_byes` and handed the Schedule no `sitsOut`, so an odd league's bye was silent on every host site.
+describe("embed schedule widget — a round robin's bye reads 'Sits out' under its round (K8)", () => {
+  // A league of three, one leg: each round one side sits out (the engine's `RoundRobinRound.bye`, stored as `round_byes`).
+  const league = (byes: unknown): Stage[] => [{ id: "st", division_id: "d1", seq: 1, kind: "league", name: "League", status: "active", ...NO_CUT, round_byes: byes } as Stage];
+  const fixtures = [
+    F({ id: "r1", round_no: 1, home_entrant_id: "e1", away_entrant_id: "e2" }),
+    F({ id: "r2", round_no: 2, home_entrant_id: "e1", away_entrant_id: "e3" }),
+    F({ id: "r3", round_no: 3, home_entrant_id: "e2", away_entrant_id: "e3" }),
+  ];
+  const BYES = [
+    { pool: null, round_no: 1, leg: 1, entrant_id: "e3" },
+    { pool: null, round_no: 2, leg: 1, entrant_id: "e2" },
+    { pool: null, round_no: 3, leg: 1, entrant_id: "e1" },
+  ];
+  const linesOf = (html: string) => [...html.matchAll(/data-testid="schedule-sits-out"[^>]*>([^<]+)</g)].map((m) => m[1]);
+
+  it("each round names its sitter, in en and es, from the public dictionary", async () => {
+    let checked = 0;
+    for (const locale of ["en", "es"]) {
+      const dict = await getDictionary(locale as "en", "public");
+      const { html } = await scheduleOf(locale, league(BYES), fixtures);
+      expect(linesOf(html), `${locale}: one line per round, round order`).toEqual(
+        ["Side 3", "Side 2", "Side 1"].map((names) => esc(t(dict, "division.sitsOut", { names }))),
+      );
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("the empty case: a stage with no recorded byes prints no line", async () => {
+    expect(linesOf((await scheduleOf("en", league(null), fixtures)).html)).toEqual([]);
+  });
+});

@@ -385,6 +385,13 @@ export function snakeDistribute<T>(ordered: readonly T[], count: number): T[][] 
   return pools;
 }
 
+/** The pools a group's first draw deals `entrants` into: by seed (unseeded last, in the order given), then the seeded snake.
+ *  The one dealing both the draw (`roundRobinStagePlan`) and Generate's engine floor check (`generate-tx.ts`, X-PO-2) read. */
+export function seededSnake<T extends { seed?: number | null }>(entrants: readonly T[], count: number): T[][] {
+  const ordered = [...entrants].sort((a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER));
+  return snakeDistribute(ordered, count);
+}
+
 // Exported: stage-seeding.ts's sourceShapeOf (relocated there, F2 Task 6)
 // needs the same pool-count derivation this file's own generation path uses,
 // so the two can never drift onto different pool-count rules.
@@ -453,10 +460,7 @@ export function roundRobinStagePlan(
   // have no pool row and keep the unprefixed key and no pool).
   const only = poolIds.get(POOL_KEYS[0]!);
   if (count === 1) return only === undefined ? roundRobinGen(entrants, legs) : roundRobinGen(entrants, legs, `p${POOL_KEYS[0]}-`, only);
-  const ordered = [...entrants].sort(
-    (a, b) => (a.seed ?? Number.MAX_SAFE_INTEGER) - (b.seed ?? Number.MAX_SAFE_INTEGER),
-  );
-  const pools = snakeDistribute(ordered, count).map((poolEntrants, i) => {
+  const pools = seededSnake(entrants, count).map((poolEntrants, i) => {
     const key = POOL_KEYS[i];
     return roundRobinGen(poolEntrants, legs, `p${key}-`, poolIds.get(key));
   });

@@ -60,19 +60,17 @@ export function finalizedExpungeItems(o: FinalizedExpungeObs): Item[] {
     const a = o.after.find((l) => l.id === b.id);
     items.push({ ok: a !== undefined && a.status === b.status && a.home === b.home && a.away === b.away && JSON.stringify(a.outcome) === JSON.stringify(b.outcome), note: `${b.id}: a line the target did not hold changed (${b.status} -> ${a?.status ?? "gone"})` });
   }
-  // The table. A LEAGUE lists every entrant (the withdrawn one stays, marked and last: RB5-W1). A GROUP pool's table, on engine 9.x, lists only the
-  // entrants holding a counted result (`entrantsOfPool`, the engine's membership-from-results): once the expunge removed the target's every result the
-  // target has no row - the engine-10 bump (app PR B, `TableStage.pools` seats by membership) closes it (progress.md, Task 21 ruling). So the
-  // EXPECTED member set is derived from the lines, never the product's rows: a league's whole pool, or a pool's entrants with a counted line; the
-  // withdrawn entrant's row, when listed, is marked and last either way.
+  // The table. A LEAGUE lists every entrant, and since app PR B Task 1 (K7; engine 10 `TableStage.pools`, X-PO-1) so does a GROUP pool: the fold
+  // seats every entrant on the pool's lines, so the withdrawn one stays in her pool's table, marked and last (RB5-W1), though the expunge left
+  // her no result (on engine 9.x a pool's members were its counted results' entrants, and she had no row). The EXPECTED member set is derived
+  // from the lines, never the product's rows: every entrant on the pool's lines.
   const rows = o.table.rows;
   const row = rows.find((r) => r.entrantId === o.target);
   const peers = new Set(o.before.filter((l) => l.poolId === o.poolId).flatMap((l) => [l.home, l.away]).filter((e): e is string => e !== null));
-  const counted = (id: string): boolean => o.after.some((l) => holds(l, id) && l.outcome !== null && l.status !== "abandoned");
-  const expected = new Set([...peers].filter((e) => o.stageKind === "league" || counted(e)));
+  const expected = peers;
   items.push(
-    { ok: o.stageKind === "group" || row !== undefined, note: "the withdrawn entrant is no longer in the league table (RB5-Wd1: they stay in the table)" },
-    { ok: rows.length === expected.size && rows.every((r) => expected.has(r.entrantId)), note: `the table lists ${rows.length} row(s) (${rows.map((r) => r.entrantId.slice(0, 4)).join(",")}), expected ${expected.size}: ${o.stageKind === "league" ? "every entrant of the league" : "the pool's entrants with a counted result"} (RB5-P1)` },
+    { ok: row !== undefined, note: `the withdrawn entrant is no longer in the ${o.stageKind === "league" ? "league" : "pool's"} table (RB5-Wd1: they stay in the table)` },
+    { ok: rows.length === expected.size && rows.every((r) => expected.has(r.entrantId)), note: `the table lists ${rows.length} row(s) (${rows.map((r) => r.entrantId.slice(0, 4)).join(",")}), expected ${expected.size}: ${o.stageKind === "league" ? "every entrant of the league" : "every entrant on the pool's lines"} (RB5-P1)` },
     { ok: row === undefined || row.status === "withdrawn", note: `the withdrawn entrant's row reads status ${row?.status ?? "(none)"}, expected withdrawn (RB5-Wd1: marked)` },
     { ok: row === undefined || row.rank === Math.max(...rows.map((r) => r.rank ?? 0)), note: `the withdrawn entrant ranks ${row?.rank ?? "(none)"} of ${rows.length}, expected last (RB5-Wd1)` },
   );

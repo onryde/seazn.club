@@ -129,7 +129,23 @@ export interface PoolFixtureLike {
  * entrants, which the write check already counts, so every lock passes. A lock whose entrant holds a result in no pool is ignored by the
  * engine and passes.
  */
-export function locksThatFit<L extends { entrantId: string; rank: number }>(locks: readonly L[], fixtures: readonly PoolFixtureLike[]): L[] {
+export function locksThatFit<L extends { entrantId: string; rank: number }>(
+  locks: readonly L[],
+  fixtures: readonly PoolFixtureLike[],
+  seating?: ReadonlyMap<string, string>,
+): L[] {
+  // W5 app PR B Task 1 (C12, X-PO-1): with a SEATING (`TableStage.pools`) a pool's table is its seated members from the first fold,
+  // and the engine checks every lock against it (`validateRankLocks(locks, entrants, pools)`: an entrant no pool seats, or a rank
+  // above the pool's seated size, refuses the fold). So a pin waits on its pool's SEATED size, never its results, and a pin on an
+  // entrant no pool seats (a stored config no write re-checks) is held back rather than handed to a refusal.
+  if (seating !== undefined && seating.size > 0) {
+    const sizes = new Map<string, number>();
+    for (const pool of seating.values()) sizes.set(pool, (sizes.get(pool) ?? 0) + 1);
+    return locks.filter((lock) => {
+      const pool = seating.get(lock.entrantId);
+      return pool !== undefined && lock.rank <= sizes.get(pool)!;
+    });
+  }
   const pools = new Set(fixtures.map((f) => f.poolId ?? ""));
   if (pools.size <= 1) return [...locks];
   const members = new Map<string, Set<string>>();

@@ -304,9 +304,14 @@ describe.skipIf(!HAS_DB)("W5 T5b: Joined round N on a late entrant's row (X-CU-1
     const ownA = catchUpLinesOf(rows, a);
     expect(ownA.every((l) => /^pA-rr-(cu|by)-/.test(l.ext_key ?? "")), "premise: pool A's keys carry the pool prefix").toBe(true);
     expect(catchUpLinesOf(rows, b).every((l) => /^pB-rr-(cu|by)-/.test(l.ext_key ?? "")), "premise: pool B's keys carry the pool prefix").toBe(true);
-    // A pool's table has no rows until something in it is decided (a pool table folds counted results only; a league's rows exist from
-    // the draw), so each late entrant plays her first catch-up line - the rest of hers (two in pool A, three in pool B) are still open, the marker still owed.
     const ownB = catchUpLinesOf(rows, b);
+    // K6 (W5 app PR B Task 1, X-PO-1): the marker no longer waits on a result. The fold seats each pool's members, so both pools
+    // list their late entrant, marked, before any line in them is decided. differential: before, a pool table had no rows until
+    // something in it was decided, so each late entrant had to play a catch-up line first.
+    const early = await tables(rig);
+    expect(early.A!.LateA, "K6: pool A marks her before anything in it is decided").toEqual(["Joined round 3"]);
+    expect(early.B!.LateB, "K6: pool B likewise").toEqual(["Joined round 3"]);
+    // Each late entrant plays her first catch-up line - the rest of hers (two in pool A, three in pool B) are still open, the marker still owed.
     await decide(rig, ownA[0]!.id);
     await decide(rig, ownB[0]!.id);
     const t = await tables(rig);

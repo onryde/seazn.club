@@ -13,10 +13,16 @@ import { buildTemplateStages } from "../../../apps/web/src/lib/format-templates.
  * and proposed nothing; engine 9 compared full rows and seated the other 3-pool's runner-up. The scores are chosen so the two
  * answers differ (derived below from the rulebook, never from the product's own table): the proposal's 7th seat is the first
  * 3-pool's runner-up, and the second 3-pool's runner-up is out.
+ *
+ * Task 1 (X-PO-1 <- RB5-P1; X-PO-2 <- RB5-E4/P2; ST-G5, PO-1): pools ride the fold as SEATING (engine 10 `TableStage.pools`). A Started
+ * group of six in two pools answers its standings with every seat of both pools, nothing played, no place (level) - before, a pool
+ * had no row until a result. And Generate's floor refusal is the engine's (`validatePoolSizes`), read as C38's: three entrants into
+ * two groups name no group count (the engine's "one pool" is a League, so `suggested` is null, "add entrants").
  */
 export async function w5RoundRobinBSuite(): Promise<void> {
   // Task 0: 1 (an unequal groups_ko proposal's 7th seat is the runner-up compared on the smallest pool's matches).
-  const EXPECTED_CHECKS = 1;
+  // Task 1: 2 (a Started two-pool group lists every seat level before a result; 3 into 2 groups is refused with no group count).
+  const EXPECTED_CHECKS = 3;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -105,6 +111,74 @@ export async function w5RoundRobinBSuite(): Promise<void> {
     w5Check(
       "w5b X-UP-1: an unequal groups_ko (3/3/2/2, Top 7) proposes its 7th seat to the 3-pool runner-up compared without its win over the bottom row; the other 3-pool's runner-up is out" +
         (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, gen ${koGen.status}/${grGen.status}, start ${started.status}, lines ${lines.length}, pools [${pools.map((p) => p.map((id) => seedOf.get(id)).join("/")).join(" ")}], scored ${scored.join(",")}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 300)}, proposal ${pRes.status} [${seats.map((q) => `${q.rank}:${seedOf.get(q.entrantId)}${q.source.group ?? "*"}`).join(" ")}]`),
+      ok,
+    );
+  }
+
+  // Check 2 - Task 1 (X-PO-1): six seeded entrants into two pools, Started, nobody has played. The rulebook's snake (doc 05 §1) deals
+  // A = seeds 1, 4, 5 and B = 2, 3, 6: the stage's standings answer lists all six, three per pool, each with nothing played and no
+  // place (a level table, X-TB-6). Before the seating, a pool had no row until a result in it: the answer was empty.
+  {
+    const dRes = await v1(owner, `/api/v1/competitions/${comp?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Pools day one",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `Po${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const stages = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 2 } } }]),
+    ) ?? [];
+    const stageId = stages[0]?.id;
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const sRes = await v1(owner, `/api/v1/stages/${stageId}/standings`);
+    type Row = { entrantId: string; rank: number | null; played: number; pool?: string | null };
+    const rows = v1data<{ rows: Row[] } | undefined>(sRes)?.rows ?? [];
+    const seat = (seeds: number[]) => seeds.map((n) => field[n - 1]?.id).sort().join(",");
+    const byPool = new Map<string, string[]>();
+    for (const r of rows) byPool.set(r.pool ?? "", [...(byPool.get(r.pool ?? "") ?? []), r.entrantId]);
+    const listed = [...byPool.values()].map((ids) => [...ids].sort().join(",")).sort();
+    const ok =
+      dRes.status === 201 && field.length === 6 && stages.length === 1 && started.status === 200 && sRes.status === 200 && rows.length === 6 &&
+      JSON.stringify(listed) === JSON.stringify([seat([1, 4, 5]), seat([2, 3, 6])].sort()) && rows.every((r) => r.played === 0 && r.rank === null);
+    w5Check(
+      "w5b X-PO-1: a Started two-pool group nobody has played lists all six seats, three per pool as the snake deals them, level (no place, nothing played)" +
+        (ok ? "" : ` - div ${dRes.status}, field ${field.length}, stages ${stages.length}, start ${started.status}, standings ${sRes.status} rows ${rows.length} ${JSON.stringify(rows.map((r) => [r.pool, r.rank, r.played]))}`),
+      ok,
+    );
+  }
+
+  // Check 3 - Task 1 (X-PO-2): three entrants into two groups leave a pool of one (the snake: A = 1, B = 2, 3). Generate refuses before
+  // writing a line, 422 STAGE_NOT_READY group_too_few_entrants - the engine's floor, whose own answer (one pool) is a League, not a
+  // group count, so `suggested` is null and the screens say "add entrants".
+  {
+    const dRes = await v1(owner, `/api/v1/competitions/${comp?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Pools floor",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 3 }, (_, i) => ({ kind: "individual", display_name: `Fl${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const stages = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", [{ seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 2 } } }]),
+    ) ?? [];
+    const gen = await v1(owner, `/api/v1/stages/${stages[0]?.id}/generate`, "POST");
+    const err = (gen.json as { error?: { code?: string; reason?: string; groups?: number; entrants?: number; suggested?: number | null } } | undefined)?.error;
+    const written = v1data<unknown[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [];
+    const ok =
+      dRes.status === 201 && field.length === 3 && stages.length === 1 && gen.status === 422 && err?.code === "STAGE_NOT_READY" &&
+      err.reason === "group_too_few_entrants" && err.groups === 2 && err.entrants === 3 && err.suggested === null && written.length === 0;
+    w5Check(
+      "w5b X-PO-2: three entrants into two groups are refused by name before a line is written, with no group count to offer (the engine's one pool is a League)" +
+        (ok ? "" : ` - div ${dRes.status}, field ${field.length}, stages ${stages.length}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 300)}, fixtures ${written.length}`),
       ok,
     );
   }

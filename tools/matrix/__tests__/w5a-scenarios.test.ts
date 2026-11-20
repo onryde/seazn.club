@@ -309,15 +309,15 @@ describe("R4c: a withdrawal under half played where one of the entrant's results
     expect(over.some((n) => /is not under half/.test(n))).toBe(true);
   });
 
-  it("a GROUP pool's table lists only the entrants with a counted result (engine 9.x, membership from results): the withdrawn row may be absent", () => {
-    const groupAfter = AFTER;
-    const rows = [{ entrantId: "Y", rank: 1, status: "active", played: 1 }, { entrantId: "Z", rank: 2, status: "active", played: 1 }];
-    const items = finalizedExpungeItems(o({ stageKind: "group", after: groupAfter, table: { stage_id: "s", pool_id: "P", rows } }));
+  it("K7: a GROUP pool's table lists every entrant on its lines (engine 10 seating, app PR B Task 1): the withdrawn row stays, marked and last", () => {
+    // The pool's lines are the league's here (poolId null on both sides of the observation): the same four, the same row set.
+    const items = finalizedExpungeItems(o({ stageKind: "group", table: { ...TABLE, pool_id: "P", rows: TABLE.rows.map((r) => ({ ...r, played: ({ Y: 1, X: 0, Z: 1, T: 0 } as Record<string, number>)[r.entrantId]! })) } }));
     expect(failing(items)).toEqual([]);
-    // ... but a row for an entrant with NO counted result is not what the engine seats either
-    const extra = failing(finalizedExpungeItems(o({ stageKind: "group", table: { stage_id: "s", pool_id: "P", rows: [...rows, { entrantId: "X", rank: 3, status: "active", played: 0 }] } })));
-    expect(extra.some((n) => /the table lists 3 row\(s\)/.test(n))).toBe(true);
-    // and on a LEAGUE the same two-row table is a failure
+    // engine 9.x's shape - only the entrants with a counted result, the withdrawn row gone - now FAILS on a group as on a league (differential)
+    const rows = [{ entrantId: "Y", rank: 1, status: "active", played: 1 }, { entrantId: "Z", rank: 2, status: "active", played: 1 }];
+    const old = failing(finalizedExpungeItems(o({ stageKind: "group", table: { stage_id: "s", pool_id: "P", rows } })));
+    expect(old.some((n) => /no longer in the pool's table/.test(n)), old.join(" | ")).toBe(true);
+    expect(old.some((n) => /the table lists 2 row\(s\)/.test(n)), old.join(" | ")).toBe(true);
     expect(failing(finalizedExpungeItems(o({ stageKind: "league", table: { stage_id: "s", pool_id: null, rows } }))).length).toBeGreaterThan(0);
   });
 });
