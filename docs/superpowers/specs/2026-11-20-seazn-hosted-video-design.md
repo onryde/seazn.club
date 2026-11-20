@@ -1,6 +1,6 @@
 # Seazn-hosted video — design
 
-Date: 2026-11-20 · Status: draft for owner approval · Repo: web (phone unchanged)
+Date: 2026-11-20 · Status: draft for owner approval · Repo: web (phone unchanged) · POC on staging 2026-11-20: results in the plan's "POC results" section (C1–C6, B1–B6)
 
 ## 1. Intent
 
@@ -22,12 +22,14 @@ Goals
 - G1. A per-match destination **Seazn**, beside the existing ones. An organiser picks Seazn or one external destination
   for a match — never both (owner: "If Seazn Hosted, no youtube come into the picture").
 - G2. **Live** on Seazn: the public match page plays the match live in a Seazn player, adaptive sizes (Cloudflare Stream's
-  own ladder), with the score on the page beside it.
+  own ladder: 720/480/360/240 from a 720p input, measured), with the score on the page beside it.
 - G3. **Replay** on Seazn: after the match the recording moves to **Bunny Stream**, which encodes every size for free; the
   match page's Replay plays from Bunny.
 - G4. **Keep replays as long as the org stays a customer** (owner, 2026-11-20: "as long as they stay for now").
-- G5. **Private competitions** play through signed, expiring URLs on both Cloudflare (live) and Bunny (replay); only
-  Seazn's pages may embed them.
+- G5. **Private competitions** play only through signed, expiring URLs on both Cloudflare (live) and Bunny (replay).
+  Bunny's embed token and referrer allow-list keep replays on Seazn's pages. For live, Cloudflare's `allowedOrigins` does
+  not stop a raw HLS request from another site (measured 2026-11-20), so a live URL works for whoever holds it until its
+  token expires: the token's short life is the protection.
 - G6. **Measure** minutes delivered per match (live on Cloudflare, replay on Bunny) so the cost is visible.
 - G7. **One cleanup rule for Cloudflare recordings**, whatever the destination (owner: "have same cleanup method").
 
@@ -43,7 +45,7 @@ Non-goals
 
 Anti-goals (would make this a failure even if it works)
 - A Seazn-hosted match that silently also creates a YouTube broadcast, or a YouTube match that silently plays on Seazn.
-- A private competition's video reachable by an unsigned URL, or embeddable on another site.
+- A private competition's video reachable by an unsigned URL, or by a signed one past its short life.
 - A replay lost because the Cloudflare recording was deleted before Bunny had a playable copy.
 - Viewer cost nobody can see (G6 exists so this never happens silently).
 
@@ -61,7 +63,7 @@ Anti-goals (would make this a failure even if it works)
 - The public match page offers a player for YouTube addresses only (`replay-plan.ts`, parts from `youtube_broadcasts`
   via `server/youtube/parts.ts`).
 - Next web migration is **V531** (V530 is the latest; there is no V529 on main).
-- Secrets (Bunny API key, Cloudflare signing key) live in server config only, never in a URL query, a log, an error or
+- Secrets (the Bunny keys, the Cloudflare API token) live in server config only, never in a URL query, a log, an error or
   the database in clear.
 
 ## 4. Approaches
@@ -97,13 +99,17 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
   the session is live, play the composed input's HLS in a Seazn player. Before the session goes live and after it ends, the page shows what it shows today for those states.
 - **All Seazn playback is signed** (my call): an input can carry matches of different competitions (courts), so a
   per-input flag cannot follow per-competition privacy. The page mints a short-lived token for every viewer it already
-  admits (public, unlisted or private alike), so public viewers notice nothing; `allowedOrigins` is limited to Seazn's hosts.
+  admits (public, unlisted or private alike), from Cloudflare's own token endpoint, so public viewers notice nothing.
+  `allowedOrigins` is set to Seazn's hosts but blocks nothing on a raw request (measured), so the token's short life is
+  what protects live. The recording Cloudflare makes from a signed input comes out unsigned (measured), so the server
+  signs each recording as soon as it appears.
 
 ### 5.3 Replay on Seazn
 - When a Seazn session ends and Cloudflare's recording is ready (Cloudflare: within ~60 s of the end), the server asks
   Bunny to fetch the recording by URL into the org's Bunny collection, and stores the Bunny video id against the session.
-- Bunny encodes; once Bunny reports the video playable, the match page's Replay plays from Bunny (signed, Bunny's
-  allowed-domains set to Seazn's hosts).
+- Bunny encodes (resolutions capped at 720p, owner setting); once Bunny reports the video playable (its webhook, with a
+  slow poll as the backstop), the match page's Replay plays in Bunny's embed player with a signed embed token. Bunny's
+  referrer allow-list (Seazn's hosts) and CDN token authentication guard its files.
 - **Order is fetch, confirm playable, then delete** (owner's step 4, with the order fixed: Bunny fetches from the
   Cloudflare copy, so it must exist until Bunny's plays). If the move fails it retries; the 3-day sweep skips a Seazn
   recording not yet moved and keeps it up to Cloudflare's own 30-day floor, alerting Seazn staff (my call: a replay is
@@ -122,7 +128,7 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 ### 5.5 Keeping and removing replays
 - Bunny replays are kept while the org is a customer (G4).
 - When an org is **closed or deleted**, its replays are deleted after a **30-day grace** period, during which the
-  organiser can download them (my call: an org on credits only, or between subscriptions, keeps its replays; only a closed
+  organiser can download them through Seazn's server, since Bunny's files need a token and an allowed referrer (my call: an org on credits only, or between subscriptions, keeps its replays; only a closed
   org starts the clock, so a paying club never loses replays by a billing gap).
 - An organiser can delete a match's replay themselves.
 
@@ -134,11 +140,12 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 
 - The data shape of the Seazn destination (a `kind` value on `org_stream_targets` with neither source, or a separate flag
   on `fixture_stream_settings`), and how the `org_stream_targets_one_source` constraint accommodates it.
-- Which player library (hls.js, or Cloudflare's and Bunny's own embeds) — one player for both is preferred.
+- Which player library (hls.js, or Cloudflare's and Bunny's own embeds) — one player for both is preferred. (Decided in
+  the plan: hls.js for live, Bunny's embed for replay, since Bunny's protected files need what the embed carries.)
 - Whether the Bunny move runs from the session-end path (`persist.ts` `endedNow`) or the relay sweep, provided it
   retries and never deletes before Bunny is playable.
 - Bunny collection layout (per org recommended) and how the Bunny API key is held.
-- How signed playback tokens are minted and their lifetime.
+- How signed playback tokens are minted and their lifetime. (Decided in the plan: Cloudflare's token endpoint, 1 h.)
 
 ## 7. Calls made in this doc (owner to check)
 
