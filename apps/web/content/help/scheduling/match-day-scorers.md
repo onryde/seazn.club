@@ -1,11 +1,11 @@
 ---
 title: Scorers and Match Day codes
-description: Give a scorer a link for one match, or make a Match Day code that lets the Seazn Club app list the day's matches, score them and call them to courts.
+description: Give a scorer a link for one match, or make a Match Day code that lets the Seazn Club app list the day's matches, score them and, when you tick it, call them to courts.
 order: 10.2
 related: scheduling/match-day, scheduling/match-day-stream, scoring/device-links, scoring/scorer-role
 ---
 
-Two things on **Match Day** hand a match to someone who is not at your desk. A scoring link gives one phone one match. A **Match Day code** gives the Seazn Club app a whole day.
+Two things on **Match Day** hand a match to someone who is not at your desk. A scoring link gives one phone one match. A **Match Day code** gives the Seazn Club app the day's matches for the competition, venue or courts you choose.
 
 ## A scoring link for one match
 
@@ -33,11 +33,11 @@ The code works from 00:00 to 24:00 on its day, in your organisation's time zone,
 
 ### What a code can do
 
-- **Always:** list the matches in its scope for the day, and open their scoring.
-- **Approve pairings and brackets:** review and approve the next Swiss round, or a knockout draw, in its scope. A tie or a slot to change is still yours, on the web.
-- **Call matches to courts:** call a match in its scope onto a court in its scope, and undo that call. The same rules apply as on Match Day, so a match whose player is on another court can't be called.
+- **Always:** list what it covers for the day, and open scoring for matches still to play or in play. A finished or cancelled match gets no scoring link.
+- **Approve pairings and brackets:** review and approve the next Swiss round, or a knockout draw, in what it covers. A tie or a slot to change is still yours, on the web.
+- **Call matches to courts:** call a match it covers onto a court it covers, and undo that call. The same rules apply as on Match Day, so a match whose player is on another court can't be called.
 
-A code only reaches what it covers. A match or court outside its scope is refused.
+A code only reaches what it covers. A match or court outside what it covers is refused.
 
 If you open a Match Day code in a browser, it shows **Open this with the Seazn Club app**.
 
