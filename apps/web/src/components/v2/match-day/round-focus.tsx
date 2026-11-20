@@ -20,7 +20,7 @@
 //
 // House theme (spec §4): ink / soft / muted text, `#e7e3f3` borders, `#7c3aed` for the one primary button per block, 44px targets, one DOM,
 // mobile-first, `min-w-0` down every ancestor of a name. The countdown is the check-in's one large element.
-import { useMemo, useReducer, type ReactNode } from "react";
+import { useEffect, useMemo, useReducer, type ReactNode } from "react";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import { apiV1 } from "@/lib/client-v1";
@@ -47,8 +47,6 @@ import {
   liveExtendableBoards,
   roundExtendRunner,
   roundExtendUi,
-  roundExtendWhy,
-  roundWhyLine,
   type ExtendCopy,
   type RoundExtendState,
 } from "../checkin-extend-ui";
@@ -104,6 +102,9 @@ export function PlayingStatus({
   const msg = useMsg();
   const plural = useMsgPlural();
   const { playing, total, finished, held, waiting } = playingTally(round.boards, owed);
+  // MD-R31: Match Day's panel says "2 boards finished" and nothing above it when every board is over - "0 of 2 playing" over "2 finished" says the
+  // same thing twice. The key is ALL OVER (every board on screen finished), not "nobody playing": a held or waiting-to-restart board keeps its line.
+  const allOver = bare && total > 0 && finished === total;
   return (
     <section
       aria-labelledby={bare ? undefined : "arbiter-column-status-heading"}
@@ -118,9 +119,11 @@ export function PlayingStatus({
       )}
       {total > 0 && (
         <div className="flex min-w-0 flex-col gap-0.5">
-          <p data-testid="arbiter-column-playing" className={`m-0 text-[15px] ${CLOCK_FACE} ${INK}`}>
-            {plural("arbiter.column.playing", total, { count: playing, total })}
-          </p>
+          {!allOver && (
+            <p data-testid="arbiter-column-playing" className={`m-0 text-[15px] ${CLOCK_FACE} ${INK}`}>
+              {plural("arbiter.column.playing", total, { count: playing, total })}
+            </p>
+          )}
           {finished > 0 && (
             <p data-testid="arbiter-column-finished" className={`m-0 text-sm ${MUTED}`}>
               {plural("arbiter.column.finished", finished)}
@@ -316,6 +319,15 @@ export function OpenRoundBlockView({
 
 // ---- the round on screen's own press ----------------------------------------------------------------------------------------------
 
+/** The check-in hero's press (quiet). BUTTON_QUIET has min-h-11 and no vertical padding. This label is long ("Inviter de nouveau et relancer l'enregistrement"
+ *  wraps to two lines from 320 to 375), and two lines of text would touch the border: py-2 keeps them clear of it, on this press only. */
+const HERO_PRESS_CLASS = `${BUTTON_QUIET} w-full py-2 max-md:max-w-sm`;
+/** The press where it is THE action of what is on screen (the playing status, and beside a link hold's reason). */
+const PRIMARY_PRESS_CLASS = `${BUTTON_PRIMARY} py-2 text-balance`;
+
+/** What `roundPress` builds: the press's button, its answer, its confirmation, and what the boards are owed. */
+export type RoundPress = ReturnType<typeof roundPress>;
+
 /** The round on screen's own reinvite or reopen press: its button, its answer and its confirmation, drawn by the check-in hero and,
  *  since the final review (I2), by the playing status. A plain function and not a component, so each caller's tree holds the button
  *  itself and a test (or a hook harness that renders one level) sees it where the caller put it. The caller owns the hooks.
@@ -385,11 +397,21 @@ export function roundPress(a: {
         open={owedView !== null && a.mayPress !== false && state.confirming}
         testId="arbiter-column-reinvite-dialog"
         title={
-          reinvite
-            ? msg("runsheet.round.confirmTitleReinvite", { round: round.roundNo })
-            : msg("arbiter.column.reopenConfirmTitle", { round: round.roundNo })
+          a.linkHeld === true
+            ? msg("matchDay.round.openAgainTitle", { round: round.roundNo })
+            : reinvite
+              ? msg("runsheet.round.confirmTitleReinvite", { round: round.roundNo })
+              : msg("arbiter.column.reopenConfirmTitle", { round: round.roundNo })
         }
-        confirmLabel={reinvite ? plural("runsheet.round.inviteCta", owed) : plural("arbiter.column.reopenConfirmCta", owed)}
+        // M3: the press says "Open round N again", so its dialog asks "Open Round N again?" and its button says it again (an action keeps one name through
+        // the flow); the body below still lists who is invited.
+        confirmLabel={
+          a.linkHeld === true
+            ? msg("matchDay.round.openAgain", { round: round.roundNo })
+            : reinvite
+              ? plural("runsheet.round.inviteCta", owed)
+              : plural("arbiter.column.reopenConfirmCta", owed)
+        }
         confirmVariant="primary"
         cancelLabel={msg("confirm.cancel")}
         stackActions
@@ -429,11 +451,16 @@ export type CheckinHeroProps = {
   linkHeld?: boolean;
   /** Match Day: the focus frame already names the round, so the card carries no heading of its own. */
   bare?: boolean;
+  /** Match Day (M3): the round's press, built by the caller so its button can stand beside the reason it exists (the link-hold block). Absent, the
+   *  hero builds and draws its own, as the Arbiter Panel's column does. */
+  press?: RoundPress;
+  /** Whether the hero draws the press's button and answer (default true). The confirmation is always the hero's. */
+  pressInHero?: boolean;
 };
 
 /** The check-in hero (spec §5.3): the countdown to the NEXT board closing, who has checked in, what is already playing, the round's
  *  +5 (the node the panel hands over), the round's own reinvite or reopen press, and the staggered groups. */
-export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, mayPress = true, linkHeld = false, bare = false }: CheckinHeroProps) {
+export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, mayPress = true, linkHeld = false, bare = false, press: given, pressInHero = true }: CheckinHeroProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const venueAt = useVenueClock(tz);
@@ -442,19 +469,19 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, ma
   const batches = view === null ? null : timedBatches(view);
   // The round's own press: a seat whose invite was released (Not delivered, Bounced) is invited again from here (C4), and a round
   // nobody was reached by opens again. Any other press belongs to the Fixtures tab or to no one.
-  const press = roundPress({
-    round,
-    view,
-    tz,
-    openRound,
-    msg,
-    plural,
-    // BUTTON_QUIET has min-h-11 and no vertical padding. This label is long ("Inviter de nouveau et relancer l'enregistrement" wraps to two
-    // lines from 320 to 375), and two lines of text would touch the border: py-2 keeps them clear of it, on this press only.
-    buttonClass: `${BUTTON_QUIET} w-full py-2 max-md:max-w-sm`,
-    mayPress,
-    linkHeld,
-  });
+  const press =
+    given ??
+    roundPress({
+      round,
+      view,
+      tz,
+      openRound,
+      msg,
+      plural,
+      buttonClass: HERO_PRESS_CLASS,
+      mayPress,
+      linkHeld,
+    });
 
   const clockLabel =
     clock.kind === "closes" ? msg("arbiter.column.checkin.closesIn") : clock.kind === "opens" ? msg("arbiter.column.checkin.opensIn") : msg("arbiter.column.checkin.closed");
@@ -530,10 +557,10 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, ma
       {/* The panel's one "+5 min to the round", exactly as it is handed over (its button, why line and answer). */}
       {roundExtend}
 
-      {press.button}
+      {pressInHero && press.button}
 
       {/* The press's answer stays under it even after the answer flips the press away (a successful reinvite leaves nobody owed). */}
-      {press.notice}
+      {pressInHero && press.notice}
 
       {view !== null && batches !== null && (
         <div data-testid="arbiter-column-batches" className="flex min-w-0 flex-col gap-1">
@@ -764,6 +791,10 @@ export type RoundFocusProps = {
    *  shell passes a `useCallback`): the open's and the "+5 min" runners are built over it and hold the in-flight flag that keeps a
    *  double tap off the network, so a new function each render would rebuild them. */
   onChanged(): void;
+  /** MD-R30: a press was answered 402 - the competition is billing-frozen NOW. The page's `frozen` was read at load and cannot say so, so the shell keeps
+   *  this and folds it into the reader before `mayPress`. Called when an answer on screen says so (an effect over that fact, so a poll's new row object
+   *  never calls it twice); it MUST keep its identity across renders. */
+  onFrozen(): void;
   onOpenBoard(fixtureId: string): void;
   onOpenRound(key: string): void;
   hiddenOnPhone?: boolean;
@@ -825,6 +856,16 @@ export function RoundFocus(p: RoundFocusProps) {
   );
   const pairRunner = useMemo(() => pairNextRunner({ dispatch: dispatchPair, post, refresh }), [refresh]);
 
+  // MD-R30: the freeze's own answer, from any of the four presses the server guards (open, resend, a board's +5, the round's +5). Pair next is NOT one of
+  // them: the stage's generate route has no freeze guard, so its 402 is a plan limit (MD-R32), and the shell is not told the competition froze.
+  const frozenAnswered = [openRound.state.notice, openRound.state.rowNotice?.notice ?? null, roundExt.notice, boardExt.notice].some(
+    (n) => n !== null && n.kind === "failed" && n.code === BILLING_FROZEN_CODE,
+  );
+  const onFrozen = p.onFrozen;
+  useEffect(() => {
+    if (frozenAnswered) onFrozen();
+  }, [frozenAnswered, onFrozen]);
+
   const copy = extendCopyOf(msg, plural, venueAt);
   const holds = linkHolds(round, nowMs);
   const pairTarget = pairNextRound(round);
@@ -850,7 +891,10 @@ export function RoundFocus(p: RoundFocusProps) {
   };
   const extendNotice = boardExtendNotice(boardExt, rr, copy);
 
-  const readyLine = next === null ? null : <ReadyLine next={next} canPress={canPress} onOpenRound={p.onOpenRound} />;
+  // M5: right after Pair next round answers "Round N is paired", the next round IS ready: one card says it and offers the go-to press, not two cards
+  // saying the same thing. Reloaded (no answer standing), the ready line is the card.
+  const pairedReady = pair.notice !== null && pair.notice.kind === "paired" && next !== null && pair.notice.round === next.round_no;
+  const readyLine = next === null || pairedReady ? null : <ReadyLine next={next} canPress={canPress} onOpenRound={p.onOpenRound} />;
   const pairBlock = (
     <PairNextBlock
       target={pairTarget}
@@ -858,8 +902,26 @@ export function RoundFocus(p: RoundFocusProps) {
       canPress={canPress}
       state={pair}
       onPair={(to) => void pairRunner.pair(round.stage_id, to)}
+      go={pairedReady && canPress ? { next, onOpenRound: p.onOpenRound } : null}
     />
   );
+  // The round's own reinvite / reopen press, built once for the check-in and the playing phase. Beside a link hold's reason it is THE action (primary,
+  // drawn in the block under the reasons - M3); otherwise the hero's quiet press or the status's primary one.
+  const holdsPress = holds.length > 0;
+  const own =
+    rr !== null && (phase === "checkin" || phase === "playing")
+      ? roundPress({
+          round: rr,
+          view,
+          tz: round.tz,
+          openRound,
+          msg,
+          plural,
+          buttonClass: holdsPress || phase === "playing" ? PRIMARY_PRESS_CLASS : HERO_PRESS_CLASS,
+          mayPress: canPress,
+          linkHeld: holdsPress,
+        })
+      : null;
 
   let body: ReactNode = null;
   if (phase === "not_started") {
@@ -887,7 +949,7 @@ export function RoundFocus(p: RoundFocusProps) {
           panel={{ ctaTestId: "md-round-open-cta", confirmTestId: "md-round-confirm" }}
         />
       );
-  } else if (rr !== null && phase === "checkin") {
+  } else if (rr !== null && own !== null && phase === "checkin") {
     body = (
       <>
         <CheckinHero
@@ -898,7 +960,9 @@ export function RoundFocus(p: RoundFocusProps) {
           openRound={openRound}
           roundExtend={roundExtend}
           mayPress={canPress}
-          linkHeld={holds.length > 0}
+          linkHeld={holdsPress}
+          press={own}
+          pressInHero={!holdsPress}
           bare
         />
         <WaitingList
@@ -912,33 +976,22 @@ export function RoundFocus(p: RoundFocusProps) {
           placement=""
           extendNotice={extendNotice}
         />
-        <LinkHoldsBlock holds={holds} onOpenBoard={p.onOpenBoard} />
+        <LinkHoldsBlock holds={holds} onOpenBoard={p.onOpenBoard} press={own} />
         {readyLine}
         {pairBlock}
       </>
     );
-  } else if (rr !== null) {
+  } else if (rr !== null && own !== null) {
     // Playing: no board is checking in. The round's own press, when the reader names one (a re-armed board after the D17 void, or a board
-    // held for a link whose window still runs), is drawn inside the status, as the column draws it.
-    const own = roundPress({
-      round: rr,
-      view,
-      tz: round.tz,
-      openRound,
-      msg,
-      plural,
-      buttonClass: `${BUTTON_PRIMARY} py-2 text-balance`,
-      mayPress: canPress,
-      linkHeld: holds.length > 0,
-    });
+    // held for a link whose window still runs), is drawn inside the status, as the column draws it - or, with a link hold, in the hold's block.
     body = (
       <>
         <PlayingStatus round={rr} roundExtend={roundExtend} owed={boardsOwedAnInvite(own.owedView)} bare>
-          {own.button}
-          {own.notice}
+          {!holdsPress && own.button}
+          {!holdsPress && own.notice}
           {own.dialog}
         </PlayingStatus>
-        <LinkHoldsBlock holds={holds} onOpenBoard={p.onOpenBoard} />
+        <LinkHoldsBlock holds={holds} onOpenBoard={p.onOpenBoard} press={own} />
         {readyLine}
         {pairBlock}
       </>
@@ -1001,11 +1054,9 @@ function RoundExtendBar({
     state.notice === null ? [] : state.notice.kind === "answered" ? extendRoundLines(state.notice.result, f) : [extendFailureText(state.notice.code, f)];
   const reach = liveExtendableBoards(round.boards, nowMs, round.extendableBoards);
   const offered = canPress && (reach > 0 || state.busy);
-  // Where the button is not offered, the reason stands in its place, never a bar that silently vanishes: the one cause every board gives, or
-  // "No board can be extended right now" when they differ. Nothing for a round that lists no boards, and nothing to a reader who could not
-  // press it anyway (the freeze says why on the page).
-  const why = offered || !canPress ? null : roundExtendWhy(round.boards, nowMs);
-  if (!offered && lines.length === 0 && why === null) return null;
+  // M5: no line says why a press is NOT there ("Can't extend check-in: it has closed" printed itself under a clock that already reads closed, to a
+  // reader who pressed nothing). The bar is its press and the answer to it; a bar with neither draws nothing.
+  if (!offered && lines.length === 0) return null;
   return (
     <div data-testid="arbiter-extend-round" className="flex w-full min-w-0 flex-col items-start gap-1.5">
       {offered && (
@@ -1025,11 +1076,6 @@ function RoundExtendBar({
             {reach > 0 && <> {f.plural("externalPlay.checkinExtend.roundHint", reach)}</>}
           </p>
         </>
-      )}
-      {why !== null && (
-        <p data-testid="arbiter-extend-round-why" data-why={why.code} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
-          {roundWhyLine(why, f)}
-        </p>
       )}
       <div role="status" data-testid="arbiter-extend-round-notice" className={`flex min-w-0 flex-col gap-0.5 text-[13px] leading-[1.45] ${SOFT}`}>
         {lines.map((line, i) => (
@@ -1067,12 +1113,16 @@ function PairNextBlock({
   canPress,
   state,
   onPair,
+  go,
 }: {
   target: number | null;
   stageId: string;
   canPress: boolean;
   state: PairNextState;
   onPair(round: number): void;
+  /** Once "paired" is the answer on screen and that round is the shell's next one, the go-to press stands in this card (M5: one card, not a second
+   *  "ready to open" card saying the same thing). */
+  go: { next: MatchDayOnlineRound; onOpenRound(key: string): void } | null;
 }) {
   const msg = useMsg();
   const plural = useMsgPlural();
@@ -1085,14 +1135,16 @@ function PairNextBlock({
       : n.kind === "paired"
         ? [msg("matchDay.round.pairedNotice", { round: n.round }), ...(n.caution === null ? [] : [nextRoundText(n.caution, msg)])]
         : [
+            // MD-R32: the generate route has no freeze guard, so its 402 is a plan limit (a format or a stage the plan does not include), never the
+            // "over its plan's limit on active competitions" sentence the four guarded presses use.
             n.code === BILLING_FROZEN_CODE
-              ? msg("runsheet.round.err.frozen")
+              ? msg("matchDay.round.pairPlanLimit")
               : isSwissRefusalCode(n.code)
                 ? swissRefusalText(n.code, n.extra, msg, plural)
                 : msg("matchDay.round.pairFailed"),
           ];
   return (
-    <section aria-label={msg("schedule.pairNext")} data-testid="md-round-pair" data-stage-id={stageId} className={`flex min-w-0 flex-col items-start gap-2 ${CARD_BOX}`}>
+    <section aria-label={msg("schedule.pairNext")} data-testid="md-round-pair" data-stage-id={stageId} className={`flex min-w-0 flex-col gap-2 ${CARD_BOX}`}>
       {offered && (
         <>
           <p className={`m-0 text-sm leading-[1.5] ${SOFT}`}>{msg("matchDay.round.pairHint", { round: target })}</p>
@@ -1118,16 +1170,25 @@ function PairNextBlock({
           ))}
         </div>
       )}
+      {go !== null && (
+        <button type="button" data-testid="md-round-ready-go" onClick={() => go.onOpenRound(go.next.key)} className={`${BUTTON_QUIET} w-full sm:w-auto`}>
+          {msg("matchDay.round.readyGo", { round: go.next.round_no })}
+        </button>
+      )}
     </section>
   );
 }
 
 /** MD-R2/R22: the boards of the round on screen held for a Lichess link - each with why, in the words the open's own answer uses - and the
  *  window's word when it has closed (an open can no longer invite that board: said, never a press that loops silently). The press itself
- *  is the round's own ("Open round N again", in the check-in hero or the playing status): one action, one name. */
-function LinkHoldsBlock({ holds, onOpenBoard }: { holds: readonly LinkHold[]; onOpenBoard(fixtureId: string): void }) {
+ *  is the round's own ("Open round N again"), drawn under the reasons in this block (M3): one action, one name. */
+function LinkHoldsBlock({ holds, onOpenBoard, press }: { holds: readonly LinkHold[]; onOpenBoard(fixtureId: string): void; press: RoundPress }) {
   const msg = useMsg();
   if (holds.length === 0) return null;
+  // M1: "the time to take a seat has passed" is only said where there is NO press under it. While "Open round N again" is offered, that press starts the
+  // window again, so the sentence beside it would contradict the page; to a reader who may not press (a frozen competition, a viewer) there is no press
+  // and the sentence is what explains why the board waits.
+  const sayClosed = press.button === null;
   return (
     <section aria-labelledby="md-round-linkhold-heading" data-testid="md-round-linkhold" className={`flex min-w-0 flex-col gap-2 ${CARD_BOX}`}>
       <h3 id="md-round-linkhold-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
@@ -1159,7 +1220,7 @@ function LinkHoldsBlock({ holds, onOpenBoard }: { holds: readonly LinkHold[]; on
             <p data-testid="md-round-linkhold-reason" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
               {msg(OPEN_ROUND_SKIP_KEYS[reason] as MessageKey)}
             </p>
-            {windowClosed && (
+            {windowClosed && sayClosed && (
               <p data-testid="md-round-linkhold-closed" className="m-0 text-[13px] font-semibold leading-[1.45] text-[#713f12]">
                 {msg(OPEN_ROUND_SKIP_KEYS.window_closed as MessageKey)}
               </p>
@@ -1167,6 +1228,10 @@ function LinkHoldsBlock({ holds, onOpenBoard }: { holds: readonly LinkHold[]; on
           </li>
         ))}
       </ul>
+      {/* M3: the round's own press stands under the reasons it answers, with its answer ("Open round N again"); the confirmation is the hero's or the
+          status's. Nothing here when the reader names no press (a viewer, a frozen competition, a round with nothing owed). */}
+      {press.button}
+      {press.notice}
     </section>
   );
 }

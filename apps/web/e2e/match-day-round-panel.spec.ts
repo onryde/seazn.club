@@ -134,6 +134,9 @@ test.describe("Match Day online - the round panel", () => {
     await page.goto(`${matchDay}?round=${roundKey(r, 1)}`);
     await expect(panel(page)).toHaveAttribute("data-key", roundKey(r, 1), { timeout: 30_000 });
     expect(await page.getByTestId("md-round-ready").count(), "premise: round 2 is not paired yet, so there is no ready line").toBe(0);
+    // MD-R31: every board is over, so the panel says "2 boards finished" and nothing above it (never "0 of 2 boards playing" over it)
+    await expect(page.getByTestId("arbiter-column-finished")).toHaveText(fill("arbiter.column.finished.other", { count: 2 }));
+    await expect(page.getByTestId("arbiter-column-playing"), "all over: no playing line").toHaveCount(0);
 
     const pair = page.getByTestId("md-round-pair-next");
     await expect(pair, "every board is over and the stage's next round is round 2: one press").toHaveCount(1);
@@ -144,11 +147,14 @@ test.describe("Match Day online - the round panel", () => {
     await expect(page.getByTestId("md-round-pair-notice"), "the answer outlives the press").toContainText(fill("matchDay.round.pairedNotice", { round: 2 }));
     await expect(pair, "the press is gone once round 2 is paired").toHaveCount(0, { timeout: 30_000 });
 
-    // round 2 is "ready to open" on round 1's panel; its go-to press moves to round 2's panel, which opens it
-    const ready = page.getByTestId("md-round-ready");
-    await expect(ready).toContainText(fill("matchDay.round.ready", { round: 2 }), { timeout: 30_000 });
+    // M5: round 2 is ready to open, and ONE card says so: the answer's card carries the go-to press (no second "ready to open" card beside it);
+    // the go-to press moves to round 2's panel, which opens it
+    const go = page.getByTestId("md-round-pair").getByTestId("md-round-ready-go");
+    await expect(go, "the paired card carries the go-to press").toHaveText(fill("matchDay.round.readyGo", { round: 2 }), { timeout: 30_000 });
+    await expect(page.getByTestId("md-round-ready"), "and there is no second card saying the same").toHaveCount(0);
+    await expect(page.getByTestId("md-round-pair-notice")).toContainText(fill("matchDay.round.pairedNotice", { round: 2 }));
     await expect(page.getByTestId("md-round-open-cta"), "round 1's panel never draws round 2's Open round").toHaveCount(0);
-    await page.getByTestId("md-round-ready-go").click();
+    await go.click();
     await expect(panel(page)).toHaveAttribute("data-key", roundKey(r, 2));
     await expect(panel(page)).toHaveAttribute("data-state", "before");
     const sent = openRoundSent(page, r.stageId);
@@ -182,20 +188,29 @@ test.describe("Match Day online - the round panel", () => {
     await expect(again, "the round's own press, named for what it does").toHaveText(fill("matchDay.round.openAgain", { round: 1 }));
     const sent = openRoundSent(page, r.stageId);
     await again.click();
+    // M3: the dialog asks and confirms in the press's own words
+    await expect(page.getByTestId("arbiter-column-reinvite-dialog"), "the dialog names the press").toContainText(fill("matchDay.round.openAgainTitle", { round: 1 }));
+    await expect(page.getByTestId("arbiter-column-reinvite-dialog-confirm")).toHaveText(fill("matchDay.round.openAgain", { round: 1 }));
     await page.getByTestId("arbiter-column-reinvite-dialog-confirm").click();
     const answer = await openAnswerOf(await sent);
     expect(answer, "the open answered").toBeDefined();
     // the player IS linked (the seed links everyone), so the re-open takes the board out of the hold
     await expect(block, "the board left the hold").toHaveCount(0, { timeout: 30_000 });
 
-    // The window run out: the closed word, and no press that would do nothing. The press is "none" only when a re-open could not start the
-    // check-in again, i.e. another board is still bound to the open (a round nobody is bound to restarts, and that press is real): the
-    // second board holds a sent mail, which binds it.
-    await seedSeatInvite(r.boards[1]!.fixtureId, "white", "sent");
+    // The window run out, M1's two branches. Nobody is bound to the open: a re-open restarts the check-in, so the press is offered and the
+    // sentence "the time to take a seat has passed" is NOT said beside it (it would contradict the press that starts the time again).
     await withDb(
       (sql) => sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'lichess_reconnect', updated_at = now() where fixture_id = ${held.fixtureId}`,
     );
     await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS + 120_000);
+    await page.goto(`${matchDay}?round=${roundKey(r, 1)}`);
+    await expect(panel(page)).toHaveAttribute("data-key", roundKey(r, 1), { timeout: 30_000 });
+    await expect(page.getByTestId("md-round-linkhold-board")).toHaveAttribute("data-window-closed", "true");
+    await expect(page.getByTestId("md-round-reopen-cta"), "nobody bound: the press restarts the check-in, and is offered").toHaveCount(1);
+    await expect(page.getByTestId("md-round-linkhold-closed"), "so the page does not also say the time has passed").toHaveCount(0);
+    // The press is "none" only when a re-open could not start the check-in again, i.e. another board is still bound to the open: the second
+    // board holds a sent mail, which binds it. Then the closed word is said, and there is no press that would do nothing.
+    await seedSeatInvite(r.boards[1]!.fixtureId, "white", "sent");
     await page.goto(`${matchDay}?round=${roundKey(r, 1)}`);
     await expect(panel(page)).toHaveAttribute("data-key", roundKey(r, 1), { timeout: 30_000 });
     const closedBoard = page.getByTestId("md-round-linkhold-board");
@@ -225,6 +240,10 @@ test.describe("Match Day online - the round panel", () => {
     await expect(page.getByTestId("arbiter-column-open-notice"), "the freeze's own sentence").toContainText(uiEn["runsheet.round.err.frozen"]!);
     await expect(page.getByTestId("arbiter-column-open-notice")).not.toContainText(uiEn["runsheet.round.err.failed"]!);
     expect(await withDb((sql) => sql`select 1 from stage_round_opens where stage_id = ${r.stageId}`), "nothing opened").toHaveLength(0);
+    // MD-R30: the 402 is the page learning the competition froze. The purple press does not stay live beside the freeze notice until a reload: it
+    // is gone now, on this same document, while the answer stays said (no reload happened since the page was first read).
+    await expect(page.getByTestId("md-round-open-cta"), "after a driven 402 the press is gone, without a reload").toHaveCount(0);
+    await expect(page.getByTestId("arbiter-column-open-notice"), "and the freeze's answer is still on screen").toContainText(uiEn["runsheet.round.err.frozen"]!);
 
     await page.goto(url);
     await expect(panel(page)).toHaveAttribute("data-state", "before", { timeout: 30_000 });

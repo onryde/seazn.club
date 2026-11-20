@@ -39,7 +39,7 @@ import en from "@/dictionaries/en/ui.json";
 import publicEn from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MatchDayCourt, MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
-import { mayPress } from "@/lib/match-day/online";
+import { mayPress, type Reader } from "@/lib/match-day/online";
 import { NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
 import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 import { CourtFocus } from "../court-focus";
@@ -311,6 +311,35 @@ describe("the reader the shell builds for the panels (O4, MD-R21): {editor, offe
     const b = parts(renderIsland(MatchDayShell, props(v, { focusRoundKey: "stage-2:1", frozen: true })).tree());
     expect(a.round!.reader).toEqual({ editor: true, offered: true, frozen: true });
     expect(b.round!.reader).toEqual({ editor: true, offered: false, frozen: true });
+  });
+});
+
+describe("MD-R30: a 402 seen by the round panel lifts every press that starts play, for good (until the page reloads)", () => {
+  // `frozen` is read when the page loads; a freeze that lands under an open page is only learned from a press answered 402. The panel tells the shell
+  // (`onFrozen`), the shell keeps it and folds it into the reader every panel is handed - so the press goes inert without waiting for a reload.
+  it("onFrozen flips the round panel's AND the board panel's reader to frozen: start is gone, the decisions that finish play stay; a poll does not take it back", async () => {
+    const v = { ...night(), online_rounds: [round("stage-1:3", "playing", arbiterRound([live(5, { fixtureId: "b-9" })]))] };
+    const island = renderIsland(MatchDayShell, props(v, { focusRoundKey: "stage-1:3" }));
+    const roundReader = () => parts(island.tree()).round!.reader as Reader;
+    expect(roundReader(), "before: not frozen, and start is offered").toEqual({ editor: true, offered: true, frozen: false });
+    expect(mayPress(roundReader(), "start")).toBe(true);
+    expect(typeof parts(island.tree()).round!.onFrozen, "anti-vacuity: the shell hands the panel the callback").toBe("function");
+    (parts(island.tree()).round!.onFrozen as () => void)();
+    expect(roundReader(), "after: frozen").toEqual({ editor: true, offered: true, frozen: true });
+    expect(mayPress(roundReader(), "start"), "no press that starts play").toBe(false);
+    expect(mayPress(roundReader(), "finish"), "the decisions that finish play stay (the freeze exempts results)").toBe(true);
+    // the same callback again is harmless; a poll whose page still says `frozen: false` does not lift it
+    (parts(island.tree()).round!.onFrozen as () => void)();
+    net.next = { ...v, now: at(1) };
+    poll.tick!();
+    await settle();
+    expect(roundReader(), "a poll cannot say the competition is unfrozen: only a reload can").toEqual({ editor: true, offered: true, frozen: true });
+    // a board opened afterwards is the same competition: its panel reads the freeze too
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-9");
+    expect(parts(island.tree()).board!.reader, "the board panel's reader").toEqual({ editor: true, offered: true, frozen: true });
+    // and a page that loads frozen=false and never saw a 402 is not frozen (the flag is state of THIS page, not of the module)
+    const fresh = renderIsland(MatchDayShell, props(v, { focusRoundKey: "stage-1:3" }));
+    expect(parts(fresh.tree()).round!.reader).toMatchObject({ frozen: false });
   });
 });
 
