@@ -173,6 +173,7 @@ const HELD_F5: NeedsOrganiserExternalPlayRow = {
   revokedSeat: null,
   roundNo: 3,
   boardNo: 5,
+  stageId: "stage-1",
   stageName: "Open Swiss",
   canResync: false,
   seated: false,

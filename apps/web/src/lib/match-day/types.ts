@@ -235,10 +235,14 @@ export interface MatchDayOnlineRound {
   /** The opened round whole (`loadArbiterRound` with flags "count"): its boards carry `seats`, `checkin` and `sides`, which the round
    *  panel's rules read. Null before the open. `round.boards` is the row's board list. */
   round: ArbiterRound | null;
-  /** Held or flagged boards of the division NOT in `round.boards`, any round, each with its round. A cancelled board is here only
-   *  while it has an open flag (owner O1, 2026-11-17). */
+  /** Held or flagged boards of the division NOT in the `round.boards` of ANY of its rows (`round.boards` is each row's own stage's
+   *  latest opened round), any round, each with its round. They are carried on the division's FIRST row only (the division page lists
+   *  them once), whichever stage the board is in; every other row has []. A cancelled board is here only while it has an open flag
+   *  (owner O1, 2026-11-17). */
   needs_decision: MatchDayBoardRow[];
-  /** Boards the viewer plays on, left out of both lists. */
+  /** Boards the viewer plays on that no list shows: the row's own round's (the loader's count) and, on the division's FIRST row, the
+   *  held boards of earlier rounds the viewer plays on. A board that is only FLAGGED in an earlier round and the viewer's own is in no
+   *  count at all (the flagged list gives a count, not ids): such a board is simply not shown. */
   own_boards: number;
 }
 

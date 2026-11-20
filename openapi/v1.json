@@ -4443,7 +4443,8 @@
                                   {
                                     "type": "object",
                                     "properties": {},
-                                    "additionalProperties": {}
+                                    "additionalProperties": {},
+                                    "description": "The open-round reader's view of this (stage, round) (OpenRoundView): `state` (paired | open), the press, the pairings and the check-in batches. Null when the reader has none for it, and for `not_started`."
                                   },
                                   {
                                     "type": "null"
@@ -4455,7 +4456,8 @@
                                   {
                                     "type": "object",
                                     "properties": {},
-                                    "additionalProperties": {}
+                                    "additionalProperties": {},
+                                    "description": "The opened round whole (ArbiterRound): `boards` (each an ArbiterBoard with `state`, `seats`, `checkin`, `sides` - presence, camera, `joinable` - `flagCount`, an always-empty `flags`, and `hold_reason`), `ownBoards` and `current`. Null before the open."
                                   },
                                   {
                                     "type": "null"
@@ -4467,7 +4469,8 @@
                                 "items": {
                                   "type": "object",
                                   "properties": {},
-                                  "additionalProperties": {}
+                                  "additionalProperties": {},
+                                  "description": "An ArbiterBoard (as in `round.boards`) with `stage_id`, `round_no` and `hold_reason`: a held or flagged board of the division that is not in `round.boards`. Carried on the division's FIRST row only."
                                 }
                               },
                               "own_boards": {

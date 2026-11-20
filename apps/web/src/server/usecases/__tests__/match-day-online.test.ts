@@ -32,6 +32,22 @@ vi.mock("../external-play/online-chess-flag", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../external-play/online-chess-flag")>();
   return { ...actual, onlineChessOffered: vi.fn(actual.onlineChessOffered) };
 });
+// The held lister, wrapped so a test can hand `readOnlineRounds` the answer it read a moment ago (a hold settled between the lister's
+// read and the board's); every other call is the real one. The module's other exports are the real ones.
+vi.mock("../external-play/queue", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-play/queue")>();
+  return { ...actual, listNeedsOrganiserExternalPlay: vi.fn(actual.listNeedsOrganiserExternalPlay) };
+});
+// The online read, wrapped so a test can make it throw (MD-R9) and see what `getMatchDay` does about it.
+vi.mock("../match-day-online", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../match-day-online")>();
+  return { ...actual, readOnlineRounds: vi.fn(actual.readOnlineRounds) };
+});
+// The division list, wrapped to count how often a poll lists the competition's divisions.
+vi.mock("../divisions", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../divisions")>();
+  return { ...actual, listDivisions: vi.fn(actual.listDivisions) };
+});
 // The club's online-chess flag: the override (vitest.config) is on; a test that needs the flag asked takes it off and answers here.
 const flag = vi.hoisted(() => ({ isServerFeatureEnabled: vi.fn<(f: string, id: string, o?: { orgId?: string; fallback?: boolean }) => Promise<boolean>>() }));
 vi.mock("@/lib/posthog-server", async (importOriginal) => {
@@ -40,16 +56,19 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 });
 
 import { GET as matchDayRoute } from "@/app/api/v1/competitions/[id]/match-day/route";
+import { isMatchDayView } from "@/lib/match-day/view";
 import { MatchDayView } from "@/server/api-v1/schemas";
 import { createApiKey } from "../api-keys";
 import { forgetOnlineChessFlagCache, onlineChessOffered } from "../external-play/online-chess-flag";
 import { closeExternalPlayFlags } from "../external-play/flags";
 import { loadArbiterRound, loadBoardsByIds } from "../external-play/arbiter";
+import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
+import { log } from "@/server/logger";
 import { listOpenRounds } from "../external-play/open-round-view";
 import { openRound } from "../external-play/open-round";
 import { getMatchDay } from "../match-day";
 import { readOnlineRounds } from "../match-day-online";
-import { createDivision } from "../divisions";
+import { createDivision, listDivisions } from "../divisions";
 import { createStages } from "../stages";
 import { putScheduleSettings, startDivision } from "../schedule";
 import { seedLinkedPair, seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
@@ -624,6 +643,228 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
     expect(roundBoards(second).map((b) => b.state.kind)).toEqual(["result", "on_hold"]);
     expect(second.key).toBe(first.key);
   });
+
+  it("MD-R9: the online read throwing is logged at error with the competition id, and the poll still answers - exactly the view without online rounds; the next poll reads them again", async () => {
+    const { day, inHall, online } = await mixedDay();
+    const now = new Date(T0);
+    vi.stubEnv("MATCH_DAY_ONLINE", undefined);
+    const withoutOnline = await getMatchDay(day.auth, day.comp.id, now);
+    expect(withoutOnline.courts.length, "premise: the in-hall day has its courts").toBe(3);
+    vi.stubEnv("MATCH_DAY_ONLINE", "1");
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      vi.mocked(readOnlineRounds).mockClear();
+      vi.mocked(readOnlineRounds).mockRejectedValueOnce(new Error("boom: the arbiter's read is down"));
+
+      const down = await getMatchDay(day.auth, day.comp.id, now);
+
+      expect(vi.mocked(readOnlineRounds), "premise: the forced throw was reached").toHaveBeenCalledTimes(1);
+      expect(down, "a failed online read leaves the day exactly as the flag-off day reads: courts, no-court list, needs-you, all of it").toEqual(withoutOnline);
+      expect(down.playing_no_court.map((m) => m.id).sort(), "nothing was listed under a round, so the online boards stay no-court rows").toEqual([inHall, ...idsOf(online.boards)].sort());
+      expect(logged, "logged once, loud").toHaveBeenCalledTimes(1);
+      const [fields] = logged.mock.calls[0]! as [{ err: Error; competitionId: string }, string];
+      expect(fields.competitionId).toBe(day.comp.id);
+      expect(fields.err.message).toBe("boom: the arbiter's read is down");
+
+      const up = await getMatchDay(day.auth, day.comp.id, now);
+      expect(up.online_rounds, "the next poll reads the rounds again").toHaveLength(1);
+      expect(logged, "and logs nothing more").toHaveBeenCalledTimes(1);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  it("I2: a poll lists the competition's divisions once - with the online read on, as often as with it off - and a read called alone lists them itself", async () => {
+    const { day } = await mixedDay();
+    const now = new Date(T0);
+    const listed = vi.mocked(listDivisions);
+    const countFor = async (flagValue: string | undefined): Promise<number> => {
+      vi.stubEnv("MATCH_DAY_ONLINE", flagValue);
+      listed.mockClear();
+      await getMatchDay(day.auth, day.comp.id, now);
+      return listed.mock.calls.length;
+    };
+
+    const off = await countFor(undefined);
+    const on = await countFor("1");
+    expect(off, "premise: the poll lists divisions (the counter sees the call)").toBeGreaterThan(0);
+    expect(on, "the online read adds no second list").toBe(off);
+
+    listed.mockClear();
+    expect(await readOnlineRounds(day.auth, day.comp.id, now)).toHaveLength(1);
+    expect(listed.mock.calls.length, "called alone, it lists once itself").toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// I2: what a poll costs. `readOnlineRounds` reads a round's boards through the arbiter's own loader (MD-R1) and the round's view through
+// `listOpenRounds`; both read each board (see the measured numbers below). The cost is pinned by the census: statements issued by one
+// read of a round of 1 board and of 4, the SAME round shape, and the per-board slope held to a ceiling. A board that costs a statement of
+// its own is a loop in a poll, and a poll runs every few seconds for every organiser watching.
+describe.runIf(HAS_DB)("readOnlineRounds - what a poll costs (I2): statements per board", () => {
+  /** Statements issued by one read (a first read warms nothing a poll would not warm: it is taken second). */
+  async function statementsOfRead(r: SeedOnlineChessRoundResult): Promise<number> {
+    await readOnlineRounds(r.owner, r.competitionId, NOW);
+    const before = statementTexts().length;
+    const rows = await readOnlineRounds(r.owner, r.competitionId, NOW);
+    const issued = statementTexts().length - before;
+    expect(rows, "premise: the round was read (a read of nothing costs nothing)").toHaveLength(1);
+    expect(issued, "premise: the counter is live").toBeGreaterThan(0);
+    return issued;
+  }
+  /** The statements one MORE board costs, from a round of 1 board and a round of 4 (the slope, which must be a whole number: a fractional
+   *  slope would mean a cost that is not per board). */
+  async function slopeOf(make: (n: number) => Promise<SeedOnlineChessRoundResult>): Promise<{ one: number; four: number; slope: number }> {
+    const one = await statementsOfRead(await make(1));
+    const four = await statementsOfRead(await make(4));
+    expect((four - one) % 3, `1 board ${one} statements, 4 boards ${four}: the difference splits evenly over the 3 extra boards`).toBe(0);
+    return { one, four, slope: (four - one) / 3 };
+  }
+  const playing = async (n: number): Promise<SeedOnlineChessRoundResult> => {
+    const r = await openedRound(n, -5);
+    for (const b of r.boards) {
+      await bridgeRow(b.fixtureId, r.orgId, { status: "live", moves: 10 });
+      await setFixtureStatus(b.fixtureId, "in_play");
+    }
+    return r;
+  };
+  const flagged = async (n: number): Promise<SeedOnlineChessRoundResult> => {
+    const r = await playing(n);
+    for (const b of r.boards) await openFlag(r.orgId, b.fixtureId);
+    return r;
+  };
+
+  // MEASURED at this commit (statements per extra board; the numbers are the pin, a change to them is a deliberate edit to this file):
+  //   boards checking in 14 = the arbiter loader's own composition 8 (an own transaction of 4 statements, the owner lookup, the board's
+  //     result read, its side names) + `listOpenRounds`' view of the same round 6 - two readers of one round, each reading its boards
+  //     (MD-R1 forbids a second composition of the BOARDS; the open-round view is the press and the pairings and needs its own);
+  //   boards playing 2;  boards playing and flagged 5.
+  // Taking the double read out means changing `listOpenRounds` and the loader to share one read of the round: not this task's change (each
+  // is measured alone: the loader 17 -> 41 statements for 1 -> 4 boards, `listOpenRounds` 12 -> 30). This test keeps it from growing meanwhile.
+  it("a board costs at most what it costs today: 14 statements checking in, 2 playing, 5 playing and flagged", async () => {
+    const checking = await slopeOf((n) => openedRound(n, -5));
+    const playingSlope = await slopeOf(playing);
+    const flaggedSlope = await slopeOf(flagged);
+    expect(checking.slope, "per board checking in").toBeLessThanOrEqual(14);
+    expect(playingSlope.slope, "per board playing").toBeLessThanOrEqual(2);
+    expect(flaggedSlope.slope, "per board playing and flagged").toBeLessThanOrEqual(5);
+    // Anti-vacuity: a round of 4 costs more than a round of 1 in every state (the slope is measured, not a flat line of zeros).
+    for (const m of [checking, playingSlope, flaggedSlope]) expect(m.four, "4 boards cost more than 1").toBeGreaterThan(m.one);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("readOnlineRounds - a chess division is online only when it is set to Lichess (I1)", () => {
+  type Mode = "lichess" | "off" | "absent";
+  const setMode = async (divisionId: string, mode: Mode): Promise<void> => {
+    if (mode === "absent") await sql`update divisions set config = config - 'onlinePlay' where id = ${divisionId}`;
+    else await sql`update divisions set config = config || ${sql.json({ onlinePlay: mode })} where id = ${divisionId}`;
+  };
+
+  it("an over-the-board chess division has no row - not started, or started with an opened round; set to Lichess it has one, and back off it has none again (the sequence)", async () => {
+    const setup = await seedOnlineChessRound({ fixtures: 1, divisionStarted: false });
+    const started = await openedRound(1, -5);
+    const cases: { label: string; r: SeedOnlineChessRoundResult; expectedPhase: string }[] = [
+      { label: "not started", r: setup, expectedPhase: "not_started" },
+      { label: "started and opened", r: started, expectedPhase: "checkin" },
+    ];
+    let checked = 0;
+    for (const { label, r, expectedPhase } of cases) {
+      for (const mode of ["off", "absent"] as const) {
+        await setMode(r.divisionId, mode);
+        expect(await readOnlineRounds(r.owner, r.competitionId, NOW), `${label}, onlinePlay ${mode}: an over-the-board division has no online row`).toEqual([]);
+        checked++;
+      }
+      await setMode(r.divisionId, "lichess");
+      const rows = await readOnlineRounds(r.owner, r.competitionId, NOW);
+      expect(rows.map((x) => [x.division_id, x.phase]), `${label}, set to Lichess: the one row`).toEqual([[r.divisionId, expectedPhase]]);
+      await setMode(r.divisionId, "off");
+      expect(await readOnlineRounds(r.owner, r.competitionId, NOW), `${label}, switched back off: no row again`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both states, every mode").toBe(6);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("readOnlineRounds - a division with two stages: two rows, the held and flagged boards on the first (M1, M4)", () => {
+  /** Stage "RR" (round 1 opened just now) and a second stage with rounds 1 and 2 opened (round 2 the division's latest), the second
+   *  stage's round-1 board `held` and the viewer's person the home player of the pair that plays every round of stage 2. */
+  async function twoStages(stage2Name: string) {
+    const r = await seedOnlineChessRound({ fixtures: 1, divisionStarted: false });
+    const pair = await seedLinkedPair(r.owner, r.divisionId);
+    const s2 = await addStage(r, stage2Name, pair);
+    await startDivision(r.owner, r.divisionId);
+    const [s2Round2] = await addRound(r, 2, [pair], s2.stageId);
+    await openStamp(r, 1, at(-60));
+    await openStamp(r, 1, at(-90), s2.stageId);
+    await openStamp(r, 2, at(-5), s2.stageId);
+    await bridgeRow(s2.fixtureId, r.orgId, { status: "needs_organiser", reason: "no_show_black" });
+    return { r, pair, s2, s2Round1Board: s2.fixtureId, s2Round2Board: s2Round2! };
+  }
+
+  it("M1: two stages with the SAME name - the viewer's held board in stage 2's round 1 is counted on the first row, not mistaken for stage 1's round 1 by its name", async () => {
+    const { r, pair, s2 } = await twoStages("RR");
+    await sql`update persons set user_id = ${r.ownerUserId} where id = ${pair.home.personId}`;
+
+    // The held lister names the board's stage by its id (the key the count below is matched on), not only by its name.
+    const heldRows = await listNeedsOrganiserExternalPlay(r.owner, r.divisionId);
+    expect(heldRows.map((h) => [h.stageId, h.roundNo, h.stageName]), "premise: the lister's row for the held board").toEqual([[s2.stageId, 1, "RR"]]);
+
+    const rows = await readOnlineRounds(r.owner, r.competitionId, NOW);
+
+    expect(rows.map((x) => x.key), "stage 1's round 1, stage 2's round 2").toEqual([`${r.stageId}:1`, `${s2.stageId}:2`]);
+    expect(rows.map((x) => x.stage_name), "premise: the two stages share a name").toEqual(["RR", "RR"]);
+    expect(rows[1]!.own_boards, "stage 2's round 2: the viewer's own board (the loader's count)").toBe(1);
+    expect(rows[0]!.own_boards, "the first row: the viewer's held board of stage 2's round 1, which no list shows").toBe(1);
+    expect(rows.flatMap((x) => idsOf(x.needs_decision)), "an own board is in no list").toEqual([]);
+  });
+
+  it("M4: the held board of stage 2's earlier round is on the FIRST row's needs_decision only (with its stage and round), the second row has none; round.current is the division's, so only the latest opened round's row reads current", async () => {
+    const { r, s2, s2Round1Board } = await twoStages("Playoff");
+
+    const rows = await readOnlineRounds(r.owner, r.competitionId, NOW);
+
+    expect(rows.map((x) => x.key)).toEqual([`${r.stageId}:1`, `${s2.stageId}:2`]);
+    expect(rows.map((x) => idsOf(x.needs_decision)), "the first row carries it, the second none").toEqual([[s2Round1Board], []]);
+    const held = rows[0]!.needs_decision[0]!;
+    expect(held).toMatchObject({ stage_id: s2.stageId, round_no: 1, hold_reason: "no_show_black" });
+    expect(held.state.kind).toBe("on_hold");
+    expect(rows.map((x) => timesListed(x, s2Round1Board)), "listed once across the division's rows").toEqual([1, 0]);
+    expect(rows.map((x) => x.round!.current), "round.current is division-wide: the division's latest opened round (stage 2's round 2) only").toEqual([false, true]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+describe.runIf(HAS_DB)("readOnlineRounds - the hold reason follows the board (M2)", () => {
+  it("a hold settled between the lister's read and the board's: the board reads live and carries no reason, in the round and in needs_decision alike", async () => {
+    const r = await openedRound(2, -90);
+    const second = await addRound(r, 2, r.boards.map((b) => ({ home: b.home, away: b.away })));
+    await openStamp(r, 2, at(-5));
+    const early = r.boards[0]!;
+    // Round 1's board and round 2's board are both held when the lister reads (one is in the listed round, one is an earlier round's)...
+    await bridgeRow(early.fixtureId, r.orgId, { status: "needs_organiser", reason: "no_show_white" });
+    await bridgeRow(second[0]!, r.orgId, { status: "needs_organiser", reason: "no_show_black" });
+    const stale = await listNeedsOrganiserExternalPlay(r.owner, r.divisionId);
+    expect(stale.map((h) => h.fixtureId).sort(), "premise: the lister reads both held").toEqual([early.fixtureId, second[0]!].sort());
+    // ...and the games go on before the boards are read.
+    for (const id of [early.fixtureId, second[0]!]) {
+      await sql`delete from fixture_external_play where fixture_id = ${id}`;
+      await bridgeRow(id, r.orgId, { status: "live", moves: 10 });
+      await setFixtureStatus(id, "in_play");
+    }
+    vi.mocked(listNeedsOrganiserExternalPlay).mockResolvedValueOnce(stale);
+
+    const [row] = await readOnlineRounds(r.owner, r.competitionId, NOW);
+
+    expect(vi.mocked(listNeedsOrganiserExternalPlay), "premise: the read used the stale answer").toHaveBeenCalledTimes(2);
+    const inRound = boardOf(row!, second[0]!);
+    expect(inRound.state.kind, "the board reads live").toBe("live");
+    expect(holdOf(inRound), "no reason on a board that is not on hold (listed in the round)").toBeNull();
+    const earlier = row!.needs_decision.find((b) => b.fixtureId === early.fixtureId)!;
+    expect(earlier.state.kind, "premise: the earlier round's board is read too, live").toBe("live");
+    expect(earlier.hold_reason, "no reason on a board that is not on hold (listed in needs_decision)").toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -652,9 +893,13 @@ describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's sche
       { params: Promise.resolve({ id: r.competitionId }) },
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ok: boolean; data: unknown };
+    const body = (await res.json()) as { ok: boolean; data: { online_rounds: unknown[] } };
+    // The consumer's own door: the client poll accepts the body only when `isMatchDayView` does (a body it refuses is dropped).
+    expect(isMatchDayView(body.data), "the poll body passes the client's shape guard").toBe(true);
     const wire = MatchDayView.parse(body.data).online_rounds;
     expect(wire, "online_rounds survives the parse (a plain z.object strips an undeclared key)").toHaveLength(usecase.length);
+    // The WHOLE row, not the keys the assertions below name: the schema neither dropped a field of a row nor invented one.
+    expect(wire, "every row of the wire is the route's JSON, field for field").toEqual(body.data.online_rounds);
 
     const wireBoards = (wire[0]!.round as { boards: (ArbiterBoard & { hold_reason?: unknown })[] }).boards;
     const wHeld = wireBoards.find((b) => b.fixtureId === held.fixtureId)!;

@@ -218,12 +218,26 @@ export const MatchDayOnlineRound = z.object({
   /** The venue zone the round's times are printed in. */
   tz: z.string(),
   /** The open-round reader's view of this (stage, round) (lib/open-round.ts OpenRoundView): the press, the pairings, the batches. Null when it has none for it, and for `not_started`. */
-  view: z.looseObject({}).nullable(),
+  view: z
+    .looseObject({})
+    .meta({ description: "The open-round reader's view of this (stage, round) (OpenRoundView): `state` (paired | open), the press, the pairings and the check-in batches. Null when the reader has none for it, and for `not_started`." })
+    .nullable(),
   /** The opened round whole (lib/arbiter-view.ts ArbiterRound), its `boards` carrying seats, check-in, sides (presence, camera, joinable), `flagCount` (flags are counted, never listed: `flags` is []) and `hold_reason`. Null before the open. */
-  round: z.looseObject({}).nullable(),
+  round: z
+    .looseObject({})
+    .meta({
+      description:
+        "The opened round whole (ArbiterRound): `boards` (each an ArbiterBoard with `state`, `seats`, `checkin`, `sides` - presence, camera, `joinable` - `flagCount`, an always-empty `flags`, and `hold_reason`), `ownBoards` and `current`. Null before the open.",
+    })
+    .nullable(),
   /** Held or flagged boards of the division NOT in `round.boards`, any round, each an ArbiterBoard with `stage_id`, `round_no` and `hold_reason`. A cancelled board is here only while it has an open flag. */
-  needs_decision: z.array(z.looseObject({})),
-  /** Boards the viewer plays on, left out of both lists. */
+  needs_decision: z.array(
+    z.looseObject({}).meta({
+      description:
+        "An ArbiterBoard (as in `round.boards`) with `stage_id`, `round_no` and `hold_reason`: a held or flagged board of the division that is not in `round.boards`. Carried on the division's FIRST row only.",
+    }),
+  ),
+  /** Boards the viewer plays on that no list shows: the row's own round's and, on the division's first row, the held boards of earlier rounds. A board only flagged in an earlier round and the viewer's own is in no count. */
   own_boards: z.number().int().nonnegative(),
 });
 

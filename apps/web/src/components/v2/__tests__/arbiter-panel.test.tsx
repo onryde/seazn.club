@@ -2334,6 +2334,7 @@ describe("the panel hands the column everything it consumes", () => {
     revokedSeat: null,
     roundNo: 3,
     boardNo: 9,
+    stageId: "stage-1",
     stageName: "Open Swiss",
     canResync: false,
     seated: false,
