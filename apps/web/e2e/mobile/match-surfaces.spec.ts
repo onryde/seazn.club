@@ -1117,3 +1117,96 @@ test("match day round panel: 43-character names on the check-in rows and the lin
 
   console.log(`[match day round panel ${width}px] ${checkinRows} check-in rows, 1 link hold; clipped ${first.clipped}/${second.clipped}`);
 });
+
+// Match Day online, Task 8 (the board panel; plan 2026-11-05-match-day-all-in-one.md): the BOARD PANEL at this project's real width, with the names
+// that break a row. One Swiss round, two boards, every player a 43-character name: the live board draws the real chessground board with both
+// clocks (each a name beside a time), the held board draws its reason, two flag cards and the decisions (a name meets a button). Asserted at
+// 320..834: the board and the clocks stay inside the viewport, nothing scrolls the page sideways or clips inside the panel, and every press is a
+// 44px target hit-tested; from the live board a way back says where it goes.
+test("match day board panel: 43-character names on the clocks, the flag cards and the decisions do not clip or scroll sideways; the board fits the screen; presses are 44px targets", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(420_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const phone = width < 768;
+  const r = await seedOnlineRound(request, Array.from({ length: 4 }, () => longName()), { camera: "optional", stage: "swiss" });
+  expect(r.boards.length, "premise: two boards in round 1").toBe(2);
+  const [live, held] = r.boards as [typeof r.boards[number], typeof r.boards[number]];
+  const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5", "c2c3", "d7d6"];
+  await roundGameSql(live, { moves: LINE });
+  await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "mismatch" });
+  const from = new Date(Date.now() - 20 * 60_000);
+  from.setUTCMilliseconds(0);
+  const to = new Date(from.getTime() + 95_000);
+  const iso = (d: Date) => d.toISOString().replace(".000Z", "Z");
+  await withDb(async (sql) => {
+    await sql`
+      insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
+        (${held.fixtureId}, ${r.orgId}, 'out_of_band_play', null,
+         ${`plies 2-5 (${LINE.slice(1, 5).join(" ")}) played at Lichess, not through Seazn; camera required`}),
+        (${held.fixtureId}, ${r.orgId}, 'camera_lost', ${held.away.personId},
+         ${`camera off 95 s of 1800 s in the match: ${iso(from)} to ${iso(to)} (its own off/on events agree); from 2 camera connections over 1 session; camera required`})`;
+  });
+
+  const panel = page.getByTestId("md-focus");
+  const check = async (state: string): Promise<number> => {
+    await expectNoHorizontalScroll(page);
+    const scan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div,a", "the board panel was not in the DOM");
+    expect(scan.clipped, `the board panel clips content at ${width}px (${state})`).toEqual([]);
+    for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+    return scan.clipped.length;
+  };
+
+  // ── the live board: the real board and both clocks ─────────────────────────────────────────────────────────────────────────────
+  const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
+  await page.goto(`${matchDay}?board=${live.fixtureId}`, { waitUntil: "load" });
+  await expect(panel, "the board panel is on screen").toBeVisible({ timeout: 30_000 });
+  await expect(panel).toHaveAttribute("data-fixture-id", live.fixtureId);
+  const position = page.getByTestId("md-board-position");
+  await expect(position).toBeVisible({ timeout: 30_000 });
+  await expect(position.locator("cg-board piece"), "the real board mounted with every piece").toHaveCount(32);
+  const boardBox = await position.locator("cg-board").boundingBox();
+  expect(boardBox, "the board has a box").not.toBeNull();
+  expect(boardBox!.x, "the board starts inside the screen").toBeGreaterThanOrEqual(0);
+  expect(boardBox!.x + boardBox!.width, `the board ends inside the ${width}px screen`).toBeLessThanOrEqual(width + 1);
+  for (const colour of ["white", "black"]) {
+    const clock = position.getByTestId(`md-board-clock-${colour}`);
+    await expect(clock, `${colour}'s clock`).toBeVisible();
+    const box = (await clock.boundingBox())!;
+    expect(box.x + box.width, `${colour}'s clock ends inside the screen`).toBeLessThanOrEqual(width + 1);
+    expect(box.height, `${colour}'s clock is tall enough for its name and time`).toBeGreaterThanOrEqual(44);
+    await expect(position.getByTestId(`md-board-clock-${colour}-time`), `${colour}'s time is on screen`).toBeVisible();
+  }
+  const first = await check("the live board");
+  await assertTapFloor(page.getByTestId("md-open-pad"), "Open match");
+  const back = page.getByTestId("md-back");
+  if (phone) {
+    await assertTapFloor(back, "the way back");
+    await expect(back).toContainText(uiEn["matchDay.back.list"]!);
+  }
+
+  // ── the held board: its reason, two flag cards, the decisions ──────────────────────────────────────────────────────────────────
+  await page.goto(`${matchDay}?board=${held.fixtureId}`, { waitUntil: "load" });
+  await expect(panel).toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
+  await expect(page.getByTestId("md-board-hold")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
+  const goOn = page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.goOn"] });
+  const settle = page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.settle"] });
+  await expect(goOn).toHaveCount(1);
+  await expect(settle).toHaveCount(1);
+  const second = await check("the held board with flags and decisions");
+  await assertTapFloor(goOn, "Let the game go on");
+  await assertTapFloor(settle, "Settle the result now");
+  // The settle disclosure is the widest thing the decisions open: its outcomes name two 43-character players (a Swiss round offers three, with the
+  // refusal of "No result" said under them).
+  await settle.click();
+  await expect(page.getByTestId("arbiter-settle").getByRole("button")).toHaveCount(3);
+  await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
+  for (const choice of await page.getByTestId("arbiter-settle").getByRole("button").all()) await assertTapFloor(choice, "a settle outcome");
+  const third = await check("the settle outcomes open");
+
+  console.log(`[match day board panel ${width}px] live board (32 pieces, 2 clocks) + held board (reason, 2 flags, decisions, 3 outcomes + guidance); clipped ${first}/${second}/${third}`);
+});

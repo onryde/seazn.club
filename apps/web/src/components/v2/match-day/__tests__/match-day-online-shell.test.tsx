@@ -9,6 +9,7 @@
 // Anti-vacuity: every sweep counts what it looked at.
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { DictProvider } from "@/components/i18n/dict-provider";
 import en from "@/dictionaries/en/ui.json";
 import publicEn from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
@@ -61,22 +62,26 @@ const match = (id: string): MatchDayFixture =>
     own_stream_code: false,
   }) as MatchDayFixture;
 
+// The page sits under the `/o/[orgSlug]` layout's DictProvider, which the board panel's formatter and chess board read (Task 8); the shell's
+// own `dict` prop is only the Match Day page's picked prefixes.
 const shell = (v: MatchDayView, o: Partial<MatchDayShellProps> = {}) =>
   renderToStaticMarkup(
-    <MatchDayShell
-      competitionId="comp-1"
-      competitionName="Westway Open"
-      orgSlug="acme"
-      compSlug="westway-open"
-      locale="en"
-      divisions={[]}
-      initial={v}
-      dict={dict}
-      scoreDict={publicEn as Dict}
-      viewerPlan="pro"
-      frozenNames={NO_FROZEN_NAMES}
-      {...o}
-    />,
+    <DictProvider dict={dict} locale="en">
+      <MatchDayShell
+        competitionId="comp-1"
+        competitionName="Westway Open"
+        orgSlug="acme"
+        compSlug="westway-open"
+        locale="en"
+        divisions={[]}
+        initial={v}
+        dict={dict}
+        scoreDict={publicEn as Dict}
+        viewerPlan="pro"
+        frozenNames={NO_FROZEN_NAMES}
+        {...o}
+      />
+    </DictProvider>,
   );
 const on = { onlineEnabled: true };
 const tagWith = (html: string, testId: string) => html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";

@@ -122,6 +122,13 @@ const HAND_CHECKED_DYNAMIC: Record<string, number> = {
   // extend-checkin, src/app/api/v1/stages/[id]/extend-checkin, src/app/api/v1/stages/[id]/generate). The open's and the resend's POSTs are
   // `useOpenRoundWith`'s, counted under desk/use-open-round.ts above.
   "src/components/v2/match-day/round-focus.tsx": 1,
+  // Match Day's board panel (Task 8, traced 2026-11-20): ONE module-level `post = (path, body) => apiV1(path, …)` handed to
+  // `decisionRunner` (arbiter-decision.ts), the same runner the arbiter panel and the held queue use: every path it builds is
+  // `/api/v1/fixtures/${id}/external-play/${tail}`, tail ∈ resync | video-override | flags/close | resolve, and the board's "+5 min" posts
+  // `extendBoardPath` = `/api/v1/fixtures/${id}/external-play/extend-checkin` (each a POST route that exists: src/app/api/v1/fixtures/[id]/
+  // external-play/{resync,video-override,flags/close,resolve,extend-checkin}). The panel's own read - GET `/api/v1/fixtures/${id}/match-day-board`
+  // (src/app/api/v1/fixtures/[id]/match-day-board) - is a template LITERAL, so the scan above reads it and it is not counted here.
+  "src/components/v2/match-day/board-focus.tsx": 1,
 };
 
 describe("apiV1 call paths", () => {
