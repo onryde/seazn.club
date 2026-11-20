@@ -214,9 +214,31 @@ describe("X-CU-2..5 the named scenes (rulebook literals; the engine's set must e
     }
     const listed = ["d", "a", "c", "b"];
     const seeded = scene(listed, 1, 1);
+    // B1 review m-6 (K14): the order rule is leg -> the opponent's EARLIEST round already played (RB5-L6) -> listed (seed) order
+    // (the engine's declaration, catch-up.ts header: "F5, designer's call"). Listed order decides here ONLY because the first
+    // key ties: a 4-field has no bye, so every member plays round 1 - asserted from the engine's own schedule, not assumed.
+    const earliestOf = (lines: readonly ExistingLine[], m: string) => Math.min(...lines.filter((l) => l.home === m || l.away === m).map((l) => l.roundNo));
+    expect(listed.map((m) => earliestOf(seeded.lines, m)), "premise: every member's earliest round is 1, so RB5-L6 ties").toEqual([1, 1, 1, 1]);
     const seededIn = { members: listed, newcomer: "n", legs: 1, lines: seeded.lines, byes: seeded.byes, lastRoundNo: seeded.lastRoundNo };
     for (const set of [lateEntryFixtures(seededIn), catchUpSet(seededIn)]) {
       expect(placed(set.fixtures, "n")).toEqual(["d:catch_up_round:4", "a:catch_up_round:5", "c:catch_up_round:6", "b:catch_up_round:7"]);
+    }
+  });
+
+  it("X-CU-3 RB5-L6 before listed order: an opponent who first played later is owed later, even when listed first", () => {
+    // The five-field's own schedule (byes 1e 2d 3c 4b 5a), every round started so no bye slot is free: all five are appended.
+    // The members are handed in REVERSE (e listed first), so the two keys disagree on e: listed order alone would owe e first;
+    // RB5-L6 owes the four who played round 1 first (in listed order d, c, b, a) and e - whose first match was round 2 - last.
+    // differential: a listed-order-only rule gives e:6, d:7, c:8, b:9, a:10.
+    const s = scene(FIVE, 1, 5);
+    expect(s.rounds.map((r) => `${r.roundNo}${r.bye}`), "premise: the engine's own byes").toEqual(["1e", "2d", "3c", "4b", "5a"]);
+    expect(s.byes.every((b) => b.started), "premise: no unstarted bye slot, so every owed fixture is appended").toBe(true);
+    const reversed = ["e", "d", "c", "b", "a"];
+    const earliestOf = (m: string) => Math.min(...s.lines.filter((l) => l.home === m || l.away === m).map((l) => l.roundNo));
+    expect(reversed.map(earliestOf), "premise: e first played in round 2, the rest in round 1").toEqual([2, 1, 1, 1, 1]);
+    const input = { members: reversed, newcomer: "f", legs: 1, lines: s.lines, byes: s.byes, lastRoundNo: s.lastRoundNo };
+    for (const set of [lateEntryFixtures(input), catchUpSet(input)]) {
+      expect(placed(set.fixtures, "f")).toEqual(["d:catch_up_round:6", "c:catch_up_round:7", "b:catch_up_round:8", "a:catch_up_round:9", "e:catch_up_round:10"]);
     }
   });
 

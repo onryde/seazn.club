@@ -107,6 +107,29 @@ describe("X-WDT-4 the decision reads the engine event's counts (C13: one decisio
     }
   });
 
+  // B1 review m-1: the guard has three predicates, and the event above trips two of them at once, so either count's check could
+  // be deleted and that test would stay green. One witness per predicate: each event below lacks exactly ONE thing the decision
+  // needs, and the decision must refuse each by name (an engine that sends `scheduled` but not `played` would otherwise write
+  // `played: undefined` into the ledger row and the preview would read "left after undefined of 5").
+  const FULL = { type: "entrant_withdrawn", stageId: LEAGUE.id, entrantId: "me", policy: "void_remaining", mode: "award", played: 1, scheduled: 2 };
+  const ONE_MISSING: [string, Record<string, unknown>][] = [
+    ["played", { ...FULL, played: undefined }],
+    ["scheduled", { ...FULL, scheduled: undefined }],
+    ["the event type", { ...FULL, type: "stage_completed" }],
+  ];
+  it.each(ONE_MISSING)("X-WDT-4 an engine event lacking only %s is refused by name", (_missing, event) => {
+    const mine = [row("a", "decided", "me", "o1", WON), row("b", "scheduled", "me", "o2")];
+    // Premise: the same rows with the full event decide (so the refusal below is this one field's, not the rows').
+    engineSeam.event = FULL;
+    try {
+      expect(decideTableWithdrawal(LEAGUE, "me", mine).played).toBe(1);
+      engineSeam.event = event;
+      expect(() => decideTableWithdrawal(LEAGUE, "me", mine)).toThrow(/entrant_withdrawn.*counts/);
+    } finally {
+      engineSeam.event = undefined;
+    }
+  });
+
   it("X-WDT-4 over real rows the engine's counts are the app's (RB5-W4 parity), every mix of statuses", () => {
     // Every status a line of hers can hold, with and without a result: played = a played status with a result (an abandoned
     // line with a stored result too, RB5-W4's B3 reading); pending = scheduled or in play; a cancelled line is neither.

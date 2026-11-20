@@ -18,6 +18,7 @@ import { EngineError } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
+import { log } from "@/server/logger";
 import { c38SuggestedOf, poolSizeIssue } from "@/lib/pool-size-gate";
 import { locksThatFit } from "@/lib/rank-override";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -336,9 +337,18 @@ describe.skipIf(!HAS_DB)("X-PO-1 pools ride the fold as seating (real draw, real
     expect(stageSeatingOf("group", await linesOf(r.stageId)), "premise: the stored seating is held").toMatchObject({ kind: "held", reason: "entrant_in_two_pools" });
     // A result on a pool A line, then one on the cross-pool line: neither write is refused (seated, the engine would refuse the
     // second with fixture_pool_mismatch, and every later fold of the stage with it).
-    await genericWin(r.auth, r.stageId, a1!, a2!);
-    await post(r.auth, extra, "core.start");
-    await post(r.auth, extra, "generic.result", { p1Score: 3, p2Score: 0 });
+    // B1 review m-4: the C11 ruling's ONLY signal is the named log line (no desk item), so it is asserted, not assumed.
+    const warn = vi.spyOn(log, "warn");
+    try {
+      await genericWin(r.auth, r.stageId, a1!, a2!);
+      await post(r.auth, extra, "core.start");
+      await post(r.auth, extra, "generic.result", { p1Score: 3, p2Score: 0 });
+      const held = warn.mock.calls.filter(([o]) => (o as { event?: string; stageId?: string } | undefined)?.event === "pool_seating_held" && (o as { stageId?: string }).stageId === r.stageId);
+      expect(held.length, "anti-vacuity: the held stage's folds logged by name").toBeGreaterThan(0);
+      for (const [o] of held) expect(o, "C11: named, with the engine refusal it dodged").toMatchObject({ event: "pool_seating_held", stageId: r.stageId, reason: "entrant_in_two_pools" });
+    } finally {
+      warn.mockRestore();
+    }
     const [{ status }] = await sql<{ status: string }[]>`select status from fixtures where id = ${extra}`;
     expect(status, "the cross-pool line was decided").toBe("decided");
     // Engine 9's membership: pool A's table is its results' entrants, b1 among them.

@@ -997,9 +997,9 @@ describe.skipIf(!HAS_DB)("X-SF-2 a pooled fixture's movement and climber read it
 // pool size), never from the code.
 // ---------------------------------------------------------------------------
 describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never crowned, walked over or expunged; a repeated post repeats nothing", () => {
-  /** A group of two pools of FOUR (badminton). Every line of both pools is played (home wins) except `target`'s, which plays `targetPlays` of her three. */
-  async function poolOfFour(targetPlays: number) {
-    const r = await rig({ n: 8, kind: "group", pools: 2, sport: BADMINTON });
+  /** A group of two pools of `size` (badminton). Every line of both pools is played (home wins) except `target`'s, which plays `targetPlays` of her size - 1. */
+  async function poolOf(size: 3 | 4, targetPlays: number) {
+    const r = await rig({ n: size * 2, kind: "group", pools: 2, sport: BADMINTON });
     await startDivision(r.auth, r.divisionId);
     const pools = await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${r.stageId} order by key`;
     const lines = await sql<{ id: string; pool_id: string; round_no: number; home_entrant_id: string; away_entrant_id: string }[]>`
@@ -1018,12 +1018,17 @@ describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never cro
         await playBadminton(r.auth, l.id, true);
       }
     }
-    expect(hers, "premise: she played the number of lines the case names (of her 3)").toBe(targetPlays);
+    expect(hers, `premise: she played the number of lines the case names (of her ${size - 1})`).toBe(targetPlays);
+    expect(inA.filter((l) => l.home_entrant_id === target || l.away_entrant_id === target), "premise: a single round robin of the pool").toHaveLength(size - 1);
     const [{ display_name }] = await sql<{ display_name: string }[]>`select display_name from entrants where id = ${target}`;
-    return { r, pools, target, targetName: display_name, firstRoundLine: lines.find((l) => l.pool_id === pools[0]!.id && l.round_no === 1 && l.home_entrant_id !== target && l.away_entrant_id !== target)!.id };
+    // The earliest pool-A line she is not in (round 1 in a pool of four; a pool of three has one line a round, so a later one).
+    const otherLine = inA.find((l) => l.home_entrant_id !== target && l.away_entrant_id !== target);
+    expect(otherLine, "premise: pool A has a line without her").toBeDefined();
+    return { r, pools, target, targetName: display_name, firstRoundLine: otherLine!.id };
   }
+  const poolOfFour = (targetPlays: number) => poolOf(4, targetPlays);
 
-  it("X-SF-2 RB5-W1/W3: a leaver who played half or more stays in her pool's table, ranked LAST - never in the digest's top 3 and last in the recap block", async () => {
+  it("X-SF-2 RB5-W1/W3: a leaver who played half or more stays in her pool's table, ranked LAST - out of a pool of four's top 3 and last in the recap block", async () => {
     const { r, pools, target, targetName, firstRoundLine } = await poolOfFour(2);
     // premise (the rulebook's own scene): before she leaves she out-scores everyone in her pool
     const stored = async () => (await sql<{ rows: { entrantId: string; rank: number; points: number }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id = ${pools[0]!.id}`)[0]!.rows;
@@ -1054,9 +1059,10 @@ describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never cro
   });
 
   // W5 app PR B Task 1 (X-WDT-7, RB5-W1): the pool is its SEATING now, so an expunged leaver stays a row of her pool (nothing counted,
-  // ranked last), as she always did in a league - and a post lists her as the walkover leaver above: never in the top three, LAST and
-  // marked in the recap block (was: "in no table and in no post at all", which held only while a pool's members were its results).
-  it("X-SF-2 RB5-W2 + W1: a leaver under half played is expunged - her results are gone, she stays LAST in her pool's table, never in the top 3, marked last in the recap", async () => {
+  // ranked last), as she always did in a league - and a post lists her as the walkover leaver above: LAST and marked, so in a top 3
+  // only when her pool has three (the next test; B1 review m-2) (was: "in no table and in no post at all", which held only while a
+  // pool's members were its results).
+  it("X-SF-2 RB5-W2 + W1: a leaver under half played is expunged - her results are gone, she stays LAST in her pool's table, out of a pool of four's top 3, marked last in the recap", async () => {
     const { r, pools, target, targetName, firstRoundLine } = await poolOfFour(0);
     await withdrawEntrantCascade(r.auth, target);
     const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number; played: number }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id = ${pools[0]!.id}`;
@@ -1075,6 +1081,32 @@ describe.skipIf(!HAS_DB)("X-SF-2 posts after a withdrawal: a leaver is never cro
     expect(block, "pool A's block lists four").toHaveLength(4);
     expect(block[3], "she is the LAST line, position 4, marked").toMatch(new RegExp(`^4\\. ${targetName} \\(${publicDict("en")["table.withdrawn"]}\\) — `));
     expect(block.slice(0, 3).some((l) => l.includes(targetName))).toBe(false);
+  });
+
+  // B1 review m-2: "never in a top 3" is false for a pool of THREE - the 6-into-2 default. Last of three IS third, so the digest's
+  // top 3 lists her, 3rd and marked, by the league's own rule ("a leaver in a top 3 is marked"). Expected positions are the
+  // rulebook's (RB5-W1: last = the pool's size; RB5-W2: nothing of hers counts) and the mark is the hub chip's own word.
+  it("X-SF-2 RB5-W2 + W1, a pool of three: the expunged leaver is LAST = 3rd, so the digest's top 3 lists her, marked, and the recap marks her 3rd", async () => {
+    const { r, pools, target, targetName, firstRoundLine } = await poolOf(3, 0);
+    await withdrawEntrantCascade(r.auth, target);
+    const [{ rows }] = await sql<{ rows: { entrantId: string; rank: number; played: number }[] }[]>`select rows from standings_snapshots where stage_id = ${r.stageId} and pool_id = ${pools[0]!.id}`;
+    expect(rows, "the pool's three seats").toHaveLength(3);
+    expect(rows.find((x) => x.entrantId === target), "RB5-W2: nothing of hers counts; RB5-W1: ranked last of three").toMatchObject({ rank: 3, played: 0 });
+    const sections = await withTenant(r.auth.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: r.stageId, division_name: "Open" }]));
+    const a = sections.find((x) => x.poolLabel === groupLabel("en", "A"))!;
+    expect(a.top3, "a pool of three lists all three").toHaveLength(3);
+    expect(a.top3[2], "she is 3rd - last - and marked with the hub chip's word").toMatchObject({ position: 3, name: targetName, departed: publicDict("en")["table.withdrawn"] });
+    expect(a.top3.slice(0, 2).some((x) => x.name === targetName), "never above a competing entrant").toBe(false);
+    await sql`update divisions set auto_posts = true where id = ${r.divisionId}`;
+    await withTenant(r.auth.orgId, (tx) => draftPostsForDecidedFixture(tx, firstRoundLine, true));
+    const recap = (await listPosts(r.auth, r.auth.orgId)).find((p) => p.kind === "round_recap");
+    expect(recap, "premise: the round recapped after the cascade").toBeDefined();
+    const lines = recap!.bodyMd.split("\n");
+    const head = lines.findIndex((l) => l === `**Standings — ${groupLabel("en", "A")}**`);
+    const block = lines.slice(head + 1).filter((l) => /^\d\. /.test(l)).slice(0, 3);
+    expect(block, "pool A's block lists three").toHaveLength(3);
+    expect(block[2], "she is the LAST line, position 3, marked").toMatch(new RegExp(`^3\\. ${targetName} \\(${publicDict("en")["table.withdrawn"]}\\) — `));
+    expect(block.slice(0, 2).some((l) => l.includes(targetName))).toBe(false);
   });
 
   it("X-SF-2 a repeated post repeats nothing: the digest run twice makes two independent drafts, each with every pool once; the recap fired twice stays one", async () => {
