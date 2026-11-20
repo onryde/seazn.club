@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
 import { buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
 
 /**
@@ -18,11 +18,18 @@ import { buildTemplateStages } from "../../../apps/web/src/lib/format-templates.
  * group of six in two pools answers its standings with every seat of both pools, nothing played, no place (level) - before, a pool
  * had no row until a result. And Generate's floor refusal is the engine's (`validatePoolSizes`), read as C38's: three entrants into
  * two groups name no group count (the engine's "one pool" is a League, so `suggested` is null, "add entrants").
+ *
+ * Task 2 (X-WDT-4 <- RB5-W7; ST-G15 note; C13): the withdrawal footnote's counts are the engine event's, read inside the ONE
+ * decision both readers take - the Disqualify/withdraw preview before the write and the stored note the hub prints after it. A league
+ * of six, P1 plays 3 of her 5 (RB5-W4) and withdraws: half or more played, so a walkover (RB5-W3) - the preview says 3 of 5 and
+ * walkover, the withdrawal walks her other 2 over, and the anonymous hub's footnote reads "left after 3 of 5 ... other 2 matches are
+ * walkovers".
  */
 export async function w5RoundRobinBSuite(): Promise<void> {
   // Task 0: 1 (an unequal groups_ko proposal's 7th seat is the runner-up compared on the smallest pool's matches).
   // Task 1: 2 (a Started two-pool group lists every seat level before a result; 3 into 2 groups is refused with no group count).
-  const EXPECTED_CHECKS = 3;
+  // Task 2: 1 (a 3-of-5 leaver: the preview, the walkovers and the hub footnote all say 3 of 5).
+  const EXPECTED_CHECKS = 4;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -179,6 +186,55 @@ export async function w5RoundRobinBSuite(): Promise<void> {
     w5Check(
       "w5b X-PO-2: three entrants into two groups are refused by name before a line is written, with no group count to offer (the engine's one pool is a League)" +
         (ok ? "" : ` - div ${dRes.status}, field ${field.length}, stages ${stages.length}, generate ${gen.status} ${JSON.stringify(gen.json).slice(0, 300)}, fixtures ${written.length}`),
+      ok,
+    );
+  }
+
+  // Check 4 - Task 2 (X-WDT-4): one count, the engine's, on both sides of the write. A PUBLIC competition (the hub is read anonymously).
+  {
+    const pubRes = await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR B note ${tag}`, visibility: "public" });
+    const pub = v1data<{ id: string; slug: string } | undefined>(pubRes);
+    const dRes = await v1(owner, `/api/v1/competitions/${pub?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Leaver",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 6 }, (_, i) => ({ kind: "individual", display_name: `Lv${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const stages = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", [{ seq: 1, kind: "league", name: "League", config: { legs: 1 } }]),
+    ) ?? [];
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const p1 = field[0]?.id;
+    const hers = (v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? []).filter(
+      (f) => f.home_entrant_id === p1 || f.away_entrant_id === p1,
+    );
+    // P1 wins three of her five lines.
+    const scored: number[] = [];
+    for (const f of hers.slice(0, 3)) {
+      scored.push((await v1(owner, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: 0, type: "generic.result", payload: f.home_entrant_id === p1 ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 } })).status);
+    }
+    const pv = await v1(owner, `/api/v1/entrants/${p1}/withdrawal-preview?as=withdrawn`);
+    const pStage = v1data<{ stages?: { mode: string; played: number; scheduled: number }[] } | undefined>(pv)?.stages?.[0];
+    const out = await v1(owner, `/api/v1/entrants/${p1}/withdraw`, "POST");
+    const report = v1data<{ policy?: string; walkovers?: number } | undefined>(out);
+    const orgSlug = ((await call(owner, "/api/orgs")) as { slug: string }[])[0]?.slug ?? "";
+    const hubRes = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/hub`);
+    type HubTable = { divisionId: string; withdrawalNotes?: { entrantId: string; body: string }[] };
+    const notes = (v1data<{ tables?: HubTable[] } | undefined>(hubRes)?.tables ?? []).find((t) => t.divisionId === divId)?.withdrawalNotes ?? [];
+    const ok =
+      pubRes.status === 201 && dRes.status === 201 && field.length === 6 && stages.length === 1 && started.status === 200 && hers.length === 5 &&
+      scored.join(",") === "201,201,201" && pv.status === 200 && pStage?.mode === "award" && pStage.played === 3 && pStage.scheduled === 5 &&
+      out.status === 200 && report?.policy === "walkover" && report.walkovers === 2 && hubRes.status === 200 && notes.length === 1 &&
+      notes[0]?.entrantId === p1 && notes[0]?.body === "left after 3 of 5, so their results stand and their other 2 matches are walkovers.";
+    w5Check(
+      "w5b X-WDT-4: a 3-of-5 leaver - the preview says walkover 3 of 5, the withdrawal walks her other 2 over, the hub footnote says 3 of 5" +
+        (ok ? "" : ` - comp ${pubRes.status}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, start ${started.status}, hers ${hers.length}, scored ${scored.join(",")}, preview ${pv.status} ${JSON.stringify(pStage ?? null)}, withdraw ${out.status} ${JSON.stringify(report ?? null)}, hub ${hubRes.status} notes ${JSON.stringify(notes)}`),
       ok,
     );
   }

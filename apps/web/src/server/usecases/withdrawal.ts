@@ -111,11 +111,17 @@ export function decideTableWithdrawal(
   const { played, pending } = tableWithdrawalInputs(entrantId, mine);
   // The policy only counts involvement: it reads the stage's id and kind alone (W2d T8 narrowed its parameter to those two).
   const result = withdrawTableEntrant(stage, entrantId, { played, pending });
-  const mode = result.events[0]?.type === "entrant_withdrawn" ? result.events[0].mode : undefined;
+  // W5 app PR B Task 2 (X-WDT-4 <- RB5-W7; preflight C13): the counts are the ENGINE's - the `entrant_withdrawn` event names the
+  // lines its 50 percent rule read (engine 10, `void_remaining`) - so the ledger row the footnote prints and the Disqualify preview
+  // carry the rule's own numbers, never a second count. An event without them is refused by name, not filled in from ours.
+  const event = result.events[0];
+  if (event?.type !== "entrant_withdrawn" || event.played === undefined || event.scheduled === undefined) {
+    throw new Error(`decideTableWithdrawal: the engine's entrant_withdrawn event for ${entrantId} in stage ${stage.id} carries no counts`);
+  }
   return {
-    mode: mode === "expunge" ? "expunge" : "walkover",
-    played: played.length,
-    scheduled: played.length + pending.length,
+    mode: event.mode === "expunge" ? "expunge" : "walkover",
+    played: event.played,
+    scheduled: event.scheduled,
     pending,
     updates: result.updates,
   };
