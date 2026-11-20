@@ -73,6 +73,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   SEEDING_RULES_MISSING: 422,
   SEEDING_MAP_SLOT_INVALID: 422,
   SEEDING_MAP_SOURCE_INVALID: 422,
+  // DEPRECATED (ruling 286, engine 10; W5 app PR B T4, preflight C2): never thrown since unequal pools always compare on the
+  // dropped basis. Kept so a stored or cached error still maps to its status and copy.
   SEEDING_BESTNTH_UNEQUAL_POOLS: 422,
   // F3 Task 3 (P6) — a seeded_map source ambiguous across >1 progression
   // source (placeDescriptors, progression.ts). It IS in seeding-error.ts's

@@ -35960,6 +35960,63 @@
                                   },
                                   "destinationSlot": {
                                     "type": "string"
+                                  },
+                                  "pool": {
+                                    "type": "string"
+                                  },
+                                  "basis": {
+                                    "type": "object",
+                                    "properties": {
+                                      "nth": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "matchesCounted": {
+                                        "type": "integer",
+                                        "minimum": -9007199254740991,
+                                        "maximum": 9007199254740991
+                                      },
+                                      "dropped": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "object",
+                                          "properties": {
+                                            "pool": {
+                                              "type": "string"
+                                            },
+                                            "against": {
+                                              "type": "array",
+                                              "items": {
+                                                "type": "string",
+                                                "format": "uuid",
+                                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                              }
+                                            }
+                                          },
+                                          "required": [
+                                            "pool",
+                                            "against"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "levelWith": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "nth",
+                                      "matchesCounted",
+                                      "dropped",
+                                      "levelWith"
+                                    ],
+                                    "additionalProperties": false
                                   }
                                 },
                                 "required": [

@@ -1,8 +1,10 @@
 // W5 Task 12b (X-BD-8, RB5-E6): a cut larger than the field, or a best-Nth cut no pool can supply, is refused by name - at the pre-Start
 // doors, at a `timing: "setup"` stage's Generate, and at resolve (the on_complete path), with the SAME numbers the builder refuses with
 // (lib/__tests__/field-cut-gate.test.ts holds the pure rule, swept against the engine). Real Postgres; skipped without DATABASE_URL.
-// The expected numbers are the rulebook's: a snake deals n entrants into pools of floor(n/p) or one more, a best-Nth reads the rank of
-// EVERY pool, so 7 into 2 pools (4 and 3) supply a top 6 and no best 4th.
+// The expected numbers are the rulebook's: a snake deals n entrants into pools of floor(n/p) or one more, and (RB5-U7, ruling 286; W5 app
+// PR B T4, K16) a pool shorter than the nth supplies no best-Nth candidate, so 7 into 3 pools (3, 2 and 2) supply ONE best 3rd: every
+// winner and two best 3rds (5 of 7) is refused, every winner and one best 3rd draws. (Under 9.x every pool had to hold the nth, so 7
+// into 4 + 3 refused a best 4th; it now resolves - the 4-pool supplies it - lib/__tests__/field-cut-gate.test.ts K16.)
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
@@ -112,19 +114,20 @@ describe.skipIf(!HAS_DB)("X-BD-8 setup path: a cut the roster cannot supply is r
     expect(checked).toBe(2);
   });
 
-  it("X-BD-8 setup path: groups + knockout, a best-Nth cut no pool can supply is refused naming 6 (7 into 4 + 3), and a top 6 draws", async () => {
+  it("X-BD-8 setup path: groups + knockout, a best-Nth cut the pools cannot supply is refused naming 3 (7 into 3 + 2 + 2), and one best 3rd draws", async () => {
     let checked = 0;
     for (const sport of [BADMINTON, FOOTBALL]) {
-      // The template's own take for qualified 7 over 2 pools: topNPerGroup 3, then the best 4th of the pools.
-      const take: TakeRule[] = [{ kind: "topNPerGroup", n: 3 }, { kind: "bestNth", nth: 4, count: 1, normaliseUnequalPools: true }];
-      const r = await rig(7, GROUPS_KO(2, take), sport);
+      // Every pool's winner and the two best 3rds: only the 3-pool has a 3rd (RB5-U7), so the pot of two cannot fill.
+      const take: TakeRule[] = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 3, count: 2, normaliseUnequalPools: true }];
+      const r = await rig(7, GROUPS_KO(3, take), sport);
       const err = await refusal(generateStageFixtures(r.auth, r.stageIds[1]!));
       expect(err.code, sport.key).toBe("RR_CUT_EXCEEDS_FIELD");
-      expect(err.extra, sport.key).toMatchObject({ qualified: 7, max: 6, reason: "bestnth_unsuppliable" });
+      expect(err.extra, sport.key).toMatchObject({ qualified: 5, max: 3, reason: "bestnth_unsuppliable" });
       expect(await fixtureCount(r.stageIds[1]!), sport.key).toBe(0);
 
-      const ok = await rig(7, GROUPS_KO(2, [{ kind: "topNPerGroup", n: 3 }]), sport);
-      expect((await generateStageFixtures(ok.auth, ok.stageIds[1]!)).created, `${sport.key}: 6 of 7 draws`).toBeGreaterThan(0);
+      // differential (K16): under 9.x the two 2-pools refused any best 3rd; RB5-U7 leaves them out and the 3-pool supplies one.
+      const ok = await rig(7, GROUPS_KO(3, [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 3, count: 1, normaliseUnequalPools: true }]), sport);
+      expect((await generateStageFixtures(ok.auth, ok.stageIds[1]!)).created, `${sport.key}: every winner and one best 3rd draws`).toBeGreaterThan(0);
       checked++;
     }
     expect(checked).toBe(2);
@@ -195,15 +198,15 @@ describe.skipIf(!HAS_DB)("X-BD-8 on_complete path: refused by name where the eng
   // differential: today the engine's STAGE_NOT_READY ("pool B takes rank 4, but only 3 entrants are available") is caught best-effort
   // by completeStage, so the stage completed, nothing was seeded, and nobody was told.
   it("X-BD-8 on_complete path: refused by name on the desk, never swallowed; the completion stands", async () => {
-    // 7 into 2 pools (4 and 3); the next stage asks for a top 7 on completion: three per pool and the best 4th.
-    const take: TakeRule[] = [{ kind: "topNPerGroup", n: 3 }, { kind: "bestNth", nth: 4, count: 1, normaliseUnequalPools: true }];
-    const r = await rig(7, GROUPS_KO(2, take, "on_complete"), GENERIC);
+    // 7 into 3 pools (3, 2, 2); the next stage asks on completion for every winner and the two best 3rds: one pool has a 3rd.
+    const take: TakeRule[] = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 3, count: 2, normaliseUnequalPools: true }];
+    const r = await rig(7, GROUPS_KO(3, take, "on_complete"), GENERIC);
     await generateStageFixtures(r.auth, r.stageIds[0]!);
     await decideAll(r.auth, r.stageIds[0]!);
     const err = await refusal(completeStage(r.auth, r.stageIds[0]!));
     expect(err.status).toBe(422);
     expect(err.code).toBe("RR_CUT_EXCEEDS_FIELD");
-    expect(err.extra).toMatchObject({ qualified: 7, max: 6, reason: "bestnth_unsuppliable", stageId: r.stageIds[0] });
+    expect(err.extra).toMatchObject({ qualified: 5, max: 3, reason: "bestnth_unsuppliable", stageId: r.stageIds[0] });
     const [{ s }] = await sql<{ s: string }[]>`select status as s from stages where id = ${r.stageIds[0]}`;
     expect(s, "the stage's own completion committed before the seeding was tried").toBe("complete");
     const [{ q }] = await sql<{ q: unknown }[]>`select config->'qualified' as q from stages where id = ${r.stageIds[1]}`;
@@ -222,7 +225,7 @@ describe.skipIf(!HAS_DB)("X-BD-8 on_complete path: refused by name where the eng
 
   it("X-BD-8 the setup-timing proposal refuses the same shortfall by name (the resolve backstop)", async () => {
     // A division already running (a stage-2 Generate after Start is not gated), so the shortfall reaches the proposal.
-    const r = await rig(7, GROUPS_KO(2, [{ kind: "topNPerGroup", n: 3 }, { kind: "bestNth", nth: 4, count: 1, normaliseUnequalPools: true }]), GENERIC);
+    const r = await rig(7, GROUPS_KO(3, [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 3, count: 2, normaliseUnequalPools: true }]), GENERIC);
     await sql`update divisions set status = 'active' where id = ${r.divisionId}`;
     await generateStageFixtures(r.auth, r.stageIds[1]!);
     await generateStageFixtures(r.auth, r.stageIds[0]!);
@@ -233,10 +236,10 @@ describe.skipIf(!HAS_DB)("X-BD-8 on_complete path: refused by name where the eng
     // differential: today the wrap's extra is {stageId, nextStageId} only, and the desk shows the server's English.
     const wrapped = await refusal(completeStage(r.auth, r.stageIds[0]!));
     expect(wrapped.code).toBe("STAGE_COMPLETED_SEEDING_FAILED");
-    expect(wrapped.extra).toMatchObject({ cause: "RR_CUT_EXCEEDS_FIELD", qualified: 7, max: 6, stageId: r.stageIds[0], nextStageId: r.stageIds[1] });
+    expect(wrapped.extra).toMatchObject({ cause: "RR_CUT_EXCEEDS_FIELD", qualified: 5, max: 3, stageId: r.stageIds[0], nextStageId: r.stageIds[1] });
     const err = await refusal(computeSeedProposal(r.auth, r.stageIds[1]!));
     expect(err.code).toBe("RR_CUT_EXCEEDS_FIELD");
-    expect(err.extra).toMatchObject({ qualified: 7, max: 6, reason: "bestnth_unsuppliable" });
+    expect(err.extra).toMatchObject({ qualified: 5, max: 3, reason: "bestnth_unsuppliable" });
   });
 });
 

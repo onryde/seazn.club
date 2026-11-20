@@ -709,6 +709,12 @@ function toTableStage(
  *   `pool_results_missing`). A stage whose fixtures name ONE table (a league, a Swiss, a one-pool group) has k = 0 by
  *   definition and is not folded: its map is empty (Task 0 review m2).
  *
+ * - W5 app PR B T4 (RB5-U5, RB5-U7; X-UP-5): the entrants this stage's own withdrawal cascade EXPUNGED - its ACTIVE
+ *   `table_withdrawal` rows (a Reinstate's `table_withdrawal_voided` takes a row out, `activeTableWithdrawals`) whose policy is
+ *   `expunge` (the ledger mirrors the engine event's `mode: "expunge"`). Their results are already gone, so best-Nth counts them in
+ *   no pool's effective size and never drops anything more for them (`PoolTable.expunged`, mapped to each pool by
+ *   `withPoolResults`). Read for every stage: a one-table stage's leaver is no candidate either.
+ *
  * One load, because the rules' `gamePoints` reader is identity-keyed on the very result objects that load paid
  * (`gamePointsReader`): a reduced row's Sonneborn-Berger, recomputed over results from a second load, would ask for results
  * this reader never paid. Like `stageTablePoints`, it stores no lots draw: results do not depend on how a tie is broken.
@@ -716,13 +722,14 @@ function toTableStage(
 export async function loadBestNthSource(
   tx: Tx,
   stageId: string,
-): Promise<{ crossGroup: CrossGroupRules; poolResults: ReadonlyMap<string, readonly FixtureResult[]> }> {
+): Promise<{ crossGroup: CrossGroupRules; poolResults: ReadonlyMap<string, readonly FixtureResult[]>; expunged: ReadonlySet<string> }> {
   const inputs = await loadStageInputs(tx, stageId);
   const stage = toTableStage(inputs, await loadLotsDraws(tx, stageId));
   const crossGroup = crossGroupRulesOf(stage);
-  if (new Set(inputs.tableFixtures.map((f) => f.poolId ?? "")).size <= 1) return { crossGroup, poolResults: new Map() };
+  const expunged = await stageTableWithdrawals(tx, inputs, "expunge");
+  if (new Set(inputs.tableFixtures.map((f) => f.poolId ?? "")).size <= 1) return { crossGroup, poolResults: new Map(), expunged };
   const { tables } = completeTableStage(stage, inputs.tableFixtures);
-  return { crossGroup, poolResults: new Map(tables.pools.map((p) => [p.pool, p.results ?? []])) };
+  return { crossGroup, poolResults: new Map(tables.pools.map((p) => [p.pool, p.results ?? []])), expunged };
 }
 
 /**
@@ -917,11 +924,15 @@ async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<Complete
  *  (`activeTableWithdrawals`). Read per stage, never from the division's field: an entrant who leaves later, from another
  *  stage (a knockout after the league finished), has no row here, and the finished table she topped is not re-ranked
  *  (RB5-L8). */
-async function stageTableWithdrawals(tx: Tx, inputs: StageInputs): Promise<ReadonlySet<string>> {
+async function stageTableWithdrawals(tx: Tx, inputs: StageInputs, policy?: "expunge"): Promise<ReadonlySet<string>> {
   const ledger = await tx<{ seq: number; type: string; payload: unknown }[]>`
     select seq::int as seq, type, payload from division_events
      where division_id = (select division_id from stages where id = ${inputs.stage.id}) and type in (${TABLE_WITHDRAWAL_ROW}, ${TABLE_WITHDRAWAL_VOIDED_ROW})`;
-  return new Set(activeTableWithdrawals(ledger).filter((r) => r.stage_id === inputs.stage.id).map((r) => r.entrant_id));
+  return new Set(
+    activeTableWithdrawals(ledger)
+      .filter((r) => r.stage_id === inputs.stage.id && (policy === undefined || r.policy === policy))
+      .map((r) => r.entrant_id),
+  );
 }
 
 /**

@@ -129,6 +129,9 @@ import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
 import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
+import { stageBasisNotes } from "@/lib/bestnth-basis-note";
+import { BestNthBasisNote } from "@/components/public-site/bestnth-basis-note";
+import { loadBestNthBases } from "@/server/public-site/bestnth-basis";
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
 import { formatPublicInstant } from "@/lib/public-date-locale";
@@ -276,6 +279,8 @@ export default async function DivisionPage({
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // W5 T8 (RB5-W7): the league/group departure notes under each table.
   const tableWithdrawals = await loadTableWithdrawals(division.id);
+  // W5 app PR B T4 (X-UP-3): the unequal-pool basis under each group stage whose best-Nth seats were compared across pools.
+  const bestNthBases = await loadBestNthBases(division.id);
   // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
   // delete, so these ids are still in `entrantNames` and in a ladder's
   // persisted order — which is exactly how a <select> came to offer a choice
@@ -577,10 +582,11 @@ export default async function DivisionPage({
                       // its stored English name (`lib/pool-label.ts`).
                       caption: poolCaption(publicDict, stage.name, p.id, named),
                       poolId: p.id as string | null,
+                      poolKey: named.get(p.id) ?? null,
                       snap: await getStandings(auth, stage.id, p.id),
                     })),
                   )
-                : [{ caption: stage.name, poolId: null as string | null, snap: await getStandings(auth, stage.id) }];
+                : [{ caption: stage.name, poolId: null as string | null, poolKey: null as string | null, snap: await getStandings(auth, stage.id) }];
             return { stage, tables };
           }),
         )
@@ -1264,6 +1270,17 @@ export default async function DivisionPage({
                     </div>
                   );
                 })}
+                {stageBasisNotes(
+                  stage.id,
+                  bestNthBases.get(stage.id),
+                  tables.flatMap(({ poolKey, snap }) => (poolKey ? [{ key: poolKey, rows: snap.rows as StandingsRow[] }] : [])),
+                  entrantNames,
+                  tableWithdrawals,
+                  (key, vars) => t(publicDict, key, vars),
+                  locale,
+                ).map((note) => (
+                  <BestNthBasisNote key={note.line} note={note} />
+                ))}
                 {/* Cascade trace (doc 05 §4): the exact tie-break order in force, per stage — and (W2d T17) where it came
                     from and whether it is pinned (X-TB-2). A stage the loader refused has no rules: no caption. */}
                 {(() => {

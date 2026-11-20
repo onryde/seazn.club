@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { onlyCompletionLeft, type OpenStageRow, type OpenStageState } from "@/lib/open-stages";
 import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
@@ -46,6 +46,7 @@ export function OpenStagesWarning({
 }) {
   const msg = useMsg();
   const msgPlural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
   // `tone`: "error" - nothing was written; "warning" - the stage DID complete and something after it needs the organiser (B5 n1).
@@ -62,7 +63,7 @@ export function OpenStagesWarning({
     } catch (err) {
       // B5 n1: the stage completed and only the next stage's seeding failed - the stage rail's own amber "completed, but" line with
       // the carried cause, and a refresh (the stage is no longer open). Same sentence, same home (`completedSeedingFailedText`).
-      const completedBut = completedSeedingFailedText(err, msg);
+      const completedBut = completedSeedingFailedText(err, msg, locale);
       if (completedBut !== null) {
         setNotice({ stageId, text: completedBut, tone: "warning" });
         router.refresh();

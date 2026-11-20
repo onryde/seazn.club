@@ -2889,7 +2889,7 @@ export function classifyActError(
   // the next click lands on an already-complete stage.
   // B4 fix wave (12b m1): a cut the field cannot supply rides inside the wrap by name with its numbers - said in the reader's
   // language by the one home of this sentence, which the open-stages warning shares (B5 n1).
-  const completedBut = completedSeedingFailedText(err, msg);
+  const completedBut = completedSeedingFailedText(err, msg, locale);
   if (completedBut !== null) return { tone: "warning", text: completedBut, refresh: true };
   // Swiss round-1 pairing, review ruling R4 — the server refused the pick
   // (the round moved on under the desk, or the stage is not Swiss). Its

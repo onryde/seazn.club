@@ -1,5 +1,5 @@
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP helpers, tag): see the header of that file.
-import { call, check, newSession, signIn, tag, v1, v1data } from "../harness.ts";
+import { BASE, call, check, cookieHeader, newSession, signIn, tag, v1, v1data } from "../harness.ts";
 import { buildTemplateStages } from "../../../apps/web/src/lib/format-templates.ts";
 
 /**
@@ -35,7 +35,8 @@ export async function w5RoundRobinBSuite(): Promise<void> {
   // Task 1: 2 (a Started two-pool group lists every seat level before a result; 3 into 2 groups is refused with no group count).
   // Task 2: 1 (a 3-of-5 leaver: the preview, the walkovers and the hub footnote all say 3 of 5).
   // Task 3: 1 (two late players in a started league of four: rounds 4-7 in seed order, then 8-11 and the first late player at 12).
-  const EXPECTED_CHECKS = 5;
+  // Task 4: 2 (Check 1's proposal stores the engine's basis on the best-Nth slots; the Standings tab prints it under the tables).
+  const EXPECTED_CHECKS = 7;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -108,7 +109,8 @@ export async function w5RoundRobinBSuite(): Promise<void> {
     const completed = v1data<{ completed?: boolean; seed_proposal?: { id: string; status: string } | null } | undefined>(done);
     // The completion proposed the knockout (setup path); asked again, the recompute answers the same draft's computed seats.
     const pRes = await v1(owner, `/api/v1/stages/${koId}/seed-proposal`, "POST");
-    type Qual = { rank: number; entrantId: string; source: { group?: string } };
+    type Basis = { nth: number; matchesCounted: number; dropped: { pool: string; against: string[] }[]; levelWith: string[] };
+    type Qual = { rank: number; entrantId: string; source: { group?: string }; pool?: string; basis?: Basis };
     const proposal = v1data<{ status?: string; computed?: { qualifiers?: Qual[] } } | undefined>(pRes);
     const seats = [...(proposal?.computed?.qualifiers ?? [])].sort((a, b) => a.rank - b.rank);
     const seventh = seats[6];
@@ -125,6 +127,36 @@ export async function w5RoundRobinBSuite(): Promise<void> {
       "w5b X-UP-1: an unequal groups_ko (3/3/2/2, Top 7) proposes its 7th seat to the 3-pool runner-up compared without its win over the bottom row; the other 3-pool's runner-up is out" +
         (ok ? "" : ` - comp ${cRes.status}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, gen ${koGen.status}/${grGen.status}, start ${started.status}, lines ${lines.length}, pools [${pools.map((p) => p.map((id) => seedOf.get(id)).join("/")).join(" ")}], scored ${scored.join(",")}, complete ${done.status} ${JSON.stringify(done.json).slice(0, 300)}, proposal ${pRes.status} [${seats.map((q) => `${q.rank}:${seedOf.get(q.entrantId)}${q.source.group ?? "*"}`).join(" ")}]`),
       ok,
+    );
+
+    // Check 6 - Task 4 (X-UP-3 <- RB5-U3; ST-G3): the best-Nth slots carry the engine's comparison basis and pool. Snake 10 into 4 deals
+    // A B C D D C B A A B, so the 3-pools are A and B; k = 3 - 2 = 1 drops each one's 3rd, and every runner-up is compared on 1 match.
+    // Every best-Nth seat stores the same basis (one comparison per nth); the group winners store none.
+    const want: Basis = { nth: 2, matchesCounted: 1, dropped: [{ pool: "A", against: [three1?.[2] ?? "?"] }, { pool: "B", against: [three2?.[2] ?? "?"] }], levelWith: [] };
+    const bestSeats = seats.slice(4);
+    const sortDropped = (b?: Basis) => (b ? { ...b, dropped: [...b.dropped].sort((x, y) => x.pool.localeCompare(y.pool)) } : b);
+    const basisOk =
+      ok && bestSeats.length === 3 && bestSeats.every((q) => JSON.stringify(sortDropped(q.basis)) === JSON.stringify(want)) &&
+      seats.slice(0, 4).every((q) => q.basis === undefined) && seventh?.pool === "A";
+    w5Check(
+      "w5b X-UP-3: each best runner-up slot stores the engine's basis (nth 2, compared on 1 match, each 3-pool's 3rd dropped) and its pool" +
+        (basisOk ? "" : ` - seats [${seats.map((q) => `${q.rank}:${q.pool ?? "-"}:${JSON.stringify(q.basis ?? null)}`).join(" ")}]`),
+      basisOk,
+    );
+
+    // Check 7 - Task 4 (X-UP-3; R24 pick 16 B, C3): the division's Standings tab prints the basis line under the group's tables, in the
+    // public dictionary's words (en), and the left-out results behind "Results left out".
+    const compSlug = v1data<{ slug?: string } | undefined>(cRes)?.slug;
+    const divSlug = v1data<{ slug?: string } | undefined>(dRes)?.slug;
+    const orgSlug = ((await call(owner, "/api/orgs")) as { slug: string }[])[0]?.slug ?? "";
+    const page = await fetch(`${BASE}/o/${orgSlug}/c/${compSlug}/d/${divSlug}?tab=standings`, { headers: { cookie: cookieHeader(owner) } });
+    const html = await page.text();
+    const line = "Best runners-up compared on 1 match (results v 3rd in Group A and Group B not counted)";
+    const pageOk = page.status === 200 && html.includes('data-testid="standings-bestnth-basis"') && html.includes(line) && html.includes(">Results left out</summary>");
+    w5Check(
+      `w5b X-UP-3: the Standings tab prints "${line}" under the group's tables, with the results left out behind a disclosure` +
+        (pageOk ? "" : ` - page ${page.status} /o/${orgSlug}/c/${compSlug}/d/${divSlug}, basis block ${html.includes("standings-bestnth-basis")}, line ${html.includes(line)}`),
+      pageOk,
     );
   }
 

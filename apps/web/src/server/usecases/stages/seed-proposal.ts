@@ -4,7 +4,7 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { type ProgressionSpec } from "@seazn/engine/competition";
+import { type ComparisonBasis, type ProgressionSpec } from "@seazn/engine/competition";
 import { resolveStoredProgression } from "../stored-progression";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -45,6 +45,11 @@ export interface SeedProposalOut {
       source: { stageId: string; group?: string; rank: number };
       entrantId: string;
       destinationSlot: string;
+      /** W5 app PR B T4 (engine 10 `ResolvedProgressionEntry.pool`): the source pool's key, group_rank and best_nth entries. */
+      pool?: string;
+      /** W5 app PR B T4 (RB5-U1/U3, X-UP-3): a best_nth entry's comparison basis - what the source's Standings footnote says
+       *  (`loadUnequalBasis`). Replaced with the slot by every re-proposal (a stale draft's basis is never read). */
+      basis?: ComparisonBasis;
     }[];
     ties: { slots: string[]; entrantIds: string[]; reason: string }[];
     standingsHash: string;
@@ -217,6 +222,9 @@ export async function computeSeedProposal(
       // filled too at confirm time via a fresh destinationSlotsBySeed() call
       // keyed off this same `rank`; see confirmSeedProposal.
       destinationSlot: slotBySeed.get(q.seed)?.[0] ?? "",
+      // W5 app PR B T4 (X-UP-3): the engine's own pool and comparison basis ride the slot; the Standings footnote reads them.
+      ...(q.pool !== undefined ? { pool: q.pool } : {}),
+      ...(q.basis !== undefined ? { basis: q.basis } : {}),
     }));
     // Integrity check over the FULL resolved slate, BEFORE the departed
     // filter below: it asks whether the generated TBD fixtures still match

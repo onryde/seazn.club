@@ -12,21 +12,16 @@
 // the resolver. Each scene's results are chosen so the right answer differs from the raw-row answer 9.x gave.
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
-import { defaultCrossGroup, lotSeed, type StandingsRow } from "@seazn/engine/competition";
+import { lotSeed, type StandingsRow } from "@seazn/engine/competition";
 import { shuffle } from "@seazn/engine/core";
-import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
-import { buildTemplateStages } from "@/lib/format-templates";
-import type { AuthCtx } from "@/server/api-v1/auth";
-import { createCompetition } from "../competitions";
-import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
 import { bestNthSourceOf } from "../pool-results";
 import { sourcePoolKeys } from "../stage-seeding";
-import { startDivision } from "../schedule";
-import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures, getSeedProposal } from "../stages";
-import { seedOrg } from "./_seed";
+import { completeStage } from "../stages";
+import { bestNthBasisNote } from "@/lib/bestnth-basis-note";
+import { snakeSizes } from "@/lib/field-cut-gate";
+import { getSeedProposal } from "../stages";
+import { declaredCrossGroup, proposedBestNth, publicT, scene, type Meeting, type Scene } from "./_groups-ko-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -37,107 +32,6 @@ afterAll(async () => {
   g._sql = undefined;
   await c?.end();
 });
-
-type Sport = "generic" | "boardgame";
-/** One meeting inside a pool, by the members' places in seed order (0 = the pool's top seed): `w` beats `l`, `score` for generic. */
-type Meeting = { w: number; l: number; score?: readonly [number, number] };
-
-interface Scene {
-  auth: AuthCtx;
-  srcId: string;
-  koId: string;
-  /** The pools by key, each member list in seed order. */
-  pools: { key: string; members: string[] }[];
-}
-
-async function post(auth: AuthCtx, fixtureId: string, type: string, payload: Record<string, unknown> = {}): Promise<void> {
-  const [{ n }] = await sql<{ n: number }[]>`select coalesce(max(seq), 0)::int as n from score_events where fixture_id = ${fixtureId}`;
-  await scoreEvent(auth, fixtureId, { expected_seq: n, type, payload });
-}
-
-/** A groups_ko division built by the template, its group stage drawn, every meeting decided as `plan` says (by the pool's size). */
-async function scene(o: {
-  sport: Sport;
-  entrants: number;
-  poolCount: number;
-  qualified: number;
-  timing: "setup" | "on_complete";
-  plan: (size: number) => readonly Meeting[];
-  rngSeed?: (pools: Scene["pools"]) => number;
-}): Promise<Scene> {
-  const { auth } = await seedOrg("pro");
-  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "PR " + o.sport, visibility: "private", branding: {} });
-  const [variant] = await sql<{ key: string; config: Record<string, unknown> }[]>`
-    select key, config from sport_variants where sport_key = ${o.sport} and is_system order by key limit 1`;
-  expect(variant, `${o.sport} has a system variant`).toBeDefined();
-  const div = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: o.sport, variant_key: variant!.key, config: variant!.config } as never);
-  await createEntrants(auth, div.id, Array.from({ length: o.entrants }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })));
-  const drafts = buildTemplateStages("groups_ko", { qualified: o.qualified, poolCount: o.poolCount, swissRounds: 3, legs: 1 });
-  const stages = await createStages(
-    auth,
-    div.id,
-    drafts.map((d, i) => ({
-      seq: i + 1,
-      kind: d.kind,
-      name: d.name,
-      config: d.config,
-      progression: d.progression === null ? null : { ...d.progression, timing: o.timing },
-    })) as never,
-  );
-  const src = stages.find((s) => s.seq === 1)!;
-  const ko = stages.find((s) => s.seq === 2)!;
-  // The setup path proposes INTO the knockout's TBD lines, so they exist first; the on_complete path seeds before any draw.
-  if (o.timing === "setup") await generateStageFixtures(auth, ko.id);
-  await generateStageFixtures(auth, src.id);
-  await startDivision(auth, div.id);
-
-  const seeds = new Map((await sql<{ id: string; seed: number }[]>`select id, seed from entrants where division_id = ${div.id}`).map((e) => [e.id, e.seed]));
-  const poolRows = await sql<{ id: string; key: string }[]>`select id, key from pools where stage_id = ${src.id} order by key`;
-  const fx = await sql<{ id: string; pool_id: string; home_entrant_id: string; away_entrant_id: string }[]>`
-    select id, pool_id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${src.id}`;
-  const pools = poolRows.map((p) => ({
-    key: p.key,
-    members: [...new Set(fx.filter((f) => f.pool_id === p.id).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]))].sort((a, b) => seeds.get(a)! - seeds.get(b)!),
-  }));
-  if (o.rngSeed) await sql`update stages set config = config || ${sql.json({ rngSeed: o.rngSeed(pools) } as never)} where id = ${src.id}`;
-
-  let decided = 0;
-  for (const p of pools) {
-    const meetings = o.plan(p.members.length);
-    // A full round robin: every pair of the pool meets once (legs 1), and the plan names each pair exactly once.
-    expect(meetings.length, `pool ${p.key}: the plan decides every meeting`).toBe((p.members.length * (p.members.length - 1)) / 2);
-    for (const m of meetings) {
-      const winner = p.members[m.w]!;
-      const loser = p.members[m.l]!;
-      const f = fx.find((x) => (x.home_entrant_id === winner && x.away_entrant_id === loser) || (x.home_entrant_id === loser && x.away_entrant_id === winner));
-      expect(f, `pool ${p.key}: ${m.w} v ${m.l} is a fixture`).toBeDefined();
-      await post(auth, f!.id, "core.start");
-      if (o.sport === "boardgame") {
-        await post(auth, f!.id, "boardgame.result", { winner, method: "resign" });
-      } else {
-        const [ws, ls] = m.score!;
-        await post(auth, f!.id, "generic.result", f!.home_entrant_id === winner ? { p1Score: ws, p2Score: ls } : { p1Score: ls, p2Score: ws });
-      }
-      decided++;
-    }
-  }
-  expect(decided, "meetings decided").toBe(fx.length);
-  return { auth, srcId: src.id, koId: ko.id, pools };
-}
-
-/** The proposal's best-Nth seats, in seed order: the qualifiers read from no group (a `best_nth` descriptor names none). */
-async function proposedBestNth(s: Scene): Promise<{ bestNth: string[]; winners: string[] }> {
-  const proposal = await getSeedProposal(s.auth, s.koId);
-  expect(proposal?.status, "the completion proposed the knockout").toBe("draft");
-  const q = [...proposal!.computed.qualifiers].sort((a, b) => a.rank - b.rank);
-  return { bestNth: q.filter((x) => x.source.group === undefined).map((x) => x.entrantId), winners: q.filter((x) => x.source.group !== undefined).map((x) => x.entrantId) };
-}
-
-const variantConfig = async (sport: Sport) =>
-  (await sql<{ config: Record<string, unknown> }[]>`select config from sport_variants where sport_key = ${sport} and is_system order by key limit 1`)[0]!.config;
-/** The sport's declared cross-group order (engine `defaultCrossGroup` over its group cascade): the comparison's keys. */
-const declaredCrossGroup = async (sport: Sport) =>
-  defaultCrossGroup(builtinModules.find((m) => m.key === sport)!.defaultTiebreakers("group", (await variantConfig(sport)) as never));
 
 // 10 entrants into 4 pools draw 3/3/2/2; groups_ko with 7 qualifiers takes every pool's winner and the best 3 of the 4 runners-up
 // (topNPerGroup 1 + bestNth nth 2 count 3, format-templates.ts). Within a pool, place 0 is the top seed.
@@ -284,4 +178,65 @@ describe.skipIf(!HAS_DB)("pool results reach best-Nth on both seeding paths (W5 
     const { bestNth } = await proposedBestNth(s);
     expect(bestNth, "RB5-U1, then the source's lots over the level runners-up").toEqual(drawOf(rngSeed, candidates).slice(0, 3));
   });
+});
+
+describe.skipIf(!HAS_DB)("no app path reaches pool_results_missing or SEEDING_BESTNTH_UNEQUAL_POOLS (W5 app PR B Task 4, K19)", () => {
+  it("X-UP-1 sweep: every groups_ko pool shape 2..4 pools x 2..5 per pool, setup and on_complete, seats its best runner-up; equal pools show no source footnote", async () => {
+    // single-sport: the refusal is the builders' (results on every pool), not a sport's; generic decides every meeting 1-0 to the
+    // higher seed. qualified = pools + 1: every pool's winner and the best runner-up (topNPerGroup 1 + bestNth nth 2 count 1).
+    // Per pool count, the field runs 2 per pool (equal), 2 per pool + 1, 5 per pool - 1 (unequal) and 5 per pool (equal).
+    // differential: drop the results on the on_complete builder (`tablesForCompletedStage`) and its leg is refused
+    // SEEDING_POOL_RESULTS_MISSING (formerly swallowed silently, K19); on 9.x every unequal shape refused SEEDING_BESTNTH_UNEQUAL_POOLS
+    // unless the take carried the flag.
+    const t = publicT("en");
+    let checked = 0, unequal = 0, footnotes = 0;
+    for (const poolCount of [2, 3, 4]) {
+      for (const entrants of [2 * poolCount, 2 * poolCount + 1, 5 * poolCount - 1, 5 * poolCount]) {
+        const sizes = snakeSizes(entrants, poolCount);
+        const isUnequal = new Set(sizes).size > 1;
+        for (const timing of ["setup", "on_complete"] as const) {
+          const label = `${entrants} into ${poolCount} (${sizes.join("/")}) ${timing}`;
+          const plan = (size: number): Meeting[] =>
+            Array.from({ length: size }, (_, w) => Array.from({ length: size - w - 1 }, (_, i): Meeting => ({ w, l: w + i + 1, score: [1, 0] }))).flat();
+          const s: Scene = await scene({ sport: "generic", entrants, poolCount, qualified: poolCount + 1, timing, plan });
+          expect(s.pools.map((p) => p.members.length), label).toEqual(sizes);
+          let done;
+          try {
+            done = await completeStage(s.auth, s.srcId);
+          } catch (e) {
+            const err = e as { code?: string; extra?: { cause?: string } };
+            throw new Error(`${label}: refused ${err.code} (cause ${err.extra?.cause}): ${String(e)}`);
+          }
+          expect(done.completed, label).toBe(true);
+          if (timing === "on_complete") {
+            expect(done.qualified?.entrants, `${label}: the knockout was seeded`).toHaveLength(poolCount + 1);
+          } else {
+            const proposal = await getSeedProposal(s.auth, s.koId);
+            expect(proposal?.status, label).toBe("draft");
+            const best = proposal!.computed.qualifiers.filter((q) => q.basis !== undefined);
+            expect(best, `${label}: one best runner-up, its basis stored`).toHaveLength(1);
+            const basis = best[0]!.basis!;
+            expect(basis.nth, label).toBe(2);
+            // RB5-U1: each larger pool drops its bottom (size - smallest) rows; equal pools drop nothing (RB5-U6).
+            const smallest = Math.min(...sizes);
+            const expectDropped = s.pools
+              .filter((p) => p.members.length > smallest)
+              .map((p) => ({ pool: p.key, against: p.members.slice(smallest) }));
+            const byPool = (a: { pool: string }, b: { pool: string }) => a.pool.localeCompare(b.pool);
+            expect([...basis.dropped].sort(byPool), label).toEqual(expectDropped);
+            const rows = (await sql<{ pool_key: string; rows: StandingsRow[] }[]>`
+              select p.key as pool_key, ss.rows from standings_snapshots ss join pools p on p.id = ss.pool_id where ss.stage_id = ${s.srcId}`);
+            const note = bestNthBasisNote(basis, rows.map((r) => ({ key: r.pool_key, rows: r.rows })), {}, new Set(), t, "en");
+            expect(note === null, `${label}: a footnote exactly when the pools are unequal`).toBe(!isUnequal);
+            if (note !== null) footnotes++;
+          }
+          checked++;
+          if (isUnequal) unequal++;
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: every shape on both paths").toBe(3 * 4 * 2);
+    expect(unequal, "the sweep saw unequal shapes").toBe(3 * 2 * 2);
+    expect(footnotes, "an unequal setup shape shows its footnote").toBe(3 * 2);
+  }, 240_000);
 });

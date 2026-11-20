@@ -18,6 +18,8 @@
   "seeding.SEEDING_NOTHING_TO_FILL": "Il ne reste personne à placer dans cette phase : tous les qualifiés se sont retirés. Recalculez la proposition une fois les participants stabilisés.",
   "seeding.SEEDING_ROUNDLOSERS_DE_SOURCE": "Une phase à double élimination ne peut pas alimenter une autre phase par perdants de tour : ses tours sont numérotés séparément dans le tableau principal, le tableau des perdants et la grande finale, la coupe désignerait donc les mauvaises personnes. Utilisez plutôt les places finales de la phase.",
   "seeding.SEEDING_FIRSTLOSSES_DE_SOURCE": "Une phase à double élimination ne peut pas alimenter une autre phase par premières défaites : un perdant passe dans le tableau des perdants et peut perdre encore, il n'y a donc pas une seule première défaite à attendre. Utilisez plutôt les places finales de la phase.",
+  "seeding.SEEDING_BESTNTH_NO_SUPPLIER": "Aucun groupe n'a de joueur à la place {rank} à comparer (le plus grand en a {available} après les retraits) : impossible de choisir les meilleurs à cette place. Réduisez le nombre de qualifiés ou changez de format.",
+  "seeding.SEEDING_POOL_RESULTS_MISSING": "Le groupe {pool} est plus grand que les autres, et ses résultats sont nécessaires pour comparer son qualifié sur le même nombre de matchs. Actualisez et réessayez ; si le problème persiste, contactez le support.",
   "ladder.LADDER_ENTRANT_FOREIGN": "Les deux joueurs doivent figurer sur cette échelle. Actualisez la page : l'échelle a pu changer depuis son ouverture.",
   "ladder.LADDER_ENTRANT_WITHDRAWN": "Ce joueur s'est retiré de cette division : il ne peut ni lancer ni recevoir de défi.",
   "ladder.LADDER_CHALLENGE_NOT_UPWARD": "Vous ne pouvez défier qu'un joueur classé au-dessus de vous.",

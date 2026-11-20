@@ -278,7 +278,7 @@ async function tablesForCompletedStage(
   // W5 app PR B T0 (G4, RB5-U1): a real table's pools carry their counted results, as on the setup path (`sourcesToTables`), so
   // best-Nth compares a larger pool's candidate without its results against the pool's bottom k; the rules come from the same load.
   const real = REAL_TABLE_KINDS.has(stage.kind) && keyOf !== undefined ? await bestNthSourceOf(tx, stage.id, keyOf) : undefined;
-  if (real !== undefined) pools = withPoolResults(pools, real.results);
+  if (real !== undefined) pools = withPoolResults(pools, real.results, real.expunged);
   // W3 T15 Carry A (controller ruling 2026-11-02): a Swiss source's departed entrants leave its cut and the next eligible
   // entrant backfills — the same tables the `setup` path's proposal reads (stage-seeding.ts `sourcesToTables`); since W4
   // T13 (RB4-V6) a league's or a group's too (`CUT_SKIPS_DEPARTED_KINDS`). Every other kind is returned as it was:

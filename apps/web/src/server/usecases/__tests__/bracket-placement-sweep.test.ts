@@ -175,8 +175,13 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
   },
   {
     re: /^groups_ko n=\d+ q=\d+ pools=\d+ third=(true|false): generate knockout refused \(\d+ can't qualify from this field: it can supply at most \d+\.\)$/,
-    expected: 2,
-    why: "RB5-E6 (the cut gate, W5 T12): a cut the field cannot supply is refused at the knockout's Generate - the sweep's one such field is n=17 with 3 pools, which supplies 15 of the 16 asked, with and without third place",
+    // K17 (W5 app PR B T4; RB5-U7, ruling 286): re-derived, not retyped. Every groups_ko field this sweep draws asks q <= n, and on
+    // the snake's pools (floor(n/p) or one more) a Top q is n' = floor(q/p) per pool + a best (n'+1)th for r = q mod p, which the
+    // `n mod p` larger pools supply exactly when q <= n - a short pool now supplies no candidate instead of refusing the whole
+    // comparison (lib/__tests__/field-cut-gate.test.ts sweeps that rule against the engine and pins 0 template shape refusals).
+    // So the one field 9.x refused (n=17, 3 pools of 6/6/5, top 16: the best 6th) now draws, and none is refused.
+    expected: 0,
+    why: "RB5-E6 (the cut gate, W5 T12) under RB5-U7: no groups_ko cut within the field is refused; one that is would be read here and fail its count",
   },
 ];
 
@@ -434,7 +439,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     // A refusal is the usecase saying no to an impossible request, not a stage that lost its bracket (see `auditRefusals`).
     const audit = auditRefusals(refused);
     expect(audit.problems, `refusals: ${refused.length} read`).toEqual([]);
-    expect(refused.length, "anti-vacuity: the sweep did meet refusals (the three known ones)").toBeGreaterThan(0);
+    expect(refused.length, "anti-vacuity: the sweep did meet refusals (the known ones)").toBeGreaterThan(0);
   });
 });
 
@@ -460,14 +465,14 @@ describe("the sweep's refusal audit (no database)", () => {
     SW("swiss_knockout", 2, false),
     SW("swiss_knockout", 2, true),
     ...THIRDS.map(SMALL_PLATE),
-    ...THIRDS.map(GKO_CUT),
+    // K17 (W5 app PR B T4; RB5-U7): the groups_ko cut refusal (n=17, 3 pools, q=16) is gone - the 6-pools supply the best 6th.
     ...CUTS,
   ];
 
-  it("accepts exactly what the sweep meets today (74 refusals: 31 + 2 + 2 + 2 + 2 + 35; the Plate refuses none, T8-b)", () => {
+  it("accepts exactly what the sweep meets today (72 refusals: 31 + 2 + 2 + 2 + 35; the Plate refuses none, T8-b; no groups_ko cut, K17)", () => {
     // 35 cuts: 16 day one + 19 seeded.
     expect(CUTS.length).toBe(35);
-    expect(today().length).toBe(74);
+    expect(today().length).toBe(72);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 
@@ -483,7 +488,7 @@ describe("the sweep's refusal audit (no database)", () => {
       ["the page playoff refusal at a field the bound allows", [...today(), PAGE().replace("n=2", "n=4")]],
       ["the page playoff refusal on a template that ends in no page playoff", [...today().filter((r) => r !== PAGE()), PAGE("swiss_knockout")]],
       ["a Swiss refusal MOVED to another template (same count)", [...today().filter((r) => r !== SW("swiss_knockout", 2, false)), SW("swiss_other", 2, false)]],
-      ["one cut-gate refusal no longer refused (third place off)", today().filter((r) => r !== GKO_CUT(false))],
+      ["a groups_ko cut within the field refused again (RB5-U7 supplies it)", [...today(), GKO_CUT(false)]],
       ["a cut-gate refusal on a template the rule does not name", [...today(), GKO_CUT(true).replace("groups_ko", "league_ko")]],
       ["a refusal text nobody has read", [...today(), "ko_plate n=8 q=4 third=false: seeding knockout from knockout refused (something new)"]],
       ["a Plate refusal of the old kind comes back (T8-b: the Plate refuses nothing)", [...today(), "ko_plate n=5 q=4 third=false: seeding knockout from knockout refused (bracket round 1 has no loser at position 2 (found 1))"]],

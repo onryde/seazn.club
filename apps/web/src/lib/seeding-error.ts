@@ -89,7 +89,13 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *
  *  SEEDING_FIRSTLOSSES_DE_SOURCE (W4 app PR B, Task 8): the same refusal for a `firstLosses` take. "First real loss" is defined over a
  *  single-elimination bracket's rounds; a double-elimination loser drops into a second lane and may lose again, so there is no one
- *  "first loss" round to wait on. Refused by name rather than guessed. */
+ *  "first loss" round to wait on. Refused by name rather than guessed.
+ *
+ *  SEEDING_BESTNTH_UNEQUAL_POOLS is DEPRECATED (W5 app PR B T4; ruling 286, RB5-U8; preflight C2): engine 10 never throws it -
+ *  best-Nth across unequal pools is always compared on the smallest pool's matches - but the code stays in the engine's union and
+ *  a stored seeding-failure notice or a cached API client can still carry it, so its copy is kept and still renders.
+ *
+ *  SEEDING_BESTNTH_NO_SUPPLIER and SEEDING_POOL_RESULTS_MISSING (W5 app PR B T4, K19): see BEST_NTH_REFUSAL_CODES below. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -110,8 +116,18 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_NOTHING_TO_FILL",
   "SEEDING_ROUNDLOSERS_DE_SOURCE",
   "SEEDING_FIRSTLOSSES_DE_SOURCE",
+  "SEEDING_BESTNTH_NO_SUPPLIER",
+  "SEEDING_POOL_RESULTS_MISSING",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
+
+/** W5 app PR B T4 (K19; RB5-U7, ruling 286): engine 10's two best-Nth STAGE_NOT_READY reasons, named at the one resolve boundary
+ *  (`bestNthRefusal`, server/usecases/stored-progression.ts) so neither is read as "another source is not ready yet" and swallowed.
+ *  SEEDING_BESTNTH_NO_SUPPLIER: no pool has a rank-N finisher (expunged leavers count in no size) - the format or the field is what
+ *  to mend. SEEDING_POOL_RESULTS_MISSING: a larger pool handed best-Nth no results - no app path reaches it (both seeding builders
+ *  attach every pool's results; the sweep in pool-results-seam.test.ts pins that), mapped by name so a regression is named. A
+ *  completion that trips either carries the code as `cause` inside STAGE_COMPLETED_SEEDING_FAILED (completed-seeding-failed.ts). */
+export const BEST_NTH_REFUSAL_CODES: ReadonlySet<string> = new Set(["SEEDING_BESTNTH_NO_SUPPLIER", "SEEDING_POOL_RESULTS_MISSING"]);
 
 function isSeedingErrorCode(code: string): code is SeedingErrorCode {
   return (SEEDING_ERROR_CODES as readonly string[]).includes(code);

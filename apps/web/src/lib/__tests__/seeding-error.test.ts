@@ -28,7 +28,7 @@ describe("seedingErrorMessage — mechanics", () => {
     expect(out).not.toBe("fallback");
   });
 
-  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS, F6's SEEDING_CARRY_SOURCE_INVALID the withdrawn-qualifier refusal and the empty-draw refusal (17 total)", () => {
+  it("SEEDING_ERROR_CODES lists exactly the 13 shipped codes, plus F3 review item 4's SEEDING_MAP_SOURCE_AMBIGUOUS, F6's SEEDING_CARRY_SOURCE_INVALID the withdrawn-qualifier refusal, the empty-draw refusal and W5's two best-Nth refusals", () => {
     const expected: SeedingErrorCode[] = [
       "SEEDING_MAP_SLOT_INVALID",
       "SEEDING_MAP_SOURCE_INVALID",
@@ -64,6 +64,9 @@ describe("seedingErrorMessage — mechanics", () => {
       "SEEDING_ROUNDLOSERS_DE_SOURCE",
       // W4 app PR B (Task 8): a firstLosses take from a double-elimination source.
       "SEEDING_FIRSTLOSSES_DE_SOURCE",
+      // W5 app PR B (Task 4, K19): engine 10's best-Nth STAGE_NOT_READY reasons, named (`bestNthRefusal`).
+      "SEEDING_BESTNTH_NO_SUPPLIER",
+      "SEEDING_POOL_RESULTS_MISSING",
     ];
     expect([...SEEDING_ERROR_CODES].sort()).toEqual([...expected].sort());
   });
@@ -73,7 +76,9 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
   for (const locale of LOCALES) {
     for (const code of SEEDING_ERROR_CODES) {
       it(`${locale}: ${code} resolves to real copy — never the raw code, never the PREFIXED dictionary key, never empty, no leftover {placeholder}`, () => {
-        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK");
+        // W5 app PR B T4: the two best-Nth refusals carry the engine's numbers (rank, available, pool); every code is given them
+        // and a code that names none ignores them, so the leftover-{placeholder} check still catches a misspelt name.
+        const out = seedingErrorMessage(locale, code, "SHOULD_NOT_SEE_FALLBACK", { rank: 3, available: 2, pool: "A" });
         expect(out).not.toBe("SHOULD_NOT_SEE_FALLBACK");
         expect(out).not.toBe(code);
         // A genuinely missing dictionary entry does NOT fall back to the bare

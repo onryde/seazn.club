@@ -487,7 +487,7 @@ export async function sourcesToTables(
     // departed cut, the earned table `keepExhaustedSeatsDead` restores, a lucky loser's cut) keeps them, and best-Nth compares a
     // larger pool's candidate without its results against the pool's bottom k. Its cross-group rules come from the same load.
     const real = REAL_TABLE_KINDS.has(source.kind) && keyOf !== undefined ? await bestNthSourceOf(tx, source.id, keyOf) : undefined;
-    const read = real === undefined ? standings : withPoolResults(standings, real.results);
+    const read = real === undefined ? standings : withPoolResults(standings, real.results, real.expunged);
     // W3 T15 Carry A: a Swiss source's departed entrants leave its cut (the next eligible entrant backfills) — and since
     // W4 T13 a league's or a group's (RB4-V6). A knockout source's departed qualifier takes a lucky loser in her place
     // (RB4-V2, `luckyLoserCut`). The hash the proposal stores is over these tables, so a departure or a return after a
