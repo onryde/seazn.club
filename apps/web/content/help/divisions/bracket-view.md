@@ -1,20 +1,35 @@
 ---
 title: The bracket
-description: The classic two-sided tree — on the console, the public page, the big screen and a printable poster.
+description: Where to see a knockout, double elimination or playoff bracket, how to open it on your phone, and how to print it as a poster.
 order: 6
+related: divisions/groups-to-knockout, divisions/qualify-from-any-stage, sharing/slideshow
 ---
 
-Knockout stages render as the classic **two-sided bracket**: quarter-finals on the outside, converging on a centre Final, the third-place match tucked underneath. Every round carries its name — *Quarter-finals*, *Semi-finals*, *Final*, *Third place* — read from the round's position in the bracket rather than from how many matches it holds, so a round is never mislabelled. One shared layout drives every surface, so they never disagree:
+A knockout stage draws as a bracket: the early rounds on the outside, converging on the final in the middle. This page shows you where to find it and how to print it.
 
-- **Console** — the division's Fixtures tab shows the tree above the match list; each node links to its scoring page, live matches pulse.
-- **Public page** — the shared division page draws the same connected tree, filled from live results. A slot waiting on an earlier match reads `TBD`; a **bye** says *Bye*, because a bye is settled at setup and never resolves into anyone.
-- **Big screen** — the [slideshow](/help/sharing/slideshow) and [presentation mode](/help/sharing/presentation-mode) get a bracket slide — the tree, the double-elim lanes, or the stepladder rungs, whichever the stage is.
-- **Poster** — Documents → *Bracket poster* exports a landscape PDF scaled to one sheet — all three shapes — with your branding on Pro or under an [Event Pass](/help/billing/event-pass).
+## On the console
 
-**Double elimination** gets its own geometry — on the console Fixtures tab *and* the public page: the winners bracket on top, the losers bracket beneath it, and the grand final (plus the bracket-reset match, when configured) joining the two lanes on the right. Stepladder stages keep their rung-by-rung view — that ladder *is* their shape.
+Open the division's **Fixtures** tab and choose **Bracket** on the stage card. On a phone it is in the **Stage tools** menu. The tree opens above the match list. The list below it has a heading for each round: **Quarter-finals**, **Semi-finals** and **Final**.
 
-**Playoffs (IPL style)** — the Page system: Qualifier 1 (1st vs 2nd, winner straight to the Final), the Eliminator (3rd vs 4th), Qualifier 2 (Q1's loser vs the Eliminator's winner), then the Final. The top two earn a second life; the card renders on every surface like the other brackets. Pick **Group + Playoffs (IPL style)** in the division builder — it locks qualification to the top 4.
+On a phone the tree is wider than the screen, so you swipe it sideways.
 
-**Round-robin stages** (leagues and groups) have no tree — their visual is the **results grid**: a team-by-team crosstable under each standings table (console Standings tab and public page alike), home side down the rows, away side across the columns, every played score linked to its match and a pulsing dot for matches in play.
+**Third place** is a choice on the stage card: **Shared** or **Play-off match**. With **Shared**, no third-place match is drawn. The choice cannot change once play has started.
 
-**Jump to the public view.** The division header carries a **Public page ↗** button (public and unlisted competitions) that opens exactly what spectators see.
+- **Double elimination** shows a **Winners bracket** with its rounds and a **Losers bracket** with its own rounds.
+- **Playoffs (IPL style)** shows **Qualifier 1**, **Eliminator**, **Qualifier 2** and the **Final**. It needs exactly four qualifiers. Choose **Group + Playoffs (IPL style)** in the division builder.
+- A **stepladder** shows **Rung 1**, **Rung 2** and so on, then the **Final**.
+
+A slot waiting for an earlier match reads "Winner of …", and the public page shows **TBD**. A slot with no opponent reads **Bye**.
+
+> **Example**
+> Five players enter a knockout. The bracket is built for eight places, so three players have a **Bye**. On the public page, the bye slots read **Bye** and the open slots read **TBD** until the earlier matches are scored.
+
+## On the public page
+
+The **Open** menu at the top of the division has **View Public Page ↗**. On the public page, the tree is on the **Standings** tab, with the round headings above it. The **Schedule** tab lists the same matches with their slots.
+
+League and group stages have no tree. The **Standings** tab shows a **Results grid** under the table instead.
+
+## Print a poster
+
+On the **Fixtures** tab, choose **Documents**, then **Bracket poster**. It downloads a one-page landscape PDF for a knockout, a double elimination, a playoff or a stepladder. Branding on the poster follows your plan, as for the other branded documents.

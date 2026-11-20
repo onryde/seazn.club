@@ -1,25 +1,42 @@
 ---
 title: Scoring without signal
-description: Lost signal mid-match doesn't lose the match — entries queue on the device and send once you're back online.
+description: Lost signal in the middle of a match does not lose the match. Entries queue on the device and send when you are back online.
 order: 13
+related: scoring/conflicts, scoring/device-links
 ---
 
-Courtside signal drops. The pad doesn't stop working when it does — every entry you make still records locally and queues to send the moment you're back online.
+Courtside signal drops. The pad keeps working: every entry shows on the pad straight away and waits in a queue until it can be sent.
 
-## What you'll see
+## What you see
 
-A status line on the pad's header shows the queue: **N queued** while entries wait to send, **Syncing…** while they're going out, **All synced** once everything's landed. Go offline and it says so plainly — *"Offline — actions are saved and will send once you're back online."* Keep scoring through all of it; nothing is blocked by a bad connection.
+The pad's status line shows where the queue stands.
 
-## It's durable, and it drains itself
+- **Offline — actions are saved and will send once you're back online.** Your connection is down. Keep scoring.
+- **3 queued**, then **2 queued**, then **1 queued**. Entries are waiting to send, or going out one at a time. The number counts down.
+- **All synced.** Everything is in the ledger.
 
-Queued entries are saved on the device, not just in the browser tab's memory — closing the tab, reloading, or the browser restarting doesn't lose them. The moment the device gets a connection back, the queue sends itself, oldest entry first, with no extra tap required. Watch the queued count drop as it goes.
+> **Example**
+> Badminton, Mira against Jonas. The venue loses signal. You tap Mira, Jonas, Mira, and the pad shows 2-1 while the status line reads Offline. The match has recorded only its start. When the phone is back online the status changes to **All synced** within a moment, and the ledger holds the three rallies in the order you tapped them.
 
-## One thing not to do
+## What is kept
 
-The queue lives on **the device that recorded it** — nowhere else. If you hand the match to a different phone or tablet partway through (a dead battery, say), whatever was still queued on the first device stays there and only sends once *that* device is back online — a fresh device starting from now has no way to see or send it. If you're switching devices, get the original one back online first, or you'll be missing entries until it reconnects.
+- **Entries are saved on the device.** Reloading the page does not lose them: after a reload the score and the queue come back.
+- **The queue lives only on the device that made the entries.** A second phone looking at the same match still shows the score the ledger has. It cannot see your queue.
+- **Order.** Entries from one device go out in the order they were made.
 
-## Common questions
+## When the queue sends
 
-**Do I need to press anything to resend?** No — reconnecting is enough. Submitting anything new also nudges the queue along.
+A device that knows it is back online sends its queue by itself, oldest entry first, with no tap.
 
-**Will I lose points if two devices score offline at once?** No, but they can disagree about order — see [score conflicts](/help/scoring/conflicts) for what happens when two entries land close together.
+Sometimes the connection is poor but the phone does not report it as offline, for example a hall with a Wi-Fi network that has no internet. Then the status line stays on **Offline** after the connection is good again. Reload the page: the pad sends what it saved. Or carry on scoring: the next entry you make sends the whole queue, oldest first, and the status goes to **All synced**.
+
+## Switching devices
+
+If you hand the match to another phone while entries are still queued on the first, they stay on the first phone. Bring that phone back online first, or the match will be missing those entries until it is.
+
+## Two devices offline at once
+
+Nothing is lost. Each device sends its own entries when it comes back, so the ledger holds them in the order the devices reconnected, not the order the taps were made. Both devices then show the same score.
+
+> **Example**
+> Phone A taps Mira twice and phone B taps Jonas three times, both offline. A reconnects first, then B. The ledger holds Mira, Mira, Jonas, Jonas, Jonas and both phones show 2-3. If the order matters to the rally count (the server, the court side), [void](/help/scoring/corrections) and re-enter. For two entries that land close together, see [score conflicts](/help/scoring/conflicts).

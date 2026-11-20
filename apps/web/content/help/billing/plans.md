@@ -28,7 +28,7 @@ Everything in Pro, plus unlimited entrants per division, unlimited seats, teams,
 
 ## Match officials — included on every plan
 
-Assigning match officials — referees, umpires, judges and more, multiple roles per person, and organiser marks — is **free on every plan, Community included**. There's no officials paywall and no per-fixture cap. Automatic officials *assignment* is included from Pro, and on an Event Pass for the competition it covers. See [match officials](/help/scheduling/officials).
+Assigning match officials — referees, umpires, judges and more, multiple roles per person, and organiser marks — is **free on every plan, Community included**. There's no officials paywall and no per-fixture cap. Automatic officials *assignment* is included from Pro, and on an Event Pass for the competition it covers. See [assigning officials to matches](/help/scheduling/officials-assign).
 
 ## The platform fee on entry fees
 

@@ -118,9 +118,9 @@ afterAll(async () => {
  * NOT a directory walk. Two siblings this task fixed were `billing/downgrade.md`
  * (the same unqualified fee-reversion claim these guards ban — see the new
  * describe block below, `billing/downgrade.md is gated too`) and
- * `scheduling/ai-scheduling.md` (the retired per-division run-cap table AND the
+ * `scheduling/ai-scheduling.md`, since split into the `scheduling/ai-*` pages (the retired per-division run-cap table AND the
  * false "officials AI runs are not metered" claim — see
- * `scheduling/ai-scheduling.md is gated too`, further down). Both moved out of
+ * `the AI Schedule pages are gated too`, further down). Both moved out of
  * this list and into real scans once #303 corrected the copy. What remains
  * below is a real gap with a real issue, and listing it as data rather than
  * leaving it silently unscanned is the point.
@@ -142,7 +142,7 @@ const KNOWN_GAPS = [
   "app/globals.css .competition-prose table — `display: block` is what gives that scroll box its overflow, and it drops the implicit table role in some assistive tech (row/column relationships stop being announced). Mitigation is an explicit role=\"table\"/rowgroup set, which the same sanitiser strips (#303)",
   // ── Round 4 bookkeeping: the residuals, named rather than left implicit ────
   "THE AXIS IS CIRCULAR. `claiming` is computed by running `en.halfClaim` over the tree, so an article only joins the half-rate axis — and therefore only earns a gate — if that vocabulary already matches it. The vocabulary has been measured at 0/12 and 0/24, so an article stating the rate in an unseen shape is invisible to the axis AND ungated. The axis narrows the ungated set; it does not close it (#303)",
-  "THE FOURTH ARTICLE. `billing/plans.md` states the plan org caps and the fee ladder and is inventory-gated. `billing/downgrade.md`, `scheduling/ai-scheduling.md` and `scheduling/ai-officials.md` now carry the fee-lock/run-cap/unmetered-run vocabulary scans (below), which is real coverage but NOT the word-for-word inventory gate — a reword that stays inside the vocabulary's blind spots is still possible. `billing/credits.md`, `billing/operator.md` and every other non-billing, non-scheduling article remain fully ungated and unscanned, defended only by the vocabulary above (#303, #365)",
+  "THE FOURTH ARTICLE. `billing/plans.md` states the plan org caps and the fee ladder and is inventory-gated. `billing/downgrade.md`, the `scheduling/ai-*` pages and `scheduling/ai-officials.md` now carry the fee-lock/run-cap/unmetered-run vocabulary scans (below), which is real coverage but NOT the word-for-word inventory gate — a reword that stays inside the vocabulary's blind spots is still possible. `billing/credits.md`, `billing/operator.md` and every other non-billing, non-scheduling article remain fully ungated and unscanned, defended only by the vocabulary above (#303, #365)",
   "COMMENTS OWNED BY A CLOSING TOKEN SURVIVE `codeOnly` — NOT just the JSX idiom. `forEachChild` never visits TOKENS, so any comment whose nearest owner is a closing token is never blanked: `{/* … */}`, but equally an end-of-block comment on its own line, a comment in an empty block, the last call argument, the last array element, the last object property, the end of an interface body, a `switch`, or an `if`. Only an end-of-file comment is blanked. Measured tree-wide: 569 comment lines / 32,229 chars across 168 of 1,460 files. Direction is FAIL-SAFE — a negative scan can red on a comment that mentions a banned idiom, but can never miss real code — which is why it is recorded rather than fixed. Recorded as .tsx-only in round 5; that scoping was wrong and would have left the next reader hunting a JSX bug (#338)",
   "LITERAL-FREE SPANS ARE UNAUDITED, AND THIS ONE IS FAIL-OPEN. `blankedInsideLiteralFaults` proves every changed character lies OUTSIDE every string/regex/template-part/JSX literal, which closes the historical family (a `/*` inside a string ate 193 lines of division-settings.tsx) — proven by a length-preserving blank across every file raising 14,857 faults. It does NOT audit a stripper that eats a span containing NO literal at all. Constructed and it PASSES: blanking the largest literal-free span per file ships 79/79 green while destroying 1,061,443 chars across 1,341 of 1,460 files, largest single span 11,831 chars in server/usecases/billing-events.ts — LARGER than the 11,384 the historical bug actually ate. So this is not a corner case, it is most of the tree. THE COST ESTIMATE IN THE TASK 7 REPORT IS WRONG and that is the part that matters: closing this does NOT need a re-parse-and-compare 'doubling the walk'. It is a string check on the CHANGED CHARACTERS ONLY — take each maximal run of changed offsets, extend across neighbouring changed/space chars, require that span's raw text to be comments and whitespace only. O(changed chars), no re-parse, sub-millisecond per file. A wrong cost estimate is what stops a thing ever being closed (#338)",
   "FRONTMATTER PARSER DIVERGENCE, STILL LIVE. `server/help-content.ts`'s parseFrontmatter splits on `indexOf(\":\")` and is last-wins, so an indented `  description:` or a spaced `description :` is still RENDERED as the article's description while `copy-truth.ts`'s claimSurfaces regex (`^([A-Za-z_][\\w-]*):`) does not match it — the field scores 0 gate faults and is invisible to every rule. A falsehood delivered that way ships green (#303)",
@@ -353,15 +353,36 @@ describe("billing/downgrade.md is gated too (#303)", () => {
   });
 });
 
-describe("scheduling/ai-scheduling.md is gated too (#303)", () => {
-  const aiScheduling = helpArticleBySlug("scheduling/ai-scheduling");
+// The AI Schedule article was split by task (help programme, Task 11a). The gates
+// below ran on `scheduling/ai-scheduling` alone; they now run on EVERY page the
+// split produced, so a retired cap or an "unmetered" claim cannot hide in one of
+// the new pages. `AI_SCHEDULING_PAGES.length` is pinned so a page dropped from
+// the list (or from the tree) is a red, never a smaller green.
+const AI_SCHEDULING_PAGES = [
+  "scheduling/ai-scheduling",
+  "scheduling/ai-instructions",
+  "scheduling/ai-dates",
+  "scheduling/ai-review",
+  "scheduling/ai-credits",
+  "scheduling/ai-several-divisions",
+] as const;
+
+describe("the AI Schedule pages are gated too (#303)", () => {
+  // The joint page carries the #391 hourly-limit sentence checked further down.
+  const aiScheduling = helpArticleBySlug("scheduling/ai-several-divisions");
+  const pages = AI_SCHEDULING_PAGES.map((slug) => ({ slug, text: helpArticleBySlug(slug) }));
+
+  it("covers all six pages, each with prose to scan", () => {
+    expect(pages).toHaveLength(6);
+    for (const p of pages) expect(p.text.length, p.slug).toBeGreaterThan(1000);
+  });
 
   it("quotes no retired per-division AI-run cap", () => {
-    expect(retiredRunCapProseFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
+    for (const p of pages) expect(retiredRunCapProseFaults(`${p.slug}.md`, p.text), p.slug).toEqual([]);
   });
 
   it("never claims an AI run — schedule or officials — is unmetered", () => {
-    expect(unmeteredAiRunProseFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
+    for (const p of pages) expect(unmeteredAiRunProseFaults(`${p.slug}.md`, p.text), p.slug).toEqual([]);
   });
 
   // MUTATION PROOF, both halves #303 found: the retired lifetime-quota table,
@@ -434,7 +455,7 @@ The quota is a **lifetime total per division** — it doesn't reset weekly or mo
 // article carried that sentence once, it was corrected, and nothing stopped it
 // coming back.
 describe("joint undo copy guard (#392)", () => {
-  const aiScheduling = helpArticleBySlug("scheduling/ai-scheduling");
+  const aiScheduling = helpArticleBySlug("scheduling/ai-several-divisions");
 
   it("fires on the sentence that was actually wrong", () => {
     expect(
@@ -528,7 +549,11 @@ describe("joint undo copy guard (#392)", () => {
       .flatMap(sentences)
       .filter((s) => /\bundo\b/i.test(s));
     expect(undoSentences.length).toBeGreaterThan(2);
-    expect(jointUndoFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
+    expect(jointUndoFaults("ai-several-divisions.md", aiScheduling)).toEqual([]);
+    // …and the claim cannot come back in any sibling page either.
+    for (const slug of AI_SCHEDULING_PAGES) {
+      expect(jointUndoFaults(`${slug}.md`, helpArticleBySlug(slug)), slug).toEqual([]);
+    }
   });
 
   // MUTATION PROOF against the article itself: the paragraph as it read before
@@ -565,7 +590,7 @@ describe("scheduling/ai-officials.md is gated too (#365)", () => {
   // absence of a call, the describe below pins the row.
   it("reds on the exact Pro-Plus-gate sentence #365 found", () => {
     const reverted = aiOfficials.replace(
-      "Like the schedule pass, it needs no upgrade — it runs on **every plan, Community included**.",
+      /You can draft and review on every plan\. Saving the officials when you apply needs [^\n]*?the same as \*\*Propose\*\* on the \[Officials tab\]\(\/help\/scheduling\/officials-assign\)\./,
       "Automatic officials assignment is a **Pro Plus** feature.",
     );
     expect(reverted, "the replacement never matched — the article moved").not.toBe(aiOfficials);
@@ -579,7 +604,7 @@ describe("scheduling/ai-officials.md is gated too (#365)", () => {
   // no-instruction default spread that makes no model call.
   it("reds on the exact unmetered sentence #365 found", () => {
     const reverted = aiOfficials.replace(
-      /## Credits and rate limits\n\n[\s\S]*?(?=\n\nInstruction runs carry)/,
+      /## What a run costs\n\n[\s\S]*?(?=\n\n## Review and apply)/,
       `## Run quotas
 
 Unlike schedule generations, **officials AI runs are not metered** — restaff as often as you like. The empty-instruction default spread is produced without a model call at all, so it's effectively free.`,
@@ -602,11 +627,13 @@ Unlike schedule generations, **officials AI runs are not metered** — restaff a
 // The same lost-sale shape as the upgrade card in `dictionary-copy-truth`: the
 // reader of this paragraph is an organiser who has just been stopped.
 // ─────────────────────────────────────────────────────────────────────────────
-describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", () => {
-  const aiScheduling = helpArticleBySlug("scheduling/ai-scheduling");
+describe("the AI Schedule pages gate the joint board on no plan at all", () => {
+  const aiScheduling = helpArticleBySlug("scheduling/ai-several-divisions");
 
   it("never names a plan as a way to plan several divisions together", () => {
-    expect(multiDivisionBoardPlanGateFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
+    for (const slug of AI_SCHEDULING_PAGES) {
+      expect(multiDivisionBoardPlanGateFaults(`${slug}.md`, helpArticleBySlug(slug)), slug).toEqual([]);
+    }
   });
 
   // MUTATION PROOF: the exact sentence #382's review found, restored. Without
@@ -617,7 +644,7 @@ describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", 
       // divisions together needs **Pro**, or this competition's **Event
       // Pass**". V393 made the key free on every plan, so the article gates
       // nothing and the anchor is the sentence that replaced it.
-      /Planning several divisions together is[^\n]*/,
+      /It is available on every plan, Community included\.[^\n]*/,
       "The multi-division board is a **Pro** feature.",
     );
     expect(reverted, "the replacement never matched — the article moved").not.toBe(aiScheduling);
@@ -657,7 +684,7 @@ describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", 
     expect(multiDivisionBoardPlanGateFaults("x", withPass)).not.toEqual([]);
     // …and the guard still has an OFF state, or "everything reds" would pass
     // this test just as well: the shipped article, which gates nothing.
-    expect(multiDivisionBoardPlanGateFaults("ai-scheduling.md", aiScheduling)).toEqual([]);
+    expect(multiDivisionBoardPlanGateFaults("ai-several-divisions.md", aiScheduling)).toEqual([]);
   });
 });
 
@@ -667,7 +694,7 @@ describe("scheduling/ai-scheduling.md gates the joint board on no plan at all", 
  * row read can notice the article going stale again because the DATA moved. It
  * became wrong that way once already — V353 changed no TypeScript at all.
  */
-describe.skipIf(!HAS_DB)("ai-scheduling.md's joint-board claim is the matrix's (#382)", () => {
+describe.skipIf(!HAS_DB)("the AI pages' joint-board claim is the matrix's (#382)", () => {
   it("the pass lifts scheduling.multi_division, and the board is open to all", async () => {
     const rows = await sql<{ feature_key: string; plan_key: string; bool_value: boolean | null }[]>`
       select feature_key, plan_key, bool_value from plan_entitlements
@@ -725,6 +752,21 @@ describe.skipIf(!HAS_DB)("ai-officials.md's 'every plan' claim is the matrix's (
       rows.filter((r) => r.bool_value !== true).map((r) => r.plan_key),
       "ai-officials.md says AI Officials runs on every plan — these plans no longer allow it",
     ).toEqual([]);
+  });
+
+  // The other half of the page's claim: SAVING the officials needs `officials.auto` (applyOfficialAssignments calls
+  // requireFeature on it — the AI console's apply posts to the same route). The page says Pro, Enterprise or an Event
+  // Pass can save, and Community cannot. Read from the matrix, never typed here.
+  it("officials.auto is on for Pro, Enterprise and the Event Pass and off for Community", async () => {
+    const rows = await sql<{ plan_key: string; bool_value: boolean | null }[]>`
+      select plan_key, bool_value from plan_entitlements
+      where feature_key = 'officials.auto' order by plan_key`;
+    expect(rows.length, "no officials.auto rows — the gate's key moved").toBeGreaterThan(3);
+    const on = (plan: string) => rows.find((r) => r.plan_key === plan)?.bool_value === true;
+    for (const plan of ["pro", "enterprise", "event_pass", "event_pass_l"]) {
+      expect(on(plan), `ai-officials.md says ${plan} can save officials on apply`).toBe(true);
+    }
+    expect(on("community"), "ai-officials.md says Community cannot save officials on apply").toBe(false);
   });
 });
 
@@ -1365,6 +1407,47 @@ describe("the help-prose guards survive a rewording, not just a revert", () => {
     expect(feeLadderFaults(feeLadderRows("no table here"), live)).toHaveLength(
       Object.keys(FEE_LADDER_PLAN_KEYS).length,
     );
+  });
+
+  it("reads a token fee ladder: the rate is live by construction, so the pairing of label and cell is what is checked", () => {
+    // Registration help renders each cell from the plan table (`{{plan:registration.fee_percent:<plan>}}`), so there is
+    // no typed percent to compare. The rate cannot go stale; what can still go wrong is a label on the wrong plan's
+    // cell, or a row that vanishes.
+    const live = { community: 8, event_pass: 5, event_pass_l: 5, pro: 2, enterprise: 1 };
+    const tok = (plan: string) => `{{plan:registration.fee_percent:${plan}}}`;
+    const table = [
+      "| Plan | Platform fee |",
+      "| --- | --- |",
+      `| Community | ${tok("community")}% |`,
+      `| Event Pass | ${tok("event_pass")}% |`,
+      `| Pro | ${tok("pro")}% |`,
+      `| Enterprise | ${tok("enterprise")}% |`,
+    ].join("\n");
+    const rows = feeLadderRows(table);
+    // anti-vacuity: four rows read, each a token row with the plan key the token names (underscore intact)
+    expect(rows.map((r) => [r.plan, r.tokenPlan, r.percent])).toEqual([
+      ["Community", "community", null],
+      ["Event Pass", "event_pass", null],
+      ["Pro", "pro", null],
+      ["Enterprise", "enterprise", null],
+    ]);
+    expect(feeLadderFaults(rows, live)).toEqual([]);
+    expect(feeLadderTables(table), "found by shape").toHaveLength(1);
+
+    // A label on another plan's cell is a fault, even though every rate is live.
+    expect(
+      feeLadderFaults(feeLadderRows(table.replace(`| Pro | ${tok("pro")}% |`, `| Pro | ${tok("community")}% |`)), live),
+    ).toEqual(['fee ladder: "Pro" reads the community cell, but its plan key is pro']);
+    // A dropped row is still a fault: it would read as "that plan has no platform fee".
+    expect(
+      feeLadderFaults(feeLadderRows(table.replace(`| Event Pass | ${tok("event_pass")}% |\n`, "")), live),
+    ).toEqual(["fee ladder: no row for Event Pass"]);
+    // A token for another feature is not a fee cell: the row is not read, so it counts as missing.
+    expect(
+      feeLadderFaults(feeLadderRows(table.replace(tok("pro"), "{{plan:entrants.per_division.max:pro}}")), live),
+    ).toEqual(["fee ladder: no row for Pro"]);
+    // Either rung of the pass answers for the Event Pass label.
+    expect(feeLadderFaults(feeLadderRows(table.replace(tok("event_pass"), tok("event_pass_l"))), live)).toEqual([]);
   });
 
   // ── THE WIDENED SWEEP, W3 ─────────────────────────────────────────────────
@@ -2785,12 +2868,13 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     }
   });
 
-  // CLAIM: "Extra seats have no control in Settings yet" / "Size packs have no
-  // control in Settings yet either." True today and the single most rot-prone
+  // CLAIM: "There is no screen for buying a size pack" (was "Size packs have no
+  // control in Settings yet either"; reworded when the page was proven against
+  // the product, Task 8). True today and the single most rot-prone
   // sentence on the page: the day somebody builds either control, the article
   // starts telling customers to email support for a button that is on screen.
   // Nothing about the copy can detect that, so this watches the CODE.
-  it("says 'no control in Settings yet' only while that is still true", () => {
+  it("says there is no screen for buying a size pack only while that is still true", () => {
     // The purchase entry points. A control means a component or page reaching
     // for one of these — the API routes and the usecases themselves are not
     // evidence of a UI, which is exactly the distinction the sentence makes.
@@ -2807,7 +2891,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
         .map(([file]) => file);
       expect(
         callers,
-        `${addOn} now has a caller in the UI. For size packs, content/help/billing/add-ons.md still says there is no control in Settings and that sentence has to go; for extra seats, entitlements v18 R13 hid the add-on from the article altogether, so a purchase control appearing means the hide has been undone and the copy has to come back`,
+        `${addOn} now has a caller in the UI. For size packs, content/help/billing/add-ons.md still says there is no screen for buying a size pack and that sentence has to go; for extra seats, entitlements v18 R13 hid the add-on from the article altogether, so a purchase control appearing means the hide has been undone and the copy has to come back`,
       ).toEqual([]);
     }
     // KNOWN-POSITIVE on the same read: the routes DO exist, so the walk is
@@ -2821,7 +2905,7 @@ describe("the add-ons article's behaviour claims are pinned to the code", () => 
     // ONE, not two: R13 removed the extra-seat section, so only the size pack
     // still makes this claim. A count rather than a floor, so re-adding the
     // hidden add-on's copy reds here and gets read.
-    expect(addOns.match(/no control in Settings yet/g) ?? []).toHaveLength(1);
+    expect(addOns.match(/no screen for buying a size pack/g) ?? []).toHaveLength(1);
   });
 
   // CLAIM: the rider matches the half rate monthly but NOT annually — "about a
@@ -3182,14 +3266,14 @@ describe.skipIf(!HAS_DB)("the OpenAPI checkpoint summary quotes the seeded quota
  *
  * TREE-WIDE for the reason `unmeteredFaultsAcrossTree` above is: the brief for
  * this task named six articles and MISSED four — `scoring/fidelity.md`,
- * `scoring/badminton.md`, `scoring/tabletennis.md` and `scoring/volleyball.md`
+ * `sports/badminton.md`, `sports/tabletennis.md` and `sports/volleyball.md` (then under `scoring/`)
  * — each of which told a reader in as many words that the finest level "needs a
  * plan that includes it". A guard scoped to a filename list would have shipped
  * all four. This one reds wherever the sentence lands, including in an article
  * nobody has written yet.
  *
  * SENTENCE-scoped, not article-scoped: `billing/plans.md` names every plan we
- * sell and `scoring/cricket.md` explains ball-by-ball scoring at length. Both
+ * sell and `sports/cricket.md` explains ball-by-ball scoring at length. Both
  * are true; only the two claims INSIDE ONE SENTENCE assert a price.
  */
 const scoringFreeFaultsAcrossTree = (

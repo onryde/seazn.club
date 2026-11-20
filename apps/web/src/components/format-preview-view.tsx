@@ -17,7 +17,7 @@ export function FormatPreviewView({ phases }: { phases: PreviewPhase[] }) {
           <div className="mt-3 grid gap-4 sm:grid-cols-2">
             {phase.sections.map((section) => (
               <div key={section.title}>
-                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-slate-500">
                   {section.title}
                 </p>
                 <ul className="space-y-1">
@@ -29,7 +29,7 @@ export function FormatPreviewView({ phases }: { phases: PreviewPhase[] }) {
                       <span className="min-w-0 flex-1 truncate text-right font-medium">
                         {m.home}
                       </span>
-                      <span className="shrink-0 font-mono text-[10px] uppercase text-purple-400">
+                      <span className="shrink-0 font-mono text-[10px] uppercase text-purple-600">
                         vs
                       </span>
                       <span className="min-w-0 flex-1 truncate font-medium">{m.away}</span>

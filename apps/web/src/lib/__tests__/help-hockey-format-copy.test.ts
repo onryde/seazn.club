@@ -1,7 +1,7 @@
 // Truth-in-copy guard for FIELD HOCKEY'S FORMAT NUMBERS in the scoring help
 // tree (ScoringPad v3, R8 sweep).
 //
-// WHY THIS EXISTS. `content/help/scoring/hockey.md` told scorers that the
+// WHY THIS EXISTS. `content/help/sports/hockey.md` told scorers that the
 // `youth` format "shortens the quarters to ten minutes and changes nothing
 // else". The engine has declared three overrides on that variant since W5
 // (#416) — `periods`, `strength` AND `suspensions.classes` — so a scorer
@@ -35,7 +35,7 @@ import { join } from "node:path";
 import { hockey } from "@seazn/engine/sports/hockey";
 import ui from "@/dictionaries/en/ui.json";
 
-const PAGE = join(process.cwd(), "content/help/scoring/hockey.md");
+const PAGE = join(process.cwd(), "content/help/sports/hockey.md");
 
 /** How close a number has to sit to the thing it describes. Wide enough for
  *  "a green is two minutes", narrow enough that the OTHER card's duration in
@@ -115,7 +115,7 @@ describe("field hockey help copy ⇄ the engine's own format declarations", () =
 
   it("reads the page it is guarding (the scan is not vacuous)", () => {
     expect(markdown.length).toBeGreaterThan(1000);
-    expect(markdown).toMatch(/^title: Scoring field hockey$/m);
+    expect(markdown).toMatch(/^title: Field hockey$/m);
     for (const { label } of FORMATS) {
       expect(
         sentencesNaming(markdown, label).length,

@@ -313,11 +313,53 @@ body {
   .competition-prose blockquote {
     @apply my-4 border-l-4 border-accent-line bg-accent-soft/50 px-4 py-2 text-zinc-600;
   }
+  /* Help callouts (server/help-callouts.ts): a labelled blockquote, rendered as a div role=note. The label is the
+     first <strong>, kept as visible text, so the kind never rests on colour alone. */
+  .competition-prose .help-callout {
+    @apply my-4 rounded-r-lg border-l-4 px-4 py-2 text-zinc-700;
+  }
+  .competition-prose .help-callout > :first-child {
+    @apply mt-0;
+  }
+  .competition-prose .help-callout > :last-child {
+    @apply mb-0;
+  }
+  .competition-prose .help-callout > p:first-child > strong:first-child {
+    @apply font-display text-sm font-semibold uppercase tracking-wide text-ink;
+  }
+  .competition-prose .help-callout[data-kind="note"] {
+    @apply border-purple-300 bg-purple-50;
+  }
+  .competition-prose .help-callout[data-kind="warning"] {
+    @apply border-red-300 bg-red-50;
+  }
+  .competition-prose .help-callout[data-kind="example"] {
+    @apply border-zinc-300 bg-zinc-50;
+  }
+  /* Help headings are link targets ("On this page", `/help/a/b#section`): land them below the sticky
+     site nav (about 60px) with room to spare, not under it. */
+  .help-prose h2,
+  .help-prose h3 {
+    @apply scroll-mt-24;
+  }
   .competition-prose hr {
     @apply my-6 border-zinc-200;
   }
   .competition-prose img {
     @apply my-4 max-h-96 max-w-full rounded-xl shadow-sm;
+  }
+  /* Help pictures (server/help-figures.ts): <figure><img width height><figcaption>. The img
+     carries its real dimensions so the page does not jump; `height: auto` and no max-height
+     keep the aspect ratio when the width is capped to the column (the plain-img rule above
+     caps height, which would squash a figure's picture). */
+  .competition-prose figure {
+    @apply my-5;
+  }
+  .competition-prose figure img {
+    @apply my-0 h-auto max-h-none;
+  }
+  .competition-prose figcaption {
+    @apply mt-2 text-sm text-zinc-500;
   }
   /* Help articles additionally use inline code, code blocks and tables. */
   .competition-prose code {

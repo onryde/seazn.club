@@ -20,12 +20,15 @@
 import { describe, expect, it } from "vitest";
 import { claimTexts, plainProse, sentences } from "@/lib/copy-truth";
 import { quoteRun, schedulingRungWeights, tokenBudgetForCredits } from "@/lib/ai-rung";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { HELP_ROOT } from "@/server/help-content";
 import { helpArticleBySlug } from "./_help-copy";
 
 /** The three articles that quote a price for an AI run. Any of them getting it
  *  wrong is a customer being told the wrong number before they spend. */
 const PRICING_ARTICLES = [
-  "scheduling/ai-scheduling",
+  "scheduling/ai-credits",
   "scheduling/ai-officials",
   "billing/credits",
 ] as const;
@@ -38,7 +41,7 @@ function asK(tokens: number): string {
 }
 
 describe("the budget table quotes tokenBudgetForCredits, not a remembered number", () => {
-  const article = plainProse(helpArticleBySlug("scheduling/ai-scheduling"));
+  const article = plainProse(helpArticleBySlug("scheduling/ai-credits"));
 
   it.each([1, 2, 3])("%d credit(s) is documented as the budget the code hands out", (credits) => {
     const budget = asK(tokenBudgetForCredits(credits));
@@ -76,7 +79,7 @@ describe("the budget table quotes tokenBudgetForCredits, not a remembered number
 });
 
 describe("the joint worked example is the arithmetic quoteRun actually does", () => {
-  const article = plainProse(helpArticleBySlug("scheduling/ai-scheduling"));
+  const article = plainProse(helpArticleBySlug("scheduling/ai-several-divisions"));
   // The article's own example: three divisions the organiser sized 1, 2 and 3.
   // Sizes are forced with `chosen`, so this asserts the PRICING rule and never
   // depends on the (uncalibrated) predictor thresholds.
@@ -114,11 +117,14 @@ describe("the joint worked example is the arithmetic quoteRun actually does", ()
     expect(article).toMatch(/budget is sized from the undiscounted total/i);
   });
 
-  it("warns that shared courts are matched by NAME — the only court identity there is", () => {
-    // Two divisions typing different labels for one physical court is the one
-    // way a joint run double-books in a way the engine cannot see, so the
-    // article has to say it in as many words.
-    expect(article).toMatch(/matched by name/i);
+  it("says shared courts are matched by the court itself, never by name", () => {
+    // Since P9 a joint run matches courts by their org-wide-unique id
+    // (competition-schedule-ai/pack.ts:26-32), so two courts that share a name
+    // are two courts. The page used to say "the same name is the same court";
+    // that is now false, and a reader who renamed a court to clear the warning
+    // would be told something that does nothing.
+    expect(article).toMatch(/matched by court, not by name/i);
+    expect(article).not.toMatch(/same name is the same court|make the names match/i);
   });
 });
 
@@ -141,7 +147,29 @@ const FLAT_RUN_PRICE_PATTERNS = [
   /\bspends?\s+(?:one|a)\s+(?:AI\s+)?credit\b/i,
 ];
 
+/** Every page of the AI Schedule section, read from the folder so a new `ai-*`
+ *  page is scanned the day it is added. The flat-price claim can be written on
+ *  any of them, not only the three that quote a price. */
+const AI_HELP_PAGES = readdirSync(join(HELP_ROOT, "scheduling"))
+  .filter((f) => /^ai-.+\.md$/.test(f))
+  .sort()
+  .map((f) => `scheduling/${f.replace(/\.md$/, "")}`);
+const FLAT_PRICE_SCAN_PAGES = [...new Set<string>([...PRICING_ARTICLES, ...AI_HELP_PAGES])];
+
 describe("no help article still sells a flat one-credit run", () => {
+  it("scans every AI page and every pricing article (count pinned)", () => {
+    // 7 AI pages (overview, instructions, dates, review, credits, several
+    // divisions, officials) + billing/credits; ai-credits and ai-officials are
+    // in both lists. A zero or shrunken folder read is a red, not a smaller green.
+    expect(AI_HELP_PAGES.length).toBe(7);
+    expect(FLAT_PRICE_SCAN_PAGES.length).toBe(8);
+  });
+
+  it.each(AI_HELP_PAGES)("%s yields prose to scan", (slug) => {
+    const all = claimTexts(helpArticleBySlug(slug)).flatMap(sentences);
+    expect(all.length, `${slug}: no sentences to scan`).toBeGreaterThan(15);
+  });
+
   /**
    * The OTHER half of "this scan is not vacuous", and the one the self-check
    * below cannot give.
@@ -167,7 +195,7 @@ describe("no help article still sells a flat one-credit run", () => {
     ).toBeGreaterThan(2);
   });
 
-  it.each(PRICING_ARTICLES)("%s", (slug) => {
+  it.each(FLAT_PRICE_SCAN_PAGES)("%s", (slug) => {
     const faults: string[] = [];
     for (const block of claimTexts(helpArticleBySlug(slug))) {
       for (const sentence of sentences(block)) {
@@ -200,5 +228,33 @@ describe("no help article still sells a flat one-credit run", () => {
         p.test("The no-instruction default spread makes no model call at all and is charged a flat 1 credit."),
       ),
     ).toBe(false);
+  });
+});
+
+/**
+ * The data-handling sentence on the AI overview page. Its truth lives on the
+ * public sub-processors page, so the expected phrase and the vendor names are
+ * read from THAT page's source, never typed here.
+ */
+describe("ai-scheduling states the no-training guarantee and names the vendors, as /legal/sub-processors does", () => {
+  const source = readFileSync(join(process.cwd(), "src/app/legal/sub-processors/page.tsx"), "utf8");
+  const flat = source.replace(/\s+/g, " ");
+  const prose = plainProse(helpArticleBySlug("scheduling/ai-scheduling")).replace(/\s+/g, " ");
+
+  it("repeats the legal page's no-training sentence", () => {
+    const m = /They (do not use your data to train their models)/.exec(flat);
+    expect(m, "the legal page no longer carries the no-training sentence — update this guard").not.toBeNull();
+    expect(prose).toContain(m![1]);
+  });
+
+  it("names every AI model vendor the legal page lists, and only those", () => {
+    // Vendors = the AI rows that SERVE a model. The routing gateway is a row too
+    // but is not a model vendor, so it is excluded by its own purpose text.
+    const rows = [...source.matchAll(/name: "([^"]+)",\s*purpose: "([^"]+)"/g)].map((r) => ({ name: r[1], purpose: r[2] }));
+    const vendors = rows
+      .filter((r) => /^AI /.test(r.purpose) && !/routing gateway/i.test(r.purpose))
+      .map((r) => r.name.split(/[\s(]/)[0]);
+    expect(vendors, "expected Anthropic, Google and xAI on the legal page").toHaveLength(3);
+    for (const v of vendors) expect(prose, `ai-scheduling does not name ${v}`).toContain(v);
   });
 });

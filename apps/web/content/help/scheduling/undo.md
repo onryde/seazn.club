@@ -1,29 +1,50 @@
 ---
 title: Undo and save points
-description: Every schedule change is undoable; a save point bookmarks a known-good timetable.
+description: Step a schedule back and forward, bookmark a known-good timetable with a save point, and restore it later.
 order: 3
+related: scheduling/board, scheduling/locks, scheduling/constraints, scheduling/ai-review
 ---
 
-Schedule edits are a **history**, like a document: undo steps back one change, redo steps forward. Generating, moving, clearing, shifting — all of it is reversible.
+Every change to the schedule is a step in a history, like edits in a document. **Undo** steps back one change and **Redo** steps forward. A **save point** bookmarks the timetable as it is now, so you can come back to it after experimenting.
+
+![The History tab of a division's schedule. It lists Recent edits, a Save points section with one save point named before rain, and a Danger zone with Clear schedule.](/help/scheduling/history-panel.webp "The History tab: Undo and Redo at the top, Recent edits below them, then Save points and the Danger zone.")
+
+## Undo and redo
+
+Open **Schedule**, then the **History** tab.
+
+1. Select **Undo** to step back one change. Placing matches, moving one, clearing the schedule and shifting every kick-off time are all steps.
+2. Select **Redo** to step forward again.
+
+Each step, including an undo or a redo, adds a row to **Recent edits**, such as **Schedule applied**, **Fixture moved** or **Schedule cleared**.
+
+Undo does not stop at a save point. With three save points on the list, one **Undo** still took back the last change.
 
 ## Save points
 
-A **save point** bookmarks the timetable exactly as it is now — every kick-off time and court. Made a mess experimenting? **Restore** rewinds the schedule to the bookmark by undoing each change since, one by one.
+1. In **Save points**, type a name. The box suggests **e.g. before rain reshuffle**.
+2. Select **Save point**. The new bookmark appears in the list with its name and time, and the counter reads, for example, **1 used**.
+3. To go back, select **Restore** beside the save point and confirm **Restore this save point?**.
 
-Match results are never touched by either. A match counts as played once a result or any scoring has been recorded on it: it is under way or finished, a walkover was recorded during play, it was abandoned after scoring began, or it was started and the start was taken back. A walkover or a void that Generate wrote itself is not played — nothing was. If undoing, redoing or restoring would move or erase a played match, it stops right there and tells you. **Community keeps 2 save points per division and Pro keeps 10.**
+Restore undoes each change made since the bookmark, one by one. The screen then says how many it undid, for example **Restored — undid 1 change.** If the board already matches, it says **Nothing to undo — the board is already at this save point.**
 
-Clearing the schedule, shifting kick-offs and applying a schedule work around played matches instead: they keep their slots, and the clear and the shift tell you how many they left in place. A played match can't be dragged or pinned on the board.
+> **Example**
+> You run **Auto-schedule** on a six-player league and save a point named before rain. You shift every match by 45 minutes. You select **Restore** and confirm. The screen says **Restored — undid 1 change.** and all 15 matches are back at their earlier times. Select **Restore** again and it says **Nothing to undo — the board is already at this save point.**
 
-When you're already at your plan's number, saving a new one **replaces the oldest** rather than refusing. The panel names the one that went, so you're never left hunting for a bookmark that quietly disappeared — and because a save point is only a bookmark, undo still rewinds past it.
+### How many you can keep
 
-AI restore points are separate: they don't use up your save points, and the newest three per division are kept.
+Community keeps {{plan:schedule.checkpoints.max:community}} save points per division. Pro keeps {{plan:schedule.checkpoints.max:pro}}.
 
-Restoring always says what it did — either how many changes it undid, or that there was nothing to undo. The second one is normal after an AI plan that was refused outright, because nothing was written: the restore point and the live schedule are already the same. An AI plan that stopped **part-way** is the other case — some of it did land, the dock says so and offers an undo of its own, and restoring here really does rewind.
+When you are at your plan's number, a new save point replaces the oldest, and the panel names the one that went: **“one” was replaced — your plan keeps 2 save points.** It adds **Undo still rewinds past it.** To remove one yourself, select the **✕** beside it and confirm **Delete this save point?**. The schedule does not change.
 
-## Common questions
+AI restore points are separate. They are listed under **AI restore points**, they do not use up your save points, and the newest three per division are kept. See [reviewing and applying an AI plan](/help/scheduling/ai-review).
 
-**Does undo affect scores?** Never — schedule history and the score ledger are separate. Fixing a wrong score happens on the fixture itself.
+## Clear the schedule
 
-**How far back can I undo?** To the start of the division's schedule history. Save points are bookmarks, not boundaries — undo walks straight past them, including past one that has been replaced.
+**Clear schedule…** sits in the **Danger zone**. The panel says **Clears timetable slots only — locked fixtures and matches in play or finished always stay, and the action is undoable above.** You confirm **Clear unlocked slots?**, and the clear shows up in Recent edits as **Schedule cleared**. Undo brings the slots back.
 
-**Can two admins undo each other?** History is shared, so undo reverses the last change whoever made it — coordinate before big rewinds, or freeze the board first.
+## Results are never touched
+
+Undo, redo and restore change the timetable only. If a step would touch a match that already has a result or scoring recorded, it stops and says so: **A match this change touches has a result or scoring recorded, so it can't be undone or redone.** The restore window adds that a change that can't be undone, such as a confirmed draw, stops the restore there.
+
+A frozen schedule switches all of this off until you unfreeze it. See [pinned slots and freezing](/help/scheduling/locks).

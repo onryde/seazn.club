@@ -1,11 +1,48 @@
 ---
 title: Groups to knockout
-description: Combined qualification (winners + runners-up + best thirds) and a custom bracket order, in one stage setup.
+description: In the app you pick how many go through from each table. Through the API you can combine winners and best runners-up, and set your own bracket order.
 order: 4
+related: divisions/qualify-from-any-stage, divisions/bracket-view, entrants/withdrawals
 ---
 
-A real cup rarely takes a single slice of the table. The knockout stage's qualification can now **combine tiers**: all group winners, then all runners-up, then the best N third-placed sides — one spec, in that order. Unequal pools are normalised the fair way (results against the bottom side are dropped before thirds are compared).
+Most cups send the top of each group into a knockout. In the app this is one choice. The API goes further: it can mix tiers, such as every group winner plus the best runner-up, and it can fix the bracket order.
 
-Set it on the knockout stage as `qualification: { combine: [...] }` — each entry is a normal pick (`take`, `topN` or `bestOfRank`), resolved against the finished stage and concatenated. The same shape serves a cricket Super-Six, a hockey crossover, any pool→bracket sport. Pool picks match the pool **key** ("A"); the display name ("Pool A") also works.
+## In the app
 
-**Custom bracket order.** By default the bracket seeds by the standard fold (1 meets 2 only in the final). When your competition publishes a fixed slot map — regional protection, third-place lookups — give the stage config a `slotOrder`: the round-one slots as seed numbers into the qualified list, `null` for a bye line. The engine validates the map (every seed exactly once) and generates that draw exactly.
+On the **Fixtures** tab, **+ Add stage** has a **Qualify from table** choice, and it offers **Top N**. The **Format** button on **Division rules** also lists suggested formats, such as **Groups + knockout**.
+
+When the groups finish, the knockout stage shows a **Seed proposal** card with **Proposed qualifiers**. Choose **Confirm proposal** to fill the bracket. The card warns that once confirmed, Undo cannot take the draw back. Unless you set your own order, the bracket seeds in the standard way, so the top two seeds meet only in the final.
+
+## Through the API
+
+The knockout stage carries its qualification in a `progression` field. Each entry in `take` is one rule, and the rules run in the order you list them.
+
+```json
+{
+  "kind": "knockout",
+  "progression": {
+    "sources": [{
+      "stage": "previous",
+      "take": [
+        { "kind": "topNPerGroup", "n": 1 },
+        { "kind": "bestNth", "nth": 2, "count": 1 }
+      ]
+    }],
+    "placement": "rank_order",
+    "timing": "setup"
+  }
+}
+```
+
+This takes every group winner, then the single best runner-up.
+
+> **Example**
+> Nine entrants play three groups of three. The progression above sends the three group winners and the best runner-up into a four-place knockout. The proposal lists the three winners at seeds 1 to 3 and the best runner-up at seed 4.
+
+If runners-up are level on the table, confirming the proposal is refused until the tie is settled.
+
+### Your own bracket order
+
+By default the bracket seeds in the standard way. To fix the first round yourself, put a `slotOrder` in the knockout stage's `config`. It lists seed numbers, counting from 1, one per first-round slot, with `null` for a bye. Every seed must appear exactly once or the stage is refused.
+
+With four qualifiers, `"slotOrder": [1, 3, 2, 4]` gave the first-round matches seed 1 against seed 3, and seed 2 against seed 4.

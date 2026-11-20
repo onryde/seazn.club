@@ -25,6 +25,7 @@ export const HELP_ARTICLE_SLUGS = [
   "players/match-reports",
   "players/duplicates",
   "registration/open-registration",
+  "registration/registrants",
   "registration/card-payments",
   "registration/reference-numbers",
   "registration/waitlist",
@@ -35,28 +36,27 @@ export const HELP_ARTICLE_SLUGS = [
   "scheduling/undo",
   "scheduling/constraints",
   "scheduling/ai-scheduling",
+  "scheduling/ai-instructions",
+  "scheduling/ai-dates",
+  "scheduling/ai-review",
+  "scheduling/ai-credits",
+  "scheduling/ai-several-divisions",
   "scheduling/ai-officials",
   "scheduling/timezones",
   "scheduling/officials",
+  "scheduling/officials-assign",
+  "scheduling/officials-my-assignments",
   "scheduling/official-marks",
   "scheduling/matchday-documents",
   "scheduling/match-day",
+  "scheduling/match-day-scorers",
+  "scheduling/match-day-stream",
   "scoring/basics",
   "scoring/conflicts",
   "scoring/device-links",
   "scoring/scorer-sheets",
+  "scoring/scorer-card-scan",
   "scoring/scorer-role",
-  "scoring/cricket",
-  "scoring/tennis",
-  "scoring/hockey",
-  "scoring/football",
-  "scoring/badminton",
-  "scoring/tabletennis",
-  "scoring/volleyball",
-  "scoring/icehockey",
-  "scoring/carrom",
-  "scoring/boardgame",
-  "scoring/generic",
   "scoring/knockout-deciders",
   "scoring/match-audit-trail",
   "scoring/lineups",
@@ -65,6 +65,19 @@ export const HELP_ARTICLE_SLUGS = [
   "scoring/offline-scoring",
   "scoring/corrections",
   "scoring/batch-import",
+  "scoring/batch-import-report",
+  "sports/badminton",
+  "sports/carrom",
+  "sports/chess",
+  "sports/cricket",
+  "sports/hockey",
+  "sports/football",
+  "sports/icehockey",
+  "sports/icehockey-penalties",
+  "sports/tabletennis",
+  "sports/tennis",
+  "sports/volleyball",
+  "sports/generic",
   "divisions/lifecycle",
   "divisions/archive",
   "divisions/settings",
@@ -106,4 +119,11 @@ export function helpUrl(slug: string | undefined): string | null {
   if (VIRTUAL[slug]) return VIRTUAL[slug];
   if (slug.startsWith("formats/")) return `/help/formats/${slug.slice("formats/".length)}`;
   return ARTICLES.has(slug) ? `/help/${slug}` : null;
+}
+
+/** One section of the help section list (server/help-content.ts helpSectionList): its pages, in reading order. */
+export interface HelpSectionEntry {
+  key: string;
+  label: string;
+  pages: { href: string; title: string }[];
 }

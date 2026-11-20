@@ -33,7 +33,7 @@ YouTube doesn't allow live streams that show children under 16 unless an adult i
 
 ## AI credits
 
-Switch the Credits page to **AI** for the AI wallet. AI features — **AI scheduling** and **AI officials** — spend **credits**, on every plan. What a run costs depends on how big the job is: credits buy the model a **thinking budget** (1 credit → up to 32K tokens, 2 → 64K, 3 → 128K), the console shows the price before anything is spent, and you can adjust it. Scheduling several divisions in one run gets a batch discount of one credit. [AI Schedule](/help/scheduling/ai-scheduling) explains the sizing in full.
+Switch the Credits page to **AI** for the AI wallet. AI features — **AI scheduling** and **AI officials** — spend **credits**, on every plan. What a run costs depends on how big the job is: credits buy the model a **thinking budget** (1 credit → up to 32K tokens, 2 → 64K, 3 → 128K), the console shows the price before anything is spent, and you can adjust it. Scheduling several divisions in one run gets a batch discount of one credit. [What an AI Schedule run costs](/help/scheduling/ai-credits) explains the sizing in full.
 
 ### Your monthly grant
 

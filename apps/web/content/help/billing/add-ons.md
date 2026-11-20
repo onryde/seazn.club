@@ -24,7 +24,7 @@ A size pack raises **one competition's** entrants-per-division limit by 32, and 
 
 Any **owner** of the competition's organisation can buy one. It charges the billing group's saved card only when that owner is also the person who pays for the group; anyone else is charged directly, which is the same rule an [Event Pass](/help/billing/event-pass) purchase follows.
 
-Size packs have **no control in Settings yet** either. [Talk to us](mailto:hello@seazn.club) if you need more entrants in a division before then.
+There is **no screen for buying a size pack** today: the purchase can only be started through the billing API, and nothing in the app calls it. [Talk to us](mailto:hello@seazn.club) if you need more entrants in a division.
 
 ## Extra organisations — the whole bill, every month
 

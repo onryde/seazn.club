@@ -3605,10 +3605,30 @@ export const FEE_LADDER_PLAN_KEYS: Record<string, string[]> = {
   Enterprise: ["enterprise"],
 };
 
-/** `| Community | 5% |` rows, from a markdown fee table. */
-export function feeLadderRows(section: string): Array<{ plan: string; percent: number }> {
-  const rows: Array<{ plan: string; percent: number }> = [];
+/**
+ * One row of a published fee ladder. A TYPED row (`| Community | 5% |`) carries its `percent`. A TOKEN row
+ * (`| Community | {{plan:registration.fee_percent:community}}% |`, the form help pages use now) carries the plan key the
+ * token reads in `tokenPlan` and a `null` percent: the page renders that cell from the plan table itself, so the rate can
+ * never be stale, and the only thing left to get wrong is which plan's cell sits beside which label.
+ */
+export interface FeeLadderRow {
+  plan: string;
+  percent: number | null;
+  tokenPlan?: string;
+}
+
+/** A token fee row. Matched on the RAW line: `plainProse` strips the underscores out of `event_pass`. */
+const FEE_TOKEN_ROW = /^\|\s*([^|]+?)\s*\|\s*\{\{plan:registration\.fee_percent:([a-z0-9_]+)\}\}\s*%\s*\|/;
+
+/** `| Community | 5% |` and `| Community | {{plan:registration.fee_percent:community}}% |` rows, from a markdown fee table. */
+export function feeLadderRows(section: string): FeeLadderRow[] {
+  const rows: FeeLadderRow[] = [];
   for (const line of section.split("\n")) {
+    const token = FEE_TOKEN_ROW.exec(line);
+    if (token) {
+      rows.push({ plan: plainProse(token[1]!), percent: null, tokenPlan: token[2]! });
+      continue;
+    }
     const match = /^\|\s*([^|]+?)\s*\|\s*(\d+(?:\.\d+)?)\s*%\s*\|/.exec(plainProse(line));
     if (match) rows.push({ plan: match[1]!, percent: Number(match[2]) });
   }
@@ -3618,7 +3638,7 @@ export function feeLadderRows(section: string): Array<{ plan: string; percent: n
 /** One fee-ladder table found in an article: its header line, and its rows. */
 export interface FeeLadderTable {
   header: string;
-  rows: Array<{ plan: string; percent: number }>;
+  rows: FeeLadderRow[];
 }
 
 /**
@@ -3726,7 +3746,7 @@ export function passFeeRowFaults(
  * plan has no platform fee".
  */
 export function feeLadderFaults(
-  rows: Array<{ plan: string; percent: number }>,
+  rows: FeeLadderRow[],
   live: Record<string, number | null>,
   /**
    * Which ladder LABELS this table must carry. Defaults to all of them, which
@@ -3748,13 +3768,21 @@ export function feeLadderFaults(
       faults.push(`fee ladder: required label "${label}" is not a ladder row at all`);
     }
   }
-  for (const { plan, percent } of rows) {
+  for (const { plan, percent, tokenPlan } of rows) {
     const keys = FEE_LADDER_PLAN_KEYS[plan];
     if (!keys) {
       faults.push(`fee ladder: row "${plan}" matches no plan key`);
       continue;
     }
     seen.add(plan);
+    if (tokenPlan !== undefined) {
+      // A token cell is the live rate by construction, so there is no number to compare: what can still be wrong is the
+      // pairing, a "Pro" label sitting on the community cell.
+      if (!keys.includes(tokenPlan)) {
+        faults.push(`fee ladder: "${plan}" reads the ${tokenPlan} cell, but its plan key is ${keys.join(" / ")}`);
+      }
+      continue;
+    }
     for (const key of keys) {
       if (live[key] !== percent) {
         faults.push(`fee ladder: "${plan}" quotes ${percent}%, but ${key} enforces ${live[key]}%`);

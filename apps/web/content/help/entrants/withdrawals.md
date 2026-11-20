@@ -1,24 +1,43 @@
 ---
 title: Withdrawals
-description: When someone drops out, the schedule repairs itself — how depends on how far you've run.
+description: What happens to the table, the bracket and the next stage when an entrant drops out, and how to bring them back.
 order: 2
+related: entrants/kinds, divisions/lifecycle, divisions/qualify-from-any-stage
 ---
 
-People drop out. **Withdraw** (on the entrant) removes them without wrecking the draw — the repair depends on the format and how much has been played.
+When someone drops out, **Withdraw** removes them without breaking the draw. What the app does with their fixtures depends on the format and on how much they have already played.
 
-## What happens
+![The Entrants tab after the tournament started, with one team withdrawn and a Reinstate button on its row](/help/entrants/withdraw-and-reinstate.webp "After the tournament starts, every active row has Withdraw and Disqualify. A withdrawn row has Reinstate")
 
-- **League and group tables, usually** — played results stand and remaining opponents get walkovers, so nobody is punished for having already beaten them.
-- **League and group tables, very early** — if more of their fixtures are still to play than they have played, counting only what is scheduled so far, those played results are expunged too and the remaining ones removed.
-- **Swiss** — played results always stand, earlier walkovers included, and every board they are already paired on becomes a walkover for the opponent. Later rounds simply pair without them.
-- **Brackets** — the next opponent gets a walkover; earlier rounds stand. One exception: a player who came through a qualifying bracket and leaves before their first main-draw match has started is replaced by a *lucky loser* — the best-ranked player the qualifying bracket knocked out (someone who lost by walkover, withdrawal or disqualification doesn't count). If nobody is left to take the place, it's a walkover as usual.
-- **Qualifiers from a league, group or Swiss table** — if one leaves before the next stage takes its players from that table, the next-ranked player in the table takes their place. The table still shows them, marked as withdrawn.
-- **Open formats** (ladders, americano) — their remaining fixtures are voided.
+On the **Entrants** tab, each active row has **Withdraw** and **Disqualify**. Before the division starts, rows have **Withdraw** and **Delete** instead. A started division shows a banner saying the entrant list is locked and that withdrawals still work.
 
-The division's history records the withdrawal and every fixture it touched.
+## What happens to their fixtures
 
-## Common questions
+- **League and group tables.** The app counts how many of their fixtures were already played.
+  - If they played **less than half**, all their results are voided, including the ones already played. Their results no longer count for anyone.
+  - If they played **half or more**, their played results stand and each fixture still to play is awarded to the opponent as a walkover.
+- **Swiss.** Played results always stand. The board they are already on is awarded to the opponent. The next round is paired without them.
+- **Knockout brackets.** Earlier rounds stand. Their next match is awarded to the opponent, who moves on.
+- **Ladder.** Open challenges that involve them, whether they issued or received them, are awarded to the other player.
 
-**Is it reversible?** The withdrawal itself is recorded and final — re-add the entrant as a new entry if they return next season.
+Every award is recorded with the reason "withdrew". On the **Standings** tab the entrant stays in the table, marked **Withdrawn**. Its row shows the results that still count. When their results were voided, every figure in the row is zero.
 
-**Registration refunds?** If they registered online, withdrawing a registration before entries lock refunds automatically; after that it's your call.
+> **Example**
+> Five teams play a league, so each team has four fixtures. Harbour Hawks withdraw after playing one of their four. One is less than half, so all four of their fixtures are voided. The table still lists Harbour Hawks, marked **Withdrawn**, with every figure at zero, and no result against them counts for anyone. Had they played two, which is exactly half, their two results would stand and the other two fixtures would be awarded to the opponents.
+
+## Disqualify
+
+**Disqualify** works like **Withdraw**. It runs the same steps on their fixtures, as listed above, and then marks the entrant **Disqualified** instead of **Withdrawn**. Awards it gives are still recorded with the reason "withdrew". A disqualified row also has **Reinstate**.
+
+## When a qualifier withdraws
+
+- **Before the next stage takes its places from a table.** The next-ranked entrant takes the place. When you ask for a seed proposal after the withdrawal, it lists the next-ranked entrant in the gap.
+- **Qualifying bracket into a main draw.** If a player who came through the qualifying bracket withdraws before their first main-draw match has started, a **lucky loser** replaces them. The app picks the entrant who lost in the latest qualifying round, then the best seed, then draws lots. Someone who lost by walkover, withdrawal or disqualification is never picked. If nobody is left, the opponent gets a walkover.
+
+## Bring someone back
+
+A withdrawal is not final. Choose **Reinstate** on the withdrawn row and the entrant returns to **Registered**. Walkovers already awarded because of the withdrawal stay as they are, with one exception. In a knockout, when the entrant's own first-round match was not played and its winner has not started round two, you can choose **Add to bracket** on the waiting entrant. That reverses the walkover and the match is played again.
+
+## Entry fees
+
+Entry fees and refunds belong to registration. See [card entry fees](/help/registration/card-payments).

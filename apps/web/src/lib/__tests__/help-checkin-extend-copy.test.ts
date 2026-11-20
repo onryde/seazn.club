@@ -1,4 +1,4 @@
-// Truth-in-copy for the help section on extending a board's check-in (scoring/boardgame.md, "Online chess: adding time to check-in").
+// Truth-in-copy for the help section on extending a board's check-in (sports/chess.md, "Online chess: adding time to check-in").
 // The prose says the step is "five minutes", that a board takes it "up to three times", that it works only while check-in is open,
 // and it quotes the panel's own reasons word for word. Each of those is a claim about code that moves: the step and the cap are
 // constants (lib/checkin-extend.ts, the owner's 2026-10-19 values), and the quoted reasons are dictionary strings. Nothing else
@@ -15,7 +15,7 @@ import { helpArticleBySlug } from "./_help-copy";
 
 const WORDS: Record<number, string> = { 1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten" };
 const EN = en as Record<string, string>;
-const SLUG = "scoring/boardgame";
+const SLUG = "sports/chess";
 
 /** The section, from its heading to the next one. */
 function section(): string {
