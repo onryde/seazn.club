@@ -198,11 +198,19 @@ describe("broadcastDescription facts (Phase 0 T5)", () => {
     expect(d.startsWith("bCup/b\nHall 2\n\n")).toBe(true);
   });
 
-  it("a 300-character competition name and a flood of facts stay within 5000 (bytes and characters); the link and footer are never cut, the LAST fact goes first", () => {
+  it("a 300-character competition name fits whole; a flood of facts is cut to 5000 (bytes and characters), the link and footer are never cut, the LAST fact goes first", () => {
     const comp = "C".repeat(300);
     const d = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts: ["Badminton · Final", comp, "Hall", "When"] });
     expect(Array.from(d).length).toBeLessThanOrEqual(DESC_MAX);
     expect(d).toContain(comp);   // 300 fits: nothing is cut when there is room
+
+    // Near the limit: one 6000-character competition name is trimmed with an ellipsis; link and footer stay.
+    const giant = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts: ["Z".repeat(6000)] });
+    expect(bytes(giant)).toBeLessThanOrEqual(DESC_MAX);
+    expect(giant.startsWith("ZZZ")).toBe(true);
+    expect(giant).toContain("…\n\n");
+    expect(giant.endsWith(`Scored live with Seazn Club · ${site}`)).toBe(true);
+    expect(giant).toContain(`L: ${url}`);
 
     const huge = Array.from({ length: 40 }, (_, i) => `${i}`.padEnd(200, "x"));   // 8000 characters of facts
     const cut = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts: huge });

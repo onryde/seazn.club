@@ -411,6 +411,51 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(bare.join("\n")).not.toMatch(/2026/);
   });
 
+  it("T5 fix (M1): the VENUE line follows the public redaction — absent for a setup division and for a competition whose page does not open, present when linkable and started; the date/time stays", async () => {
+    const startsAt = "2026-12-05T14:30:00Z";
+    const set = async (w: World) => {
+      await sql`update organizations set timezone = 'Europe/London' where id = ${w.orgId}`;
+      await sql`update fixtures set scheduled_at = ${startsAt}, venue = 'Hall 2' where id = ${w.fixtures[0]!}`;
+    };
+    const lines = async (w: World): Promise<string[]> =>
+      w.fake.inspectBroadcast((await row((await must(prep(w, w.fixtures[0]!))).broadcastId)).yt_broadcast_id!)!.description.split("\n\n")[0]!.split("\n");
+
+    const open = await world(1);
+    await set(open);
+    await sql`update competitions set visibility = 'public' where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${open.fixtures[0]!})`;
+    await sql`update divisions set status = 'active' where id = (select division_id from fixtures where id = ${open.fixtures[0]!})`;
+    const shown = await lines(open);
+    expect(shown, "linkable and started: venue present").toContain("Hall 2");
+    expect(shown).toHaveLength(4);
+
+    const setup = await world(1);
+    await set(setup);
+    await sql`update divisions set status = 'setup' where id = (select division_id from fixtures where id = ${setup.fixtures[0]!})`;
+    const inSetup = await lines(setup);
+    expect(inSetup, "setup division: no venue").not.toContain("Hall 2");
+    expect(inSetup[inSetup.length - 1], "setup division: the time stays").toMatch(/2026/);
+
+    const priv = await world(1);
+    await set(priv);
+    await sql`update competitions set visibility = 'private' where id = (select d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${priv.fixtures[0]!})`;
+    const hidden = await lines(priv);
+    expect(hidden, "private competition: no venue").not.toContain("Hall 2");
+    expect(hidden[hidden.length - 1], "private competition: the time stays").toMatch(/2026/);
+  });
+
+  it("T5 fix (M2): a junk division timezone falls through to a valid org timezone and the time still prints (never UTC-by-guess)", async () => {
+    const w = await world(1);
+    const f = w.fixtures[0]!;
+    await sql`update organizations set timezone = 'Europe/London' where id = ${w.orgId}`;
+    await sql`update fixtures set scheduled_at = '2026-06-05T14:30:00Z' where id = ${f}`;
+    await sql`insert into schedule_settings (division_id, tz) select division_id, 'Not/AZone' from fixtures where id = ${f}
+              on conflict (division_id) do update set tz = excluded.tz`;
+    const last = w.fake.inspectBroadcast((await row((await must(prep(w, f))).broadcastId)).yt_broadcast_id!)!.description
+      .split("\n\n")[0]!.split("\n").pop()!;
+    expect(last).toMatch(/15:30|3:30\sPM/);   // June: London is BST (UTC+1), so 14:30 UTC reads 15:30
+    expect(last).not.toMatch(/14:30|2:30\sPM/);
+  });
+
   it("S2 (owner 2026-10-29): the Powered-by paragraph is shown for EVERY org — a dashboard.branding org (which removed the public footer's badge) gets it too, before and after a plan change; an unbranded org beside it still gets it (checked === 4)", async () => {
     const a = await world(3);   // the org whose plan changes
     const b = await world(1);   // an unbranded org beside it, in the same run

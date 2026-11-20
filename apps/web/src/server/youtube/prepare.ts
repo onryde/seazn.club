@@ -303,7 +303,7 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
      where f.id = ${ctx.fixtureId} and c.org_id = ${ctx.orgId}`;
   if (!f) throw new HttpError(404, "fixture not found");
   const locale = toLocale(f.default_locale);
-  const facts = await readDescriptionFacts({ fixtureId: ctx.fixtureId, orgId: ctx.orgId, competition: f.competition }, locale);
+  const facts = await readDescriptionFacts({ fixtureId: ctx.fixtureId, orgId: ctx.orgId, competition: f.competition, linkable: f.linkable }, locale);
   return {
     locale,
     title: broadcastTitle({

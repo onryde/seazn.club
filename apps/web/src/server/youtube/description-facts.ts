@@ -8,6 +8,7 @@ import "server-only";
 import type { RoundCodeFixture } from "@/components/v2/board/round-codes";
 import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
+import { venueTzOrNull } from "@/lib/tz";
 import { matchDayRounds } from "@/lib/match-day/rounds";
 import { msgFor } from "@/lib/messages-i18n";
 import type { MessageKey } from "@/lib/messages";
@@ -53,17 +54,17 @@ export function describeFacts(f: FactsInput, locale: Locale): string[] {
 
 interface Row {
   sport_key: string; stage_id: string; stage_kind: string; round_no: number; scheduled_at: Date | null;
-  venue: string | null; tz: string | null;
+  venue: string | null; division_tz: string | null; org_tz: string | null; division_status: string;
 }
 
 /** The facts of one fixture, in `locale`. The caller has already proven the fixture is the org's (textsFor's own select). */
 export async function readDescriptionFacts(
-  a: { fixtureId: string; orgId: string; competition: string }, locale: Locale,
+  a: { fixtureId: string; orgId: string; competition: string; linkable: boolean }, locale: Locale,
 ): Promise<string[]> {
   const [r] = await sql<Row[]>`
     select d.sport_key, f.stage_id, s.kind as stage_kind, f.round_no, f.scheduled_at,
            coalesce(nullif(btrim(f.venue), ''), nullif(btrim(vn.name), '')) as venue,
-           coalesce(ss.tz, o.timezone) as tz
+           ss.tz as division_tz, o.timezone as org_tz, d.status as division_status
       from fixtures f
       join divisions d on d.id = f.division_id
       join stages s on s.id = f.stage_id
@@ -82,7 +83,10 @@ export async function readDescriptionFacts(
     (key, vars) => msgFor(locale, key, vars),
   );
   return describeFacts({
-    sportKey: r.sport_key, competition: a.competition, venue: r.venue, startsAt: r.scheduled_at, timeZone: r.tz,
+    sportKey: r.sport_key, competition: a.competition, // The public page's own redaction (public-site/data.ts, V369): no venue for a division still in setup, and none for a
+    // competition whose public page does not open. The date and time stay.
+    venue: r.division_status === "setup" || !a.linkable ? null : r.venue,
+    startsAt: r.scheduled_at, timeZone: venueTzOrNull(r.division_tz, r.org_tz),
     round: rounds.get(a.fixtureId)?.label ?? null,
   }, locale);
 }
