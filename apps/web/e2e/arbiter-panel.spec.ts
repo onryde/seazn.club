@@ -28,7 +28,7 @@
  * checks in, and the arbiter only joins one that exists. No API here checks a player in, so the rows a
  * check-in leaves are seeded - `putRoom` - with vendor ids that are not real: the route finds the row, asks
  * the unreachable vendor for a participant, and is refused.) The receive-only meeting itself (video only,
- * never audio, one player's camera) is the loader's own suite (components/v2/__tests__/arbiter-camera.test.ts)
+ * never audio, one player's camera) is the loader's own suite (components/v2/match-day/__tests__/arbiter-camera.test.ts)
  * against the fake SDK; the White/Black switch (no DELETE ever, one join POST per open) is
  * driven here through the real panel against a stubbed join route.
  *
@@ -798,7 +798,7 @@ test.describe("arbiter panel", () => {
     // The server's RealtimeKit is unreachable here, so the JOIN is answered in the browser (`wire`) with a token the real
     // SDK cannot connect with: the pane reads `error`, so no answer is ever KEPT and every open POSTs exactly once. What is
     // proven is the panel's half: it never sends a hand-back. (A return POSTing nothing needs a connect that succeeds, and
-    // is arbiter-watch.test.ts's.) A DELETE is counted where the browser SENDS it - the context's request event, which sees a
+    // is match-day/__tests__/arbiter-watch.test.ts's.) A DELETE is counted where the browser SENDS it - the context's request event, which sees a
     // keepalive request issued while the page unloads - never in a route handler, which can miss one.
     const log = await wire(page, { post: () => "mint" });
     const deletes: string[] = [];
@@ -1072,7 +1072,7 @@ test.describe("arbiter panel", () => {
   // The server's RealtimeKit is unreachable, so a SUCCESSFUL join cannot be had: the join route is answered in the browser
   // (as I2 does), with a participant the real SDK then fails to connect to ("e2e-not-a-token"). What is proven is the
   // panel's half through its real producer and consumer: which side it asks for, that a switch sends no DELETE and makes one join per open, the states it paints, and the control a
-  // person touches. The loader's own suite (arbiter-camera.test.ts) owns the camera.
+  // person touches. The loader's own suite (match-day/__tests__/arbiter-camera.test.ts) owns the camera.
   const SWITCH_WIDTHS = [1280, 768, 320] as const;
   const group = (page: Page) => page.getByRole("group", { name: uiEn["arbiter.switch.group"] });
   const switchButton = (page: Page, colour: "white" | "black") =>

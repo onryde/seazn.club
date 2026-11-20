@@ -21,6 +21,7 @@ import {
 } from "../helpers";
 import { longName, roundGameSql, seedOnlineRound, seedSeatInvite, uiEn } from "../match-room-kit";
 import { backdateOpenSql, cancelFlaggedSql, holdNoShowSql } from "../arbiter-column-kit";
+import { putArrival } from "../match-day-kit";
 import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../../src/server/external-play/window";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import {
@@ -1209,4 +1210,113 @@ test("match day board panel: 43-character names on the clocks, the flag cards an
   const third = await check("the settle outcomes open");
 
   console.log(`[match day board panel ${width}px] live board (32 pieces, 2 clocks) + held board (reason, 2 flags, decisions, 3 outcomes + guidance); clipped ${first}/${second}/${third}`);
+});
+
+// Match Day online, Task 9 (both players' cameras in the board panel; plan 2026-11-05-match-day-all-in-one.md; design of record: the phone
+// composition, cameras AFTER the board and BEFORE the reason, a switch under lg). One Swiss round of 43-character names whose division REQUIRES
+// cameras, both players of both boards here. Every width of this matrix is below lg (1024), so the panel is ONE column with a Cameras / Board switch:
+// the live board opens on its cameras (the board hidden), the Board press swaps them, and the HELD board opens with its cameras folded to one
+// status line a player and a "Show video" press that unfolds them. Asserted at 320..834: no horizontal scroll, nothing clipped inside the panel,
+// every control a 44px target, the cameras in the DOM between the board and the reason, and a 43-character name truncated inside its tile.
+test("match day board panel, cameras: the switch, the folded held cameras and 43-character names hold at this width; presses are 44px targets; cameras sit after the board and before the reason", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(420_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const r = await seedOnlineRound(request, Array.from({ length: 4 }, () => longName()), { camera: "required", stage: "swiss" });
+  expect(r.boards.length, "premise: two boards in round 1").toBe(2);
+  const [live, held] = r.boards as [typeof r.boards[number], typeof r.boards[number]];
+  const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5", "c2c3", "d7d6"];
+  await roundGameSql(live, { moves: LINE });
+  await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "account_changed" });
+  for (const board of [live, held]) {
+    await putArrival(board.fixtureId, r.orgId, "home", board.home.personId);
+    await putArrival(board.fixtureId, r.orgId, "away", board.away.personId);
+  }
+
+  const panel = page.getByTestId("md-focus");
+  const cameras = page.getByTestId("md-cameras");
+  const position = page.getByTestId("md-board-position");
+  const check = async (state: string): Promise<void> => {
+    await expectNoHorizontalScroll(page);
+    const scan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div,a,figure", "the board panel was not in the DOM");
+    expect(scan.clipped, `the board panel clips content at ${width}px (${state})`).toEqual([]);
+    for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+  };
+  /** The test ids in document order: the order a phone reads them in. */
+  const domOrder = (ids: string[]) =>
+    page.evaluate((list) => list.map((id) => ({ id, el: document.querySelector(`[data-testid="${id}"]`) })).map((o, i, all) => ({ id: o.id, present: o.el !== null, before: all.slice(0, i).every((p) => p.el === null || o.el === null || (p.el.compareDocumentPosition(o.el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) })), ids);
+
+  // ── the live board: cameras first, the board one press away ───────────────────────────────────────────────────────────────────
+  const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
+  await page.goto(`${matchDay}?board=${live.fixtureId}`, { waitUntil: "load" });
+  await expect(panel).toHaveAttribute("data-fixture-id", live.fixtureId, { timeout: 30_000 });
+  await expect(cameras, "the cameras are on the panel").toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("md-camera-tile")).toHaveCount(2);
+  await expect(position, "below lg the cameras are the first view and the board is hidden").toBeHidden();
+  const buttons = page.getByTestId("md-camera-switch").getByRole("button");
+  await expect(buttons, "Cameras and Board").toHaveCount(2);
+  await expect(buttons.nth(0)).toContainText(uiEn["matchDay.cameras.viewCameras"]!);
+  await expect(buttons.nth(1)).toContainText(uiEn["matchDay.cameras.viewBoard"]!);
+  await expect(buttons.nth(0)).toHaveAttribute("aria-pressed", "true");
+  await assertTapFloor(buttons.nth(0), "the Cameras switch");
+  await assertTapFloor(buttons.nth(1), "the Board switch");
+  // White first, each tile names its player inside its own column (a 43-character name truncates, its full text in the title).
+  const tileBoxes: { x: number; right: number; width: number }[] = [];
+  for (const colour of ["white", "black"] as const) {
+    const tile = page.locator(`[data-testid="md-camera-tile"][data-colour="${colour}"]`);
+    await expect(tile).toBeVisible();
+    const name = colour === "white" ? live.home.name : live.away.name;
+    await expect(tile.locator(`[title="${name}"]`), `${colour}'s 43-character name is in the tile, whole in its title`).toHaveCount(1);
+    const box = (await tile.boundingBox())!;
+    expect(box.x, `${colour}'s tile starts inside the screen`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${colour}'s tile ends inside the ${width}px screen`).toBeLessThanOrEqual(width + 1);
+    tileBoxes.push({ x: box.x, right: box.x + box.width, width: box.width });
+  }
+  expect(tileBoxes[0]!.x, "White is the first tile").toBeLessThanOrEqual(tileBoxes[1]!.x);
+  await check("the live board, cameras");
+
+  // Board: the swap. The board is a real board again, the cameras are hidden, and the seat cards (the names the tiles carried) are back.
+  await buttons.nth(1).click();
+  await expect(buttons.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(position).toBeVisible();
+  await expect(position.locator("cg-board piece"), "the real board mounted with every piece").toHaveCount(32);
+  await expect(cameras, "the cameras give the phone up").toBeHidden();
+  await expect(page.getByTestId("md-board-seats"), "the seat cards name the players when the tiles are hidden").toBeVisible();
+  await check("the live board, board");
+  // And back: the cameras return without a reload.
+  await buttons.nth(0).click();
+  await expect(cameras).toBeVisible();
+  await expect(position).toBeHidden();
+
+  // The order a phone reads in the DOM (the switch hides one of the two, it never reorders them): board, THEN cameras.
+  const order = await domOrder(["md-board-position", "md-board-cameras"]);
+  expect(order.every((o) => o.present), "both blocks are in the DOM").toBe(true);
+  expect(order.every((o) => o.before), "the board is before the cameras").toBe(true);
+
+  // ── the held board: cameras folded, the reason after them, the decision reachable ────────────────────────────────────────────
+  await page.goto(`${matchDay}?board=${held.fixtureId}`, { waitUntil: "load" });
+  await expect(panel).toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
+  await expect(page.getByTestId("md-board-hold")).toBeVisible({ timeout: 30_000 });
+  await expect(cameras, "a held board opens with its cameras folded").toHaveAttribute("data-folded", "true");
+  await expect(page.getByTestId("md-camera-tile")).toHaveCount(2);
+  const heldOrder = await domOrder(["md-board-position", "md-board-cameras", "md-board-hold", "arbiter-decision"]);
+  expect(heldOrder.every((o) => o.present), "the board, the cameras, the reason and the decision are all in the DOM").toBe(true);
+  expect(heldOrder.every((o) => o.before), "the DOM reads: board, cameras, reason, decision").toBe(true);
+  const toggle = page.getByTestId("md-cameras-toggle");
+  await assertTapFloor(toggle, "Show video");
+  await expect(toggle).toHaveText(uiEn["matchDay.cameras.show"]!);
+  await check("the held board, cameras folded");
+  await toggle.click();
+  await expect(cameras).toHaveAttribute("data-folded", "false");
+  await expect(toggle).toHaveText(uiEn["matchDay.cameras.hide"]!);
+  await check("the held board, cameras unfolded");
+  // This held board carries no flag, so "Let the game go on" is not offered; the decision it does offer is Resync and Settle.
+  await assertTapFloor(page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.resync"] }), "Resync from Lichess");
+  await assertTapFloor(page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.settle"] }), "Settle the result now");
+
+  console.log(`[match day cameras ${width}px] live (switch, 2 tiles, 43-char names) + held (folded, unfolded, reason after the cameras)`);
 });

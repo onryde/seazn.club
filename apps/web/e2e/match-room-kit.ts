@@ -502,7 +502,7 @@ export async function seedOnlineRound(
 /** A game on a board's ledger, as T9 (create) and T10 (moves) leave it, White
  *  the home side (recorded on the row, the way T9 records it). `hold` puts it
  *  on the organiser's desk (needs_organiser). The rules judge `moves`. */
-export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; hold?: "mismatch" }): Promise<{ fen: string }> {
+export async function roundGameSql(board: RoundBoard, opts: { moves: string[]; hold?: string }): Promise<{ fen: string }> {
   const rules = new Chess();
   for (const uci of opts.moves) rules.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), ...(uci.length > 4 ? { promotion: uci[4] } : {}) });
   await withDb(async (sql) => {

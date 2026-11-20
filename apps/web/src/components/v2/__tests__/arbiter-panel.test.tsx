@@ -57,7 +57,7 @@ import type { OpenRoundHandle } from "../desk/use-open-round";
 // The container's first render (effects never run here): only the router's
 // existence is needed.
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => undefined }) }));
-import { ArbiterGuardError } from "../arbiter-camera";
+import { ArbiterGuardError } from "../match-day/online/arbiter-camera";
 
 const LOCALES = { en, es, fr, nl } as const;
 
@@ -518,6 +518,8 @@ describe("the pane: ONE player's camera (D16 §5.6.4)", () => {
       [{ kind: "unavailable" }, EN["arbiter.tile.unavailable"]!],
       [{ kind: "fault" }, EN["arbiter.tile.fault"]!],
       [{ kind: "error" }, EN["arbiter.tile.error"]!],
+      // The vendor's budget is on the check-in line (503 VIDEO_BUSY): the panel says it waits, not that the video "couldn't load".
+      [{ kind: "busy" }, EN["arbiter.tile.busy"]!],
       [{ kind: "own" }, EN["arbiter.tile.own"]!],
       [{ kind: "watching", tile: { present: false, live: false, offSinceMs: null, track: null } }, EN["arbiter.tile.absent"]!],
     ];
@@ -531,17 +533,17 @@ describe("the pane: ONE player's camera (D16 §5.6.4)", () => {
       if (video.kind !== "watching") expect(statusOf(h), `${video.kind}: the live region says it`).toBe(sentence);
       checked++;
     }
-    expect(checked).toBe(13);
+    expect(checked).toBe(14);
   });
 
-  it("a fault or an error offers ONE retry; no other state does", () => {
+  it("a fault, an error or a busy vendor offers ONE retry (the panel does not re-ask by itself); no other state does", () => {
     let checked = 0;
-    for (const kind of ["fault", "error", "connecting", "switching", "notStarted", "ended", "unavailable", "none", "own"] as const) {
+    for (const kind of ["fault", "error", "busy", "connecting", "switching", "notStarted", "ended", "unavailable", "none", "own"] as const) {
       const t = text(html(props({ video: { kind } })));
-      expect(count(t, EN["arbiter.tile.retry"]!), kind).toBe(kind === "fault" || kind === "error" ? 1 : 0);
+      expect(count(t, EN["arbiter.tile.retry"]!), kind).toBe(kind === "fault" || kind === "error" || kind === "busy" ? 1 : 0);
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(10);
   });
 });
 
@@ -1758,8 +1760,8 @@ describe("the camera join, as pure decisions", () => {
       // The panel only lists opened rounds: unreachable but by a race, so no copy of its own.
       [new ApiV1Error("x", 409, "ROUND_NOT_OPEN"), "error"],
       [new Error("network"), "error"],
-      // ACCEPTED INTERIM: the busy view and its retry are the Match Day plan's Task 9, which flips this row.
-      [new ApiV1Error("x", 503, "VIDEO_BUSY"), "error"],
+      // The check-in line has first call on the vendor's budget (503 VIDEO_BUSY): the join waits its turn, it did not fail (Match Day Task 9).
+      [new ApiV1Error("x", 503, "VIDEO_BUSY"), "busy"],
     ];
     let checked = 0;
     for (const [err, kind] of rows) {
@@ -1847,13 +1849,22 @@ describe("every locale", () => {
 
   it("the source never asks for the arbiter's own camera or microphone", () => {
     let scanned = 0;
-    for (const f of ["../arbiter-panel.tsx", "../arbiter-camera.ts", "../arbiter-watch.ts"]) {
+    const files = [
+      "../arbiter-panel.tsx",
+      "../match-day/online/arbiter-camera.ts",
+      "../match-day/online/arbiter-watch.ts",
+      "../match-day/online/arbiter-video.tsx",
+      "../match-day/online/arbiter-joins.ts",
+      "../match-day/board-cameras.tsx",
+    ];
+    for (const f of files) {
       const src = readFileSync(pathJoin(__dirname, f), "utf8");
       expect(src.length).toBeGreaterThan(1_000);
       for (const call of ["getUserMedia", "enableAudio", "enableVideo", "enableScreenShare"]) expect(src, `${f}: ${call}`).not.toContain(call);
       scanned++;
     }
-    expect(scanned).toBe(3);
+    expect(scanned, "every file that touches the video, the panel's and Match Day's").toBe(files.length);
+    expect(files.length).toBe(6);
   });
 });
 
@@ -2471,6 +2482,7 @@ describe("rejoinAfterPoll - re-open only a join refused NOT_STARTED while the si
     over: { kind: "over" },
     ended: { kind: "ended" },
     unavailable: { kind: "unavailable" },
+    busy: { kind: "busy" },
     fault: { kind: "fault" },
     own: { kind: "own" },
     error: { kind: "error" },
@@ -2484,6 +2496,6 @@ describe("rejoinAfterPoll - re-open only a join refused NOT_STARTED while the si
     }
     expect(rejoinAfterPoll(null, true), "no view").toBe(false);
     expect(checked, "views iterated x 2").toBe(Object.keys(VIEWS).length * 2);
-    expect(Object.keys(VIEWS).length, "every ArbiterVideoView kind (13)").toBe(13);
+    expect(Object.keys(VIEWS).length, "every ArbiterVideoView kind (14)").toBe(14);
   });
 });

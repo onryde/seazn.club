@@ -32,6 +32,8 @@ import { initialArbiterDecision } from "../../arbiter-decision";
 import type { MatchDayCtx } from "../court-focus";
 import { BoardFocus, BoardPanelView, isMatchDayBoard, type BoardFocusProps, type BoardPanelViewProps } from "../board-focus";
 import { BoardPosition } from "../board-position";
+import type { JoinViews } from "../online/arbiter-joins";
+import type { ArbiterVideoView } from "../online/arbiter-video";
 import { arbiterRound, held, iso, live, meeting, NOW, openWindow, present, round, withState } from "./_online-fixtures";
 
 const MIN = 60_000;
@@ -108,6 +110,15 @@ const devices: ArbiterFlag = { id: "flag-dev", kind: "multiple_devices", at: iso
 const ALL_FLAGS = [camera(), outOfBand, connection, devices];
 
 const noop = () => {};
+/** A side whose player has arrived: the room is open and the loader calls it joinable (the only kind the shell joins). */
+const joinable = (camera: "live" | "off" = "live") => ({ ...present(camera), joinable: true });
+/** What the shell's `useArbiterJoins` hands the panel for a board: a view per side, keyed the way the hook keys them. */
+const joinsFor = (b: ArbiterBoard, kinds: Partial<Record<"home" | "away", ArbiterVideoView>>) => ({
+  views: new Map(Object.entries(kinds).map(([side, v]) => [`${b.fixtureId}:${side}`, v])) as unknown as JoinViews,
+  retry: vi.fn(),
+});
+const WATCHING: ArbiterVideoView = { kind: "watching", tile: { present: true, live: true, offSinceMs: null, track: null } };
+const UNAVAILABLE: ArbiterVideoView = { kind: "unavailable" };
 const ON = () => ({ extend: vi.fn(), resync: vi.fn(), goOn: vi.fn(), toggleSettle: vi.fn(), settle: vi.fn(), override: vi.fn() });
 const viewProps = (b: ArbiterBoard, over: Partial<BoardPanelViewProps> = {}): BoardPanelViewProps => ({
   ctx,
@@ -121,6 +132,8 @@ const viewProps = (b: ArbiterBoard, over: Partial<BoardPanelViewProps> = {}): Bo
   on: ON(),
   backLabel: "All boards",
   onBack: noop,
+  cameraMode: "board",
+  onCameraMode: noop,
   ...over,
 });
 const underEnglish = (node: ReactElement) => renderToStaticMarkup(<DictProvider dict={dict} locale="en">{node}</DictProvider>);
@@ -275,13 +288,26 @@ describe("BoardPanelView: what the board shows", () => {
     expect(count(h, "md-board-seat")).toBe(2);
   });
 
-  it("the cameras seam: a node handed in takes the top panel (Task 9 fills it), and the position does not draw beside it", () => {
-    const h = html(LIVE, { answer: answerOf(LIVE, { position: POSITION }), cameras: <p data-testid="cameras-probe">two tiles</p> });
-    expect(count(h, "cameras-probe")).toBe(1);
+  it("the cameras: offered to an editor on a board whose division REQUIRES them, drawn from the shell's joins, and the position draws BESIDE them", () => {
+    const b = live(5, { fixtureId: "b-cam", white: ADA, black: BEN, clock: CLOCK, cameraPolicy: "required", sides: { home: joinable("live"), away: joinable("off") } });
+    const joins = joinsFor(b, { home: WATCHING, away: WATCHING });
+    const h = html(b, { answer: answerOf(b, { position: POSITION }), joins });
     expect(count(h, "md-board-cameras")).toBe(1);
-    expect(count(h, "board-stub")).toBe(0);
-    // Without it the position is the panel (the pair).
-    expect(count(html(LIVE, { answer: answerOf(LIVE, { position: POSITION }) }), "board-stub")).toBe(1);
+    expect(count(h, "md-cameras")).toBe(1);
+    expect(count(h, "md-camera-tile"), "two tiles, one per player").toBe(2);
+    expect(count(h, "board-stub"), "the board is still drawn (a switch below lg, both from lg)").toBe(1);
+    // The tiles carry the names; the first tile is White's.
+    const tiles = [...h.matchAll(/<figure[^>]*data-testid="md-camera-tile"[^>]*data-colour="(white|black)"[^>]*>/g)].map((m) => m[1]);
+    expect(tiles).toEqual(["white", "black"]);
+    // The pair, each way a panel does NOT carry cameras: the reader may not watch, the division does not require them, nobody shell-joined.
+    const none = (over: Partial<BoardPanelViewProps>) => count(html(b, { answer: answerOf(b, { position: POSITION }), joins, ...over }), "md-board-cameras");
+    expect(none({ reader: VIEWER }), "a view-only member").toBe(0);
+    expect(none({ reader: NOT_OFFERED }), "a club not offered online chess").toBe(0);
+    expect(none({ joins: undefined }), "the shell handed no joins").toBe(0);
+    const optional = { ...b, cameraPolicy: "optional" as const };
+    expect(count(html(optional, { answer: answerOf(optional, { position: POSITION }), joins }), "md-board-cameras"), "policy optional").toBe(0);
+    const overridden = { ...b, videoOverridden: true };
+    expect(count(html(overridden, { answer: answerOf(overridden, { position: POSITION }), joins }), "md-board-cameras"), "let go without video").toBe(0);
   });
 
   it("presence marks sit beside the names: Ada here, Ben present with the camera off, each in the colour's own seat", () => {
@@ -440,10 +466,13 @@ describe("BoardPanelView: who is offered which decision", () => {
   /** A held board with every decision the loader would allow: a game to resync, a flag to close, a result to settle, and an open check-in. */
   const deciding = withState(
     { kind: "on_hold" },
-    { fixtureId: "b-decide", white: ADA, black: BEN, canResync: true, canSettle: true, flags: [camera()], flagCount: 1, checkin: openWindow(), cameraPolicy: "required" },
+    { fixtureId: "b-decide", white: ADA, black: BEN, canResync: true, canSettle: true, flags: [camera()], flagCount: 1, checkin: openWindow(), cameraPolicy: "required", sides: { home: joinable(), away: joinable() } },
   );
   const board = () => answerOf(deciding, { hold_reason: "clock_flag_unsettled" });
   const decide = (reader: Reader, over: Partial<BoardPanelViewProps> = {}) => html(deciding, { answer: board(), reader, ...over });
+  /** The vendor is down: the join route answered 503 VIDEO_UNAVAILABLE for both players' meetings. */
+  const down = joinsFor(deciding, { home: UNAVAILABLE, away: UNAVAILABLE });
+  const up = joinsFor(deciding, { home: WATCHING, away: WATCHING });
   const resync = t("arbiter.decide.resync");
   const goOn = t("arbiter.decide.goOn");
   const settle = t("arbiter.decide.settle");
@@ -457,7 +486,7 @@ describe("BoardPanelView: who is offered which decision", () => {
   });
 
   it("a viewer sees no decision section and no outage card - and no press of any kind", () => {
-    const h = decide(VIEWER, { videoUnavailable: true });
+    const h = decide(VIEWER, { joins: down });
     expect(count(h, "arbiter-decision")).toBe(0);
     expect(count(h, "arbiter-outage")).toBe(0);
     for (const word of [resync, goOn, settle, extendLabel]) expect(has(h, word), word).toBe(false);
@@ -482,12 +511,17 @@ describe("BoardPanelView: who is offered which decision", () => {
   });
 
   it("(O4) the outage card ('let this board play without video') is a finishing decision: shown for a frozen editor, not for a viewer", () => {
-    expect(count(decide(FROZEN, { videoUnavailable: true }), "arbiter-outage")).toBe(1);
-    expect(count(decide(EDITOR, { videoUnavailable: true }), "arbiter-outage")).toBe(1);
-    expect(count(decide(VIEWER, { videoUnavailable: true }), "arbiter-outage")).toBe(0);
-    // Only while the vendor is down (the seam Task 9 sets), only while the board is still to be played and not already let go.
-    expect(count(decide(EDITOR, { videoUnavailable: false }), "arbiter-outage")).toBe(0);
-    expect(count(decide(EDITOR, { videoUnavailable: true, answer: answerOf({ ...deciding, videoOverridden: true }) }), "arbiter-outage")).toBe(0);
+    expect(count(decide(FROZEN, { joins: down }), "arbiter-outage")).toBe(1);
+    expect(count(decide(EDITOR, { joins: down }), "arbiter-outage")).toBe(1);
+    expect(count(decide(VIEWER, { joins: down }), "arbiter-outage")).toBe(0);
+    // Only while the vendor is down (a join answered VIDEO_UNAVAILABLE), only while the board is still to be played and not already let go.
+    expect(count(decide(EDITOR, { joins: up }), "arbiter-outage"), "the vendor is up").toBe(0);
+    expect(count(decide(EDITOR), "arbiter-outage"), "no joins at all (the shell keeps none)").toBe(0);
+    expect(count(decide(EDITOR, { joins: down, answer: answerOf({ ...deciding, videoOverridden: true }) }), "arbiter-outage"), "already let go").toBe(0);
+    // One side down is enough (either player's room failing is the outage); a side not yet checked in is not an outage.
+    expect(count(decide(EDITOR, { joins: joinsFor(deciding, { home: WATCHING, away: UNAVAILABLE }) }), "arbiter-outage")).toBe(1);
+    const notHere = { ...deciding, sides: { home: joinable(), away: meeting() } };
+    expect(count(html(notHere, { answer: answerOf(notHere, { hold_reason: "clock_flag_unsettled" }), joins: joinsFor(notHere, { home: WATCHING, away: UNAVAILABLE }) }), "arbiter-outage"), "a stale answer for a side that is not watchable does not count").toBe(0);
   });
 
   it("a board that is not held: the go-on press is the flag's, and a finished board's is 'mark as reviewed' (words by state)", () => {
@@ -517,10 +551,10 @@ describe("BoardPanelView: two columns from lg (MD-R33, MD-R34)", () => {
   // marks (so the seat strip draws). Its answer has a position, so the board draws in the left column.
   const FULL = withState(
     { kind: "on_hold" },
-    { fixtureId: "b-grid", white: ADA, black: BEN, canResync: true, canSettle: true, flags: [camera()], flagCount: 1, cameraPolicy: "required", sides: { home: present("live"), away: present("off") } },
+    { fixtureId: "b-grid", white: ADA, black: BEN, canResync: true, canSettle: true, flags: [camera()], flagCount: 1, cameraPolicy: "required", sides: { home: joinable("live"), away: joinable("off") } },
   );
   const fullAnswer = () => answerOf(FULL, { hold_reason: "fair_play", position: POSITION });
-  const full = (over: Partial<BoardPanelViewProps> = {}) => html(FULL, { answer: fullAnswer(), videoUnavailable: true, ...over });
+  const full = (over: Partial<BoardPanelViewProps> = {}) => html(FULL, { answer: fullAnswer(), joins: joinsFor(FULL, { home: UNAVAILABLE, away: UNAVAILABLE }), ...over });
   /** The `lg:order-N` a block carries (null = none): the visual order the right column re-sorts into from lg. */
   const orderOf = (h: string, testid: string): number | null => {
     const m = /\blg:order-(\d+)\b/.exec(tagOf(h, testid) ?? "");
@@ -550,9 +584,12 @@ describe("BoardPanelView: two columns from lg (MD-R33, MD-R34)", () => {
       seen += 1;
     }
     expect(seen, "every no-position case was checked").toBe(4);
-    // The cameras seam is a single column today as well (Task 9 puts the tiles at the right column's top).
-    const withCameras = html(LIVE, { answer: answerOf(LIVE, { position: POSITION }), cameras: <p data-testid="cameras-probe">tiles</p> });
+    // Cameras with no board to sit beside (the game is not on file) are the one column too: the tiles span the width.
+    const camLive = withState({ kind: "on_hold" }, { fixtureId: "b-nopos", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    const withCameras = html(camLive, { answer: answerOf(camLive), joins: joinsFor(camLive, { home: WATCHING, away: WATCHING }) });
+    expect(count(withCameras, "md-board-cameras"), "the tiles are drawn").toBe(1);
     expect(tagOf(withCameras, "md-board-grid")).not.toMatch(/lg:grid-cols/);
+    expect(count(withCameras, "md-camera-switch"), "nothing to switch to without a board").toBe(0);
   });
 
   it("with a position the grid is two columns from lg: a fluid left column capped at 420px / 42%, top-aligned, and the board sits ONLY in the left one", () => {
@@ -584,10 +621,12 @@ describe("BoardPanelView: two columns from lg (MD-R33, MD-R34)", () => {
     expect(tag).toMatch(/\bmax-w-\[560px\]/);
   });
 
-  it("DOM order (a phone, a tablet) is unchanged: state, seats, board, why, flags, decision, outage", () => {
-    const order = domOrder(full(), ["md-online-state", "md-board-seats", "md-board-position", "md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"]);
+  it("DOM order (a phone, a tablet): state, the switch, seats, board, CAMERAS (after the board, before the reason), why, flags, decision, outage", () => {
+    const ids = ["md-online-state", "md-camera-switch", "md-board-seats", "md-board-position", "md-board-cameras", "md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"];
+    const order = domOrder(full(), ids);
     expect(order.every((o) => o.at >= 0), "every block is drawn (a missing one would hide in the sort)").toBe(true);
-    expect(order.map((o) => o.id)).toEqual(["md-online-state", "md-board-seats", "md-board-position", "md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"]);
+    expect(order.map((o) => o.id)).toEqual(ids);
+    expect(order.length, "the sweep checked all nine").toBe(9);
   });
 
   it("from lg the right column reads: state row, seats, why it is held, the decision (and the outage card), THEN the flags", () => {
@@ -595,6 +634,9 @@ describe("BoardPanelView: two columns from lg (MD-R33, MD-R34)", () => {
     const rest = ["md-board-hold", "arbiter-decision", "arbiter-outage", "md-board-flags"] as const;
     const orders = rest.map((id) => ({ id, order: orderOf(h, id) }));
     expect(orders.every((o) => o.order !== null), `each block of the rest carries an lg:order: ${JSON.stringify(orders)}`).toBe(true);
+    // The cameras carry NO lg:order (order 0), so from lg they are the right column's top - above every block that has one (all are 1 or more).
+    expect(orderOf(h, "md-board-cameras"), "the cameras wrapper has no order of its own").toBeNull();
+    expect(Math.min(...orders.map((o) => o.order!)), "every ordered block sorts after the cameras").toBeGreaterThanOrEqual(1);
     // Flex re-sorts by (order, DOM position): the sort a browser does, so a changed number moves this and nothing else.
     const visual = orders
       .map((o, domIndexOf) => ({ ...o, domIndexOf }))
@@ -627,6 +669,96 @@ describe("BoardPanelView: two columns from lg (MD-R33, MD-R34)", () => {
     // A cell with nothing in it must not leave its 16px gap in the grid (React draws no node for null, so `:empty` matches).
     expect(tagOf(h, "md-board-rest")).toContain("empty:hidden");
     expect(tagOf(h, "md-board-left")).toContain("empty:hidden");
+  });
+});
+
+describe("BoardPanelView: cameras and the board share the screen (Task 9)", () => {
+  // Below lg the two share ONE column, so a switch picks one; from lg both show (cameras at the right column's top).
+  const CAM = withState({ kind: "live", moveNo: 9 }, { fixtureId: "b-cam2", white: ADA, black: BEN, clock: CLOCK, cameraPolicy: "required", sides: { home: joinable("live"), away: joinable("live") } });
+  const camJoins = joinsFor(CAM, { home: WATCHING, away: WATCHING });
+  const camAnswer = () => answerOf(CAM, { position: POSITION });
+  const cam = (over: Partial<BoardPanelViewProps> = {}) => html(CAM, { answer: camAnswer(), joins: camJoins, cameraMode: "cameras", ...over });
+  const classOf = (h: string, testid: string) => /class="([^"]*)"/.exec(tagOf(h, testid) ?? "")?.[1] ?? "";
+  const hasClass = (h: string, testid: string, cls: string) => classOf(h, testid).split(/\s+/).includes(cls);
+
+  it("EMPTY CASE FIRST: a panel without cameras has no switch and hides nothing - not the board, not the seats - in either mode", () => {
+    let checked = 0;
+    for (const mode of ["cameras", "board"] as const) {
+      const h = html(LIVE, { answer: answerOf(LIVE, { position: POSITION }), cameraMode: mode });
+      expect(count(h, "md-camera-switch"), mode).toBe(0);
+      expect(count(h, "md-board-cameras"), mode).toBe(0);
+      expect(hasClass(h, "md-board-left", "max-lg:hidden"), `${mode}: the board is never hidden when there are no cameras`).toBe(false);
+      expect(count(h, "board-stub")).toBe(1);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("cameras picked: the switch says so (aria-pressed), the board is hidden below lg, the cameras are not - and both show from lg", () => {
+    const h = cam();
+    const buttons = [...h.matchAll(/<button[^>]*data-mode="(cameras|board)"[^>]*>/g)];
+    expect(buttons.map((m) => m[1]), "Cameras first, then Board").toEqual(["cameras", "board"]);
+    expect(buttons[0]![0]).toContain('aria-pressed="true"');
+    expect(buttons[1]![0]).toContain('aria-pressed="false"');
+    expect(hasClass(h, "md-camera-switch", "lg:hidden"), "from lg there is nothing to pick").toBe(true);
+    expect(hasClass(h, "md-board-left", "max-lg:hidden"), "the board gives the phone up (max-lg only, so it still shows from lg)").toBe(true);
+    expect(hasClass(h, "md-board-cameras", "max-lg:hidden")).toBe(false);
+    // The words are the dictionary's.
+    expect(has(h, t("matchDay.cameras.viewCameras"))).toBe(true);
+    expect(has(h, t("matchDay.cameras.viewBoard"))).toBe(true);
+  });
+
+  it("board picked: the cameras are hidden below lg and the board is not; the pair of the case above", () => {
+    const h = cam({ cameraMode: "board" });
+    const buttons = [...h.matchAll(/<button[^>]*data-mode="(cameras|board)"[^>]*>/g)];
+    expect(buttons[0]![0]).toContain('aria-pressed="false"');
+    expect(buttons[1]![0]).toContain('aria-pressed="true"');
+    expect(hasClass(h, "md-board-cameras", "max-lg:hidden")).toBe(true);
+    expect(hasClass(h, "md-board-left", "max-lg:hidden")).toBe(false);
+  });
+
+  it("the switch buttons are phone-sized taps (44px); their press is the e2e's (a click needs a DOM, which this workspace's vitest does not have)", () => {
+    const h = cam();
+    let checked = 0;
+    for (const m of h.matchAll(/<button[^>]*data-mode="(?:cameras|board)"[^>]*>/g)) {
+      expect(m[0]).toMatch(/\bmin-h-11\b/);
+      checked += 1;
+    }
+    expect(checked, "both buttons were read").toBe(2);
+  });
+
+  it("no board drawn (the game is not on file yet): no switch - there is nothing to switch to - and the cameras are never hidden", () => {
+    const b = withState({ kind: "on_hold" }, { fixtureId: "b-nopos2", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    for (const mode of ["cameras", "board"] as const) {
+      const h = html(b, { answer: answerOf(b), joins: joinsFor(b, { home: WATCHING, away: WATCHING }), cameraMode: mode });
+      expect(count(h, "md-camera-switch"), mode).toBe(0);
+      expect(count(h, "md-board-cameras"), mode).toBe(1);
+      expect(hasClass(h, "md-board-cameras", "max-lg:hidden"), `${mode}: with no board the cameras are the panel`).toBe(false);
+    }
+  });
+
+  it("the seat cards are the tiles' own words while the tiles show: hidden then, kept for a board in its check-in (they carry the check-in and invite words)", () => {
+    // A live board: the tiles carry the names and marks; below lg the seats go with the cameras and back when the board is picked.
+    expect(hasClass(cam(), "md-board-seats", "hidden"), "cameras showing: the seat cards are redundant").toBe(true);
+    const boardMode = cam({ cameraMode: "board" });
+    expect(hasClass(boardMode, "md-board-seats", "hidden"), "board picked: the seat cards are a phone's way to name the players").toBe(false);
+    expect(hasClass(boardMode, "md-board-seats", "lg:hidden"), "...but from lg the tiles are there, so the cards are not").toBe(true);
+    // A board in its check-in has seats with words: always shown.
+    const checkin = withState({ kind: "checking_in" }, { fixtureId: "b-ci", white: ADA, black: BEN, cameraPolicy: "required", seats: { white: { here: true, invites: [] }, black: { here: false, invites: ["delivered"] } }, checkin: openWindow(), sides: { home: joinable(), away: meeting() } });
+    const h = html(checkin, { answer: answerOf(checkin), joins: joinsFor(checkin, { home: WATCHING }), cameraMode: "cameras" });
+    expect(count(h, "md-board-seats")).toBe(1);
+    expect(hasClass(h, "md-board-seats", "hidden")).toBe(false);
+    expect(hasClass(h, "md-board-seats", "lg:hidden")).toBe(false);
+  });
+
+  it("the cameras draw BEFORE the reason and the decision in the right column (and from lg carry no order, so they are its top)", () => {
+    const heldCam = withState({ kind: "on_hold" }, { fixtureId: "b-hc", white: ADA, black: BEN, canSettle: true, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    const h = html(heldCam, { answer: answerOf(heldCam, { hold_reason: "clock_flag_unsettled", position: POSITION }), joins: joinsFor(heldCam, { home: WATCHING, away: WATCHING }), cameraMode: "cameras" });
+    const at = (id: string) => h.indexOf(`data-testid="${id}"`);
+    expect(at("md-board-cameras")).toBeGreaterThan(at("md-board-position"));
+    expect(at("md-board-cameras")).toBeLessThan(at("md-board-hold"));
+    expect(at("md-board-hold")).toBeLessThan(at("arbiter-decision"));
+    expect(innerOf(h, "md-board-rest")).toContain('data-testid="md-board-cameras"');
   });
 });
 
@@ -717,6 +849,34 @@ describe("BoardFocus: the read rides the poll, the decisions are the runner's", 
     expect(viewOf(ui).readFailed).toBe(false);
   });
 
+  it("the shell's joins reach the view whole, and the camera mode opens on the cameras while there is something to watch (the board otherwise)", () => {
+    const watched = withState({ kind: "live", moveNo: 3 }, { fixtureId: "b-watch", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    const joins = joinsFor(watched, { home: WATCHING, away: WATCHING });
+    const ui = renderIsland(BoardFocus, focusProps(watched, { joins }));
+    expect(viewOf(ui).joins, "the very object the shell made").toBe(joins);
+    expect(viewOf(ui).cameraMode).toBe("cameras");
+    // The pair: a reader who may not watch, a board that is over, and a division that does not require cameras all open on the board.
+    expect(viewOf(renderIsland(BoardFocus, focusProps(watched, { joins, reader: VIEWER }))).cameraMode, "a view-only member").toBe("board");
+    const over = withState({ kind: "result", score: "1-0", noResult: false }, { fixtureId: "b-over2", white: ADA, black: BEN, cameraPolicy: "required" });
+    expect(viewOf(renderIsland(BoardFocus, focusProps(over, { joins: joinsFor(over, {}) }))).cameraMode, "a finished game has nothing to watch").toBe("board");
+    const optional = { ...watched, cameraPolicy: "optional" as const };
+    expect(viewOf(renderIsland(BoardFocus, focusProps(optional, { joins }))).cameraMode, "cameras not required").toBe("board");
+  });
+
+  it("a picked mode is the panel's own and outlives the polls: the board picked stays picked across a new refreshKey and a new row (a poll never flips the view)", async () => {
+    const watched = withState({ kind: "live", moveNo: 3 }, { fixtureId: "b-pick", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    const joins = joinsFor(watched, { home: WATCHING, away: WATCHING });
+    const ui = renderIsland(BoardFocus, focusProps(watched, { joins, refreshKey: 1 }));
+    expect(viewOf(ui).cameraMode).toBe("cameras");
+    viewOf(ui).onCameraMode("board");
+    expect(viewOf(ui).cameraMode).toBe("board");
+    ui.rerender(focusProps({ ...watched, state: { kind: "live", moveNo: 4 } }, { joins: joinsFor(watched, { home: WATCHING, away: WATCHING }), refreshKey: 2 }));
+    await flush();
+    expect(viewOf(ui).cameraMode, "the poll moved the board on; the picked view stays").toBe("board");
+    viewOf(ui).onCameraMode("cameras");
+    expect(viewOf(ui).cameraMode).toBe("cameras");
+  });
+
   it("the answer reaches the view, whole", async () => {
     const ui = renderIsland(BoardFocus, focusProps(LIVE));
     net.calls[0]!.resolve(full(LIVE));
@@ -799,6 +959,29 @@ describe("BoardFocus: the read rides the poll, the decisions are the runner's", 
     net.calls[0]!.reject(new ApiV1Error("not found", 404, "NOT_FOUND"));
     await flush();
     expect(viewOf(ui).answer).toBeNull();
+    expect(viewOf(ui).readFailed).toBe(true);
+  });
+
+  it("SEQUENCE (T8 minor): a failed read raises the line, and a LATER 404 with the answer in hand takes it down - the board is gone, not unreadable (the pair: a later 503 keeps it up)", async () => {
+    const ui = renderIsland(BoardFocus, focusProps(LIVE, { refreshKey: 1 }));
+    net.calls[0]!.resolve(full(LIVE));
+    await flush();
+    ui.rerender(focusProps(LIVE, { refreshKey: 2 }));
+    net.calls[1]!.reject(new ApiV1Error("offline", 503, "UNAVAILABLE"));
+    await flush();
+    expect(viewOf(ui).readFailed, "the failed read raised the line").toBe(true);
+    ui.rerender(focusProps(LIVE, { refreshKey: 3 }));
+    net.calls[2]!.reject(new ApiV1Error("not found", 404, "NOT_FOUND"));
+    await flush();
+    expect(viewOf(ui).answer?.position, "the last answer stays").toEqual(POSITION);
+    expect(viewOf(ui).readFailed, "the earlier failure is cleared: gone, not unreadable").toBe(false);
+    // The pair: the same board, a failed read, then ANOTHER failed read (a 503): the line stays.
+    ui.rerender(focusProps(LIVE, { refreshKey: 4 }));
+    net.calls[3]!.reject(new ApiV1Error("offline", 503, "UNAVAILABLE"));
+    await flush();
+    ui.rerender(focusProps(LIVE, { refreshKey: 5 }));
+    net.calls[4]!.reject(new ApiV1Error("offline", 503, "UNAVAILABLE"));
+    await flush();
     expect(viewOf(ui).readFailed).toBe(true);
   });
 
