@@ -30,7 +30,7 @@ import {
   type ArbiterSideMeeting,
 } from "@/lib/arbiter-view";
 import { seatInviteWords, type SeatInviteWord } from "@/lib/invite-status";
-import type { MatchDayBoardRow } from "@/lib/match-day/types";
+import type { BoardPosition, MatchDayBoard, MatchDayBoardRow } from "@/lib/match-day/types";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -52,6 +52,7 @@ import { linePool } from "@/server/external-play/seat-line";
 import { VIDEO_BUSY } from "@/lib/online-chess";
 import { anchorOfRow, boardExtraSql, boardOpenFor, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
 import { type BoardAnchor, bridgeGameOnFile, checkInCounts, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
+import type { PublicExternalPlayStatus } from "@/server/external-play/public-view";
 import { latestEmailStatus, type EmailStatusRow } from "@/server/email-outbox/status";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
 import { EDITOR_ROLES } from "@/lib/types";
@@ -59,13 +60,14 @@ import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { checkedInAtOfBoards, countedCheckIns } from "./check-ins";
-import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side, type SidePlayer } from "./guard";
+import { loadOnlinePlayFixture, loadSides, onlinePlayDivisionWhere, whiteSideOf, type Side, type SidePlayer } from "./guard";
 import { noResultOffer } from "./no-result";
 import { readNeedsReason } from "./queue";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
 import { reconcile, type ReconcileDeps } from "./reconcile";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef, seatStampBound, type Colour } from "./seat-stamp";
 import { fixturesSeating, isSeatedOn } from "./seated";
+import { watchFromLedger } from "../external-play-read";
 
 // ---------------------------------------------------------------------------
 // The round in view
@@ -131,6 +133,8 @@ type BoardRow = {
   stageKind: string | null;
   winnerToFixture: string | null;
   loserToFixture: string | null;
+  /** The bridge's move list (UCI), the focused board's position (`positionOf`). null: no bridge row. */
+  movesUci: string[] | null;
 };
 
 type FlagRow = {
@@ -308,6 +312,85 @@ export async function loadBoardsByIds(
   return boards.map((board, i) => ({ ...board, stage_id: listed[i]!.stageId, round_no: listed[i]!.roundNo! }));
 }
 
+/**
+ * The ONE board Match Day's panel has in focus, read by its id (Match Day online, Task 3): the board as the arbiter's round view paints it
+ * - `composeBoards`, so presence, camera, `joinable`, the seats of a board in check-in and the check-in window ride it exactly as they ride
+ * the round's boards (MD-R1) - with every open flag built in FULL (`flags: "full"`: the connection card's seconds and stamps), the board's
+ * `stage_id` and `round_no`, `hold_reason` (the bridge row's own word while the board is `on_hold`, null in any other state) and the
+ * position of its game. The position is the public read's own derivation (`watchFromLedger`: `fenAfter` over the bridge's moves, the last
+ * REPLAYED ply as the last move, the turn from the plies replayed) over the moves this loader reads from the bridge row it already joins -
+ * not through `loadOnlinePlayFixture`, a playability guard that answers null for a finished board, whose final position is wanted too.
+ *
+ * NOT FOUND (404) for a fixture that is not an online board of this club (another club's, another sport's, a division that does not play
+ * online, an unpaired seat, an id that is no uuid) and for a cancelled board with no open flag (owner O1: the Flagged list's rule - a settled
+ * one has left every list, so its read leaves with it). 403 ARBITER_PLAYS_THIS_BOARD for a board the viewer plays on (`isSeatedOn`, the
+ * join's own predicate and refusal). No editor check: any member who may read the competition may read the board and its state, and a key
+ * (no user) plays nowhere and is never asked.
+ */
+export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: { now?: Date } = {}): Promise<MatchDayBoard> {
+  const now = opts.now ?? new Date();
+  const notFound = () => new HttpError(404, "board not found", "NOT_FOUND");
+  // A path value: a malformed id is "not here", never a 500 from Postgres' uuid cast.
+  if (!UUID.test(fixtureId)) throw notFound();
+  // This club's fixture of a division that plays online (the one home of that rule, guard.ts), with the division's clock.
+  const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
+    select d.config from fixtures f
+      join divisions d on d.id = f.division_id
+     where f.id = ${fixtureId} and f.org_id = ${auth.orgId} and ${onlinePlayDivisionWhere()}`;
+  if (!division) throw notFound();
+  const [row] = await boardRows(auth, sql`f.id = ${fixtureId}`, { cancelled: true });
+  if (!row) throw notFound();
+  const flagRows = await openFlagRows(auth, [fixtureId]);
+  // Owner O1: a cancelled board is read only while it has an open flag (`loadBoardsByIds`' twin guard, and the Flagged list's R4 rule).
+  if (row.fixtureStatus === "cancelled" && flagRows.length === 0) throw notFound();
+  // C1 (D7): a board the viewer plays on is not theirs to watch. A key has no user, so plays nowhere.
+  if (auth.userId !== null && (await isSeatedOn(auth.userId, fixtureId))) {
+    throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
+  }
+  const policy = await fixtureCameraPolicy(fixtureId);
+  const [board] = await composeBoards(auth, [row], {
+    limitMs: (division.config?.clock?.base ?? 0) * 1_000,
+    policyOf: async () => policy,
+    flagRows,
+    now,
+    flags: "full",
+  });
+  if (board === undefined) throw new Error("loadMatchDayBoard: composeBoards returned no board for the one it was given");
+  return {
+    ...board,
+    stage_id: row.stageId,
+    // `fixtures.round_no` is NOT NULL (V214): the row type is the loose one the round view's left joins share, the column never is null.
+    round_no: row.roundNo!,
+    hold_reason: board.state.kind === "on_hold" ? readNeedsReason(row.needsReason) : null,
+    position: positionOf(row),
+  };
+}
+
+/** The game's position as the focused board draws it, from the moves `boardRows` reads off the bridge row. One derivation with the public
+ *  read: `watchFromLedger` replays the ledger as far as chess.js can follow it, and says which ply that was (so the last move is the last
+ *  REPLAYED ply, never the list's tail) and whose turn it is. null while no game is on file (its own first rule: no challenge). */
+function positionOf(r: BoardRow): BoardPosition | null {
+  const watch = watchFromLedger({
+    // `over` is the only thing the status changes in a watch, and the position reads none of it.
+    status: (r.bridgeStatus ?? "pending") as PublicExternalPlayStatus,
+    challenge_id: r.challengeId,
+    white_side: r.whiteSide,
+    // A board with no bridge row has no moves (null) and no game: the ledger is never replayed for it.
+    moves_uci: r.movesUci ?? [],
+    move_count: r.moveCount ?? 0,
+    white_ms: r.whiteMs,
+    black_ms: r.blackMs,
+    last_move_at: r.lastMoveAt,
+  });
+  if (watch === null) return null;
+  return {
+    fen: watch.fen,
+    // A UCI move is its two squares plus an optional promotion piece: the squares are the move.
+    lastMove: watch.lastMove === null ? null : [watch.lastMove.slice(0, 2), watch.lastMove.slice(2, 4)],
+    turn: watch.turn,
+  };
+}
+
 /** A board with open flags, wherever it sits in the division (T16's
  *  organiser queue, "Flagged · the game carried on"). */
 export type FlaggedBoard = ArbiterBoard & { roundNo: number | null; stageName: string };
@@ -392,7 +475,8 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            (ma.home_entrant_id, ma.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "awaySamePair",
            ${playerOnFile("home")} as "homePlayer", ${playerOnFile("away")} as "awayPlayer",
            ma.ended_at as "awayEndedAt", ma.camera_evidence_at as "awayEvidenceAt",
-           s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture"
+           s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture",
+           ep.moves_uci as "movesUci"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id

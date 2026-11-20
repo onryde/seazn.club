@@ -270,6 +270,33 @@ export const MatchDayView = z.object({
   online_rounds: z.array(MatchDayOnlineRound),
 });
 
+/** The focused board's position (lib/match-day/types.ts `BoardPosition`): the replayed ledger as FEN, the last REPLAYED ply as its two
+ *  squares, and whose turn it is. */
+export const BoardPosition = z.object({
+  fen: z.string(),
+  lastMove: z.tuple([z.string(), z.string()]).nullable(),
+  turn: z.enum(["white", "black"]),
+});
+
+/** GET /fixtures/{id}/match-day-board (lib/match-day/types.ts `MatchDayBoard`): an `ArbiterBoard` (lib/arbiter-view.ts, no zod) with the
+ *  focus's own keys. A plain z.object STRIPS an undeclared key on parse, so the board is an open object (`z.looseObject`) that keeps
+ *  whatever the server sent - `sides` with presence, camera and `joinable`, `seats`, `checkin`, `flags` in full - and the keys the focus
+ *  adds are declared. */
+export const MatchDayBoard = z
+  .looseObject({
+    fixtureId: Uuid,
+    /** The bridge's replayed position; null while no game is on file. */
+    position: BoardPosition.nullable(),
+    stage_id: Uuid,
+    round_no: z.number().int(),
+    /** Why the board is held (the `needs_reason` vocabulary) while it is `on_hold`; null in any other state. */
+    hold_reason: z.string().nullable(),
+  })
+  .meta({
+    description:
+      "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` built in full, `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`.",
+  });
+
 export const MatchDayCandidate = z.object({
   fixture: MatchDayFixture,
   source: z.enum(["this_court", "other_court", "no_court"]),

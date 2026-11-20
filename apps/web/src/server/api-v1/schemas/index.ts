@@ -105,7 +105,7 @@ export {
 } from "./stages.ts";
 export {
   PatchFixture, PutFixtureStream, CallFixtureInput, FixtureCalled, FixtureCallUndone, MatchDayRound,
-  FixtureCallPreview, MatchDayFixture, MatchDayCourt, MatchDayOnlineRound, MatchDayView, MatchDayCandidate, ArbiterJoinInput,
+  FixtureCallPreview, MatchDayFixture, MatchDayCourt, MatchDayOnlineRound, MatchDayView, MatchDayBoard, BoardPosition, MatchDayCandidate, ArbiterJoinInput,
   ArbiterJoinOut, ArbiterRevokeInput, ArbiterLeaveOut, ExternalPlayResyncOut, VideoOverrideInput, VideoOverrideOut, ExternalPlayLobbyOut,
   ResolveExternalPlay, ResolveExternalPlayOut, CloseExternalPlayFlags, CloseExternalPlayFlagsOut, RoomAct,
   RoomCameraFault, RoomCameraReport, RoomSeatClaim, RoomCameraAnswer, RoomActOut, FixtureStream,
