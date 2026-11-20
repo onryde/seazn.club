@@ -12,6 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { builtinModules } from "@seazn/engine/sports";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
+import { helpUrl } from "@/lib/help";
 import {
   BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_SLUG, BLOG_TOPICS,
   type BlogPostMeta, type BlogTopic,
@@ -24,6 +25,55 @@ import {
 export const BLOG_ROOT = join(process.cwd(), "content", "blog");
 
 export type BlogPost = BlogPostMeta & { markdown: string };
+
+/**
+ * The approved topic list's slugs (design, "The first topic list") that are not written yet. A `related` link may
+ * name one while the programme is being written; the DEFAULT root accepts them, an explicit root (the fixtures)
+ * never does. The list shrinks as posts land: blog-tree.test.ts fails on an entry that is now a post, and the
+ * pages that print related links must show only the slugs `blogPost()` resolves. It is deleted with the last batch.
+ */
+export const BLOG_PLANNED_SLUGS: ReadonlySet<string> = new Set([
+  "shootout-win-league-points",
+  "cricket-points-ties-no-results",
+  "chess-points-and-half-points",
+  "why-matches-won-come-first",
+  "table-tennis-loss-still-scores",
+  "level-on-points-who-finishes-higher",
+  "three-way-tie-head-to-head",
+  "net-run-rate-explained",
+  "set-ratio-or-set-difference",
+  "buchholz-and-sonneborn-berger",
+  "when-lots-decide-a-tie",
+  "how-swiss-pairing-works",
+  "swiss-chess-bye",
+  "joining-or-leaving-a-swiss",
+  "knockout-seeds-and-byes",
+  "third-place-match",
+  "knockout-match-ends-level",
+  "page-playoff-and-stepladder",
+  "double-elimination-explained",
+  "what-is-a-plate",
+  "how-americano-works",
+  "how-mexicano-works",
+  "how-a-ladder-works",
+  "withdrawal-in-a-knockout",
+  "forfeits-and-walkovers-by-sport",
+  "double-walkover",
+  "round-robin-schedule",
+  "groups-into-knockout",
+  "best-third-placed-teams",
+  "clinched-or-eliminated",
+  "withdrawal-in-a-league",
+  "joining-a-league-late",
+]);
+
+/**
+ * The link to a post's help page, or null when the page is not registered (never a dead link). The page that
+ * prints "How Seazn handles it" renders the link only for a non-null answer.
+ */
+export function blogHelpHref(help: string): string | null {
+  return helpUrl(help);
+}
 
 export interface BlogProblem {
   /** The front-matter key, or `body` for a problem in the post text. */
@@ -250,13 +300,19 @@ export function parseBlogFrontmatter(
   return post;
 }
 
-/** Every bad `related` slug across `posts`, one readable line each; empty means sound. */
-export function blogRelatedProblems(posts: ReadonlyMap<string, Pick<BlogPostMeta, "slug" | "related">>): string[] {
+/**
+ * Every bad `related` slug across `posts`, one readable line each; empty means sound. A slug in `planned` (a post
+ * still to be written, BLOG_PLANNED_SLUGS) is accepted; the post itself never is.
+ */
+export function blogRelatedProblems(
+  posts: ReadonlyMap<string, Pick<BlogPostMeta, "slug" | "related">>,
+  planned: ReadonlySet<string> = new Set(),
+): string[] {
   const out: string[] = [];
   for (const p of posts.values()) {
     for (const r of p.related) {
       if (r === p.slug) out.push(`${p.slug}: related '${r}' is the post itself`);
-      else if (!posts.has(r)) out.push(`${p.slug}: related '${r}' is not a post`);
+      else if (!posts.has(r) && !planned.has(r)) out.push(`${p.slug}: related '${r}' is not a post`);
     }
   }
   return out;
@@ -265,14 +321,14 @@ export function blogRelatedProblems(posts: ReadonlyMap<string, Pick<BlogPostMeta
 /** Newest first; two posts on the same day sort by slug, so the order never depends on how the files were read. */
 export const blogNewestFirst = (a: Pick<BlogPostMeta, "date" | "slug">, b: Pick<BlogPostMeta, "date" | "slug">) => (a.date === b.date ? a.slug.localeCompare(b.slug) : a.date < b.date ? 1 : -1);
 
-function loadPosts(root: string, opts: BlogParseOptions): BlogPost[] {
+function loadPosts(root: string, opts: BlogParseOptions, planned?: ReadonlySet<string>): BlogPost[] {
   const posts = new Map<string, BlogPost>();
   for (const file of readdirSync(root).filter((f) => f.endsWith(".md")).sort()) {
     const where = relative(process.cwd(), join(root, file));
     const post = parseBlogFrontmatter(readFileSync(join(root, file), "utf8"), where, opts);
     posts.set(post.slug, post);
   }
-  const problems = blogRelatedProblems(posts);
+  const problems = blogRelatedProblems(posts, planned);
   if (problems.length > 0) throw new Error(`blog related: ${problems.join("; ")}`);
   return [...posts.values()].sort(blogNewestFirst);
 }
@@ -283,7 +339,7 @@ let cache: BlogPost[] | null = null;
 export function allBlogPosts(root?: string, opts: BlogParseOptions = {}): BlogPost[] {
   if (root !== undefined) return loadPosts(root, opts);
   if (cache && process.env.NODE_ENV === "production") return cache;
-  cache = loadPosts(BLOG_ROOT, opts);
+  cache = loadPosts(BLOG_ROOT, opts, BLOG_PLANNED_SLUGS);
   return cache;
 }
 

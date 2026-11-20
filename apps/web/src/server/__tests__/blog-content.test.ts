@@ -11,7 +11,7 @@ import { BLOG_TOPICS, blogUrl } from "@/lib/blog";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { allHelpArticles, parseHelpFrontmatter } from "@/server/help-content";
 import {
-  BlogFrontmatterError, PLAN_WORD, blogNewestFirst, TYPED_FIGURE, allBlogPosts, blogPostsForHelp, blogRelatedProblems,
+  BLOG_PLANNED_SLUGS, BlogFrontmatterError, PLAN_WORD, blogHelpHref, blogNewestFirst, TYPED_FIGURE, allBlogPosts, blogPostsForHelp, blogRelatedProblems,
   blogSearchIndex, parseBlogFrontmatter,
 } from "@/server/blog-content";
 
@@ -244,6 +244,46 @@ describe("related: the set-level rule", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("related: slugs planned but not yet written", () => {
+  it("a planned slug is accepted by the set-level rule, an unplanned unknown one still is not", () => {
+    const missing = parse("related-missing.md");
+    const valid = new Map(allBlogPosts(FIXTURES).map((p) => [p.slug, p]));
+    const withBad = new Map(valid).set("related-missing", { ...missing, slug: "related-missing" });
+    expect(blogRelatedProblems(withBad, new Set(["a-post-nobody-wrote"]))).toEqual([]);
+    expect(blogRelatedProblems(withBad, new Set(["something-else"]))).toEqual(["related-missing: related 'a-post-nobody-wrote' is not a post"]);
+    // A post cannot be related to itself even when its own slug is planned.
+    const self = new Map(valid).set("related-self", { ...parse("related-missing.md"), slug: "related-self", related: ["related-self", "how-swiss-pairs-round-two"] });
+    expect(blogRelatedProblems(self, new Set(["related-self"]))).toEqual(["related-self: related 'related-self' is the post itself"]);
+  });
+  it("the planned list is the approved topic list: kebab slugs, no duplicates, 32 posts after the pilot", () => {
+    expect(BLOG_PLANNED_SLUGS.size, "anti-vacuity: planned slugs").toBe(32);
+    for (const s of BLOG_PLANNED_SLUGS) expect(s, s).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    expect(BLOG_PLANNED_SLUGS.has("how-standings-points-work"), "the pilot is a post, not planned").toBe(false);
+  });
+  it("an explicit root is strict: only the default root accepts planned slugs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "blog-planned-"));
+    try {
+      for (const f of mdFiles(FIXTURES)) copyFileSync(join(FIXTURES, f), join(dir, f));
+      const raw = read(FIXTURES, mdFiles(FIXTURES)[0]!).replace(/^related: .*$/m, "related: shootout-win-league-points, cricket-points-ties-no-results");
+      writeFileSync(join(dir, mdFiles(FIXTURES)[0]!), raw);
+      expect(BLOG_PLANNED_SLUGS.has("shootout-win-league-points")).toBe(true);
+      expect(() => allBlogPosts(dir)).toThrow(/related 'shootout-win-league-points' is not a post/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("blogHelpHref: the help link is null-safe", () => {
+  it("a registered article and a format family link; an unregistered one is null, never a dead link", () => {
+    expect(blogHelpHref("divisions/settings")).toBe("/help/divisions/settings");
+    expect(blogHelpHref("formats/swiss")).toBe("/help/formats/swiss");
+    expect(blogHelpHref("formats/overview")).toBe("/help/formats");
+    expect(blogHelpHref("sports/curling")).toBeNull();
+    expect(blogHelpHref("")).toBeNull();
   });
 });
 

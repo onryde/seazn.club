@@ -68,6 +68,24 @@ describe("findBlogLeaks: hand-written cases", () => {
   });
 });
 
+describe("a bare URL is not a code identifier", () => {
+  it("a URL with underscores or camel case passes; the same token in prose is still flagged", () => {
+    const cases = [
+      "Read https://example.com/help/swiss_pairing_rules for the full text.",
+      "See https://example.com/guide?utm_source=newsletter&topNPerGroup=2 now.",
+      "Visit http://seazn.club/live/some_club/season_one.",
+      "The page is at www.example.com/a_b_c today.",
+    ];
+    for (const c of cases) expect(findBlogLeaks(c), c).toEqual([]);
+    // The exemption is the URL only: prose around it is still scanned, and the same token outside a URL is a leak.
+    expect(findBlogLeaks("Read https://example.com/swiss_pairing and then h2h_reapply.").map((l) => l.match)).toEqual(["h2h_reapply"]);
+    expect(findBlogLeaks("swiss_pairing_rules").map((l) => l.match)).toEqual(["swiss_pairing_rules"]);
+    // The index of a hit after a URL is still the index in the original text.
+    const text = "https://example.com/a_b then h2h_reapply";
+    expect(findBlogLeaks(text)[0]!.index).toBe(text.indexOf("h2h_reapply"));
+  });
+});
+
 describe("BLOG_LEAK_ALLOW", () => {
   it("has a reason per entry, and each entry is the only thing standing between a real use and a flag", () => {
     expect(BLOG_LEAK_ALLOW.length, "anti-vacuity: allow entries").toBeGreaterThan(0);

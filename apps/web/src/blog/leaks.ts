@@ -35,10 +35,16 @@ export const BLOG_LEAK_ALLOW: BlogLeakAllow[] = [
   { match: "iOS", reason: "Apple's operating system name; a post may say where the scoring screen runs." },
 ];
 
+// A bare URL ("https://example.com/help/swiss_pairing", "www.example.com/a_b") is a link a reader follows, not a
+// code identifier. It is blanked to spaces, so every hit after it keeps its index in the original text. Only the
+// identifier rules skip it: P1's rules still see the whole text.
+const BARE_URL = /\b(?:https?:\/\/|www\.)\S+/gi;
+
 function identifierLeaks(text: string): BlogLeak[] {
   const out: BlogLeak[] = [];
+  const prose = text.replace(BARE_URL, (u) => " ".repeat(u.length));
   for (const re of [SNAKE, CAMEL]) {
-    for (const m of text.matchAll(re)) {
+    for (const m of prose.matchAll(re)) {
       // A plural ("iPads") is the same word.
       if (BLOG_LEAK_ALLOW.some((a) => a.match === m[0] || `${a.match}s` === m[0])) continue;
       out.push({ rule: "code-identifier", match: m[0], index: m.index! });

@@ -1,0 +1,164 @@
+{
+  "facts": {
+    "footballWin": "3",
+    "footballLoss": "0",
+    "footballLevel": "1",
+    "footballRankedBy": "points",
+    "cricketWin": "2",
+    "cricketLoss": "0",
+    "cricketLevel": "1",
+    "cricketRankedBy": "points",
+    "boardgameWin": "1",
+    "boardgameLoss": "0",
+    "boardgameLevel": "½",
+    "boardgameRankedBy": "points",
+    "carromWin": "2",
+    "carromLoss": "0",
+    "carromRankedBy": "points",
+    "genericWin": "3",
+    "genericLoss": "0",
+    "genericRankedBy": "points",
+    "volleyballWin30": "3",
+    "volleyballLoss30": "0",
+    "volleyballWin31": "3",
+    "volleyballLoss31": "0",
+    "volleyballWin32": "2",
+    "volleyballLoss32": "1",
+    "volleyballRankedBy": "wins",
+    "badmintonWin20": "2",
+    "badmintonLoss20": "0",
+    "badmintonWin21": "2",
+    "badmintonLoss21": "0",
+    "badmintonRankedBy": "wins",
+    "tabletennisWin30": "2",
+    "tabletennisLoss30": "1",
+    "tabletennisWin31": "2",
+    "tabletennisLoss31": "1",
+    "tabletennisWin32": "2",
+    "tabletennisLoss32": "1",
+    "tabletennisRankedBy": "points",
+    "tennisWin": "2",
+    "tennisLoss": "0",
+    "tennisRankedBy": "wins",
+    "icehockeyWin": "3",
+    "icehockeyLoss": "0",
+    "icehockeyRankedBy": "points",
+    "hockeyWin": "3",
+    "hockeyLoss": "0",
+    "hockeyLevel": "1",
+    "hockeyRankedBy": "points",
+    "sportCount": 11
+  },
+  "table": {
+    "caption": "What one finished match is worth in the standings, by sport.",
+    "columns": [
+      "Sport",
+      "Winner gets",
+      "Each side in a level match",
+      "Loser gets",
+      "Table ranks first by"
+    ],
+    "rows": [
+      [
+        "Football",
+        "3",
+        "1",
+        "0",
+        "Points"
+      ],
+      [
+        "Cricket",
+        "2",
+        "1 (a tie)",
+        "0",
+        "Points"
+      ],
+      [
+        "Chess",
+        "1",
+        "½",
+        "0",
+        "Points"
+      ],
+      [
+        "Carrom",
+        "2",
+        "Not possible",
+        "0",
+        "Points"
+      ],
+      [
+        "Generic",
+        "3",
+        "Not possible",
+        "0",
+        "Points"
+      ],
+      [
+        "Volleyball",
+        "3 (3-0 or 3-1), 2 (3-2)",
+        "Not possible",
+        "0 (3-0 or 3-1), 1 (3-2)",
+        "Wins"
+      ],
+      [
+        "Badminton",
+        "2",
+        "Not possible",
+        "0",
+        "Wins"
+      ],
+      [
+        "Table tennis",
+        "2",
+        "Not possible",
+        "1",
+        "Points"
+      ],
+      [
+        "Tennis",
+        "2",
+        "Not possible",
+        "0",
+        "Wins"
+      ],
+      [
+        "Ice hockey",
+        "3",
+        "Not possible",
+        "0",
+        "Points"
+      ],
+      [
+        "Hockey",
+        "3",
+        "1",
+        "0",
+        "Points"
+      ]
+    ]
+  },
+  "text": [
+    "Each row comes from real matches scored the way a division scores them: Ana beats Ben, and where the sport allows a level result, Cy and Dev finish level.",
+    "Football: Ana beat Ben 1 — 0.",
+    "Football: Cy and Dev drew 0 — 0.",
+    "Cricket: Ana beat Ben 61/9 (20) — 35 (5).",
+    "Cricket: Cy and Dev tied 113/9 (20) — 113/7 (20).",
+    "Chess: Ana beat Ben 1 — 0.",
+    "Chess: Cy and Dev drew ½ — ½.",
+    "Carrom: Ana beat Ben 2 — 0.",
+    "Generic: Ana beat Ben 4 — 0.",
+    "Volleyball: Ana beat Ben 3 — 0 · 29–27, 25–21, 25–0.",
+    "Volleyball: Ana beat Ben 3 — 1 · 25–8, 28–30, 25–22, 25–11.",
+    "Volleyball: Ana beat Ben 3 — 2 · 25–20, 1–25, 27–29, 30–28, 15–0.",
+    "Badminton: Ana beat Ben 2 — 0 · 26–24, 21–3.",
+    "Badminton: Ana beat Ben 2 — 1 · 3–21, 23–21, 21–12.",
+    "Table tennis: Ana beat Ben 3 — 0 · 15–13, 11–9, 11–0.",
+    "Table tennis: Ana beat Ben 3 — 1 · 11–2, 4–11, 11–5, 11–1.",
+    "Table tennis: Ana beat Ben 3 — 2 · 12–10, 4–11, 8–11, 11–9, 11–2.",
+    "Tennis: Ana beat Ben 2 — 1 · 3–6 6–1 6–1.",
+    "Ice hockey: Ana beat Ben 1 — 0.",
+    "Hockey: Ana beat Ben 2 — 1.",
+    "Hockey: Cy and Dev drew 1 — 1."
+  ]
+}
