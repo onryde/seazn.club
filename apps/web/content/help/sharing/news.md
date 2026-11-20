@@ -1,51 +1,54 @@
 ---
-title: Org news & share cards
-description: Publish results and updates to a public news feed — with auto-drafted result posts and one-tap share cards.
+title: News and share cards
+description: Write and publish posts to your public news feed, let a division draft result posts for you, and download an image card to share.
 order: 8
+related: sharing/grow-your-club, sharing/visibility, divisions/settings
 ---
 
-Your public page shows scores and standings. The **News** feed lets you add words: match reports, announcements, the weekend round-up — each one a shareable page with its own image card.
+Your public pages show scores and standings. **News** adds words: a match report, an announcement, the weekend round-up. Each post is its own page, with a link you can share.
 
-## Where it lives
+Open **Settings**, then the **News** tab. It reads **Publish results and updates to your public news feed. Free on every plan.** Owners and admins write posts.
 
-Open **Settings → News** in your console. You'll see a drafts queue, your published posts, and a composer. Manual posts are **free on every plan** — a free organisation publishing news is exactly the point.
+![The News tab with two auto drafts, a result and a recap, each with a Publish button, above a Published list of two posts.](/help/sharing/news-tab.webp "The News tab: drafts waiting for review above the published posts.")
 
-## Auto-drafts (Pro)
+## Write a post
 
-Turn on **News auto-drafts** in a division's **Settings** tab ("Draft a news post when results land"). From then on, whenever a result lands or a round completes in that division, we write a **draft** for you — a result post ("Riverside 3–1 Northside") or a round recap with the results grid and top of the table.
+1. Select **New post**.
+2. Fill in **Headline**, choose a **Type** (**Club news**, **Announcement** or **Result**) and a **Competition**. **Whole organisation** is for a general post.
+3. Write the **Story**. **Preview** shows how it reads. Add a **Hero image** if you want one.
+4. Select **Save draft**. The post waits under **Drafts**.
+5. Select **Publish**.
 
-Drafts are cheap and disposable:
+A post has no schedule field. It goes live when you select **Publish**.
 
-- They wait in your News tab badged **⚡ Auto** — nothing publishes on its own.
-- If you void or re-decide the fixture, the draft is flagged **Result changed** so you know to re-check it.
-- We never auto-edit, auto-publish, or auto-delete anything.
+Before you publish, the composer reads **The public URL locks when you first publish.** Afterwards it reads **The public URL is locked — edits keep the same link.** Edit the headline of a published post and the link stays the same.
 
-The Monday-morning job becomes "review a few drafts, tap **Publish**."
+## Who can see a post
 
-## Composing a post
+A post for the **Whole organisation** is public. A post for one competition follows that competition's visibility: a **Private** competition's post is not found at its address, and a **Link only** or **Public** competition's post opens and is listed on your news page. See [who can see what](/help/sharing/visibility).
 
-- **Headline** is the title. For result posts, keep it as a scoreline (`Home 3–1 Away`) and the feed card renders it as a **scorebug** — big numerals and crests.
-- **Story** is Markdown — the same editor as competition descriptions, with a hero image if you want one.
-- **Type** picks the kind chip (Result, Announcement, Club news). **Competition** scopes the post (leave it on *Whole organisation* for a general post).
+## Auto-drafts
 
-## Publishing & the URL
+A division can write drafts for you. Open the division's **Settings** tab and find **News auto-drafts**. It reads **Draft a news post automatically when a result lands or a round completes.** Switch **Draft a news post when results land** on. The setting is Off until you change it.
 
-Publishing stamps the post live and **locks its URL**. After that first publish the link never changes — edit the words as often as you like and every share already sent keeps working. Org-level posts are always public; a post scoped to a competition follows that competition's visibility.
+- A scored match gets an **Auto** draft headed with the score, for example **Amber Ward 3–1 Dunmore Park**.
+- A finished round gets a recap, for example **Round 1 recap: Singles League**, with **Results**, **Standings** and **Biggest result**.
+- A draft waits under **Drafts** until you publish it. Nothing publishes by itself.
+- Void or re-decide a match and its draft carries a **Result changed** chip. The words are not rewritten. Read the draft and fix it before you publish.
 
-## Share cards
+The division panel adds: **Drafts are written as results are scored — switching this on later will not create posts for fixtures already played. Turn it on before play starts.**
 
-Every published post has an **OG image** (the preview that appears when you paste the link into WhatsApp or a group chat) and, for result posts, a **Download image card** button — a portrait 1080×1350 PNG sized for an Instagram/WhatsApp story. Download it and post it yourself: no account linking, no permissions to grant.
+Auto-drafts are on Pro and the Event Pass. On Community the division panel shows **PRO ✦** and **Auto-drafted result posts are on Pro and the Event Pass.**
 
-## Archiving
+**Generate digest**, on the News tab, makes a weekly digest draft, **week of** the date it covers. It is a Pro feature, and carries a **PRO ✦** badge on Community. Writing and publishing posts by hand is free on every plan.
 
-**Archive** (the box icon next to a published post) takes a post off the public feed — its page returns "not found" until you bring it back. Nothing is deleted: archived posts live under **Archived (N)** at the bottom of the News tab (click to expand). From there, **Republish** puts a post back live at the **same URL** (the link was frozen at first publish), or delete it for good.
+## Share a post
 
-## Common questions
+A public post has **WhatsApp** and **Copy link** buttons. A **Result** post with a score also has **Download image card**, a portrait 1080×1350 PNG sized for a story. Club news and announcements have no image card. You post the card yourself.
 
-**Do I need Pro to publish news?** No — writing and publishing posts is free. Only the automatic drafting of results is a Pro feature.
+## Archive a post
 
-**Will it post to Facebook/Instagram for me?** No. We give you the image card to post yourself — see [growing your club](/help/sharing/grow-your-club) for the wider share loop.
+**Archive** takes a post off your news page. Its address then reads **This link is no longer valid**. Archived posts sit under **Archived (1)** at the bottom of the tab. **Republish** puts a post back at the same address.
 
-**Can I schedule a post for later?** Not yet — publish is immediate.
-
-**Where do archived posts go?** Into the collapsed **Archived (N)** list at the bottom of Settings → News. They're hidden from the public feed and their pages 404 until you republish.
+> **Example**
+> You switch **News auto-drafts** on for **Singles League** before round one. **Amber Ward** beat **Dunmore Park** 3–1, and a draft headed **Amber Ward 3–1 Dunmore Park** waits under **Drafts**, badged **Auto**. You then void that result and re-decide it 1–0. The draft now carries **Result changed** and still reads 3–1. You edit the headline to **Amber Ward 1–0 Dunmore Park**, select **Save**, then **Publish**. The post goes live. Edit the headline again later and its link stays the same.
