@@ -329,6 +329,10 @@ test.describe("X-SF-4 a five-player league says who sits out each round", () => 
     const everyone = ids.map(nameOf);
     expectNames(await readLines("[data-run-sheet-round-sits-out]", "desk"), everyone, [], "desk, before");
     expectNames(await readLines('[data-testid="schedule-sits-out"]', "public"), everyone, [], "public, before");
+    // W5 app PR B Task 1 (K8): the embed's schedule widget prints the same five lines (one helper, `publicSitsOutLines`). Read once,
+    // before any change: the embed route is ISR-cached for 30s (`revalidate = 30`), so an "after" read could serve this render.
+    await page.goto(`/embed/divisions/${divisionId}/schedule`);
+    expectNames(await page.locator('[data-testid="schedule-sits-out"]').allInnerTexts(), everyone, [], "embed, before");
 
     // A player leaves: the round they sat out no longer says anyone sits out (the four others keep their line, unchanged).
     const started = await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST");
@@ -1403,8 +1407,8 @@ test.describe("T14b a finished multi-pool Groups only division names each pool's
 });
 
 // W5 app PR A, B4 fix wave (owner 2026-11-18, RB5-W2 + RB5-W7): an UNDER-half leaver of a POOL has every result removed, so no
-// counted result names her and her pool's table has no row for her - and the footnote used to key on listed rows only, so she had
-// none. Now her ledger row records her pool and the note is printed under THAT pool's table, on the organiser's division page and
+// counted result names her - and the footnote used to key on listed rows only, so she had none. Since W5 app PR B Task 1 (X-WDT-7,
+// X-PO-1: the pools ride the fold as seating) she stays a row of her pool, zero played, ranked last (RB5-W1); before, no row. Now her ledger row records her pool and the note is printed under THAT pool's table, on the organiser's division page and
 // the public one. Expected text: the en dictionary's own expunge sentence (the owner's R24 pick 11 A wording), typed here.
 test.describe("RB5-W7 an under-half pool leaver keeps her footnote", () => {
   test("two pools of four, she leaves pool A after 1 of 3: the note sits under pool A's table only, on both division pages", async ({ page, request }) => {
@@ -1459,9 +1463,10 @@ test.describe("RB5-W7 an under-half pool leaver keeps her footnote", () => {
       // The innermost box holding both a table and the note is that table's own wrapper (document order: ancestors first).
       const table = page.locator("div").filter({ has: page.getByTestId("standings-withdrawal-notes") }).filter({ has: page.locator("table") }).last();
       const rows = table.locator('tbody th[scope="row"]');
-      await expect(rows, `${path}: her pool lists her three pool-mates, not her (no counted result names her)`).toHaveCount(3);
+      await expect(rows, `${path}: her pool lists her three pool-mates and her (X-WDT-7: she stays seated)`).toHaveCount(4);
       for (const m of mateNames) await expect(rows.filter({ hasText: m }), `${path}: ${m} is in the noted table`).toHaveCount(1);
-      await expect(rows.filter({ hasText: vName }), path).toHaveCount(0);
+      await expect(rows.filter({ hasText: vName }), `${path}: her row, once`).toHaveCount(1);
+      await expect(rows.last(), `${path}: RB5-W1 - ranked last`).toContainText(vName);
       await expectNoHorizontalScroll(page);
     }
 
