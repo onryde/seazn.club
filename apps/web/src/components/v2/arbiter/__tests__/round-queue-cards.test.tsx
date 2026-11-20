@@ -79,6 +79,7 @@ const HELD = (fixtureId: string, o: Partial<NeedsOrganiserExternalPlayRow> = {})
   revokedSeat: null,
   roundNo: 2,
   boardNo: 4,
+  stageId: "stage-1",
   stageName: "Swiss Open",
   canResync: false,
   seated: false,

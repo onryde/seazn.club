@@ -27,6 +27,8 @@ export type NeedsOrganiserExternalPlayRow = {
   whiteSide: Side;
   /** V454: the seat a seat hold (token_revoked, account_changed) froze; null otherwise. */
   revokedSeat: "white" | "black" | "both" | null;
+  /** The stage the board belongs to (the key a round is told apart by: stage names are not unique). */
+  stageId: string;
   roundNo: number | null;
   /** The board number in its round (`seq_in_round`, the room's boardNo). */
   boardNo: number | null;
@@ -90,6 +92,7 @@ export async function listNeedsOrganiserExternalPlay(
         challenge_id: string | null;
         round_no: number | null;
         seq_in_round: number | null;
+        stage_id: string;
         stage_name: string;
         stage_kind: string | null;
         winner_to_fixture: string | null;
@@ -100,7 +103,7 @@ export async function listNeedsOrganiserExternalPlay(
              f.home_entrant_id, f.away_entrant_id,
              f.scheduled_at, ep.needs_reason, ep.last_error,
              ep.white_side, ep.revoked_seat, ep.challenge_id,
-             f.round_no, f.seq_in_round, s.name as stage_name,
+             f.round_no, f.seq_in_round, f.stage_id, s.name as stage_name,
              s.kind as stage_kind, f.winner_to_fixture, f.loser_to_fixture
         from fixture_external_play ep
         join fixtures f on f.id = ep.fixture_id
@@ -132,6 +135,7 @@ export async function listNeedsOrganiserExternalPlay(
         // Before a game exists the colour is the pairing's (guard.ts).
         whiteSide: r.white_side ?? (await whiteSideOf({ fixtureId: r.fixture_id, orgId: auth.orgId })),
         revokedSeat: readRevokedSeat(r.revoked_seat),
+        stageId: r.stage_id,
         roundNo: r.round_no,
         boardNo: r.seq_in_round,
         stageName: r.stage_name,

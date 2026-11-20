@@ -153,6 +153,7 @@ function held(over: Partial<NeedsOrganiserExternalPlayRow> = {}): NeedsOrganiser
     revokedSeat: null,
     roundNo: 2,
     boardNo: nextId,
+    stageId: "stage-1",
     stageName: "Swiss",
     canResync: false,
     seated: false,

@@ -20,7 +20,7 @@ import "server-only";
 // built by `loadBoardsByIds`, the arbiter's own composition (presence, camera and `joinable` ride every board - MD-R1). A cancelled board
 // reaches the list only while it has an open flag (owner O1): the flagged lister's rule, and `loadBoardsByIds` holds the same line.
 // Every held board carries WHY it is held (`hold_reason`, MD-R6/R8), in `round.boards` and in `needs_decision` alike, from the held
-// lister's own reason - never a second read of the bridge row; a board that is not held carries null.
+// lister's own reason - never a second read of the bridge row - and only on a board whose own state is `on_hold`; any other board carries null.
 //
 // Sealed tables (stage_round_opens, the bridge and the flags) are read on the module `sql` client, after the caller's competition
 // auth, and never inside a tenant transaction: `getMatchDay` calls this beside its other reads, not within `withTenant`.
@@ -48,8 +48,14 @@ type StageRow = { id: string; division_id: string; name: string; seq: number };
 
 /** The competition's online chess rounds, after the courts in the list (`MatchDayView.online_rounds`): divisions in competition order, and
  *  inside a division its stages and rounds in play order. Empty when the competition has no online division. */
-export async function readOnlineRounds(auth: AuthCtx, competitionId: string, now: Date): Promise<MatchDayOnlineRound[]> {
-  const divisions = (await listDivisions(auth, competitionId)).filter((d) => divisionPlaysOnline(d));
+export async function readOnlineRounds(
+  auth: AuthCtx,
+  competitionId: string,
+  now: Date,
+  /** The competition's live divisions when the caller already reads them (`getMatchDay` does, beside this): one list per poll, not two. */
+  listed?: Promise<readonly DivisionRow[]> | readonly DivisionRow[],
+): Promise<MatchDayOnlineRound[]> {
+  const divisions = (await (listed ?? listDivisions(auth, competitionId))).filter((d) => divisionPlaysOnline(d));
   if (divisions.length === 0) return [];
   // The club's answer, once for the whole competition (a remote call kept 60 s, `onlineChessOffered`).
   const offered = await onlineChessOffered(auth);
@@ -183,11 +189,12 @@ async function rowsOfDivision(auth: AuthCtx, d: DivisionRow, ctx: DivisionCtx): 
     first.needs_decision = (await loadBoardsByIds(auth, d.id, [...decisionIds].filter((id) => !inRound.has(id)), { now: ctx.now, flags: "count" })).map((b) =>
       stamped(b, reasonOf),
     );
-    // The viewer's own boards, left out of both lists: the listed round's (the loader's count, in its own row) and the held boards of
-    // earlier rounds the viewer plays on. A board that is only FLAGGED in an earlier round and the viewer's own is not counted: the flagged
-    // list gives a count, not ids, and a count cannot be told from the listed round's own boards.
-    const roundsOwn = new Set(rounds.flatMap((r, i) => (r === null ? [] : [`${latest[i]!.stage.name}:${r.roundNo}`])));
-    first.own_boards += held.filter((h) => h.seated && !roundsOwn.has(`${h.stageName}:${h.roundNo}`)).length;
+    // The viewer's own boards no list shows: the listed round's (the loader's count, in its own row) and the held boards of earlier rounds
+    // the viewer plays on. A board that is only FLAGGED in an earlier round and the viewer's own is in no count and in no list: the flagged
+    // list gives a count, not ids, and a count cannot be told from the listed round's own boards. A round is told apart by its stage's ID
+    // (names are not unique), the way `key` spells it.
+    const roundsOwn = new Set(rounds.flatMap((r, i) => (r === null ? [] : [`${latest[i]!.stage.id}:${latest[i]!.roundNo}`])));
+    first.own_boards += held.filter((h) => h.seated && !roundsOwn.has(`${h.stageId}:${h.roundNo}`)).length;
   }
   const multi = out.length > 1;
   return out.map((r) => ({ ...r, multi_stage: multi }));
@@ -200,8 +207,10 @@ const rowShell = (stage: StageRow, roundNo: number) => ({
   round_no: roundNo,
 });
 
-/** A board of either list with its hold reason: the held lister's own word for a held board, null for any other. */
+/** A board of either list with its hold reason: the held lister's own word for a board that IS on hold, null for any other. The lister
+ *  and the board are read a moment apart, so a hold settled in between would otherwise carry a reason on a board that reads live: the
+ *  stamp follows the board's own state (`on_hold`), and the reason is the lister's word for why. */
 function stamped<B extends ArbiterBoard>(b: B, reasonOf: ReadonlyMap<string, NeedsReason>): B & { hold_reason: NeedsReason | null } {
-  return { ...b, hold_reason: reasonOf.get(b.fixtureId) ?? null };
+  return { ...b, hold_reason: b.state.kind === "on_hold" ? (reasonOf.get(b.fixtureId) ?? null) : null };
 }
 
