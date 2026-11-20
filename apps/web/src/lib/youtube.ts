@@ -52,6 +52,21 @@ export const isYoutubeLiveStateRefusal = (c: unknown): c is YoutubeLiveStateRefu
  *  never consults the record and always asks YouTube. Judged on the time the refusal was recorded (`last_health_at`). */
 export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
 
+/** The AUTOMATIC start's backoff on a channel (Phase 0, YouTube channel safety; V538): after a refusal in YOUTUBE_AUTO_BACKOFF_CODES
+ *  the next automatic start waits BASE seconds, doubling with each refusal in a row, never more than MAX (connections.ts
+ *  `backoffSeconds`). Inside the window an automatic start is refused with the stored code and no call to YouTube. A person's tap
+ *  never reads it, and any successful prepare clears it. */
+export const YOUTUBE_AUTO_BACKOFF_BASE_SECONDS = 60;
+export const YOUTUBE_AUTO_BACKOFF_MAX_SECONDS = 1800;
+/** The refusals that open the window: YouTube's rate limit, its being unavailable, and Seazn's own full pool. Not the channel-state
+ *  refusals (YOUTUBE_LIVE_STATE_OF_REFUSAL has its own record) and not a dead grant (the connection moves to reconnect_needed). V538's
+ *  `auto_backoff_code` check lists the same three. */
+export const YOUTUBE_AUTO_BACKOFF_CODES: readonly YoutubeRefusalCode[] = [
+  "youtube_limit_reached",
+  "youtube_channel_busy",
+  "youtube_unavailable",
+];
+
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
  *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
 export function isYoutubeUrl(url: string): boolean {

@@ -11,6 +11,8 @@ import "server-only";
 //      organiser's Go live, the phone operator's Start — always asks YouTube (fix round 2, F2): the club may have enabled live at YouTube
 //      a minute ago, and a person is owed YouTube's current answer, not a replayed one. An access token from the sealed refresh token (in
 //      memory only). A `youtube_reconnect_needed` from ANY port call (a dead grant) moves the connection to reconnect_needed first (F5).
+//      Also for an AUTOMATIC start alone (Phase 0, V538): inside the backoff window a rate / availability refusal opened
+//      (YOUTUBE_AUTO_BACKOFF_CODES, recorded by `failRow`) → that stored refusal, before any port call. A successful prepare clears it.
 //   2. A short transaction: the fixture's OPEN broadcast (`created|bound|live|reserved`; `ending` is never selected, so a claimed
 //      row is never reused), locked `for update` (no skip). A reservation not yet lapsed is another Go live mid-admission →
 //      the existing `active_session` 409. Otherwise its end rule decides (end-rule.ts, read through THIS transaction under the
@@ -41,11 +43,12 @@ import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
 import { siteOrigin } from "@/lib/site-origin";
 import {
-  YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode,
+  YOUTUBE_AUTO_BACKOFF_CODES, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy,
+  type YoutubeRefusalCode,
 } from "@/lib/youtube";
 import type { StartCause } from "@/server/relay/domain/session";
 import { insertPooledKey } from "@/server/relay/secret-columns";
-import { freshLiveRefusal, recordLiveState } from "./connections";
+import { autoBackoffRefusal, clearAutoBackoff, freshLiveRefusal, recordAutoBackoff, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
 import { broadcastDescription, broadcastTitle } from "./title";
@@ -133,9 +136,10 @@ export async function prepareYoutubeBroadcast(
   const [target] = await sql<{
     connection_id: string | null; status: string | null; privacy: YoutubePrivacy | null; made_for_kids: boolean | null;
     last_health_at: Date | null; last_error_code: string | null; status_since: Date | null;
+    auto_retry_after: Date | null; auto_backoff_code: string | null;
   }[]>`
     select t.youtube_connection_id as connection_id, c.status, c.default_privacy as privacy, c.made_for_kids,
-           c.last_health_at, c.last_error_code, c.status_since
+           c.last_health_at, c.last_error_code, c.status_since, c.auto_retry_after, c.auto_backoff_code
       from org_stream_targets t
       left join org_youtube_connections c on c.id = t.youtube_connection_id and c.org_id = t.org_id
      where t.id = ${a.targetId} and t.org_id = ${a.orgId} and t.archived_at is null`;
@@ -156,6 +160,12 @@ export async function prepareYoutubeBroadcast(
   // what the record spares; an organiser's or an operator's tap asks YouTube every time, and a success clears the record (`noteLiveState`).
   const recorded = a.startCause === "automatic" ? freshLiveRefusal(target, a.now) : null;
   if (recorded !== null) throw youtubeRefusal(recorded, connectionId);
+  // Phase 0 (V538): a rate / availability refusal opened a window on this channel — the automatic start's retries wait it out with no
+  // call to YouTube, no row and no key. Writes nothing, so the window lapses on time. A person's tap never reads it.
+  if (a.startCause === "automatic" && autoBackoffRefusal(target, a.now)) {
+    const code = isYoutubeRefusalCode(target.auto_backoff_code) ? target.auto_backoff_code : "youtube_unavailable";
+    throw youtubeRefusal(code, connectionId);
+  }
 
   const port = typeof portOf === "function" ? portOf() : portOf;
   const at = await accessTokenFor(a.orgId, connectionId, port);
@@ -164,8 +174,20 @@ export async function prepareYoutubeBroadcast(
     port, at,
   };
   const reused = await reuseOrClaim(ctx);
-  if (reused) return reused;
-  return createNew(ctx, true);
+  const prepared = reused ?? (await createNew(ctx, true));
+  await noteAutoBackoff(ctx, null);
+  return prepared;
+}
+
+/** The automatic start's backoff (Phase 0, V538): a refusal in YOUTUBE_AUTO_BACKOFF_CODES opens or extends the window, a successful
+ *  prepare (`null`) clears it. Best effort, like `noteLiveState`: the outcome stands either way. */
+async function noteAutoBackoff(ctx: { orgId: string; connectionId: string; now: Date }, code: YoutubeRefusalCode | null): Promise<void> {
+  try {
+    if (code === null) await clearAutoBackoff(sql, ctx.orgId, ctx.connectionId);
+    else if (YOUTUBE_AUTO_BACKOFF_CODES.includes(code)) await recordAutoBackoff(sql, ctx.orgId, ctx.connectionId, ctx.now, code);
+  } catch (err) {
+    captureError(err, { orgId: ctx.orgId, route: "youtube.prepare.auto_backoff", extra: { connectionId: ctx.connectionId } });
+  }
 }
 
 /** Step 1's token: the sealed refresh token opened (in memory only) and exchanged. A connection with no token, or one whose
@@ -509,8 +531,10 @@ async function deleteStream(ctx: Ctx, streamId: string): Promise<void> {
 }
 
 /** A refused new broadcast: the row `failed` with the code (from any state a prepare or a reuse left it in), then what YouTube
- *  got deleted. The row goes first, so nothing reuses a broadcast that is about to vanish. Both are best effort. */
+ *  got deleted. The row goes first, so nothing reuses a broadcast that is about to vanish. Both are best effort. A rate /
+ *  availability code also opens the automatic start's backoff window on the channel first (`noteAutoBackoff`, Phase 0). */
 async function failRow(ctx: Ctx, rowId: string, ytId: string | null, code: YoutubeRefusalCode): Promise<void> {
+  await noteAutoBackoff(ctx, code);
   try {
     await sql`
       update youtube_broadcasts set state = 'failed', last_error_code = ${code}, reserved_until = null
