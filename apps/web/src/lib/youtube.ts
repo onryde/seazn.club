@@ -57,10 +57,6 @@ export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
  *  `backoffSeconds`). Inside the window an automatic start is refused with the stored code and no call to YouTube. A person's tap
  *  never reads it, and any successful prepare clears it. */
 // Equal to AUTO_START_RETRY_SECONDS (relay/config.ts), so the first refusal's window ends exactly at the next scheduled retry: the backoff bites from the second refusal in a row (accepted).
-/** The per-fixture runaway ceiling (Phase 0): at most this many NEW broadcasts (youtube_broadcasts rows) per fixture in any 60 minutes.
- *  Seazn's own guard in prepare.ts, checked before any call to YouTube; far above a person's Stop/Go live restarts, it stops only a
- *  loop. Refused with `youtube_limit_reached`, which never opens the automatic start's backoff (no YouTube call was made). */
-export const YOUTUBE_MAX_BROADCASTS_PER_FIXTURE_PER_HOUR = 10;
 export const YOUTUBE_AUTO_BACKOFF_BASE_SECONDS = 60;
 export const YOUTUBE_AUTO_BACKOFF_MAX_SECONDS = 1800;
 /** The refusals that open the window: YouTube's rate limit and its being unavailable (at the token exchange or on a new broadcast),
@@ -73,6 +69,11 @@ export const YOUTUBE_AUTO_BACKOFF_CODES: readonly YoutubeRefusalCode[] = [
   "youtube_channel_busy",
   "youtube_unavailable",
 ];
+
+/** The per-fixture runaway ceiling (Phase 0): at most this many NEW broadcasts (youtube_broadcasts rows) per fixture in any 60 minutes.
+ *  Seazn's own guard in prepare.ts, checked before any call to YouTube; far above a person's Stop/Go live restarts, it stops only a
+ *  loop. Refused with `youtube_limit_reached`, which never opens the automatic start's backoff (no YouTube call was made). */
+export const YOUTUBE_MAX_BROADCASTS_PER_FIXTURE_PER_HOUR = 10;
 
 /** The channel-safety warning on Go live (Phase 0, YouTube channel safety; server/youtube/channel-safety.ts `channelSafetyWarning`).
  *  YouTube treats a young channel, or one that has run several short live streams lately, as a risk. A channel created fewer than

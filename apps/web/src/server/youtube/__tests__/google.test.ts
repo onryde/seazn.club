@@ -279,10 +279,11 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
     expect(await driver().channelCreatedAt(AT, "UCchan"), "no items at all").toBeNull();
   });
 
-  it("recentBroadcasts: GET liveBroadcasts?part=snippet,status&mine=true&broadcastType=all; actual start and end; never-started skipped; stops at the first page with one older than `since`", async () => {
+  it("recentBroadcasts: GET liveBroadcasts?part=snippet,status&mine=true&broadcastType=all; actual start and end; never-started and older-than-`since` skipped on EVERY page, whatever the order", async () => {
     const since = new Date("2026-11-19T12:00:00Z");
     const pages: Record<string, unknown> = {
       "": { nextPageToken: "p2", items: [
+        { id: "old", snippet: { actualStartTime: "2026-11-17T10:00:00Z", actualEndTime: "2026-11-17T10:05:00Z" } },   // older, BEFORE a newer one
         { id: "a", snippet: { actualStartTime: "2026-11-20T10:00:00Z", actualEndTime: "2026-11-20T10:05:00Z" } },
         { id: "b", snippet: { actualStartTime: "2026-11-20T11:00:00Z" } },                  // still live
         { id: "c", snippet: { scheduledStartTime: "2026-11-20T09:00:00Z" } },               // never started
@@ -291,27 +292,28 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
         { id: "d", snippet: { actualStartTime: "2026-11-19T13:00:00Z", actualEndTime: "2026-11-19T14:00:00Z" } },
         { id: "e", snippet: { actualStartTime: "2026-11-18T13:00:00Z", actualEndTime: "2026-11-18T13:01:00Z" } },   // before `since`
       ] },
-      p3: { items: [{ id: "f", snippet: { actualStartTime: "2026-11-20T08:00:00Z" } }] },     // never read
+      p3: { items: [{ id: "f", snippet: { actualStartTime: "2026-11-20T08:00:00Z" } }] },     // a recent one on the LAST page
     };
     handler = (req) => res(200, pages[new URL(req.url).searchParams.get("pageToken") ?? ""]);
     const got = await driver().recentBroadcasts(AT, since);
     expect(got.map((x) => [x.startedAt.toISOString(), x.endedAt?.toISOString() ?? null])).toEqual([
       ["2026-11-20T11:00:00.000Z", null],
       ["2026-11-20T10:00:00.000Z", "2026-11-20T10:05:00.000Z"],
+      ["2026-11-20T08:00:00.000Z", null],
       ["2026-11-19T13:00:00.000Z", "2026-11-19T14:00:00.000Z"],
     ]);
-    expect(sent, "page 3 is never fetched: page 2 reached past `since`").toHaveLength(2);
+    expect(sent, "every page is read until Google sends no nextPageToken").toHaveLength(3);
     const u = new URL(sent[0]!.url);
     expect([sent[0]!.method, u.pathname]).toEqual(["GET", "/youtube/v3/liveBroadcasts"]);
     expect([u.searchParams.get("part"), u.searchParams.get("mine"), u.searchParams.get("broadcastType")]).toEqual(["snippet,status", "true", "all"]);
-    expect(new URL(sent[1]!.url).searchParams.get("pageToken")).toBe("p2");
+    expect([1, 2].map((i) => new URL(sent[i]!.url).searchParams.get("pageToken"))).toEqual(["p2", "p3"]);
   });
 
   it("recentBroadcasts reads at most 3 pages and answers what it read; a refusal maps through the error table", async () => {
     let n = 0;
     handler = () => res(200, { nextPageToken: `p${++n}`, items: [{ id: `b${n}`, snippet: { actualStartTime: "2026-11-20T10:00:00Z", actualEndTime: "2026-11-20T10:01:00Z" } }] });
     expect(await driver().recentBroadcasts(AT, new Date("2026-11-19T12:00:00Z"))).toHaveLength(3);
-    expect(sent).toHaveLength(3);
+    expect(sent, "the cap: Google still offers a 4th page, it is never fetched").toHaveLength(3);
     handler = () => apiError(403, "quotaExceeded");
     expect(((await rejection(driver().recentBroadcasts(AT, new Date(0)))) as YouTubeError).code).toBe("youtube_limit_reached");
     handler = () => apiError(403, "liveStreamingNotEnabled");

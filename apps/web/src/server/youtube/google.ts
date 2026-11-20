@@ -288,8 +288,8 @@ export class GoogleYouTube implements YouTubePort {
 
   /** liveBroadcasts.list(part=snippet,status, mine=true, broadcastType=all), …/live/docs/liveBroadcasts/list, 50 a page, following
    *  `nextPageToken`. Only `snippet.actualStartTime` / `actualEndTime` are read; a broadcast with no actual start (never went live) is
-   *  skipped. Reading stops at the first page holding a broadcast that started before `since` (YouTube lists the newest first), at the
-   *  last page, at a page token that repeats, or after RECENT_BROADCAST_PAGES pages: what was read by then is the answer. */
+   *  skipped, and so is one that started before `since`. Google's page promises no order, so no item ends the reading: it stops at the
+   *  last page, at a page token that repeats, or after RECENT_BROADCAST_PAGES pages, and what was read by then is the answer. */
   async recentBroadcasts(at: string, since: Date): Promise<{ startedAt: Date; endedAt: Date | null }[]> {
     const out: { startedAt: Date; endedAt: Date | null }[] = [];
     const seen = new Set<string>();
@@ -298,16 +298,15 @@ export class GoogleYouTube implements YouTubePort {
       const query: Record<string, string> = { part: "snippet,status", mine: "true", broadcastType: "all", maxResults: String(BROADCASTS_PER_PAGE) };
       if (pageToken !== null) query.pageToken = pageToken;
       const body = parseBody(await api(at, "GET", "liveBroadcasts", { query }));
-      let older = false;
       for (const item of Array.isArray(body.items) ? body.items : []) {
         const snippet = asRecord(asRecord(item)?.snippet);
         const startedAt = isoDate(snippet?.actualStartTime);
         if (!startedAt) continue;
-        if (startedAt < since) { older = true; continue; }
+        if (startedAt < since) continue;
         out.push({ startedAt, endedAt: isoDate(snippet?.actualEndTime) });
       }
       const next = nonEmpty(body.nextPageToken);
-      if (older || next === null || seen.has(next)) break;
+      if (next === null || seen.has(next)) break;
       seen.add(next);
       pageToken = next;
     }
