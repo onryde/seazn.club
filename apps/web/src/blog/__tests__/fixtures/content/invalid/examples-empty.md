@@ -12,7 +12,6 @@ examples:
 
 Players on the same score meet in round two.
 
-{{example:swiss-round-two}}
 
 ## How Seazn handles it
 

@@ -7,7 +7,7 @@ topic: swiss
 sports: boardgame, badminton
 help: formats/swiss
 related: what-a-draw-is-worth, who-wins-a-two-way-tie
-examples: other-example
+examples: swiss-round-two
 ---
 
 Players on the same score meet in round two.
@@ -17,3 +17,5 @@ Players on the same score meet in round two.
 ## How Seazn handles it
 
 Ana finishes round one on {{fact:swiss-round-two.anaPoints}} points.
+
+{{example:other-example}}

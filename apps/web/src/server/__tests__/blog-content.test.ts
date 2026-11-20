@@ -11,7 +11,7 @@ import { BLOG_TOPICS, blogUrl } from "@/lib/blog";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { allHelpArticles, parseHelpFrontmatter } from "@/server/help-content";
 import {
-  BlogFrontmatterError, PLAN_WORD, TYPED_FIGURE, allBlogPosts, blogPostsForHelp, blogRelatedProblems,
+  BlogFrontmatterError, PLAN_WORD, blogNewestFirst, TYPED_FIGURE, allBlogPosts, blogPostsForHelp, blogRelatedProblems,
   blogSearchIndex, parseBlogFrontmatter,
 } from "@/server/blog-content";
 
@@ -21,52 +21,58 @@ const mdFiles = (dir: string) => readdirSync(dir).filter((f) => f.endsWith(".md"
 const read = (dir: string, file: string) => readFileSync(join(dir, file), "utf8");
 const parse = (file: string, today?: string) => parseBlogFrontmatter(read(INVALID, file), `invalid/${file}`, { today });
 
-/** file -> the one key it must fail on (the rule it exists for). */
-const INVALID_CASES: Record<string, string> = {
-  "title-no-question.md": "title",
-  "title-missing.md": "title",
-  "title-token.md": "title",
-  "description-short.md": "description",
-  "description-long.md": "description",
-  "date-bad-format.md": "date",
-  "date-impossible.md": "date",
-  "date-future.md": "date",
-  "updated-before-date.md": "updated",
-  "updated-bad-format.md": "updated",
-  "author-team.md": "author",
-  "author-ana.md": "author",
-  "author-empty.md": "author",
-  "author-missing.md": "author",
-  "topic-unknown.md": "topic",
-  "sports-unknown.md": "sports",
-  "sports-all-mixed.md": "sports",
-  "help-unknown-article.md": "help",
-  "help-unknown-family.md": "help",
-  "related-one.md": "related",
-  "related-five.md": "related",
-  "related-self.md": "related",
-  "related-duplicate.md": "related",
-  "examples-empty.md": "examples",
-  "examples-unused.md": "examples",
-  "examples-undeclared.md": "examples",
-  "examples-twice.md": "examples",
-  "body-plan-token.md": "body",
-  "body-typed-figure.md": "body",
-  "body-stray-braces.md": "body",
-  "body-fact-in-heading.md": "body",
-  "body-inline-example.md": "body",
-  "bad_slug.md": "slug",
+/** file -> the one key it must fail on, and the message that says WHICH guard fired (so a neighbour sharing the key cannot cover for it). */
+const INVALID_CASES: Record<string, [key: string, message: RegExp]> = {
+  "title-no-question.md": ["title", /must be a question/],
+  "title-missing.md": ["title", /is required/],
+  "title-token.md": ["title", /must not carry a token/],
+  "title-typed-figure.md": ["title", /types a plan figure/],
+  "description-short.md": ["description", /must be 50 to 160 characters, is 31/],
+  "description-long.md": ["description", /must be 50 to 160 characters, is 197/],
+  "description-token.md": ["description", /must not carry a token/],
+  "description-typed-figure.md": ["description", /types a plan figure/],
+  "date-bad-format.md": ["date", /is not an ISO date/],
+  "date-impossible.md": ["date", /is not an ISO date/],
+  "date-future.md": ["date", /is in the future \(today is \d{4}-\d{2}-\d{2}, UTC\)/],
+  "updated-before-date.md": ["updated", /is before 'date' \(2026-10-02\)/],
+  "updated-bad-format.md": ["updated", /is not an ISO date/],
+  "updated-future.md": ["updated", /is in the future/],
+  "author-team.md": ["author", /must be exactly 'Seazn', is 'Seazn Team'/],
+  "author-ana.md": ["author", /must be exactly 'Seazn', is 'Ana'/],
+  "author-empty.md": ["author", /must be exactly 'Seazn', is ''/],
+  "author-missing.md": ["author", /is required/],
+  "topic-unknown.md": ["topic", /'cooking' is not one of/],
+  "sports-unknown.md": ["sports", /'curling' is not a sport in the registry/],
+  "sports-all-mixed.md": ["sports", /'all' must stand alone/],
+  "sports-empty.md": ["sports", /is empty; write 'all' or sport keys/],
+  "help-unknown-article.md": ["help", /'sports\/curling' is not a help article/],
+  "help-unknown-family.md": ["help", /'formats\/nope' is not a help article/],
+  "related-one.md": ["related", /lists 1 posts; it needs 2 to 4/],
+  "related-five.md": ["related", /lists 5 posts; it needs 2 to 4/],
+  "related-self.md": ["related", /lists the post itself/],
+  "related-duplicate.md": ["related", /lists a post twice/],
+  "related-bad-shape.md": ["related", /'Not A Slug' is not a post slug/],
+  "examples-empty.md": ["examples", /is empty; every post carries at least one/],
+  "examples-unused.md": ["examples", /example 'never-placed' is listed but the body never places it/],
+  "examples-undeclared.md": ["examples", /the body uses example 'other-example', which 'examples' does not list/],
+  "examples-twice.md": ["examples", /example 'swiss-round-two' is placed more than once/],
+  "body-plan-token.md": ["body", /a \{\{plan:\.\.\.\}\} token/],
+  "body-typed-figure.md": ["body", /types a plan figure/],
+  "body-stray-braces.md": ["body", /'\{\{score\}\} in the end\.\n?' is not a fact token or an example token/],
+  "body-fact-in-heading.md": ["body", /a heading carries a token/],
+  "body-inline-example.md": ["body", /an example token must stand alone on its own line/],
+  "body-fenced-code.md": ["body", /a fenced code block; posts carry no code/],
+  "bad_slug.md": ["slug", /must be lowercase words joined by hyphens/],
 };
 // Invalid files that fail somewhere other than parseBlogFrontmatter's own problem list:
 //   related-missing.md  needs the whole set (blogRelatedProblems), related-yaml-list.md is P1's parser's error.
 const SET_OR_PARSER_CASES = ["related-missing.md", "related-yaml-list.md"];
 
-function problemKeys(file: string, today?: string): string[] {
+function problemsOf(file: string): { key: string; message: string }[] {
   try {
-    parse(file, today);
+    parse(file);
   } catch (e) {
-    // One defect can surface as two lines under the same key (an unlisted example is also an unplaced one).
-    if (e instanceof BlogFrontmatterError) return [...new Set(e.problems.map((p) => p.key))];
+    if (e instanceof BlogFrontmatterError) return e.problems;
     throw e;
   }
   return [];
@@ -171,9 +177,11 @@ describe("parseBlogFrontmatter: failing cases, one defect per fixture", () => {
     console.log(`blog-content: failing cases=${entries.length}`);
     expect(entries.length, "anti-vacuity: failing cases").toBeGreaterThan(0);
   });
-  for (const [file, key] of entries) {
-    it(`${file} fails on '${key}' alone, and the error names the file`, () => {
-      expect(problemKeys(file)).toEqual([key]);
+  for (const [file, [key, message]] of entries) {
+    it(`${file} fails on exactly one problem: '${key}', and the error names the file`, () => {
+      const problems = problemsOf(file);
+      expect(problems.map((p) => p.key), "a single-defect fixture raises one problem").toEqual([key]);
+      expect(problems[0]!.message).toMatch(message);
       expect(() => parse(file)).toThrow(new RegExp(`invalid/${file.replace(/\./g, "\\.")}: '${key}'`));
     });
   }
@@ -251,6 +259,14 @@ describe("allBlogPosts, blogPostsForHelp, blogSearchIndex over the fixtures", ()
       "how-swiss-pairs-round-two", // 2026-10-02
       "who-wins-a-two-way-tie", // 2026-09-20
     ]);
+  });
+  it("two posts on the same day sort by slug whichever way round they arrive", () => {
+    const a = { date: "2026-10-15", slug: "what-a-bye-is-worth" };
+    const b = { date: "2026-10-15", slug: "what-a-draw-is-worth" };
+    const c = { date: "2026-10-16", slug: "zzz" };
+    expect([b, a].sort(blogNewestFirst)).toEqual([a, b]);
+    expect([a, b].sort(blogNewestFirst)).toEqual([a, b]);
+    expect([a, c, b].sort(blogNewestFirst)).toEqual([c, a, b]);
   });
   it("ignores the invalid/ folder and non-markdown files", () => {
     expect(posts.some((p) => p.slug.startsWith("title-") || p.slug === "bad_slug")).toBe(false);

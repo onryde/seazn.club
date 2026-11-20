@@ -12,7 +12,6 @@ import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { builtinModules } from "@seazn/engine/sports";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
-import { helpUrl } from "@/lib/help";
 import {
   BLOG_AUTHOR, BLOG_DESCRIPTION_MAX, BLOG_DESCRIPTION_MIN, BLOG_SLUG, BLOG_TOPICS,
   type BlogPostMeta, type BlogTopic,
@@ -70,7 +69,6 @@ const SPORT_KEYS: ReadonlySet<string> = new Set(builtinModules.map((m) => m.key)
 
 /** True when `help` names a help article that exists, or a format family page. */
 function helpResolves(help: string): boolean {
-  if (helpUrl(help) === null) return false;
   if (help === "formats/overview") return true;
   if (help.startsWith("formats/")) return FORMAT_FAMILIES.some((f) => `formats/${f.slug}` === help);
   return allHelpArticles().has(help);
@@ -103,11 +101,17 @@ function bodyProblems(body: string, examples: string[]): BlogProblem[] {
     .filter((l) => !EXAMPLE_LINE.test(l.trim()))
     .join("\n")
     .replace(FACT_TOKEN, "")
-    .replace(/\{\{plan:[^}]*\}\}/g, "");
+    .replace(/\{\{plan:[^}]*\}\}/g, "")
+    // An example token that is not alone on its line is already reported above; not a second time here.
+    .replace(/\{\{example:[^}]*\}\}/g, "");
   const stray = rest.indexOf("{{");
   if (stray !== -1) {
     problems.push({ key: "body", message: `'${rest.slice(stray, stray + 40)}' is not a fact token or an example token` });
   }
+
+  // Posts are for organisers and carry no code: a fenced block would also show a reader what the leak scan skips.
+  const fence = lines.findIndex((line) => /^\s{0,3}(?:```|~~~)/.test(line));
+  if (fence !== -1) problems.push({ key: "body", message: `line ${fence + 1}: a fenced code block; posts carry no code` });
 
   // A fact token in a heading would ship raw into the contents list and the search index.
   lines.forEach((line, i) => {
@@ -174,13 +178,13 @@ export function parseBlogFrontmatter(
   const date = need("date");
   if (date !== null) {
     if (!isIsoDate(date)) bad("date", `'${date}' is not an ISO date (YYYY-MM-DD)`);
-    else if (date > today) bad("date", `'${date}' is in the future`);
+    else if (date > today) bad("date", `'${date}' is in the future (today is ${today}, UTC)`);
   }
   const updated = meta.updated;
   if (updated !== undefined) {
     if (!isIsoDate(updated)) bad("updated", `'${updated}' is not an ISO date (YYYY-MM-DD)`);
     else if (date !== null && isIsoDate(date) && updated < date) bad("updated", `'${updated}' is before 'date' (${date})`);
-    else if (updated > today) bad("updated", `'${updated}' is in the future`);
+    else if (updated > today) bad("updated", `'${updated}' is in the future (today is ${today}, UTC)`);
   }
 
   const author = need("author");
@@ -258,7 +262,8 @@ export function blogRelatedProblems(posts: ReadonlyMap<string, Pick<BlogPostMeta
   return out;
 }
 
-const byNewest = (a: BlogPostMeta, b: BlogPostMeta) => (a.date === b.date ? a.slug.localeCompare(b.slug) : a.date < b.date ? 1 : -1);
+/** Newest first; two posts on the same day sort by slug, so the order never depends on how the files were read. */
+export const blogNewestFirst = (a: Pick<BlogPostMeta, "date" | "slug">, b: Pick<BlogPostMeta, "date" | "slug">) => (a.date === b.date ? a.slug.localeCompare(b.slug) : a.date < b.date ? 1 : -1);
 
 function loadPosts(root: string, opts: BlogParseOptions): BlogPost[] {
   const posts = new Map<string, BlogPost>();
@@ -269,7 +274,7 @@ function loadPosts(root: string, opts: BlogParseOptions): BlogPost[] {
   }
   const problems = blogRelatedProblems(posts);
   if (problems.length > 0) throw new Error(`blog related: ${problems.join("; ")}`);
-  return [...posts.values()].sort(byNewest);
+  return [...posts.values()].sort(blogNewestFirst);
 }
 
 let cache: BlogPost[] | null = null;

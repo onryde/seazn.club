@@ -16,6 +16,8 @@ describe("findBlogLeaks: hand-written cases", () => {
     ["FEWEST_PLAYED goes last", "code-identifier", "FEWEST_PLAYED"],
     ["set topNPerGroup to 2", "code-identifier", "topNPerGroup"],
     ["Ana finishes on anaPoints", "code-identifier", "anaPoints"],
+    ["h2hReapply is a tie-break", "code-identifier", "h2hReapply"],
+    ["pick top2Teams", "code-identifier", "top2Teams"],
     ["the engine decides", "developer-word", "engine"],
     ["a PR #123 landed", "pr-number", "PR #123"],
   ];
@@ -49,6 +51,12 @@ describe("findBlogLeaks: hand-written cases", () => {
       { rule: "code-identifier", match: "h2h_reapply", index: 18 },
     ]);
   });
+  it("an identifier before a developer word is listed first (the result is in text order)", () => {
+    expect(findBlogLeaks("h2h_reapply uses the engine")).toEqual([
+      { rule: "code-identifier", match: "h2h_reapply", index: 0 },
+      { rule: "developer-word", match: "engine", index: 21 },
+    ]);
+  });
   it("P1's allow-list still applies (T20 is not a task id)", () => {
     expect(rulesOf("a T20 match")).toEqual([]);
     expect(rulesOf("a T2 match")).toEqual(["wave-id"]);
@@ -71,21 +79,22 @@ describe("BLOG_LEAK_ALLOW", () => {
       expect(findBlogLeaks(`Score on your ${a.match} here.`), a.match).toEqual([]);
     }
   });
+  it("an allow-listed token may be plural (iPads, iPhones), nothing else follows it", () => {
+    expect(findBlogLeaks("Score on iPads and iPhones here.")).toEqual([]);
+    expect(rulesOf("iPhonex")).toEqual(["code-identifier"]);
+  });
   it("an allow-listed token inside a longer identifier is still flagged", () => {
     expect(rulesOf("iPhoneScoreCount")).toEqual(["code-identifier"]);
   });
 });
 
 describe("blogLeakText", () => {
-  it("drops link targets, image paths, fenced code and the blog's tokens; keeps underscores in prose", () => {
+  it("drops link targets, image paths and the blog's tokens; keeps underscores in prose", () => {
     const md = [
       "See [the Swiss page](/help/formats/swiss_page).",
       "![A bracket](/blog/img/swiss_bye.webp)",
       "{{example:swiss-bye}}",
       "Ana finishes on {{fact:swiss-bye.anaPoints}} points.",
-      "```",
-      "snake_case_in_fence",
-      "```",
     ].join("\n");
     const text = blogLeakText(md);
     expect(findBlogLeaks(text)).toEqual([]);

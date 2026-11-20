@@ -24,9 +24,9 @@ export interface BlogLeakAllow {
 
 // snake_case: letters/digits joined by single underscores ("h2h_reapply", "buchholz_cut1", "FEWEST_PLAYED").
 const SNAKE = /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g;
-// camelCase: a lowercase start, then at least one capital ("topNPerGroup", "anaPoints"). A capital start
+// camelCase: a lowercase start (digits may follow), then at least one capital ("topNPerGroup", "anaPoints", "h2hReapply"). A capital start
 // ("YouTube") is not matched, so brand and proper names are not caught.
-const CAMEL = /\b[a-z]+(?:[A-Z][a-z0-9]*)+\b/g;
+const CAMEL = /\b[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)+\b/g;
 
 /** A token that looks like an identifier and is real copy. Each entry is proved live by blog-leaks.test.ts. */
 export const BLOG_LEAK_ALLOW: BlogLeakAllow[] = [
@@ -39,7 +39,8 @@ function identifierLeaks(text: string): BlogLeak[] {
   const out: BlogLeak[] = [];
   for (const re of [SNAKE, CAMEL]) {
     for (const m of text.matchAll(re)) {
-      if (BLOG_LEAK_ALLOW.some((a) => a.match === m[0])) continue;
+      // A plural ("iPads") is the same word.
+      if (BLOG_LEAK_ALLOW.some((a) => a.match === m[0] || `${a.match}s` === m[0])) continue;
       out.push({ rule: "code-identifier", match: m[0], index: m.index! });
     }
   }
@@ -59,7 +60,6 @@ export function findBlogLeaks(text: string): BlogLeak[] {
  */
 export function blogLeakText(markdown: string): string {
   return markdown
-    .replace(/```[\s\S]*?```/g, " ")
     .replace(/\{\{(?:fact|example):[^}]*\}\}/g, " ")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
