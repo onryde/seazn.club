@@ -8930,5 +8930,6 @@
   "progression.rosterDrift.confirmCount.other": "It deletes {count} fixtures.",
   "progression.rosterDrift.rebuiltCreated": "{created} fixture(s) drawn in their place.",
   "progression.rosterDrift.pinsCleared.one": "{count} manual rank was cleared: its group changed.",
-  "progression.rosterDrift.pinsCleared.other": "{count} manual ranks were cleared: their groups changed."
+  "progression.rosterDrift.pinsCleared.other": "{count} manual ranks were cleared: their groups changed.",
+  "divBuilder.format.drawCanRefuse": "The knockout draw can be refused at seeding: a best runner-up (or best third, and so on) may share a pool with their round-one opponent. Qualify the same number from every pool to avoid it."
 }

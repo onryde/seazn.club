@@ -230,7 +230,10 @@ describe("division builder - a Top N the plan cannot supply (X-BD-8)", () => {
     expect(h.text(), "a plan of 8 can supply 8: the refusal goes with the number it named").not.toContain(exceeds);
   });
 
-  it("X-BD-8 Groups + Knockout: a best-Nth cut no pool can supply is refused with the pool shape's own maximum", () => {
+  it("X-BD-8 Groups + Knockout: K16 RB5-U7 (ruling 286) - a Top 7 of 7 in pools of 4 and 3 is supplied; a Top 8 is over the field", () => {
+    // Re-pinned in W5 app PR B T5 part 3: Task 4 (ruling 286) re-pinned the gate's own test (lib/__tests__/field-cut-gate.test.ts K16)
+    // and left this one asserting the 9.x refusal. 7 into pools of 4 and 3: the best 4th is the 4-pool's own; the 3-pool has no 4th and
+    // is left out of the comparison (RB5-U7). differential: under 9.x every pool had to hold the nth, so this was refused, max 6.
     const h = mount();
     setName(h, "Cup");
     setPlanEntrants(h, "7");
@@ -239,11 +242,11 @@ describe("division builder - a Top N the plan cannot supply (X-BD-8)", () => {
     setKnob(h, "pools", "2");
     setKnob(h, "qualify", "7");
     press(h, UI["divBuilder.step.review"]!);
-    // 7 into pools of 4 and 3: the best 4th would need a 4th in the 3-pool.
-    expect(h.text()).toContain(bestNth);
-    setKnob(h, "qualify", "6");
+    expect(h.text(), "Top 7 of 7 is supplied").not.toContain("can't qualify");
+    expect(h.text(), "no shape refusal under RB5-U7").not.toContain(bestNth);
+    setKnob(h, "qualify", "8");
     press(h, UI["divBuilder.step.review"]!);
-    expect(h.text(), "6 (three per pool) is supplied").not.toContain("can't qualify");
+    expect(h.text(), "Top 8 of 7 is over the field").toContain("Qualify to finals: 8 can't qualify from 7 entrants. Choose 7 or fewer, or add entrants.");
     expect(h.text()).not.toContain(bestNth);
   });
 
@@ -296,5 +299,46 @@ describe("division builder - the 44px tap floor (D1)", () => {
     const create = h.tree().find((e) => e.type === "button" && propsOf(e)["data-testid"] === "division-builder-create");
     expect(create, "the last step draws Create").toBeDefined();
     expect(classesOfEl(create!)).toContain("min-h-11");
+  });
+});
+
+// W5 app PR B T5 part 3 (RB5-D10, X-PD-4; controller ruling, owner standing "apply rec"): before Start, the builder says when the
+// knockout draw can be refused - two pools' winners and the best runner-up into a 4-draw (X-PD-4's named case), and three pools' winners
+// with one best runner-up. Whole pool places (Top 2 / Top 4 of two pools, Top 3 / Top 6 of three) always separate (X-PD-2): no line. The
+// sentence is the en dictionary's; which shapes refuse is the rulebook's, never this component's.
+describe("division builder - the draw can be refused (RB5-D10)", () => {
+  const SAYS = UI["divBuilder.format.drawCanRefuse"]!;
+  const line = (h: H) => h.tree().filter((e) => propsOf(e)["data-testid"] === "division-builder-draw-can-refuse");
+  function onFormat(label: string): H {
+    const h = mount();
+    setName(h, "Cup");
+    pickFormat(h, label);
+    press(h, UI["wizard.tab.format"]!);
+    return h;
+  }
+
+  it("groups_ko: 2 pools Top 3 warns, Top 4 mends it, Top 3 again warns again; 3 pools Top 4 warns, Top 6 does not", () => {
+    const h = onFormat(UI["format.template.groups_ko.label"]!);
+    setKnob(h, "pools", "2");
+    setKnob(h, "qualify", "3");
+    expect(h.text(), "X-PD-4's named case").toContain(SAYS);
+    expect(line(h), "one line, not one per knob").toHaveLength(1);
+    setKnob(h, "qualify", "4");
+    expect(h.text(), "Top 4 of two pools is whole pool places (X-PD-2)").not.toContain(SAYS);
+    setKnob(h, "qualify", "3");
+    expect(h.text(), "the second time, again (no latch)").toContain(SAYS);
+    setKnob(h, "pools", "3");
+    setKnob(h, "qualify", "4");
+    expect(h.text(), "three winners and one best runner-up").toContain(SAYS);
+    setKnob(h, "qualify", "6");
+    expect(h.text(), "Top 6 of three pools is whole pool places").not.toContain(SAYS);
+    expect(apiV1Mock, "said on screen, nothing sent").not.toHaveBeenCalled();
+  });
+
+  it("another format: a league-fed stepladder is never drawn across pools, so Top 3 says nothing", () => {
+    const h = onFormat(UI["format.template.group_stepladder.label"]!);
+    expect(h.text(), "premise: the format tab is open").toContain(UI["wizard.qualify"]!);
+    expect(line(h)).toHaveLength(0);
+    expect(h.text()).not.toContain(SAYS);
   });
 });

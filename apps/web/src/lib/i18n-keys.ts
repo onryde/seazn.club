@@ -2090,6 +2090,7 @@ export type DictionaryKey =
   | "divBuilder.err.formatKind"
   | "divBuilder.err.formatLocked"
   | "divBuilder.err.timeControl"
+  | "divBuilder.format.drawCanRefuse"
   | "divBuilder.format.showMore.one"
   | "divBuilder.format.showMore.other"
   | "divBuilder.in"

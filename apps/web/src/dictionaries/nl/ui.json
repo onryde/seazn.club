@@ -8930,5 +8930,6 @@
   "progression.rosterDrift.confirmCount.other": "Er worden {count} wedstrijden verwijderd.",
   "progression.rosterDrift.rebuiltCreated": "{created} wedstrijd(en) ingedeeld in hun plaats.",
   "progression.rosterDrift.pinsCleared.one": "{count} handmatige plaats is gewist: de poule is veranderd.",
-  "progression.rosterDrift.pinsCleared.other": "{count} handmatige plaatsen zijn gewist: de poules zijn veranderd."
+  "progression.rosterDrift.pinsCleared.other": "{count} handmatige plaatsen zijn gewist: de poules zijn veranderd.",
+  "divBuilder.format.drawCanRefuse": "De loting van de knock-outfase kan bij het plaatsen worden geweigerd: een beste nummer twee (of beste nummer drie, enzovoort) kan in dezelfde poule zitten als zijn tegenstander in de eerste ronde. Laat uit elke poule evenveel doorgaan om dit te voorkomen."
 }

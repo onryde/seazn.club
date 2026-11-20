@@ -21,7 +21,11 @@
 //
 // Pure and client-safe: no DB, no server import.
 import { crossGroupOrder, PRE_W2D_CROSS_GROUP, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
-import type { PooledSeed } from "@seazn/engine/scheduling";
+import type { FirstRoundShape, PooledSeed } from "@seazn/engine/scheduling";
+
+/** The first-round shape a destination kind draws in across pools; a kind absent here is not drawn. One authority: the server's draw
+ *  (`usecases/stages/cross-pool-draw.ts`) and the builder's warning (`lib/cross-pool-draw-risk.ts`) both read it. */
+export const CROSS_POOL_SHAPES: Readonly<Record<string, FirstRoundShape>> = { knockout: "single_elim", stepladder: "stepladder", page_playoff: "page_playoff" };
 
 /** The resolver's entry, as far as the draw reads it (`ResolvedProgressionEntry`, stored descriptor). */
 export interface CrossPoolEntry {

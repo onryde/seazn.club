@@ -14,14 +14,13 @@ import "server-only";
 import { HttpError } from "@/lib/errors";
 import { EngineError } from "@seazn/engine/core";
 import { swissDrawSeed } from "@/lib/swiss-draw";
-import { pooledSeeds, type CrossPoolEntry } from "@/lib/cross-pool-ties";
-import { crossPoolDraw, type FirstRoundShape } from "@seazn/engine/scheduling";
+import { CROSS_POOL_SHAPES, pooledSeeds, type CrossPoolEntry } from "@/lib/cross-pool-ties";
+import { crossPoolDraw } from "@seazn/engine/scheduling";
 import type { ProgressionSpec, SourceTables } from "@seazn/engine/competition";
 import type { Tx } from "./types";
 import { readStageDrawSeed } from "./generators";
 
-/** The first-round shape a destination kind draws in; a kind absent here is not drawn across pools. */
-export const CROSS_POOL_SHAPES: Readonly<Record<string, FirstRoundShape>> = { knockout: "single_elim", stepladder: "stepladder", page_playoff: "page_playoff" };
+export { CROSS_POOL_SHAPES };
 
 /** The destination's stored draw seed (ruling 281, W4 RB4-D4): the one its newest proposal drew with, else the one its newest
  *  Generate recorded, else minted from the stage id (`swissDrawSeed`, W4 K5) - and then stored on the proposal that uses it. */

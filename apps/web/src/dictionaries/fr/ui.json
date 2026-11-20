@@ -8930,5 +8930,6 @@
   "progression.rosterDrift.confirmCount.other": "Cela supprime {count} matchs.",
   "progression.rosterDrift.rebuiltCreated": "{created} match(s) tiré(s) à la place.",
   "progression.rosterDrift.pinsCleared.one": "{count} rang manuel a été effacé : sa poule a changé.",
-  "progression.rosterDrift.pinsCleared.other": "{count} rangs manuels ont été effacés : leurs poules ont changé."
+  "progression.rosterDrift.pinsCleared.other": "{count} rangs manuels ont été effacés : leurs poules ont changé.",
+  "divBuilder.format.drawCanRefuse": "Le tirage de la phase finale peut être refusé au placement : un meilleur deuxième (ou meilleur troisième, etc.) peut partager la poule de son adversaire du premier tour. Qualifiez le même nombre dans chaque poule pour l'éviter."
 }
