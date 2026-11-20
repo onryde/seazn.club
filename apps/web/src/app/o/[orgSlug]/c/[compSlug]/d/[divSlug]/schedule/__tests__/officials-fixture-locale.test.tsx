@@ -14,6 +14,7 @@
 // test.tsx's own mocks never provide (it has no next/headers mock and no
 // TBD-with-a-label fixture). Same no-jsdom / direct-invocation convention.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const spies = vi.hoisted(() => ({
@@ -113,7 +114,7 @@ vi.mock("@/lib/currency-server", () => ({ preferredCurrency: vi.fn(async () => "
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 

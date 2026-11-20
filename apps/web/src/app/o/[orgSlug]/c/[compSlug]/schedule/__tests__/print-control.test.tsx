@@ -10,6 +10,7 @@
 // prop handed straight to the component in its own test would pass even if
 // the page never threaded it through.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const state = vi.hoisted(() => ({
@@ -61,7 +62,7 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") 
 
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
 }));
 
 import CompetitionSchedulePage from "../page";
