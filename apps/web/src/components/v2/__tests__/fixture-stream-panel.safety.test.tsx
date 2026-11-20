@@ -151,6 +151,16 @@ describe("Go live and the channel-safety notice", () => {
     expect(noticeOf(island), "the notice is gone once it started").toBeUndefined();
   });
 
+  it("two taps before the first read answers make ONE safety read, and the read is no-store", async () => {
+    const island = await mount({ targets: [target("t1", YT)], safety: warnYes });
+    pick(island);
+    bodyOf(island).onGoLive();
+    bodyOf(island).onGoLive();   // the same tick: `busy` has not flushed
+    await settle();
+    expect(count(SAFETY), "one tap = one read").toBe(1);
+    expect(apiV1.mock.calls.find(([url]) => url.endsWith("/safety"))?.[1], "never served from a cache").toMatchObject({ cache: "no-store" });
+  });
+
   it("warn:false: no notice and the match starts on the first tap", async () => {
     const island = await mount({ targets: [target("t1", YT)], safety: warnNo });
     pick(island);

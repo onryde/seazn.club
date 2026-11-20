@@ -819,6 +819,8 @@ export function PhoneTab({
   const [createError, setCreateError] = useState<CreateError | null>(null);
   // Phase 0 (channel safety): the pre-Go-live notice is up; the next Go live tap ("Go live anyway") proceeds with no second check.
   const [safetyNotice, setSafetyNotice] = useState(false);
+  // A ref, not state: a second tap landing before `busy` has flushed must not ask again (one tap = one read, 1 quota unit each).
+  const safetyInFlight = useRef(false);
   // The purchase: the chooser, its one Checkout Session, the embedded sheet and a plan refusal (C22 / D12) — the ONE
   // copy the flag-off credits section uses too (B8 re-review item 2).
   const { checkoutError, setCheckoutError, checkoutSecret, planGate, setPlanGate, showBuy, setShowBuy, onBuy, onTileIntent, sheet } =
@@ -1165,8 +1167,15 @@ export function PhoneTab({
     // notice is non-blocking: while it is up, the next tap is "Go live anyway" and goes straight through. A failed read goes live.
     const checked = targets.status === "ok" ? targets.list.find((t) => t.id === chosen) : undefined;
     if (!safetyNotice && court === null && needsChannelCheck(checked)) {
+      if (safetyInFlight.current) return;
+      safetyInFlight.current = true;
       setBusy(true);
-      const verdict = await fetchChannelSafety(orgId, checked!.youtube!.connectionId);
+      let verdict: Awaited<ReturnType<typeof fetchChannelSafety>>;
+      try {
+        verdict = await fetchChannelSafety(orgId, checked!.youtube!.connectionId);
+      } finally {
+        safetyInFlight.current = false;
+      }
       if (verdict?.warn) {
         setSafetyNotice(true);
         setBusy(false);

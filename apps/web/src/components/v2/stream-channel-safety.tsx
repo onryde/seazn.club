@@ -17,7 +17,7 @@ export function needsChannelCheck(target: Pick<StreamTarget, "youtube"> | null |
 /** One read of the connection's safety facts. Fail-open on this side too: a request that fails answers null, and the caller goes live. */
 export async function fetchChannelSafety(orgId: string, connectionId: string): Promise<YoutubeChannelSafety | null> {
   try {
-    return await apiV1<YoutubeChannelSafety>(`/api/v1/orgs/${orgId}/youtube-connections/${connectionId}/safety`);
+    return await apiV1<YoutubeChannelSafety>(`/api/v1/orgs/${orgId}/youtube-connections/${connectionId}/safety`, { cache: "no-store" });
   } catch {
     return null;
   }
