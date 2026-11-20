@@ -311,8 +311,23 @@ describe("the quick match's pad copy: no organiser to ask (review Q1/Q2)", () =>
     }
     expect(checked, "anti-vacuity: four reasons, the decided line, four dead-link headlines, its hint").toBe(10);
     // The positive pair: the word the check looks for IS in each language's ordinary copy, so the check can fail.
-    for (const key of [VIEW_ONLY_COPY.carried_forward, VIEW_ONLY_COPY.finalized, "device.resultRecorded", "device.askFreshLink"]) {
+    // Finalized is NOT in this list, on purpose: a finalised result can't be changed by anyone, so its line has no organiser
+    // path to name (scoring-defects item 1; the organiser-correction promise it used to make was false). The ordinary lines
+    // that DO have one are derived from the helpers, never typed: carried forward, the decided line, the fresh-link hint.
+    const ordinaryWithOrganiser = [viewOnlyKey("carried_forward", false), decidedKey(false), askFreshLinkKey(false)];
+    expect(new Set(ordinaryWithOrganiser).size, "anti-vacuity: three distinct ordinary lines").toBe(3);
+    for (const key of ordinaryWithOrganiser) {
       expect(d[key], `${locale} ${key}`).toMatch(ORGANISER[locale]!);
+    }
+  });
+
+  it.each(["en", "es", "fr", "nl"])("%s: the finalised line names no organiser in ANY pad, ordinary or quick match", (locale) => {
+    const d = load(locale);
+    const keys = [viewOnlyKey("finalized", false), viewOnlyKey("finalized", true)];
+    expect(new Set(keys).size, "anti-vacuity: the ordinary and the quick match line are two different keys").toBe(2);
+    for (const key of keys) {
+      expect(d[key], `${locale} ${key}`).toBeTruthy();
+      expect(d[key], `${locale} ${key}`).not.toMatch(ORGANISER[locale]!);
     }
   });
 });
