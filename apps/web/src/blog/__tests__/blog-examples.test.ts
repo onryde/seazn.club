@@ -15,7 +15,7 @@ import { BLOG_EXAMPLES, blogExample } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
 import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
-import { DECLARED_BUT_UNREACHABLE } from "@/blog/examples/standings-points";
+import { DECLARED_BUT_UNREACHABLE, rankingKeyProblem } from "@/blog/examples/standings-points";
 import { pageVariantRows, startingVariantKey, syncedVariantName } from "@/blog/examples/starting-variant";
 import { PREFERRED_VARIANT } from "@/lib/preferred-variant";
 import { findBlogLeaks } from "@/blog/leaks";
@@ -206,6 +206,25 @@ describe("the example-wide claims have teeth too", () => {
     expect(failing(miscounted).length, "a wrong sportCount").toBeGreaterThan(0);
   });
 
+  it("the ranking rule: keys exactly points and wins, points outnumber wins, wins in at least two sports (counts the registry does not hold today)", () => {
+    expect(rankingKeyProblem({ Points: 8, Wins: 3 })).toBeNull();
+    expect(rankingKeyProblem({ Points: 5, Wins: 2 })).toBeNull();
+    expect(rankingKeyProblem({ Points: 3, Wins: 3 }), "tie in count").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 2, Wins: 5 }), "wins outnumber points").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 10, Wins: 1 }), "a single sport is not a few").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 11 }), "no sport ranks by wins").not.toBeNull();
+    expect(rankingKeyProblem({ Wins: 11 }), "no sport ranks by points").not.toBeNull();
+    expect(rankingKeyProblem({ Points: 8, Wins: 2, "Goal difference": 1 }), "a third key").not.toBeNull();
+    // ...and today's registry satisfies it, with its real counts reported.
+    const real: Record<string, number> = {};
+    forEachSport(({ module }) => {
+      const k = tiebreakLabel(module.primaryTableKey);
+      real[k.charAt(0).toUpperCase() + k.slice(1)] = (real[k.charAt(0).toUpperCase() + k.slice(1)] ?? 0) + 1;
+    });
+    expect(Object.values(real).reduce((a, b) => a + b, 0)).toBe(builtinModules.length);
+    expect(rankingKeyProblem(real)).toBeNull();
+  });
+
   it("a table whose every sport ranks by the same key, or names a key no sport declares, fails the ranking claim", () => {
     const flat = structuredClone(golden);
     for (const r of flat.table!.rows) r[5] = "Points";
@@ -361,7 +380,14 @@ describe("a result kind the engine declares reachable but no match ends in is le
 });
 
 describe("the registry is server-only: nothing a page loads imports the engine's testkit, the registry or the dictionaries' label file", () => {
-  const FORBIDDEN = [/from\s+["']@\/blog\/examples["']/, /from\s+["']@\/blog\/examples\/(?:index|standings-points|starting-variant)["']/, /["']@seazn\/engine\/testkit["']/, /from\s+["']@\/blog\/labels["']/];
+  // Both import forms: `from "x"` and a bare side-effect `import "x"`; dynamic `import("x")` too.
+  const spec = String.raw`(?:from\s+|import\s*\(?\s*)["']`;
+  const FORBIDDEN = [
+    new RegExp(spec + String.raw`@/blog/examples["']`),
+    new RegExp(spec + String.raw`@/blog/examples/(?:index|standings-points|starting-variant)["']`),
+    new RegExp(spec + String.raw`@seazn/engine/testkit["']`),
+    new RegExp(spec + String.raw`@/blog/labels["']`),
+  ];
   const walk = (dir: string): string[] =>
     readdirSync(dir).flatMap((f) => {
       const p = join(dir, f);
@@ -375,7 +401,7 @@ describe("the registry is server-only: nothing a page loads imports the engine's
     expect(hits).toEqual([]);
   });
   it("the scan itself sees each forbidden import form", () => {
-    const forms = ['import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";'];
+    const forms = ['import "@/blog/labels";', 'const m = await import("@/blog/labels");', 'import { x } from "@/blog/examples";', "import x from '@/blog/examples/standings-points';", 'import { y } from "@seazn/engine/testkit";', 'import { t } from "@/blog/labels";'];
     for (const f of forms) expect(FORBIDDEN.some((re) => re.test(f)), f).toBe(true);
     expect(FORBIDDEN.some((re) => re.test('import { g } from "@/blog/examples/goldens";'))).toBe(false);
   });

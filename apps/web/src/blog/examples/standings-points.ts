@@ -414,6 +414,21 @@ function claimsFor(module: AnySportModule): Claim[] {
   ];
 }
 
+/**
+ * The post's sentence "points in most sports, matches won in a few", as a rule over how many sports declare each first key
+ * (the owner's ruling on Task 3's review): the keys are exactly Points and Wins, Points outnumber Wins, Wins is at least two.
+ * Pure, so a test can feed it counts the registry does not hold today.
+ */
+export function rankingKeyProblem(declared: Readonly<Record<string, number>>): string | null {
+  const keys = Object.keys(declared).sort().join(",");
+  if (keys !== "Points,Wins") return `the registry declares first keys [${keys}], the post says points and wins`;
+  const points = declared.Points!;
+  const wins = declared.Wins!;
+  if (!(points > wins)) return `points (${points}) must be more sports than wins (${wins})`;
+  if (wins < 2) return `wins is first in ${wins} sport(s); the post says a few`;
+  return null;
+}
+
 /** Example-wide claims: what the post says ACROSS sports (no `sport`), read from the registry's declarations. */
 function acrossSports(): Claim[] {
   return [
@@ -426,11 +441,10 @@ function acrossSports(): Claim[] {
           const label = upperFirst(tiebreakLabel(module.primaryTableKey));
           declared[label] = (declared[label] ?? 0) + 1;
         });
-        const keys = Object.keys(declared).sort().join(",");
-        if (keys !== "Points,Wins") return `the registry declares first keys [${keys}], the post says points and wins`;
-        if (!((declared.Points ?? 0) > (declared.Wins ?? 0))) return `points (${declared.Points}) must be more sports than wins (${declared.Wins})`;
-        if ((declared.Wins ?? 0) < 2) return `wins is first in ${declared.Wins} sport(s); the post says a few`;
+        const bad = rankingKeyProblem(declared);
+        if (bad !== null) return bad;
         // The table agrees: the rows show exactly the declared keys.
+        const keys = Object.keys(declared).sort().join(",");
         const shown = new Set((result.table?.rows ?? []).map((r) => String(r[C.sorted])));
         return [...shown].sort().join(",") === keys || `the table shows [${[...shown].sort()}]`;
       },
