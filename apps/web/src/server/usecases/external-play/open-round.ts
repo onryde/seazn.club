@@ -70,6 +70,7 @@ import { audit } from "../audit";
 import { lichessLinkStatesByUser } from "../external-accounts";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
 import { attachToOpen, boardSeats, dispatchAndClassify, queueFixtureInvite, type InviteSeat } from "./invite";
+import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { assertOnlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus } from "./preflight";
 import {
@@ -331,6 +332,10 @@ export async function openRound(
   // chess (the PostHog flag `online-chess`; 403 ONLINE_CHESS_DISABLED). A re-open invites too, so it is gated alike.
   // After the two refusals above: a stranger learns nothing about the club's flag, and an offline round asks nothing.
   await assertOnlineChessOffered({ orgId: st.orgId, userId: a.actorUserId });
+  // Match Day O4 (owner 2026-11-17): an open STARTS play, so a billing-frozen competition (over `competitions.max_active`) refuses it with
+  // the freeze's 402 - the rule every write but scoring keeps (freeze-guard-sites.test.ts). Before ANY write below: the stale-bridge
+  // reset, a link hold's row, the stamp, the invites. Outside every transaction, as the guard requires (`frozenCompetitionIds`).
+  await assertCompetitionNotFrozen(st.orgId, st.competitionId);
   // The guard serves no board of a division that has not started.
   if (st.divisionStatus === "setup" || st.divisionStatus === "scheduled") {
     return { opened: false, reason: "division_not_started" };

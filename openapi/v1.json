@@ -30019,7 +30019,7 @@
     },
     "/api/v1/stages/{id}/open-round": {
       "post": {
-        "summary": "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (the 10-minute check-in window hangs off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route",
+        "summary": "D12 — the organiser opens one round of an online-play (Lichess) stage: stamps it (the 10-minute check-in window hangs off this) and emails each player not yet invited for the current pairing. Idempotent per seat: a re-open invites only boards added or re-paired since, and answers `already_open` when nobody is left. A refusal (`no_fixtures`, `not_paired`, `division_not_started`, `clock_not_playable`) writes nothing; a board with no start time is served, its window hanging off the open. 403 OPEN_ROUND_FORBIDDEN for a non-organiser; 422 ROUND_NOT_ONLINE when the division is not played online; 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) (asked after those two, so a re-open is refused alike and nothing is written); 402 PAYMENT_REQUIRED (`competitions.max_active`) when the competition is billing-frozen (over its organisation's active-competition limit): an open starts play, so the freeze that keeps every write but scoring refuses it, before anything is written (asked after the flag, so a stranger learns nothing of the club's billing); 409 ROUND_CHANGED when a board was re-paired mid-call. Session only — never an API-key route",
         "tags": [
           "stages"
         ],
@@ -30271,6 +30271,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -73554,7 +73598,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/extend-checkin": {
       "post": {
-        "summary": "The arbiter adds 5 minutes to ONE board's check-in while it is still open (at most 3 times a board): the board's deadline - and with it the player's countdown, the sweep's no-show and the line's cap - moves by the same 5 minutes. Answers the board's press count, the presses it has left and its new deadline. Allowed only while the board's check-in is open: after it opens, before its (extended) deadline, with no game on file, the board still to be played, under the cap. Written to the audit log (who, which board, the new deadline). Session only, never an API key. 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board, or the caller is not a signed-in owner or admin of the club; 404 for a board that is not this club's online board; 409 ROUND_NOT_OPEN, then one code per reason: CHECKIN_NOT_OPEN (the board's batch has not opened yet), CHECKIN_CLOSED (past its deadline), CHECKIN_GAME_STARTED (a game is, or may be, on file), FIXTURE_NOT_PLAYABLE (the board is over, cancelled or voided), CHECKIN_EXTEND_CAP (already extended 3 times); ROUND_CHANGED when the board changed under the call",
+        "summary": "The arbiter adds 5 minutes to ONE board's check-in while it is still open (at most 3 times a board): the board's deadline - and with it the player's countdown, the sweep's no-show and the line's cap - moves by the same 5 minutes. Answers the board's press count, the presses it has left and its new deadline. Allowed only while the board's check-in is open: after it opens, before its (extended) deadline, with no game on file, the board still to be played, under the cap. Written to the audit log (who, which board, the new deadline). Session only, never an API key. 403 ARBITER_PLAYS_THIS_BOARD when the caller plays on this board, or the caller is not a signed-in owner or admin of the club; 404 for a board that is not this club's online board; 402 PAYMENT_REQUIRED (`competitions.max_active`) when the competition is billing-frozen (over its organisation's active-competition limit): the extra time starts play, so the freeze that keeps every write but scoring refuses it, before anything is written (after the 403s, before the 409s); 409 ROUND_NOT_OPEN, then one code per reason: CHECKIN_NOT_OPEN (the board's batch has not opened yet), CHECKIN_CLOSED (past its deadline), CHECKIN_GAME_STARTED (a game is, or may be, on file), FIXTURE_NOT_PLAYABLE (the board is over, cancelled or voided), CHECKIN_EXTEND_CAP (already extended 3 times); ROUND_CHANGED when the board changed under the call",
         "tags": [
           "fixtures"
         ],
@@ -73690,6 +73734,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -73877,7 +73965,7 @@
     },
     "/api/v1/stages/{id}/extend-checkin": {
       "post": {
-        "summary": "The arbiter adds 5 minutes to the check-in of EVERY board of an opened round whose check-in is open right now: one action, the single board's rule on each board, each board its own atomic step. Answers how many boards were extended and how many were skipped and why - `closed` (past its deadline), `gameStarted` (a game is, or may be, on file), `capReached` (already extended 3 times) - plus `notOpenYet` (a later batch that has not opened; untouched), `ownBoards` (boards the caller plays on; never touched) and `failed` (a board whose step threw; the others went on). One audit row per board extended. Session only, never an API key. 403 for a caller who is not a signed-in owner or admin of the club; 404 for a stage that is not this club's; 409 ROUND_NOT_OPEN before the round is opened",
+        "summary": "The arbiter adds 5 minutes to the check-in of EVERY board of an opened round whose check-in is open right now: one action, the single board's rule on each board, each board its own atomic step. Answers how many boards were extended and how many were skipped and why - `closed` (past its deadline), `gameStarted` (a game is, or may be, on file), `capReached` (already extended 3 times) - plus `notOpenYet` (a later batch that has not opened; untouched), `ownBoards` (boards the caller plays on; never touched) and `failed` (a board whose step threw; the others went on). One audit row per board extended. Session only, never an API key. 403 for a caller who is not a signed-in owner or admin of the club; 404 for a stage that is not this club's; 402 PAYMENT_REQUIRED (`competitions.max_active`) when the competition is billing-frozen (over its organisation's active-competition limit): the extra time starts play, so the freeze that keeps every write but scoring refuses it, before anything is written (the whole call is refused: no board is extended and none is counted as failed); 409 ROUND_NOT_OPEN before the round is opened",
         "tags": [
           "stages"
         ],
@@ -74069,6 +74157,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {
@@ -74662,7 +74794,7 @@
     },
     "/api/v1/fixtures/{id}/external-play/resend": {
       "post": {
-        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) — nobody is mailed. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its 10-minute deadline (plus any time the arbiter added), ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
+        "summary": "Re-email the Seazn fixture URL to both players of an online-play fixture (does not mint a new Lichess challenge). Session only, never an API key. 403 ONLINE_CHESS_DISABLED unless the club is offered online chess (the PostHog flag `online-chess`) — nobody is mailed. 402 PAYMENT_REQUIRED (`competitions.max_active`) when the competition is billing-frozen (over its organisation's active-competition limit): an invite starts play, so the freeze that keeps every write but scoring refuses it, before anything is written (asked after the flag, before the 409s) — nobody is mailed. 409 ROUND_NOT_OPEN before the round is opened, WINDOW_CLOSED after its 10-minute deadline (plus any time the arbiter added), ONLINE_GAME_EXISTS when a game exists (or may exist) on the board, BOARD_HELD while it awaits an organiser decision, ALREADY_RESOLVED / FIXTURE_NOT_PLAYABLE for a settled board, ROUND_CHANGED when it was re-paired mid-call",
         "tags": [
           "fixtures"
         ],
@@ -74777,6 +74909,50 @@
           },
           "401": {
             "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Plan upgrade required",
             "content": {
               "application/json": {
                 "schema": {

@@ -76,6 +76,9 @@ export type OnlinePlayFixture = {
   orgId: string;
   orgSlug: string;
   orgName: string;
+  /** The competition the board belongs to: what the billing freeze (`competitions.max_active`) is keyed on, so a START write of an online
+   *  round (open, resend, +5) asks `assertCompetitionNotFrozen(orgId, competitionId)` of the board it was handed. */
+  competitionId: string;
   competitionSlug: string;
   divisionSlug: string;
   /** `null` ⇒ the board has no start time (an unscheduled online Swiss round,
@@ -209,7 +212,7 @@ export function onlinePlayClock(divisionConfig: unknown) {
 export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePlayFixture | null> {
   const [row] = await sql<LoadedRow[]>`
     select f.id as "fixtureId", o.id as "orgId", o.slug as "orgSlug", o.name as "orgName",
-           c.slug as "competitionSlug", d.slug as "divisionSlug", f.scheduled_at as "scheduledAt",
+           c.id as "competitionId", c.slug as "competitionSlug", d.slug as "divisionSlug", f.scheduled_at as "scheduledAt",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            f.status as "fixtureStatus", d.config as "divisionConfig",
            case when ep.fixture_id is null then null else to_jsonb(ep) end as bridge
@@ -230,6 +233,7 @@ export async function loadOnlinePlayFixture(fixtureId: string): Promise<OnlinePl
     orgId: row.orgId,
     orgSlug: row.orgSlug,
     orgName: row.orgName,
+    competitionId: row.competitionId,
     competitionSlug: row.competitionSlug,
     divisionSlug: row.divisionSlug,
     scheduledAt: row.scheduledAt,
