@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { PRE_W2D_CROSS_GROUP, type CrossGroupRules, type SourceTables, type StandingsRow } from "@seazn/engine/competition";
 import { crossPoolDraw } from "@seazn/engine/scheduling";
-import { pooledSeeds, type CrossPoolEntry } from "@/lib/cross-pool-ties";
+import { answerTies, pooledSeeds, type CrossPoolEntry } from "@/lib/cross-pool-ties";
 
 const row = (entrantId: string, points: number, o: { diff?: number; for?: number; played?: number; won?: number } & Partial<StandingsRow> = {}): StandingsRow => {
   const { diff = 0, for: f = 0, played = 3, won = Math.floor(points / 3), ...rest } = o;
@@ -132,5 +132,58 @@ describe("pooledSeeds: best_nth tiers read the engine's basis.levelWith", () => 
 describe("the order constant the module falls back to is the engine's own", () => {
   it("PRE_W2D_CROSS_GROUP is points, diff, for, wins (no head-to-head key)", () => {
     expect([...PRE_W2D_CROSS_GROUP]).toEqual(["points", "diff", "for", "wins"]);
+  });
+});
+
+// D-B2-1 (ruling, controller under the owner's standing "apply rec"): a tie the confirm answers fixes the ORDER of its entrants; the
+// draw then re-runs over that slate. `answerTies` is the slate the draw is handed.
+describe("answerTies: a picked tie fixes its order before the cross-pool draw re-runs (D-B2-1)", () => {
+  // 3 pools: the winners, then every runner-up level (each names the others in `levelWith`), in the resolver's order b2, c2, a2.
+  const slate = (): CrossPoolEntry[] => [gr("a1", "A", 1), gr("b1", "B", 1), gr("c1", "C", 1), bn("b2", "B", 2, ["c2", "a2"]), bn("c2", "C", 2, ["b2", "a2"]), bn("a2", "A", 2, ["b2", "c2"])];
+  const poolOf = (_: CrossPoolEntry, id: string) => ({ a: "A", b: "B", c: "C" })[id[0] as "a" | "b" | "c"];
+  // the winners split on points (never tied); the runners-up level on every key, so only the best-Nth links can tie
+  const t = tables({ A: [row("a1", 9), row("a2", 3)], B: [row("b1", 7), row("b2", 3)], C: [row("c1", 5), row("c2", 3)] });
+
+  it("no tie answered: the slate as it came", () => {
+    expect(answerTies(slate(), [], poolOf)).toEqual({ slate: slate() });
+  });
+
+  it("the ranking fills the tie's seats best first; every other seat is untouched", () => {
+    const out = answerTies(slate(), [{ members: ["b2", "c2", "a2"], seats: [5, 3, 4], ranking: ["a2", "b2", "c2"] }], poolOf);
+    expect("slate" in out && out.slate.map((e) => `${e.entrantId}:${e.pool}`)).toEqual(["a1:A", "b1:B", "c1:C", "a2:A", "b2:B", "c2:C"]);
+  });
+
+  it("the picked entrants are no longer a tied run: the stored seed cannot reshuffle the order the organiser gave", () => {
+    // differential: handed the same slate unanswered, the draw links the whole runner-up tier (two `tied` seeds).
+    expect(tiedOf(pooledSeeds(slate(), t)), "the premise: level runners-up are a tied run").toEqual(["c2", "a2"]);
+    const out = answerTies(slate(), [{ members: ["b2", "c2", "a2"], seats: [3, 4, 5], ranking: ["c2", "a2", "b2"] }], poolOf);
+    expect("slate" in out).toBe(true);
+    const picked = (out as { slate: CrossPoolEntry[] }).slate;
+    expect(picked.map((e) => e.entrantId)).toEqual(["a1", "b1", "c1", "c2", "a2", "b2"]);
+    expect(tiedOf(pooledSeeds(picked, t)), "no runner-up tied to another").toEqual([]);
+  });
+
+  it("a boundary tie: the ranking's first seats the candidate the draft left out, in her own pool", () => {
+    // one best-runner-up seat, b2 drafted; a2 level with her and ranked first
+    const one = [gr("a1", "A", 1), gr("b1", "B", 1), bn("b2", "B", 2, ["a2"])];
+    const out = answerTies(one, [{ members: ["a2", "b2"], seats: [2], ranking: ["a2", "b2"] }], poolOf);
+    expect("slate" in out && out.slate[2]).toEqual({ entrantId: "a2", sourceIndex: 0, pool: "A", descriptor: { kind: "best_nth", nth: 2 }, basis: { levelWith: [] } });
+  });
+
+  it("a ranking that does not answer the tie is refused by the tie's index: an outsider, a repeat, too few", () => {
+    const bad: [string, string[]][] = [
+      ["an entrant outside the tie", ["a1", "b2", "c2"]],
+      ["one entrant twice", ["b2", "b2", "c2"]],
+      ["fewer entrants than seats", ["b2", "c2"]],
+    ];
+    for (const [name, ranking] of bad) {
+      const answers = [{ members: ["a1"], seats: [0], ranking: ["a1"] }, { members: ["b2", "c2", "a2"], seats: [3, 4, 5], ranking }];
+      expect(answerTies(slate(), answers, poolOf), name).toEqual({ unresolved: 1 });
+    }
+    expect(bad.length, "anti-vacuity").toBe(3);
+  });
+
+  it("an entrant the source's pools do not hold is a wiring fault, named", () => {
+    expect(() => answerTies(slate(), [{ members: ["b2", "c2", "a2"], seats: [3, 4, 5], ranking: ["a2", "b2", "c2"] }], () => undefined)).toThrow(/a2 sits in no pool of source 0/);
   });
 });

@@ -45,6 +45,7 @@ import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft, type TemplateKno
 import { PLATE_MIN, QUALIFYING_MAIN_MIN } from "@/lib/format-size-gates";
 import { foldFirstLosses } from "@/lib/division-builder/__tests__/first-loss-fold";
 import { EngineError } from "@seazn/engine/core";
+import { HttpError } from "@/lib/errors";
 import { generateSingleElim } from "@seazn/engine/scheduling";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
@@ -191,8 +192,9 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     // refused, exactly when that runner-up shares the second winner's pool (round one is seed 2 v seed 3; tier 1 keeps its places,
     // tier 2 has one seat). At n=8 (4/4) the sweep's results make B2 the best runner-up AND leave A1 and B1 level, so the stage's
     // stored draw seed orders the winners (RB5-D3) and decides whether B1 lands on seed 2: the case refuses on about half the seeds.
-    // Part 3 (a 72-of-73 red met in a scoped run): the count is therefore read off the drafts the sweep made - every draft whose draw
-    // the engine refused (`computed.crossPoolDraw.refused`, RB5-D10-shaped, asserted below) - never typed as a constant.
+    // Part 3 (a 72-of-73 red met in a scoped run): the count is therefore read off the sweep's own seeding - never typed as a constant.
+    // D-B2-1: off the CONFIRMS, not the drafts - a tie the sweep picks re-runs the draw over the pick, which can seat a refused draft
+    // or refuse a drawn one (the pick follows the sweep's seeding, the draft's last resort follows entrant ids).
     expected: D10_FROM_DRAFTS,
     why: "RB5-D10: groups_ko, two pools, Top 3 - the best runner-up from the second winner's pool cannot be kept off her in round one",
   },
@@ -237,7 +239,7 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
    *  the rule working, judged below against the rule's arithmetic (fewer than 4 entrants, fewer than 2 real semis). */
   const thirdRefused: Array<{ label: string; entrants: number; code: unknown }> = [];
   /** Part 3: every draft the cross-pool draw ran on (`computed.crossPoolDraw`), and its refusal if the engine refused it. */
-  const crossPoolDrafts: Array<{ label: string; refused: { code: string; vars: Record<string, string | number> } | undefined }> = [];
+  const crossPoolDrafts: Array<{ label: string; refused: { code: string; vars: Record<string, string | number> } | undefined; answered: boolean; confirmRefused?: { code: string; vars: Record<string, unknown> } }> = [];
   /** W4 T24: every (wide template, field, q, third) the seeded pass asked, so a field cannot drop out of the widened sweep unnoticed. */
   const wideAsked: Array<{ key: string; n: number; q: number; third: boolean }> = [];
 
@@ -315,9 +317,14 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
           }
         }
         const proposal = firstLossPlate ? (await getSeedProposal(auth, stageIds[i + 1]!))! : await computeSeedProposal(auth, stageIds[i + 1]!);
-        if (proposal.computed.crossPoolDraw !== undefined) crossPoolDrafts.push({ label, refused: proposal.computed.crossPoolDraw.refused });
         const ties = proposal.computed.ties.map((t) => ({ slots: t.slots, order: [...t.entrantIds].sort((a, b) => (seedOf.get(a) ?? 99) - (seedOf.get(b) ?? 99)) }));
-        await confirmSeedProposal(auth, stageIds[i + 1]!, { proposalId: proposal.id, ...(ties.length > 0 ? { tiePicks: ties } : {}) });
+        const drawn: (typeof crossPoolDrafts)[number] | null = proposal.computed.crossPoolDraw === undefined ? null : { label, refused: proposal.computed.crossPoolDraw.refused, answered: ties.length > 0 };
+        if (drawn !== null) crossPoolDrafts.push(drawn);
+        // D-B2-1: a pick re-runs the draw over the picked slate, so the confirm's own refusal (never the draft's) is what seats nobody.
+        await confirmSeedProposal(auth, stageIds[i + 1]!, { proposalId: proposal.id, ...(ties.length > 0 ? { tiePicks: ties } : {}) }).catch((e: unknown) => {
+          if (drawn !== null && e instanceof HttpError && e.code === "SEEDING_POOL_SEPARATION_IMPOSSIBLE") drawn.confirmRefused = { code: e.code, vars: e.extra ?? {} };
+          throw e;
+        });
       } catch (e) {
         refused.push(`${label}: seeding ${drafts[i + 1]!.kind} from ${drafts[i]!.kind} refused (${(e as Error).message})`);
         if (nextIsBracket) refusedBracket++;
@@ -457,12 +464,23 @@ describe.skipIf(!HAS_DB)("every bracket-type stage the engine builds has a brack
     // RB5-D10's count is the drafts the engine's draw refused, each RB5-D10-shaped: a groups_ko Top 3 from two pools, one pool supplying
     // two of the three seats of a single_elim (the refusal's own numbers).
     expect(crossPoolDrafts.length, "anti-vacuity: the seeded pass drew across pools").toBeGreaterThan(0);
-    const d10 = crossPoolDrafts.filter((d) => d.refused !== undefined);
-    for (const d of d10) {
+    const d10Shape = { code: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", count: 2, entrants: 3, shape: "single_elim" };
+    for (const d of crossPoolDrafts.filter((x) => x.refused !== undefined)) {
       expect(d.label, "a refused draw is a groups_ko Top 3").toMatch(/^groups_ko n=\d+ q=3 /);
-      expect({ code: d.refused!.code, count: d.refused!.vars.count, entrants: d.refused!.vars.entrants, shape: d.refused!.vars.shape }, `${d.label}: RB5-D10's shape`).toEqual({ code: "SEEDING_POOL_SEPARATION_IMPOSSIBLE", count: 2, entrants: 3, shape: "single_elim" });
+      expect({ code: d.refused!.code, count: d.refused!.vars.count, entrants: d.refused!.vars.entrants, shape: d.refused!.vars.shape }, `${d.label}: RB5-D10's shape`).toEqual(d10Shape);
     }
-    console.info(`cross-pool drafts: ${crossPoolDrafts.length} drawn, ${d10.length} refused by RB5-D10`);
+    // D-B2-1: a draft with no tie to answer is confirmed as drawn - refused exactly when its draft was. One whose tie the sweep picks
+    // is re-drawn over the pick, so ITS refusal is the confirm's (read off the error), RB5-D10-shaped all the same.
+    const unanswered = crossPoolDrafts.filter((d) => !d.answered);
+    expect(crossPoolDrafts.length - unanswered.length, "anti-vacuity: the sweep picked a tie on a drawn draft (the re-draw ran)").toBeGreaterThan(0);
+    expect(unanswered.length, "anti-vacuity: and confirmed drawn drafts with no tie").toBeGreaterThan(0);
+    for (const d of unanswered) expect(d.confirmRefused?.code, `${d.label}: no pick, the draft's own outcome`).toBe(d.refused?.code);
+    const d10 = crossPoolDrafts.filter((d) => d.confirmRefused !== undefined);
+    for (const d of d10) {
+      expect(d.label, "a refused confirm is a groups_ko Top 3").toMatch(/^groups_ko n=\d+ q=3 /);
+      expect({ code: d.confirmRefused!.code, count: d.confirmRefused!.vars.count, entrants: d.confirmRefused!.vars.entrants, shape: d.confirmRefused!.vars.shape }, `${d.label}: RB5-D10's shape`).toEqual(d10Shape);
+    }
+    console.info(`cross-pool drafts: ${crossPoolDrafts.length} drawn (${unanswered.length} with no tie to pick), ${crossPoolDrafts.filter((d) => d.refused !== undefined).length} drafts and ${d10.length} confirms refused by RB5-D10`);
     const audit = auditRefusals(refused, d10.length);
     expect(audit.problems, `refusals: ${refused.length} read`).toEqual([]);
     expect(refused.length, "anti-vacuity: the sweep did meet refusals (the known ones)").toBeGreaterThan(0);

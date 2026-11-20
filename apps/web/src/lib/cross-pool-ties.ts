@@ -108,3 +108,38 @@ function groupRankLevel(entries: readonly CrossPoolEntry[], seeds: readonly Pool
   }
   return out;
 }
+
+/** One tie a confirm answers (D-B2-1): its entrants (`members`), the slate places its descriptors hold (`seats`, indices into the
+ *  slate in seed order), and the organiser's `ranking` of its entrants, best first. */
+export interface AnsweredTie {
+  readonly members: readonly string[];
+  readonly seats: readonly number[];
+  readonly ranking: readonly string[];
+}
+
+/** W5 app PR B D-B2-1 (ruling, controller under the owner's standing "apply rec"): the pick fixes the ORDER, then the draw re-runs
+ *  over the picked slate. Each answered tie's seats, best first, go to its ranking's first entrants in order (`poolOf` names the
+ *  pool an incoming entrant sits in - a boundary tie can seat a candidate the draft left out), and a best-Nth seat no longer lists
+ *  the tie's members as level (`basis.levelWith`): the organiser ordered them, so the stored seed must not reshuffle them as a
+ *  `tied` run. Refused, by the tie's index: a ranking that repeats an entrant, names one outside the tie, or is shorter than its seats. */
+export function answerTies<Q extends CrossPoolEntry>(
+  slate: readonly Q[],
+  answers: readonly AnsweredTie[],
+  poolOf: (entry: Q, entrantId: string) => string | undefined,
+): { slate: Q[] } | { unresolved: number } {
+  const out = [...slate];
+  for (const [index, answer] of answers.entries()) {
+    const members = new Set(answer.members);
+    const { ranking } = answer;
+    if (ranking.length < answer.seats.length || new Set(ranking).size !== ranking.length || ranking.some((id) => !members.has(id))) return { unresolved: index };
+    [...answer.seats].sort((x, y) => x - y).forEach((at, j) => {
+      const seat = out[at]!;
+      const entrantId = ranking[j]!;
+      const pool = poolOf(seat, entrantId);
+      // The tie's entrants come from the source's tables; one that sits in no pool there is a wiring fault.
+      if (pool === undefined) throw new Error(`cross-pool ties: tied entrant ${entrantId} sits in no pool of source ${seat.sourceIndex}`);
+      out[at] = { ...seat, entrantId, pool, ...(seat.basis !== undefined ? { basis: { ...seat.basis, levelWith: seat.basis.levelWith.filter((id) => !members.has(id)) } } : {}) };
+    });
+  }
+  return { slate: out };
+}

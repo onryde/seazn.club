@@ -49,14 +49,17 @@ export async function drawAcrossPools<Q extends CrossPoolEntry & { seed: number 
   progression: ProgressionSpec,
   qualifiers: readonly Q[],
   tables: readonly SourceTables[],
-  draw: typeof crossPoolDraw = crossPoolDraw,
+  /** `seed`: the draw seed to use - a confirm re-drawing a draft's picked slate passes the draft's own (D-B2-1); else the stage's
+   *  stored seed (`storedCrossPoolSeed`). */
+  opts: { seed?: number; draw?: typeof crossPoolDraw } = {},
 ): Promise<{ qualifiers: Q[]; seed: number; refused?: CrossPoolRefused } | null> {
+  const draw = opts.draw ?? crossPoolDraw;
   const shape = CROSS_POOL_SHAPES[stage.kind];
   if (shape === undefined || progression.placement !== "rank_order" || organiserPlaced(progression)) return null;
   const ordered = [...qualifiers].sort((a, b) => a.seed - b.seed);
   const seeded = pooledSeeds(ordered, tables);
   if (seeded === null) return null;
-  const seed = await storedCrossPoolSeed(tx, stage.id);
+  const seed = opts.seed ?? (await storedCrossPoolSeed(tx, stage.id));
   let order: string[];
   try {
     order = draw(seeded, shape, seed).order;
