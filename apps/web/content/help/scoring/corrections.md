@@ -35,7 +35,7 @@ A [device link](/help/scoring/device-links) shows **Void my last entry** on its 
 
 Nothing can change a finalized match, whoever you are. **Void** is no longer offered to the organiser, an official or a device link, the console shows no scoring controls for the match, and the app refuses every write to it, including from an owner or an API key. There is no way to reopen a finalized match.
 
-Check the result with both sides before you, or an official, press **Finalize**. Until then the result can be voided and entered again. A pad that was already open when the match was finalized and tries to score says "This match already has a result. Reopen it before scoring again.", but there is nothing to reopen. The signed [audit trail](/help/scoring/match-audit-trail) keeps the whole record either way.
+Check the result with both sides before you, or an official, press **Finalize**. Until then the result can be voided and entered again. A pad that was already open when the match was finalized and tries to score is refused on the match console with "This match already has a result. To score it again, void the entry that decided it (“⟲ Void last entry” in the match console). A finalised result can't be changed." and on a device link with "This match already has a result. If your last entry decided it, void it with “⟲ Void my last entry” to score again; if someone else's did, ask the organiser. A finalised result can't be changed." On a finalized match there is nothing to void or reopen, so the last sentence is the one that applies. The signed [audit trail](/help/scoring/match-audit-trail) keeps the whole record either way.
 
 ## Replays
 

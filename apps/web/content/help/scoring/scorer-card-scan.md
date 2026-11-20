@@ -19,7 +19,7 @@ One phone can score a whole court. Scan each card as its match comes up. Each sc
 
 - **Not started yet:** the organiser has not started this division, and the screen moves on by itself once the division starts.
 - **Waiting for** both sides. A side is not decided yet. The screen says "This page updates by itself." and moves on when the result is in. There is no need to scan again.
-- **The final score with no controls.** The match is over. The phone says why, for example "Match over — result finalised. Ask the organiser to correct it."
+- **The final score with no controls.** The match is over. The phone says why, for example "Match over — result finalised. A finalised result can't be changed."
 - **This scoring link was revoked.** or **This scoring link is not valid.** The card no longer works.
 
 The names on a card can be out of date. Trust the phone, which shows who is in the match now.
