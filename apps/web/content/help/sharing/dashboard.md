@@ -16,7 +16,7 @@ The public dashboard is your competition's home for everyone who is not running 
 - **Match pages.** The score and its detail, with the sponsors block.
 - **Share and Present.** **Share on WhatsApp** sits under the title on a division page, with **Present ▸**. See [presentation mode](/help/sharing/presentation-mode).
 
-Your organisation page, your news feed and your match pages end with **Powered by Seazn Club · Run your own free →**. An embed ends with **Run your own free →** only, and the **Present** board has no footer. Enterprise removes the line. See [growing your club](/help/sharing/grow-your-club).
+Your organisation page, your news feed and your match pages end with **Powered by Seazn Club · Run your own free →**. An embed ends with **Run your own free →** only, and the **Present** board has no footer. Enterprise removes the line from the first three, and the embed keeps its link. See [growing your club](/help/sharing/grow-your-club).
 
 ## Your logo and brand colour
 
