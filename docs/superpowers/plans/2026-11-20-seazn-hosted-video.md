@@ -627,12 +627,52 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 - Modify: the `streamPreviewOf` caller and `match-day/view` where `live_video.url` is read
 - Test: `components/v2/match-day/__tests__/match-day-ssr.test.tsx`, `server/usecases/__tests__/match-day*.test.ts` (the file covering `live_video`), `e2e/match-day.spec.ts`, `e2e/mobile/match-surfaces.spec.ts`
 
+**The phone's day read (capture app's Watch live link; owner ruling 2026-11-20, option A).** The phone's Match Day list
+(`GET /api/v1/match-day-code`, capture-matchday-day.v1) is a different shape from the organiser board above, and it
+gets its own field. The phone shows a "Watch live" link that opens the public match page in the browser. It has no
+in-app player. So the phone needs the page's address and nothing else: no playback URL and no token.
+
+- Modify: `apps/web/src/server/api-v1/capture-schemas.ts` (`CaptureMatchdayRow`, about line 362): add
+  `live_seazn: z.strictObject({ watch_url: z.string().regex(CAPTURE_MATCHDAY_WATCH_URL_RE) }).nullable()`. The
+  pinned shape is `live_seazn: { watch_url: string } | null`. The field is required on every row, and `null` means
+  "not live on Seazn". `CAPTURE_MATCHDAY_WATCH_URL_RE` is a new exported constant beside `CAPTURE_SCORING_LINK_URL_RE`:
+  `^https://[a-z0-9.-]+(?::\d+)?/live/[^/?#]+/[^/?#]+/[^/?#]+/fixtures/[0-9a-fA-F-]{36}$`. That is an absolute https
+  URL with no query and no fragment, so it can carry no token.
+- Modify: `apps/web/src/server/usecases/match-day-code-view.ts` (`MatchDayCodeRowView` and `codeRowViews`, about lines
+  35-57 and 339-361). `codeRowViews` takes a `ReadonlyMap<fixtureId, watchUrl>` of the rows that are live on Seazn.
+  `getMatchDayForCode` builds that map. A row gets `{ watch_url }` exactly when its fixture has a live Seazn session.
+  That is the same predicate the board's `live_seazn: true` uses (above), on the same playing ids (the courts' playing
+  `current` and `playingNoCourt`). The value is `` `${siteOrigin()}${routes.publicFixture(orgSlug, compSlug, divSlug, fixtureId)}` ``
+  (`lib/site-origin.ts`, `lib/routes.ts:180`), the public match page on this deployment's own host
+  (`https://seazn.club` in production, `https://stg.seazn.club` on staging). The phone accepts only its build's host
+  and hides the link for any other. Every other row, and every candidate row in `match-day-code-call.ts` (which
+  reuses `codeRowViews`), gets `null`.
+- Modify: `scripts/gen-capture-contracts.ts` (the `capture-matchday-day.v1.json` entry, about line 272): prose for
+  `courts.now.live_seazn` / the row's `live_seazn`: "While the match is streaming live to Seazn, the public match
+  page's address on this server's own host (`watch_url`: https, no query, no fragment, never a token); null
+  otherwise. The phone opens it in the browser (capture Watch live)." Re-run
+  `node --experimental-strip-types scripts/gen-capture-contracts.ts`. This regenerates
+  `docs/contracts/capture-matchday-day.v1.json` and `capture-matchday-call.v1.json` (whose candidates carry the row).
+  Add the fixture `docs/contracts/fixtures/capture-matchday-day.v1/valid-live-seazn.json` (one playing row with
+  `live_seazn: {watch_url: "https://seazn.club/live/club/open/singles/fixtures/<uuid>"}`, every other row `null`), and
+  `invalid-live-seazn-query.json` (a `watch_url` with `?t=…`). Add `"live_seazn": null` to every existing row of every
+  existing fixture. Move the two sha256 constants in `apps/web/src/server/api-v1/__tests__/capture-contract.test.ts:60`
+  and the call contract's own.
+- Test: `apps/web/src/server/usecases/__tests__/match-day-code-view.test.ts`,
+  `apps/web/src/server/api-v1/__tests__/capture-contract.test.ts`
+
 - [ ] **Step 1: Write the failing tests.**
   - A Seazn live match on a playing court gives `live_seazn: true` and `live_video: null`, and the board JSON contains no `playback.fake.invalid`.
   - A YouTube one is unchanged.
   - e2e: a Match Day court with a live Seazn match shows `[data-testid=seazn-player]`. At 320 there is no horizontal scroll.
+  - Phone day read (`match-day-code-view.test.ts`): a Seazn live match on a playing court gives
+    `live_seazn: { watch_url: "<siteOrigin>/live/<org>/<comp>/<div>/fixtures/<id>" }`. A YouTube live match, a match
+    that is not live, a queued row and a finished row all give `live_seazn: null`. The day read's JSON contains no
+    `playback.fake.invalid` and no `?`.
+  - Contract (`capture-contract.test.ts`): `valid-live-seazn` validates and `invalid-live-seazn-query` is refused.
+    The day read built by the use case validates against the regenerated `capture-matchday-day.v1.json`.
 - [ ] **Step 2: Run them and see them fail.**
-- [ ] **Step 3: Implement.** Then run `npm run openapi:gen`.
+- [ ] **Step 3: Implement.** Then run `npm run openapi:gen` and `node --experimental-strip-types scripts/gen-capture-contracts.ts`.
 - [ ] **Step 4: Run them again.** Expect PASS.
 - [ ] **Step 5: Commit** `feat(match-day): Seazn live preview`.
 
