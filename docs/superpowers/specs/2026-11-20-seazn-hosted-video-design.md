@@ -82,10 +82,11 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 ## 5. How it works (decided)
 
 ### 5.1 Destination
-- A new destination **Seazn**, needing no credentials, **off for each org until an org admin enables it** (§8). Once
-  enabled it is the **preferred** destination (owner, 2026-11-20: "We tell org to use Seazn Hosted as a prefered Live
-  Stream Dest"): first and pre-selected in the match's stream panel, with the org's external destinations beside it.
-  Picking it means no external live output is created.
+- A new destination **Seazn**, available to every org, needing no credentials. It is the **preferred** destination
+  (owner, 2026-11-20: "We tell org to use Seazn Hosted as a prefered Live Stream Dest"): first and pre-selected in the
+  match's stream panel, with the org's external destinations beside it. Picking it means no external live output is created.
+- **No per-org opt-in** (owner, 2026-11-20: "No need, as we will test in stage then promote to Prod"). Rollout is the
+  server flags alone: on in staging first, then prod. No Enable card, no admin toggle, no "Try Seazn Hosted" prompt.
 - When the destination is Seazn, nothing YouTube-related runs for that session: no broadcast, no thumbnail, no
   `youtube_broadcasts` row.
 - When the destination is YouTube (or any external one), everything stays exactly as today, and the match page shows
@@ -156,25 +157,3 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 3. **Billing unchanged**: a Seazn match draws the same stream credit (£3) with the same admission and balance checks;
    replay storage and all delivery are absorbed by Seazn, uncapped, measured (§5.6).
 4. All Seazn playback signed (§5.2); an unmoved recording held past 3 days (§5.3).
-5. A member who is not an org admin sees no "Try Seazn Hosted" card in the match panel at all (§8.4): the simpler of the
-   two the owner allowed, since such a member could neither enable it nor usefully dismiss it.
-
-## 8. Owner rulings: enabling Seazn Hosted (2026-11-20)
-
-The owner asked: "In stream page, can we option to enable Seazn Hosted Option and Ask to enable first?", then answered
-"both ok" to the two picks put to him. Recorded as owner rulings:
-
-1. **Off per org until enabled.** On the org's Streaming (destinations) page, a **Seazn Hosted** card marked
-   _Recommended_ carries an **Enable** button (one confirm). After it the card reads **Enabled**, and it can be
-   **disabled** later.
-2. **Org admins only.** Only an org's owner or admin enables or disables it: the same gate that adds a stream
-   destination or connects a YouTube channel (`requireOrgAuth(req, id, "write")`, `EDITOR_ROLES` = owner, admin; the
-   page's `canEdit`). Any other member is refused 403.
-3. **The row is made on Enable.** The `kind = 'seazn'` `org_stream_targets` row is created when an admin enables Seazn
-   Hosted, never for every org up front (no trigger). Disable archives it the way Remove archives a destination
-   (`archived_at`), so it is no longer offered; a session already using it runs on unaffected.
-4. **The match panel asks first.** Until Seazn Hosted is enabled, the match's stream panel shows a **Try Seazn Hosted**
-   card with an **Enable Seazn Hosted** button and a dismiss. The card shows to org admins only (call 5 above). A
-   dismiss is remembered for the org, so the card stays gone after a reload and for the org's other admins. Once
-   enabled, Seazn is listed first and pre-selected (§5.1).
-5. **Every string in four languages** (en, es, fr, nl).
