@@ -78,6 +78,16 @@ async function member(orgId: string, role: "admin" | "viewer"): Promise<string> 
   return u!.id;
 }
 
+/** Match Day O4: pin the org's `competitions.max_active` (the override the freeze sweep uses): 0 freezes the org's competition, a bigger
+ *  limit lifts it again. */
+async function setLimit(orgId: string, limit: number): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value)
+    values (${orgId}, 'competitions.max_active', ${limit})
+    on conflict (org_id, feature_key) do update set int_value = ${limit}, bool_value = null`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 beforeEach(() => {
   mail.sent.length = 0;
   authState.userId = "";
@@ -194,6 +204,40 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/resend", () => {
     const res = await read(await resendRoute(post(`/fixtures/${f}/external-play/resend`, {}), ctx(f)));
     expect(res.status).toBe(200);
     expect(res.body.data).toEqual({ emailed: 2, retrying: 0 });
+    expect(mail.sent).toHaveLength(2);
+  });
+});
+
+describe.skipIf(!HAS_DB)("Match Day O4 - a billing-frozen competition: the START presses are refused 402 over HTTP", () => {
+  it("open-round answers 402 PAYMENT_REQUIRED (competitions.max_active): no stamp, nobody mailed; once the freeze lifts the same round opens", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    authState.userId = r.ownerUserId;
+    await setLimit(r.orgId, 0);
+    const frozen = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
+    expect(frozen.status).toBe(402);
+    expect(frozen.body.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+    expect(await stamps(r.stageId), "no stamp").toHaveLength(0);
+    expect(mail.sent, "nobody mailed").toHaveLength(0);
+    await setLimit(r.orgId, 50);
+    const lifted = await read(await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId)));
+    expect([lifted.status, lifted.body.data], "the same round, the freeze lifted").toEqual([200, { opened: true, invited: 2, retrying: 0, skipped: [] }]);
+    expect(await stamps(r.stageId)).toHaveLength(1);
+  });
+
+  it("resend answers 402 PAYMENT_REQUIRED (competitions.max_active) and mails nobody; once the freeze lifts the same board is re-sent", async () => {
+    const r = await seedOnlineChessRound({ roundNo: 1, fixtures: 1 });
+    const f = r.boards[0]!.fixtureId;
+    authState.userId = r.ownerUserId;
+    expect((await openRoute(post(`/stages/${r.stageId}/open-round`, { roundNo: 1 }), ctx(r.stageId))).status, "premise: opened while not frozen").toBe(200);
+    mail.sent.length = 0;
+    await setLimit(r.orgId, 0);
+    const frozen = await read(await resendRoute(post(`/fixtures/${f}/external-play/resend`, {}), ctx(f)));
+    expect(frozen.status).toBe(402);
+    expect(frozen.body.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+    expect(mail.sent, "nobody mailed").toHaveLength(0);
+    await setLimit(r.orgId, 50);
+    const lifted = await read(await resendRoute(post(`/fixtures/${f}/external-play/resend`, {}), ctx(f)));
+    expect([lifted.status, lifted.body.data], "the same board, the freeze lifted").toEqual([200, { emailed: 2, retrying: 0 }]);
     expect(mail.sent).toHaveLength(2);
   });
 });

@@ -103,6 +103,20 @@ describe.skipIf(!process.env.DATABASE_URL)("loadOnlinePlayFixture (the online-pl
     expect(await loadOnlinePlayFixture(fixture.id)).toBeNull();
   });
 
+  // Match Day O4 (owner 2026-11-17): the START writes' billing-freeze guard is keyed on the competition, and this is where they read it from.
+  it("carries the competition the board belongs to (the id the billing freeze is keyed on), and the slug beside it", async () => {
+    const s = await seedOnlineChessFixture({
+      onlinePlay: "lichess",
+      divisionStarted: true,
+      scheduledAt: T,
+      linked: true,
+    });
+    const f = await loadOnlinePlayFixture(s.fixtureId);
+    expect(f?.competitionId).toBe(s.competitionId);
+    const [row] = await sql<{ slug: string }[]>`select slug from competitions where id = ${s.competitionId}`;
+    expect(f?.competitionSlug, "premise: the slug is the same competition's").toBe(row!.slug);
+  });
+
   it("missing scheduled_at ⇒ SERVED, with scheduledAt null (ruling 2026-10-10: D12 anchors on the open)", async () => {
     // Was "⇒ null" until the controller ruled that an unscheduled online
     // Swiss board is playable; its bridge basis is the round's opened_at.

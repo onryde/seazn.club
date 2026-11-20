@@ -84,6 +84,16 @@ async function openedNow() {
   return r;
 }
 
+/** Match Day O4: pin the org's `competitions.max_active` (the override the freeze sweep uses): 0 freezes the org's competition, a bigger
+ *  limit lifts it again. */
+async function setLimit(orgId: string, limit: number): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value)
+    values (${orgId}, 'competitions.max_active', ${limit})
+    on conflict (org_id, feature_key) do update set int_value = ${limit}, bool_value = null`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 beforeEach(() => {
   authState.userId = "";
   door.userless = false;
@@ -167,6 +177,21 @@ describe.skipIf(!HAS_DB)("POST /fixtures/{id}/external-play/extend-checkin", () 
     expect(res.status).toBe(403);
     expect(await extraOf(f)).toEqual({ ms: 0, n: 0 });
     expect(await auditCount(f)).toBe(0);
+  });
+
+  it("Match Day O4: a billing-frozen competition is refused 402 PAYMENT_REQUIRED (competitions.max_active), the deadline stays and no audit row is written; once the freeze lifts the same board extends", async () => {
+    const r = await openedNow();
+    const f = r.boards[0]!.fixtureId;
+    authState.userId = r.ownerUserId;
+    await setLimit(r.orgId, 0);
+    const frozen = await read(await extendRoute(post(f), ctx(f)));
+    expect(frozen.status).toBe(402);
+    expect(frozen.body.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+    expect(await extraOf(f), "the refused press wrote no extension").toEqual({ ms: 0, n: 0 });
+    expect(await auditCount(f)).toBe(0);
+    await setLimit(r.orgId, 50);
+    expect((await extendRoute(post(f), ctx(f))).status, "the same board, the freeze lifted").toBe(200);
+    expect(await extraOf(f)).toEqual({ ms: CHECKIN_EXTEND_STEP_MINUTES * 60_000, n: 1 });
   });
 
   it("a board whose round has not been opened is a 409 ROUND_NOT_OPEN; a board that does not exist is a 404", async () => {

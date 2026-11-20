@@ -88,6 +88,16 @@ async function openedNow(fixtures = 2) {
   return r;
 }
 
+/** Match Day O4: pin the org's `competitions.max_active` (the override the freeze sweep uses): 0 freezes the org's competition, a bigger
+ *  limit lifts it again. */
+async function setLimit(orgId: string, limit: number): Promise<void> {
+  await sql`
+    insert into org_entitlement_overrides (org_id, feature_key, int_value)
+    values (${orgId}, 'competitions.max_active', ${limit})
+    on conflict (org_id, feature_key) do update set int_value = ${limit}, bool_value = null`;
+  await invalidateOrgEntitlements(orgId);
+}
+
 beforeEach(() => {
   authState.userId = "";
   door.userless = false;
@@ -168,6 +178,20 @@ describe.skipIf(!HAS_DB)("POST /stages/{id}/extend-checkin", () => {
     }
     expect(checked).toBe(5);
     expect(await added(r.stageId)).toEqual({ ms: 0, audit: 0 });
+  });
+
+  it("Match Day O4: a billing-frozen competition is refused 402 PAYMENT_REQUIRED (competitions.max_active) and no deadline moves; once the freeze lifts the same round extends", async () => {
+    const r = await openedNow(2);
+    authState.userId = r.ownerUserId;
+    await setLimit(r.orgId, 0);
+    const frozen = await read(await extendRoundRoute(post(r.stageId, { roundNo: 1 }), ctx(r.stageId)));
+    expect(frozen.status).toBe(402);
+    expect(frozen.body.error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "competitions.max_active" });
+    expect(await added(r.stageId), "the refused press moved no deadline and wrote no audit row").toEqual({ ms: 0, audit: 0 });
+    await setLimit(r.orgId, 50);
+    const lifted = await read(await extendRoundRoute(post(r.stageId, { roundNo: 1 }), ctx(r.stageId)));
+    expect(lifted.status, "the same round, the freeze lifted").toBe(200);
+    expect(await added(r.stageId)).toEqual({ ms: 2 * CHECKIN_EXTEND_STEP_MINUTES * 60_000, audit: 2 });
   });
 
   it("a round that has not been opened is a 409 ROUND_NOT_OPEN; a stage that does not exist is a 404", async () => {

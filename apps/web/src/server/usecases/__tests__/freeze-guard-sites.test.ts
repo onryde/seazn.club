@@ -100,6 +100,13 @@ const LEDGER: Record<string, [file: string, words: string]> = {
     "server/usecases/__tests__/event-import-freeze.test.ts",
     "402s the whole call and writes NOTHING when the division's competition is frozen",
   ],
+  // Match Day O4 (owner 2026-11-17): the online round's START writes - open a round, resend an invite, +5 on a board, +5 to the round -
+  // keep the freeze like every write but scoring. Its FINISH decisions (resync, let the game go on, settle, let play without video) carry
+  // none, below. The sweep drives each through its real usecase (the second half of frozen-competition-writes.test.ts).
+  "external-play/checkin-extend.ts#extendCheckin": [SWEEP, '"external-play/checkin-extend.ts#extendCheckin"'],
+  "external-play/checkin-extend.ts#extendRoundCheckin": [SWEEP, '"external-play/checkin-extend.ts#extendRoundCheckin"'],
+  "external-play/invite.ts#resendExternalPlayNotice": [SWEEP, '"external-play/invite.ts#resendExternalPlayNotice"'],
+  "external-play/open-round.ts#openRound": [SWEEP, '"external-play/open-round.ts#openRound"'],
   "fixture-rules.ts#writeFixtureRulesOverride": [SWEEP, '"fixture-rules.ts#writeFixtureRulesOverride"'],
   // Task 8e: the guards sit in the cores the desk's wrappers (callFixtureToCourt, previewCall, undoCall) and a Match Day
   // code's call (match-day-code-call.ts) share; the desk's witness drives them through the wrappers.
@@ -150,6 +157,28 @@ describe("the billing freeze's guard sites (PB2: every write but scoring)", () =
     expect(scoring).toContain("async function assertEntitledToScore(");
     expect(scoring).not.toMatch(CALL);
     expect(scoring).not.toContain("frozenCompetitionIds(");
+  });
+
+  it("Match Day O4: the FINISH decisions of an online round (resync, let the game go on, settle, let play without video) carry no freeze guard — they write a result, which is scoring — and the scan would see one there", () => {
+    const finish: [file: string, fn: string][] = [
+      ["server/usecases/external-play/arbiter.ts", "resyncExternalPlay"],
+      ["server/usecases/external-play/arbiter.ts", "overrideVideoAsOrganiser"],
+      ["server/usecases/external-play/flags.ts", "closeExternalPlayFlags"],
+      ["server/usecases/external-play/resolve.ts", "resolveExternalPlay"],
+    ];
+    let checked = 0;
+    for (const [file, fn] of finish) {
+      const text = readFileSync(join(SRC, file), "utf8");
+      expect(text, `${file}: still the file that declares ${fn}`).toContain(`export async function ${fn}(`);
+      expect(text, `${file}: carries no freeze guard`).not.toMatch(CALL);
+      expect(text, `${file}: reads no frozen set`).not.toContain("frozenCompetitionIds(");
+      expect(sites.filter((s) => s.startsWith(`${file.slice("server/usecases/".length)}#`)), `${file}: no site`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: finish decisions checked").toBe(finish.length);
+    // The scan's positive control: the same rules find the guard in the START writes that keep it.
+    expect(sites).toContain("external-play/open-round.ts#openRound");
+    expect(sites).toContain("external-play/checkin-extend.ts#extendRoundCheckin");
   });
 
   it("fix round 1 (m2): a guard is named by the scope whose BODY holds it — an arrow bound after a function is the arrow's, a guard past a function's closing brace is not that function's, a nested callback is its enclosing function's", () => {

@@ -50,6 +50,7 @@ import {
   type OnlinePlayFixture,
   type SidePlayer,
 } from "./guard";
+import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { assertOnlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus } from "./preflight";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef, claimSeat, releaseSeat, type Colour } from "./seat-stamp";
@@ -452,6 +453,10 @@ export async function resendExternalPlayNotice(
   // T20: an invite STARTS play for the people it reaches, so the club must be offered online chess (403
   // ONLINE_CHESS_DISABLED). After the 404, so a probe still cannot tell a foreign board from a missing one.
   await assertOnlineChessOffered(auth);
+  // Match Day O4 (owner 2026-11-17): an invite STARTS play, so a billing-frozen competition refuses it with the freeze's 402 (the rule
+  // every write but scoring keeps; freeze-guard-sites.test.ts). Before any write: the stale-bridge reset below, the stamps, the rows.
+  // Outside the transaction, as the guard requires (`frozenCompetitionIds`).
+  await assertCompetitionNotFrozen(f.orgId, f.competitionId);
   if (f.bridge?.status === "finished") {
     throw new HttpError(409, "Fixture already finished", "ALREADY_RESOLVED");
   }
