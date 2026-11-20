@@ -3,23 +3,23 @@
 // owes and where each one goes, and which pool a group newcomer joins. `server/usecases/roundrobin-late-entry.ts` reads the stage,
 // asks these questions and writes the answer.
 //
-// The catch-up set is the engine's own `lateEntryFixtures` rule (engine plan T2, `src/scheduling/catch-up.ts` on the engine's
-// main, unreleased in 9.1.0), written here with the engine's field names so app PR B's parity test is a direct compare when it
-// swaps this for the engine function. Where the app plan and the engine disagree the engine wins (plan header, F2): appended
-// fixtures are ordered leg first (the engine review's ruling G1), then the member's earliest round, then listed order.
+// The catch-up set IS the engine's `lateEntryFixtures` (engine 10, `src/scheduling/catch-up.ts`; app PR B Task 3, FX-G1): this
+// module only calls it and names its answers in the app's terms. The engine's rule, for the reader:
 //
 //   owed = {(newcomer, m, leg) : m in members, leg in 1..legs} minus every line already present for that key (order-free).
 //   An owed key whose member holds an UNSTARTED bye slot in that leg -> that bye's round (`bye_slot`), the slot consumed (RB5-L3).
-//   A started bye is never touched (RB5-L4). A slot whose member or newcomer already plays in that round is unusable: no round
-//   seats an entrant twice.
+//   A started bye is never touched (RB5-L4). A slot whose member or newcomer already plays in that round is unusable.
 //   Every other owed key -> its own catch-up round, lastRoundNo + 1, + 2, ... (one fixture per round), ordered by leg, then the
-//   member's earliest round among `lines` (RB5-L6), then the member's position in `members` (listed/seed order, F5); a member
-//   with no line after every member with one.
+//   member's earliest round among `lines` (RB5-L6), then the member's position in `members` (listed/seed order, F5).
 //   Home side (RB5-G2): in leg 1 the newcomer alternates along the leg's owed keys in `members` order, away first; in every later
-//   leg each pair takes the opposite of its side in the previous leg (an owed fixture's or a line already present).
+//   leg each pair takes the opposite of its side in the previous leg.
 //
-// One difference from the engine, by the app brief (F8): nothing owed is an EMPTY set here and `decideRoundRobinLateEntry` turns
-// it into the named refusal (RB5-E9), where the engine throws `nothing_to_add`. Client-safe and strip-types-safe: no import.
+// The engine refuses by name (CONFIG_INVALID). `nothing_to_add` (RB5-E9) is the app's EMPTY set here, which
+// `decideRoundRobinLateEntry` turns into RR_LATE_ENTRY_NOTHING_TO_ADD (F8); every other refusal (`newcomer_is_member`,
+// `legs_invalid`, `last_round_invalid`, `last_round_below_lines`) is a caller handing the rule something no stage can hold - a
+// programming error, thrown as `CatchUpInputError` carrying the engine's reason name.
+import { EngineError } from "@seazn/engine/core";
+import { lateEntryFixtures } from "@seazn/engine/scheduling";
 
 export interface ExistingLine {
   home: string;
@@ -70,98 +70,17 @@ export class CatchUpInputError extends Error {
   }
 }
 
-/** The order-free (pair, leg) key, `rrKey`'s pair-and-leg text without the pool (the set is computed inside one pool). */
-const lineKey = (a: string, b: string, leg: number): string => `${a < b ? a : b}:${a < b ? b : a}:L${leg}`;
-
-interface Owed {
-  member: string;
-  memberIndex: number;
-  leg: number;
-  home: string;
-  away: string;
-}
-
-/** The fixtures `newcomer` owes in a started round robin and where each one goes (RB5-L3, L6, L16). Empty when nothing is owed. */
+/** The fixtures `newcomer` owes in a started round robin and where each one goes (RB5-L3, L6, L16): the engine's
+ *  `lateEntryFixtures`. Empty when nothing is owed (the engine's `nothing_to_add`). */
 export function catchUpSet(input: CatchUpInput): CatchUpSet {
-  const { members, newcomer, legs, lines, byes, lastRoundNo } = input;
-  if (members.includes(newcomer)) throw new CatchUpInputError(`${newcomer} is already a member`);
-  if (!Number.isInteger(legs) || legs < 1) throw new CatchUpInputError(`legs must be an integer of at least 1, got ${legs}`);
-  if (!Number.isInteger(lastRoundNo) || lastRoundNo < 0) throw new CatchUpInputError(`lastRoundNo must be an integer of at least 0, got ${lastRoundNo}`);
-  for (const at of [...lines.map((l) => l.roundNo), ...byes.map((b) => b.roundNo)]) {
-    if (at > lastRoundNo) throw new CatchUpInputError(`a line or bye sits in round ${at}, after the last drawn round ${lastRoundNo}`);
+  try {
+    return lateEntryFixtures(input);
+  } catch (err) {
+    if (!EngineError.is(err) || err.code !== "CONFIG_INVALID") throw err;
+    const reason = (err.data as { reason?: unknown } | undefined)?.reason;
+    if (reason === "nothing_to_add") return { fixtures: [], consumedByes: [], appendedRounds: 0 };
+    throw new CatchUpInputError(`${String(reason)}: ${err.message}`);
   }
-
-  const present = new Set(lines.map((l) => lineKey(l.home, l.away, l.leg)));
-  // The newcomer's side on each line it already has (true = home): a later leg flips from it.
-  const newcomerHome = new Map<string, boolean>();
-  for (const l of lines) {
-    if (l.home === newcomer || l.away === newcomer) newcomerHome.set(lineKey(l.home, l.away, l.leg), l.home === newcomer);
-  }
-  // Who already plays in each round: a bye slot there is unusable for anyone already seated.
-  const seated = new Map<number, Set<string>>();
-  for (const l of lines) seated.set(l.roundNo, (seated.get(l.roundNo) ?? new Set<string>()).add(l.home).add(l.away));
-  const earliest = new Map<string, number>();
-  for (const l of lines) {
-    for (const id of [l.home, l.away]) {
-      const seen = earliest.get(id);
-      if (seen === undefined || l.roundNo < seen) earliest.set(id, l.roundNo);
-    }
-  }
-
-  const owed: Owed[] = [];
-  for (let leg = 1; leg <= legs; leg++) {
-    const keys = new Set<string>();
-    let position = 0;
-    members.forEach((member, memberIndex) => {
-      const key = lineKey(newcomer, member, leg);
-      if (present.has(key) || keys.has(key)) return;
-      keys.add(key);
-      // Leg 1: alternate along the owed list, away first. Later legs: the opposite of this pair's previous-leg side.
-      const previousHome = leg === 1 ? undefined : newcomerHome.get(lineKey(newcomer, member, leg - 1));
-      const newcomerAway = previousHome === undefined ? position % 2 === 0 : previousHome;
-      position++;
-      newcomerHome.set(key, !newcomerAway);
-      owed.push({ member, memberIndex, leg, home: newcomerAway ? member : newcomer, away: newcomerAway ? newcomer : member });
-    });
-  }
-
-  const fixtures: CatchUpFixture[] = [];
-  const consumedByes: ByeSlot[] = [];
-  const toAppend: Owed[] = [];
-  for (const o of owed) {
-    const slot = byes.find(
-      (b) =>
-        !b.started &&
-        b.entrantId === o.member &&
-        b.leg === o.leg &&
-        !(seated.get(b.roundNo)?.has(o.member) ?? false) &&
-        !(seated.get(b.roundNo)?.has(newcomer) ?? false),
-    );
-    if (slot === undefined) {
-      toAppend.push(o);
-      continue;
-    }
-    consumedByes.push(slot);
-    seated.set(slot.roundNo, (seated.get(slot.roundNo) ?? new Set<string>()).add(newcomer));
-    fixtures.push({ home: o.home, away: o.away, leg: o.leg, placement: { kind: "bye_slot", roundNo: slot.roundNo } });
-  }
-
-  const firstRound = (o: Owed): number => earliest.get(o.member) ?? Number.POSITIVE_INFINITY;
-  // An explicit three-way compare (Task 5 m4): two members with no line are both Infinity, and Infinity - Infinity is NaN — a tie
-  // only because NaN is falsy. Spelt out, the tie falls to the listed order on purpose.
-  const byFirstRound = (x: Owed, y: Owed): number => {
-    const a = firstRound(x);
-    const b = firstRound(y);
-    return a === b ? 0 : a < b ? -1 : 1;
-  };
-  toAppend.sort((x, y) => x.leg - y.leg || byFirstRound(x, y) || x.memberIndex - y.memberIndex);
-  toAppend.forEach((o, k) => {
-    fixtures.push({ home: o.home, away: o.away, leg: o.leg, placement: { kind: "catch_up_round", roundNo: lastRoundNo + k + 1 } });
-  });
-
-  fixtures.sort((x, y) => x.placement.roundNo - y.placement.roundNo);
-  consumedByes.sort((x, y) => x.roundNo - y.roundNo);
-  return { fixtures, consumedByes, appendedRounds: toAppend.length };
 }
 
 export type RoundRobinLateDecision =

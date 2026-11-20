@@ -24,12 +24,18 @@ import { buildTemplateStages } from "../../../apps/web/src/lib/format-templates.
  * of six, P1 plays 3 of her 5 (RB5-W4) and withdraws: half or more played, so a walkover (RB5-W3) - the preview says 3 of 5 and
  * walkover, the withdrawal walks her other 2 over, and the anonymous hub's footnote reads "left after 3 of 5 ... other 2 matches are
  * walkovers".
+ *
+ * Task 3 (FX-G1; X-CU-3, X-CU-5, X-RR-5): the catch-up set and the line key ARE the engine's (`lateEntryFixtures`,
+ * `roundRobinLineKey`). A league of four, Started (a round-1 line begun): late player L1 owes the four, appended in rounds 4-7 in
+ * seed order (every member's earliest round is 1, so listed order decides, RB5-L6); late player L2 then owes the four in rounds
+ * 8-11 and L1 last, in round 12 (L1's earliest round is 4, RB5-L16), and no pair is stored twice.
  */
 export async function w5RoundRobinBSuite(): Promise<void> {
   // Task 0: 1 (an unequal groups_ko proposal's 7th seat is the runner-up compared on the smallest pool's matches).
   // Task 1: 2 (a Started two-pool group lists every seat level before a result; 3 into 2 groups is refused with no group count).
   // Task 2: 1 (a 3-of-5 leaver: the preview, the walkovers and the hub footnote all say 3 of 5).
-  const EXPECTED_CHECKS = 4;
+  // Task 3: 1 (two late players in a started league of four: rounds 4-7 in seed order, then 8-11 and the first late player at 12).
+  const EXPECTED_CHECKS = 5;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -79,7 +85,7 @@ export async function w5RoundRobinBSuite(): Promise<void> {
     for (const f of lines) for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id) byPool.set(f.pool_id ?? "", (byPool.get(f.pool_id ?? "") ?? new Set()).add(id));
     const pools = [...byPool.values()]
       .map((s) => [...s].sort((a, b) => seedOf.get(a)! - seedOf.get(b)!))
-      .sort((a, b) => b.length - a.length || seedOf.get(a[0]!)! - seedOf.get(b[0]!)!);
+      .sort((a, b) => b.length - a.length || seedOf.get(a[0])! - seedOf.get(b[0])!);
     const [three1, three2, two1, two2] = pools;
     // [pool, [winner's place, loser's place, [winner's score, loser's score]][]]
     const plan: [string[] | undefined, [number, number, [number, number]][]][] = [
@@ -235,6 +241,54 @@ export async function w5RoundRobinBSuite(): Promise<void> {
     w5Check(
       "w5b X-WDT-4: a 3-of-5 leaver - the preview says walkover 3 of 5, the withdrawal walks her other 2 over, the hub footnote says 3 of 5" +
         (ok ? "" : ` - comp ${pubRes.status}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, start ${started.status}, hers ${hers.length}, scored ${scored.join(",")}, preview ${pv.status} ${JSON.stringify(pStage ?? null)}, withdraw ${out.status} ${JSON.stringify(report ?? null)}, hub ${hubRes.status} notes ${JSON.stringify(notes)}`),
+      ok,
+    );
+  }
+
+  // Check 5 - Task 3 (X-CU-3, X-CU-5, X-RR-5): two late players, the engine's catch-up order, no pair twice.
+  {
+    const dRes = await v1(owner, `/api/v1/competitions/${comp?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Late pair",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Lt${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const stages = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", [{ seq: 1, kind: "league", name: "League", config: { legs: 1 } }]),
+    ) ?? [];
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const fixtures = async () => v1data<(Fx & { round_no: number })[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [];
+    const first = (await fixtures()).find((f) => f.round_no === 1);
+    const begun = await v1(owner, `/api/v1/fixtures/${first?.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    type Late = { id: string; late_entry?: { case?: string } };
+    const add = async (name: string) => {
+      const res = await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST", [{ kind: "individual", display_name: `${name} ${tag}` }]);
+      return { status: res.status, late: (v1data<Late[] | undefined>(res) ?? [])[0] };
+    };
+    const l1 = await add("L1");
+    const l2 = await add("L2");
+    const all = await fixtures();
+    // Each late player's lines as "opponent:round", in round order, the opponent by seed (1..4) or by name.
+    const nameOf = new Map<string, string>([...field.map((e, i) => [e.id, `s${i + 1}`] as const), [l1.late?.id ?? "", "L1"], [l2.late?.id ?? "", "L2"]]);
+    const linesOf = (id: string | undefined) =>
+      all.filter((f) => f.home_entrant_id === id || f.away_entrant_id === id)
+        .sort((a, b) => a.round_no - b.round_no)
+        .map((f) => `${nameOf.get((f.home_entrant_id === id ? f.away_entrant_id : f.home_entrant_id) ?? "") ?? "?"}:${f.round_no}`);
+    const pairs = all.map((f) => [f.home_entrant_id, f.away_entrant_id].sort().join("|"));
+    const ok =
+      dRes.status === 201 && field.length === 4 && stages.length === 1 && started.status === 200 && begun.status === 201 &&
+      l1.status === 201 && l1.late?.late_entry?.case === "catch_up" && l2.status === 201 && l2.late?.late_entry?.case === "catch_up" &&
+      linesOf(l1.late?.id).join(",") === "s1:4,s2:5,s3:6,s4:7,L2:12" &&
+      linesOf(l2.late?.id).join(",") === "s1:8,s2:9,s3:10,s4:11,L1:12" &&
+      all.length === 6 + 4 + 5 && new Set(pairs).size === pairs.length;
+    w5Check(
+      "w5b X-CU-3/5: two late players in a started league of four - L1 plays the seeds in rounds 4-7 in seed order, L2 plays them in 8-11 and L1 in 12, no pair twice" +
+        (ok ? "" : ` - div ${dRes.status}, field ${field.length}, start ${started.status}, begun ${begun.status}, L1 ${l1.status} ${l1.late?.late_entry?.case} [${linesOf(l1.late?.id).join(",")}], L2 ${l2.status} ${l2.late?.late_entry?.case} [${linesOf(l2.late?.id).join(",")}], lines ${all.length}, distinct pairs ${new Set(pairs).size}`),
       ok,
     );
   }
