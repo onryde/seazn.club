@@ -279,12 +279,18 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
   };
 
   // MD-R16: the org's frozen competitions, read once per org the pass reaches (`frozenCompetitionIds` may choose and store the freeze on
-  // its first read, and is asked outside any `withTenant`: this pass holds none).
-  const frozenByOrg = new Map<string, Promise<Set<string>>>();
-  const frozenIn = (orgId: string): Promise<Set<string>> => {
+  // its first read, and is asked outside any `withTenant`: this pass holds none). MD-R20: a read that FAILS is that org's alone - logged
+  // once (the answer is kept for the pass, so its rows share the one catch), and `null` here means "unknown": the org's rows are deferred,
+  // FAIL CLOSED (a competition that might be frozen gets no vendor call), while every other org's rooms are still made. The org then
+  // mints on demand at its open, as before the pre-mint, if the read keeps failing.
+  const frozenByOrg = new Map<string, Promise<Set<string> | null>>();
+  const frozenIn = (orgId: string): Promise<Set<string> | null> => {
     let set = frozenByOrg.get(orgId);
     if (set === undefined) {
-      set = frozenCompetitionIds(orgId);
+      set = frozenCompetitionIds(orgId).catch((err: unknown) => {
+        log.error({ orgId, err }, "external-play premint: an organisation's freeze could not be read; its rows are deferred");
+        return null;
+      });
       frozenByOrg.set(orgId, set);
     }
     return set;
@@ -302,7 +308,9 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
     }
     const row = rows[i]!;
     // A frozen competition cannot open its round, so no room is made for it; the row keeps its place for the pass after the thaw.
-    if ((await frozenIn(row.orgId)).has(row.competitionId)) {
+    // An org whose freeze could not be read (`null`) is held the same way.
+    const frozen = await frozenIn(row.orgId);
+    if (frozen === null || frozen.has(row.competitionId)) {
       report.deferred += 1;
       continue;
     }
