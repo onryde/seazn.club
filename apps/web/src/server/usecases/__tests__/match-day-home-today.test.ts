@@ -339,6 +339,29 @@ describe.skipIf(!HAS_DB)("an online night: what makes an opened round a match da
     expect(await nightCount(r, now)).toBe(0);
   });
 
+  it("(c) on a forfeited board: a live game still on file counts in an old round, one with no game does not, and closing the game takes it off", async () => {
+    // The ledger can call a board forfeited while its game is still on the bridge (the organiser closes the board first, the bridge row
+    // is closed after). Arm (c) reads the BRIDGE, not the fixture's own status: the only status the board rule refuses is cancelled.
+    const r = await unplanned(3);
+    const [withGame, noGame, control] = r.boards.map((b) => b.fixtureId) as [string, string, string];
+    const opened = new Date("2026-11-18T09:00:00.000Z"); // yesterday, bound 09:30Z yesterday: closed by the read
+    await openStamp(r, 1, opened);
+    await bridgeRow(withGame, r.orgId, { status: "ready" }); // a challenge on file, not finished
+    await setFixtureStatus(withGame, "forfeited");
+    await setFixtureStatus(noGame, "forfeited"); // no bridge row at all
+    const now = new Date("2026-11-19T10:00:00.000Z");
+    expect(now.getTime() - opened.getTime(), "premise: far past the window bound, so arm (b) is off").toBeGreaterThan(TAIL_MS);
+    expect(iso(opened).slice(0, 10), "premise: opened the day before the read, so arm (a) is off").not.toBe(iso(now).slice(0, 10));
+    expect(await nightCount(r, now), "only the forfeited board with a game on file: the other two have none").toBe(1);
+
+    await sql`update fixture_external_play set status = 'finished' where fixture_id = ${withGame}`;
+    expect(await nightCount(r, now), "its game is closed: the night is over").toBe(0);
+
+    // The positive pair: a board that is NOT forfeited but has the same open game counts the same way.
+    await bridgeRow(control, r.orgId, { status: "ready" });
+    expect(await nightCount(r, now), "a scheduled board with the same game on file").toBe(1);
+  });
+
   it("a round paired after the opened one is no part of the day until it is opened itself", async () => {
     const r = await unplanned(2);
     await openStamp(r, 1, at(-5));
