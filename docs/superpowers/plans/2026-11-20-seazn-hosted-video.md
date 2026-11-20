@@ -4,7 +4,7 @@
 
 **Goal:** Add a per-match destination **Seazn**. A Seazn match runs composed, plays live on the public match page and on Match Day from a signed Cloudflare programme input, and its replay moves to Bunny Stream, where it stays while the org is a customer. Delivered minutes are measured for staff. Before any of it, Phase 0 makes YouTube Connect safe for customers' channels: no automatic retry loop, a per-fixture runaway ceiling, a non-blocking pre-Go-live warning for young or recently churned channels, and a fuller broadcast description.
 
-**Architecture:** Phase 0 (YouTube Connect only): automatic start gets its own persisted backoff on `org_youtube_connections` (separate from the live-state record that feeds `liveStateOf`); a ceiling of 10 broadcasts per fixture per rolling hour guards runaway bugs; `YouTubePort` gains `channelCreatedAt` and `recentBroadcasts`, which feed a fail-open safety check behind a pre-Go-live warning; `broadcastDescription` gains localised match facts. Every Phase 0 guard sits inside `prepareYoutubeBroadcast` after its connection check, or in the panel behind a YouTube-connection predicate, so a target with no YouTube connection (pasted key, Seazn) never meets one. Phases 1–3: Seazn is one `org_stream_targets` row per org with `kind = 'seazn'` and no credential. Every admission, holder and picker path reads it from there, so `target_id` stays the session's one destination fact. A Seazn session is composed. The programme input (Input B, R2004) that composed sessions already create becomes the viewers' input: it is created signed and gets no Cloudflare output; viewers play it with tokens from Cloudflare's own token endpoint, and a tick pass signs each of its recordings as it appears (Cloudflare records a signed input unsigned). A tick pass moves finished programme recordings to Bunny through a new `ReplayHost` port; Bunny's webhook reports them playable, with a slow poll as the backstop. Replays play in Bunny's embed player. From Phase 1 on, the daily sweep holds every Seazn recording past 3 days (Cloudflare's 30-day floor is the backstop) so Phase 2 can still move it; Phase 3 measures delivery and deletes the replays of deleted orgs.
+**Architecture:** Phase 0 (YouTube Connect only): automatic start gets its own persisted backoff on `org_youtube_connections` (separate from the live-state record that feeds `liveStateOf`); a ceiling of 10 broadcasts per fixture per rolling hour guards runaway bugs; `YouTubePort` gains `channelCreatedAt` and `recentBroadcasts`, which feed a fail-open safety check behind a pre-Go-live warning; `broadcastDescription` gains localised match facts. Every Phase 0 guard sits inside `prepareYoutubeBroadcast` after its connection check, or in the panel behind a YouTube-connection predicate, so a target with no YouTube connection (pasted key, Seazn) never meets one. Phases 1–3: Seazn is one active `org_stream_targets` row per org with `kind = 'seazn'` and no credential, made only when an org admin enables Seazn Hosted on the Streaming page or from the match panel's prompt, and archived when one disables it (spec §8). Every admission, holder and picker path reads it from there, so `target_id` stays the session's one destination fact. A Seazn session is composed. The programme input (Input B, R2004) that composed sessions already create becomes the viewers' input: it is created signed and gets no Cloudflare output; viewers play it with tokens from Cloudflare's own token endpoint, and a tick pass signs each of its recordings as it appears (Cloudflare records a signed input unsigned). A tick pass moves finished programme recordings to Bunny through a new `ReplayHost` port; Bunny's webhook reports them playable, with a slow poll as the backstop. Replays play in Bunny's embed player. From Phase 1 on, the daily sweep holds every Seazn recording past 3 days (Cloudflare's 30-day floor is the backstop) so Phase 2 can still move it; Phase 3 measures delivery and deletes the replays of deleted orgs.
 
 **Tech Stack:** Next.js (apps/web), TypeScript 7, postgres.js (`sql`, the non-tenant client for stream tables), zod 4 api-v1 schemas plus `npm run openapi:gen`, Cloudflare's `POST /stream/{uid}/token` for playback and download tokens (no key of our own, no `jose` signing: POC result C1), Bunny's embed player (iframe) for replays, `FakeYouTube` (`server/youtube/fake.ts`) behind the `YouTubePort` seam (`port.ts`) for Phase 0, `hls.js` (new, pinned exactly; live only), vitest (node env, real Postgres), Playwright e2e, and `scripts/smoke/suites`.
 
@@ -49,6 +49,7 @@ Still open, and probed in Tasks 7 and 20: whether a lock set on an in-progress r
 - `ingest-cf.ts:10-15`: never send an update that changes `recording` on a live input. The signed settings are part of the create body, and `setInputEnabled` re-sends exactly what the create sent.
 - Secrets (`BUNNY_STREAM_API_KEY`, `BUNNY_STREAM_READONLY_KEY`, `BUNNY_TOKEN_KEY`, and the existing Cloudflare API token; `BUNNY_STREAM_LIBRARY_ID` and `BUNNY_STREAM_CDN_HOST` are config, held the same way) come from env through `config.ts` only. There is no Cloudflare signing key (C1). They never appear in a URL query, a log, an error, a `stream_provider_calls` row or a database column. A signed token appears only in the playback URL handed to the viewer.
 - **Cloudflare video safety (C6).** Every call that acts on a Cloudflare video (delete, sign, download) takes its uid either from a row this database stored after checking it, or from a listing whose EACH item is checked: the video's own `liveInput` (`IngestVideo.inputId`) must equal the input that was asked about, else it is skipped and counted. Never bulk-act on a filtered listing without that per-item check: Cloudflare ignores an unknown filter and answers every video on the account. The sweep's camera step already does this (`relay-sweep.ts:354-358`); new code copies it. Every task that lists or deletes videos (13, 18, 24, 27) has a test whose port answers videos of OTHER inputs and asserts none of them is touched.
+- **Seazn Hosted is opt-in per org** (owner rulings, spec §8, 2026-11-20). No org has a `seazn` row until an org admin (owner or admin: `requireOrgAuth(req, id, "write")`, the gate the stream-target and YouTube-connection routes already use) taps Enable; Disable archives it. Every "LIVE on" below also means "and the org has an active `seazn` row": with no row there is nothing to list, pick, resolve or admit, so no reader needs a second check.
 - Courts stay out (spec §7.2). `court_stream_links` admits YouTube connections only (court stream O9), so a `seazn` row (no connection) is already refused there. A test pins that.
 - Billing is unchanged (spec §7.3): a Seazn match takes one stream credit through the same admission, balance and `consume_credit` path as any composed match.
 - Every new user-facing string goes in `src/dictionaries/{en,es,fr,nl}/ui.json` (and `public.json` for the match page). `src/lib/i18n-keys.ts` is generated and never hand-edited.
@@ -72,7 +73,7 @@ Still open, and probed in Tasks 7 and 20: whether a lock set on an in-progress r
 
 ## Review Focus
 
-Items 1–5 and 11–13 are the Seazn phases'; items 6–10 are Phase 0's.
+Items 1–5 and 11–14 are the Seazn phases'; items 6–10 are Phase 0's.
 
 1. **Two Seazn matches of one org live at the same time.** Both are admitted, because one shared `seazn` row must never read as "destination in use". Pinned in Task 9 (the index) and Task 11 (the holder guard and admission).
 2. **The flag goes off after a fixture saved Seazn as its pick, or while a Seazn session runs.** A new start is refused with a typed 422, the saved Seazn pick resolves to **no destination** ("waiting for a destination"), never silently to YouTube or another external one (spec anti-goal), and the running session runs on and ends normally. Pinned in Task 10 and Task 11.
@@ -87,6 +88,7 @@ Items 1–5 and 11–13 are the Seazn phases'; items 6–10 are Phase 0's.
 11. **A Cloudflare listing that answers videos of other inputs** (C6). Nothing outside the asked-for input is signed, moved or deleted. Pinned in Tasks 13, 18, 24 and 27.
 12. **A Seazn recording left publicly playable** (C3). The tick signs every recording of a Seazn programme input, live or ended, whatever the flags. Pinned in Task 13.
 13. **A forged, repeated or dropped Bunny webhook** (B6). A bad signature changes nothing, a repeated `EventId` acts once, and a dropped webhook is caught by the 15-min poll. Pinned in Tasks 24 and 27.
+14. **Seazn Hosted is off until an admin enables it** (spec §8). Before Enable no reader offers Seazn; a non-admin's Enable or Disable is 403 and writes nothing; Disable archives the row, so it is no longer offered and a saved Seazn pick resolves to no destination, while a session already on it runs on. Pinned in Tasks 9, 10 and 16.
 
 ---
 
@@ -340,59 +342,80 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 
 - Widen the kind check to `('youtube','facebook','twitch','kick','custom_rtmp','seazn')`.
 - Replace `org_stream_targets_one_source` with `check ((kind = 'seazn' and rtmp_enc is null and youtube_connection_id is null) or (kind <> 'seazn' and (rtmp_enc is null) <> (youtube_connection_id is null)))`.
-- `create unique index org_stream_targets_one_seazn on org_stream_targets (org_id) where kind = 'seazn'`.
-- Insert one row per existing organisation: `label 'Seazn'`, `watch_url null`. Create function `ensure_seazn_target()` as `security definer` with `set search_path = public, pg_temp`, owned by the migration role, and an `after insert on organizations` trigger that inserts the row (`on conflict do nothing`). `org_stream_targets` has forced RLS with no policy (V410 `:407-408`), so an invoker-rights trigger would fail an org insert made by the app role.
+- `create unique index org_stream_targets_one_seazn on org_stream_targets (org_id) where kind = 'seazn' and archived_at is null`: one ACTIVE Seazn row per org. An archived one (a past Disable, V427's `archived_at`) stays for the sessions that name it, and a later Enable inserts a fresh row beside it.
+- No row is inserted and no trigger is created (owner ruling, spec §8.3): the row is made by Enable (Task 10).
+- `alter table organizations add column seazn_hosted_prompt_dismissed_at timestamptz null`: the match panel's "Try Seazn Hosted" dismiss, remembered per org (spec §8.4). It follows the existing per-org settings columns on `organizations` (V118 `stripe_charges_enabled`, V333 `referral_code`); there is no org settings table to reuse.
 - `fixture_stream_inputs` gains `access jsonb null`: the signed settings an input was CREATED with (`{"signed":true,"allowedOrigins":[…]}`), written once by provisioning and never updated (Task 12).
 - `create table seazn_held_alerts (cf_video_id text primary key, session_id uuid not null references fixture_stream_sessions(id) on delete restrict, alerted_at timestamptz not null default now())`, with RLS as in V430. It is the one-alert-per-recording mark for the sweep hold (Task 18); it needs no replay row, so it works in Phase 1.
 - `create table seazn_locked_videos (cf_video_id text primary key, input_row_id uuid not null references fixture_stream_inputs(id) on delete restrict, locked_at timestamptz not null default now())`, RLS as in V430: the mark that Task 13 has set `requireSignedURLs: true` on a recording (C3), so it is set once. `fixture_stream_inputs` also gains `recordings_locked_at timestamptz null`: Task 13's mark that every recording of a finished programme input is locked, so the input is never listed again.
 - Drop and recreate `fixture_stream_sessions_one_active_target` (V479 `:285-289`) with an added `and destination_kind is distinct from 'seazn'`. `destination_kind` is written once at insert and never updated, so the predicate is stable.
 
-  Plan decision: rows are created by trigger rather than lazily on read. `fixtureStreamTarget` is documented as writing nothing, and RULES.md is greenfield, so no backfill concern applies.
+  Plan decision: the row is created by the Enable write (Task 10), never by a trigger or lazily on read. `fixtureStreamTarget` is documented as writing nothing, and RULES.md is greenfield, so no backfill concern applies.
 
 - [ ] **Step 1: Write the failing tests.**
-  - A new org gets exactly one `seazn` row.
-  - A second `seazn` row for that org fails 23505.
+  - A new org gets no `seazn` row.
+  - A second active `seazn` row for that org fails 23505. With the first archived, a second inserts.
   - A `seazn` row with `rtmp_enc` set fails 23514. A `youtube` row with neither source still fails 23514 (the regression).
   - Two `live` sessions on one `seazn` target insert. Two on one pasted target still fail 23505.
   - The RLS state of `org_stream_targets` is unchanged (`rls-static.test.ts`), and `seazn_held_alerts` and `seazn_locked_videos` are listed.
-  - An organisation inserted under `set local role app_user` (the app role) commits and gets its `seazn` row. Run it once with the function as invoker to see it fail, then as definer.
+  - `organizations.seazn_hosted_prompt_dismissed_at` exists, is nullable and is null on a new org.
 - [ ] **Step 2: Run them and see them fail** (table shape missing). `cd apps/web && npx vitest run src/server/relay/__tests__/seazn-destination-migration.test.ts src/server/relay/__tests__/migration-shape.test.ts src/server/relay/__tests__/rls-static.test.ts --reporter=json --outputFile=$SCRATCH/t9.json`.
 - [ ] **Step 3: Write V540.** Apply it to a fresh local schema per the `seazn-local-env` skill (`db:apply` then `sync:sports`). Never apply it to a shared database.
 - [ ] **Step 4: Run the Step 2 command again.** Expect PASS.
-- [ ] **Step 5: Commit** `feat(db): V540 Seazn destination row`.
+- [ ] **Step 5: Commit** `feat(db): V540 Seazn destination kind, enabled per org`.
 
-### Task 10: Destination reads and writes know Seazn
+### Task 10: Destination reads and writes know Seazn; an org admin enables it
 
 **Files:**
 
-- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts:70` (`StreamTargetKind` gains `"seazn"`)
+- Modify: `apps/web/src/server/api-v1/schemas/streaming.ts:70` (`StreamTargetKind` gains `"seazn"`; new `SeaznHostedState`)
 - Modify: `apps/web/src/server/usecases/stream-targets.ts`:
-  - `listStreamTargets :66-95`: when LIVE is on, Seazn is first, `keyHint: null`, `inUse: null`; when LIVE is off, the row is left out.
-  - `patchStreamTarget :163`, `removeStreamTarget :198`: both refuse a `seazn` row.
+  - `listStreamTargets :66-95`: when LIVE is on, the org's active Seazn row (if enabled) is first, `keyHint: null`, `inUse: null`; when LIVE is off, the row is left out. The query already reads `archived_at is null`, so a disabled Seazn is never listed.
+  - `patchStreamTarget :163`, `removeStreamTarget :198`: both refuse a `seazn` row (Disable, below, is the only way to take it away).
+- Create: `apps/web/src/server/usecases/seazn-hosted.ts` (owner rulings, spec §8):
+  - `seaznHostedState(orgId): Promise<SeaznHostedState>`: `{ enabled, promptDismissed }`, read from the active `seazn` row and `organizations.seazn_hosted_prompt_dismissed_at`.
+  - `enableSeaznHosted(auth, orgId)`: 422 `seazn_unavailable` while LIVE is off; else inserts `kind 'seazn'`, `label 'Seazn'`, `watch_url null`, no `rtmp_enc`, no `youtube_connection_id` (`on conflict do nothing` on `org_stream_targets_one_seazn`, so a second Enable answers the same row). A direct insert, not `insertStreamTarget` (`secret-columns.ts:133`), which seals a key the row does not have.
+  - `disableSeaznHosted(auth, orgId)`: `archiveStreamTarget` (`secret-columns.ts:327`) on the active `seazn` row, the same soft-delete Remove uses. No holder check: a session already on it keeps its `target_id` and runs on (spec §8.3). Disabling when not enabled is a no-op.
+  - `dismissSeaznPrompt(auth, orgId)`: sets `organizations.seazn_hosted_prompt_dismissed_at = now()` where it is null.
+  - Each write checks `auth.orgId === orgId` (404 otherwise), as `createStreamTarget` does.
+- Create: `apps/web/src/app/api/v1/orgs/[id]/seazn-hosted/route.ts` (`POST` enable → 200 `SeaznHostedState`; `DELETE` disable → 200 `SeaznHostedState`) and `apps/web/src/app/api/v1/orgs/[id]/seazn-hosted/prompt-dismissal/route.ts` (`POST` → 200 `SeaznHostedState`). Modelled on `orgs/[id]/stream-targets/route.ts`: `assertUuid`, then `requireOrgAuth(req, id, "write")`, the org-admin gate the stream-target and YouTube-connection routes use (`EDITOR_ROLES` = owner, admin, `lib/types.ts:24`), so a viewer or scorer gets 403.
+- Modify: `apps/web/src/server/api-v1/key-scopes.ts:459-470` (`NEVER_KEY_ROUTES`, beside the stream targets): `POST /orgs/:id/seazn-hosted`, `DELETE /orgs/:id/seazn-hosted`, `POST /orgs/:id/seazn-hosted/prompt-dismissal`. An org admin's act, never a key's.
+- Modify: `apps/web/src/server/api-v1/openapi.ts` (beside `:331-333`): the three routes.
 - Modify: `apps/web/src/server/usecases/stream-codes.ts`:
   - `fixtureStreamTarget :496-509`: when LIVE is on, list `seazn` first; when off, exclude it.
   - `writeStreamSettings :515`: refuse a `seazn` target with 422 `seazn_unavailable` while LIVE is off.
 - Modify: `apps/web/src/server/usecases/stream-target-holders.ts:43-66` (`holderRows`): add `and t.kind <> 'seazn'` beside the existing `t.youtube_connection_id is null`.
 - Read, no change expected: `apps/web/src/lib/stream-destinations.ts:79-81` (`resolveStreamTarget`). A saved pick that is not in the live list answers `null`, so with LIVE off (Seazn excluded from the list) a saved Seazn pick resolves to no destination. Pin that with a test; never add a fallback there.
-- Test: `src/server/usecases/__tests__/stream-targets.test.ts`, `src/server/usecases/__tests__/stream-codes.test.ts` (or the file that covers `fixtureStreamTarget`), `src/server/usecases/__tests__/court-streams.test.ts`
+- Test: `src/server/usecases/__tests__/stream-targets.test.ts`, `src/server/usecases/__tests__/stream-codes.test.ts` (or the file that covers `fixtureStreamTarget`), `src/server/usecases/__tests__/court-streams.test.ts`, `src/app/api/v1/orgs/[id]/seazn-hosted/__tests__/seazn-hosted-route.test.ts` (new, following `stream-targets/__tests__/target-route.test.ts`: real `org_members` rows behind `requireOrgAuth`), `src/server/api-v1/__tests__/key-scopes.test.ts`
 
 **Interfaces — Produces:**
 
+- `type SeaznHostedState = { enabled: boolean; promptDismissed: boolean }` (zod in `schemas/streaming.ts`).
+- `seaznHostedState`, `enableSeaznHosted`, `disableSeaznHosted`, `dismissSeaznPrompt` (`usecases/seazn-hosted.ts`, above). Task 16 reads `seaznHostedState` for the Streaming page and the match panel.
+- A test helper `enableSeazn(orgId)` in the stream-sessions rig (`src/server/relay/__tests__/_session-rig.ts`) that calls `enableSeaznHosted` as the org's owner. Tasks 11–19 set up every Seazn fixture through it, never by a raw insert.
 - `SEAZN_TARGET_FIXED = "seazn_destination_fixed"`: the 422 code for patch and remove.
 - `SEAZN_UNAVAILABLE = "seazn_unavailable"`: the 422 code when a write or start names a Seazn target while LIVE is off.
 - SQL fragment `seaznOrder(on: boolean)` in `stream-targets.ts`. When on it is `order by (kind = 'seazn') desc, created_at, id`. When off it is `kind <> 'seazn'` in the WHERE plus the old order.
 
 - [ ] **Step 1: Write the failing tests.**
-  - LIVE on: `listStreamTargets` returns the Seazn row first for an org with two older pasted keys, and `fixtureStreamTarget` with no saved pick answers it with `source: "default"`.
+  - Enable, one test each (owner's list, spec §8):
+    - **Admin enables → row exists.** The org's admin `POST`s `/orgs/{id}/seazn-hosted` with LIVE on: 200 `{ enabled: true, promptDismissed: false }`, and the org has exactly one active `seazn` row. A second `POST` answers the same and still one row.
+    - **Non-admin refused.** A viewer member's `POST` (and `DELETE`) answers 403 and the org has no `seazn` row.
+    - **Disable → no longer offered.** After Enable then `DELETE`, `listStreamTargets` has no Seazn row, `fixtureStreamTarget` with no saved pick answers the oldest pasted key, and a fixture whose saved pick was the Seazn row answers `null`. In the same test, a session that was live on that row before the Disable is still `live` with its `target_id` unchanged (the one cheap check of spec §8.3).
+  - Before Enable, LIVE on: `listStreamTargets` and `fixtureStreamTarget` never answer Seazn (no row exists).
+  - `POST` with LIVE off: 422 `seazn_unavailable`, no row.
+  - The dismissal route sets `promptDismissed: true`, and `seaznHostedState` reads it back.
+  - `key-scopes.test.ts`: the three routes are never key-reachable.
+  - LIVE on, enabled: `listStreamTargets` returns the Seazn row first for an org with two older pasted keys, and `fixtureStreamTarget` with no saved pick answers it with `source: "default"`.
   - LIVE off: neither function returns it, and the pick is the oldest pasted key (the regression).
   - LIVE off with a fixture whose saved pick is the Seazn row (`target_chosen` true): `fixtureStreamTarget` answers `null`, not any external destination, even when the org has a YouTube connection (Review Focus 2, spec anti-goal).
   - `patchStreamTarget` and `removeStreamTarget` on Seazn give 422 `seazn_destination_fixed`, and the row is unchanged.
   - `holderRows` with a live session on Seazn returns `[]`.
   - Court link create with the Seazn target id gives the existing YouTube-only refusal.
-- [ ] **Step 2: Run them and see them fail.** `cd apps/web && npx vitest run src/server/usecases/__tests__/stream-targets.test.ts src/server/usecases/__tests__/court-streams.test.ts <the stream-codes test file> --reporter=json --outputFile=$SCRATCH/t10.json`.
-- [ ] **Step 3: Implement.** Then `npm run openapi:gen` (the kind enum and the two refusal codes).
-- [ ] **Step 4: Run the Step 2 command again.** Expect PASS. Check that the openapi diff is the kind enum and the codes only. Mutate `holderRows`: drop the new predicate, and the holder test fails.
-- [ ] **Step 5: Commit** `feat(stream): Seazn in destination reads and writes`.
+- [ ] **Step 2: Run them and see them fail.** `cd apps/web && npx vitest run src/server/usecases/__tests__/stream-targets.test.ts src/server/usecases/__tests__/court-streams.test.ts "src/app/api/v1/orgs/[id]/seazn-hosted" src/server/api-v1/__tests__/key-scopes.test.ts <the stream-codes test file> --reporter=json --outputFile=$SCRATCH/t10.json`.
+- [ ] **Step 3: Implement.** Then `npm run openapi:gen` (the kind enum, the two refusal codes and the three Seazn Hosted routes).
+- [ ] **Step 4: Run the Step 2 command again.** Expect PASS. Check that the openapi diff is the kind enum, the codes and the three routes only. Mutate `holderRows`: drop the new predicate, and the holder test fails. Mutate the routes' scope to `"read"`, and the non-admin test fails.
+- [ ] **Step 5: Commit** `feat(stream): Seazn in destination reads and writes; an org admin enables it`.
 
 ### Task 11: Admission of a Seazn session
 
@@ -417,7 +440,7 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 
   Plan decision: coerce the mode rather than refuse passthrough. The phone's start and the automatic start read the fixture's stored `stream_mode`, and refusing would strand them. `composedUnavailable()` still refuses first, by name.
 
-- [ ] **Step 1: Write the failing tests.** Use the fakes (`relay/fakes.ts`).
+- [ ] **Step 1: Write the failing tests.** Use the fakes (`relay/fakes.ts`). Every org here has Seazn Hosted enabled through `enableSeazn` (Task 10).
   - A passthrough create on Seazn makes a session with `mode = 'composed'` and `destination_kind = 'seazn'`, no `youtube_broadcasts` row, and no `readTargetSecret` call (spy).
   - A second fixture of the same org starts on Seazn while the first is live, so both are admitted (Review Focus 1).
   - LIVE off gives 422 `seazn_unavailable` with zero provider calls and no row.
@@ -593,28 +616,43 @@ C1–C6 settled the token and access questions this task used to probe: the inpu
 - [ ] **Step 4: Run both commands again.** Expect PASS. Take screenshots at the three widths and open each one.
 - [ ] **Step 5: Commit** `feat(stream): Seazn live player on the match page`.
 
-### Task 16: Organiser picker — Seazn first and pre-selected
+### Task 16: Enable Seazn Hosted, then Seazn first and pre-selected
+
+Owner rulings, spec §8: the Streaming page enables it, and the match panel asks first.
 
 **Files:**
 
 - Modify: `apps/web/src/components/v2/fixture-destination-picker.tsx:47` (a `seazn` option: Seazn mark, label `stream.dest.kind.seazn`, a one-line sub "Plays on this match's page")
 - Modify: `apps/web/src/components/v2/stream-platform-mark.tsx` (a Seazn mark)
-- Modify: `apps/web/src/components/v2/stream-destinations-panel.tsx` (the Seazn row shows with no Rename, Replace key or Remove)
-- Modify: `apps/web/src/components/v2/fixture-stream-panel.tsx`. Phase 0's pre-Go-live warning (Task 4) already sits in `onGoLive` (`:1154`) behind `needsChannelCheck(target)` (true only for a target with a YouTube connection). The Seazn row has `youtube: null`, so it must never fetch the safety route or show the notice: build on that predicate, never beside it. (No other logic change expected: `serverPick` comes from `fixtureStreamTarget`, which Task 10 already answers with Seazn; verify. The 2,805-line file is not split in this plan.)
-- Modify: `src/dictionaries/{en,es,fr,nl}/ui.json`: `stream.dest.kind.seazn` ("Seazn"), `stream.dest.seazn.sub` ("Plays on this match's page"), `streamDest.error.seaznFixed` ("Seazn is always available and can't be changed"), `stream.refusal.seazn_unavailable`, `stream.refusal.seazn_video_unconfigured`
-- Test: `components/v2/__tests__/fixture-destination-picker.test.tsx`, `components/v2/__tests__/stream-destinations-panel.test.tsx`, `components/v2/__tests__/fixture-stream-panel.safety.test.tsx` (Task 4's file, extended), `e2e/streaming-destinations.spec.ts` (`e2e/walkthrough/`), `e2e/mobile/` (the stream-panel area file)
+- Create: `apps/web/src/components/v2/seazn-hosted-card.tsx` (client), shown at the top of the Streaming page's list while LIVE is on:
+  - not enabled: the Seazn mark, title "Seazn Hosted", a _Recommended_ badge, one line "Viewers watch live and replays on your match pages. No YouTube needed.", and, for `canEdit`, **Enable**. Enable opens one confirm ("Enable Seazn Hosted?" / "Seazn becomes the first choice for every match. You can turn it off here at any time." / Enable / Cancel), then `POST /api/v1/orgs/{id}/seazn-hosted` and `router.refresh()`.
+  - enabled: an **Enabled** badge and, for `canEdit`, **Disable** (one confirm: "Disable Seazn Hosted?" / "Matches can no longer pick Seazn. A match streaming to Seazn now carries on." / Disable / Cancel), `DELETE` the same route.
+  - a member who is not an admin sees the card and its badge with no button.
+- Modify: `apps/web/src/components/v2/stream-destinations-panel.tsx`: the panel takes `seaznHosted: SeaznHostedState | null` (null while LIVE is off: no card) and renders `<SeaznHostedCard>` above the list. The enabled Seazn row in the list itself shows with no Rename, Replace key or Remove (Disable is on the card).
+- Modify: `apps/web/src/app/o/[orgSlug]/streaming/page.tsx` (full-access branch, `:84-95`): read `seaznHostedLive() ? await seaznHostedState(auth.orgId) : null` and pass it with `canEdit`. The disconnect-only branch shows no card.
+- Modify: `apps/web/src/server/stream-panel-context.ts` (the return at `:180-225`) and `StreamPanelContext` (`fixture-stream-panel.tsx:178`): add `seaznPrompt: boolean`, true exactly when LIVE is on, the relay is on, the org has no active `seazn` row, `seazn_hosted_prompt_dismissed_at` is null, and `auth.role` is owner or admin (`EDITOR_ROLES`). Read in the existing `Promise.all`, only with the relay.
+- Create: `apps/web/src/components/v2/seazn-hosted-prompt.tsx` (client): the match panel's **Try Seazn Hosted** card, rendered by `fixture-stream-panel.tsx` above the destination picker while `stream.seaznPrompt` is true and the card has not been dismissed in this render. One line ("Stream to your match page with Seazn Hosted. No YouTube channel needed."), **Enable Seazn Hosted** (no second confirm: the button names the act; it `POST`s the enable route, then re-reads `/orgs/{id}/stream-targets` through the panel's existing `targets` loader (`:871`) so Seazn appears first and selected without a reload), and a dismiss (×, screen-reader name "Dismiss"), which hides the card at once and `POST`s `/seazn-hosted/prompt-dismissal`.
+  - Plan decision (spec §7.5): a member who is not an org admin gets no card at all, not a card without its button. They could not act on it, and a dismiss they could not save would come back on every load.
+- Modify: `apps/web/src/components/v2/fixture-stream-panel.tsx`. Phase 0's pre-Go-live warning (Task 4) already sits in `onGoLive` (`:1154`) behind `needsChannelCheck(target)` (true only for a target with a YouTube connection). The Seazn row has `youtube: null`, so it must never fetch the safety route or show the notice: build on that predicate, never beside it. Beyond mounting `<SeaznHostedPrompt>`, no other logic change expected: `serverPick` comes from `fixtureStreamTarget`, which Task 10 already answers with Seazn once enabled; verify. The 2,805-line file is not split in this plan.
+- Modify: `src/dictionaries/{en,es,fr,nl}/ui.json` (all four, spec §8.5): `stream.dest.kind.seazn` ("Seazn"), `stream.dest.seazn.sub` ("Plays on this match's page"), `streamDest.error.seaznFixed` ("Turn Seazn Hosted off with Disable on its card"), `stream.refusal.seazn_unavailable`, `stream.refusal.seazn_video_unconfigured`, and the card and prompt strings above under `streamDest.seaznHosted.*` (`title`, `recommended`, `enabled`, `desc`, `enable`, `disable`, `enableConfirmTitle`, `enableConfirmBody`, `disableConfirmTitle`, `disableConfirmBody`, `cancel`) and `stream.seaznPrompt.*` (`title` "Try Seazn Hosted", `body`, `enable`, `dismiss`, `failed` "Seazn Hosted could not be turned on. Try again.").
+- Test: `components/v2/__tests__/fixture-destination-picker.test.tsx`, `components/v2/__tests__/stream-destinations-panel.test.tsx`, `components/v2/__tests__/seazn-hosted-prompt.test.tsx` (new), `components/v2/__tests__/fixture-stream-panel.safety.test.tsx` (Task 4's file, extended), `server/__tests__/stream-panel-context.test.ts`, `app/o/[orgSlug]/streaming/__tests__/streaming-page.test.tsx`, `e2e/walkthrough/streaming-destinations.spec.ts`, `e2e/mobile/` (the stream-panel area file)
 
 - [ ] **Step 1: Write the failing tests.**
-  - The picker lists Seazn first and checked for a fixture with no pick.
+  - Owner's list, one test each (spec §8):
+    - **The panel offers no Seazn before Enable.** An org with LIVE on and no `seazn` row: the picker has no Seazn option and the oldest destination is checked; an admin sees the Try Seazn Hosted card.
+    - **A dismissed card stays gone after reload.** `stream-panel-context.test.ts`: after `dismissSeaznPrompt`, `seaznPrompt` is false for the same org, for another admin of it too. `seazn-hosted-prompt.test.tsx`: tapping dismiss hides the card and `POST`s the dismissal route once.
+    - **Enabled → Seazn pre-selected.** e2e: an admin taps Enable Seazn Hosted on the panel's card; without a reload the picker lists Seazn first and checked, and Go live starts a session with `destination_kind = 'seazn'`.
+  - `seaznPrompt` is false for a viewer member, and false once the org is enabled.
+  - Streaming page: the card shows _Recommended_ and Enable for an admin, Enabled and Disable after Enable, and no button for a viewer. No card while LIVE is off.
+  - The picker lists Seazn first and checked for a fixture with no pick, once enabled.
   - Picking a pasted key and reloading keeps the pasted key (the server answer).
   - The destinations panel row for Seazn has no `button[name=Remove]`.
-  - The `nl` render shows the Dutch strings.
+  - The `nl` render shows the Dutch strings for the card and the prompt.
   - Phase 0 warning stays YouTube-only (Review Focus 9), in `fixture-stream-panel.safety.test.tsx` (Task 4's file): with Seazn picked on an org whose YouTube connection would warn (fake safety route answers `warn: true`), Go live makes zero requests to `/youtube-connections/*/safety`, renders no channel-safety notice, and POSTs `stream-sessions` with the Seazn `targetId` on the first tap. The same panel with the YouTube connection target picked shows the notice (the control). `needsChannelCheck` answers false for a `kind: "seazn"` target.
-  - e2e: a new org's match panel shows Seazn selected, and Go live starts a session with `destination_kind = 'seazn'`.
-- [ ] **Step 2: Run them and see them fail.** Run vitest on the three component tests; run `npx playwright test e2e/walkthrough/streaming-destinations.spec.ts e2e/mobile/` on whole files.
+- [ ] **Step 2: Run them and see them fail.** Run vitest on the component, context and page tests above; run `npx playwright test e2e/walkthrough/streaming-destinations.spec.ts e2e/mobile/` on whole files.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run both again.** Expect PASS. Take screenshots at 320, 768 and 1280.
-- [ ] **Step 5: Commit** `feat(stream): Seazn is the preferred destination in the match panel`.
+- [ ] **Step 4: Run both again.** Expect PASS. Mutate `seaznPrompt`: drop the dismissed check, and the reload test fails. Take screenshots of the Streaming page card (both states) and the panel prompt at 320, 768 and 1280.
+- [ ] **Step 5: Commit** `feat(stream): an org admin enables Seazn Hosted; then it is the preferred destination`.
 
 ### Task 17: Match Day plays the Seazn live
 
@@ -708,8 +746,8 @@ Controller ruling (2026-11-20): every `destination_kind = 'seazn'` recording is 
 
 **Files:**
 
-- Create: `scripts/smoke/suites/seaznHosted.ts`, registered as `streamTargets.ts` is. It covers the Seazn row present and first, the start refused while LIVE is off, and the public video route `no-store`.
-- Create: `apps/web/e2e/walkthrough/seazn-hosted.spec.ts`. On the fake driver, organiser and spectator: Seazn pre-selected → Go live → the spectator sees the player → Stop → the player goes and the page shows its ended state. The database has 0 `youtube_broadcasts` rows and 0 `add_output` provider calls for the fixture.
+- Create: `scripts/smoke/suites/seaznHosted.ts`, registered as `streamTargets.ts` is. It covers no Seazn row before Enable, the Seazn row present and first after an admin's Enable, the start refused while LIVE is off, and the public video route `no-store`.
+- Create: `apps/web/e2e/walkthrough/seazn-hosted.spec.ts`. On the fake driver, organiser and spectator: the admin enables Seazn Hosted on the Streaming page → Seazn pre-selected in the match panel → Go live → the spectator sees the player → Stop → the player goes and the page shows its ended state. The database has 0 `youtube_broadcasts` rows and 0 `add_output` provider calls for the fixture.
 
 - [ ] **Step 1: Write both.**
 - [ ] **Step 2: Run them.** `npx playwright test e2e/walkthrough/seazn-hosted.spec.ts`, and the smoke suite by its runner. Expect PASS.
@@ -774,9 +812,7 @@ export interface ReplayHost {
     now: Date,
     ttlSeconds: number,
   ): { src: string; expiresAt: string }; // pure, no call
-  openDownload(
-    videoId: string,
-  ): Promise<{
+  openDownload(videoId: string): Promise<{
     body: ReadableStream<Uint8Array>;
     bytes: number | null;
     fileName: string;
