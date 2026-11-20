@@ -13,7 +13,8 @@ import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
 import { isEditorRole } from "@/lib/types";
-import { mayPress } from "@/lib/match-day/online";
+import { holdReasonForReader } from "@/lib/arbiter-view";
+import { latestOpenedRoundNos, mayPress } from "@/lib/match-day/online";
 import { isLinkHold } from "@/server/external-play/types";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { frozenCompetitionIds } from "./entitlement-freeze";
@@ -351,6 +352,9 @@ function resolveDivisionNext(rows: FixtureRaw[], nowIso: string): DeskNextFixtur
  * - Ruling MD-R2: `reopen` is set on a LINK hold (`isLinkHold`) only when this viewer may also press the round's Open round - an editor,
  *   the club offered online chess, the competition not billing-frozen (`mayPress(…, "start")`, the ONE rule the panel's presses obey).
  *   Otherwise the row opens the board's own decisions, which finish play whatever the freeze says.
+ * - Ruling MD-R22: AND only when the hold's round is its stage's LATEST opened round (`latestRound`): that is the one round of a stage Match
+ *   Day lists, so only it has a round panel for the row's `?round=` to open. A hold left in an earlier round (a league whose next round has
+ *   opened) opens its board, where the abandon settle is offered.
  * - ISOLATED (the rule MD-R9 gave Match Day's own online read): the competition page must not die because the chess queue could not be
  *   read, so a division whose read throws is logged at error and has no board attentions in this read, the rest of the desk whole.
  *
@@ -360,6 +364,8 @@ async function onlineBoardAttentions(
   auth: AuthCtx,
   competitionId: string,
   divisionIds: readonly string[],
+  /** Each stage's latest opened round (`latestOpenedRoundNos` of the opened-round read): the one round of a stage a re-open can name. */
+  latestRound: ReadonlyMap<string, number>,
 ): Promise<Map<string, Attention[]>> {
   const out = new Map<string, Attention[]>();
   // Ruling MD-R18: behind the flag that gates Match Day's own online rows (match-day.ts reads the same one). A row whose button lands on a
@@ -410,8 +416,8 @@ async function onlineBoardAttentions(
           boardNo: boardNoOf(h.boardNo, h.fixtureId),
           home: h.homeName,
           away: h.awayName,
-          reason: editor ? h.reason : null,
-          reopen: start && isLinkHold(h.reason),
+          reason: holdReasonForReader(h.reason, editor),
+          reopen: start && isLinkHold(h.reason) && latestRound.get(h.stageId) === h.roundNo,
         });
       }
       for (const b of r.flagged) {
@@ -703,7 +709,7 @@ export async function getCompetitionDesk(
   );
   const openedRounds = await roundOpensOfDivisions(sql, [...onlineIds]);
   // Match Day online (T4): the per-board attentions of those divisions, appended to each one's list below.
-  const boardAttentions = await onlineBoardAttentions(auth, competitionId, [...onlineIds]);
+  const boardAttentions = await onlineBoardAttentions(auth, competitionId, [...onlineIds], latestOpenedRoundNos(openedRounds.keys()));
 
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();

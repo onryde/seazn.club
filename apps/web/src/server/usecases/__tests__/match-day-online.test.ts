@@ -874,7 +874,7 @@ describe.runIf(HAS_DB)("readOnlineRounds - the hold reason follows the board (M2
 describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's schema", () => {
   const real = (minutes: number): Date => new Date(Date.now() + minutes * MIN);
 
-  it("a link-held board (real open) and a board with live presence and camera: hold_reason, presence, camera and joinable survive the parse", async () => {
+  it("a link-held board (real open) and a board with live presence and camera: presence, camera and joinable survive the parse, and a key reads the board held without WHY (MD-R21)", async () => {
     vi.stubEnv("MATCH_DAY_ONLINE", "1");
     const r = await seedOnlineChessRound({ fixtures: 2 });
     const [held, here] = r.boards as [SeedRoundBoard, SeedRoundBoard];
@@ -905,15 +905,23 @@ describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's sche
     const wHeld = wireBoards.find((b) => b.fixtureId === held.fixtureId)!;
     const wHere = wireBoards.find((b) => b.fixtureId === here.fixtureId)!;
     expect(wHeld.state.kind).toBe("on_hold");
-    expect(wHeld.hold_reason, "hold_reason on the wire").toBe("lichess_unlinked");
+    // The read key is no editor, so the reason does not reach it (null on the wire, not a missing key); the usecase's own row - the organiser's
+    // read - still has it. Every role is driven in competitions/[id]/match-day/__tests__/hold-reasons.test.ts.
+    expect(wHeld.hold_reason, "hold_reason on the wire: withheld from a key").toBeNull();
+    expect(Object.keys(wHeld), "withheld as null, never a missing key").toContain("hold_reason");
+    const usecaseHeld = (usecase[0]!.round as { boards: ArbiterBoard[] }).boards.find((b) => b.fixtureId === held.fixtureId)!;
+    expect(holdOf(usecaseHeld), "premise: the real open's reason is on the usecase's row").toBe("lichess_unlinked");
     expect(wHere.hold_reason ?? null).toBeNull();
     expect(wHere.sides.home.presence.present, "presence on the wire").toBe(true);
     expect(wHere.sides.home.camera.state, "camera on the wire").toBe("live");
     expect(wHere.sides.home.joinable, "joinable on the wire").toBe(true);
     expect(wHere.sides.away.joinable).toBe(false);
-    // And the wire's board IS the usecase's, JSON for JSON (the schema neither dropped a field nor invented one).
+    // And the wire's board IS the usecase's, JSON for JSON (the schema neither dropped a field nor invented one) - but for the reason a key
+    // does not get.
     const usecaseBoards = (usecase[0]!.round as { boards: ArbiterBoard[] }).boards;
-    expect(wireBoards).toEqual(JSON.parse(JSON.stringify(usecaseBoards)));
+    const unreasoned = (boards: unknown[]): unknown[] => boards.map((b) => Object.fromEntries(Object.entries(b as Record<string, unknown>).filter(([k]) => k !== "hold_reason")));
+    expect(unreasoned(wireBoards)).toEqual(unreasoned(JSON.parse(JSON.stringify(usecaseBoards)) as unknown[]));
+    expect(unreasoned(wireBoards).length, "anti-vacuity: boards compared").toBe(2);
   });
 });
 

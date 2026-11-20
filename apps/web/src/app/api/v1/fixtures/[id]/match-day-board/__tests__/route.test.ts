@@ -134,13 +134,14 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
     expect(sides.away).toMatchObject({ state: "none", presence: { present: false }, camera: { state: "unknown" }, joinable: false });
   });
 
-  it("a held board's reason rides the wire; a live board's is null - the vocabulary the schema carries is the server's own", async () => {
-    const held = await read(await boardRoute(get(s.two.fixtureId, secret), ctx(s.two.fixtureId)));
+  it("a held board's reason rides the wire to an organiser; a live board's is null - the vocabulary the schema carries is the server's own", async () => {
+    authState.userId = s.r.ownerUserId;
+    const held = await read(await boardRoute(get(s.two.fixtureId), ctx(s.two.fixtureId)));
     expect(held.status).toBe(200);
     const board = MatchDayBoard.parse(held.body.data);
     expect([(board.state as { kind: string }).kind, board.hold_reason]).toEqual(["on_hold", "no_show_white"]);
     expect(NEEDS_REASONS as readonly string[]).toContain(board.hold_reason);
-    const live = MatchDayBoard.parse((await read(await boardRoute(get(s.three.fixtureId, secret), ctx(s.three.fixtureId)))).body.data);
+    const live = MatchDayBoard.parse((await read(await boardRoute(get(s.three.fixtureId), ctx(s.three.fixtureId)))).body.data);
     expect(live.hold_reason).toBeNull();
   });
 
@@ -209,6 +210,37 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
     const unflagged = (board: Record<string, unknown>) => Object.fromEntries(Object.entries(board).filter(([key]) => key !== "flags"));
     expect(Object.keys(seen.owner!), "the board has more than its flags to compare").toContain("sides");
     expect(unflagged(seen.viewer!), "nothing but the flags differs between the roles").toEqual(unflagged(seen.owner!));
+  });
+
+  it("MD-R21 over the wire, by ROLE: an owner and an admin read WHY the board is held; a viewer member and a read key read null - the board is held for all of them, and nothing else differs; a write-scope key (usecase level: the club has no write keys) is stripped too", async () => {
+    const viewer = await member(s.r.orgId, "viewer");
+    const admin = await member(s.r.orgId, "admin");
+    const seen: Record<string, Record<string, unknown>> = {};
+    let checked = 0;
+    for (const [who, userId, secretOf, want] of [
+      ["owner", s.r.ownerUserId, undefined, "no_show_white"],
+      ["admin", admin, undefined, "no_show_white"],
+      ["viewer", viewer, undefined, null],
+      ["read key", "", secret, null],
+    ] as const) {
+      authState.userId = userId;
+      const res = await read(await boardRoute(get(s.two.fixtureId, secretOf), ctx(s.two.fixtureId)));
+      expect(res.status, who).toBe(200);
+      const board = MatchDayBoard.parse(res.body.data);
+      expect((board.state as { kind: string }).kind, `${who}: the board is held for every reader`).toBe("on_hold");
+      expect(board.hold_reason, who).toBe(want);
+      if (want === null) expect(JSON.stringify(res.body), `${who}: the reason word does not travel`).not.toContain("no_show_white");
+      seen[who] = res.body.data!;
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every reader checked").toBe(4);
+    const reasoned = (board: Record<string, unknown>) => Object.fromEntries(Object.entries(board).filter(([key]) => key !== "hold_reason"));
+    // A key's role is null whatever its scopes: the write-scope key is no editor either (the door above cannot mint one for this club).
+    const writeKeyCtx = { orgId: s.r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read", "write"] } as AuthCtx;
+    expect((await loadMatchDayBoard(writeKeyCtx, s.two.fixtureId)).hold_reason, "a write-scope key").toBeNull();
+    expect((await loadMatchDayBoard(s.r.owner, s.two.fixtureId)).hold_reason, "positive pair: the owner's own ctx").toBe("no_show_white");
+    for (const who of ["viewer", "read key"]) expect(reasoned(seen[who]!), `${who}: nothing but the reason differs from the owner's board`).toEqual(reasoned(seen.owner!));
+    expect(Object.keys(seen.viewer!), "the null is on the wire, not a missing key").toContain("hold_reason");
   });
 
   it("the organiser who PLAYS on the board is refused 403 ARBITER_PLAYS_THIS_BOARD over the wire, and reads the round's other board", async () => {

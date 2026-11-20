@@ -25,10 +25,12 @@ import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
 import type { MatchDayBoardRow, MatchDayOnlineRound, OnlineRoundPhase } from "../types";
 import {
   boardRowWord,
+  latestOpenedRoundNos,
   mayPress,
   onlineRoundKey,
   onlineRoundPhase,
   orderOnlineRounds,
+  parseOnlineRoundKey,
   presenceMark,
   resolveOnlineFocus,
   roundRowWord,
@@ -741,5 +743,64 @@ describe("onlineRoundKey: the one spelling of a round's key", () => {
     const src = readFileSync(join(__dirname, "../../../components/v2/desk/needs-you.tsx"), "utf8");
     expect(src, "the builder reads the one function").toContain("onlineRoundKey(");
     expect(src, "and holds no `${...stageId}:${...}` template of its own").not.toMatch(/\$\{[^}]*stageId\}:\$\{/);
+  });
+});
+
+// ---- which round of a stage is its LATEST opened one (MD-R22) -----------------------------------------------------------------------
+// Match Day lists, per stage, its latest opened round (match-day-online.ts `latestOpened`); the competition desk's re-open is on offer only for
+// that round. Both read the opens through this one function, so the two cannot disagree on which round a stage is on.
+describe("latestOpenedRoundNos: each stage's highest opened round, from the opened-round keys", () => {
+  const A = "5b1f0c2e-7d34-4c6a-9a51-0e2f8c3d4b67";
+  const B = "0a9e8d7c-6b5a-4f3e-8d2c-1b0a9f8e7d6c";
+
+  it("EMPTY CASE FIRST: no round opened is no stage on a round - an empty map, never a default round", () => {
+    expect(latestOpenedRoundNos([]).size).toBe(0);
+    expect(latestOpenedRoundNos([]).get(A)).toBeUndefined();
+  });
+
+  it("the highest round number of each stage, whatever order the keys arrive in, and each stage on its own: stage B's round 1 is not behind stage A's round 3", () => {
+    const keys = [onlineRoundKey(A, 2), onlineRoundKey(B, 1), onlineRoundKey(A, 3), onlineRoundKey(A, 1)];
+    const forward = latestOpenedRoundNos(keys);
+    const backward = latestOpenedRoundNos([...keys].reverse());
+    expect([...forward.entries()].sort()).toEqual([[A, 3], [B, 1]].sort());
+    expect([...backward.entries()].sort(), "order of arrival changes nothing").toEqual([...forward.entries()].sort());
+    expect(forward.size, "anti-vacuity: both stages read").toBe(2);
+  });
+
+  it("compares round NUMBERS, not their spellings: round 10 is later than round 9 (a string compare puts '9' last)", () => {
+    expect(latestOpenedRoundNos([onlineRoundKey(A, 9), onlineRoundKey(A, 10), onlineRoundKey(A, 2)]).get(A)).toBe(10);
+  });
+
+  it("parseOnlineRoundKey is onlineRoundKey's inverse for every round number it is given", () => {
+    let checked = 0;
+    for (const n of [0, 1, 9, 10, 128]) {
+      expect(parseOnlineRoundKey(onlineRoundKey(A, n)), `round ${n}`).toEqual({ stageId: A, roundNo: n });
+      checked++;
+    }
+    expect(checked).toBe(5);
+  });
+
+  it("a key that is no round key is refused by name (a guard, not a silent skip): none of these is a stage and a round", () => {
+    let refused = 0;
+    for (const bad of ["", "no-colon", `${A}:`, `${A}:x`, `${A}:1.5`, `:3`, `${A}:-1`]) {
+      expect(() => parseOnlineRoundKey(bad), JSON.stringify(bad)).toThrow(/not a round key/);
+      expect(() => latestOpenedRoundNos([onlineRoundKey(A, 1), bad]), `${JSON.stringify(bad)} among good keys`).toThrow(/not a round key/);
+      refused++;
+    }
+    expect(refused).toBe(7);
+  });
+
+  it("the Match Day producer and the desk read ONE function: neither spells a round key's template nor splits one by hand", () => {
+    const root = join(__dirname, "../../../server/usecases");
+    let scanned = 0;
+    for (const file of ["match-day-online.ts", "competition-desk.ts"]) {
+      // Comments say things like `${stageId}:${roundNo}` in prose; the code is what is read.
+      const code = readFileSync(join(root, file), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+      expect(code, `${file}: no round-key template literal of its own`).not.toMatch(/`\$\{[^}`]+\}:\$\{[^}`]+\}`/);
+      expect(code, `${file}: no hand split of a key at its colon`).not.toMatch(/lastIndexOf\(":"\)/);
+      scanned++;
+    }
+    expect(scanned, "anti-vacuity: both producers scanned").toBe(2);
+    expect(readFileSync(join(root, "match-day-online.ts"), "utf8"), "the Match Day producer builds keys through the one function").toContain("onlineRoundKey(");
   });
 });

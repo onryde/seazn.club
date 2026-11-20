@@ -12,6 +12,7 @@
 // `camera_connection_problems` flag is NEVER read from its note (controller
 // addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
 
+import type { NeedsReason } from "@/server/external-play/types";
 import type { CheckinExtendState } from "./checkin-extend.ts";
 import type { SeatInviteWord } from "./invite-status.ts";
 
@@ -145,6 +146,13 @@ function flagSummary(f: ArbiterFlag): ArbiterFlag {
  *  API key) `flagSummary`'s. Pure: the input is never changed. */
 export function flagsForReader(flags: ArbiterFlag[], canEdit: boolean): ArbiterFlag[] {
   return canEdit ? flags : flags.map(flagSummary);
+}
+
+/** The ONE strip of WHY a board is held for a reader (MD-R21): the reason names the players' conduct (`fair_play`, the no-shows), so it is an
+ *  editor's fact like the flags' evidence (MD-R13) - an editor's role gets it as it is, anyone else (a view-only member, an API key) gets
+ *  null. Every door that carries a hold's reason goes through here: the focused board, Match Day's online rounds, the competition desk. */
+export function holdReasonForReader(reason: NeedsReason | null, canEdit: boolean): NeedsReason | null {
+  return canEdit ? reason : null;
 }
 
 /** The sweep's job-5 multiple_devices note, as it states it (D9). */

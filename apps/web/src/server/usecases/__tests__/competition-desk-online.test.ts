@@ -66,9 +66,10 @@ import { openRound } from "../external-play/open-round";
 import { getMatchDay } from "../match-day";
 import { readOnlineRounds } from "../match-day-online";
 import { createDivision } from "../divisions";
+import { startDivision } from "../schedule";
 import { createStages } from "../stages";
-import { reconnectLichess, seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
-import { MIN, NOW, bridgeRow, openFlag, setFixtureStatus } from "./_match-day-online-seed";
+import { reconnectLichess, seedLinkedPair, seedOnlineChessRound, type SeedOnlineChessRoundResult, type SeedRoundBoard } from "./_external-play-seed";
+import { MIN, NOW, addRound, addStage, bridgeRow, openFlag, openStamp, setFixtureStatus } from "./_match-day-online-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => {
@@ -414,6 +415,8 @@ describe.runIf(HAS_DB)("MD-R2: a link hold from the REAL open points at the roun
     const r = await round(2);
     const [b] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, b, "lichess_reconnect");
+    // MD-R22: a link hold is written BY the open, so its round is opened (the stamp the open leaves, which the re-open's row names).
+    await openStamp(r, 1, new Date(Date.now() - 2 * MIN));
 
     const desk = await deskOf(r.owner, r.competitionId);
 
@@ -441,10 +444,102 @@ describe.runIf(HAS_DB)("MD-R2: a link hold from the REAL open points at the roun
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
+// MD-R22: a re-open names a round the page LISTS. Match Day lists, per stage, the LATEST opened round (and the paired ones to come); a league
+// that has opened round 2 no longer has a row for round 1, so a link hold left behind in round 1 cannot be answered by "Open round 1 again" -
+// the key would match no row and the click would land nowhere. That hold's way back is the board's own decisions (`?board=`, where the
+// abandon settle is offered).
+describe.runIf(HAS_DB)("MD-R22: a link hold's re-open names the stage's LATEST opened round, else the board", () => {
+  /** What the open leaves: the stamp. (The link hold itself is written by the real open in the first test and seeded elsewhere.) */
+  const opened = (r: Pick<SeedOnlineChessRoundResult, "stageId" | "orgId" | "ownerUserId">, roundNo: number, stageId?: string): Promise<void> =>
+    openStamp(r, roundNo, new Date(Date.now() - (10 - roundNo) * MIN), stageId);
+  /** The Needs-you `round_key`s of the competition's desk, and the keys Match Day's own online block lists. */
+  async function keysOf(r: SeedOnlineChessRoundResult): Promise<{ emitted: string[]; listed: string[]; desk: CompetitionDesk }> {
+    const desk = await deskOf(r.owner, r.competitionId);
+    const emitted = rowsOf(desk, r).flatMap((i) => (i.round_key === undefined ? [] : [i.round_key]));
+    const listed = (await readOnlineRounds(r.owner, r.competitionId, new Date())).map((x) => x.key);
+    return { emitted, listed, desk };
+  }
+  const boardHref = (id: string): string => `/o/acme/c/spring/match-day?board=${encodeURIComponent(id)}`;
+
+  it("the LEAGUE case through the real open: round 1's link hold is 'Open round 1 again' while round 1 is the latest, and a plain 'Review board 1' once round 2 is opened", async () => {
+    const r = await round(2);
+    const [unlinked] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await sql`delete from user_external_accounts where user_id = ${unlinked.away.userId} and provider = 'lichess'`;
+    await openRound({ stageId: r.stageId, roundNo: 1, actorUserId: r.ownerUserId }, { now: new Date(Date.now() - 2 * MIN) });
+    const [hold1] = await sql<{ status: string; reason: string | null }[]>`select status, needs_reason as reason from fixture_external_play where fixture_id = ${unlinked.fixtureId}`;
+    expect(hold1, "premise: the real open held the board").toEqual({ status: "needs_organiser", reason: "lichess_unlinked" });
+
+    const before = await keysOf(r);
+    expect(heldOf(attentionsOf(before.desk, r.divisionId)), "round 1 is the latest opened round: the re-open is on offer").toEqual([expect.objectContaining({ fixtureId: unlinked.fixtureId, roundNo: 1, reopen: true })]);
+    expect(before.emitted).toEqual([`${r.stageId}:1`]);
+    expect(before.listed, "premise: the page lists round 1").toContain(`${r.stageId}:1`);
+
+    // The league's round 2 opens (the same players meet again) while round 1's board is still held.
+    await addRound(r, 2, r.boards.map((b) => ({ home: b.home, away: b.away })));
+    await opened(r, 2);
+    const after = await keysOf(r);
+    const held = heldOf(attentionsOf(after.desk, r.divisionId));
+
+    expect(after.listed, "premise: the page lists round 2 and no longer round 1").toEqual([`${r.stageId}:2`]);
+    expect(held, "the same hold, one round behind: no re-open, still named by its own round").toEqual([expect.objectContaining({ fixtureId: unlinked.fixtureId, roundNo: 1, reason: "lichess_unlinked", reopen: false })]);
+    const item = rowsOf(after.desk, r).find((i) => i.kind === "board_held")!;
+    expect(item.action, "routed to the board, where the abandon settle is offered").toEqual({ label: "Review board 1", href: boardHref(unlinked.fixtureId) });
+    expect(item.round_key).toBeUndefined();
+    expect(after.emitted).toEqual([]);
+  });
+
+  it("every round_key the desk emits is a key Match Day lists - swept over a latest hold, a superseded one and two stages (and not vacuously: keys were emitted)", async () => {
+    // Scenario 1: one stage, round 1 the latest, a link hold in it.
+    const one = await round(2);
+    await hold(one, one.boards[0]!, "lichess_unlinked");
+    await opened(one, 1);
+
+    // Scenario 2: one stage, the hold in round 1 and round 2 opened after it.
+    const two = await round(2);
+    await hold(two, two.boards[0]!, "lichess_reconnect");
+    await opened(two, 1);
+    await addRound(two, 2, two.boards.map((b) => ({ home: b.home, away: b.away })));
+    await opened(two, 2);
+
+    // Scenario 3: two stages. Stage 1's round 1 is ITS latest (held); stage 2 has opened rounds 1 and 2: round 1's hold is behind, round 2's is current.
+    const three = await seedOnlineChessRound({ fixtures: 1, scheduledAt: null, divisionStarted: false });
+    const pair = await seedLinkedPair(three.owner, three.divisionId);
+    const s2 = await addStage(three, "Playoff", pair);
+    await startDivision(three.owner, three.divisionId);
+    const [s2Round2] = await addRound(three, 2, [pair], s2.stageId);
+    await opened(three, 1);
+    await opened(three, 1, s2.stageId);
+    await opened(three, 2, s2.stageId);
+    await hold(three, three.boards[0]!, "lichess_unlinked");
+    await bridgeRow(s2.fixtureId, three.orgId, { status: "needs_organiser", reason: "lichess_reconnect" });
+    await bridgeRow(s2Round2!, three.orgId, { status: "needs_organiser", reason: "lichess_unlinked" });
+
+    let emittedTotal = 0;
+    for (const [label, r, want] of [
+      ["latest hold", one, [`${one.stageId}:1`]],
+      ["superseded hold", two, []],
+      ["two stages: each stage's own latest", three, [`${three.stageId}:1`, `${s2.stageId}:2`]],
+    ] as const) {
+      const { emitted, listed } = await keysOf(r);
+      expect([...emitted].sort(), `${label}: the keys emitted`).toEqual([...want].sort());
+      for (const key of emitted) expect(listed, `${label}: ${key} is a row Match Day lists`).toContain(key);
+      emittedTotal += emitted.length;
+    }
+    expect(emittedTotal, "anti-vacuity: keys were emitted and checked").toBe(3);
+    // Stage 2's round-1 hold is behind its own stage's round 2: the board route, however low its round number sits beside stage 1's.
+    const desk = (await keysOf(three)).desk;
+    const behind = heldOf(attentionsOf(desk, three.divisionId)).find((h) => h.fixtureId === s2.fixtureId);
+    expect(behind, "premise: stage 2's round-1 hold is raised").toMatchObject({ roundNo: 1, stageId: s2.stageId, reopen: false });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
 describe.runIf(HAS_DB)("MD-R2 / MD-R13: what a link hold opens and what a reason says depend on WHO reads (the desk is served to viewers and keys too)", () => {
   async function linkHeld(): Promise<SeedOnlineChessRoundResult> {
     const r = await round(2);
     await hold(r, r.boards[0]!, "lichess_unlinked");
+    // MD-R22: a link hold is written BY the open, so its round is opened (the stamp the open leaves, which the re-open's row names).
+    await openStamp(r, 1, new Date(Date.now() - 2 * MIN));
     return r;
   }
   const boardHref = (r: SeedOnlineChessRoundResult): string => `/o/acme/c/spring/match-day?board=${encodeURIComponent(r.boards[0]!.fixtureId)}`;
@@ -712,6 +807,8 @@ describe.runIf(HAS_DB)("the wire: the per-board Needs-you rows survive Match Day
     const [heldBoard, flagged] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, heldBoard, "lichess_unlinked");
     await flaggedBoard(r, flagged, 1);
+    // MD-R22: a link hold is written by the open, so the round is opened - and the page lists it, which is what the key must name.
+    await openStamp(r, 1, new Date(NOW.getTime() - 5 * MIN));
 
     const view = await getMatchDay(r.owner, r.competitionId, NOW);
     const wire = MatchDayView.parse(JSON.parse(JSON.stringify(view)));
@@ -723,6 +820,7 @@ describe.runIf(HAS_DB)("the wire: the per-board Needs-you rows survive Match Day
     const flaggedRow = rows.find((i) => i.kind === "board_flagged")!;
     expect(heldRow.fixture_id).toBe(heldBoard.fixtureId);
     expect(heldRow.round_key).toBe(`${r.stageId}:1`);
+    expect(wire.online_rounds.map((x) => x.key), "MD-R22: the round the row names is a round the same answer lists").toContain(heldRow.round_key);
     expect(flaggedRow.fixture_id).toBe(flagged.fixtureId);
     expect(flaggedRow.round_key, "a flagged board opens its board, never a round").toBeUndefined();
   });

@@ -133,10 +133,12 @@ describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day - online_rounds", 
     const raw = (body.data as { online_rounds: Record<string, unknown>[] }).online_rounds;
     expect(raw.length, "rows checked").toBeGreaterThan(0);
     for (const row of raw) expect(Object.keys(row).filter((k) => !declared.has(k))).toEqual([]);
-    // The documented-object fields keep their contents (passthrough): the round's boards and the held board with its reason.
-    const decision = parsed.online_rounds[0]!.needs_decision as { fixtureId: string; round_no: number; hold_reason?: string }[];
+    // The documented-object fields keep their contents (passthrough): the round's boards and the held board. A read key is no editor, so the
+    // reason is the one thing that does not reach it (MD-R21: hold-reasons.test.ts drives every role); the usecase's own row still has it.
+    const decision = parsed.online_rounds[0]!.needs_decision as { fixtureId: string; round_no: number; hold_reason?: string | null }[];
     expect(decision.map((b) => b.fixtureId)).toEqual([online.boards[0]!.fixtureId]);
-    expect(decision[0]).toMatchObject({ round_no: 1, hold_reason: "no_show_white" });
+    expect(decision[0]).toMatchObject({ round_no: 1, hold_reason: null });
+    expect(usecase[0]!.needs_decision[0], "the usecase's row carries the reason the door withholds").toMatchObject({ hold_reason: "no_show_white" });
     expect((parsed.online_rounds[0]!.round as { boards: { fixtureId: string }[] }).boards.map((b) => b.fixtureId)).toEqual([r2]);
   });
 
