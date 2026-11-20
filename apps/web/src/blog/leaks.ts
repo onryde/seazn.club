@@ -67,6 +67,7 @@ export function findBlogLeaks(text: string): BlogLeak[] {
 export function blogLeakText(markdown: string): string {
   return markdown
     .replace(/\{\{(?:fact|example):[^}]*\}\}/g, " ")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+    // A picture's or link's quoted title is text a reader sees (help-figures.ts renders it as the <figcaption>): keep it.
+    .replace(/!\[([^\]]*)\]\([^)\s]*(?:\s+"([^"]*)")?\s*\)/g, "$1 $2")
+    .replace(/\[([^\]]*)\]\([^)\s]*(?:\s+"([^"]*)")?\s*\)/g, "$1 $2");
 }

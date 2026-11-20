@@ -1,11 +1,10 @@
 // The words an example prints, taken from the product's own English dictionaries so a post says what the
 // organiser's screen says (design: "Words in example output are the product's own labels, never keys").
 // A key with no label THROWS, naming it: an example never prints an engine key by falling back to it.
-import pub from "@/dictionaries/en/public.json";
 import ui from "@/dictionaries/en/ui.json";
+import { variantWordKey } from "@/lib/variant-label-keys";
 
 const UI = ui as Record<string, string>;
-const PUBLIC = pub as Record<string, string>;
 
 function need(dict: Record<string, string>, id: string, what: string, key: string): string {
   const v = dict[id];
@@ -18,9 +17,11 @@ export function tiebreakLabel(key: string): string {
   return need(UI, `div.detail.tiebreak.rule.${key}`, "tie-break", key);
 }
 
-/** A result column's heading on the public table: "Won", "Drawn", "Lost", "Ties", "Points" (`table.col.<key>`). */
-export function resultLabel(key: string): string {
-  return need(PUBLIC, `table.col.${key}`, "result", key);
+/** A variant's name as the organiser's picker prints it: "Beach", "Test match" (`variant.<sport>.<variant>`, the closed map `variantWordKey`). */
+export function variantLabel(sportKey: string, variantKey: string): string {
+  const id = variantWordKey(sportKey, variantKey);
+  if (id === undefined) throw new Error(`blog label: no variant label for '${sportKey}/${variantKey}'`);
+  return need(UI, id, "variant", `${sportKey}/${variantKey}`);
 }
 
 /** A sport's name as the product prints it: "Chess" for `boardgame`, "Table tennis" (`sport.<key>`). */

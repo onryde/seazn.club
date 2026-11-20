@@ -120,6 +120,17 @@ describe("blogLeakText", () => {
     expect(text).toContain("A bracket");
     expect(blogLeakText("a leaked_token in prose")).toContain("leaked_token");
   });
+
+  it("keeps a picture's and a link's quoted title, which the page renders as a caption (and so scans it)", () => {
+    const md = '![A bracket](/blog/img/a.webp "Caption with a_leaked_key")\n\n[page](/help/x "link_title_leak")';
+    const text = blogLeakText(md);
+    expect(text).toContain("Caption with a_leaked_key");
+    expect(text).toContain("link_title_leak");
+    expect(text).not.toContain("/blog/img");
+    expect(findBlogLeaks(text).map((l) => l.match).sort()).toEqual(["a_leaked_key", "link_title_leak"]);
+    // The same markup without a title still drops the target.
+    expect(blogLeakText("![x](/a/b_c.webp)")).not.toContain("b_c");
+  });
 });
 
 describe("the valid fixture posts carry no leak", () => {

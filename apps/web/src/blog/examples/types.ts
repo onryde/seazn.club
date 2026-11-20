@@ -46,7 +46,11 @@ export interface ExampleResult {
   facts: Record<string, string | number>;
   table?: ExampleTable;
   diagram?: DiagramModel;
-  /** Every other sentence the example prints; scanned by the leak sweep with the caption and the cells. */
+  /**
+   * Every other sentence the example prints; scanned by the leak sweep with the caption and the cells. These lines are
+   * for the sweep and for a reviewer: they may carry scores the engine made up for the match it played ("25-0"), so a
+   * page must NOT render them as facts about the sport. Anything a post shows a reader is a fact or a table cell.
+   */
   text: string[];
 }
 

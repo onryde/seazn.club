@@ -1,22 +1,25 @@
-// Post #1, "How do standings points work in each sport?". For every sport in the registry, under the sport's own
-// declared default config, two real matches are played through the engine's own event stream (the testkit's
-// seeded walk, refolded the way the app folds it): Ana beats Ben, and where the sport allows a level result, Cy
-// and Dev finish level. Each result is paid by the same rule resolver the standings use (`resolveTableRules` then
-// `payout`), so the points in the table are what a division would book, not a typed number.
+// Post #1, "How do standings points work in each sport?". For every sport in the registry, under the variant a NEW
+// division of that sport starts on (starting-variant.ts: the builder's own pick), real matches are played through the
+// engine's own event stream (the testkit's seeded walk, refolded the way the app folds it) and paid by the same rule
+// resolver the standings use (`resolveTableRules` then `payout`). So the points in the table are what a division would
+// book, not a typed number. A variant whose points differ from the starting one gets a row of its own.
 //
-// WHICH MATCH. The walk is seeded and the search for a seed that gives the wanted result is deterministic, so the
-// example needs no typed seed and no typed score. A set sport is played once per reachable final set score,
-// because that is what its points depend on (volleyball: a 3-2 win pays 2, not 3).
+// WHICH MATCHES, per row: Ana beats Ben (once per reachable final set score, for a set sport, because its points depend
+// on the score); Ana beats Ben after overtime or in a shoot-out, where the variant can reach them; and one match for
+// each way a match can end with nobody winning (a draw, a cricket tie, a cricket no result). The seeded search is
+// deterministic, so the example needs no typed seed and no typed score.
 //
-// WHAT CHECKS IT. Each claim below reads the sport module's own declaration (`tablePointsRule`, `primaryTableKey`,
-// `reachableResultKinds`, `reachableSetScores`) and compares the committed result to it. None reads `build()`.
+// WHAT CHECKS IT. The claims below recompute every expected cell and fact from the sport module's own declarations
+// (`tablePointsRule`, `primaryTableKey`, `reachableResultKinds`, `reachableSetScores`, `reachableDecidedIn`) in code
+// that shares no formatter with `build()`, and compare the committed result to it. None reads `build()`.
 import { foldMatch } from "@seazn/engine/core";
 import type { MatchOutcome } from "@seazn/engine/core";
 import { decidedInFor, forfeitShaped, payout, pointsText, resolveTableRules, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
 import { resolvePositions } from "@seazn/engine/sport";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { buildWalk, declaredCfgs, forEachSport, lineupFromCatalog } from "@seazn/engine/testkit";
-import { sportLabel, tiebreakLabel } from "@/blog/labels";
+import { sportLabel, tiebreakLabel, variantLabel } from "@/blog/labels";
+import { startingVariantKey } from "./starting-variant";
 import type { BlogExample, Claim, ExampleResult } from "./types";
 
 export const STANDINGS_POINTS_ID = "standings-points";
@@ -26,24 +29,42 @@ const NAMES: Record<string, string> = { ana: "Ana", ben: "Ben", cy: "Cy", dev: "
 const MAX_SEEDS = 20000;
 const MAX_EVENTS = 3000;
 
-const COLUMNS = ["Sport", "Winner gets", "Each side in a level match", "Loser gets", "Table ranks first by"];
+const COLUMNS = ["Sport", "Winner gets", "Loser gets", "Each side when nobody wins", "After overtime or a shoot-out", "Table sorted by first"];
+const C = { sport: 0, winner: 1, loser: 2, nobody: 3, beyond: 4, sorted: 5 } as const;
 const NOT_POSSIBLE = "Not possible";
 
 type Cfg = unknown;
-type Level = { kind: "draw" | "tie"; points: number };
+type LevelKind = "draw" | "tie" | "noResult";
+type Beyond = "ot" | "so";
+const LEVEL_KINDS: readonly LevelKind[] = ["draw", "tie", "noResult"];
+const OUTCOME_OF: Record<LevelKind, MatchOutcome["kind"]> = { draw: "draw", tie: "tie", noResult: "no_result" };
+const LEVEL_WORDS: Record<LevelKind, string> = { draw: "a draw", tie: "a tie", noResult: "no result" };
+const BEYOND_WORDS: Record<Beyond, string> = { ot: "overtime", so: "shoot-out" };
 
-interface Played {
-  outcome: MatchOutcome;
-  paid: FixtureResult;
-  headline: string;
-}
+/**
+ * Result kinds a variant DECLARES reachable that no match can end in. Cricket's `reachableResultKinds` lists no result for
+ * every variant, but `core.abandon` in a two-innings match (Test) books a draw, so a Test match is never "no result":
+ * 3000 seeded Test walks end in win, draw, tie and award and never in no_result (blog-examples.test.ts re-proves that
+ * and fails when the engine starts reaching it, so this entry cannot go stale unseen). An example prints only what a
+ * played match can end in. Hockey with a shoot-out is the second: it declares a draw, but a level match always goes to the
+ * shoot-out and is booked a win there (1500 seeded walks: win in regulation, win in the shoot-out, or an award; no draw).
+ */
+export const DECLARED_BUT_UNREACHABLE: Readonly<Record<string, readonly LevelKind[]>> = {
+  "cricket/test": ["noResult"],
+  "hockey/fih-shootout": ["draw"],
+};
+const levelKindsOf = (module: AnySportModule, variantKey: string, reach: ReadonlySet<string>): LevelKind[] =>
+  LEVEL_KINDS.filter((k) => reach.has(k) && !(DECLARED_BUT_UNREACHABLE[`${module.key}/${variantKey}`] ?? []).includes(k));
 
 const upperFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const scoreSuffix = (score: string | null) => (score === null ? "" : score.replace("-", ""));
+const compact = (variantKey: string) => upperFirst(variantKey.replace(/[^a-z0-9]/gi, ""));
 
-/** The sport's declared default config: the first entry `declaredCfgs` lists, as the sport's schema parsed it. */
-function declaredCfgOf(module: AnySportModule): Cfg {
-  return declaredCfgs(module)[0]!.cfg;
+/** The variants a module declares by name (declaredCfgs also lists the bare schema default, which is no variant). */
+function variantsOf(module: AnySportModule): { key: string; cfg: Cfg }[] {
+  return declaredCfgs(module)
+    .filter((c) => Object.hasOwn(module.variants, c.name))
+    .map((c) => ({ key: c.name, cfg: c.cfg as Cfg }));
 }
 
 /** The rule a league table pays by, from the engine's one resolver (no stage rule, no division order, no pin). */
@@ -58,11 +79,17 @@ function leagueRules(module: AnySportModule, cfg: Cfg) {
   });
 }
 
+interface Played {
+  outcome: MatchOutcome;
+  paid: FixtureResult;
+  headline: string;
+}
+
 /**
  * Plays one match to the wanted result: the first seeded walk, in seed order, whose refolded outcome `accept`
  * takes. The refold is the app's (`foldMatch`), and must agree with the walk's own last state.
  */
-function play(module: AnySportModule, cfg: Cfg, sides: [string, string], accept: (outcome: MatchOutcome, pair: FixtureResult) => boolean): Played {
+function play(module: AnySportModule, cfg: Cfg, what: string, sides: [string, string], accept: (outcome: MatchOutcome, pair: FixtureResult) => boolean): Played {
   const catalog = resolvePositions(module, cfg);
   const lineups = { home: lineupFromCatalog(catalog, sides[0]), away: lineupFromCatalog(catalog, sides[1]) };
   const rules = leagueRules(module, cfg);
@@ -71,7 +98,7 @@ function play(module: AnySportModule, cfg: Cfg, sides: [string, string], accept:
     const last = states[states.length - 1];
     const walked = last === undefined ? null : module.outcome(last);
     // Cheap filter first: only a decided, played match can be wanted; the refold below is the real read.
-    if (walked === null || (walked.kind !== "win" && walked.kind !== "draw" && walked.kind !== "tie")) continue;
+    if (walked === null || !["win", "draw", "tie", "no_result"].includes(walked.kind)) continue;
     const state = foldMatch(module, cfg, lineups, events);
     const outcome = module.outcome(state);
     if (JSON.stringify(outcome) !== JSON.stringify(walked)) {
@@ -84,7 +111,7 @@ function play(module: AnySportModule, cfg: Cfg, sides: [string, string], accept:
     const paid = payout(outcome, decidedInFor(module, outcome), pair, true, rules.points, module.awardScoreKeys, setsToWinOf(module, cfg));
     return { outcome, paid, headline: module.summary(state).headline };
   }
-  throw new Error(`${module.key}: no seed up to ${MAX_SEEDS} gives the wanted match`);
+  throw new Error(`${module.key}: no seed up to ${MAX_SEEDS} gives the wanted match (${what})`);
 }
 
 function winnerSetScore(pair: FixtureResult): string | null {
@@ -94,214 +121,337 @@ function winnerSetScore(pair: FixtureResult): string | null {
   return won === undefined || lost === undefined ? null : `${won}-${lost}`;
 }
 
-interface Win {
-  score: string | null;
+/** What the winner and the loser of a decided match were paid, by entrant (a booked shoot-out has no `won` flag). */
+function winnerLoserPoints(p: Played): [number, number] {
+  const o = p.outcome;
+  if (o.kind !== "win") throw new Error("a winner and a loser need a win");
+  const w = p.paid.find((d) => d.entrantId === o.winner);
+  const l = p.paid.find((d) => d.entrantId === o.loser);
+  if (w === undefined || l === undefined) throw new Error("the paid pair does not name the match's winner and loser");
+  return [w.points, l.points];
+}
+
+interface Tagged<T extends string | null> {
+  tag: T;
   winner: number;
   loser: number;
   line: string;
 }
-
-interface SportRun {
-  key: string;
+interface LevelRun {
+  kind: LevelKind;
+  points: number;
+  line: string;
+}
+interface Run {
+  rowId: string;
+  variantKey: string;
   unit: "whole" | "half";
-  wins: Win[];
-  level: (Level & { line: string }) | null;
+  wins: Tagged<string | null>[];
+  beyond: Tagged<Beyond>[];
+  levels: LevelRun[];
   rankedBy: string;
 }
 
-function runSport(module: AnySportModule): SportRun {
-  const cfg = declaredCfgOf(module);
+function runVariant(module: AnySportModule, variantKey: string, cfg: Cfg, rowId: string): Run {
   const rules = leagueRules(module, cfg);
-  const unit = rules.points.unit;
   const scores: readonly (string | null)[] = module.reachableSetScores?.(cfg) ?? [null];
-  const wins: Win[] = scores.map((score) => {
-    const p = play(module, cfg, ["ana", "ben"], (o, pair) => {
-      if (o.kind !== "win" || o.winner !== "ana") return false;
-      if (decidedInFor(module, o) !== "regulation") return false;
+  const wins = scores.map((score): Tagged<string | null> => {
+    const p = play(module, cfg, `${variantKey} win ${String(score)}`, ["ana", "ben"], (o, pair) => {
+      if (o.kind !== "win" || o.winner !== "ana" || decidedInFor(module, o) !== "regulation") return false;
       return score === null || winnerSetScore(pair) === score;
     });
-    const w = p.paid.find((d) => d.won === 1)!;
-    const l = p.paid.find((d) => d.lost === 1)!;
-    return { score, winner: w.points, loser: l.points, line: `${NAMES.ana} beat ${NAMES.ben} ${p.headline}` };
+    const [winner, loser] = winnerLoserPoints(p);
+    return { tag: score, winner, loser, line: `${NAMES.ana} beat ${NAMES.ben} ${p.headline}` };
   });
+  const decided = module.reachableDecidedIn(cfg, "league");
+  const beyond = (["ot", "so"] as const)
+    .filter((d) => decided.has(d))
+    .map((d): Tagged<Beyond> => {
+      const p = play(module, cfg, `${variantKey} win in ${d}`, ["ana", "ben"], (o) => o.kind === "win" && o.winner === "ana" && decidedInFor(module, o) === d);
+      const [winner, loser] = winnerLoserPoints(p);
+      return { tag: d, winner, loser, line: `${NAMES.ana} beat ${NAMES.ben} in ${BEYOND_WORDS[d]}, ${p.headline}` };
+    });
   const reach = module.reachableResultKinds(cfg, "league");
-  const kind = reach.has("draw") ? "draw" : reach.has("tie") ? "tie" : null;
-  let level: SportRun["level"] = null;
-  if (kind !== null) {
-    const p = play(module, cfg, ["cy", "dev"], (o) => o.kind === kind);
+  const levels = levelKindsOf(module, variantKey, reach).map((kind): LevelRun => {
+    const p = play(module, cfg, `${variantKey} ${kind}`, ["cy", "dev"], (o) => o.kind === OUTCOME_OF[kind]);
     const [a, b] = p.paid;
-    if (a.points !== b.points) throw new Error(`${module.key}: a level match paid ${a.points} and ${b.points}`);
-    level = { kind, points: a.points, line: `${NAMES.cy} and ${NAMES.dev} ${kind === "draw" ? "drew" : "tied"} ${p.headline}` };
-  }
-  return { key: module.key, unit, wins, level, rankedBy: tiebreakLabel(rules.tiebreakers[0]!) };
+    if (a.points !== b.points) throw new Error(`${module.key}: a ${kind} paid ${a.points} and ${b.points}`);
+    return { kind, points: a.points, line: `${NAMES.cy} and ${NAMES.dev}, ${LEVEL_WORDS[kind]}, ${p.headline}` };
+  });
+  return { rowId, variantKey, unit: rules.points.unit, wins, beyond, levels, rankedBy: tiebreakLabel(rules.tiebreakers[0]!) };
 }
 
-/** "3 (3-0 or 3-1), 2 (3-2)" when a set sport pays by score; just "3" when every score pays the same. */
-function composeCell(groups: { points: number; scores: (string | null)[] }[], unit: "whole" | "half"): string {
-  if (groups.length === 1) return pointsText(groups[0]!.points, unit);
-  return groups.map((g) => `${pointsText(g.points, unit)} (${g.scores.join(" or ")})`).join(", ");
-}
+// ---- how a run prints (build side) ----
 
-/** Groups scores by what they pay (in score order), so a flat rule is one group and volleyball is two. */
-function groupBy(entries: { score: string | null; pair: readonly [number, number] }[], side: 0 | 1) {
-  const groups: { key: string; points: number; scores: (string | null)[] }[] = [];
-  for (const e of entries) {
-    const key = `${e.pair[0]}/${e.pair[1]}`;
-    const found = groups.find((g) => g.key === key);
-    if (found) found.scores.push(e.score);
-    else groups.push({ key, points: e.pair[side], scores: [e.score] });
+function groupBy<T>(items: T[], keyOf: (t: T) => string): T[][] {
+  const groups: T[][] = [];
+  for (const it of items) {
+    const g = groups.find((x) => keyOf(x[0]!) === keyOf(it));
+    if (g) g.push(it);
+    else groups.push([it]);
   }
   return groups;
 }
 
-const levelCell = (level: Level | null, unit: "whole" | "half") =>
-  level === null ? NOT_POSSIBLE : `${pointsText(level.points, unit)}${level.kind === "tie" ? " (a tie)" : ""}`;
+function joinOr(words: string[]): string {
+  return words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+}
+
+function sideCell(wins: Tagged<string | null>[], side: "winner" | "loser", unit: "whole" | "half"): string {
+  const groups = groupBy(wins, (w) => `${w.winner}/${w.loser}`);
+  if (groups.length === 1) return pointsText(groups[0]![0]![side], unit);
+  return groups.map((g) => `${pointsText(g[0]![side], unit)} (${g.map((w) => w.tag).join(" or ")})`).join(", ");
+}
+
+function nobodyCell(levels: LevelRun[], unit: "whole" | "half"): string {
+  if (levels.length === 0) return NOT_POSSIBLE;
+  if (levels.length === 1 && levels[0]!.kind === "draw") return pointsText(levels[0]!.points, unit);
+  return groupBy(levels, (l) => String(l.points))
+    .map((g) => `${pointsText(g[0]!.points, unit)} (${joinOr(g.map((l) => LEVEL_WORDS[l.kind]))})`)
+    .join(", ");
+}
+
+function beyondCell(beyond: Tagged<Beyond>[], unit: "whole" | "half"): string {
+  if (beyond.length === 0) return NOT_POSSIBLE;
+  return groupBy(beyond, (b) => `${b.winner}/${b.loser}`)
+    .map((g) => `winner ${pointsText(g[0]!.winner, unit)}, loser ${pointsText(g[0]!.loser, unit)} (${joinOr(g.map((b) => BEYOND_WORDS[b.tag]))})`)
+    .join("; ");
+}
+
+const rowIdOf = (key: string, variantKey: string, isStart: boolean) => (isStart ? key : `${key}${compact(variantKey)}`);
+
+function cellsOf(label: string, run: Run): (string | number)[] {
+  return [label, sideCell(run.wins, "winner", run.unit), sideCell(run.wins, "loser", run.unit), nobodyCell(run.levels, run.unit), beyondCell(run.beyond, run.unit), upperFirst(run.rankedBy)];
+}
+
+/** Whether a variant's declarations differ from the starting one's in anything a cell prints (the decision to play it). */
+function declaredDifferently(module: AnySportModule, a: Cfg, b: Cfg): boolean {
+  const view = (cfg: Cfg) =>
+    JSON.stringify([
+      module.tablePointsRule(cfg as never, "league"),
+      [...module.reachableResultKinds(cfg as never, "league")].sort(),
+      module.reachableSetScores?.(cfg as never) ?? null,
+      [...module.reachableDecidedIn(cfg as never, "league")].sort(),
+      module.primaryTableKey,
+    ]);
+  return view(a) !== view(b);
+}
 
 function build(): ExampleResult {
   const facts: ExampleResult["facts"] = {};
   const rows: (string | number)[][] = [];
   const text: string[] = [
-    "Each row comes from real matches scored the way a division scores them: Ana beats Ben, and where the sport allows a level result, Cy and Dev finish level.",
+    "Each row comes from real matches scored the way a division scores them: Ana beats Ben, and where the sport can end a match with nobody winning, Cy and Dev finish that way.",
   ];
   const visited = forEachSport(({ module }) => {
-    const run = runSport(module);
-    const entries = run.wins.map((w) => ({ score: w.score, pair: [w.winner, w.loser] as const }));
-    const winnerGroups = groupBy(entries, 0);
-    const loserGroups = groupBy(entries, 1);
-    for (const w of run.wins) {
-      const suffix = scoreSuffix(w.score);
-      facts[`${run.key}Win${suffix}`] = pointsText(w.winner, run.unit);
-      facts[`${run.key}Loss${suffix}`] = pointsText(w.loser, run.unit);
-      text.push(`${sportLabel(run.key)}: ${w.line}.`);
+    const key = module.key;
+    const startKey = startingVariantKey(module);
+    const variants = variantsOf(module);
+    const start = variants.find((v) => v.key === startKey);
+    if (start === undefined) throw new Error(`${key}: the starting variant '${startKey}' is not one of the sport's variants`);
+    const runs: Run[] = [runVariant(module, start.key, start.cfg, rowIdOf(key, start.key, true))];
+    for (const v of variants) {
+      if (v.key === start.key || !declaredDifferently(module, start.cfg, v.cfg)) continue;
+      const run = runVariant(module, v.key, v.cfg, rowIdOf(key, v.key, false));
+      // A variant that differs only in what a cell never prints gets no row.
+      if (JSON.stringify(cellsOf("", run)) !== JSON.stringify(cellsOf("", runs[0]!))) runs.push(run);
     }
-    if (run.level !== null) {
-      facts[`${run.key}Level`] = pointsText(run.level.points, run.unit);
-      text.push(`${sportLabel(run.key)}: ${run.level.line}.`);
+    for (const run of runs) {
+      const label = runs.length > 1 ? `${sportLabel(key)} (${variantLabel(key, run.variantKey)})` : sportLabel(key);
+      for (const w of run.wins) {
+        facts[`${run.rowId}Win${scoreSuffix(w.tag)}`] = pointsText(w.winner, run.unit);
+        facts[`${run.rowId}Loss${scoreSuffix(w.tag)}`] = pointsText(w.loser, run.unit);
+        text.push(`${label}: ${w.line}.`);
+      }
+      for (const b of run.beyond) {
+        facts[`${run.rowId}Win${upperFirst(b.tag)}`] = pointsText(b.winner, run.unit);
+        facts[`${run.rowId}Loss${upperFirst(b.tag)}`] = pointsText(b.loser, run.unit);
+        text.push(`${label}: ${b.line}.`);
+      }
+      for (const l of run.levels) {
+        facts[`${run.rowId}${upperFirst(l.kind)}`] = pointsText(l.points, run.unit);
+        text.push(`${label}: ${l.line}.`);
+      }
+      facts[`${run.rowId}RankedBy`] = run.rankedBy;
+      rows.push(cellsOf(label, run));
     }
-    facts[`${run.key}RankedBy`] = run.rankedBy;
-    rows.push([
-      sportLabel(run.key),
-      composeCell(winnerGroups, run.unit),
-      levelCell(run.level, run.unit),
-      composeCell(loserGroups, run.unit),
-      upperFirst(run.rankedBy),
-    ]);
   });
   facts.sportCount = visited;
   return {
     facts,
-    table: { caption: "What one finished match is worth in the standings, by sport.", columns: COLUMNS, rows },
+    table: { caption: "What one finished match is worth in the standings, by sport and variant.", columns: COLUMNS, rows },
     text,
   };
 }
 
-// ---- claims: every expected value below comes from the sport module's own declarations ----
+// ---- claims: every expected value below is recomputed from the sport module's own declarations ----
 
-const rowOf = (result: ExampleResult, label: string) => result.table?.rows.find((r) => r[0] === label);
+interface ExpectedRow {
+  rowId: string;
+  label: string;
+  cells: string[];
+  facts: Record<string, string>;
+}
+
+/** The rows the declarations say the table must hold for a sport, and every fact each one carries. */
+function expectedRows(module: AnySportModule): ExpectedRow[] {
+  const key = module.key;
+  const startKey = startingVariantKey(module);
+  const per = variantsOf(module).map(({ key: variantKey, cfg }) => {
+    const rule = module.tablePointsRule(cfg as never, "league");
+    const unit = rule.unit;
+    const fmt = (n: number) => pointsText(n, unit);
+    const facts: Record<string, string> = {};
+    const id = variantKey === startKey ? key : `${key}${compact(variantKey)}`;
+
+    // winner / loser, by set score where the sport keeps one
+    const scores: readonly (string | null)[] = module.reachableSetScores?.(cfg as never) ?? [null];
+    const winPairs = new Map<string, { w: number; l: number; tags: string[] }>();
+    for (const score of scores) {
+      let w = rule.win.regulation;
+      let l = rule.loss.regulation;
+      if (rule.bySetScore !== undefined && score !== null) {
+        const hit = rule.bySetScore[score] ?? rule.bySetScore["*"];
+        if (hit === undefined) throw new Error(`${key}/${variantKey}: the declared rule pays no ${score}`);
+        [w, l] = hit;
+      }
+      facts[`${id}Win${scoreSuffix(score)}`] = fmt(w);
+      facts[`${id}Loss${scoreSuffix(score)}`] = fmt(l);
+      const g = winPairs.get(`${w}/${l}`) ?? { w, l, tags: [] };
+      g.tags.push(String(score));
+      winPairs.set(`${w}/${l}`, g);
+    }
+    const flat = winPairs.size === 1;
+    const side = (pick: "w" | "l") => (flat ? fmt([...winPairs.values()][0]![pick]) : [...winPairs.values()].map((g) => `${fmt(g[pick])} (${g.tags.join(" or ")})`).join(", "));
+
+    // nobody wins
+    const reach = module.reachableResultKinds(cfg as never, "league");
+    const lv = new Map<string, string[]>();
+    const kinds = levelKindsOf(module, variantKey, reach);
+    for (const k of kinds) {
+      const declared = rule[k];
+      if (declared === undefined) throw new Error(`${key}/${variantKey}: the rule declares no points for ${k}`);
+      facts[`${id}${upperFirst(k)}`] = fmt(declared);
+      lv.set(String(declared), [...(lv.get(String(declared)) ?? []), LEVEL_WORDS[k]]);
+    }
+    const nobody =
+      kinds.length === 0 ? NOT_POSSIBLE : kinds.length === 1 && kinds[0] === "draw" ? fmt(rule.draw!) : [...lv.entries()].map(([pts, ws]) => `${fmt(Number(pts))} (${joinOr(ws)})`).join(", ");
+
+    // overtime and shoot-out: the rule's own fallback chain so -> ot -> regulation (points.d.ts), or the draw plus a bonus
+    const decided = module.reachableDecidedIn(cfg as never, "league");
+    const bp = new Map<string, { w: number; l: number; tags: string[] }>();
+    for (const d of ["ot", "so"] as const) {
+      if (!decided.has(d)) continue;
+      const bonus = rule.shootoutAs === "draw_plus_bonus" && d === "so";
+      const w = bonus ? rule.draw! + (rule.soBonus ?? 1) : d === "so" ? (rule.win.so ?? rule.win.ot ?? rule.win.regulation) : (rule.win.ot ?? rule.win.regulation);
+      const l = bonus ? rule.draw! : d === "so" ? (rule.loss.so ?? rule.loss.ot ?? rule.loss.regulation) : (rule.loss.ot ?? rule.loss.regulation);
+      facts[`${id}Win${upperFirst(d)}`] = fmt(w);
+      facts[`${id}Loss${upperFirst(d)}`] = fmt(l);
+      const g = bp.get(`${w}/${l}`) ?? { w, l, tags: [] };
+      g.tags.push(BEYOND_WORDS[d]);
+      bp.set(`${w}/${l}`, g);
+    }
+    const beyond = bp.size === 0 ? NOT_POSSIBLE : [...bp.values()].map((g) => `winner ${fmt(g.w)}, loser ${fmt(g.l)} (${joinOr(g.tags)})`).join("; ");
+
+    const first = tiebreakLabel(module.primaryTableKey);
+    facts[`${id}RankedBy`] = first;
+    return { variantKey, id, facts, cells: [side("w"), side("l"), nobody, beyond, upperFirst(first)] };
+  });
+  const start = per.find((p) => p.variantKey === startKey);
+  if (start === undefined) throw new Error(`${key}: the starting variant '${startKey}' is not declared`);
+  const shown = [start, ...per.filter((p) => p.variantKey !== startKey && p.cells.join("|") !== start.cells.join("|"))];
+  return shown.map((p) => ({
+    rowId: p.id,
+    label: shown.length > 1 ? `${sportLabel(key)} (${variantLabel(key, p.variantKey)})` : sportLabel(key),
+    cells: p.cells,
+    facts: p.facts,
+  }));
+}
+
+/** The table rows that belong to a sport: its plain name, or its name with a variant in brackets. */
+const rowsOfSport = (result: ExampleResult, sport: string) =>
+  (result.table?.rows ?? []).filter((r) => r[C.sport] === sport || String(r[C.sport]).startsWith(`${sport} (`));
+
+const isFactOf = (suffix: RegExp) => (k: string, rowId: string) => k.startsWith(rowId) && suffix.test(k.slice(rowId.length));
 
 function claimsFor(module: AnySportModule): Claim[] {
-  const key = module.key;
-  const label = sportLabel(key);
-  const cfg = declaredCfgOf(module);
-  const rule = module.tablePointsRule(cfg, "league");
-  const unit = rule.unit;
-  const scores: readonly (string | null)[] = module.reachableSetScores?.(cfg) ?? [null];
-  /** What the declaration pays a win at this set score: the exact "W-L" entry, else "*", else the flat win and loss. */
-  const pairFor = (score: string | null): readonly [number, number] => {
-    const map = rule.bySetScore;
-    if (map !== undefined && score !== null) {
-      const hit = map[score] ?? map["*"];
-      if (hit === undefined) throw new Error(`${key}: the declared rule pays no ${score}`);
-      return hit;
-    }
-    return [rule.win.regulation, rule.loss.regulation];
-  };
-  const expected = scores.map((score) => ({ score, pair: pairFor(score) }));
-  const mine = (says: string, source: string, check: Claim["check"]): Claim => ({ says: `${label}: ${says}`, source, sport: key, check });
-  const all = (result: ExampleResult, side: 0 | 1, prefix: "Win" | "Loss") => {
-    for (const e of expected) {
-      const fact = result.facts[`${key}${prefix}${scoreSuffix(e.score)}`];
-      const want = pointsText(e.pair[side], unit);
-      if (fact !== want) return `${key}${prefix}${scoreSuffix(e.score)} is ${String(fact)}, the declaration pays ${want}`;
-    }
-    return true;
-  };
-  const reach = module.reachableResultKinds(cfg, "league");
-  const levelKind = reach.has("draw") ? "draw" : reach.has("tie") ? "tie" : null;
-  const declaredLevel = levelKind === "draw" ? rule.draw : levelKind === "tie" ? rule.tie : undefined;
-  const claims: Claim[] = [
-    mine("the winner's points are what the sport's points rule pays a win", "tablePointsRule(cfg, \"league\").win (and bySetScore for a set sport)", (r) => all(r, 0, "Win")),
-    mine("the loser's points are what the sport's points rule pays a loss", "tablePointsRule(cfg, \"league\").loss (and bySetScore for a set sport)", (r) => all(r, 1, "Loss")),
-    mine("the winner's cell shows what the rule pays", "tablePointsRule(cfg, \"league\")", (r) => {
-      const want = composeCell(groupBy(expected, 0), unit);
-      const cell = rowOf(r, label)?.[1];
-      return cell === want || `cell is ${String(cell)}, the declaration gives ${want}`;
-    }),
-    mine("the loser's cell shows what the rule pays", "tablePointsRule(cfg, \"league\")", (r) => {
-      const want = composeCell(groupBy(expected, 1), unit);
-      const cell = rowOf(r, label)?.[3];
-      return cell === want || `cell is ${String(cell)}, the declaration gives ${want}`;
-    }),
-    mine(levelKind === null ? "a level match cannot happen, so none is shown" : `a level match pays what the rule pays a ${levelKind}`, "reachableResultKinds(cfg, \"league\") and tablePointsRule(cfg, \"league\").draw / .tie", (r) => {
-      const cell = rowOf(r, label)?.[2];
-      if (levelKind === null) {
-        if (cell !== NOT_POSSIBLE) return `cell is ${String(cell)}, the sport cannot end a league match level`;
-        return r.facts[`${key}Level`] === undefined || "a level fact exists for a sport that cannot end level";
+  const sport = sportLabel(module.key);
+  const expected = expectedRows(module);
+  const mine = (says: string, source: string, check: Claim["check"]): Claim => ({ says: `${sport}: ${says}`, source, sport: module.key, check });
+  /** Every expected row, found by label, compared on the given columns and on the facts `pick` selects. */
+  const perRow =
+    (columns: number[], pick: (key: string, rowId: string) => boolean): Claim["check"] =>
+    (result) => {
+      for (const e of expected) {
+        const row = (result.table?.rows ?? []).find((r) => r[C.sport] === e.label);
+        if (row === undefined) return `no row '${e.label}'`;
+        for (const c of columns) if (row[c] !== e.cells[c - 1]) return `${e.label}: '${COLUMNS[c]}' is ${String(row[c])}, the declaration gives ${e.cells[c - 1]}`;
+        for (const [k, v] of Object.entries(e.facts)) if (pick(k, e.rowId) && result.facts[k] !== v) return `fact ${k} is ${String(result.facts[k])}, the declaration gives ${v}`;
       }
-      if (declaredLevel === undefined) return `the rule declares no points for a ${levelKind}`;
-      const want = levelCell({ kind: levelKind, points: declaredLevel }, unit);
-      if (cell !== want) return `cell is ${String(cell)}, the declaration gives ${want}`;
-      return r.facts[`${key}Level`] === pointsText(declaredLevel, unit) || `fact ${key}Level is ${String(r.facts[`${key}Level`])}`;
+      return true;
+    };
+  const level = isFactOf(/^(Draw|Tie|NoResult)$/);
+  return [
+    mine("one row for the variant a new division starts on, and one for each other variant whose points differ", "pickVariant (the builder) and tablePointsRule(cfg, \"league\") of every variant", (r) => {
+      const got = rowsOfSport(r, sport).map((x) => String(x[C.sport]));
+      const want = expected.map((e) => e.label);
+      return JSON.stringify(got) === JSON.stringify(want) || `rows are [${got.join("; ")}], the declarations give [${want.join("; ")}]`;
     }),
-    mine("the table ranks first by the sport's primary table key", "primaryTableKey", (r) => {
-      const want = tiebreakLabel(module.primaryTableKey);
-      const cell = rowOf(r, label)?.[4];
-      if (cell !== upperFirst(want)) return `cell is ${String(cell)}, the declaration gives ${upperFirst(want)}`;
-      return r.facts[`${key}RankedBy`] === want || `fact ${key}RankedBy is ${String(r.facts[`${key}RankedBy`])}`;
+    mine("the winner's and the loser's points are what the rule pays", "tablePointsRule(cfg, \"league\") (win, loss, bySetScore)", perRow([C.winner, C.loser], isFactOf(/^(Win|Loss)\d*$/))),
+    mine("a match nobody wins pays what the rule pays each side, or is not possible", "reachableResultKinds(cfg, \"league\") and tablePointsRule(cfg, \"league\").draw / .tie / .noResult", (r) => {
+      const v = perRow([C.nobody], level)(r);
+      if (v !== true) return v;
+      // A level fact exists exactly where the declaration reaches one.
+      for (const e of expected) {
+        const have = Object.keys(r.facts).filter((k) => level(k, e.rowId)).sort();
+        const want = Object.keys(e.facts).filter((k) => level(k, e.rowId)).sort();
+        if (have.join() !== want.join()) return `${e.label}: level facts are [${have}], the declaration gives [${want}]`;
+      }
+      return true;
     }),
+    mine("overtime and shoot-out pay what the rule's chain pays, or are not possible", "reachableDecidedIn(cfg, \"league\") and tablePointsRule(cfg, \"league\") (ot, so, soBonus)", perRow([C.beyond], isFactOf(/^(Win|Loss)(Ot|So)$/))),
+    mine("the table is sorted first by the sport's primary key", "primaryTableKey", perRow([C.sorted], isFactOf(/^RankedBy$/))),
   ];
-  // Class 19: where the declared pairs differ by score, the narrowest win must pay ITS pair, not the clean sweep's.
-  const distinct = new Set(expected.map((e) => e.pair.join("/")));
-  if (scores.length > 1 && distinct.size > 1) {
-    const clean = expected[0]!;
-    const narrow = expected[expected.length - 1]!;
-    claims.push(
-      mine(`a ${narrow.score} win pays ${narrow.pair[0]}-${narrow.pair[1]}, not the ${clean.pair[0]}-${clean.pair[1]} of a ${clean.score} win`, "tablePointsRule(cfg, \"league\").bySetScore", (r) => {
-        const won = r.facts[`${key}Win${scoreSuffix(narrow.score)}`];
-        const wrong = pointsText(clean.pair[0], unit);
-        if (won === wrong) return `the ${narrow.score} win pays ${String(won)}, which is the clean sweep's`;
-        return won === pointsText(narrow.pair[0], unit) || `the ${narrow.score} win pays ${String(won)}`;
-      }),
-    );
-  }
-  return claims;
 }
 
 /** Example-wide claims: what the post says ACROSS sports (no `sport`), read from the registry's declarations. */
-const acrossSports = (): Claim[] => [
-  {
-    says: "the table's last column names exactly the first ranking keys the registry declares, and the sports do not all share one",
-    source: "primaryTableKey of every sport module",
-    check(result) {
-      const declared = new Set<string>();
-      forEachSport(({ module }) => declared.add(upperFirst(tiebreakLabel(module.primaryTableKey))));
-      const shown = new Set((result.table?.rows ?? []).map((r) => String(r[4])));
-      if (declared.size < 2) return `the registry declares ${declared.size} first key; the post says they differ`;
-      return [...declared].sort().join(",") === [...shown].sort().join(",") || `the table shows ${[...shown].join(", ")}, the registry declares ${[...declared].join(", ")}`;
+function acrossSports(): Claim[] {
+  return [
+    {
+      says: "every sport sorts its table first by points or by matches won, points in more sports than wins, and wins in at least two",
+      source: "primaryTableKey of every sport module",
+      check(result) {
+        const declared: Record<string, number> = {};
+        forEachSport(({ module }) => {
+          const label = upperFirst(tiebreakLabel(module.primaryTableKey));
+          declared[label] = (declared[label] ?? 0) + 1;
+        });
+        const keys = Object.keys(declared).sort().join(",");
+        if (keys !== "Points,Wins") return `the registry declares first keys [${keys}], the post says points and wins`;
+        if (!((declared.Points ?? 0) > (declared.Wins ?? 0))) return `points (${declared.Points}) must be more sports than wins (${declared.Wins})`;
+        if ((declared.Wins ?? 0) < 2) return `wins is first in ${declared.Wins} sport(s); the post says a few`;
+        // The table agrees: the rows show exactly the declared keys.
+        const shown = new Set((result.table?.rows ?? []).map((r) => String(r[C.sorted])));
+        return [...shown].sort().join(",") === keys || `the table shows [${[...shown].sort()}]`;
+      },
     },
-  },
-  {
-    says: "the table has one row per sport in the registry, in registry order",
-    source: "the sport registry (builtinModules, via forEachSport)",
-    check(result) {
-      const labels: string[] = [];
-      const visited = forEachSport(({ module }) => labels.push(sportLabel(module.key)));
-      const shown = (result.table?.rows ?? []).map((r) => String(r[0]));
-      if (result.facts.sportCount !== visited) return `sportCount is ${String(result.facts.sportCount)}, the registry has ${visited}`;
-      return JSON.stringify(shown) === JSON.stringify(labels) || `rows are ${shown.join(", ")}, the registry is ${labels.join(", ")}`;
+    {
+      says: "the table holds the sports of the registry, in registry order, and counts them",
+      source: "the sport registry (builtinModules, via forEachSport)",
+      check(result) {
+        const labels: string[] = [];
+        const visited = forEachSport(({ module }) => labels.push(sportLabel(module.key)));
+        const seen: string[] = [];
+        for (const r of result.table?.rows ?? []) {
+          const name = String(r[C.sport]).replace(/ \(.*\)$/, "");
+          if (seen[seen.length - 1] !== name) seen.push(name);
+        }
+        if (result.facts.sportCount !== visited) return `sportCount is ${String(result.facts.sportCount)}, the registry has ${visited}`;
+        return JSON.stringify(seen) === JSON.stringify(labels) || `sports are ${seen.join(", ")}, the registry is ${labels.join(", ")}`;
+      },
     },
-  },
-];
+  ];
+}
 
 const claims: Claim[] = [...acrossSports()];
 const sportsClaimed = forEachSport(({ module }) => {

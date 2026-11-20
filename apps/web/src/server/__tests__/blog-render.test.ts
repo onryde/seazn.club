@@ -88,6 +88,14 @@ describe("headings", () => {
     await expect(renderBlogPost(post("## How it works\n\nA.\n\n{{example:one}}\n\n## How it works\n\nB.\n"), GOLDENS)).rejects.toThrow(/duplicate heading id 'how-it-works'/);
   });
 
+  it("any brace pair left after resolution throws, whatever its shape (a typo'd token never reaches a reader as text)", async () => {
+    for (const bad of ["{{fact one.ana}}", "{{facts:one.ana}}", "{{ fact:one.ana }}", "{{example}}", "{{}}"]) {
+      await expect(renderBlogPost(post(`A ${bad} figure.\n\n{{example:one}}`), GOLDENS), bad).rejects.toThrow(/left unresolved/);
+    }
+    // ...and the same text without braces renders.
+    await expect(renderBlogPost(post("A fact one.ana figure.\n\n{{example:one}}"), GOLDENS)).resolves.toBeDefined();
+  });
+
   it("a plan token never renders (a post states no plan figure): the renderer refuses rather than loading a matrix", async () => {
     await expect(renderBlogPost(post("A {{plan:billing:pro}} figure.\n\n{{example:one}}"), GOLDENS)).rejects.toThrow(/plan/);
   });

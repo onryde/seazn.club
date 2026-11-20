@@ -75,6 +75,9 @@ export async function renderBlogPost(post: RenderablePost, goldens: Record<strin
     }
     const markdown = seg.join("\n");
     if (markdown.trim().length === 0) continue;
+    // Every token has been resolved or refused by now: a brace pair that is still here would print as text.
+    const stray = markdown.indexOf("{{");
+    if (stray !== -1) throw new Error(`${post.slug}: '${markdown.slice(stray, stray + 40)}' is left unresolved after the fact tokens ran`);
     const { html, headings: found } = await renderHelpArticle({ markdown }, noMatrix);
     for (const h of found) {
       if (seen.has(h.id)) throw new Error(`${post.slug}: duplicate heading id '${h.id}' (the same heading text in two segments); reword one`);

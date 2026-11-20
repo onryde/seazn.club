@@ -16,15 +16,13 @@ const posts: BlogPost[] = allBlogPosts();
 const EXAMPLE_LINE = /^\{\{example:([a-z0-9-]+)\}\}$/;
 const FACT = /\{\{fact:([a-z0-9-]+)\.([A-Za-z0-9_]+)\}\}/g;
 
-/** Every string of an example's generated result a reader sees: table caption, headings, cells, text lines, fact values. */
-function exampleStrings(id: string): string[] {
-  const g = BLOG_GOLDENS[id]!;
-  return [
-    ...(g.table ? [g.table.caption, ...g.table.columns, ...g.table.rows.flat().map(String)] : []),
-    ...g.text,
-    ...Object.values(g.facts).map(String),
-  ];
+/** Every string anywhere in an example's generated result (table, diagram, text, facts): a leaf-walk, so no field is skipped. */
+function leaves(v: unknown): string[] {
+  if (typeof v === "string") return [v];
+  if (v === null || typeof v !== "object") return v === undefined ? [] : [String(v)];
+  return Object.values(v as Record<string, unknown>).flatMap(leaves);
 }
+const exampleStrings = (id: string): string[] => leaves(BLOG_GOLDENS[id]!);
 
 describe("the tree", () => {
   it("every file in content/blog parses (allBlogPosts throws on one that does not), and the folder is not empty", () => {
@@ -90,6 +88,8 @@ describe("the tree", () => {
         pending++;
       }
     expect(related, "related links checked").toBeGreaterThan(0);
+    // The programme is 33 posts: those written plus those planned (Task 14 deletes the planned list when the last lands).
+    expect(posts.length + BLOG_PLANNED_SLUGS.size, "posts + planned slugs").toBe(33);
     expect(pending, "of which still to be written").toBeLessThanOrEqual(related);
     const stale = [...BLOG_PLANNED_SLUGS].filter((s) => slugs.has(s));
     expect(stale, "a planned slug that is now a post must come off the planned list").toEqual([]);
@@ -102,6 +102,18 @@ describe("the tree", () => {
       expect(href, `${p.slug}: help '${p.help}' has a link`).not.toBeNull();
       const family = p.help.startsWith("formats/") && (p.help === "formats/overview" || FORMAT_FAMILIES.some((f) => `formats/${f.slug}` === p.help));
       expect(allHelpArticles().has(p.help) || family, `${p.slug}: help '${p.help}'`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a post carries no section of its own that the page renders from front matter (\"How Seazn handles it\") and no typed /help link to its own help page", () => {
+    let checked = 0;
+    for (const p of posts) {
+      expect(p.markdown, `${p.slug}: its own How Seazn handles it`).not.toMatch(/^#{1,6}\s+How Seazn handles it\s*$/im);
+      const own = blogHelpHref(p.help);
+      expect(own, p.slug).not.toBeNull();
+      expect(p.markdown.includes(`](${own})`), `${p.slug}: a typed link to ${own}`).toBe(false);
       checked++;
     }
     expect(checked).toBeGreaterThan(0);
