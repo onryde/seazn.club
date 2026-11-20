@@ -1,6 +1,9 @@
 // Match Day online, Task 8 - the board panel (`BoardFocus`, its pure body `BoardPanelView`, and `BoardPosition`): the chess board, the
 // flags and the decisions of ONE online board, in the focus column of the day.
 //
+// Chess only: the board panel is the online-chess board's (a board the shell opens through the online block); no other sport reaches it, so
+// the sport sweep this suite owes is the one over the hold reasons and flag kinds, not over the sport registry.
+//
 // Two ways of looking, on purpose (round-focus.test.tsx does the same): `renderToStaticMarkup` reads what a person would see (copy comes
 // from the English dictionary, never typed here), and the hook harness (`renderIsland`, no DOM in this workspace) drives the REAL seam -
 // the panel's own read, reducer and runner with the network doubled at `apiV1` - because a pure view cannot see whether the press it
@@ -138,6 +141,22 @@ const textIn = (h: string, testid: string): string | null => {
   while ((m = re.exec(h)) !== null) {
     depth += m[1] === "/" ? -1 : 1;
     if (depth === 0) return h.slice(from, m.index).replace(/<[^>]+>/g, "");
+  }
+  return null;
+};
+
+/** The inner HTML of the first element with this test id (tags kept): what sits INSIDE it, nested elements and all. */
+const innerOf = (h: string, testid: string): string | null => {
+  const open = new RegExp(`<([a-z0-9]+)\\b[^>]*data-testid="${testid}"[^>]*>`).exec(h);
+  if (!open) return null;
+  const re = new RegExp(`<(/?)${open[1]}\\b[^>]*>`, "g");
+  re.lastIndex = open.index + open[0].length;
+  let depth = 1;
+  let m: RegExpExecArray | null;
+  const from = open.index + open[0].length;
+  while ((m = re.exec(h)) !== null) {
+    depth += m[1] === "/" ? -1 : 1;
+    if (depth === 0) return h.slice(from, m.index);
   }
   return null;
 };
@@ -320,6 +339,19 @@ describe("BoardPanelView: why a board is held (editors only)", () => {
     expect(tagOf(h, "md-online-state")).not.toBeNull();
   });
 
+  it("the hold's reason is the answer's, once there is an answer: a lifted hold (null) is not painted from the list's stale row (the pair)", () => {
+    const stale = { ...toRow(heldBoard), hold_reason: "fair_play" as const };
+    const lifted = html(heldBoard, { row: stale, answer: answerOf(heldBoard, { hold_reason: null }) });
+    expect(count(lifted, "md-board-hold"), "the answer says there is no hold").toBe(0);
+    // Before the first answer the list's row is all there is, so its reason is what shows.
+    const before = html(heldBoard, { row: stale, answer: null });
+    expect(count(before, "md-board-hold")).toBe(1);
+    expect(tagOf(before, "md-board-hold")).toContain('data-reason="fair_play"');
+    // And an answer that has one wins over the row's.
+    const changed = html(heldBoard, { row: stale, answer: answerOf(heldBoard, { hold_reason: "lichess_unlinked" }) });
+    expect(tagOf(changed, "md-board-hold")).toContain('data-reason="lichess_unlinked"');
+  });
+
   it("a view-only reader is not shown a reason even if one reached the page (the view asks too)", () => {
     const h = html(heldBoard, { answer: answerOf(heldBoard, { hold_reason: "fair_play" }), reader: VIEWER });
     expect(count(h, "md-board-hold")).toBe(0);
@@ -480,6 +512,124 @@ describe("BoardPanelView: who is offered which decision", () => {
 
 // ---- the guard ----------------------------------------------------------------------------------------------------------------------
 
+describe("BoardPanelView: two columns from lg (MD-R33, MD-R34)", () => {
+  // A held board with everything the right-hand column can carry: why it is held, a flag, every decision, the outage card, and presence
+  // marks (so the seat strip draws). Its answer has a position, so the board draws in the left column.
+  const FULL = withState(
+    { kind: "on_hold" },
+    { fixtureId: "b-grid", white: ADA, black: BEN, canResync: true, canSettle: true, flags: [camera()], flagCount: 1, cameraPolicy: "required", sides: { home: present("live"), away: present("off") } },
+  );
+  const fullAnswer = () => answerOf(FULL, { hold_reason: "fair_play", position: POSITION });
+  const full = (over: Partial<BoardPanelViewProps> = {}) => html(FULL, { answer: fullAnswer(), videoUnavailable: true, ...over });
+  /** The `lg:order-N` a block carries (null = none): the visual order the right column re-sorts into from lg. */
+  const orderOf = (h: string, testid: string): number | null => {
+    const m = /\blg:order-(\d+)\b/.exec(tagOf(h, testid) ?? "");
+    return m ? Number(m[1]) : null;
+  };
+  /** Test ids in the order they appear in the markup: the DOM order a phone (and a tablet, below lg) reads. */
+  const domOrder = (h: string, ids: readonly string[]) => ids.map((id) => ({ id, at: h.indexOf(`data-testid="${id}"`) })).sort((a, b) => a.at - b.at);
+
+  it("EMPTY CASE FIRST: with no position there is ONE column from lg too - the loading line, the failed line and the no-game note span the whole width, no hole on the left", () => {
+    const wide = (h: string) => {
+      const grid = tagOf(h, "md-board-grid")!;
+      expect(grid, "the grid wrapper is there").not.toBeNull();
+      expect(grid).toContain("min-w-0");
+      expect(grid, "no second column without a board to put in it").not.toMatch(/lg:grid-cols|lg:items-start/);
+      return h;
+    };
+    let seen = 0;
+    for (const [h, id] of [
+      [wide(html(LIVE, { answer: null })), "md-board-loading"],
+      [wide(html(LIVE, { answer: null, readFailed: true })), "md-board-read-failed"],
+      [wide(html(NOGAME)), "md-board-nogame"],
+      [wide(html(held(0, { fixtureId: "b-held", white: ADA, black: BEN }))), "md-board-nogame"],
+    ] as const) {
+      expect(count(h, id), `${id} is drawn`).toBe(1);
+      expect(innerOf(h, "md-board-grid")!, `${id} sits in the grid`).toContain(`data-testid="${id}"`);
+      expect(tagOf(h, "md-board-left") ?? "", `${id}: the note is not pinned into a left column`).not.toMatch(/lg:col-start|lg:row-span/);
+      seen += 1;
+    }
+    expect(seen, "every no-position case was checked").toBe(4);
+    // The cameras seam is a single column today as well (Task 9 puts the tiles at the right column's top).
+    const withCameras = html(LIVE, { answer: answerOf(LIVE, { position: POSITION }), cameras: <p data-testid="cameras-probe">tiles</p> });
+    expect(tagOf(withCameras, "md-board-grid")).not.toMatch(/lg:grid-cols/);
+  });
+
+  it("with a position the grid is two columns from lg: a fluid left column capped at 420px / 42%, top-aligned, and the board sits ONLY in the left one", () => {
+    const h = full();
+    const grid = tagOf(h, "md-board-grid")!;
+    expect(grid).toContain("min-w-0");
+    expect(grid).toContain("lg:grid-cols-[minmax(0,min(420px,42%))_1fr]");
+    expect(grid).toContain("lg:items-start");
+    const left = innerOf(h, "md-board-left")!;
+    expect(left, "the board and its clocks are in the left column").toContain('data-testid="md-board-position"');
+    expect(left).toContain('data-testid="md-board-clock-white"');
+    expect(left).toContain('data-testid="md-board-clock-black"');
+    for (const id of ["md-online-state", "md-board-seats", "md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"]) {
+      expect(left, `${id} is not in the left column`).not.toContain(`data-testid="${id}"`);
+    }
+    // Everything else is in the right column's two blocks: the head (state row, seats) and the rest (why, decisions, flags).
+    const head = innerOf(h, "md-board-head")!;
+    const rest = innerOf(h, "md-board-rest")!;
+    for (const id of ["md-online-state", "md-board-seats"]) expect(head, id).toContain(`data-testid="${id}"`);
+    for (const id of ["md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"]) expect(rest, id).toContain(`data-testid="${id}"`);
+    // And the pair: no block is in two places.
+    expect(count(h, "md-board-position")).toBe(1);
+    expect(count(h, "arbiter-decision")).toBe(1);
+  });
+
+  it("the board is capped at 420px from lg and keeps its 560px cap below it (a phone and a tablet are one column)", () => {
+    const tag = tagOf(full(), "md-board-position")!;
+    expect(tag).toContain("lg:max-w-[420px]");
+    expect(tag).toMatch(/\bmax-w-\[560px\]/);
+  });
+
+  it("DOM order (a phone, a tablet) is unchanged: state, seats, board, why, flags, decision, outage", () => {
+    const order = domOrder(full(), ["md-online-state", "md-board-seats", "md-board-position", "md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"]);
+    expect(order.every((o) => o.at >= 0), "every block is drawn (a missing one would hide in the sort)").toBe(true);
+    expect(order.map((o) => o.id)).toEqual(["md-online-state", "md-board-seats", "md-board-position", "md-board-hold", "md-board-flags", "arbiter-decision", "arbiter-outage"]);
+  });
+
+  it("from lg the right column reads: state row, seats, why it is held, the decision (and the outage card), THEN the flags", () => {
+    const h = full();
+    const rest = ["md-board-hold", "arbiter-decision", "arbiter-outage", "md-board-flags"] as const;
+    const orders = rest.map((id) => ({ id, order: orderOf(h, id) }));
+    expect(orders.every((o) => o.order !== null), `each block of the rest carries an lg:order: ${JSON.stringify(orders)}`).toBe(true);
+    // Flex re-sorts by (order, DOM position): the sort a browser does, so a changed number moves this and nothing else.
+    const visual = orders
+      .map((o, domIndexOf) => ({ ...o, domIndexOf }))
+      .sort((a, b) => a.order! - b.order! || a.domIndexOf - b.domIndexOf)
+      .map((o) => o.id);
+    expect(visual).toEqual(["md-board-hold", "arbiter-decision", "arbiter-outage", "md-board-flags"]);
+    expect(orders.length, "the sweep checked all four").toBe(4);
+    // The head is above the rest, by the grid's own rows.
+    expect(tagOf(h, "md-board-head")).toMatch(/lg:col-start-2/);
+    expect(tagOf(h, "md-board-head")).toMatch(/lg:row-start-1/);
+    expect(tagOf(h, "md-board-rest")).toMatch(/lg:col-start-2/);
+    expect(tagOf(h, "md-board-rest")).toMatch(/lg:row-start-2/);
+    expect(tagOf(h, "md-board-left")).toMatch(/lg:col-start-1/);
+    expect(tagOf(h, "md-board-left"), "the board spans both rows: the extra height lands in the stretchy row, not between the right blocks").toMatch(/lg:row-span-2/);
+    expect(tagOf(h, "md-board-grid")).toContain("lg:grid-rows-[auto_1fr]");
+  });
+
+  it("a failed read after an answer keeps the board and the line under it, in the left column (a note about the board it is under)", () => {
+    const h = full({ readFailed: true });
+    expect(innerOf(h, "md-board-left")).toContain('data-testid="md-board-read-failed"');
+    expect(tagOf(h, "md-board-grid")).toContain("lg:grid-cols-[minmax(0,min(420px,42%))_1fr]");
+  });
+
+  it("a viewer's board is the same two columns: no decision, no hold, and the flags are the whole of the right column's rest", () => {
+    const h = full({ reader: VIEWER });
+    expect(count(h, "arbiter-decision")).toBe(0);
+    expect(count(h, "md-board-hold")).toBe(0);
+    expect(innerOf(h, "md-board-rest")).toContain('data-testid="md-board-flags"');
+    expect(innerOf(h, "md-board-left")).toContain('data-testid="md-board-position"');
+    // A cell with nothing in it must not leave its 16px gap in the grid (React draws no node for null, so `:empty` matches).
+    expect(tagOf(h, "md-board-rest")).toContain("empty:hidden");
+    expect(tagOf(h, "md-board-left")).toContain("empty:hidden");
+  });
+});
+
 describe("isMatchDayBoard: the answer the panel will dereference", () => {
   const UUID_A = "11111111-1111-4111-8111-111111111111";
   const UUID_B = "22222222-2222-4222-8222-222222222222";
@@ -615,6 +765,41 @@ describe("BoardFocus: the read rides the poll, the decisions are the runner's", 
     net.calls[0]!.resolve(full(LIVE, { position: { ...POSITION, turn: "white" } }));
     await flush();
     expect(viewOf(ui).answer?.position?.turn, "the newer read's answer stands").toBe("black");
+  });
+
+  it("a re-read that answers 404 after a press means the board is gone: the last answer stays and no 'could not read' line is raised (the pair: a first read, and a 503)", async () => {
+    const b = withState({ kind: "on_hold" }, { fixtureId: "b-gone", white: ADA, black: BEN, canSettle: true, canResync: true });
+    const ui = renderIsland(BoardFocus, focusProps(b));
+    net.calls[0]!.resolve(full(b));
+    await flush();
+    void viewOf(ui).on.resync();
+    net.calls.at(-1)!.resolve({ read: true, adopted: 0 });
+    await flush();
+    const reread = reads().at(-1)!;
+    expect(reads(), "the press re-read the board").toHaveLength(2);
+    reread.reject(new ApiV1Error("not found", 404, "NOT_FOUND"));
+    await flush();
+    expect(viewOf(ui).answer?.position, "the last answer stays").toEqual(POSITION);
+    expect(viewOf(ui).readFailed, "gone is not a failed read").toBe(false);
+    // The pair, same board and same press: a 503 on the re-read IS a failed read.
+    const other = renderIsland(BoardFocus, focusProps(b));
+    const first = net.calls.length - 1;
+    net.calls[first]!.resolve(full(b));
+    await flush();
+    void viewOf(other).on.resync();
+    net.calls.at(-1)!.resolve({ read: true, adopted: 0 });
+    await flush();
+    reads().at(-1)!.reject(new ApiV1Error("offline", 503, "UNAVAILABLE"));
+    await flush();
+    expect(viewOf(other).readFailed).toBe(true);
+  });
+
+  it("a 404 on the FIRST read has no answer to keep: that one is a failed read (nothing to show, so say so)", async () => {
+    const ui = renderIsland(BoardFocus, focusProps(LIVE));
+    net.calls[0]!.reject(new ApiV1Error("not found", 404, "NOT_FOUND"));
+    await flush();
+    expect(viewOf(ui).answer).toBeNull();
+    expect(viewOf(ui).readFailed).toBe(true);
   });
 
   it("an answer the panel cannot read is a failed read, never a half-drawn board; so is one for another board", async () => {

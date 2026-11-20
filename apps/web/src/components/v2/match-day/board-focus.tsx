@@ -26,7 +26,7 @@ import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDe
 import { CARD, CHIP_NEUTRAL, FlagCard, MUTED, SOFT, useFmt } from "../arbiter-flag-cards";
 import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
 import { boardIsOver, type ArbiterFlag } from "@/lib/arbiter-view";
-import { apiV1 } from "@/lib/client-v1";
+import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import { mayPress, presenceMark, boardRowWord, type Reader } from "@/lib/match-day/online";
 import { boardName, boardWord, earlierRoundChip, presenceText } from "@/lib/match-day/online-copy";
@@ -84,7 +84,10 @@ export function isMatchDayBoard(raw: unknown): raw is MatchDayBoard {
 type Read = { answer: MatchDayBoard | null; failed: boolean };
 
 /** One board's read: on mount and whenever `refreshKey` or `reloadKey` moves. The last answer is kept (state is never reset by a new read),
- *  a read that fails or answers something else only raises `failed`, and an answer that arrives after a newer read began is dropped. */
+ *  a read that fails or answers something else only raises `failed`, and an answer that arrives after a newer read began is dropped.
+ *  One failure is not a failure: a 404 on a RE-read (an answer is in hand) says the board is gone - a press can take it away, a settle that
+ *  voids the game, an organiser deleting the match elsewhere - so the last answer stays and no "could not read" line is raised over a board
+ *  that is leaving; the day's own read drops the row and the shell closes the panel. A 404 on the FIRST read has nothing to keep: failed. */
 function useBoardRead(fixtureId: string, refreshKey: number | null, reloadKey: number): Read {
   const [read, setRead] = useState<Read>({ answer: null, failed: false });
   useEffect(() => {
@@ -97,8 +100,10 @@ function useBoardRead(fixtureId: string, refreshKey: number | null, reloadKey: n
         if (isMatchDayBoard(raw) && raw.fixtureId === fixtureId) setRead({ answer: raw, failed: false });
         else fail();
       })
-      .catch(() => {
-        if (current) fail();
+      .catch((e: unknown) => {
+        if (!current) return;
+        if (e instanceof ApiV1Error && e.status === 404) setRead((prev) => (prev.answer !== null ? prev : { answer: null, failed: true }));
+        else fail();
       });
     return () => {
       current = false;
@@ -274,10 +279,14 @@ export function BoardPanelView(p: BoardPanelViewProps) {
     );
   }
   const showsPosition = p.cameras == null && position !== null;
+  // The second column exists only for a board to put in it (a position drawn, not the cameras seam: Task 9 decides that cell).
+  const twoCol = showsPosition;
   // The seats: always while there is no board to name them (the check-in's words belong here), else only to carry a presence mark.
   const showSeats = !showsPosition || marks.white !== null || marks.black !== null;
 
-  const holdReason = answer?.hold_reason ?? row.hold_reason ?? null;
+  // The reason is the ANSWER's once there is one (null = not held, or not an editor's to read): `??` would paint a lifted hold from the list's
+  // stale row. The row's reason is what shows only before the first answer.
+  const holdReason = answer !== null ? answer.hold_reason : (row.hold_reason ?? null);
   // Why it is held, in the held queue's own words: an editor's fact (MD-R21 - the server sends null to anyone else, and the view asks too).
   // The seat a hold froze (`revokedSeat`) is not on the board's wire, so a seat hold reads in its general words.
   const holdBody = editor && holdReason !== null ? heldBody({ reason: holdReason, revokedSeat: null, whiteName: board.white.name, blackName: board.black.name }) : null;
@@ -300,126 +309,144 @@ export function BoardPanelView(p: BoardPanelViewProps) {
         </>
       }
     >
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <p data-testid="md-online-state" className={`min-w-0 text-sm font-semibold [overflow-wrap:anywhere] ${WORD_TONE[word.tone]}`}>
-          {word.text}
-          {word.sub !== null && <span className="ml-2 font-medium text-slate-600">{word.sub}</span>}
-        </p>
-        {matchHref !== null && (
-          <Link href={matchHref} data-testid="md-open-pad" className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5">
-            {f.t("matchDay.focus.openMatch")}
-          </Link>
-        )}
-      </div>
+      {/* MD-R33/R34: from lg the panel is two columns - the board and its clocks on the left (a fluid column, capped at 420px / 42%, so the
+          focus at 1024 is not squeezed), everything else on the right, so the decision is above the fold on a held board. Below lg ONE column,
+          in the DOM's own order: state, seats, board, why, flags, decision. The grid has three cells: the head (state row, seats) at the right's
+          top, the board's cell spanning both rows (the extra height of a tall board lands in the stretchy second row, never between the right's
+          blocks), and the rest, which re-sorts with `lg:order-*` into why, decision, outage card, THEN flags (the decision is what the
+          organiser came for). With no position there is no left column at all: the notes (loading, no game, read failed) span the width. The
+          cameras slot (Task 9) is the same cell, which replaces the board today; Task 9 puts the tiles at the right column's top. */}
+      <div
+        data-testid="md-board-grid"
+        className={`grid min-w-0 gap-4${twoCol ? " lg:grid-cols-[minmax(0,min(420px,42%))_1fr] lg:grid-rows-[auto_1fr] lg:items-start" : ""}`}
+      >
+        <div data-testid="md-board-head" className={`flex min-w-0 flex-col gap-4${twoCol ? " lg:col-start-2 lg:row-start-1" : ""}`}>
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <p data-testid="md-online-state" className={`min-w-0 text-sm font-semibold [overflow-wrap:anywhere] ${WORD_TONE[word.tone]}`}>
+              {word.text}
+              {word.sub !== null && <span className="ml-2 font-medium text-slate-600">{word.sub}</span>}
+            </p>
+            {matchHref !== null && (
+              <Link href={matchHref} data-testid="md-open-pad" className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5">
+                {f.t("matchDay.focus.openMatch")}
+              </Link>
+            )}
+          </div>
 
-      {showSeats && (
-        <ul data-testid="md-board-seats" className="m-0 grid min-w-0 list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
-          {(["white", "black"] as const).map((colour) => {
-            const mark = marks[colour];
-            const seat = board.seats?.[colour] ?? null;
-            const text = presenceText(ctx.dict, mark);
-            return (
-              <li key={colour} data-testid="md-board-seat" data-colour={colour} className={`flex flex-col gap-1 ${CARD_BOX}`}>
-                <span className={`text-xs ${MUTED}`}>{f.t(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black")}</span>
-                <span className="min-w-0 text-sm font-semibold text-[#2e1065] [overflow-wrap:anywhere]">
-                  {board[colour].name}
-                  <Mark mark={mark} dict={ctx.dict} />
-                  {text !== null && (
-                    <span aria-hidden className="text-xs font-medium text-slate-600">
-                      {text}
-                    </span>
-                  )}
-                </span>
-                {seat !== null && (
-                  // The check-in's words (a board in its window): here, or not here yet and what each invite did - the waiting list's own words.
-                  <span data-testid="md-board-seat-words" className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    {seat.here ? (
-                      <span data-seat-word="here" className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900">
-                        {f.t("arbiter.column.here")}
-                      </span>
-                    ) : (
-                      <>
-                        <span data-seat-word="not_here" className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-900">
-                          {f.t("arbiter.column.notHereYet")}
+          {showSeats && (
+            <ul data-testid="md-board-seats" className="m-0 grid min-w-0 list-none grid-cols-1 gap-2 p-0 sm:grid-cols-2">
+              {(["white", "black"] as const).map((colour) => {
+                const mark = marks[colour];
+                const seat = board.seats?.[colour] ?? null;
+                const text = presenceText(ctx.dict, mark);
+                return (
+                  <li key={colour} data-testid="md-board-seat" data-colour={colour} className={`flex flex-col gap-1 ${CARD_BOX}`}>
+                    <span className={`text-xs ${MUTED}`}>{f.t(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black")}</span>
+                    <span className="min-w-0 text-sm font-semibold text-[#2e1065] [overflow-wrap:anywhere]">
+                      {board[colour].name}
+                      <Mark mark={mark} dict={ctx.dict} />
+                      {text !== null && (
+                        <span aria-hidden className="text-xs font-medium text-slate-600">
+                          {text}
                         </span>
-                        {seatWords(seat).map((w, i) => (
-                          <span key={`${w}:${i}`} data-seat-word={w} className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
-                            {f.t(SEAT_WORD_KEYS[w])}
+                      )}
+                    </span>
+                    {seat !== null && (
+                      // The check-in's words (a board in its window): here, or not here yet and what each invite did - the waiting list's own words.
+                      <span data-testid="md-board-seat-words" className="flex min-w-0 flex-wrap items-center gap-1.5">
+                        {seat.here ? (
+                          <span data-seat-word="here" className="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-900">
+                            {f.t("arbiter.column.here")}
                           </span>
-                        ))}
-                      </>
+                        ) : (
+                          <>
+                            <span data-seat-word="not_here" className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-900">
+                              {f.t("arbiter.column.notHereYet")}
+                            </span>
+                            {seatWords(seat).map((w, i) => (
+                              <span key={`${w}:${i}`} data-seat-word={w} className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
+                                {f.t(SEAT_WORD_KEYS[w])}
+                              </span>
+                            ))}
+                          </>
+                        )}
+                      </span>
                     )}
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
 
-      {top}
-      {p.readFailed && (
-        <p data-testid="md-board-read-failed" role="status" className={NOTE}>
-          {f.t("matchDay.board.readFailed")}
-        </p>
-      )}
+        </div>
+        <div data-testid="md-board-left" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-1 lg:row-span-2 lg:row-start-1" : ""}`}>
+          {top}
+          {p.readFailed && (
+            <p data-testid="md-board-read-failed" role="status" className={NOTE}>
+              {f.t("matchDay.board.readFailed")}
+            </p>
+          )}
 
-      {holdBody !== null && holdReason !== null && (
-        <section data-testid="md-board-hold" data-reason={holdReason} className={`flex flex-col gap-1.5 ${CARD_BOX} border-[#f1c4c0]`}>
-          <span className="self-start rounded-full bg-[#fde8e6] px-2.5 py-[3px] text-xs font-semibold text-[#7f1d1d]">{f.t(HELD_TITLE_KEYS[holdReason])}</span>
-          <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t(holdBody.key, holdBody.vars)}</p>
-        </section>
-      )}
+        </div>
+        <div data-testid="md-board-rest" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-2 lg:row-start-2" : ""}`}>
+          {holdBody !== null && holdReason !== null && (
+            <section data-testid="md-board-hold" data-reason={holdReason} className={`flex flex-col gap-1.5 ${CARD_BOX} border-[#f1c4c0] lg:order-1`}>
+              <span className="self-start rounded-full bg-[#fde8e6] px-2.5 py-[3px] text-xs font-semibold text-[#7f1d1d]">{f.t(HELD_TITLE_KEYS[holdReason])}</span>
+              <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t(holdBody.key, holdBody.vars)}</p>
+            </section>
+          )}
 
-      {(board.flags.length > 0 || board.cameraReport === "pending") && (
-        <section data-testid="md-board-flags" className="flex min-w-0 flex-col gap-2.5">
-          <h3 className="m-0 text-[17px] font-semibold text-[#2e1065]">{f.t("arbiter.flags.headingThis")}</h3>
-          <p className={`m-0 text-xs leading-[1.45] lg:text-[13px] ${MUTED}`}>{f.t(editor ? "arbiter.flags.lede" : "matchDay.board.flagsViewer")}</p>
-          {board.flags.map((flag) => (
-            <div key={flag.id} data-testid="md-board-flag" data-kind={flag.kind} className="min-w-0">
-              {editor ? (
-                <FlagCard flag={flag} f={f} />
-              ) : (
+          {(board.flags.length > 0 || board.cameraReport === "pending") && (
+            <section data-testid="md-board-flags" className="flex min-w-0 flex-col gap-2.5 lg:order-4">
+              <h3 className="m-0 text-[17px] font-semibold text-[#2e1065]">{f.t("arbiter.flags.headingThis")}</h3>
+              <p className={`m-0 text-xs leading-[1.45] lg:text-[13px] ${MUTED}`}>{f.t(editor ? "arbiter.flags.lede" : "matchDay.board.flagsViewer")}</p>
+              {board.flags.map((flag) => (
+                <div key={flag.id} data-testid="md-board-flag" data-kind={flag.kind} className="min-w-0">
+                  {editor ? (
+                    <FlagCard flag={flag} f={f} />
+                  ) : (
+                    <article className={`${CARD} border-[#e7e3f3]`}>
+                      <span className={CHIP_NEUTRAL}>{f.t(SUMMARY_CHIP[flag.kind])}</span>
+                      {f.hm(flag.at) !== null && <span className={`text-xs ${MUTED}`}>{f.t("arbiter.flag.foundAt", { time: f.hm(flag.at)! })}</span>}
+                    </article>
+                  )}
+                </div>
+              ))}
+              {board.cameraReport === "pending" && (
                 <article className={`${CARD} border-[#e7e3f3]`}>
-                  <span className={CHIP_NEUTRAL}>{f.t(SUMMARY_CHIP[flag.kind])}</span>
-                  {f.hm(flag.at) !== null && <span className={`text-xs ${MUTED}`}>{f.t("arbiter.flag.foundAt", { time: f.hm(flag.at)! })}</span>}
+                  <span className={CHIP_NEUTRAL}>{f.t("arbiter.flag.pending.chip")}</span>
+                  <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.pending.body")}</p>
                 </article>
               )}
-            </div>
-          ))}
-          {board.cameraReport === "pending" && (
-            <article className={`${CARD} border-[#e7e3f3]`}>
-              <span className={CHIP_NEUTRAL}>{f.t("arbiter.flag.pending.chip")}</span>
-              <p className="m-0 text-[13px] leading-[1.45] lg:text-sm">{f.t("arbiter.flag.pending.body")}</p>
-            </article>
+            </section>
           )}
-        </section>
-      )}
 
-      {/* Draws nothing for a reader with no right to press: every button asks `may`, and the section itself is null when none is offered. */}
-      <BoardDecision
-        board={board}
-        decision={decision}
-        roundBusy={false}
-        nowMs={nowMs}
-        settleHref={matchHref}
-        may={may}
-        showWhy={false}
-        on={p.on}
-        f={f}
-        headingId={decideId}
-        className={`flex flex-col gap-2 ${CARD_BOX}`}
-      />
-      {may.finish && outageOffered(board, p.videoUnavailable === true) && (
-        <OutageCard
-          busy={decision.busy !== null}
-          overriding={decision.busy?.kind === "override"}
-          onOverride={p.on.override}
-          f={f}
-          headingId={outageId}
-          className="flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12]"
-        />
-      )}
+          {/* Draws nothing for a reader with no right to press: every button asks `may`, and the section itself is null when none is offered. */}
+          <BoardDecision
+            board={board}
+            decision={decision}
+            roundBusy={false}
+            nowMs={nowMs}
+            settleHref={matchHref}
+            may={may}
+            showWhy={false}
+            on={p.on}
+            f={f}
+            headingId={decideId}
+            className={`flex flex-col gap-2 ${CARD_BOX} lg:order-2`}
+          />
+          {may.finish && outageOffered(board, p.videoUnavailable === true) && (
+            <OutageCard
+              busy={decision.busy !== null}
+              overriding={decision.busy?.kind === "override"}
+              onOverride={p.on.override}
+              f={f}
+              headingId={outageId}
+              className="flex min-w-0 flex-col gap-2 rounded-xl border border-[#f5d27a] bg-[#fef3c7] p-3 text-[#713f12] lg:order-3"
+            />
+          )}
+        </div>
+      </div>
     </OnlineFocusFrame>
   );
 }
