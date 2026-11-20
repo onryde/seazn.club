@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto";
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { divisionScoringClosed } from "@/lib/division-phase";
 import { isSwissByeShellExtKey, SWISS_BYE_SHELL_EXT_KEY_SQL_PATTERN } from "@/lib/swiss-shell";
@@ -52,6 +53,20 @@ import {
 } from "../../__tests__/_external-play-seed";
 import { seedSecondOnlineRound } from "../../__tests__/_second-online-round-seed";
 
+// MD-R20: the freeze read, switchable per org. It is the REAL `frozenCompetitionIds` unless an org is named here, in which case it rejects
+// as a failing database read would; every other test in this file reads the real one.
+const freezeRead = vi.hoisted(() => ({ failOrgs: new Set<string>() }));
+vi.mock("../../entitlement-freeze", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../entitlement-freeze")>();
+  return {
+    ...actual,
+    frozenCompetitionIds: async (orgId: string) => {
+      if (freezeRead.failOrgs.has(orgId)) throw new Error("the freeze read failed (test)");
+      return actual.frozenCompetitionIds(orgId);
+    },
+  };
+});
+
 const DB = !!process.env.DATABASE_URL;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -84,6 +99,7 @@ beforeEach(async () => {
   vi.stubEnv("EXTERNAL_PLAY_PREMINT", "1");
   mail.sent.length = 0;
   mail.fail.clear();
+  freezeRead.failOrgs.clear();
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -1080,5 +1096,34 @@ describe.skipIf(!DB)("premint pass - a billing-frozen competition's unopened rou
     expect(await run(orgs), "the pass after the thaw").toMatchObject({ scanned: 2, roomsMade: 2, deferred: 0, failed: 0 });
     expect(createsFor(aIds).sort(), "the thawed competition's rooms are made").toEqual(titles(aIds));
     expect(await roomsOf(aIds)).toHaveLength(2);
+  }, 120_000);
+
+  it("MD-R20: one org's freeze read failing defers ONLY that org's rows (fail closed: no vendor call for it, though nothing of it is frozen), logs the error once with its orgId, and the other org's rooms are made in the same pass; the next pass makes the deferred rooms", async () => {
+    const a = await seedRound(1); // the org whose freeze read will fail: in quota, nothing frozen
+    const b = await seedRound(1);
+    const aIds = ids(a);
+    const bIds = ids(b);
+    expect(await frozenCompetitionIds(a.orgId), "premise: nothing of A is frozen, so a deferral below is the failed read's doing").toEqual(new Set());
+    expect(keysOf(await rowsOf([a.orgId, b.orgId])).sort(), "premise: both boards are candidates").toEqual(bothSides([...aIds, ...bIds]).sort());
+
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      freezeRead.failOrgs.add(a.orgId);
+      const report = await run([a.orgId, b.orgId]);
+      expect(report, "the pass ran to its end: A deferred, B made, nothing a failure").toEqual({ skipped: 0, disabled: 0, scanned: 4, roomsMade: 2, deferred: 2, failed: 0, windowsOpen: 0, failures: [] });
+      expect(createsFor(aIds), "A: fail closed, no vendor call").toEqual([]);
+      expect(await roomsOf(aIds), "A: no room on file").toEqual([]);
+      expect(createsFor(bIds).sort(), "B: made").toEqual(titles(bIds));
+      const own = logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === a.orgId);
+      expect(own, "the error is logged ONCE for A (a row of the org each, memoised per pass), with its orgId").toHaveLength(1);
+      expect(logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === b.orgId), "and not for B").toEqual([]);
+
+      // the read recovers: the deferred rows kept their place, the next pass makes them
+      freezeRead.failOrgs.clear();
+      expect(await run([a.orgId, b.orgId]), "the next pass").toMatchObject({ scanned: 2, roomsMade: 2, deferred: 0, failed: 0 });
+      expect(createsFor(aIds).sort(), "A's rooms are made once the read works").toEqual(titles(aIds));
+    } finally {
+      logged.mockRestore();
+    }
   }, 120_000);
 });
