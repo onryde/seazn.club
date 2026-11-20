@@ -143,10 +143,10 @@ export async function presenceRow(
 export async function openFlag(
   orgId: string,
   fixtureId: string,
-  o: { kind?: "out_of_band_play" | "camera_connection_problems"; personId?: string; openedAt?: Date } = {},
+  o: { kind?: "out_of_band_play" | "camera_lost" | "camera_connection_problems" | "multiple_devices"; personId?: string; openedAt?: Date; note?: string } = {},
 ): Promise<string> {
   const kind = o.kind ?? "out_of_band_play";
-  const note = kind === "out_of_band_play" ? JSON.stringify({ plies: [3] }) : "x";
+  const note = o.note ?? (kind === "out_of_band_play" ? JSON.stringify({ plies: [3] }) : "x");
   const [row] = await sql<{ id: string }[]>`
     insert into fixture_play_flags (org_id, fixture_id, kind, person_id, opened_at, note)
     values (${orgId}, ${fixtureId}, ${kind}, ${o.personId ?? null}, ${o.openedAt ?? NOW}, ${note})

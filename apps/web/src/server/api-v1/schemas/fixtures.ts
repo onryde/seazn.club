@@ -7,7 +7,7 @@ import { z } from "zod";
 // registration-rules.ts above: this file is shared with the standalone
 // OpenAPI generator script, which has no `@/` alias resolution.
 import { streamUrlSchema } from "../../../lib/stream-url.ts";
-import type { BoardErrorCode, GrantRefusal } from "../../external-play/types.ts";
+import { NEEDS_REASONS, type BoardErrorCode, type GrantRefusal } from "../../external-play/types.ts";
 import { VenueId, CourtId, Uuid } from "./common.ts";
 
 // ---------------------------------------------------------------------------
@@ -280,7 +280,7 @@ export const BoardPosition = z.object({
 
 /** GET /fixtures/{id}/match-day-board (lib/match-day/types.ts `MatchDayBoard`): an `ArbiterBoard` (lib/arbiter-view.ts, no zod) with the
  *  focus's own keys. A plain z.object STRIPS an undeclared key on parse, so the board is an open object (`z.looseObject`) that keeps
- *  whatever the server sent - `sides` with presence, camera and `joinable`, `seats`, `checkin`, `flags` in full - and the keys the focus
+ *  whatever the server sent - `sides` with presence, camera and `joinable`, `seats`, `checkin`, `flags` (each card whole for an editor's role) - and the keys the focus
  *  adds are declared. */
 export const MatchDayBoard = z
   .looseObject({
@@ -289,12 +289,13 @@ export const MatchDayBoard = z
     position: BoardPosition.nullable(),
     stage_id: Uuid,
     round_no: z.number().int(),
-    /** Why the board is held (the `needs_reason` vocabulary) while it is `on_hold`; null in any other state. */
-    hold_reason: z.string().nullable(),
+    /** Why the board is held (the `needs_reason` vocabulary, the server's one list - `NEEDS_REASONS`) while it is `on_hold`; null in any
+     *  other state. */
+    hold_reason: z.enum(NEEDS_REASONS).nullable(),
   })
   .meta({
     description:
-      "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` built in full, `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`.",
+      "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` - whole for an owner or an admin, kind and time only for a view-only member or a key - `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`.",
   });
 
 export const MatchDayCandidate = z.object({

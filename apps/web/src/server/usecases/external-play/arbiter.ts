@@ -19,6 +19,7 @@ import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import {
   boardMoveNo,
+  flagsForReader,
   parseCameraLostNote,
   parseMultipleDevicesNote,
   parseOutOfBandNote,
@@ -55,7 +56,7 @@ import { type BoardAnchor, bridgeGameOnFile, checkInCounts, extendRefusal, exten
 import type { PublicExternalPlayStatus } from "@/server/external-play/public-view";
 import { latestEmailStatus, type EmailStatusRow } from "@/server/email-outbox/status";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
-import { EDITOR_ROLES } from "@/lib/types";
+import { EDITOR_ROLES, isEditorRole } from "@/lib/types";
 import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
@@ -324,15 +325,20 @@ export async function loadBoardsByIds(
  * NOT FOUND (404) for a fixture that is not an online board of this club (another club's, another sport's, a division that does not play
  * online, an unpaired seat, an id that is no uuid) and for a cancelled board with no open flag (owner O1: the Flagged list's rule - a settled
  * one has left every list, so its read leaves with it). 403 ARBITER_PLAYS_THIS_BOARD for a board the viewer plays on (`isSeatedOn`, the
- * join's own predicate and refusal). No editor check: any member who may read the competition may read the board and its state, and a key
- * (no user) plays nowhere and is never asked.
+ * join's own predicate and refusal). Also NOT FOUND for a board of a round nobody has opened (the empty check-in a left join of
+ * `stage_round_opens` would otherwise read as `checking_in`: no list shows such a board, so no link points here). No editor check to READ:
+ * any member who may read the competition may read the board and its state, and a key (no user) plays nowhere and is never asked - but the
+ * flags are evidence about a named player and travel whole to an editor's role only (MD-R13, `flagsForReader`): anyone else gets each
+ * flag's id, kind and opening time, `flagCount` unchanged.
  */
 export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: { now?: Date } = {}): Promise<MatchDayBoard> {
   const now = opts.now ?? new Date();
   const notFound = () => new HttpError(404, "board not found", "NOT_FOUND");
   // A path value: a malformed id is "not here", never a 500 from Postgres' uuid cast.
   if (!UUID.test(fixtureId)) throw notFound();
-  // This club's fixture of a division that plays online (the one home of that rule, guard.ts), with the division's clock.
+  // This club's fixture of a division that plays online (the one home of that rule, guard.ts), with the division's clock. `f.org_id` here
+  // is the TWIN of the org filter in `boardRows` below, kept on purpose: each statement guards its own read, so neither depends on the
+  // other staying (dropping either alone changes nothing; the pair is the guard).
   const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
     select d.config from fixtures f
       join divisions d on d.id = f.division_id
@@ -348,16 +354,23 @@ export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: 
     throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
   }
   const policy = await fixtureCameraPolicy(fixtureId);
-  const [board] = await composeBoards(auth, [row], {
-    limitMs: (division.config?.clock?.base ?? 0) * 1_000,
-    policyOf: async () => policy,
-    flagRows,
-    now,
-    flags: "full",
-  });
-  if (board === undefined) throw new Error("loadMatchDayBoard: composeBoards returned no board for the one it was given");
+  // `composeBoards` answers one board per row it is given, in order (a `Promise.all` over `listed`, `withSeats` keeps them): one row in, one out.
+  const board = (
+    await composeBoards(auth, [row], {
+      limitMs: (division.config?.clock?.base ?? 0) * 1_000,
+      policyOf: async () => policy,
+      flagRows,
+      now,
+      flags: "full",
+    })
+  )[0]!;
+  // A round nobody opened has no board yet: `boardRows` left-joins the opens, so its fixtures are rows with `openId` null that read as an
+  // empty check-in. The round view, the Flagged list and Match Day list none of them, so nothing links here - the same 404 as a board that
+  // is not one. A held, settled or live board of such a round (a game or a hold on file) is not that empty check-in and reads.
+  if (row.openId === null && board.state.kind === "checking_in") throw notFound();
   return {
     ...board,
+    flags: flagsForReader(board.flags, isEditorRole(auth.role)),
     stage_id: row.stageId,
     // `fixtures.round_no` is NOT NULL (V214): the row type is the loose one the round view's left joins share, the column never is null.
     round_no: row.roundNo!,
