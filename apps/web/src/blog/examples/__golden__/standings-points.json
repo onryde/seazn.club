@@ -74,6 +74,7 @@
     "hockeyFihshootoutLoss": "0",
     "hockeyFihshootoutWinSo": "2",
     "hockeyFihshootoutLossSo": "1",
+    "hockeyFihshootoutDraw": "1",
     "hockeyFihshootoutRankedBy": "points",
     "sportCount": 11
   },
@@ -212,7 +213,7 @@
         "Hockey (FIH with shoot-out)",
         "3",
         "0",
-        "Not possible",
+        "1",
         "winner 2, loser 1 (shoot-out)",
         "Points"
       ]
@@ -253,6 +254,7 @@
     "Hockey (FIH outdoor): Ana beat Ben 2 — 1.",
     "Hockey (FIH outdoor): Cy and Dev, a draw, 1 — 1.",
     "Hockey (FIH with shoot-out): Ana beat Ben 2 — 1.",
-    "Hockey (FIH with shoot-out): Ana beat Ben in shoot-out, 1 — 1 (SO 4–1)."
+    "Hockey (FIH with shoot-out): Ana beat Ben in shoot-out, 1 — 1 (SO 4–1).",
+    "Hockey (FIH with shoot-out): Cy and Dev, level and settled in a shoot-out, 1 — 1 (SO 4–1)."
   ]
 }

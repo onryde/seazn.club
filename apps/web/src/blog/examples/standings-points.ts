@@ -46,12 +46,11 @@ const BEYOND_WORDS: Record<Beyond, string> = { ot: "overtime", so: "shoot-out" }
  * every variant, but `core.abandon` in a two-innings match (Test) books a draw, so a Test match is never "no result":
  * 3000 seeded Test walks end in win, draw, tie and award and never in no_result (blog-examples.test.ts re-proves that
  * and fails when the engine starts reaching it, so this entry cannot go stale unseen). An example prints only what a
- * played match can end in. Hockey with a shoot-out is the second: it declares a draw, but a level match always goes to the
- * shoot-out and is booked a win there (1500 seeded walks: win in regulation, win in the shoot-out, or an award; no draw).
+ * played match can end in. (Hockey with a shoot-out is NOT one: its `outcome()` is a win, but the TABLE books the
+ * shoot-out as a draw plus a bonus, which is the level result `reachableResultKinds` declares. See `levelRunOf`.)
  */
 export const DECLARED_BUT_UNREACHABLE: Readonly<Record<string, readonly LevelKind[]>> = {
   "cricket/test": ["noResult"],
-  "hockey/fih-shootout": ["draw"],
 };
 const levelKindsOf = (module: AnySportModule, variantKey: string, reach: ReadonlySet<string>): LevelKind[] =>
   LEVEL_KINDS.filter((k) => reach.has(k) && !(DECLARED_BUT_UNREACHABLE[`${module.key}/${variantKey}`] ?? []).includes(k));
@@ -152,6 +151,28 @@ interface Run {
   rankedBy: string;
 }
 
+/**
+ * One way a match is level, as the TABLE books it. A draw, a tie or a no result is an outcome of its own. A draw-plus-bonus
+ * shoot-out (hockey with a shoot-out) is not: `outcome()` says win, and `payout` books both sides drawn, pays each the
+ * rule's draw and the shoot-out winner the bonus on top. That booking is the level result the module declares reachable,
+ * so it is played as a shoot-out win, checked to be booked drawn on both sides, and read off the side that did not win.
+ */
+function levelRunOf(module: AnySportModule, cfg: Cfg, variantKey: string, kind: LevelKind, decided: ReadonlySet<string>): LevelRun {
+  const rules = leagueRules(module, cfg);
+  if (kind === "draw" && rules.points.shootoutAs === "draw_plus_bonus" && decided.has("so")) {
+    const p = play(module, cfg, `${variantKey} shoot-out booked as a draw`, ["cy", "dev"], (o) => o.kind === "win" && decidedInFor(module, o) === "so");
+    if (!p.paid.every((d) => d.drawn === 1)) throw new Error(`${module.key}/${variantKey}: a shoot-out win is not booked drawn on both sides`);
+    const o = p.outcome;
+    const loser = o.kind === "win" ? p.paid.find((d) => d.entrantId === o.loser) : undefined;
+    if (loser === undefined) throw new Error(`${module.key}/${variantKey}: the shoot-out's losing side is not in the paid pair`);
+    return { kind, points: loser.points, line: `${NAMES.cy} and ${NAMES.dev}, level and settled in a shoot-out, ${p.headline}` };
+  }
+  const p = play(module, cfg, `${variantKey} ${kind}`, ["cy", "dev"], (o) => o.kind === OUTCOME_OF[kind]);
+  const [a, b] = p.paid;
+  if (a.points !== b.points) throw new Error(`${module.key}: a ${kind} paid ${a.points} and ${b.points}`);
+  return { kind, points: a.points, line: `${NAMES.cy} and ${NAMES.dev}, ${LEVEL_WORDS[kind]}, ${p.headline}` };
+}
+
 function runVariant(module: AnySportModule, variantKey: string, cfg: Cfg, rowId: string): Run {
   const rules = leagueRules(module, cfg);
   const scores: readonly (string | null)[] = module.reachableSetScores?.(cfg) ?? [null];
@@ -172,12 +193,7 @@ function runVariant(module: AnySportModule, variantKey: string, cfg: Cfg, rowId:
       return { tag: d, winner, loser, line: `${NAMES.ana} beat ${NAMES.ben} in ${BEYOND_WORDS[d]}, ${p.headline}` };
     });
   const reach = module.reachableResultKinds(cfg, "league");
-  const levels = levelKindsOf(module, variantKey, reach).map((kind): LevelRun => {
-    const p = play(module, cfg, `${variantKey} ${kind}`, ["cy", "dev"], (o) => o.kind === OUTCOME_OF[kind]);
-    const [a, b] = p.paid;
-    if (a.points !== b.points) throw new Error(`${module.key}: a ${kind} paid ${a.points} and ${b.points}`);
-    return { kind, points: a.points, line: `${NAMES.cy} and ${NAMES.dev}, ${LEVEL_WORDS[kind]}, ${p.headline}` };
-  });
+  const levels = levelKindsOf(module, variantKey, reach).map((kind): LevelRun => levelRunOf(module, cfg, variantKey, kind, decided));
   return { rowId, variantKey, unit: rules.points.unit, wins, beyond, levels, rankedBy: tiebreakLabel(rules.tiebreakers[0]!) };
 }
 

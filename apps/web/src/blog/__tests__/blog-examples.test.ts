@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { buildWalk, declaredCfgs, forEachSport, lineupFromCatalog } from "@seazn/engine/testkit";
 import { resolvePositions } from "@seazn/engine/sport";
+import { decidedInFor, forfeitShaped, payout, resolveTableRules, setsToWinOf } from "@seazn/engine/competition";
 import { BLOG_EXAMPLES, blogExample } from "@/blog/examples";
 import { BLOG_GOLDENS } from "@/blog/examples/goldens";
 import type { ExampleResult } from "@/blog/examples/types";
@@ -331,51 +332,80 @@ describe("the starting variant is the builder's, read from the builder's code", 
   });
 });
 
-describe("a result kind the engine declares reachable but no match ends in is left out, and the exemption cannot go stale", () => {
+describe("a result kind the engine declares reachable but no match is booked as is left out, and the exemption cannot go stale", () => {
   const SEEDS = 1200;
-  /** The result kinds a seeded walk of this variant ends in: the engine's own legal-move generator, not a declaration. */
-  const walked = (sportKey: string, variantKey: string): Map<string, number> => {
+  /**
+   * The level kinds a seeded walk of this variant is BOOKED as by the table: each finished match goes through the app's
+   * own rule resolver and `payout`, and counts as level when its outcome is a draw/tie/no_result or when `payout` books
+   * both sides drawn (a draw-plus-bonus shoot-out, whose `outcome()` says win). Reading `outcome().kind` alone is blind to
+   * the second, which is how a wrong exemption once hid behind it.
+   */
+  const booked = (sportKey: string, variantKey: string): { levels: Map<string, number>; outcomeKinds: Map<string, number>; matches: number } => {
     const m = builtinModules.find((x) => x.key === sportKey)!;
     const cfg = declaredCfgs(m).find((c) => c.name === variantKey)!.cfg;
+    const rule = resolveTableRules({ module: m, stageKind: "league", mergedCfg: cfg, stageOwn: { points: null, tiebreakers: null, crossGroup: null }, divisionTiebreakers: null, pinned: null }).points;
     const catalog = resolvePositions(m, cfg);
     const lineups = { home: lineupFromCatalog(catalog, "cy"), away: lineupFromCatalog(catalog, "dev") };
-    const seen = new Map<string, number>();
+    const levels = new Map<string, number>();
+    const outcomeKinds = new Map<string, number>();
+    let matches = 0;
     for (let seed = 1; seed <= SEEDS; seed++) {
       const { states } = buildWalk(m, cfg, lineups, seed, 3000);
       const last = states[states.length - 1];
       const o = last === undefined ? null : m.outcome(last);
-      if (o !== null) seen.set(o.kind, (seen.get(o.kind) ?? 0) + 1);
+      if (o === null || last === undefined) continue;
+      matches++;
+      outcomeKinds.set(o.kind, (outcomeKinds.get(o.kind) ?? 0) + 1);
+      const delta = m.standingsDelta(o, cfg, { kind: "league" }, last);
+      const paid = payout(o, decidedInFor(m, o), [delta[0], delta[1]], true, rule, m.awardScoreKeys, setsToWinOf(m, cfg));
+      const kind = o.kind === "draw" || o.kind === "tie" ? o.kind : o.kind === "no_result" ? "noResult" : o.kind === "win" && !forfeitShaped(o) && paid.every((d) => d.drawn === 1) ? "draw" : null;
+      if (kind !== null) levels.set(kind, (levels.get(kind) ?? 0) + 1);
     }
-    return seen;
+    return { levels, outcomeKinds, matches };
   };
-  const WORDS: Record<string, string> = { draw: "draw", tie: "tie", noResult: "no_result" };
 
-  it("every exempted (variant, kind) is declared reachable AND never ended in across the seeded walks", () => {
+  it("every exempted (variant, kind) is declared reachable AND never booked as that level result across the seeded walks", () => {
     let checked = 0;
     for (const [id, kinds] of Object.entries(DECLARED_BUT_UNREACHABLE)) {
       const [sportKey, variantKey] = id.split("/") as [string, string];
       const m = builtinModules.find((x) => x.key === sportKey)!;
       const cfg = declaredCfgs(m).find((c) => c.name === variantKey)!.cfg;
-      const seen = walked(sportKey, variantKey);
-      expect(seen.size, `${id}: outcome kinds seen`).toBeGreaterThan(1);
+      const seen = booked(sportKey, variantKey);
+      expect(seen.matches, `${id}: matches booked`).toBeGreaterThan(100);
       for (const k of kinds) {
         expect(m.reachableResultKinds(cfg, "league").has(k), `${id}: ${k} is declared reachable (else the exemption is dead)`).toBe(true);
-        expect(seen.get(WORDS[k]!) ?? 0, `${id}: ${k} must never happen, else drop the exemption`).toBe(0);
+        expect(seen.levels.get(k) ?? 0, `${id}: ${k} must never be booked, else drop the exemption`).toBe(0);
         checked++;
       }
     }
     expect(checked).toBe(Object.values(DECLARED_BUT_UNREACHABLE).flat().length);
     expect(checked).toBeGreaterThan(0);
   });
-  it("the walk CAN end in each of these kinds elsewhere (so a zero above is the variant, not the search)", () => {
-    expect(walked("cricket", "t20").get("no_result") ?? 0, "cricket t20 no_result").toBeGreaterThan(0);
-    expect(walked("hockey", "fih-outdoor").get("draw") ?? 0, "hockey fih-outdoor draw").toBeGreaterThan(0);
+  it("the walks DO book each of these level kinds elsewhere (so a zero above is the variant, not the search)", () => {
+    expect(booked("cricket", "t20").levels.get("noResult") ?? 0, "cricket t20 no result").toBeGreaterThan(0);
+    expect(booked("hockey", "fih-outdoor").levels.get("draw") ?? 0, "hockey fih-outdoor draw").toBeGreaterThan(0);
   });
-  it("the golden prints a Test match without a no result and the shoot-out hockey row without a draw", () => {
+  it("hockey with a shoot-out: outcome() never says draw, yet the table books drawn matches (the class the old check was blind to)", () => {
+    const seen = booked("hockey", "fih-shootout");
+    expect(seen.outcomeKinds.get("draw") ?? 0, "outcome kind draw").toBe(0);
+    expect(seen.levels.get("draw") ?? 0, "booked as a draw").toBeGreaterThan(0);
+    expect(DECLARED_BUT_UNREACHABLE["hockey/fih-shootout"], "no exemption for it").toBeUndefined();
+  });
+  it("the golden prints a Test match without a no result, and the shoot-out hockey row as a draw plus a shoot-out bonus", () => {
     const rows = BLOG_GOLDENS["standings-points"]!.table!.rows;
+    const facts = BLOG_GOLDENS["standings-points"]!.facts;
     expect(rows.find((r) => r[0] === "Cricket (Test match)")![3]).toBe("1 (a draw or a tie)");
-    expect(rows.find((r) => r[0] === "Hockey (FIH with shoot-out)")![3]).toBe("Not possible");
     expect(rows.find((r) => r[0] === "Cricket (T20)")![3]).toBe("1 (a tie or no result)");
+    const hockey = rows.find((r) => r[0] === "Hockey (FIH with shoot-out)")!;
+    expect(hockey[3]).toBe(String(facts.hockeyFihshootoutDraw));
+    expect(hockey[4]).toBe(`winner ${facts.hockeyFihshootoutWinSo}, loser ${facts.hockeyFihshootoutLossSo} (shoot-out)`);
+    // The bonus is on top of the draw: winner = draw + bonus, loser = draw.
+    expect(Number(facts.hockeyFihshootoutLossSo)).toBe(Number(facts.hockeyFihshootoutDraw));
+    // ...and the post's "a bonus point" is the rule's own declared soBonus (1), not a typed figure.
+    const hockeyModule = builtinModules.find((x) => x.key === "hockey")!;
+    const rule = hockeyModule.tablePointsRule(declaredCfgs(hockeyModule).find((c) => c.name === "fih-shootout")!.cfg, "league");
+    expect(rule.soBonus).toBe(1);
+    expect(Number(facts.hockeyFihshootoutWinSo) - Number(facts.hockeyFihshootoutDraw)).toBe(rule.soBonus);
   });
 });
 
