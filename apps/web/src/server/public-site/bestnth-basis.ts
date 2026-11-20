@@ -9,14 +9,16 @@
 import "server-only";
 import type { ComparisonBasis } from "@seazn/engine/competition";
 import { sql } from "@/lib/db";
+import type { StageBases } from "@/lib/bestnth-basis-note";
 
 interface StoredSlot {
   source?: { stageId?: string };
   basis?: ComparisonBasis;
 }
 
-/** Source stage id -> the distinct comparison bases (one per nth) its best-Nth qualifiers were seated on. */
-export async function loadBestNthBases(divisionId: string): Promise<ReadonlyMap<string, readonly ComparisonBasis[]>> {
+/** Source stage id -> the distinct comparison bases (one per nth) its best-Nth qualifiers were seated on, with the stage's carried
+ *  openings' `played` (C4: the footnote counts the stage's own compared matches, `comparedMatches`). */
+export async function loadBestNthBases(divisionId: string): Promise<ReadonlyMap<string, StageBases>> {
   const rows = await sql<{ status: string; computed: { qualifiers?: StoredSlot[] } }[]>`
     select distinct on (p.stage_id) p.status, p.computed
       from stage_seed_proposals p
@@ -35,5 +37,15 @@ export async function loadBestNthBases(divisionId: string): Promise<ReadonlyMap<
       out.set(stageId, bases);
     }
   }
-  return out;
+  if (out.size === 0) return new Map();
+  // C4: a source stage seeded with carry "full" opens each row with its first-tier `played` (`carry_deltas`, carry-over.ts).
+  const carried = await sql<{ id: string; deltas: { entrantId?: unknown; played?: unknown }[] | null }[]>`
+    select id, config->'carry_deltas' as deltas from stages where id = any(${[...out.keys()]}::uuid[])`;
+  const openingsOf = new Map(
+    carried.map((r) => [
+      r.id,
+      new Map((Array.isArray(r.deltas) ? r.deltas : []).flatMap((d) => (typeof d.entrantId === "string" && typeof d.played === "number" ? [[d.entrantId, d.played] as const] : []))),
+    ]),
+  );
+  return new Map([...out].map(([stageId, bases]) => [stageId, { bases, openings: openingsOf.get(stageId) ?? new Map() }]));
 }

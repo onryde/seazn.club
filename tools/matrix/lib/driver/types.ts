@@ -114,7 +114,12 @@ export interface FinishSwissOut extends CompleteOut { finished_after: number; sh
  *  entrants, in the product's listed order (computeSeedProposal `ties`). */
 export interface SeedTie { readonly slots: readonly string[]; readonly entrantIds: readonly string[]; readonly reason: string }
 /** A recomputed draft (POST /stages/:id/seed-proposal → 201 `computed`). */
-export interface SeedProposalOut { readonly id: string; readonly status: string; readonly qualifiers: readonly { rank: number; entrantId: string; destinationSlot: string }[]; readonly ties: readonly SeedTie[] }
+/** W5 app PR B (K21): a best-Nth slot's comparison basis as the proposal stores it (the engine's `ComparisonBasis`, seed-proposal.ts): the nth
+ *  compared, the matches each candidate was compared on, and per larger pool (by KEY) the entrants whose results were left out. */
+export interface ComparisonBasisWire { readonly nth: number; readonly matchesCounted: number; readonly dropped: readonly { readonly pool: string; readonly against: readonly string[] }[]; readonly levelWith: readonly string[] }
+/** `pool` / `basis` (W5 app PR B): the qualifier's source pool KEY and, on a best-Nth slot, its comparison basis. Absent elsewhere. */
+export interface SeedQualifierWire { readonly rank: number; readonly entrantId: string; readonly destinationSlot: string; readonly pool?: string; readonly basis?: ComparisonBasisWire }
+export interface SeedProposalOut { readonly id: string; readonly status: string; readonly qualifiers: readonly SeedQualifierWire[]; readonly ties: readonly SeedTie[] }
 /** confirmSeedProposal's answer: `filled` counts SLOTS (a bye seed owns two),
  *  and `fixtures` is the WHOLE target stage (usecases/stages/, `where f.stage_id`). */
 export interface SeedConfirmOut { readonly proposalId: string; readonly filled: number; readonly fixtures: readonly FixtureRow[] }

@@ -14,14 +14,20 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { sql, withTenant } from "@/lib/db";
 import { ApiV1Error } from "@/lib/client-v1";
-import { bestNthBasisNote } from "@/lib/bestnth-basis-note";
+import { bestNthBasisNote, stageBasisNotes } from "@/lib/bestnth-basis-note";
 import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 import { loadBestNthBases } from "@/server/public-site/bestnth-basis";
 import { bestNthSourceOf } from "../pool-results";
 import { sourcePoolKeys } from "../stage-seeding";
-import { completeStage, computeSeedProposal, getSeedProposal } from "../stages";
-import { declaredCrossGroup, publicT, scene, type Meeting, type Scene } from "./_groups-ko-scene";
-import type { StandingsRow } from "@seazn/engine/competition";
+import { completeStage, computeSeedProposal, createStages, generateStageFixtures, getSeedProposal } from "../stages";
+import { declaredCrossGroup, post, publicT, scene, type Meeting, type Scene } from "./_groups-ko-scene";
+import { shuffle } from "@seazn/engine/core";
+import { createCompetition } from "../competitions";
+import { createDivision } from "../divisions";
+import { createEntrants } from "../entrants";
+import { startDivision } from "../schedule";
+import { seedOrg } from "./_seed";
+import { lotSeed, type StandingsRow } from "@seazn/engine/competition";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -77,7 +83,7 @@ describe.skipIf(!HAS_DB)("best-Nth across unequal pools (W5 app PR B Task 4)", (
 
     // X-UP-3: the page's read of it, and the footnote it prints under the source's tables (R24 pick 16 B; the copy is public.json's).
     const bases = await loadBestNthBases(s.divId);
-    expect(bases.get(s.srcId), "the source stage's basis, read off the live proposal").toEqual([slot!.basis]);
+    expect(bases.get(s.srcId)?.bases, "the source stage's basis, read off the live proposal").toEqual([slot!.basis]);
     const names = await namesOf(s);
     const t = publicT("en");
     const note = bestNthBasisNote(slot!.basis!, await poolRows(s), names, new Set(), t, "en");
@@ -95,7 +101,7 @@ describe.skipIf(!HAS_DB)("best-Nth across unequal pools (W5 app PR B Task 4)", (
     expect(again.status).toBe("draft");
     const rows = await sql<{ id: string; status: string }[]>`select id, status from stage_seed_proposals where stage_id = ${s.koId} order by created_at`;
     expect(rows.map((r) => r.status), "the replaced row stays stale, the re-proposal is live").toEqual(["stale", "draft"]);
-    expect((await loadBestNthBases(s.divId)).get(s.srcId), "the re-proposal's basis").toEqual([slot!.basis]);
+    expect((await loadBestNthBases(s.divId)).get(s.srcId)?.bases, "the re-proposal's basis").toEqual([slot!.basis]);
   });
 
   it("X-UP-1 pools of 5 and 3: k = 2 bottom results dropped", async () => {
@@ -201,4 +207,132 @@ describe.skipIf(!HAS_DB)("best-Nth across unequal pools (W5 app PR B Task 4)", (
       );
     });
   }
+
+  it("C9 X-UP-4 a walkover leaver ranks last in her pool (RB5-W1), so the drop takes her results first", async () => {
+    // 9 into 2 (A 5, B 4). A1 - the TOP seed - plays her first two meetings (beats A2, A3), then withdraws: half of her four
+    // lines played, so RB5-W2 awards the other two as walkovers (to A4, A5) and she is NOT expunged (effective size stays 5,
+    // k = 1). By results she has 2 wins and A5 has 1 (a walkover win), so a results-only order would put A5 at the bottom.
+    // RB5-W1 ranks the leaver LAST: the drop is her result. // differential: a cascade-order pick drops A5.
+    const s = await scene({ ...NINE, timing: "setup", leaver: (pools) => pools[0]!.members[0]!, leaverPlays: 2 });
+    const { A } = await ninePremises(s);
+    const leaver = A[0]!;
+    const [ledger] = await sql<{ policy: string }[]>`
+      select payload->>'policy' as policy from division_events where division_id = ${s.divId} and type = 'table_withdrawal' and payload->>'entrant_id' = ${leaver}`;
+    expect(ledger?.policy, "RB5-W2: half played, so her remaining lines are awarded").toBe("walkover");
+    expect([...(await sourceOf(s)).expunged], "a walkover leaver is no expunged row").toEqual([]);
+    expect((await completeStage(s.auth, s.srcId)).completed).toBe(true);
+    const [slot] = await bestNthSlots(s);
+    expect(slot!.basis!.dropped, "k = 5 - 4 = 1: the results left out are those against the leaver").toEqual([{ pool: "A", against: [leaver] }]);
+    expect(slot!.basis!.matchesCounted).toBe(3);
+    const tables = await poolRows(s);
+    const a = [...tables.find((t) => t.key === "A")!.rows].sort((x, y) => (x.rank ?? 99) - (y.rank ?? 99));
+    const wins = (id: string) => a.find((r) => r.entrantId === id)!.won;
+    expect(wins(leaver), "the premise: by results she is above A5").toBeGreaterThan(wins(A[4]!));
+    expect(a.map((r) => r.entrantId).at(-1), "RB5-W1: the leaver's row is pool A's last on the table too").toBe(leaver);
+  });
+
+  it("X-UP-4 the dropped bottom row is the pool's own cascade's last, stored lots included", async () => {
+    // 9 into 2 (A 5, B 4). A4 and A5 lose every other meeting 0-1 and draw each other 0-0: level on every key of the pool's own
+    // cascade, so a stored lots draw orders them. The stage's rngSeed is chosen from the ENGINE's own lots rule (lotSeed over the
+    // sorted pair, then shuffle) so the draw puts A4 - the higher seed, listed first - LAST. k = 1 for A: the drop is A4.
+    // Then, once pool A is played out and the draw STORED, the stage's rngSeed moves to one whose fresh draw would put A5 last;
+    // pool B's results refold the stage after it, and the stored draw still decides (RB5-U4 "stored lots included").
+    // differential: a row-order (seed / listed) pick, or a fresh draw that ignores the stored one, drops A5.
+    let pair: string[] = [];
+    let moved = false;
+    const plan = (size: number): Meeting[] =>
+      sweepTo((n) => (n === 5 ? [1, 0] : [3, 0]))(size).map((m) => (size === 5 && m.w === 3 && m.l === 4 ? { ...m, score: [0, 0] as const } : m));
+    const s = await scene({
+      sport: "generic", entrants: 9, poolCount: 2, qualified: 3, timing: "setup", plan,
+      rngSeed: (pools) => {
+        pair = [pools[0]!.members[3]!, pools[0]!.members[4]!];
+        const ids = [...pair].sort();
+        for (let rng = 1; rng < 500; rng++) if (shuffle(lotSeed(rng, ids), ids).at(-1) === pair[0]) return rng;
+        throw new Error("no rngSeed under 500 draws A4 last");
+      },
+      afterPool: async (key, _pools, srcId) => {
+        if (key !== "A") return;
+        const ids = [...pair].sort();
+        let other = 0;
+        for (let rng = 1; rng < 500 && other === 0; rng++) if (shuffle(lotSeed(rng, ids), ids).at(-1) === pair[1]) other = rng;
+        expect(other, "an rngSeed whose fresh draw puts A5 last").toBeGreaterThan(0);
+        await sql`update stages set config = config || ${sql.json({ rngSeed: other } as never)} where id = ${srcId}`;
+        moved = true;
+      },
+    });
+    const { A } = await ninePremises(s);
+    expect(pair, "the level pair is A4, A5").toEqual([A[3], A[4]]);
+    expect(moved, "the rngSeed moved before pool B was played").toBe(true);
+    expect((await completeStage(s.auth, s.srcId)).completed).toBe(true);
+    const [pa] = await sql<{ id: string }[]>`select id from pools where stage_id = ${s.srcId} and key = 'A'`;
+    const draws = await sql<{ drawn_order: string[] }[]>`
+      select drawn_order from stage_lots_draws where stage_id = ${s.srcId} and pool_id = ${pa!.id} order by drawn_at desc, id desc`;
+    const stored = draws.find((d) => [...d.drawn_order].sort().join() === [...pair].sort().join());
+    expect(stored?.drawn_order, "the pool's stored lots draw for the level pair puts A4 last").toEqual([A[4], A[3]]);
+    const a = [...(await poolRows(s)).find((t) => t.key === "A")!.rows].sort((x, y) => (x.rank ?? 99) - (y.rank ?? 99));
+    expect(a.slice(3).map((r) => r.entrantId), "the table reads the draw").toEqual([A[4], A[3]]);
+    const [slot] = await bestNthSlots(s);
+    expect(slot!.basis!.dropped, "RB5-U4: the stored lots' last is the bottom row").toEqual([{ pool: "A", against: [A[3]] }]);
+  });
+
+  it("C4 a second-tier group fed with carry full: the basis line says the matches compared IN the stage, not the carried played", async () => {
+    // group (9 into 2: 5/4) -> group (on_complete, carry "full": each qualifier opens with her first-tier played - 4 from A, 3
+    // from B) -> knockout (setup, the winners and both best runners-up). The tier-2 group takes 7 (top 3 per pool + the best
+    // 4th), drawn 3/4: k = 1 for the larger pool, so each runner-up is compared on (3 - 1) x 1 = 2 tier-2 matches (RB5-U1).
+    // The engine's `matchesCounted` is the largest `played` of a compared row, the carried opening included (B2-B4 m3), so it
+    // reads 2 + 3 or 2 + 4. differential: the footnote printed `matchesCounted` ("compared on 6 matches").
+    const { auth } = await seedOrg("pro");
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "C4", visibility: "private", branding: {} });
+    const [variant] = await sql<{ key: string; config: Record<string, unknown> }[]>`
+      select key, config from sport_variants where sport_key = 'generic' and is_system order by key limit 1`;
+    const div = await createDivision(auth, comp.id, { name: "Open", slug: "open", sport_key: "generic", variant_key: variant!.key, config: variant!.config } as never);
+    await createEntrants(auth, div.id, Array.from({ length: 9 }, (_, i) => ({ kind: "individual" as const, display_name: `E${i + 1}`, seed: i + 1, members: [] })));
+    const [t1, t2, ko] = await createStages(auth, div.id, [
+      { seq: 1, kind: "group", name: "Tier 1", config: { legs: 1, pools: { count: 2 } } },
+      { seq: 2, kind: "group", name: "Tier 2", config: { legs: 1, pools: { count: 2 } }, progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 3 }, { kind: "bestNth", nth: 4, count: 1 }] }], placement: "rank_order", timing: "on_complete", carry: "full" } },
+      { seq: 3, kind: "knockout", name: "Knockout", config: { thirdPlace: false }, progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 2 }] }], placement: "rank_order", timing: "setup" } },
+    ] as never);
+    await generateStageFixtures(auth, ko!.id);
+    await generateStageFixtures(auth, t1!.id);
+    await startDivision(auth, div.id);
+    const seedOf = new Map((await sql<{ id: string; seed: number }[]>`select id, seed from entrants where division_id = ${div.id}`).map((e) => [e.id, e.seed]));
+    // every meeting of a stage to the better first-tier seed, 1-0
+    const playOut = async (stageId: string) => {
+      const fx = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${stageId}`;
+      expect(fx.length, "the stage has lines").toBeGreaterThan(0);
+      for (const f of fx) {
+        await post(auth, f.id, "core.start");
+        const homeWins = seedOf.get(f.home_entrant_id)! < seedOf.get(f.away_entrant_id)!;
+        await post(auth, f.id, "generic.result", homeWins ? { p1Score: 1, p2Score: 0 } : { p1Score: 0, p2Score: 1 });
+      }
+    };
+    await playOut(t1!.id);
+    expect((await completeStage(auth, t1!.id)).completed).toBe(true);
+    const [cfg] = await sql<{ config: { carry_deltas?: { entrantId: string; played: number }[]; qualified?: string[] } }[]>`select config from stages where id = ${t2!.id}`;
+    const openings = cfg!.config.carry_deltas ?? [];
+    expect(openings.length, "the carry opened every tier-2 row").toBe(7);
+    expect(new Set(openings.map((d) => d.played)), "carry full: first-tier played 4 (pool of 5) and 3 (pool of 4)").toEqual(new Set([4, 3]));
+    await generateStageFixtures(auth, t2!.id);
+    const tierPools = await sql<{ key: string; n: number }[]>`
+      select p.key, count(distinct e)::int as n from pools p join fixtures f on f.pool_id = p.id, unnest(array[f.home_entrant_id, f.away_entrant_id]) e
+       where p.stage_id = ${t2!.id} group by p.key order by p.key`;
+    expect(tierPools.map((p) => p.n).sort(), "7 into 2: one pool of 3, one of 4").toEqual([3, 4]);
+    await playOut(t2!.id);
+    expect((await completeStage(auth, t2!.id)).completed).toBe(true);
+    const proposal = await getSeedProposal(auth, ko!.id);
+    const slots = proposal!.computed.qualifiers.filter((q) => q.basis !== undefined);
+    expect(slots, "both best runners-up").toHaveLength(2);
+    const basis = slots[0]!.basis!;
+    const larger = tierPools.find((p) => p.n === 4)!.key;
+    expect(basis.dropped.map((d) => d.pool), "k = 1 for the larger tier-2 pool").toEqual([larger]);
+    const compared = (3 - 1) * 1;
+    expect(basis.matchesCounted, "the premise: the engine's count includes the carried opening").toBeGreaterThan(compared);
+
+    const bases = (await loadBestNthBases(div.id)).get(t2!.id);
+    expect(bases?.bases, "the tier-2 stage's basis").toEqual([basis]);
+    const rows = (await sql<{ key: string; rows: StandingsRow[] }[]>`select p.key, ss.rows from standings_snapshots ss join pools p on p.id = ss.pool_id where ss.stage_id = ${t2!.id} order by p.key`).map((r) => ({ key: r.key, rows: r.rows }));
+    const names = Object.fromEntries((await sql<{ id: string; display_name: string }[]>`select id, display_name from entrants where division_id = ${div.id}`).map((e) => [e.id, e.display_name]));
+    const [note] = stageBasisNotes(t2!.id, bases, rows, names, [], publicT("en"), "en");
+    expect(note!.line, "compared on the tier-2 matches, never the carried played").toMatch(new RegExp(`^Best runners-up compared on ${compared} matches \\(`));
+  });
 });

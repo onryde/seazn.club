@@ -1,6 +1,7 @@
 // W5 app PR A, Task 24 (T5-b): the opt-in round-robin scripts R2 (a late player into a running league or group), R4c (a withdrawal under half where a
 // result is already finalized), Q2 (a departed qualifier backfilled), P7 (rank override per pool, refused on a non-table), C6a (a correction after
-// the stage completed, a confirmed cut) and SURF (the table's API shape), plus F4 and C5 planned and NOT run (app PR B) - their registration, their
+// the stage completed, a confirmed cut), SURF (the table's API shape) and F4 (unequal pools, activated by app PR B, K21), plus C5 planned and NOT run
+// (app PR B Task 7) - their registration, their
 // cells, and each script's own checks against fixtures that mirror what the product answered in the local live runs (next dev :3330 + the HTTP
 // driver; run ids t24r2*, t24r4*, t24q2*, t24p7*, t24c6a*, t24s* of the Task 24 report).
 //
@@ -8,13 +9,14 @@
 // reports how many items it examined and zero is a failure; every item class has a fixture that makes exactly it fail and one that passes.
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
-import { RefusedCall, type LateEntryWire, type StandingsOut, type WithdrawOut } from "../lib/driver/types.ts";
+import { RefusedCall, type ComparisonBasisWire, type LateEntryWire, type SeedQualifierWire, type StandingsOut, type StandingsRowWire, type WithdrawOut } from "../lib/driver/types.ts";
 import type { ObservedOutcome, ObservedStage } from "../lib/observed.ts";
 import { ATOMIC } from "../lib/scenario-catalogue.ts";
 import { assertion } from "../lib/scenarios/assertions.ts";
 import { c5AdjustPoints } from "../lib/scenarios/c5-adjust-points.ts";
 import { correctionItems, type CorrectionObs } from "../lib/scenarios/c6a-correction-after-complete.ts";
-import { f4UnequalPools } from "../lib/scenarios/f4-unequal-pools.ts";
+import { UNEQUAL_POOLS_REFUSAL, bestNthTakeOf, f4Bodies, f4UnequalPools, unequalPoolItems, type F4Obs } from "../lib/scenarios/f4-unequal-pools.ts";
+import { takeSeats, takesOf } from "../lib/scenarios/advance.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { pinnedTableItems, refusedOverrideItems } from "../lib/scenarios/p7-rank-override-pool.ts";
 import { departedQualifierItems, eligibleCut } from "../lib/scenarios/q2-departed-qualifier.ts";
@@ -41,7 +43,7 @@ function tl(id: string, round: number, home: string | null, away: string | null,
 
 // --- registration and cells -------------------------------------------------------------------------------------------------------
 
-describe("W5A registration: eight keys, opt-in, six that run and two planned and not run", () => {
+describe("W5A registration: eight keys, opt-in, seven that run and one planned and not run", () => {
   it("the keys, the registry and the planner agree, and the default plans hold none of them", () => {
     expect([...W5A_SCENARIO_KEYS]).toEqual(["W5A_R2", "W5A_R4C", "W5A_Q2", "W5A_P7", "W5A_C6A", "W5A_SURF", "W5A_F4", "W5A_C5"]);
     for (const k of W5A_SCENARIO_KEYS) {
@@ -114,12 +116,12 @@ describe("W5A registration: eight keys, opt-in, six that run and two planned and
     expect(w5aCells("W5A_R2", () => true)).toEqual([]);
   });
 
-  it("F4 and C5 are planned and NOT run: they defer to W5 by name, never read green", async () => {
-    for (const s of [f4UnequalPools, c5AdjustPoints]) {
-      const ctx = { spec: { row: "league", sport: "football" } } as unknown as ScenarioContext;
-      await expect(s.run(ctx)).rejects.toBeInstanceOf(ScenarioUnsupported);
-      await expect(s.run(ctx)).rejects.toMatchObject({ wave: "W5" });
-    }
+  it("C5 is planned and NOT run: it defers to W5 by name, never reads green; F4 RUNS (app PR B, K21)", async () => {
+    const ctx = { spec: { row: "league", sport: "football" } } as unknown as ScenarioContext;
+    await expect(c5AdjustPoints.run(ctx)).rejects.toBeInstanceOf(ScenarioUnsupported);
+    await expect(c5AdjustPoints.run(ctx)).rejects.toMatchObject({ wave: "W5" });
+    expect([...W5A_NOT_RUN_KEYS]).toEqual(["W5A_C5"]);
+    expect(W5A_RUN_KEYS).toContain("W5A_F4");
     expect(SCENARIOS.W5A_F4).toBe(f4UnequalPools);
     expect(SCENARIOS.W5A_C5).toBe(c5AdjustPoints);
   });
@@ -565,5 +567,138 @@ describe("playDivision's afterAdvance hook: the window between a confirmed desti
     const { plays } = await play("group_group_ko", { afterAdvance: async (stage) => { seqs.push(stage.seq); } });
     expect(plays.length).toBe(3);
     expect(seqs, "only the second stage's window").toEqual([2]);
+  });
+});
+
+// --- F4 (app PR B, K21) -------------------------------------------------------------------------------------------------------------
+
+describe("F4: unequal pools - the fold of a short pool, and the best-Nth compared at k = size - min (RB5-U1/U3/U4/U7/U8)", () => {
+  const snakeSizes = (n: number, pools: number): number[] => {
+    const sizes = Array.from({ length: pools }, () => 0);
+    for (let seed = 1; seed <= n; seed++) sizes[snakePoolIndex(seed, pools)]!++;
+    return sizes;
+  };
+
+  it("the field never divides by the pool count, so the rulebook's snake deals unequal pools on every pooled row (counted)", () => {
+    let rows = 0;
+    for (const row of w5aPooledRows()) {
+      const p = entryPools(row);
+      const sizes = snakeSizes(w5aField("W5A_F4", row), p);
+      expect(new Set(sizes).size, `${row}: ${sizes.join("/")}`).toBeGreaterThan(1);
+      expect(Math.max(...sizes) - Math.min(...sizes), `${row}: one larger pool`).toBe(1);
+      rows++;
+    }
+    expect(rows).toBe(w5aPooledRows().length);
+    expect(rows).toBeGreaterThan(0);
+  });
+
+  it("the posted bodies turn the take the root stage feeds into a best-Nth over every pool, with the row's own seat count; every other body is the row's", () => {
+    let fed = 0;
+    for (const row of w5aPooledRows()) {
+      const own = stagesForRow(row);
+      const posted = f4Bodies(own);
+      const pools = entryPools(row);
+      expect(posted.length, row).toBe(own.length);
+      for (const [i, b] of posted.entries()) if (b.seq !== own[0]!.seq + 1) expect(b, `${row} stage ${b.seq}`).toBe(own[i]);
+      const take = bestNthTakeOf(posted);
+      const second = own.find((b) => b.seq === own[0]!.seq + 1);
+      if (second?.progression === undefined || second.progression === null) {
+        expect(take, `${row}: the root feeds nothing`).toBeNull();
+        continue;
+      }
+      fed++;
+      const n = Number((takesOf(second)[0] as { n: unknown }).n);
+      expect(take, row).toEqual({ nth: n, count: pools });
+      const seats = (b: typeof second) => takesOf(b).reduce((k, t) => k + takeSeats(t, pools), 0);
+      expect(seats(posted.find((b) => b.seq === second.seq)!), `${row}: the destination keeps its shape`).toBe(seats(second));
+      // a snake over a bestNth pot is refused by the product (CONFIG_INVALID), so it is posted rank_order; any other placement is the row's
+      const placement = posted.find((b) => b.seq === second.seq)!.progression!.placement;
+      expect(placement, row).toBe(second.progression.placement === "snake" ? "rank_order" : second.progression.placement);
+    }
+    expect(fed).toBeGreaterThan(0);
+    expect(stagesForRow("group_group_ko")[1]!.progression!.placement, "the premise: a snake row is among them").toBe("snake");
+    expect(() => f4Bodies([{ ...stagesForRow("groups_ko")[0]!, kind: "league" } as never])).toThrow(/no pooled group/);
+    const odd = stagesForRow("groups_ko").map((b) => (b.seq === 2 ? { ...b, progression: { ...b.progression!, sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }] } } : b));
+    expect(() => f4Bodies(odd as never)).toThrow(/rankRange/);
+  });
+
+  // 7 into 2 pools (snake: A 3, B 4), single leg; the take seats the best 2nd of each pool (count 2). The smallest supplier is A (3): each
+  // runner-up is compared on 2 matches, and B's drops its result against B's LAST row (k = 4 - 3 = 1). Expected from the rulebook, by hand.
+  const row = (entrantId: string, rank: number, played: number): StandingsRowWire => ({ entrantId, rank, played });
+  const A = { key: "A", members: new Set(["a1", "a2", "a3"]), rows: [row("a1", 1, 2), row("a2", 2, 2), row("a3", 3, 2)] };
+  const B = { key: "B", members: new Set(["b1", "b2", "b3", "b4"]), rows: [row("b1", 1, 3), row("b2", 2, 3), row("b3", 3, 3), row("b4", 4, 3)] };
+  const basis: ComparisonBasisWire = { nth: 2, matchesCounted: 2, dropped: [{ pool: "B", against: ["b4"] }], levelWith: [] };
+  const slot = (entrantId: string, pool: string, b: ComparisonBasisWire = basis): SeedQualifierWire => ({ rank: 3, entrantId, destinationSlot: "x", pool, basis: b });
+  const obs = (over: Partial<F4Obs> = {}): F4Obs => ({
+    pools: [A, B], legs: 1, take: { nth: 2, count: 2 },
+    proposal: { qualifiers: [{ rank: 1, entrantId: "a1", destinationSlot: "f1:home", pool: "A" }, { rank: 2, entrantId: "b1", destinationSlot: "f2:home", pool: "B" }, slot("b2", "B"), slot("a2", "A")] },
+    ...over,
+  });
+
+  it("the recorded product shape passes, counted", () => {
+    const items = unequalPoolItems(obs());
+    expect(failing(items)).toEqual([]);
+    expect(items.length).toBeGreaterThan(15);
+    expect(assertion("w5a-f4-unequal-pools", items)).toMatchObject({ verdict: "pass", checked: items.length });
+  });
+
+  it("each way the product can get unequal pools wrong fails the item that names it", () => {
+    const refused = new RefusedCall("POST", "/x", 422, UNEQUAL_POOLS_REFUSAL, "x");
+    const withBasis = (b: ComparisonBasisWire) => ({ qualifiers: [slot("b2", "B", b), slot("a2", "A", b)] });
+    const cases: readonly [string, F4Obs, RegExp][] = [
+      ["the field divided evenly", obs({ pools: [A, { ...A, key: "B" }] }), /pool sizes 3\/3 - the field divided evenly/],
+      ["a seated member missing from her table", obs({ pools: [A, { ...B, rows: B.rows.slice(0, 3) }] }), /pool B: the table lists 3 row\(s\), 4 seated/],
+      ["a row credited with another pool's match", obs({ pools: [{ ...A, rows: [row("a1", 1, 3), ...A.rows.slice(1)] }, B] }), /pool A: a1 played 3, expected 2/],
+      ["refused for the size difference (RB5-U8)", obs({ proposal: refused }), /RB5-U8: never refused for the size difference/],
+      ["the destination never proposed", obs({ proposal: null }), /never proposed/],
+      ["a slot without its basis (RB5-U3)", obs({ proposal: { qualifiers: [slot("b2", "B"), { rank: 4, entrantId: "a2", destinationSlot: "x", pool: "A" }] } }), /1 slot\(s\) carry a comparison basis, the take seats 2 best of place 2/],
+      ["compared on the raw rows (9.x)", obs({ proposal: withBasis({ ...basis, matchesCounted: 3 }) }), /compared on 3 match\(es\), expected 2/],
+      ["nothing dropped from the larger pool (9.x without the flag)", obs({ proposal: withBasis({ ...basis, dropped: [] }) }), /pool B \(size 4\): drops 0 entrant\(s\)' results, expected k = 4 - 3 = 1/],
+      ["the TOP row dropped, not the bottom (RB5-U4)", obs({ proposal: withBasis({ ...basis, dropped: [{ pool: "B", against: ["b1"] }] }) }), /pool B: drops b1, its own table's bottom 1 is b4/],
+      ["k = 2 for a size difference of 1", obs({ proposal: withBasis({ ...basis, dropped: [{ pool: "B", against: ["b3", "b4"] }] }) }), /expected k = 4 - 3 = 1/],
+      ["the smallest pool drops too", obs({ proposal: withBasis({ ...basis, dropped: [...basis.dropped, { pool: "A", against: ["a3"] }] }) }), /pool A \(size 3, the minimum\): drops a3, expected nothing/],
+      ["a dropped pool the stage does not have", obs({ proposal: withBasis({ ...basis, dropped: [...basis.dropped, { pool: "Z", against: ["z9"] }] }) }), /drops from pool Z, which is no supplying pool/],
+      ["the slot names the wrong pool", obs({ proposal: { qualifiers: [slot("b2", "A"), slot("a2", "A")] } }), /b2: the slot names pool A, she sits in B/],
+      ["a 3rd seated as a best 2nd", obs({ proposal: { qualifiers: [slot("b3", "B"), slot("a2", "A")] } }), /b3: not place 2 of pool B/],
+      ["two comparisons for one take", obs({ proposal: { qualifiers: [slot("b2", "B"), slot("a2", "A", { ...basis, matchesCounted: 3 })] } }), /a2: a comparison unlike the first slot's/],
+      ["a level pair named one way only", obs({ proposal: { qualifiers: [slot("b2", "B"), slot("a2", "A", { ...basis, levelWith: ["b2"] })] } }), /a2: level with b2, who is not level with her in return/],
+      ["level with somebody who is no candidate", obs({ proposal: { qualifiers: [slot("b2", "B", { ...basis, levelWith: ["b3"] }), slot("a2", "A")] } }), /b2: level with b3, who is no candidate at place 2/],
+    ];
+    let proven = 0;
+    for (const [what, o, why] of cases) {
+      const bad = failing(unequalPoolItems(o));
+      expect(bad.length, what).toBeGreaterThan(0);
+      expect(bad.some((n) => why.test(n)), `${what}: ${bad.join(" | ")}`).toBe(true);
+      proven++;
+    }
+    expect(proven).toBe(cases.length);
+  });
+
+  it("the bottom is the pool's OWN order: lots split a level bottom pair, and a shared rank at the edge allows either member", () => {
+    // b3 and b4 level on points; the table's stored lots put b4 last - the drop must follow the table, never seed or id order
+    const lots = { ...B, rows: [row("b1", 1, 3), row("b2", 2, 3), row("b4", 3, 3), row("b3", 4, 3)] };
+    const pass = unequalPoolItems(obs({ pools: [A, lots], proposal: { qualifiers: [slot("b2", "B", { ...basis, dropped: [{ pool: "B", against: ["b3"] }] }), slot("a2", "A", { ...basis, dropped: [{ pool: "B", against: ["b3"] }] })] } }));
+    expect(failing(pass)).toEqual([]);
+    const wrong = unequalPoolItems(obs({ pools: [A, lots] }));
+    expect(failing(wrong).some((n) => /pool B: drops b4, its own table's bottom 1 is b3/.test(n))).toBe(true);
+    const shared = { ...B, rows: [row("b1", 1, 3), row("b2", 2, 3), row("b3", 3, 3), row("b4", 3, 3)] };
+    for (const e of ["b3", "b4"]) {
+      const b = { ...basis, dropped: [{ pool: "B", against: [e] }] };
+      expect(failing(unequalPoolItems(obs({ pools: [A, shared], proposal: { qualifiers: [slot("b2", "B", b), slot("a2", "A", b)] } }))), e).toEqual([]);
+    }
+  });
+
+  it("two runners-up level after the drop name each other (levelWith is per slot), and that passes", () => {
+    const lv = (other: string) => ({ ...basis, levelWith: [other] });
+    const items = unequalPoolItems(obs({ proposal: { qualifiers: [slot("b2", "B", lv("a2")), slot("a2", "A", lv("b2"))] } }));
+    expect(failing(items)).toEqual([]);
+    expect(items.filter((i) => /level with/.test(i.note)).length).toBe(2);
+  });
+
+  it("a row whose root stage feeds nothing is judged on the fold alone, and says so (counted)", () => {
+    const items = unequalPoolItems(obs({ take: null, proposal: null }));
+    expect(failing(items)).toEqual([]);
+    expect(items.some((i) => /the fold alone is judged/.test(i.note))).toBe(true);
+    expect(items.length).toBe(2 + 2 + 7 + 1);
   });
 });

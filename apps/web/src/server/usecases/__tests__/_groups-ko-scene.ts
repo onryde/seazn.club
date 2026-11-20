@@ -53,6 +53,11 @@ export async function scene(o: {
   leaver?: (pools: Scene["pools"]) => string | string[];
   /** T4: Reinstate the leaver straight after (the real `patchEntrant` door: her table_withdrawal row is voided). */
   reinstate?: boolean;
+  /** T4 part 2 (C9): the leaver first plays this many of her own meetings (in plan order), then withdraws - at half or more of
+   *  her lines played RB5-W2 awards the rest as walkovers (policy `walkover`) instead of expunging her. Default 0. */
+  leaverPlays?: number;
+  /** T4 part 2 (X-UP-4): runs after each pool's last meeting is decided, before the next pool's first (pool order). */
+  afterPool?: (key: string, pools: Scene["pools"], srcId: string) => Promise<void>;
   /** T4: rewrite the knockout's stored progression (e.g. a pre-ruling-286 flag). */
   progression?: (p: Record<string, unknown>) => Record<string, unknown>;
 }): Promise<Scene> {
@@ -101,35 +106,53 @@ export async function scene(o: {
   }));
   if (o.rngSeed) await sql`update stages set config = config || ${sql.json({ rngSeed: o.rngSeed(pools) } as never)} where id = ${src.id}`;
   const leavers = o.leaver ? [o.leaver(pools)].flat() : [];
+  const decide = async (p: Scene["pools"][number], m: Meeting): Promise<void> => {
+    const winner = p.members[m.w]!;
+    const loser = p.members[m.l]!;
+    const f = fx.find((x) => (x.home_entrant_id === winner && x.away_entrant_id === loser) || (x.home_entrant_id === loser && x.away_entrant_id === winner));
+    expect(f, `pool ${p.key}: ${m.w} v ${m.l} is a fixture`).toBeDefined();
+    if (!started.has(f!.id)) await post(auth, f!.id, "core.start");
+    if (o.sport === "boardgame") {
+      await post(auth, f!.id, "boardgame.result", { winner, method: "resign" });
+    } else {
+      const [ws, ls] = m.score!;
+      await post(auth, f!.id, "generic.result", f!.home_entrant_id === winner ? { p1Score: ws, p2Score: ls } : { p1Score: ls, p2Score: ws });
+    }
+  };
+  // A full round robin: every pair of the pool meets once (legs 1), and the plan names each pair exactly once.
+  const plans = pools.map((p) => {
+    const meetings = o.plan(p.members.length);
+    expect(meetings.length, `pool ${p.key}: the plan decides every meeting`).toBe((p.members.length * (p.members.length - 1)) / 2);
+    return { p, meetings };
+  });
+  // C9: the leaver's first `leaverPlays` meetings are decided BEFORE she withdraws (the rest are the cascade's walkovers, or voids).
+  const playedFirst = new Set<Meeting>();
+  for (const { p, meetings } of plans) {
+    for (const id of leavers) {
+      const hers = meetings.filter((m) => p.members[m.w] === id || p.members[m.l] === id).slice(0, o.leaverPlays ?? 0);
+      for (const m of hers) {
+        await decide(p, m);
+        playedFirst.add(m);
+      }
+    }
+  }
   for (const id of leavers) {
     await withdrawEntrantCascade(auth, id);
     if (o.reinstate) await patchEntrant(auth, id, { status: "registered" });
   }
-  // A leaver still away has her lines voided by the cascade: those meetings are not played.
+  // A leaver still away has her remaining lines voided (or walked over) by the cascade: those meetings are not played.
   const away = new Set(o.reinstate ? [] : leavers);
 
-  let decided = 0;
-  for (const p of pools) {
-    const meetings = o.plan(p.members.length);
-    // A full round robin: every pair of the pool meets once (legs 1), and the plan names each pair exactly once.
-    expect(meetings.length, `pool ${p.key}: the plan decides every meeting`).toBe((p.members.length * (p.members.length - 1)) / 2);
+  let decided = playedFirst.size;
+  for (const { p, meetings } of plans) {
     for (const m of meetings) {
-      const winner = p.members[m.w]!;
-      const loser = p.members[m.l]!;
-      if (away.has(winner) || away.has(loser)) continue;
-      const f = fx.find((x) => (x.home_entrant_id === winner && x.away_entrant_id === loser) || (x.home_entrant_id === loser && x.away_entrant_id === winner));
-      expect(f, `pool ${p.key}: ${m.w} v ${m.l} is a fixture`).toBeDefined();
-      if (!started.has(f!.id)) await post(auth, f!.id, "core.start");
-      if (o.sport === "boardgame") {
-        await post(auth, f!.id, "boardgame.result", { winner, method: "resign" });
-      } else {
-        const [ws, ls] = m.score!;
-        await post(auth, f!.id, "generic.result", f!.home_entrant_id === winner ? { p1Score: ws, p2Score: ls } : { p1Score: ls, p2Score: ws });
-      }
+      if (playedFirst.has(m) || away.has(p.members[m.w]!) || away.has(p.members[m.l]!)) continue;
+      await decide(p, m);
       decided++;
     }
+    await o.afterPool?.(p.key, pools, src.id);
   }
-  expect(decided, "meetings decided").toBe(fx.filter((f) => !away.has(f.home_entrant_id) && !away.has(f.away_entrant_id)).length);
+  expect(decided, "meetings decided").toBe(fx.filter((f) => !away.has(f.home_entrant_id) && !away.has(f.away_entrant_id)).length + playedFirst.size);
   return { auth, divId: div.id, srcId: src.id, koId: ko.id, pools };
 }
 

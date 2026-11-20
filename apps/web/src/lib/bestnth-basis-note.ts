@@ -6,13 +6,21 @@
 //
 // Pure and client-safe. The basis is the engine's own `ComparisonBasis` (the stored proposal's slot, `loadBestNthBases`), the
 // rows the stage's own standings; nothing here re-derives the comparison. C4: "compared on {n} matches", never "matches
-// played" - `matchesCounted` is the largest number of matches a compared row counts.
+// played". n is the matches compared IN THIS STAGE (`comparedMatches`): the engine's `matchesCounted` is the largest `played`
+// of a compared row, a carried opening's included, so on a tier fed with carry "full" it would count first-tier matches too.
 import type { ComparisonBasis } from "@seazn/engine/competition";
 
 export interface BasisPool {
   /** The pool's key ('A', 'B', ...): the key `ComparisonBasis.dropped[].pool` names. */
   key: string;
-  rows: readonly { entrantId: string; rank?: number | null }[];
+  rows: readonly { entrantId: string; rank?: number | null; played?: number }[];
+}
+
+/** The basis of one source stage as the pages read it: its comparisons, and (C4) each entrant's carried opening `played` (the
+ *  stage's `carry_deltas`, carry "full"; empty when nothing was carried). */
+export interface StageBases {
+  readonly bases: readonly ComparisonBasis[];
+  readonly openings: ReadonlyMap<string, number>;
 }
 
 export interface BasisNoteText {
@@ -32,6 +40,27 @@ export function ordinalText(n: number, locale: string, t: T): string {
   return t(`table.ordinal.${ORDINAL_KEYS.has(cat) ? cat : "other"}`, { n });
 }
 
+/** A pool's rows in its own order, its expunged leavers out (they hold no place, RB5-U5). */
+const placedRows = <R extends BasisPool["rows"][number]>(rows: readonly R[], expunged: ReadonlySet<string>): R[] =>
+  [...rows].filter((r) => !expunged.has(r.entrantId)).sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER));
+
+/** C4 (preflight): the matches every candidate was compared on in THIS stage. A supplying pool the comparison left nothing out
+ *  of (k = 0 - the smallest supplier always is one, RB5-U7) is compared on its nth row's own results, so that row's `played`
+ *  less its carried opening is the count (RB5-U1: every candidate is compared on the same number). Falls back to the engine's
+ *  `matchesCounted` only when no such row carries a `played` (a caller that passed none) - the one surface it cannot overstate
+ *  on is a stage with no opening, where the two agree. */
+export function comparedMatches(basis: ComparisonBasis, pools: readonly BasisPool[], expunged: ReadonlySet<string>, openings: ReadonlyMap<string, number>): number {
+  const leftOut = new Set(basis.dropped.filter((d) => d.against.length > 0).map((d) => d.pool));
+  let n: number | null = null;
+  for (const p of pools) {
+    if (leftOut.has(p.key)) continue;
+    const row = placedRows(p.rows, expunged)[basis.nth - 1];
+    if (row?.played === undefined) continue;
+    n = Math.max(n ?? 0, row.played - (openings.get(row.entrantId) ?? 0));
+  }
+  return n ?? basis.matchesCounted;
+}
+
 /** The footnote for one source stage, or null when nothing was left out. `expunged`: the stage's expunged leavers, who are no
  *  candidate and hold no place (RB5-U5) - a place is counted among the pool's other rows, in rank order. */
 export function bestNthBasisNote(
@@ -41,17 +70,13 @@ export function bestNthBasisNote(
   expunged: ReadonlySet<string>,
   t: T,
   locale: string,
+  openings: ReadonlyMap<string, number> = new Map(),
 ): BasisNoteText | null {
   if (basis.dropped.length === 0) return null;
   const list = new Intl.ListFormat(locale, { style: "long", type: "conjunction" });
   const nameOf = (id: string) => names[id] ?? id;
   const poolLabel = (key: string) => t("table.poolLabel", { key });
-  const placed = new Map(
-    pools.map((p) => [
-      p.key,
-      [...p.rows].filter((r) => !expunged.has(r.entrantId)).sort((a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER)).map((r) => r.entrantId),
-    ]),
-  );
+  const placed = new Map(pools.map((p) => [p.key, placedRows(p.rows, expunged).map((r) => r.entrantId)]));
   const placeOf = (pool: string, id: string): number => {
     const at = placed.get(pool)?.indexOf(id) ?? -1;
     if (at < 0) throw new Error(`bestNthBasisNote: ${id} left out of pool ${pool} has no row in it`);
@@ -73,7 +98,7 @@ export function bestNthBasisNote(
       .map(([place, keys]) => t("table.bestNth.against", { place: ordinalText(place, locale, t), pools: list.format([...keys].sort((x, y) => poolOrder(x) - poolOrder(y)).map(poolLabel)) })),
   );
   const who = basis.nth === 1 || basis.nth === 2 ? t(`table.bestNth.who.${basis.nth}`) : t("table.bestNth.who.other", { nth: ordinalText(basis.nth, locale, t) });
-  const n = basis.matchesCounted;
+  const n = comparedMatches(basis, pools, expunged, openings);
   const line = t(`table.bestNth.basis.${new Intl.PluralRules(locale).select(n) === "one" ? "one" : "other"}`, { who, count: n, against });
   const leftOut: string[] = [];
   for (const p of pools) {
@@ -97,14 +122,14 @@ export function bestNthBasisNote(
  *  the expunged leavers. A stage with no stored basis (no proposal, equal pools, on_complete) has none. */
 export function stageBasisNotes(
   stageId: string,
-  bases: readonly ComparisonBasis[] | undefined,
+  stage: StageBases | undefined,
   pools: readonly BasisPool[],
   names: Readonly<Record<string, string>>,
   withdrawals: readonly { stage_id: string; entrant_id: string; policy: string }[],
   t: T,
   locale: string,
 ): BasisNoteText[] {
-  if (bases === undefined || bases.length === 0) return [];
+  if (stage === undefined || stage.bases.length === 0) return [];
   const expunged = new Set(withdrawals.filter((r) => r.stage_id === stageId && r.policy === "expunge").map((r) => r.entrant_id));
-  return bases.flatMap((b) => bestNthBasisNote(b, pools, names, expunged, t, locale) ?? []);
+  return stage.bases.flatMap((b) => bestNthBasisNote(b, pools, names, expunged, t, locale, stage.openings) ?? []);
 }
