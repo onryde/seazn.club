@@ -10,6 +10,15 @@ import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import { boardsOwedAnInvite, checkinClock, checkinTally, playingTally, roundColumnPhase } from "@/lib/round-column";
 import type { MatchDayBoardRow, MatchDayOnlineRound, OnlineRoundPhase } from "./types";
 
+// ---- the round's key -------------------------------------------------------------------------------------------------------------
+
+/** `${stage_id}:${round_no}` - the ONE spelling of a round's key: `MatchDayOnlineRound.key`, the `?round=` param's value, the Needs-you
+ *  row's `round_key` (a link hold's way back is its round), and the server's `roundKey` of an opened round (server/external-play/
+ *  round-open.ts), which calls this. A stage's id is a uuid and a round number an integer, so the ':' cannot be inside either part. */
+export function onlineRoundKey(stageId: string, roundNo: number): string {
+  return `${stageId}:${roundNo}`;
+}
+
 // ---- phase and order (§5.2) -------------------------------------------------------------------------------------------------------
 
 /** The server's `phase`, re-read from `round.boards` (the poll is up to 20 s apart): a division not started stays `not_started`; every

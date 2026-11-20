@@ -17,6 +17,7 @@ import "server-only";
 // the chesslep DB 2026-10-09 — which is why patchDivision asks BEFORE it opens
 // its tenant transaction, the same placement as its `requireFeature` reads.
 import type postgres from "postgres";
+import { onlineRoundKey } from "@/lib/match-day/online";
 import {
   CHECKIN_BATCH_GAP_MS,
   CHECKIN_BATCH_SIZE,
@@ -94,7 +95,7 @@ export async function roundOpenAt(db: AnySql, stageId: string, roundNo: number):
 
 /** The key `roundOpensOfDivisions` answers by: one (stage, round). */
 export function roundKey(stageId: string, roundNo: number): string {
-  return `${stageId}:${roundNo}`;
+  return onlineRoundKey(stageId, roundNo);
 }
 
 /** T16 fix round 1, M8 + R4 — the same read for many rounds at once: every opened (stage, round) of these divisions,

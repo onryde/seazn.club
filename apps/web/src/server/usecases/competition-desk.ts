@@ -361,6 +361,10 @@ async function onlineBoardAttentions(
   divisionIds: readonly string[],
 ): Promise<Map<string, Attention[]>> {
   const out = new Map<string, Attention[]>();
+  // Ruling MD-R18: behind the flag that gates Match Day's own online rows (match-day.ts reads the same one). A row whose button lands on a
+  // Match Day with no online block - the board and round panels read `?board=` / `?round=` from it - is a red row that does nothing;
+  // the division page's Held | Flagged queue still carries these boards until Task 10 removes the flag with the arbiter page.
+  if (process.env.MATCH_DAY_ONLINE !== "1") return out;
   if (divisionIds.length === 0) return out;
   // A dynamic import: the arbiter loader pulls the video stack, which every other read of the desk has no use for.
   const [{ listNeedsOrganiserExternalPlay }, { listFlaggedExternalPlay }] = await Promise.all([
@@ -386,16 +390,12 @@ async function onlineBoardAttentions(
     }),
   );
   // The START rule is asked only when a row could use it: an editor, and a link hold on the list. The club's flag is a cached remote
-  // call and the freeze a read of the organisation, so a desk with nothing held pays for neither. A failed ask is the SAFE answer (the
-  // board's own decisions are always on offer), logged.
+  // call and the freeze a read of the organisation, so a desk with nothing held pays for neither. Not isolated (ruling MD-R19, as the
+  // desk's other organisation-wide reads are not, MD-R17): a throw here is the desk's, like the freeze lookup of any other read.
   let start = false;
   if (editor && read.some((r) => r.held.some((h) => isLinkHold(h.reason)))) {
-    try {
-      const [offered, frozen] = await Promise.all([onlineChessOffered(auth), frozenCompetitionIds(auth.orgId)]);
-      start = mayPress({ editor, offered, frozen: frozen.has(competitionId) }, "start");
-    } catch (err) {
-      log.error({ event: "competition_desk_start_rule_failed", competitionId, err }, "competition_desk_start_rule_failed: a link hold opens the board, not the round");
-    }
+    const [offered, frozen] = await Promise.all([onlineChessOffered(auth), frozenCompetitionIds(auth.orgId)]);
+    start = mayPress({ editor, offered, frozen: frozen.has(competitionId) }, "start");
   }
   for (const r of read) {
     const list: Attention[] = [];

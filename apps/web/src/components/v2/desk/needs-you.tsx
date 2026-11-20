@@ -10,6 +10,7 @@ import { ATTENTION_SEVERITY, type Attention, type DrawDoor, type Severity } from
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
 import { HELD_TITLE_KEYS } from "@/components/v2/external-play-held-copy";
+import { onlineRoundKey } from "@/lib/match-day/online";
 
 export interface NeedsYouItem {
   key: string;
@@ -266,13 +267,13 @@ export function needsYouItems(
         case "board_held": {
           const matchDay = routes.competitionMatchDay(org, comp);
           const reopenRound = a.reopen ? a.roundNo : null;
-          const roundKey = `${a.stageId}:${a.roundNo}`;
+          const roundKey = reopenRound === null ? null : onlineRoundKey(a.stageId, reopenRound);
           items.push({
             key: needsYouKey(d.id, "board_held", a.fixtureId), severity: sev, kind: a.kind, fixture_id: a.fixtureId,
-            ...(reopenRound !== null ? { round_key: roundKey } : {}),
+            ...(roundKey !== null ? { round_key: roundKey } : {}),
             title: t(dict, "desk.needsYou.board_held", { division: d.name, board: a.boardNo, home: a.home, away: a.away }),
             sub: a.reason === null ? t(dict, "desk.needsYou.board_held.sub") : t(dict, HELD_TITLE_KEYS[a.reason]),
-            action: reopenRound !== null
+            action: reopenRound !== null && roundKey !== null
               ? { label: t(dict, "desk.needsYou.board.openRound", { round: reopenRound }), href: `${matchDay}?round=${encodeURIComponent(roundKey)}` }
               : { label: t(dict, "desk.needsYou.board.action", { board: a.boardNo }), href: `${matchDay}?board=${encodeURIComponent(a.fixtureId)}` },
           });
