@@ -117,7 +117,15 @@ const COLUMN_FILES = readdirSync(join(SRC, COLUMN_DIR), { withFileTypes: true })
   .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
   .map((e) => `${COLUMN_DIR}/${e.name}`)
   .sort();
-const HELPER_FILES = ["components/v2/desk/open-round-control.tsx", "components/v2/checkin-extend-ui.ts", "components/v2/venue-clock.ts"];
+// `match-day/round-focus.tsx` (Match Day's round panel, Task 7) carries the bodies MOVED out of round-column.tsx - the check-in hero, the
+// waiting list, the playing status, the open-round block, the round's own press - which the column imports; it is scanned both ways
+// like the other helpers, so a literal the moved bodies (or the panel) pass is listed, and a variable key stays pinned.
+const HELPER_FILES = [
+  "components/v2/desk/open-round-control.tsx",
+  "components/v2/checkin-extend-ui.ts",
+  "components/v2/venue-clock.ts",
+  "components/v2/match-day/round-focus.tsx",
+];
 
 /** One function out of a file that holds dozens of keys the column never renders: from its opening to the first line that is a bare `}`. */
 function functionBody(rel: string, opening: string): string {
@@ -196,11 +204,17 @@ const EXTEND_MAPS = [
  *  literal scan reads whole. A site that is not here, or is here and gone, fails the pin test below. */
 type Site = { expr: string; maps?: readonly (keyof typeof MAPS)[]; arms?: true };
 const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
-  "components/v2/arbiter/round-column.tsx": [
-    // WaitingList's `copy.t` shim: it forwards the keys checkin-extend-ui.ts asks for.
+  // The column's bodies moved to match-day/round-focus.tsx (Task 7): the column itself asks for literals only.
+  "components/v2/arbiter/round-column.tsx": [],
+  "components/v2/match-day/round-focus.tsx": [
+    // WaitingList's `copy.t` shim and the panel's `extendCopyOf`: both forward the keys checkin-extend-ui.ts asks for.
+    { expr: "key as MessageKey", maps: EXTEND_MAPS },
     { expr: "key as MessageKey", maps: EXTEND_MAPS },
     { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: true },
     { expr: "INVITE_WORD_KEYS[word] as MessageKey", maps: ["INVITE_WORD_KEYS"] },
+    // The link-hold block: each held board's reason, and the window's own word when it has run out (MD-R2/R22) - the open's skip words.
+    { expr: "OPEN_ROUND_SKIP_KEYS[reason] as MessageKey", maps: ["OPEN_ROUND_SKIP_KEYS"] },
+    { expr: "OPEN_ROUND_SKIP_KEYS.window_closed as MessageKey", maps: ["OPEN_ROUND_SKIP_KEYS"] },
   ],
   "components/v2/arbiter/round-queue-cards.tsx": [
     { expr: "HELD_TITLE_KEYS[row.reason]", maps: ["HELD_TITLE_KEYS"] },
@@ -316,7 +330,9 @@ describe("the list cannot fall behind the column", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: literals checked").toBeGreaterThanOrEqual(40);
+    // The column's bodies moved to match-day/round-focus.tsx (the helper sweep below reads them); what stays is the queue and the shell of
+    // the column, so the floor is what these files hold now.
+    expect(checked, "anti-vacuity: literals checked").toBeGreaterThanOrEqual(12);
   });
 
   it("the scan itself catches a key added to the column (a scratch copy with one more literal fails the check)", () => {
@@ -400,7 +416,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
       sites += NON_LITERAL_SITES[name]!.length;
     }
     expect(files, "anti-vacuity: the column's files, the helper files and the three functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 3);
-    expect(sites, "anti-vacuity: sixteen sites are pinned").toBe(16);
+    expect(sites, "anti-vacuity: nineteen sites are pinned").toBe(19);
   });
 
   it("a variable key added to the column's file is caught by the pin (a scratch copy with msg(someNewVar) differs from the list)", () => {
@@ -432,7 +448,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
         accounted += 1;
       }
     }
-    expect(accounted, "anti-vacuity: all sixteen sites accounted for").toBe(16);
+    expect(accounted, "anti-vacuity: all nineteen sites accounted for").toBe(19);
   });
 });
 

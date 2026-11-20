@@ -137,6 +137,14 @@ export const OPEN_ROUND_SKIP_KEYS: Readonly<Record<OpenRoundSkipReason, Dictiona
   lichess_reconnect: "externalPlay.openRound.skipped.lichessReconnect",
 };
 
+/** The billing freeze's wire code (402 `PAYMENT_REQUIRED`, `extra.feature_key = "competitions.max_active"`): every START write - open a
+ *  round, resend an invite, "+5 min" on a board or the round, pair the next round - is refused with it while the competition is frozen
+ *  (server `assertCompetitionNotFrozen`). Match Day's `frozen` flag is read from a polled view, so a panel drawn a moment before the
+ *  freeze can still send one; its answer is this sentence, never the generic "failed". */
+export const BILLING_FROZEN_CODE = "PAYMENT_REQUIRED";
+// Its sentence is `runsheet.round.err.frozen`, one for the open's, the resend's and the extension's answers (each mapper names the key as
+// a literal, so the copy sweep reads it).
+
 /** A re-pair (Swiss unpair, Rebuild, or the delete-entrant that unpairs) is
  *  refused while a game stands — or may stand — behind any board it would
  *  clear (controller ruling, 2026-10-10). There is no "void" that unblocks it:

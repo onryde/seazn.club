@@ -17,7 +17,7 @@
 // reset does not clear it either. That is intended, not a gap: the one-request-at-a-time rule (R1) holds across a round change,
 // so a press on the new round is ignored for as long as the old round's request is out (its round-trip), then works.
 // Only the round the presses TARGET follows the view - `stageId` and `roundNo`, read at call time, never a stale render's.
-import { useMemo, useReducer, useState } from "react";
+import { useCallback, useMemo, useReducer, useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1 } from "@/lib/client-v1";
 import type { OpenRoundView } from "@/lib/open-round";
@@ -40,13 +40,23 @@ type Presses = Omit<OpenRoundHandle, "state">;
 /** The presses of a handle with no round: every call does nothing. */
 const NO_PRESSES: Presses = { ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
 
-/** A null view gives a no-op handle (initial state; every call does nothing). ArbiterPanel calls it for the round on screen (C9). */
+/** A null view gives a no-op handle (initial state; every call does nothing). ArbiterPanel calls it for the round on screen (C9). The
+ *  runner's refresh is the Next router's: the Arbiter Panel's round is read by its server component. */
 export function useOpenRound(view: OpenRoundView | null): OpenRoundHandle {
   const router = useRouter();
+  const refresh = useCallback(() => router.refresh(), [router]);
+  return useOpenRoundWith(view, refresh);
+}
+
+/** The same handle with the caller's own refresh after an answer (Match Day's round panel, Task 7: the shell's page is a client island
+ *  that re-reads the day itself - `router.refresh()` would not move it - so it hands its quiet day read). `refresh` must keep its
+ *  identity across renders (a `useCallback`), or the runner - whose in-flight flag keeps a double tap off the network - is rebuilt
+ *  with it. Reads no router, so a round panel mounts anywhere. */
+export function useOpenRoundWith(view: OpenRoundView | null, refresh: () => void): OpenRoundHandle {
   const [state, dispatch] = useReducer(openRoundUi, undefined, initialOpenRoundUi);
   const runner = useMemo(
-    () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh: () => router.refresh() }),
-    [router],
+    () => openRoundRunner({ dispatch, post: (path, body) => apiV1(path, { method: "POST", json: body }), refresh }),
+    [refresh],
   );
   // Primitives, so the presses keep their identity while the same round is redrawn with fresh data.
   const stageId = view === null ? null : view.stageId;

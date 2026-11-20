@@ -20,6 +20,29 @@ export function onlineRoundTitle(dict: Dict, r: Pick<MatchDayOnlineRound, "divis
     : t(dict, "matchDay.online.round", { division: r.division_name, round: r.round_no });
 }
 
+/** The title as two parts, so a narrow track can wrap the division and the stage (free text) and never the round label: `lead` is
+ *  everything up to the label's word, `tail` is "Round 3" (the locale's word and the number, and anything the sentence puts after it).
+ *  Read off the dictionary's own sentence - the round is formatted as a marker, and the word before the marker joins the number - so
+ *  every locale splits where its own sentence puts the label. A sentence with no round in it, or one the split cannot recompose into the
+ *  title, is all lead: the title is never altered, only cut. */
+export function onlineRoundTitleParts(
+  dict: Dict,
+  r: Pick<MatchDayOnlineRound, "division_name" | "stage_name" | "round_no" | "multi_stage">,
+): { lead: string; tail: string } {
+  const whole = onlineRoundTitle(dict, r);
+  const key = r.multi_stage ? "matchDay.online.roundStage" : "matchDay.online.round";
+  const marked = t(dict, key, { division: r.division_name, stage: r.stage_name, round: ROUND_MARK });
+  const at = marked.lastIndexOf(ROUND_MARK);
+  if (at === -1) return { lead: whole, tail: "" };
+  const before = marked.slice(0, at);
+  const word = before.trimEnd().lastIndexOf(" ") + 1;
+  const lead = before.slice(0, word);
+  const tail = before.slice(word) + String(r.round_no) + marked.slice(at + ROUND_MARK.length);
+  return lead + tail === whole ? { lead, tail } : { lead: whole, tail: "" };
+}
+/** Stands where the round number goes while the title is cut; never part of a name a person types. */
+const ROUND_MARK = "\u0001";
+
 /** Is this board of the round the row stands for? A board of the "Needs a decision" group can be of the listed round itself (a cancelled
  *  board with an open flag is dropped from the round's own boards by the loader) or of an earlier round or stage. */
 export function isOwnRound(b: Pick<MatchDayBoardRow, "stage_id" | "round_no">, r: Pick<MatchDayOnlineRound, "stage_id" | "round_no">): boolean {

@@ -18,6 +18,7 @@ import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import {
+  BILLING_FROZEN_CODE,
   ONLINE_GAME_EXISTS_CODE,
   OPEN_ROUND_ALREADY_OPEN_KEY,
   OPEN_ROUND_INVITED_KEY,
@@ -177,6 +178,7 @@ export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundVie
 
 export function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plural: Plural): string[] {
   if (n.kind === "failed") {
+    if (n.code === BILLING_FROZEN_CODE) return [msg("runsheet.round.err.frozen")];
     if (n.code === ONLINE_CHESS_DISABLED_CODE) return [msg("runsheet.round.err.disabled")];
     if (n.code === "ROUND_CHANGED") return [msg("runsheet.round.err.roundChanged")];
     if (n.code === "ROUND_NOT_ONLINE") return [msg("runsheet.round.err.notOnline")];
@@ -211,6 +213,7 @@ export function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): str
     ];
     return lines.length > 0 ? lines.join(" ") : msg("runsheet.round.resentNone");
   }
+  if (n.code === BILLING_FROZEN_CODE) return msg("runsheet.round.err.frozen");
   if (n.code === "WINDOW_CLOSED" || n.code === "BOARD_HELD") return msg(RESEND_REFUSAL_KEYS[n.code] as MessageKey);
   if (n.code === ONLINE_GAME_EXISTS_CODE) return msg("externalPlay.resend.gameExists");
   if (n.code === "ROUND_CHANGED") return msg("externalPlay.resend.roundChanged");
