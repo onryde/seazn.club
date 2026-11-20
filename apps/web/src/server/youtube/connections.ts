@@ -19,9 +19,10 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type {
   PickYoutubeChannel, YoutubeConnectionSaved, YoutubeConnectionSettings, YoutubeConnectionView, YoutubePendingChannels,
 } from "@/server/api-v1/schemas";
+import { log } from "@/server/logger";
 import { fingerprintYoutubeChannel } from "@/server/relay/crypto";
-import type { YouTubePort } from "./port";
-import { insertConnectionWithToken, replaceConnectionToken, takePendingToken } from "./token-store";
+import { YouTubeError, type YouTubePort } from "./port";
+import { insertConnectionWithToken, openToken, replaceConnectionToken, takePendingToken } from "./token-store";
 
 /** The sentence a connect refused because the channel is live in another organisation says (spec §5.2). */
 export const OTHER_ORG_MESSAGE = "This channel is connected to another organisation on Seazn";
@@ -206,7 +207,28 @@ export async function pickYoutubeChannel(
 ): Promise<YoutubeConnectionSaved> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   if (auth.userId === null) throw pendingNotFound();
-  return saveConnectionFromGrant({ pendingId: b.pendingId, channelId: b.channelId, userId: auth.userId, orgId }, port);
+  const saved = await saveConnectionFromGrant({ pendingId: b.pendingId, channelId: b.channelId, userId: auth.userId, orgId }, port);
+  if (!saved.existing) await recordChannelCreatedAt(port, orgId, saved.connectionId);
+  return saved;
+}
+
+/** A NEW connection learns when its channel was created (V539 `channel_created_at`; the channel-safety warning reads it): the token,
+ *  an access token, channels.list's `snippet.publishedAt`, one UPDATE. Called by both connect paths (the OAuth callback and the pick)
+ *  AFTER the save's transaction has committed, so no lock is held across the Google calls. BEST EFFORT: any failure (a refused or
+ *  unreadable token, YouTube down, no date) leaves the column null and is logged as a code only - it never throws, so it never fails
+ *  the connect. */
+export async function recordChannelCreatedAt(port: YouTubePort, orgId: string, connectionId: string): Promise<void> {
+  try {
+    const [row] = await sql<{ channel_id: string | null }[]>`
+      select channel_id from org_youtube_connections where id = ${connectionId} and org_id = ${orgId}`;
+    const token = row?.channel_id ? await openToken(sql, orgId, connectionId) : null;
+    if (!row?.channel_id || token === null) return;
+    const createdAt = await port.channelCreatedAt(await port.accessToken(token), row.channel_id);
+    await sql`update org_youtube_connections set channel_created_at = ${createdAt} where id = ${connectionId} and org_id = ${orgId}`;
+  } catch (err) {
+    const failure = err instanceof YouTubeError ? err.code : err instanceof Error ? err.name : "unknown";
+    log.warn({ orgId, connectionId, failure }, "youtube connect: the channel's creation date could not be read; stored none");
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------

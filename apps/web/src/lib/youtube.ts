@@ -74,6 +74,16 @@ export const YOUTUBE_AUTO_BACKOFF_CODES: readonly YoutubeRefusalCode[] = [
   "youtube_unavailable",
 ];
 
+/** The channel-safety warning on Go live (Phase 0, YouTube channel safety; server/youtube/channel-safety.ts `channelSafetyWarning`).
+ *  YouTube treats a young channel, or one that has run several short live streams lately, as a risk. A channel created fewer than
+ *  YOUNG_CHANNEL_DAYS ago is young; a broadcast that ENDED within SHORT_BROADCAST_MINUTES of its start is short (one still live is not);
+ *  the warning shows when the channel is young or at least SHORT_BROADCAST_WARN_COUNT short broadcasts started within the last
+ *  SHORT_BROADCAST_WINDOW_HOURS. A warning only: it never blocks a Go live. */
+export const YOUTUBE_YOUNG_CHANNEL_DAYS = 30;
+export const YOUTUBE_SHORT_BROADCAST_MINUTES = 10;
+export const YOUTUBE_SHORT_BROADCAST_WARN_COUNT = 2;
+export const YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS = 24;
+
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
  *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
 export function isYoutubeUrl(url: string): boolean {

@@ -122,7 +122,7 @@ describe("GoogleYouTube is a live YouTubePort", () => {
       expect(typeof (g as unknown as Record<string, unknown>)[m], m).toBe("function");
       checked++;
     }
-    expect(checked, "anti-vacuity: the declared methods").toBe(16);
+    expect(checked, "anti-vacuity: the declared methods").toBe(18);
   });
 });
 
@@ -261,6 +261,61 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
     // Google omits `items` entirely when the list is empty.
     handler = () => res(200, { kind: "youtube#channelListResponse", pageInfo: { totalResults: 0, resultsPerPage: 5 } });
     expect(await driver().listMyChannels(AT)).toEqual([]);
+  });
+
+  it("channelCreatedAt: GET channels?part=snippet&mine=true; snippet.publishedAt of the item with THAT id; another id, no items, no date or a bad date is null", async () => {
+    handler = () => res(200, { items: [
+      { id: "UCother", snippet: { title: "Other", publishedAt: "2010-01-01T00:00:00Z" } },
+      { id: "UCchan", snippet: { title: "Chan", publishedAt: "2026-11-01T08:00:00Z" } },
+    ] });
+    expect((await driver().channelCreatedAt(AT, "UCchan"))?.toISOString()).toBe("2026-11-01T08:00:00.000Z");
+    const u = new URL(sent[0]!.url);
+    expect([sent[0]!.method, u.origin + u.pathname]).toEqual(["GET", "https://www.googleapis.com/youtube/v3/channels"]);
+    expect([u.searchParams.get("part"), u.searchParams.get("mine")]).toEqual(["snippet", "true"]);
+    expect(await driver().channelCreatedAt(AT, "UCmissing"), "a channel the grant does not list").toBeNull();
+    handler = () => res(200, { items: [{ id: "UCchan", snippet: { title: "Chan", publishedAt: "not a date" } }] });
+    expect(await driver().channelCreatedAt(AT, "UCchan"), "an unreadable date").toBeNull();
+    handler = () => res(200, { pageInfo: { totalResults: 0 } });
+    expect(await driver().channelCreatedAt(AT, "UCchan"), "no items at all").toBeNull();
+  });
+
+  it("recentBroadcasts: GET liveBroadcasts?part=snippet,status&mine=true&broadcastType=all; actual start and end; never-started skipped; stops at the first page with one older than `since`", async () => {
+    const since = new Date("2026-11-19T12:00:00Z");
+    const pages: Record<string, unknown> = {
+      "": { nextPageToken: "p2", items: [
+        { id: "a", snippet: { actualStartTime: "2026-11-20T10:00:00Z", actualEndTime: "2026-11-20T10:05:00Z" } },
+        { id: "b", snippet: { actualStartTime: "2026-11-20T11:00:00Z" } },                  // still live
+        { id: "c", snippet: { scheduledStartTime: "2026-11-20T09:00:00Z" } },               // never started
+      ] },
+      p2: { nextPageToken: "p3", items: [
+        { id: "d", snippet: { actualStartTime: "2026-11-19T13:00:00Z", actualEndTime: "2026-11-19T14:00:00Z" } },
+        { id: "e", snippet: { actualStartTime: "2026-11-18T13:00:00Z", actualEndTime: "2026-11-18T13:01:00Z" } },   // before `since`
+      ] },
+      p3: { items: [{ id: "f", snippet: { actualStartTime: "2026-11-20T08:00:00Z" } }] },     // never read
+    };
+    handler = (req) => res(200, pages[new URL(req.url).searchParams.get("pageToken") ?? ""]);
+    const got = await driver().recentBroadcasts(AT, since);
+    expect(got.map((x) => [x.startedAt.toISOString(), x.endedAt?.toISOString() ?? null])).toEqual([
+      ["2026-11-20T11:00:00.000Z", null],
+      ["2026-11-20T10:00:00.000Z", "2026-11-20T10:05:00.000Z"],
+      ["2026-11-19T13:00:00.000Z", "2026-11-19T14:00:00.000Z"],
+    ]);
+    expect(sent, "page 3 is never fetched: page 2 reached past `since`").toHaveLength(2);
+    const u = new URL(sent[0]!.url);
+    expect([sent[0]!.method, u.pathname]).toEqual(["GET", "/youtube/v3/liveBroadcasts"]);
+    expect([u.searchParams.get("part"), u.searchParams.get("mine"), u.searchParams.get("broadcastType")]).toEqual(["snippet,status", "true", "all"]);
+    expect(new URL(sent[1]!.url).searchParams.get("pageToken")).toBe("p2");
+  });
+
+  it("recentBroadcasts reads at most 3 pages and answers what it read; a refusal maps through the error table", async () => {
+    let n = 0;
+    handler = () => res(200, { nextPageToken: `p${++n}`, items: [{ id: `b${n}`, snippet: { actualStartTime: "2026-11-20T10:00:00Z", actualEndTime: "2026-11-20T10:01:00Z" } }] });
+    expect(await driver().recentBroadcasts(AT, new Date("2026-11-19T12:00:00Z"))).toHaveLength(3);
+    expect(sent).toHaveLength(3);
+    handler = () => apiError(403, "quotaExceeded");
+    expect(((await rejection(driver().recentBroadcasts(AT, new Date(0)))) as YouTubeError).code).toBe("youtube_limit_reached");
+    handler = () => apiError(403, "liveStreamingNotEnabled");
+    expect(((await rejection(driver().recentBroadcasts(AT, new Date(0)))) as YouTubeError).code).toBe("youtube_live_not_enabled");
   });
 
   it("liveEnabled: a cheap liveBroadcasts.list(mine); success = enabled, liveStreamingNotEnabled = not_enabled, livePermissionBlocked = blocked", async () => {
@@ -1094,6 +1149,8 @@ const CALLS: Record<RequestMethod, (g: YouTubePort) => Promise<unknown>> = {
   exchangeCode: (g) => g.exchangeCode({ code: CODE, codeVerifier: VERIFIER, redirectUri: REDIRECT }),
   accessToken: (g) => g.accessToken(RT),
   listMyChannels: (g) => g.listMyChannels(AT),
+  channelCreatedAt: (g) => g.channelCreatedAt(AT, "UCchan"),
+  recentBroadcasts: (g) => g.recentBroadcasts(AT, new Date("2026-11-19T12:00:00Z")),
   liveEnabled: (g) => g.liveEnabled(AT),
   insertStream: (g) => g.insertStream(AT, { title: "k" }),
   deleteStream: (g) => g.deleteStream(AT, "strm1"),
@@ -1111,13 +1168,13 @@ const CALLS: Record<RequestMethod, (g: YouTubePort) => Promise<unknown>> = {
 describe("secrets stay out of every URL and ride in the Authorization header or a POST body", () => {
   it("every request-making method: no URL holds the access token, refresh token, code, verifier or client secret; Data API calls carry `Authorization: Bearer <at>`", async () => {
     const methods = FAKE_YOUTUBE_METHODS.filter((m): m is RequestMethod => m !== "authorizeUrl");
-    expect(methods.length, "the port's 15 methods other than authorizeUrl").toBe(15);
+    expect(methods.length, "the port's 17 methods other than authorizeUrl").toBe(17);
     expect(Object.keys(CALLS).sort(), "the table covers exactly those").toEqual([...methods].sort());
     const g = driver();
     for (const m of methods) await CALLS[m](g);
 
-    // exchangeCode makes TWO requests (token, then tokeninfo): 15 methods, 16 requests.
-    expect(sent).toHaveLength(16);
+    // exchangeCode makes TWO requests (token, then tokeninfo): 17 methods, 18 requests.
+    expect(sent).toHaveLength(18);
     let checked = 0;
     let bearer = 0;
     let formBodies = 0;
@@ -1145,8 +1202,8 @@ describe("secrets stay out of every URL and ride in the Authorization header or 
       }
       checked++;
     }
-    expect(checked, "anti-vacuity: every captured request was checked").toBe(16);
-    expect([bearer, formBodies], "12 Data API calls + 4 OAuth form calls").toEqual([12, 4]);
+    expect(checked, "anti-vacuity: every captured request was checked").toBe(18);
+    expect([bearer, formBodies], "14 Data API calls + 4 OAuth form calls").toEqual([14, 4]);
   });
 
   it("revoke and tokeninfo send the token in a form POST body, never the query string", async () => {
@@ -1353,11 +1410,11 @@ describe("failures are codes, whatever Google (or the network) said", () => {
       expect([m, b instanceof YouTubeError && b.code]).toEqual([m, "youtube_unavailable"]);
       checked++;
     }
-    expect(checked, "15 methods").toBe(15);
+    expect(checked, "17 methods").toBe(17);
   });
 
   it("a 200 whose body is not JSON is youtube_unavailable / malformedResponse for every method that reads the body", async () => {
-    const readers: RequestMethod[] = ["exchangeCode", "accessToken", "listMyChannels", "liveEnabled", "insertStream", "listStreams", "insertBroadcast", "broadcastLife", "streamStatus", "existingVideos"];
+    const readers: RequestMethod[] = ["exchangeCode", "accessToken", "listMyChannels", "channelCreatedAt", "recentBroadcasts", "liveEnabled", "insertStream", "listStreams", "insertBroadcast", "broadcastLife", "streamStatus", "existingVideos"];
     let checked = 0;
     for (const m of readers) {
       handler = () => res(200, undefined, `{"id": ${AT}`);

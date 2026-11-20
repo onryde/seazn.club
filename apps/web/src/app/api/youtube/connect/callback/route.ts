@@ -10,7 +10,7 @@ import { streamingPageOffer } from "@/server/stream-panel-context";
 import { sql } from "@/lib/db";
 import { sealPendingToken } from "@/server/youtube/token-store";
 import { claimPending, dropPending, grantInUse, offerRefusal, reconnectTarget, roleNow, seatFrozen, storeGrant } from "@/server/youtube/connect-flow";
-import { saveConnectionFromGrant } from "@/server/youtube/connections";
+import { recordChannelCreatedAt, saveConnectionFromGrant } from "@/server/youtube/connections";
 import { orgSlugOf } from "@/server/youtube/connect-flow";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError, type YouTubePort } from "@/server/youtube/port";
@@ -185,6 +185,8 @@ async function callback(req: Request): Promise<Response> {
       }
       throw err;
     }
+    // Best effort and never throws: a new connection learns its channel's creation date (the channel-safety warning's input).
+    if (!saved.existing) await recordChannelCreatedAt(port, pending.orgId, saved.connectionId);
     // A FRESH connect of a channel the organisation already had is a reconnect underneath: the connection kept its own visibility and
     // made-for-kids settings and the choices just made went unused, so the page says that (`already_connected`). A Reconnect the
     // person asked for (`pending.connectionId`) is plain `connected`: its settings were never in question, the save is `existing`

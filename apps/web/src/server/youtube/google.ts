@@ -38,6 +38,11 @@ const STREAMS_PER_PAGE = 50;
  *  deletes from the answer and reports what it could not reach, so a list that stops early must not pass for the whole channel). Each page
  *  is one request under the call bound, so the cap also bounds how long the disconnect waits on the list. */
 const MAX_STREAM_PAGES = 10;
+/** liveBroadcasts.list's page: `maxResults` 0-50 (the liveBroadcasts.list page). */
+const BROADCASTS_PER_PAGE = 50;
+/** `recentBroadcasts` reads at most this many pages (150 broadcasts, 3 quota units): the channel-safety warning's input, so a channel
+ *  with more in a day is answered with what was read, never with more calls. */
+const RECENT_BROADCAST_PAGES = 3;
 /** A broadcast title: 1–100 characters (liveBroadcasts.insert "invalidTitle"), and neither `<` nor `>` (the videos resource's
  *  `snippet.title`: a broadcast is one video). Counted in code points. The same rule, and the same refusal, as the fake. */
 const BROADCAST_TITLE_MAX_CHARS = 100;
@@ -271,6 +276,42 @@ export class GoogleYouTube implements YouTubePort {
       if (id) out.push({ id, title: typeof asRecord(row?.snippet)?.title === "string" ? (asRecord(row?.snippet)!.title as string) : "" });
     }
     return out;
+  }
+
+  /** channels.list(part=snippet, mine=true), the same request as `listMyChannels`: `snippet.publishedAt` (ISO 8601, "the date and time
+   *  that the channel was created") of the item whose id is `channelId`. No such item, or no readable date, is null. */
+  async channelCreatedAt(at: string, channelId: string): Promise<Date | null> {
+    const items = parseBody(await api(at, "GET", "channels", { query: { part: "snippet", mine: "true", maxResults: "50" } })).items;
+    const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === channelId);
+    return row ? isoDate(asRecord(row.snippet)?.publishedAt) : null;
+  }
+
+  /** liveBroadcasts.list(part=snippet,status, mine=true, broadcastType=all), …/live/docs/liveBroadcasts/list, 50 a page, following
+   *  `nextPageToken`. Only `snippet.actualStartTime` / `actualEndTime` are read; a broadcast with no actual start (never went live) is
+   *  skipped. Reading stops at the first page holding a broadcast that started before `since` (YouTube lists the newest first), at the
+   *  last page, at a page token that repeats, or after RECENT_BROADCAST_PAGES pages: what was read by then is the answer. */
+  async recentBroadcasts(at: string, since: Date): Promise<{ startedAt: Date; endedAt: Date | null }[]> {
+    const out: { startedAt: Date; endedAt: Date | null }[] = [];
+    const seen = new Set<string>();
+    let pageToken: string | null = null;
+    for (let page = 0; page < RECENT_BROADCAST_PAGES; page++) {
+      const query: Record<string, string> = { part: "snippet,status", mine: "true", broadcastType: "all", maxResults: String(BROADCASTS_PER_PAGE) };
+      if (pageToken !== null) query.pageToken = pageToken;
+      const body = parseBody(await api(at, "GET", "liveBroadcasts", { query }));
+      let older = false;
+      for (const item of Array.isArray(body.items) ? body.items : []) {
+        const snippet = asRecord(asRecord(item)?.snippet);
+        const startedAt = isoDate(snippet?.actualStartTime);
+        if (!startedAt) continue;
+        if (startedAt < since) { older = true; continue; }
+        out.push({ startedAt, endedAt: isoDate(snippet?.actualEndTime) });
+      }
+      const next = nonEmpty(body.nextPageToken);
+      if (older || next === null || seen.has(next)) break;
+      seen.add(next);
+      pageToken = next;
+    }
+    return out.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
   }
 
   /** There is no "is live enabled" call: the cheapest probe is liveBroadcasts.list(mine) (1 quota unit), which refuses with
