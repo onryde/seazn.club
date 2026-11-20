@@ -69,7 +69,7 @@ export function BoardPosition({
 }) {
   const t = useT();
   return (
-    <div data-testid="md-board-position" data-turn={position.turn} className="mx-auto flex w-full min-w-0 max-w-[560px] flex-col gap-2 lg:mx-0">
+    <div data-testid="md-board-position" data-turn={position.turn} className="mx-auto flex w-full min-w-0 max-w-[560px] flex-col gap-2 lg:mx-0 lg:max-w-[420px]">
       <Clock colour="black" name={black} ms={readingOf(clock, "black", nowMs)} active={clock?.running === true && clock.turn === "black"} />
       <div className="w-full min-w-0">
         <Board fen={position.fen} orientation="white" lastMove={position.lastMove} movable={false} viewOnly syncKey={0} onMove={() => {}} label={label} t={t} />

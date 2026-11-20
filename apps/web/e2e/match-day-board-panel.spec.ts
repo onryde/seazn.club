@@ -240,6 +240,72 @@ test.describe("Match Day online - the board panel", () => {
     await expect(panel(page)).toHaveAttribute("data-state", "result", { timeout: 30_000 });
   });
 
+  test("(MD-R33/R34) a held board is two columns from lg - the board capped at 420 / 42% on the left, the decision above the fold on the right - and one column, in the DOM's order, below lg", async ({ page }) => {
+    test.setTimeout(budget(4, 2));
+    const { orgId, round: r, matchDay } = await seedDay(page, `mdbg${TAG}`.slice(0, 14), { stage: "swiss" });
+    const held = r.boards[1]!;
+    await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "mismatch" });
+    await flagBoard(orgId, held);
+
+    /** Page coordinates (scroll added back) of the first element with this test id, with the scroll the page was at. */
+    const box = (id: string) =>
+      page.getByTestId(id).first().evaluate((el) => {
+        const b = el.getBoundingClientRect();
+        return { left: b.left + window.scrollX, top: b.top + window.scrollY, right: b.right + window.scrollX, bottom: b.bottom + window.scrollY, width: b.width, height: b.height, scrollY: window.scrollY };
+      });
+    const open = async (width: number, height: number) => {
+      await page.setViewportSize({ width, height });
+      await page.goto(`${matchDay}?board=${held.fixtureId}`);
+      await expect(panel(page)).toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
+      await expect(page.getByTestId("md-board-position"), "the game on file is drawn").toBeVisible({ timeout: 30_000 });
+      await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
+      await expect(decision(page)).toBeVisible();
+      await expect(page.getByTestId("md-board-hold")).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    };
+
+    // 1280 x 800, the screen an organiser has: the whole decision is on it without a scroll.
+    await open(1280, 800);
+    const dec = await box("arbiter-decision");
+    expect(dec.scrollY, "measured from the top of the page").toBe(0);
+    expect(dec.top, "the decision starts on the screen").toBeGreaterThanOrEqual(0);
+    expect(dec.bottom, `the decision ends inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800);
+    const pos = await box("md-board-position");
+    const grid = await box("md-board-grid");
+    const left = await box("md-board-left");
+    const head = await box("md-board-head");
+    expect(pos.width, "the board is capped at 420").toBeLessThanOrEqual(420.5);
+    expect(pos.width, "and it is a real board, not a collapsed one").toBeGreaterThan(300);
+    expect(Math.abs(left.top - head.top), "the two columns start at the same height").toBeLessThanOrEqual(1);
+    expect(head.left, "the right column is to the right of the board's").toBeGreaterThanOrEqual(left.right - 1);
+    expect(head.right, "and it fills the width the board leaves").toBeGreaterThanOrEqual(grid.right - 1);
+    // The right column reads state -> why it is held -> decision -> flags (the lg order), whatever the DOM order is.
+    const rows = [await box("md-online-state"), await box("md-board-hold"), await box("arbiter-decision"), await box("md-board-flags")];
+    expect(rows.map((b) => b.top), "state, why, decision, flags: each starts below the one before").toEqual([...rows.map((b) => b.top)].sort((a, b) => a - b));
+    expect(new Set(rows.map((b) => Math.round(b.top))).size, "four distinct rows").toBe(4);
+    // A one-column phone would put the decision below the board; here it sits in the column BESIDE it.
+    expect(dec.left, "the decision is in the right column, beside the board").toBeGreaterThanOrEqual(left.right - 1);
+    expect(dec.top, "and starts above the board's own foot, not a board's height down").toBeLessThan(pos.bottom + 40);
+
+    // 1024 x 768, the narrowest lg: the board gives way (42% of the panel), nothing overflows.
+    await open(1024, 768);
+    const pos1024 = await box("md-board-position");
+    const grid1024 = await box("md-board-grid");
+    expect(grid1024.width, "the panel is real").toBeGreaterThan(300);
+    expect(pos1024.width, `the board is at most 42% of the panel (${Math.round(pos1024.width)} of ${Math.round(grid1024.width)})`).toBeLessThanOrEqual(grid1024.width * 0.42 + 1);
+    expect(pos1024.width).toBeGreaterThan(150);
+    expect((await box("md-board-head")).left, "still two columns").toBeGreaterThanOrEqual((await box("md-board-left")).right - 1);
+
+    // 768: below lg, ONE column in the DOM's own order - state, board, why, flags, decision.
+    await open(768, 1024);
+    const phone = [await box("md-online-state"), await box("md-board-position"), await box("md-board-hold"), await box("md-board-flags"), await box("arbiter-decision")];
+    expect(phone.map((b) => Math.round(b.top)), "state, board, why, flags, decision: each below the one before").toEqual([...phone.map((b) => Math.round(b.top))].sort((a, b) => a - b));
+    expect(new Set(phone.map((b) => Math.round(b.top))).size, "five distinct rows").toBe(5);
+    const posPhone = await box("md-board-position");
+    const gridPhone = await box("md-board-grid");
+    expect(posPhone.width, "the board keeps its one-column width: the whole panel, up to its 560 cap").toBeGreaterThanOrEqual(Math.min(560, gridPhone.width) - 1);
+  });
+
   test("a cancelled board with an open flag: its flag card and 'Mark as reviewed' (no settle on a cancelled board); the press closes the flag and the board leaves the list", async ({ page }) => {
     test.setTimeout(budget(2, 4));
     const { orgId, round: r, matchDay } = await seedDay(page, `mdbc${TAG}`.slice(0, 14), { stage: "swiss" });
