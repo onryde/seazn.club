@@ -43,12 +43,13 @@ import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
 import { siteOrigin } from "@/lib/site-origin";
 import {
-  YOUTUBE_AUTO_BACKOFF_CODES, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy,
+  YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy,
   type YoutubeRefusalCode,
 } from "@/lib/youtube";
 import type { StartCause } from "@/server/relay/domain/session";
 import { insertPooledKey } from "@/server/relay/secret-columns";
-import { autoBackoffRefusal, clearAutoBackoff, freshLiveRefusal, recordAutoBackoff, recordLiveState } from "./connections";
+import { autoBackoffRefusalCode, opensAutoBackoff } from "./auto-backoff";
+import { clearAutoBackoff, freshLiveRefusal, recordAutoBackoff, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
 import { broadcastDescription, broadcastTitle } from "./title";
@@ -162,29 +163,29 @@ export async function prepareYoutubeBroadcast(
   if (recorded !== null) throw youtubeRefusal(recorded, connectionId);
   // Phase 0 (V538): a rate / availability refusal opened a window on this channel — the automatic start's retries wait it out with no
   // call to YouTube, no row and no key. Writes nothing, so the window lapses on time. A person's tap never reads it.
-  if (a.startCause === "automatic" && autoBackoffRefusal(target, a.now)) {
-    const code = isYoutubeRefusalCode(target.auto_backoff_code) ? target.auto_backoff_code : "youtube_unavailable";
-    throw youtubeRefusal(code, connectionId);
-  }
+  const backedOff = a.startCause === "automatic" ? autoBackoffRefusalCode(target, a.now) : null;
+  if (backedOff !== null) throw youtubeRefusal(backedOff, connectionId);
 
   const port = typeof portOf === "function" ? portOf() : portOf;
-  const at = await accessTokenFor(a.orgId, connectionId, port);
+  const at = await accessTokenFor(a.orgId, connectionId, port, a.now);
   const ctx: Ctx = {
     orgId: a.orgId, fixtureId: a.fixtureId, connectionId, privacy: target.privacy, madeForKids: target.made_for_kids, now: a.now,
     port, at,
   };
   const reused = await reuseOrClaim(ctx);
   const prepared = reused ?? (await createNew(ctx, true));
-  await noteAutoBackoff(ctx, null);
+  await noteAutoBackoff(ctx, "success");
   return prepared;
 }
 
-/** The automatic start's backoff (Phase 0, V538): a refusal in YOUTUBE_AUTO_BACKOFF_CODES opens or extends the window, a successful
- *  prepare (`null`) clears it. Best effort, like `noteLiveState`: the outcome stands either way. */
-async function noteAutoBackoff(ctx: { orgId: string; connectionId: string; now: Date }, code: YoutubeRefusalCode | null): Promise<void> {
+/** The automatic start's backoff (Phase 0, V538): a refusal that opens it (auto-backoff.ts `opensAutoBackoff`; null — a fault of
+ *  Seazn's own — never does) opens or extends the window, a successful prepare clears it. Best effort, like `noteLiveState`. */
+async function noteAutoBackoff(
+  ctx: { orgId: string; connectionId: string; now: Date }, outcome: YoutubeRefusalCode | null | "success",
+): Promise<void> {
   try {
-    if (code === null) await clearAutoBackoff(sql, ctx.orgId, ctx.connectionId);
-    else if (YOUTUBE_AUTO_BACKOFF_CODES.includes(code)) await recordAutoBackoff(sql, ctx.orgId, ctx.connectionId, ctx.now, code);
+    if (outcome === "success") await clearAutoBackoff(sql, ctx.orgId, ctx.connectionId);
+    else if (opensAutoBackoff(outcome)) await recordAutoBackoff(sql, ctx.orgId, ctx.connectionId, ctx.now, outcome);
   } catch (err) {
     captureError(err, { orgId: ctx.orgId, route: "youtube.prepare.auto_backoff", extra: { connectionId: ctx.connectionId } });
   }
@@ -192,7 +193,7 @@ async function noteAutoBackoff(ctx: { orgId: string; connectionId: string; now: 
 
 /** Step 1's token: the sealed refresh token opened (in memory only) and exchanged. A connection with no token, or one whose
  *  token will not open, needs reconnecting; a KEK fault is the deployment's and stays loud. */
-async function accessTokenFor(orgId: string, connectionId: string, port: YouTubePort): Promise<string> {
+async function accessTokenFor(orgId: string, connectionId: string, port: YouTubePort, now: Date): Promise<string> {
   const refresh = await openToken(sql, orgId, connectionId).catch((err: unknown) => {
     if (err instanceof YoutubeTokenUnreadableError) throw youtubeRefusal("youtube_reconnect_needed", connectionId);
     throw err;
@@ -202,7 +203,10 @@ async function accessTokenFor(orgId: string, connectionId: string, port: YouTube
     return await viaPort(() => port.accessToken(refresh));
   } catch (err) {
     await markIfGrantDead(err, orgId, connectionId);
-    throw youtubeRefusal(refusalCodeOf(err) ?? "youtube_unavailable", connectionId);
+    const code = refusalCodeOf(err);
+    // A rate / availability refusal of the token exchange opens the automatic start's window too (Phase 0), as `failRow` does.
+    await noteAutoBackoff({ orgId, connectionId, now }, code);
+    throw youtubeRefusal(code ?? "youtube_unavailable", connectionId);
   }
 }
 
@@ -418,7 +422,7 @@ async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
     return { broadcastId: rowId, reused: false, keyId };
   } catch (err) {
     const code = refusalCodeOf(err);
-    await failRow(ctx, rowId, ytId, code ?? "youtube_unavailable");
+    await failRow(ctx, rowId, ytId, code);
     if (keyId !== null && isStreamGone(err)) await retireKey(ctx, keyId);
     await markIfGrantDead(err, ctx.orgId, ctx.connectionId);
     if (isYoutubeLiveStateRefusal(code)) await noteLiveState(ctx, code);
@@ -531,13 +535,15 @@ async function deleteStream(ctx: Ctx, streamId: string): Promise<void> {
 }
 
 /** A refused new broadcast: the row `failed` with the code (from any state a prepare or a reuse left it in), then what YouTube
- *  got deleted. The row goes first, so nothing reuses a broadcast that is about to vanish. Both are best effort. A rate /
- *  availability code also opens the automatic start's backoff window on the channel first (`noteAutoBackoff`, Phase 0). */
-async function failRow(ctx: Ctx, rowId: string, ytId: string | null, code: YoutubeRefusalCode): Promise<void> {
+ *  got deleted. The row goes first, so nothing reuses a broadcast that is about to vanish. Both are best effort. `code` is the
+ *  refusal YouTube (or the pool) answered, null for a fault of Seazn's own (a database error, a key not found): the row is failed
+ *  `youtube_unavailable` either way, but only a real refusal in YOUTUBE_AUTO_BACKOFF_CODES opens the automatic start's backoff
+ *  window on the channel (`noteAutoBackoff`, Phase 0) — a fault of ours says nothing about the channel. */
+async function failRow(ctx: Ctx, rowId: string, ytId: string | null, code: YoutubeRefusalCode | null): Promise<void> {
   await noteAutoBackoff(ctx, code);
   try {
     await sql`
-      update youtube_broadcasts set state = 'failed', last_error_code = ${code}, reserved_until = null
+      update youtube_broadcasts set state = 'failed', last_error_code = ${code ?? "youtube_unavailable"}, reserved_until = null
        where id = ${rowId} and state in ('created', 'bound', 'reserved')`;
   } catch (err) {
     captureError(err, { orgId: ctx.orgId, route: "youtube.prepare.fail_row", extra: { broadcastId: rowId } });

@@ -17,7 +17,7 @@ import { HttpError } from "@/lib/errors";
 import { YOUTUBE_AUTO_BACKOFF_BASE_SECONDS, YOUTUBE_AUTO_BACKOFF_CODES, YOUTUBE_AUTO_BACKOFF_MAX_SECONDS } from "@/lib/youtube";
 import type { StartCause } from "@/server/relay/domain/session";
 import { divisionRig } from "@/server/usecases/__tests__/_rig";
-import { autoBackoffRefusal, backoffSeconds } from "@/server/youtube/connections";
+import { autoBackoffRefusal, autoBackoffRefusalCode, backoffSeconds, opensAutoBackoff } from "@/server/youtube/auto-backoff";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { prepareYoutubeBroadcast } from "@/server/youtube/prepare";
 import { connect, org } from "./_connect-rig";
@@ -49,6 +49,18 @@ describe("autoBackoffRefusal", () => {
     expect(autoBackoffRefusal({ auto_retry_after: until }, until)).toBe(false);
     expect(autoBackoffRefusal({ auto_retry_after: until }, secondsAfter(T0, 61))).toBe(false);
     expect(autoBackoffRefusal({ auto_retry_after: null }, T0)).toBe(false);
+  });
+  it("autoBackoffRefusalCode: the stored code inside the window, youtube_unavailable when none is stored, null once it ends", () => {
+    const until = secondsAfter(T0, 60);
+    expect(autoBackoffRefusalCode({ auto_retry_after: until, auto_backoff_code: "youtube_limit_reached" }, T0)).toBe("youtube_limit_reached");
+    expect(autoBackoffRefusalCode({ auto_retry_after: until, auto_backoff_code: null }, T0)).toBe("youtube_unavailable");
+    expect(autoBackoffRefusalCode({ auto_retry_after: until, auto_backoff_code: "youtube_limit_reached" }, until)).toBeNull();
+  });
+  it("opensAutoBackoff: the three codes only; not a channel-state refusal, not a dead grant, not null (a fault of Seazn's own)", () => {
+    expect(["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"].every((c) => opensAutoBackoff(c as "youtube_unavailable"))).toBe(true);
+    expect(opensAutoBackoff("youtube_live_not_enabled")).toBe(false);
+    expect(opensAutoBackoff("youtube_reconnect_needed")).toBe(false);
+    expect(opensAutoBackoff(null)).toBe(false);
   });
 });
 
@@ -141,6 +153,37 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the automatic start's back
     expect((await refusal(prep(w, f, at, "automatic"))).code).toBe("youtube_unavailable");
     expect(insertBroadcasts(w)).toBe(inserts + 1);
     expect(await backoff(w)).toMatchObject({ auto_backoff_count: 2, auto_retry_after: secondsAfter(at, 120) });
+  });
+
+  it("a rate refusal of the TOKEN EXCHANGE on an automatic start opens the window too, before any broadcast row", async () => {
+    const w = await world();
+    w.fake.failNext("accessToken", "youtube_limit_reached");
+    expect((await refusal(prep(w, w.fixtures[0]!, T0, "automatic"))).code).toBe("youtube_limit_reached");
+    expect(await backoff(w)).toMatchObject({ auto_backoff_count: 1, auto_retry_after: secondsAfter(T0, 60), auto_backoff_code: "youtube_limit_reached" });
+    expect(await rowStates(w)).toEqual([]);
+  });
+
+  it("a fault of Seazn's own (a database error, not a YouTube refusal) on an automatic start opens no window", async () => {
+    const w = await world();
+    // A broadcast id Postgres cannot store as text (a NUL byte): the write after insertBroadcast fails in the DATABASE.
+    const port = new Proxy(w.fake, {
+      get(t, p) {
+        const v = Reflect.get(t, p, t) as unknown;
+        if (p === "insertBroadcast") {
+          return async (...args: Parameters<FakeYouTube["insertBroadcast"]>) => {
+            const out = await t.insertBroadcast(...args);
+            return { ...out, broadcastId: `${out.broadcastId}\u0000` };
+          };
+        }
+        return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+      },
+    });
+    const err = await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: w.fixtures[0]!, targetId: w.targetId, now: T0, startCause: "automatic" }, port)
+      .then(() => null, (e: unknown) => e);
+    expect(err).not.toBeNull();
+    expect(err).not.toBeInstanceOf(HttpError);   // not a refusal: the fault itself, rethrown
+    expect(await backoff(w)).toMatchObject({ auto_backoff_count: 0, auto_retry_after: null, auto_backoff_code: null });
+    expect(await rowStates(w)).toEqual(["failed"]);
   });
 
   it("a refusal that is not a backoff code (not enabled for live) opens no window", async () => {

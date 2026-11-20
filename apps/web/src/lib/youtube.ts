@@ -53,14 +53,17 @@ export const isYoutubeLiveStateRefusal = (c: unknown): c is YoutubeLiveStateRefu
 export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
 
 /** The AUTOMATIC start's backoff on a channel (Phase 0, YouTube channel safety; V538): after a refusal in YOUTUBE_AUTO_BACKOFF_CODES
- *  the next automatic start waits BASE seconds, doubling with each refusal in a row, never more than MAX (connections.ts
+ *  the next automatic start waits BASE seconds, doubling with each refusal in a row, never more than MAX (server/youtube/auto-backoff.ts
  *  `backoffSeconds`). Inside the window an automatic start is refused with the stored code and no call to YouTube. A person's tap
  *  never reads it, and any successful prepare clears it. */
+// Equal to AUTO_START_RETRY_SECONDS (relay/config.ts), so the first refusal's window ends exactly at the next scheduled retry: the backoff bites from the second refusal in a row (accepted).
 export const YOUTUBE_AUTO_BACKOFF_BASE_SECONDS = 60;
 export const YOUTUBE_AUTO_BACKOFF_MAX_SECONDS = 1800;
-/** The refusals that open the window: YouTube's rate limit, its being unavailable, and Seazn's own full pool. Not the channel-state
- *  refusals (YOUTUBE_LIVE_STATE_OF_REFUSAL has its own record) and not a dead grant (the connection moves to reconnect_needed). V538's
- *  `auto_backoff_code` check lists the same three. */
+/** The refusals that open the window: YouTube's rate limit and its being unavailable (at the token exchange or on a new broadcast),
+ *  and `youtube_channel_busy` ONLY when the pool's grow lost its slot after a YouTube insertStream (prepare.ts `growPool`). The
+ *  pick-time busy (no free key and ten live) is deliberately NOT backed off: it is decided in Seazn's database with no YouTube call to
+ *  spare. Not the channel-state refusals (YOUTUBE_LIVE_STATE_OF_REFUSAL has its own record), not a dead grant (the connection moves to
+ *  reconnect_needed), and not a fault of Seazn's own. V538's `auto_backoff_code` check lists the same three. */
 export const YOUTUBE_AUTO_BACKOFF_CODES: readonly YoutubeRefusalCode[] = [
   "youtube_limit_reached",
   "youtube_channel_busy",

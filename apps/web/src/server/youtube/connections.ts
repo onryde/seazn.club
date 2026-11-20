@@ -261,26 +261,22 @@ export function freshLiveRefusal(
   return state === YOUTUBE_LIVE_STATE_OF_REFUSAL[code] ? code : null;
 }
 
-/** The automatic start's window after `count` backoff refusals in a row (count >= 1): BASE seconds, doubling, capped at MAX. The
- *  exponent is bounded so a long run of refusals never overflows before the cap applies. */
-export function backoffSeconds(count: number): number {
-  const doublings = Math.min(Math.max(0, Math.floor(count) - 1), 30);
-  return Math.min(YOUTUBE_AUTO_BACKOFF_BASE_SECONDS * 2 ** doublings, YOUTUBE_AUTO_BACKOFF_MAX_SECONDS);
-}
-
-/** A refusal in YOUTUBE_AUTO_BACKOFF_CODES on this connection (prepare.ts `failRow`): one more in a row, and the next automatic start
- *  waits `backoffSeconds` of the new count from `now`. `code` is kept so a backed-off refusal carries YouTube's own answer. This org's
- *  row only. Never touches the live-state record (`last_error_code` / `last_health_at`). */
+/** A refusal in YOUTUBE_AUTO_BACKOFF_CODES on this connection (prepare.ts `failRow`, `accessTokenFor`): one more in a row, and the next
+ *  automatic start waits `backoffSeconds` (auto-backoff.ts) of the new count from `now`. ONE statement, so two refusals at once
+ *  cannot compute a window from a stale count: the exponent is the OLD count (`backoffSeconds(old + 1)`), the same table in SQL.
+ *  The backoff's pure decisions live in auto-backoff.ts; this file keeps only its two writes. `code` is kept so a backed-off refusal
+ *  carries YouTube's own answer. This org's row only. Never touches the live-state record. */
 export async function recordAutoBackoff(
   exec: Tx | typeof sql, orgId: string, connectionId: string, now: Date, code?: YoutubeRefusalCode,
 ): Promise<void> {
-  const [r] = await exec<{ auto_backoff_count: number }[]>`
-    update org_youtube_connections set auto_backoff_count = auto_backoff_count + 1, auto_backoff_code = ${code ?? null}
-     where id = ${connectionId} and org_id = ${orgId}
-    returning auto_backoff_count`;
-  if (!r) return;
-  const until = new Date(now.getTime() + backoffSeconds(r.auto_backoff_count) * 1000);
-  await exec`update org_youtube_connections set auto_retry_after = ${until} where id = ${connectionId} and org_id = ${orgId}`;
+  await exec`
+    update org_youtube_connections
+       set auto_backoff_count = auto_backoff_count + 1,
+           auto_retry_after = ${now}::timestamptz + make_interval(secs => least(
+             ${YOUTUBE_AUTO_BACKOFF_BASE_SECONDS}::double precision * power(2, least(auto_backoff_count, 30)),
+             ${YOUTUBE_AUTO_BACKOFF_MAX_SECONDS}::double precision)),
+           auto_backoff_code = ${code ?? null}
+     where id = ${connectionId} and org_id = ${orgId}`;
 }
 
 /** A successful prepare: the channel answered, so the automatic start's window, its count and its code go. */
@@ -288,12 +284,6 @@ export async function clearAutoBackoff(exec: Tx | typeof sql, orgId: string, con
   await exec`
     update org_youtube_connections set auto_backoff_count = 0, auto_retry_after = null, auto_backoff_code = null
      where id = ${connectionId} and org_id = ${orgId} and (auto_backoff_count <> 0 or auto_retry_after is not null)`;
-}
-
-/** Step 1 of prepare, for an AUTOMATIC start only (prepare.ts never calls it for a person's tap): is the window still open? It is
- *  until `auto_retry_after`; at that instant and after, the start asks YouTube again. */
-export function autoBackoffRefusal(r: { auto_retry_after: Date | null }, now: Date): boolean {
-  return r.auto_retry_after !== null && now.getTime() < r.auto_retry_after.getTime();
 }
 
 function toView(r: ConnectionViewRow): YoutubeConnectionView {
