@@ -3,11 +3,13 @@
 // - the position, the flags built in full, each side's presence, camera and `joinable`, `stage_id`, `round_no` and `hold_reason` - parsed
 // by the schema the OpenAPI document publishes (a plain z.object STRIPS a key it does not name, so a key the schema forgot would be served
 // by the usecase and gone from the wire), and who the door lets through: a read-scope key, a signed-in viewer, the organiser who plays on
-// the board (refused 403 by the usecase, over the wire), another club's caller (refused by the door), a key pinned to another competition.
+// the board (refused 403 by the usecase, over the wire), another club's caller (refused by the door, 401), a key pinned to another competition,
+// and what each reader's ROLE gets of the flags (MD-R13): an owner, an admin the card whole, a viewer member and a read key the kind and the
+// opening time and nothing the evidence says.
 //
 // Chess-only by construction (online play is `boardgame`'s door, guard.ts): the registry sweep of the other sports is the usecase suite's.
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
 
@@ -26,9 +28,12 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { fenAfter } from "@/server/external-play/fen";
-import { NEEDS_REASONS } from "@/server/external-play/types";
+import { NEEDS_REASONS, type NeedsReason } from "@/server/external-play/types";
+import type { MatchDayBoard as MatchDayBoardWire } from "@/lib/match-day/types";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { MatchDayBoard } from "@/server/api-v1/schemas";
 import { createApiKey } from "@/server/usecases/api-keys";
 import { closeExternalPlayFlags } from "@/server/usecases/external-play/flags";
@@ -101,7 +106,7 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
     secret = (await createApiKey(s.r.owner, { name: "match day board read", scopes: ["read"] })).secret;
   });
 
-  it("an API key with the read scope reads the board: 200, and the position, the flag card, each side's presence/camera/joinable and the focus keys survive the wire", async () => {
+  it("an API key with the read scope reads the board: 200, and the position, the flag (kind and time), each side's presence/camera/joinable and the focus keys survive the wire", async () => {
     const res = await read(await boardRoute(get(s.one.fixtureId, secret), ctx(s.one.fixtureId)));
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
@@ -116,10 +121,12 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
     // The board as the round view paints it, with every key the usecase gave: nothing was stripped (the schema is open on purpose), by the
     // PARSE as well as on the wire - a plain z.object would drop `sides`, `flags` and the rest and parse to a shell.
     expect(board, "the published schema keeps every key it was given").toEqual(raw);
-    expect(raw, "the wire carries every key of the usecase's board").toEqual(JSON.parse(JSON.stringify(await loadMatchDayBoard(s.r.owner, s.one.fixtureId))) as unknown);
+    const keyCtx = { orgId: s.r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] } as AuthCtx;
+    expect(raw, "the wire carries every key of the usecase's board, as that reader gets it").toEqual(JSON.parse(JSON.stringify(await loadMatchDayBoard(keyCtx, s.one.fixtureId))) as unknown);
     expect(Object.keys(raw).sort()).toEqual(expect.arrayContaining(["position", "stage_id", "round_no", "hold_reason", "sides", "flags", "flagCount", "state", "clock", "seats", "checkin"]));
-    expect(raw.flags, "the flag card is built in full, with the guard's own seconds and stamps").toEqual([
-      { id: s.flagId, kind: "camera_connection_problems", at: "2026-10-12T19:42:00.000Z", personName: "P1W", seconds: 90, stamps: 2 },
+    // A read key is not an editor: the flag is there (kind, opening time, the count) and the evidence on it is not (MD-R13).
+    expect(raw.flags, "the flag, as a reader without an editor's role gets it").toEqual([
+      { id: s.flagId, kind: "camera_connection_problems", at: "2026-10-12T19:42:00.000Z", personName: null, seconds: null, stamps: null },
     ]);
     expect(raw.flagCount).toBe(1);
     const sides = raw.sides as Record<"home" | "away", Record<string, unknown>>;
@@ -137,6 +144,27 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
     expect(live.hold_reason).toBeNull();
   });
 
+  it("the published schema's `hold_reason` is the server's own vocabulary: every reason parses, a word nobody writes does not - and the schema's keys agree with the wire type (checked by tsc)", async () => {
+    const live = (await read(await boardRoute(get(s.three.fixtureId, secret), ctx(s.three.fixtureId)))).body.data!;
+    let checked = 0;
+    for (const reason of NEEDS_REASONS) {
+      expect(MatchDayBoard.safeParse({ ...live, hold_reason: reason }).success, reason).toBe(true);
+      checked++;
+    }
+    expect(checked, "every reason in the vocabulary").toBe(NEEDS_REASONS.length);
+    expect(NEEDS_REASONS.length).toBeGreaterThan(0);
+    expect(MatchDayBoard.safeParse({ ...live, hold_reason: null }).success, "null is the other board states").toBe(true);
+    for (const bad of ["no_such_reason", "", "NO_SHOW_WHITE"]) expect(MatchDayBoard.safeParse({ ...live, hold_reason: bad }).success, `"${bad}"`).toBe(false);
+    // Type level (a no-op at runtime, a compile error under tsc): the schema and `MatchDayBoard` (lib/match-day/types.ts) say the same
+    // thing about the keys the focus adds - one vocabulary for the reason, one shape for the position.
+    type Parsed = ReturnType<typeof MatchDayBoard.parse>;
+    expectTypeOf<Parsed["hold_reason"]>().toEqualTypeOf<NeedsReason | null>();
+    expectTypeOf<Parsed["hold_reason"]>().toEqualTypeOf<MatchDayBoardWire["hold_reason"]>();
+    expectTypeOf<Parsed["position"]>().toEqualTypeOf<MatchDayBoardWire["position"]>();
+    expectTypeOf<Parsed["stage_id"]>().toEqualTypeOf<MatchDayBoardWire["stage_id"]>();
+    expectTypeOf<Parsed["round_no"]>().toEqualTypeOf<MatchDayBoardWire["round_no"]>();
+  });
+
   it("a board with no game on file answers a null position (the empty case, over the wire)", async () => {
     const fresh = await seedOnlineChessRound({ fixtures: 1 });
     await openStamp(fresh, fresh.roundNo, new Date(Date.now() - 60_000));
@@ -147,18 +175,40 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
     expect(res.body.data).toHaveProperty("position", null);
   });
 
-  it("a signed-in VIEWER reads it (200) - the read-only page's own read; the same request from an admin of the club passes too", async () => {
+  it("a signed-in VIEWER reads it (200) - the read-only page's own read; the same request from an admin and from the owner of the club passes too", async () => {
     const viewer = await member(s.r.orgId, "viewer");
     const admin = await member(s.r.orgId, "admin");
     let checked = 0;
-    for (const [who, userId] of [["viewer", viewer], ["admin", admin]] as const) {
+    for (const [who, userId] of [["viewer", viewer], ["admin", admin], ["owner", s.r.ownerUserId]] as const) {
       authState.userId = userId;
       const res = await read(await boardRoute(get(s.one.fixtureId), ctx(s.one.fixtureId)));
       expect(res.status, who).toBe(200);
       expect(MatchDayBoard.parse(res.body.data).position, who).toMatchObject({ fen: FEN_AFTER_12 });
       checked++;
     }
-    expect(checked).toBe(2);
+    expect(checked).toBe(3);
+  });
+
+  it("MD-R13 over the wire, by ROLE: an owner and an admin get the flag card whole (name, the guard's seconds and stamps); a viewer member gets kind and time and NULL for the rest - the same board otherwise", async () => {
+    const viewer = await member(s.r.orgId, "viewer");
+    const admin = await member(s.r.orgId, "admin");
+    const flagWhole = { id: s.flagId, kind: "camera_connection_problems", at: "2026-10-12T19:42:00.000Z", personName: "P1W", seconds: 90, stamps: 2 };
+    const flagStripped = { id: s.flagId, kind: "camera_connection_problems", at: "2026-10-12T19:42:00.000Z", personName: null, seconds: null, stamps: null };
+    const seen: Record<string, Record<string, unknown>> = {};
+    let checked = 0;
+    for (const [who, userId, want] of [["owner", s.r.ownerUserId, flagWhole], ["admin", admin, flagWhole], ["viewer", viewer, flagStripped]] as const) {
+      authState.userId = userId;
+      const res = await read(await boardRoute(get(s.one.fixtureId), ctx(s.one.fixtureId)));
+      expect(res.status, who).toBe(200);
+      expect(res.body.data!.flags, who).toEqual([want]);
+      expect(res.body.data!.flagCount, `${who}: the count is the same for everyone`).toBe(1);
+      seen[who] = res.body.data!;
+      checked++;
+    }
+    expect(checked).toBe(3);
+    const unflagged = (board: Record<string, unknown>) => Object.fromEntries(Object.entries(board).filter(([key]) => key !== "flags"));
+    expect(Object.keys(seen.owner!), "the board has more than its flags to compare").toContain("sides");
+    expect(unflagged(seen.viewer!), "nothing but the flags differs between the roles").toEqual(unflagged(seen.owner!));
   });
 
   it("the organiser who PLAYS on the board is refused 403 ARBITER_PLAYS_THIS_BOARD over the wire, and reads the round's other board", async () => {
@@ -181,8 +231,9 @@ describe.skipIf(!HAS_DB)("/api/v1/fixtures/{id}/match-day-board", () => {
       ["a read key of another club", get(s.one.fixtureId, strangerKey)],
     ] as const) {
       const res = await read(await boardRoute(request, ctx(s.one.fixtureId)));
-      expect(res.status, why).toBeGreaterThanOrEqual(401);
-      expect(res.status, why).toBeLessThan(500);
+      // The door's own word, not the usecase's 404: it asks whose the fixture is before anyone reads it, and a caller of another club is no
+      // member (401), as for every resource of the v1 surface.
+      expect(res.status, why).toBe(401);
       expect(res.body.ok, why).toBe(false);
       expect(JSON.stringify(res.body), `${why}: no board data in the refusal`).not.toContain(FEN_AFTER_12);
       checked++;

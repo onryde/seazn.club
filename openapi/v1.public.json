@@ -46189,7 +46189,7 @@
     },
     "/api/v1/fixtures/{id}/match-day-board": {
       "get": {
-        "summary": "Match Day: the board in focus, as the arbiter's round view paints it - `state`, `clock`, each side's presence, camera and `joinable`, the seats of a board in check-in, `checkin`, every open flag built in full (`flags`, with `flagCount`) - plus `position` (the game's replayed position: `fen`, the last replayed ply's two squares as `lastMove`, `turn`; null while no game is on file), `stage_id`, `round_no` and `hold_reason` (why a board in `on_hold` is held; null otherwise). Reads only: any member who may read the competition, or a read-scope key. 404 NOT_FOUND for a fixture that is not an online board of this club - another club's, another sport's, an unpaired seat - and for a cancelled board with no open flag (it has left every list); 403 ARBITER_PLAYS_THIS_BOARD for a board the signed-in caller plays on",
+        "summary": "Match Day: the board in focus, as the arbiter's round view paints it - `state`, `clock`, each side's presence, camera and `joinable`, the seats of a board in check-in, `checkin`, every open flag (`flags`, with `flagCount`) - plus `position` (the game's replayed position: `fen`, the last replayed ply's two squares as `lastMove`, `turn`; null while no game is on file), `stage_id`, `round_no` and `hold_reason` (why a board in `on_hold` is held; null otherwise). Reads only: any member who may read the competition, or a read-scope key; a caller of another club is refused at the door (401), as on every resource. The flags are evidence about a named player: an owner or an admin gets each flag whole, a view-only member or an API key gets its `id`, `kind` and `at` with every other field null (`flagCount` unchanged). 404 NOT_FOUND for a fixture that is not an online board of this club - another sport's, a division that does not play online, an unpaired seat, a board of a round nobody has opened - and for a cancelled board with no open flag (it has left every list); 403 ARBITER_PLAYS_THIS_BOARD for a board the signed-in caller plays on",
         "tags": [
           "fixtures"
         ],
@@ -46288,7 +46288,25 @@
                         "hold_reason": {
                           "anyOf": [
                             {
-                              "type": "string"
+                              "type": "string",
+                              "enum": [
+                                "no_show_white",
+                                "no_show_black",
+                                "no_show_both",
+                                "not_started",
+                                "aborted",
+                                "mismatch",
+                                "provider_error",
+                                "token_revoked",
+                                "double_walkover_blocked",
+                                "create_outcome_unknown",
+                                "tiebreak_owed",
+                                "fair_play",
+                                "account_changed",
+                                "clock_flag_unsettled",
+                                "lichess_unlinked",
+                                "lichess_reconnect"
+                              ]
                             },
                             {
                               "type": "null"
@@ -46304,7 +46322,7 @@
                         "hold_reason"
                       ],
                       "additionalProperties": {},
-                      "description": "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` built in full, `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`."
+                      "description": "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` - whole for an owner or an admin, kind and time only for a view-only member or a key - `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason`."
                     },
                     "requestId": {
                       "type": "string",
@@ -46326,7 +46344,7 @@
                     },
                     "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
                     "round_no": -9007199254740991,
-                    "hold_reason": "example"
+                    "hold_reason": "no_show_white"
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

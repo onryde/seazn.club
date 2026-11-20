@@ -2409,6 +2409,35 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - the empty case first", () => {
   });
 });
 
+describe.runIf(HAS_DB)("loadMatchDayBoard - a board of a round nobody has opened is not a board yet", () => {
+  it("NOT FOUND while its round is unopened (the round view lists none, and no list links one); the same board reads, in check-in, once the round opens", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    const [one, two] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
+    let checked = 0;
+    for (const b of [one, two]) {
+      expect(await codeOf(loadMatchDayBoard(r.owner, b.fixtureId)), `board ${b.fixtureId} before the open`).toEqual([404, "NOT_FOUND"]);
+      checked++;
+    }
+    expect(checked, "both boards of the round").toBe(2);
+    // The positive pair: the round opens and the very same ids read, in check-in.
+    await openRound(r);
+    for (const b of [one, two]) {
+      const board = await loadMatchDayBoard(r.owner, b.fixtureId);
+      expect(board.state, `board ${b.fixtureId} after the open`).toEqual({ kind: "checking_in" });
+      expect([board.stage_id, board.round_no]).toEqual([r.stageId, r.roundNo]);
+    }
+  });
+
+  it("a key reads the same refusal; a HELD board of an unopened round still reads - the refusal is the empty check-in of a round nobody opened, not the missing stamp", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    const key = { orgId: r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] } as AuthCtx;
+    expect(await codeOf(loadMatchDayBoard(key, r.boards[0]!.fixtureId))).toEqual([404, "NOT_FOUND"]);
+    // A held board (the bridge row says why) is the organiser's to decide whether or not the round was ever opened.
+    await bridge(r.boards[1]!.fixtureId, r.orgId, { status: "needs_organiser", reason: "lichess_unlinked" });
+    expect(await loadMatchDayBoard(r.owner, r.boards[1]!.fixtureId)).toMatchObject({ state: { kind: "on_hold" }, hold_reason: "lichess_unlinked" });
+  });
+});
+
 describe.runIf(HAS_DB)("loadMatchDayBoard - the position, from the bridge's moves by the public read's own derivation", () => {
   it("a live board with twelve plies: the position those plies reach, the twelfth ply's two squares as the last move, White to move", async () => {
     const { r, b } = await playedBoard(RUY_12);
@@ -2603,6 +2632,110 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - the flags, built in full", () => {
     expect(await closeExternalPlayFlags(r.owner, b.fixtureId, [one, two])).toEqual({ closed: 2, stillOpen: 0 });
     const after = await loadMatchDayBoard(r.owner, b.fixtureId);
     expect([after.flagCount, after.flags]).toEqual([0, []]);
+  });
+});
+
+describe.runIf(HAS_DB)("loadMatchDayBoard - what a flag says to a reader without an editor's role (MD-R13)", () => {
+  /** A live board with one open flag of EVERY kind, each with the note its producer writes (the texts the flag readers' own suite copies
+   *  from reconcile and the sweep's job 5): the evidence is a person's name and numbers an accusation is made of. */
+  async function flaggedBoard() {
+    const { r, b } = await playedBoard(RUY_12);
+    const at = (m: number) => new Date(`2026-10-12T19:4${m}:00Z`);
+    const flags = {
+      out_of_band_play: await openFlag(r.orgId, b.fixtureId, {
+        kind: "out_of_band_play",
+        openedAt: at(0),
+        note: "plies 2-5 (e7e5 g1f3 b8c6 f1c4) played at Lichess, not through Seazn; camera required",
+      }),
+      camera_lost: await openFlag(r.orgId, b.fixtureId, {
+        kind: "camera_lost",
+        personId: b.home.personId,
+        openedAt: at(1),
+        note: "camera off 189 s of 1260 s in the match: 2026-10-12T19:31:05.000Z to 2026-10-12T19:34:14.000Z (its own off/on events agree); from 3 camera connections over 2 sessions; camera required",
+      }),
+      camera_connection_problems: await openFlag(r.orgId, b.fixtureId, { kind: "camera_connection_problems", personId: b.home.personId, openedAt: at(2) }),
+      multiple_devices: await openFlag(r.orgId, b.fixtureId, {
+        kind: "multiple_devices",
+        personId: b.away.personId,
+        openedAt: at(3),
+        note: "2 camera connections at once for 75 s in the match: 2026-10-12T19:30:00.000Z to 2026-10-12T19:31:15.000Z; camera required",
+      }),
+    };
+    return { r, b, flags, at };
+  }
+  const keyOf = (r: SeedOnlineChessRoundResult) => ({ orgId: r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] }) as AuthCtx;
+
+  it("an owner and an admin get every card whole: the names and the evidence the notes carry", async () => {
+    const { r, b, flags } = await flaggedBoard();
+    let checked = 0;
+    for (const [who, auth] of [["owner", r.owner], ["admin", { ...r.owner, role: "admin" } as AuthCtx]] as const) {
+      const board = await loadMatchDayBoard(auth, b.fixtureId);
+      expect(board.flagCount, who).toBe(4);
+      const byKind = Object.fromEntries(board.flags.map((f) => [f.kind, f]));
+      expect(byKind.out_of_band_play, who).toMatchObject({ id: flags.out_of_band_play, plies: { from: 2, to: 5 } });
+      expect(byKind.camera_lost, who).toMatchObject({ id: flags.camera_lost, personName: "P1W", report: { offSeconds: 189, windowSeconds: 1260, connections: 3, sessions: 2 } });
+      expect(byKind.camera_connection_problems, who).toMatchObject({ id: flags.camera_connection_problems, personName: "P1W" });
+      expect(byKind.multiple_devices, who).toMatchObject({ id: flags.multiple_devices, personName: "P1B", report: { devices: 2, seconds: 75 } });
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("a viewer member and a read key get each flag's id, kind and opening time and NOTHING else - no name, no number, no interval - and the count stays whole", async () => {
+    const { r, b, flags, at } = await flaggedBoard();
+    const viewer = { ...r.owner, role: "viewer" } as AuthCtx;
+    let checked = 0;
+    for (const [who, auth] of [["viewer", viewer], ["key", keyOf(r)]] as const) {
+      const board = await loadMatchDayBoard(auth, b.fixtureId);
+      expect(board.flagCount, `${who}: the count is not evidence`).toBe(4);
+      // Expected from the seed: the ids and times the flags were opened with, in the order the cards are listed.
+      expect(board.flags.map((f) => [f.id, f.kind, f.at]), who).toEqual([
+        [flags.out_of_band_play, "out_of_band_play", at(0).toISOString()],
+        [flags.camera_lost, "camera_lost", at(1).toISOString()],
+        [flags.camera_connection_problems, "camera_connection_problems", at(2).toISOString()],
+        [flags.multiple_devices, "multiple_devices", at(3).toISOString()],
+      ]);
+      for (const f of board.flags) {
+        const detail = Object.entries(f).filter(([k]) => !["id", "kind", "at"].includes(k));
+        expect(detail.length, `${who} ${f.kind}: has detail fields`).toBeGreaterThan(0);
+        for (const [k, v] of detail) expect(v, `${who} ${f.kind}.${k}`).toBeNull();
+      }
+      const wire = JSON.stringify(board.flags);
+      for (const secret of ["P1W", "P1B", "189", "1260", "19:31:05", "19:30:00", "e7e5"]) expect(wire, `${who}: no ${secret} in the flags`).not.toContain(secret);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("only the flags differ: the rest of the board is the very board an owner reads, key for key", async () => {
+    const { r, b } = await flaggedBoard();
+    const { flags: whole, ...owner } = await loadMatchDayBoard(r.owner, b.fixtureId);
+    expect(whole, "the owner's flags are the evidence").toHaveLength(4);
+    for (const auth of [{ ...r.owner, role: "viewer" } as AuthCtx, keyOf(r)]) {
+      const { flags: stripped, ...rest } = await loadMatchDayBoard(auth, b.fixtureId);
+      expect(rest).toEqual(owner);
+      expect(stripped).toHaveLength(4);
+    }
+  });
+
+  it("the sequence: the strip holds on a second read and once a flag is closed, on a cancelled board's flags, and the empty case is still empty", async () => {
+    const { r, b, flags } = await flaggedBoard();
+    const viewer = { ...r.owner, role: "viewer" } as AuthCtx;
+    const first = await loadMatchDayBoard(viewer, b.fixtureId);
+    expect(await loadMatchDayBoard(viewer, b.fixtureId), "a second read").toEqual(first);
+    expect(await closeExternalPlayFlags(r.owner, b.fixtureId, [flags.camera_lost, flags.multiple_devices])).toEqual({ closed: 2, stillOpen: 2 });
+    const after = await loadMatchDayBoard(viewer, b.fixtureId);
+    expect([after.flagCount, after.flags.map((f) => f.kind)]).toEqual([2, ["out_of_band_play", "camera_connection_problems"]]);
+    expect(JSON.stringify(after.flags)).not.toContain("P1W");
+    // A cancelled board is read only through its open flags (O1): a viewer reads those flags stripped too.
+    await sql`update fixtures set status = 'cancelled' where id = ${b.fixtureId}`;
+    const cancelled = await loadMatchDayBoard(viewer, b.fixtureId);
+    expect(cancelled.state).toEqual({ kind: "cancelled" });
+    expect(cancelled.flags.map((f) => f.id)).toEqual([flags.out_of_band_play, flags.camera_connection_problems]);
+    expect(JSON.stringify(cancelled.flags)).not.toContain("P1W");
+    // The empty case: a board with no flag reads no flag for a viewer, with a count of 0.
+    const plain = await playedBoard(RUY_12);
+    expect(await loadMatchDayBoard({ ...plain.r.owner, role: "viewer" } as AuthCtx, plain.b.fixtureId)).toMatchObject({ flags: [], flagCount: 0 });
   });
 });
 
