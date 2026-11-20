@@ -95,7 +95,10 @@ const BY_LOCALE: Record<Locale, Dict> = { en, es, fr, nl };
  *  best-Nth across unequal pools is always compared on the smallest pool's matches - but the code stays in the engine's union and
  *  a stored seeding-failure notice or a cached API client can still carry it, so its copy is kept and still renders.
  *
- *  SEEDING_BESTNTH_NO_SUPPLIER and SEEDING_POOL_RESULTS_MISSING (W5 app PR B T4, K19): see BEST_NTH_REFUSAL_CODES below. */
+ *  SEEDING_BESTNTH_NO_SUPPLIER and SEEDING_POOL_RESULTS_MISSING (W5 app PR B T4, K19): see BEST_NTH_REFUSAL_CODES below.
+ *
+ *  SEEDING_POOL_SEPARATION_IMPOSSIBLE, SEEDING_PAGE_PLAYOFF_NEEDS_FOUR and SEEDING_CROSS_POOL_DRAW_INVALID (W5 app PR B T5, K22):
+ *  see CROSS_POOL_REFUSAL_CODES below. */
 export const SEEDING_ERROR_CODES = [
   "SEEDING_MAP_SLOT_INVALID",
   "SEEDING_MAP_SOURCE_INVALID",
@@ -118,6 +121,9 @@ export const SEEDING_ERROR_CODES = [
   "SEEDING_FIRSTLOSSES_DE_SOURCE",
   "SEEDING_BESTNTH_NO_SUPPLIER",
   "SEEDING_POOL_RESULTS_MISSING",
+  "SEEDING_POOL_SEPARATION_IMPOSSIBLE",
+  "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR",
+  "SEEDING_CROSS_POOL_DRAW_INVALID",
 ] as const;
 export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
 
@@ -128,6 +134,13 @@ export type SeedingErrorCode = (typeof SEEDING_ERROR_CODES)[number];
  *  attach every pool's results; the sweep in pool-results-seam.test.ts pins that), mapped by name so a regression is named. A
  *  completion that trips either carries the code as `cause` inside STAGE_COMPLETED_SEEDING_FAILED (completed-seeding-failed.ts). */
 export const BEST_NTH_REFUSAL_CODES: ReadonlySet<string> = new Set(["SEEDING_BESTNTH_NO_SUPPLIER", "SEEDING_POOL_RESULTS_MISSING"]);
+
+/** W5 app PR B T5 (K22; ruling 281, RB5-D4): the cross-pool draw's refusals (`crossPoolRefusal`, usecases/stages/cross-pool-draw.ts).
+ *  SEEDING_POOL_SEPARATION_IMPOSSIBLE: no ordering of the rank tiers keeps pool-mates apart in round one ({pool} the largest supplier,
+ *  {count} of {entrants}). SEEDING_PAGE_PLAYOFF_NEEDS_FOUR: a page playoff fed {entrants}. SEEDING_CROSS_POOL_DRAW_INVALID: the draw's
+ *  own input refusals ({reason}: tier_invalid, duplicate_entrant, ...) - the app builds that input, so these name a wiring fault. A
+ *  completion that trips one carries the code as `cause` inside STAGE_COMPLETED_SEEDING_FAILED, as the best-Nth ones do. */
+export const CROSS_POOL_REFUSAL_CODES: ReadonlySet<string> = new Set(["SEEDING_POOL_SEPARATION_IMPOSSIBLE", "SEEDING_PAGE_PLAYOFF_NEEDS_FOUR", "SEEDING_CROSS_POOL_DRAW_INVALID"]);
 
 function isSeedingErrorCode(code: string): code is SeedingErrorCode {
   return (SEEDING_ERROR_CODES as readonly string[]).includes(code);

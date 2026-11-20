@@ -17,6 +17,7 @@ import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
 import {
   completeStage,
+  computeSeedProposal,
   confirmSeedProposal,
   createStages,
   generateStageFixtures,
@@ -662,8 +663,12 @@ describe.skipIf(!HAS_DB)("D4a/P5 — a bye seed owns TWO destination slots (#554
       await generateStageFixtures(auth, groupStageId);
       await decideAllGroupFixtures(auth, groupStageId, entrantBySeed);
       const result = await completeStage(auth, groupStageId);
-      const [proposal] = await sql<{ id: string }[]>`
-        select id from stage_seed_proposals where id = ${result.seed_proposal!.id}`;
+      // W5 app PR B T5 (ruling 281): pool-mates level across pools are ordered by the destination's STORED draw seed, minted per
+      // stage - so two independent runs fill alike given the same stored seed. Both hold one here (the draft's, then Recompute).
+      await sql`update stage_seed_proposals set computed = jsonb_set(computed, '{crossPoolDraw,seed}', '12345'::jsonb)
+                 where id = ${result.seed_proposal!.id} and computed ? 'crossPoolDraw'`;
+      const proposal = await computeSeedProposal(auth, koStageId);
+      expect(proposal.computed.crossPoolDraw?.seed, "a two-pool source is drawn across the pools, with the stored seed").toBe(12345);
       const confirmed = await confirmSeedProposal(auth, koStageId, { proposalId: proposal.id });
       const seedOfEntrant = new Map([...entrantBySeed.entries()].map(([seed, id]) => [id, seed]));
       // Observable outcome only — never Postgres row order: which ORIGINAL

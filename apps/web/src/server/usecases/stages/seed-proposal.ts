@@ -18,6 +18,7 @@ import { fillSlot, resolveBracketSeats } from "./bracket-seats";
 import { knockoutRefusal } from "../knockout-refusal";
 import { writeProgressionSetupFixtures } from "./setup-fixtures";
 import { isFirstLossProgression, reseedPlateQualifiers } from "../plate-field";
+import { drawAcrossPools, preBumpBestNthDraft, type CrossPoolRefused } from "./cross-pool-draw";
 import {
   nonRealCarrySource,
   carrySourceRefusal,
@@ -55,6 +56,9 @@ export interface SeedProposalOut {
     standingsHash: string;
     /** W4 T8 (RB4-E5/T4): a plate configured with a third-place match whose field gave under two real semi-finals - drawn without it. */
     thirdPlaceDropped?: true;
+    /** W5 app PR B T5 (FX-G5, ruling 281): the seats were drawn across the source's pools with this stored draw seed
+     *  (`drawAcrossPools`); the stage card shows it (R24 pick 18 A). Absent: not a pooled field, nothing drawn. */
+    crossPoolDraw?: { seed: number; refused?: CrossPoolRefused };
   };
 }
 
@@ -171,7 +175,12 @@ export async function computeSeedProposal(
     // and a direct propose is refused by name rather than writing an empty draw.
     if (firstLossPlate && resolvedProgression.qualifiers.length < 2) throw knockoutRefusal("PLATE_FIELD_TOO_SMALL");
     if (firstLossPlate) await writeProgressionSetupFixtures(tx, stageId, { checkSeats: true });
-    const qualifiers = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
+    const resolvedSeats = firstLossPlate ? await reseedPlateQualifiers(tx, stage, resolvedProgression.qualifiers) : resolvedProgression.qualifiers;
+    // W5 app PR B T5 (FX-G5): a knockout fed from two or more pools seats round one across the pools, its level runs drawn with the
+    // stage's stored seed (`drawAcrossPools`; null - today's seats - for any other field). Over the FULL slate, before the departed
+    // filter below, so the drawn geometry is the one the TBD lines hold.
+    const crossPool = firstLossPlate ? null : await drawAcrossPools(tx, stage, progression, resolvedSeats, tables);
+    const qualifiers = crossPool?.qualifiers ?? resolvedSeats;
     // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
     await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 
@@ -295,6 +304,7 @@ export async function computeSeedProposal(
       standingsHash: standingsHash(poolTableRowsAcrossSources(tables)),
       // RB4-E5/T4: the plate asked for a third-place match and its field gave under two real semi-finals, so it was drawn without.
       ...(firstLossPlate && stage.config.thirdPlace === true && resolvedProgression.qualifiers.length < 4 ? { thirdPlaceDropped: true as const } : {}),
+      ...(crossPool !== null ? { crossPoolDraw: { seed: crossPool.seed, ...(crossPool.refused !== undefined ? { refused: crossPool.refused } : {}) } } : {}),
     };
 
     if (opts.refreshSameSlate) {
@@ -364,6 +374,9 @@ export async function getSeedProposal(auth: AuthCtx, stageId: string): Promise<S
   });
 }
 
+/** F11: thrown inside the confirm transaction for a pre-bump best-Nth draft; caught outside it, where the re-proposal runs. */
+class PreBumpDraft extends Error {}
+
 export interface ConfirmSeedProposalOut {
   proposalId: string;
   filled: number;
@@ -410,6 +423,12 @@ export async function confirmSeedProposal(
     if (proposal.status === "stale") {
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
     }
+    // W5 app PR B T5 (RB5-D4, RB5-D10; K22): a draft whose cross-pool draw was refused is never confirmed - same-pool round one
+    // is not seated silently. Named, with the numbers the card's band shows.
+    const refused = proposal.computed.crossPoolDraw?.refused;
+    if (refused !== undefined) {
+      throw new HttpError(422, "no ordering of the qualifiers keeps pool-mates apart in round one", refused.code, refused.vars);
+    }
 
     // Step 1 — freshness. A standings override could have landed between the
     // draft's compute and this request; re-derive the hash rather than trust
@@ -419,6 +438,9 @@ export async function confirmSeedProposal(
       await tx`update stage_seed_proposals set status = 'stale' where id = ${proposal.id}`;
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
     }
+    // W5 app PR B T5 (F11, Review Focus 4): a 9.x draft over unequal pools with a best-Nth seat and no basis is re-proposed, never
+    // confirmed (below, outside this transaction, which holds the division lock the re-proposal takes).
+    if (preBumpBestNthDraft(progression, resolved.map((r) => r.id), tables, proposal.computed.qualifiers)) throw new PreBumpDraft();
 
     // Step 2 — apply edits + tiePicks over the computed slate.
     const bySlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId] as const));
@@ -752,6 +774,12 @@ export async function confirmSeedProposal(
       filledFixtureIds: [...filledFixtureIds],
       kind: stage.kind,
     };
+  }).catch(async (e: unknown) => {
+    if (!(e instanceof PreBumpDraft)) throw e;
+    const fresh = await computeSeedProposal(auth, stageId);
+    throw new HttpError(409, "this draft was made before the unequal-pool comparison changed; it was re-proposed - review the new draft", "SEEDING_PROPOSAL_STALE", {
+      reproposed: fresh.id,
+    });
   });
 
   log.info(

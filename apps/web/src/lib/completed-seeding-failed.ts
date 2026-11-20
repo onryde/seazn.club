@@ -6,7 +6,7 @@
 import { ApiV1Error } from "@/lib/client-v1";
 import type { Locale } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
-import { BEST_NTH_REFUSAL_CODES, seedingErrorMessage } from "@/lib/seeding-error";
+import { BEST_NTH_REFUSAL_CODES, CROSS_POOL_REFUSAL_CODES, seedingErrorMessage } from "@/lib/seeding-error";
 import { undoRefusalText } from "@/lib/undo-refusals";
 
 export const STAGE_COMPLETED_SEEDING_FAILED = "STAGE_COMPLETED_SEEDING_FAILED";
@@ -25,7 +25,8 @@ export function completedSeedingFailedText(
     cause === "RR_CUT_EXCEEDS_FIELD"
       ? undoRefusalText(cause, err.extra, msg)
       : // W5 app PR B T4 (K19): a best-Nth cut nobody supplies, in the seeding copy (errors.json), with its numbers.
-        typeof cause === "string" && BEST_NTH_REFUSAL_CODES.has(cause)
+        // W5 app PR B T5 (K22): so is a cross-pool draw that cannot separate the pools.
+        typeof cause === "string" && (BEST_NTH_REFUSAL_CODES.has(cause) || CROSS_POOL_REFUSAL_CODES.has(cause))
         ? seedingErrorMessage(locale, cause, err.message, err.extra as Record<string, string | number> | undefined)
         : err.message;
   return msg("schedule.error.completedSeedingFailed", { reason });

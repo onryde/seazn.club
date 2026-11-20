@@ -176,7 +176,10 @@ describe.skipIf(!HAS_DB)("pool results reach best-Nth on both seeding paths (W5 
     expect(handed.crossGroup.gamePoints, "the source's game-points rule is forwarded").toBeDefined();
     for (const r of results) expect(() => handed.crossGroup.gamePoints!(r)).not.toThrow();
     const { bestNth } = await proposedBestNth(s);
-    expect(bestNth, "RB5-U1, then the source's lots over the level runners-up").toEqual(drawOf(rngSeed, candidates).slice(0, 3));
+    // WHO qualifies is the source's cascade (RB5-U1, then its lots over the level runners-up; X-PD-8); WHERE the level three sit is
+    // the knockout's own stored draw seed (ruling 281, W5 app PR B T5), so the seats are compared as a set.
+    expect(new Set(bestNth), "RB5-U1, then the source's lots over the level runners-up").toEqual(new Set(drawOf(rngSeed, candidates).slice(0, 3)));
+    expect(bestNth, "three seats").toHaveLength(3);
   });
 });
 

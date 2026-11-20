@@ -446,7 +446,10 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     const r = await rig(GROUPS4);
     const poolOf = (seed: number) => rowsOf(r.srcId).then((rows) => rows.find((f) => [f.home_entrant_id, f.away_entrant_id].includes(r.idOf.get(seed)!))!.pool_id);
     expect(await poolOf(4), "premise: E4 and E5 share a pool").toBe(await poolOf(5));
-    expect(await slateOf(r, r.confirmedId), "premise: top two of each pool, wave-major (A1, B1, A2, B2)").toEqual([1, 2, 4, 3]);
+    // premise: top two of each pool, wave-major (A1, B1, A2, B2). The two winners are level across the pools, so their order is the
+    // knockout's stored draw seed's (ruling 281, W5 app PR B T5): each wave is compared as a set.
+    const slate = await slateOf(r, r.confirmedId);
+    expect([new Set(slate.slice(0, 2)), new Set(slate.slice(2))], "premise: top two of each pool, wave-major (A1, B1 | A2, B2)").toEqual([new Set([1, 2]), new Set([4, 3])]);
     await correct(r, 4, 5, 5); // pool A: E1 9, E5 6, E4 3, E8 0: E5 goes through instead of E4
     expect(await statusOf(r.confirmedId)).toBe("stale");
     await expectDayOne(r);

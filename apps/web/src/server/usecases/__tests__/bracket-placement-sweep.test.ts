@@ -183,6 +183,14 @@ const KNOWN_REFUSALS: Array<{ re: RegExp; expected: number; why: string }> = [
     expected: 0,
     why: "RB5-E6 (the cut gate, W5 T12) under RB5-U7: no groups_ko cut within the field is refused; one that is would be read here and fail its count",
   },
+  {
+    re: /^groups_ko n=\d+ q=3 .*refused \(no ordering of the qualifiers keeps pool-mates apart in round one\)$/,
+    // W5 app PR B T5 (RB5-D10, OWNER 288 REC-12): two pools' winners plus the best runner-up into a 4-draw is refused, and stays
+    // refused, exactly when that runner-up shares the second winner's pool (round one is seed 2 v seed 3; tier 1 keeps its places,
+    // tier 2 has one seat). Measured: the sweep meets it once, n=8 (4/4), where its results make B2 the best runner-up.
+    expected: 1,
+    why: "RB5-D10: groups_ko, two pools, Top 3 - the best runner-up from the second winner's pool cannot be kept off her in round one",
+  },
 ];
 
 /** Every problem with a list of refusals: a rule that covered the wrong number of cases, and a refusal no rule has read. Empty = clean. */
@@ -467,12 +475,14 @@ describe("the sweep's refusal audit (no database)", () => {
     ...THIRDS.map(SMALL_PLATE),
     // K17 (W5 app PR B T4; RB5-U7): the groups_ko cut refusal (n=17, 3 pools, q=16) is gone - the 6-pools supply the best 6th.
     ...CUTS,
+    // W5 app PR B T5 (RB5-D10): two pools' winners and B's runner-up into a 4-draw.
+    "groups_ko n=8 q=3 third=false: seeding knockout from group refused (no ordering of the qualifiers keeps pool-mates apart in round one)",
   ];
 
-  it("accepts exactly what the sweep meets today (72 refusals: 31 + 2 + 2 + 2 + 35; the Plate refuses none, T8-b; no groups_ko cut, K17)", () => {
+  it("accepts exactly what the sweep meets today (73 refusals: 31 + 2 + 2 + 2 + 35 + 1; the Plate refuses none, T8-b; no groups_ko cut, K17; one RB5-D10 draw)", () => {
     // 35 cuts: 16 day one + 19 seeded.
     expect(CUTS.length).toBe(35);
-    expect(today().length).toBe(72);
+    expect(today().length).toBe(73);
     expect(auditRefusals(today()).problems).toEqual([]);
   });
 

@@ -2954,6 +2954,8 @@
   "knockout.waiting.placed": "{name} se ha añadido al cuadro.",
   "knockout.drawSeed": "Sorteo aleatorio · n.º {seed}",
   "knockout.drawSeedHint": "Los mismos participantes y este número siempre producen este cuadro. Reconstruir enfrentamientos lo conserva.",
+  "knockout.crossPoolDrawSeed": "Sorteo entre grupos · n.º {seed}",
+  "knockout.crossPoolDrawSeedHint": "Ningún partido de la primera ronda enfrenta a participantes del mismo grupo. Los participantes empatados entre grupos se ordenan con este número. Los mismos participantes y este número siempre producen este sorteo. Reconstruir enfrentamientos lo conserva.",
   "knockout.waiting.withdrawBody": "{name} todavía no está en el cuadro, así que ningún partido se ve afectado. Pasa a figurar como retirado en la lista de participantes.",
   "knockout.lateEntry.luckyLoser": "{lucky} ocupa el puesto de {name} en la ronda 1, como mejor perdedor.",
   "stage.err.swissRoundsRequired": "Una fase suiza necesita un número de rondas antes de poder guardarse. Pon Rondas en 1 o más y vuelve a aplicar.",

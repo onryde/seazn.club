@@ -29,7 +29,7 @@ import { readStagePins, readStageSeating } from "../rank-override";
 import { inTheField } from "@/lib/entrant-field";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
-import { BEST_NTH_REFUSAL_CODES } from "@/lib/seeding-error";
+import { BEST_NTH_REFUSAL_CODES, CROSS_POOL_REFUSAL_CODES } from "@/lib/seeding-error";
 
 /**
  * W4 T6 (AN-2; the app half of engine row X-CH-7): the lines of a BRACKET stage still owed a result, in bracket order
@@ -299,7 +299,7 @@ async function progressCompletedStage(
         // desk says that sentence in the reader's language instead of the server's English reason.
         // W5 app PR B T4 (K19): so does a best-Nth cut nobody can supply (SEEDING_BESTNTH_NO_SUPPLIER), said in the seeding copy.
         const cause =
-          err instanceof HttpError && err.code !== undefined && (isRoundRobinRefusalCode(err.code) || BEST_NTH_REFUSAL_CODES.has(err.code))
+          err instanceof HttpError && err.code !== undefined && (isRoundRobinRefusalCode(err.code) || BEST_NTH_REFUSAL_CODES.has(err.code) || CROSS_POOL_REFUSAL_CODES.has(err.code))
             ? { ...err.extra, cause: err.code }
             : {};
         throw new HttpError(

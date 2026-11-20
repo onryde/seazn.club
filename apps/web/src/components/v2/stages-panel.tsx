@@ -529,6 +529,9 @@ interface Props {
   /** W4 T20 (K5 "shown"; R24 pick 3A): each stage's draw seed, stage id -> the seed its newest Generate drew with
    *  (`listStageDrawSeeds`). A stage that drew nothing is absent; only a knockout-family card shows one. */
   drawSeeds?: Readonly<Record<string, number>>;
+  /** W5 app PR B T5 (FX-G5; R24 pick 18 A): each stage whose seats were drawn across its source's pools - the stored draw seed and
+   *  any named refusal (`listCrossPoolDraws`). Absent for a stage fed from one pool or a league. */
+  crossPoolDraws?: Readonly<Record<string, { seed: number; refused?: { code: string; vars: Record<string, string | number> } }>>;
   /** B4 T10 (C35): the stages whose newest seed proposal drew a plate WITHOUT its third-place match (`thirdPlaceDropped`). */
   thirdPlaceDropped?: readonly string[];
   /** B4 M-7: the knockout stages that have started by the server's rule (`stageHasStarted`); the Third place control is read-only there. */
@@ -685,7 +688,7 @@ function scrollIntoViewIfHidden(el: HTMLElement) {
   el.scrollIntoView({ block: "nearest", behavior: reduce ? "auto" : "smooth" });
 }
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, entrantBadges, headlines, pools, activeEntrantIds, entrantSeeds, entrantSwissFirstRounds, venues = [], rosterDrift = {}, canEdit, canSettle, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null, matchDayHref = null, rulesStrip, initialOpenPanels, attentionStageIds, divisionStatus, swissRoundControls, entrantStatuses, swissCutDrift, knockoutCutDrift, tableCutDrift, knockoutWaiting = [], tableWaiting = [], tableLatePools = null, drawSeeds = {}, crossPoolDraws = {}, thirdPlaceDropped = [], startedKnockoutStageIds = [] }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1732,6 +1735,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
         const tableWaitingHere = tableWaiting.filter((w) => w.stageId === stage.id);
         // W4 T20: a drawn knockout's seed, by the card's own stage id (`0` is a seed: an absent one is `undefined`).
         const drawSeed = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? drawSeeds[stage.id] : undefined;
+        // W5 app PR B T5: a knockout fed from groups, drawn across the pools with this stored seed (`0` is a seed).
+        const crossPool = ROOT_KNOCKOUT_KINDS.includes(stage.kind) ? crossPoolDraws[stage.id] : undefined;
         // F3 Task 5 (5a) — only ever non-empty for the one stage
         // getStageRosterDrift finds eligible (usecases/stages/roster-drift.ts); every
         // other stage's entry is absent or both arrays empty, so this is a
@@ -1999,6 +2004,25 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                         {msg("knockout.drawSeedHint")}
                       </p>
                     </>
+                  )}
+                  {/* W5 app PR B T5 (FX-G5, ruling 281; R24 pick 18 A): the same muted pair for a knockout fed from groups - the stored
+                      seed its round one was drawn across the pools with, and what that number orders. Both viewers see it. */}
+                  {!folded && crossPool !== undefined && crossPool.refused === undefined && (
+                    <>
+                      <p data-testid="stage-cross-pool-draw-seed" data-draw-seed={crossPool.seed} className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.crossPoolDrawSeed", { seed: crossPool.seed })}
+                      </p>
+                      <p data-testid="stage-cross-pool-draw-seed-hint" className="w-full min-w-0 text-xs text-slate-500">
+                        {msg("knockout.crossPoolDrawSeedHint")}
+                      </p>
+                    </>
+                  )}
+                  {/* R24 pick 18 A: the refused draw as a red band inside the card, where the proposal waits - the cause and the two ways
+                      out, in the reader's language (errors.json). The confirm refuses the same code. */}
+                  {!folded && crossPool?.refused !== undefined && (
+                    <p role="alert" data-testid="stage-cross-pool-refused" data-code={crossPool.refused.code} className="w-full min-w-0 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                      {seedingErrorMessage(locale, crossPool.refused.code, crossPool.refused.code, crossPool.refused.vars)}
+                    </p>
                   )}
                 </header>
 

@@ -251,7 +251,8 @@ export function ProgressionPanel({
 
   function reportError(err: unknown) {
     setError(
-      err instanceof ApiV1Error ? seedingErrorMessage(locale, err.code, err.message) : msg("progression.genericError"),
+      // W5 app PR B T5 (K22): a cross-pool refusal names its numbers ({pool}, {count}, {entrants}); `extra` carries them.
+      err instanceof ApiV1Error ? seedingErrorMessage(locale, err.code, err.message, err.extra as Record<string, string | number> | undefined) : msg("progression.genericError"),
     );
   }
 

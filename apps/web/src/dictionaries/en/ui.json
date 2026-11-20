@@ -2954,6 +2954,8 @@
   "knockout.waiting.placed": "{name} was added to the bracket.",
   "knockout.drawSeed": "Random draw · #{seed}",
   "knockout.drawSeedHint": "The same entrants and this number always produce this bracket. Rebuild keeps it.",
+  "knockout.crossPoolDrawSeed": "Cross-pool draw · #{seed}",
+  "knockout.crossPoolDrawSeedHint": "No round-one match is between entrants from the same group. Entrants level across groups are ordered by this number. The same entrants and this number always produce this draw. Rebuild keeps it.",
   "knockout.waiting.withdrawBody": "{name} isn't in the bracket yet, so no match is affected. They stay on the entrant list as withdrawn.",
   "knockout.lateEntry.luckyLoser": "{lucky} takes {name}'s place in round 1, as the best loser.",
   "stage.err.swissRoundsRequired": "A Swiss stage needs a number of rounds before it can be saved. Set Rounds to 1 or more and apply again.",

@@ -28,7 +28,7 @@ import { divisionQualification, qualificationFixtures } from "@/server/public-si
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { listSwissRoundControls } from "@/server/usecases/swiss-rounds-admin";
 import { getSwissCutDrift } from "@/server/usecases/swiss-cut-drift";
-import { listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
+import { listCrossPoolDraws, listKnockoutWaiting, listStageDrawSeeds, listStartedKnockoutStageIds, listThirdPlaceDropped } from "@/server/usecases/knockout-desk";
 import { listTableWaiting, readTableLatePools } from "@/server/usecases/table-desk";
 import { swissCutDriftStageIds } from "@/lib/swiss-cut-drift";
 import { listNamedPools } from "@/server/usecases/stage-table-snapshot";
@@ -468,6 +468,10 @@ export default async function DivisionPage({
   // Information, so read for a viewer as well as an organiser; this tab only, and only where a knockout-family stage exists.
   const drawSeeds =
     tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listStageDrawSeeds(auth, id) : {};
+  // W5 app PR B T5 (FX-G5; R24 pick 18 A): the stored seed a knockout fed from groups was drawn across the pools with - "Cross-pool
+  // draw · #…" under its header, or its refusal as a red band. Read for a viewer as well; this tab only, where a knockout-family stage exists.
+  const crossPoolDraws =
+    tab === "fixtures" && stages.some((s) => ROOT_KNOCKOUT_KINDS.includes(s.kind)) ? await listCrossPoolDraws(auth, id) : {};
   // B4 T10 (C35): the plate stages that drew without the third-place match they were asked for - one line on the card.
   const thirdPlaceDropped =
     tab === "fixtures" && stages.some((s) => s.kind === "knockout") ? await listThirdPlaceDropped(auth, id) : [];
@@ -1158,6 +1162,7 @@ export default async function DivisionPage({
               tableWaiting={tableWaiting}
               tableLatePools={tableWaitingPools}
               drawSeeds={drawSeeds}
+              crossPoolDraws={crossPoolDraws}
               thirdPlaceDropped={thirdPlaceDropped}
               startedKnockoutStageIds={startedKnockoutStageIds}
               knockoutCutDrift={knockoutCutDrift}
