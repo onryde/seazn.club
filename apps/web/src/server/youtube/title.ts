@@ -5,7 +5,7 @@
 //   - snippet.title: "must be between 1 and 100 characters long" (`invalidTitle`); the videos resource's title — a broadcast
 //     is one video — may hold any UTF-8 character "except < and >". Counted in CODE POINTS (Array.from), as the fake and
 //     the live driver count it, so an emoji is one character and a cut never splits a surrogate pair.
-//   - snippet.description: up to 5000 bytes, and the same "< and >" rule. Two short paragraphs and two URLs are far inside that.
+//   - snippet.description: up to 5000 bytes, and the same "< and >" rule. The match facts give way to that limit (see broadcastDescription).
 // Shape: `<Home> v <Away> · <Division> · <Competition>`. Over the limit, the COMPETITION gives way first (cut with an ellipsis,
 // or dropped when too little of it would show), then the division, and only then the match itself.
 
@@ -58,12 +58,52 @@ export function broadcastTitle(a: {
   return fit(match, TITLE_MAX_CHARS) ?? chars(match).slice(0, TITLE_MAX_CHARS).join("");
 }
 
-/** Two paragraphs, every part without `<` or `>`: the line and the public match URL, a blank line, then "Powered by Seazn Club"
- *  and the site's own link (owner request 2026-10-29). Every org gets both, `dashboard.branding` orgs included (owner, 2026-10-29).
+/** YouTube's description limit (liveBroadcasts.insert / videos `snippet.description`): 5000 BYTES. The brief counts characters;
+ *  bytes is the stricter of the two, so a description inside it is inside both. */
+const DESCRIPTION_MAX_BYTES = 5000;
+const bytes = (s: string): number => new TextEncoder().encode(s).length;
+
+/** `s` in at most `room` bytes: whole when it fits, else its beginning plus an ellipsis, or null when fewer than MIN_KEPT_CHARS
+ *  of it would show. Cuts on code points, so a surrogate pair is never split. */
+function fitBytes(s: string, room: number): string | null {
+  if (bytes(s) <= room) return s;
+  const kept: string[] = [];
+  let used = bytes(ELLIPSIS);
+  for (const c of chars(s)) {
+    used += bytes(c);
+    if (used > room) break;
+    kept.push(c);
+  }
+  return kept.length < MIN_KEPT_CHARS ? null : kept.join("").trimEnd() + ELLIPSIS;
+}
+
+/** The match's facts (already localised, in order: sport and round, competition, venue when present, date and time), a blank
+ *  line, the live-score line with the public match URL, a blank line, then ONE footer — "Scored live with Seazn Club · <site>"
+ *  (owner request 2026-10-29: every org gets it, `dashboard.branding` orgs included). Every part is without `<` or `>`.
  *  A match with no public page (`matchUrl` null: a private competition's /live/... URL answers "This link is no longer valid")
- *  carries no live-score line, only the powered-by paragraph — a viewer is never handed a dead link. */
-export function broadcastDescription(a: { line: string; matchUrl: string | null; poweredBy: string; siteUrl: string }): string {
+ *  carries no live-score line — a viewer is never handed a dead link. Over the 5000 limit the facts give way, the LAST first
+ *  (trimmed, then dropped); the match link and the footer are never cut. */
+export function broadcastDescription(a: {
+  line: string; matchUrl: string | null; poweredBy: string; siteUrl: string; facts?: string[];
+}): string {
   const url = (u: string): string => u.replace(/[<>]/g, "");
-  const powered = `${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
-  return a.matchUrl === null ? powered : `${clean(a.line)} ${url(a.matchUrl)}\n\n${powered}`;
+  const footer = `${clean(a.poweredBy)} · ${url(a.siteUrl)}`;
+  const tail = a.matchUrl === null ? footer : `${clean(a.line)} ${url(a.matchUrl)}\n\n${footer}`;
+  const facts = (a.facts ?? []).map(clean).filter((f) => f !== "");
+
+  // Room for the facts: what is left of the limit after the tail and the blank line that separates them.
+  let room = DESCRIPTION_MAX_BYTES - bytes(tail) - 2;
+  const kept: string[] = [];
+  for (const [i, fact] of facts.entries()) {
+    const need = bytes(fact) + (i === 0 ? 0 : 1);   // a "\n" joins each fact to the one before
+    if (need <= room) {
+      kept.push(fact);
+      room -= need;
+      continue;
+    }
+    const cut = fitBytes(fact, room - (i === 0 ? 0 : 1));
+    if (cut !== null) kept.push(cut);
+    break;   // everything after the first fact that did not fit is dropped: the last facts go first
+  }
+  return kept.length === 0 ? tail : `${kept.join("\n")}\n\n${tail}`;
 }

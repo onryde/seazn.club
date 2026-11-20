@@ -11,6 +11,10 @@
 //
 // Sport: not applicable — a title names entrants, a division and a competition, never a sport rule.
 import { describe, expect, it } from "vitest";
+import en from "@/dictionaries/en/ui.json";
+import es from "@/dictionaries/es/ui.json";
+import fr from "@/dictionaries/fr/ui.json";
+import nl from "@/dictionaries/nl/ui.json";
 import { broadcastDescription, broadcastTitle } from "@/server/youtube/title";
 
 /** YouTube's title limit, typed from liveBroadcasts.insert (plan P11). */
@@ -148,5 +152,86 @@ describe("broadcastDescription (spec §6.5)", () => {
     const paragraphs = d.split("\n\n");
     expect(paragraphs).toHaveLength(2);
     expect(paragraphs[1]).toBe(`${base.poweredBy} · ${site}`);
+  });
+});
+
+// Task 5 (Seazn-hosted video plan, Phase 0): the match facts. Expected strings are typed from the brief's shape —
+// facts block, blank line, match link line, blank line, ONE footer — and the dictionaries, never read back from title.ts.
+describe("broadcastDescription facts (Phase 0 T5)", () => {
+  const url = "https://seazn.club/live/club/cup/open/fixtures/abc";
+  const site = "https://seazn.club";
+  const DESC_MAX = 5000;
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+  const facts = ["Badminton · Semi-finals", "Spring Cup", "Hall 2", "Saturday, December 5, 2026 at 2:30 PM GMT"];
+
+  it("facts block, blank line, match link line, blank line, one footer", () => {
+    const d = broadcastDescription({ line: "Live score and results:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts });
+    expect(d).toBe(`${facts.join("\n")}\n\nLive score and results: ${url}\n\nScored live with Seazn Club · ${site}`);
+    expect(d.split(url)).toHaveLength(2);   // exactly one match link
+  });
+
+  it("a private competition (matchUrl null): facts then the footer; no link and no line", () => {
+    const d = broadcastDescription({ line: "Live score and results:", matchUrl: null, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts });
+    expect(d).toBe(`${facts.join("\n")}\n\nScored live with Seazn Club · ${site}`);
+    expect(d).not.toContain("/live/");
+  });
+
+  it("EMPTY CASE: no facts (undefined or []) is the old two-paragraph shape, with no leading blank line", () => {
+    const base = { line: "Live score and results:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site };
+    const want = `Live score and results: ${url}\n\nScored live with Seazn Club · ${site}`;
+    expect(broadcastDescription(base)).toBe(want);
+    expect(broadcastDescription({ ...base, facts: [] })).toBe(want);
+    expect(broadcastDescription({ ...base, facts: ["  ", ""] })).toBe(want);
+  });
+
+  it("with and without a venue line, the other facts keep their order", () => {
+    const withVenue = broadcastDescription({ line: "L:", matchUrl: null, poweredBy: "P", siteUrl: site, facts: ["A", "B", "Hall 2", "D"] });
+    const without = broadcastDescription({ line: "L:", matchUrl: null, poweredBy: "P", siteUrl: site, facts: ["A", "B", "D"] });
+    expect(withVenue.split("\n\n")[0]).toBe("A\nB\nHall 2\nD");
+    expect(without.split("\n\n")[0]).toBe("A\nB\nD");
+  });
+
+  it("no '<' or '>' survives in any fact", () => {
+    const d = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "P", siteUrl: site, facts: ["<b>Cup</b>", "Hall > 2"] });
+    expect(d).not.toMatch(/[<>]/);
+    expect(d.startsWith("bCup/b\nHall  2\n\n")).toBe(false);   // whitespace collapses: "Hall 2"
+    expect(d.startsWith("bCup/b\nHall 2\n\n")).toBe(true);
+  });
+
+  it("a 300-character competition name and a flood of facts stay within 5000 (bytes and characters); the link and footer are never cut, the LAST fact goes first", () => {
+    const comp = "C".repeat(300);
+    const d = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts: ["Badminton · Final", comp, "Hall", "When"] });
+    expect(Array.from(d).length).toBeLessThanOrEqual(DESC_MAX);
+    expect(d).toContain(comp);   // 300 fits: nothing is cut when there is room
+
+    const huge = Array.from({ length: 40 }, (_, i) => `${i}`.padEnd(200, "x"));   // 8000 characters of facts
+    const cut = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "Scored live with Seazn Club", siteUrl: site, facts: huge });
+    expect(Array.from(cut).length).toBeLessThanOrEqual(DESC_MAX);
+    expect(bytes(cut)).toBeLessThanOrEqual(DESC_MAX);
+    expect(cut).toContain(`L: ${url}`);
+    expect(cut.endsWith(`Scored live with Seazn Club · ${site}`)).toBe(true);
+    expect(cut.startsWith(huge[0]!)).toBe(true);   // the first fact survives whole
+    expect(cut).not.toContain(huge[39]!);          // the last fact went first
+  });
+
+  it("multi-byte text is capped in bytes too (YouTube counts 5000 bytes)", () => {
+    const wide = Array.from({ length: 30 }, () => "é".repeat(200));   // 2 bytes each: 12000 bytes
+    const d = broadcastDescription({ line: "L:", matchUrl: url, poweredBy: "P", siteUrl: site, facts: wide });
+    expect(bytes(d)).toBeLessThanOrEqual(DESC_MAX);
+    expect(d.endsWith(`P · ${site}`)).toBe(true);
+  });
+
+  it("each of the four locales' footer words come through verbatim from the dictionaries", () => {
+    let checked = 0;
+    for (const dict of [en, es, fr, nl] as Record<string, string>[]) {
+      const words = dict["streaming.youtube.broadcast.scoredLive"]!;
+      expect(words).toBeTruthy();
+      expect(words).toContain("Seazn Club");
+      const d = broadcastDescription({ line: dict["streaming.youtube.broadcast.descriptionLine"]!, matchUrl: url, poweredBy: words, siteUrl: site, facts });
+      expect(d.endsWith(`\n\n${words} · ${site}`)).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    for (const dict of [es, fr, nl] as Record<string, string>[]) expect(dict["streaming.youtube.broadcast.scoredLive"]).not.toBe(en["streaming.youtube.broadcast.scoredLive"]);
   });
 });

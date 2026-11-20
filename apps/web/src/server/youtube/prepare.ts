@@ -52,6 +52,7 @@ import { autoBackoffRefusalCode, opensAutoBackoff } from "./auto-backoff";
 import { clearAutoBackoff, freshLiveRefusal, recordAutoBackoff, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
+import { readDescriptionFacts } from "./description-facts";
 import { broadcastDescription, broadcastTitle } from "./title";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
@@ -302,6 +303,7 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
      where f.id = ${ctx.fixtureId} and c.org_id = ${ctx.orgId}`;
   if (!f) throw new HttpError(404, "fixture not found");
   const locale = toLocale(f.default_locale);
+  const facts = await readDescriptionFacts({ fixtureId: ctx.fixtureId, orgId: ctx.orgId, competition: f.competition }, locale);
   return {
     locale,
     title: broadcastTitle({
@@ -313,8 +315,9 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
       // The live-score link only when the public fixture page opens: a private competition's and an archived division's
       // /live/... URL 404s ("This link is no longer valid"), so no line is better than a dead one.
       matchUrl: f.linkable ? `${siteOrigin()}${routes.publicFixture(f.org_slug, f.comp_slug, f.div_slug, ctx.fixtureId)}` : null,
-      poweredBy: msgFor(locale, "streaming.youtube.broadcast.poweredBy"),
+      poweredBy: msgFor(locale, "streaming.youtube.broadcast.scoredLive"),
       siteUrl: siteOrigin(),
+      facts,
     }),
   };
 }

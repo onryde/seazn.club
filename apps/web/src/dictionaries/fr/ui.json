@@ -1941,7 +1941,7 @@
   "streaming.youtube.error.notOffered": "Cette chaîne ne fait pas partie de celles que ce compte Google propose. Choisissez à nouveau ou recommencez.",
   "streaming.youtube.error.gone": "Cette chaîne n’est plus connectée. Rechargez la page.",
   "streaming.youtube.broadcast.descriptionLine": "Score en direct et résultats :",
-  "streaming.youtube.broadcast.poweredBy": "Propulsé par Seazn Club",
+  "streaming.youtube.broadcast.scoredLive": "Scores en direct avec Seazn Club",
   "streaming.youtube.streamKeyTitle": "Seazn Club · clé de diffusion {n}",
   "streaming.youtube.part": "Partie {n}",
   "streaming.youtube.replay.region": "Replay du match",
