@@ -1074,3 +1074,73 @@ test("Disconnect stays reachable after the org loses Go live - the restricted St
   await declineCookies(page);
   await expect(page.getByTestId("nav-streaming"), "the nav no longer offers Streaming").toHaveCount(0);
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 5. Phase 0 (YouTube channel safety), Task 4: the pre-Go-live notice. WRITTEN, NOT RUN locally: CI dispatches it.
+// ---------------------------------------------------------------------------------------------------------------------
+test("Fixture panel - a young channel's Go live shows the safety notice first; Go live anyway starts, a pasted key never asks, at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 8, acts: 40 }));
+  const r = await rig(page, { match: true });
+  const channelTitle = `Riverside FC ${randomBytes(2).toString("hex")}`;
+  await seedDestinations(page, r, channelTitle, `Court key ${randomBytes(2).toString("hex")}`);
+  // The channel is two days old (the stored creation date the safety route reads first), so it is "young" whatever the fake says.
+  await withDb((sql) => sql`
+    update org_youtube_connections set channel_created_at = now() - interval '2 days' where org_id = ${r.orgId} and channel_title = ${channelTitle}`);
+  // A Go live that starts nothing: the notice is the thing under test, not a broadcast. The refusal is the wire's own, so the panel stays honest.
+  let posts = 0;
+  await page.route("**/api/v1/fixtures/*/stream-sessions", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posts++;
+    await route.fulfill({
+      status: 503, contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: { code: "youtube_unavailable", message: "YouTube refused Go live: youtube_unavailable", connectionId: randomUUID() } }),
+    });
+  });
+  const safetyReads: string[] = [];
+  page.on("request", (req) => { if (req.method() === "GET" && /\/youtube-connections\/[^/]+\/safety$/.test(new URL(req.url()).pathname)) safetyReads.push(req.url()); });
+  let widthsRead = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    const before = { posts, reads: safetyReads.length };
+    const scope = await openPhoneTab(page, r);
+    await pairedPhone(page); // W5: Go live needs a paired phone
+    await openTargetPicker(scope);
+    const channelRow = scope.getByTestId("stream-target-option").filter({ hasText: en("stream.dest.kind.channel", { platform: STREAM_KIND_BRAND.youtube }) });
+    await selectTarget(scope, (await channelRow.getAttribute("data-target-id"))!);
+    await scope.getByTestId("stream-go-live").click();
+    const notice = scope.getByTestId("stream-safety-notice");
+    await expect(notice, `${w}: the notice shows`).toBeVisible({ timeout: ACT_MS * 2 });
+    await expect(notice.getByTestId("stream-safety-text")).toHaveText(en("stream.safety.notice"));
+    expect(posts, `${w}: the warning started nothing`).toBe(before.posts);
+    expect(safetyReads.length, `${w}: one safety read for the tap`).toBe(before.reads + 1);
+    await expect(scope.getByTestId("stream-go-live"), `${w}: non-blocking: Go live is still offered`).toBeVisible();
+    await expectTappable(notice.getByTestId("stream-safety-go-anyway"), `Go live anyway at ${w}`);
+    await expectTappable(notice.getByTestId("stream-safety-cancel"), `Cancel at ${w}`);
+    await expectNoPageScroll(page, `the notice at ${w}`);
+    await shot(page, `safety-notice-${w}`);
+    // Cancel dismisses it and starts nothing.
+    await notice.getByTestId("stream-safety-cancel").click();
+    await expect(notice).toHaveCount(0);
+    expect(posts, `${w}: Cancel started nothing`).toBe(before.posts);
+    // Go live again, then Go live anyway: the start is asked (here refused by the stub), with no second safety read.
+    await scope.getByTestId("stream-go-live").click();
+    await expect(notice).toBeVisible({ timeout: ACT_MS * 2 });
+    await notice.getByTestId("stream-safety-go-anyway").click();
+    await expect.poll(() => posts, { timeout: ACT_MS * 2, message: `${w}: Go live anyway asked the server to start` }).toBe(before.posts + 1);
+    expect(safetyReads.length, `${w}: Go live anyway reads nothing more`).toBe(before.reads + 2);
+    widthsRead++;
+  }
+  expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
+
+  // A pasted key never asks.
+  const scope = await openPhoneTab(page, r);
+  await openTargetPicker(scope);
+  const keyRow = scope.getByTestId("stream-target-option").filter({ hasText: en("stream.dest.kind.key", { platform: STREAM_KIND_BRAND.youtube }) });
+  await selectTarget(scope, (await keyRow.getAttribute("data-target-id"))!);
+  const reads = safetyReads.length;
+  const startedBefore = posts;
+  await scope.getByTestId("stream-go-live").click();
+  await expect.poll(() => posts, { timeout: ACT_MS * 2, message: "a pasted key's Go live is asked at once" }).toBe(startedBefore + 1);
+  expect(safetyReads.length, "a pasted key makes no safety read").toBe(reads);
+  await expect(scope.getByTestId("stream-safety-notice")).toHaveCount(0);
+});
