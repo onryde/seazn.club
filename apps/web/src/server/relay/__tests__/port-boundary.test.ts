@@ -23,7 +23,9 @@ const GUARDED = [join(SERVER, "usecases"), join(SERVER, "relay", "domain")];
 
 /** Every import form that could pull a module in: `from "…"`, a side-effect `import "…"`, a dynamic `import("…")` and
  *  `require("…")`, with or without an extension. Anchored on the quoted SPECIFIER's last path segment. */
-const ADAPTER_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'][^"']*\b(?:runner-fly|fly-client|ingest-cf)(?:\.[cm]?[jt]s)?["']/;
+// Task 22: the replay host's Bunny adapter (`video/replay-bunny.ts`) is held to the same line: the application layer speaks
+// ReplayHost, and only `video/replay-driver.ts` builds the adapter.
+const ADAPTER_IMPORT = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'][^"']*\b(?:runner-fly|fly-client|ingest-cf|replay-bunny)(?:\.[cm]?[jt]s)?["']/;
 
 function walk(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -33,7 +35,7 @@ function walk(dir: string): string[] {
   });
 }
 
-describe("A23 + m2: the application layer and the domain never import a provider adapter (Fly or Cloudflare)", () => {
+describe("A23 + m2: the application layer and the domain never import a provider adapter (Fly, Cloudflare or Bunny)", () => {
   it("the detector fires on a real import of each adapter (the positive twins) and ignores a comment that merely names the file", () => {
     // fakes.ts sits OUTSIDE the guarded trees and legitimately builds a real FlyApiError (lane C A3) and mirrors the
     // Cloudflare adapter's page size (m2) — a real import of each.
@@ -45,13 +47,20 @@ describe("A23 + m2: the application layer and the domain never import a provider
     ];
     for (const form of forms) expect(form, form).toMatch(ADAPTER_IMPORT);
     expect(forms.filter((f) => f.includes("ingest-cf")).length, "the Cloudflare half of the positive twins is not empty").toBe(3);
+    // Task 22: the Bunny adapter — a real import (the driver builds it) and each import form.
+    expect(readFileSync(join(SERVER, "video", "replay-driver.ts"), "utf8")).toMatch(ADAPTER_IMPORT);
+    const bunnyForms = [`import { BunnyReplayHost } from "@/server/video/replay-bunny";`, `await import("../video/replay-bunny.ts")`, `require("./replay-bunny")`];
+    for (const form of bunnyForms) expect(form, form).toMatch(ADAPTER_IMPORT);
+    expect(bunnyForms).toHaveLength(3);
+    expect("// replay-bunny.ts drops heights above 720").not.toMatch(ADAPTER_IMPORT);
+    expect(`import { x } from "./replay-bunny-cfg";`).not.toMatch(ADAPTER_IMPORT);
     expect("// runner-fly.ts `adoptNamed`: the refusal id is the only handle").not.toMatch(ADAPTER_IMPORT);
     expect("// ingest-cf.ts sends `limit = LIST_VIDEOS_PAGE_LIMIT`").not.toMatch(ADAPTER_IMPORT);
     expect(`import { flyish } from "./runner-flyover";`).not.toMatch(ADAPTER_IMPORT);
     expect(`import { x } from "./ingest-cfg";`).not.toMatch(ADAPTER_IMPORT);
   });
 
-  it("no file under server/usecases/** or server/relay/domain/** imports runner-fly, fly-client or ingest-cf", () => {
+  it("no file under server/usecases/** or server/relay/domain/** imports runner-fly, fly-client, ingest-cf or replay-bunny", () => {
     const files = GUARDED.flatMap(walk);
     const names = files.map((f) => relative(SERVER, f));
     expect(files.length, "the walk read nothing").toBeGreaterThan(0);

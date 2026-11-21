@@ -1,12 +1,13 @@
 // Task 21: which ReplayHost a process talks to, and how a stream session's deps reach it. The fake is ONE instance per process
-// (a Go-live on one copy of a module and a webhook on another must see the same videos); `bunny` mode never falls back to it.
+// (a Go-live on one copy of a module and a webhook on another must see the same videos); `bunny` mode answers the Bunny adapter
+// (Task 22) and never falls back to the fake.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUNNY_ENV_NAMES } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { defaultDeps, replayOf, type SessionDeps } from "@/server/usecases/stream-sessions/deps";
+import { BunnyReplayHost } from "../replay-bunny";
 import { replayDriver, setReplayDriverForTest } from "../replay-driver";
 import { FakeReplayHost } from "../replay-fake";
-import type { ReplayHost } from "../replay-ports";
 
 // An explicit REPLAY_DRIVER=fake is honoured only where ENV_NAME is local or ci, and a developer's .env.local may name another.
 beforeEach(() => { vi.stubEnv("ENV_NAME", "local"); });
@@ -58,11 +59,15 @@ describe("replayDriver", () => {
     expect(BUNNY_ENV_NAMES).toHaveLength(5);
   });
 
-  it("bunny mode with its settings present still never answers the fake", () => {
+  it("bunny mode with its settings present answers the Bunny adapter, built once; a test reset builds the next one", () => {
     setEnv({ REPLAY_DRIVER: "bunny", ...BUNNY_ENV });
-    let got: ReplayHost | undefined;
-    try { got = replayDriver(); } catch { /* the adapter may refuse; what must not happen is a fake in its place */ }
-    expect(got).not.toBeInstanceOf(FakeReplayHost);
+    const host = replayDriver();
+    expect(host).toBeInstanceOf(BunnyReplayHost);
+    expect(replayDriver()).toBe(host);
+    setReplayDriverForTest(null);
+    const next = replayDriver();
+    expect(next).toBeInstanceOf(BunnyReplayHost);
+    expect(next).not.toBe(host);
   });
 
   it("a misspelt REPLAY_DRIVER throws naming the variable", () => {

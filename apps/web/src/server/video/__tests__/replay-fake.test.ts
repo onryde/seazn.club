@@ -182,7 +182,9 @@ describe("FakeReplayHost: signedEmbed is pure and has the real URL's shape", () 
     const other = parse(fake.signedEmbed("vid-2", now, 3600).src);
     expect(other.video).toBe("vid-2");
     expect(other.token).not.toBe(parse(a.src).token);
-    expect(fake.signedEmbed("vid-1", now, 60).expiresAt).toBe("2026-11-21T10:01:00.000Z");
+    const shorter = fake.signedEmbed("vid-1", now, 60);
+    expect(shorter.expiresAt).toBe("2026-11-21T10:01:00.000Z");
+    expect(shorter.src).not.toBe(a.src);
     expect(other.library).toBe(parse(a.src).library);
   });
 });

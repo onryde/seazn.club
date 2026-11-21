@@ -7,6 +7,8 @@ import "server-only";
 // The fake is ONE instance per process, kept on globalThis: Next can bundle this module more than once (a route, the cron worker's
 // entry), and two fakes would be two hosts — a fetch through one, a webhook read through the other.
 import { bunnyConfig, replayDriverMode } from "@/server/relay/config";
+import { log } from "@/server/logger";
+import { BunnyReplayHost } from "./replay-bunny";
 import { FakeReplayHost } from "./replay-fake";
 import type { ReplayHost } from "./replay-ports";
 
@@ -14,12 +16,15 @@ const FAKE_SLOT = Symbol.for("seazn.replay.fake");
 const slots = globalThis as unknown as Record<symbol, FakeReplayHost | undefined>;
 
 let override: ReplayHost | null = null;
+let bunny: BunnyReplayHost | null = null;
 
-/** The Bunny adapter. Its settings are checked HERE, so a process whose Bunny variables are missing refuses with their names
- *  instead of serving a fake. Task 22 builds `BunnyReplayHost` and returns it from here; until then this refuses, loudly. */
+/** The Bunny adapter, built once per process on first use. Its settings are checked HERE (`bunnyConfig`), so a process whose
+ *  Bunny variables are missing refuses with their names instead of serving a fake, and a refusal caches nothing.
+ *  It records through NO database recorder yet: V410's CHECK on the provider-call table admits cloudflare, fly and stripe only,
+ *  so every Bunny row would fail its insert and trip `dbRecorder`'s once-per-process warning, which would then hide a real
+ *  Cloudflare or Fly telemetry failure. The migration that admits `bunny` there passes `recorder: dbRecorder` here. */
 function buildBunnyDriver(): ReplayHost {
-  bunnyConfig();
-  throw new Error("REPLAY_DRIVER=bunny: the Bunny adapter is not built yet (Task 22)");
+  return (bunny ??= new BunnyReplayHost(bunnyConfig(), { warn: (fields, msg) => log.warn(fields, msg) }));
 }
 
 export function replayDriver(): ReplayHost {
@@ -28,9 +33,12 @@ export function replayDriver(): ReplayHost {
   return buildBunnyDriver();
 }
 
-/** Tests only. A host installs itself as the driver; `null` clears the override AND the shared fake, so the next test starts
- *  with an empty host. */
+/** Tests only. A host installs itself as the driver; `null` clears the override, the shared fake AND the built Bunny adapter,
+ *  so the next test starts with an empty host built from its own settings. */
 export function setReplayDriverForTest(host: ReplayHost | null): void {
   override = host;
-  if (host === null) delete slots[FAKE_SLOT];
+  if (host === null) {
+    delete slots[FAKE_SLOT];
+    bunny = null;
+  }
 }
