@@ -301,9 +301,11 @@ export async function withdrawCore(reg: RegistrationWithGroupRow, actorId: strin
     // still-pending entry is correctly left untouched.
     await clearExpiresIfNoLongerNeeded(tx, locked.group_id, locked.id);
     // A registration that leaves is not always a place that frees: an organiser may have withdrawn its entrant from the table already
-    // (and filled the place). An online division at its cap serves nobody from the waitlist (`onlineCapHoldsPromotion`).
+    // (and filled the place). An online division at its cap serves nobody from the waitlist (`onlineCapHoldsPromotion`) - except for
+    // the place THIS withdrawal frees: after Start the entrant is still live until the table withdrawal below runs, so it is passed as
+    // the one leaving (`cascadeOwed`), and counted out while it is live.
     const promoted =
-      freedSpot && !(await onlineCapHoldsPromotion(tx, reg.division_id, capGuard))
+      freedSpot && !(await onlineCapHoldsPromotion(tx, reg.division_id, capGuard, cascadeOwed ? locked.entrant_id : null))
         ? await promoteOldestWaitlisted(tx, reg.division_id, settings, undefined, seatGate)
         : null;
     await audit(tx, ctx.competition_id, ctx.org_id, "registration.withdrawn", {

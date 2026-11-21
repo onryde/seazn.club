@@ -1112,3 +1112,63 @@ describe.skipIf(!HAS_DB)("auto-promotion honours a plan below the online cap too
     expect(await run(1), "96 held when the registrant withdraws: a place that is not there is not served").toEqual({ status: "waitlisted", held: 96 });
   });
 });
+
+describe.skipIf(!HAS_DB)("a withdrawal AFTER Start still promotes at the online cap (fix round 3)", () => {
+  // After Start the registration's entrant leaves through the table withdrawal (the cascade, run AFTER the withdrawal commits), so
+  // while the promotion is decided the entrant is still live: the cap guard must not count the place that is leaving as held.
+  // "Started" is the cascade's own predicate (`divisionHasStarted`: status active or completed).
+  /** An online manual-approval division of `others + 1` live entrants (the holder H among them), started, with W waitlisted. */
+  const started = async (others: number) => {
+    const r = await regRig("pro", "online", "manual");
+    const [holder] = await r.holders(1);
+    await fillEntrants(r.division.id, others);
+    const w = await r.waiting();
+    await sql`update divisions set status = 'active' where id = ${r.division.id}`;
+    const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string }[]>`select entrant_id from registrations where id = ${holder!}`;
+    return { r, holder: holder!, w, entrantId };
+  };
+  const entrantStatus = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from entrants where id = ${id}`)[0]!.status;
+  const isStarted = async (divisionId: string): Promise<string> => (await sql<{ status: string }[]>`select status from divisions where id = ${divisionId}`)[0]!.status;
+
+  it("128 held, started, one waitlisted: the registrant withdraws, the waitlisted one is promoted and the division stays at 128", async () => {
+    const { r, holder, w, entrantId } = await started(MAX - 1);
+    expect(await isStarted(r.division.id), "premise: started").toBe("active");
+    expect(await heldOf(r.division.id), "premise: at the cap").toBe(MAX);
+    expect(await entrantStatus(entrantId), "premise: the leaving entrant is live").toBe("confirmed");
+    await withdrawRegistration(r.auth, holder);
+    expect(await statusOfReg(holder), "the registration withdrew").toBe("withdrawn");
+    expect(await entrantStatus(entrantId), "the table withdrawal ran: the entrant is gone").toBe("withdrawn");
+    expect(await statusOfReg(w), "the freed place went to the waitlist").toBe("pending");
+    expect(await heldOf(r.division.id), "full again, never past").toBe(MAX);
+  });
+
+  it("control: with room, a started withdrawal promotes too", async () => {
+    const { r, holder, w } = await started(MAX - 2);
+    expect(await heldOf(r.division.id), "premise: one place spare").toBe(MAX - 1);
+    await withdrawRegistration(r.auth, holder);
+    expect(await statusOfReg(w)).toBe("pending");
+    expect(await heldOf(r.division.id)).toBe(MAX - 1);
+  });
+
+  it("a started division stored PAST the cap (129 held): the withdrawal frees exactly ONE place, so 128 remain and nobody is promoted", async () => {
+    const { r, holder, w } = await started(MAX); // MAX others + the holder = 129
+    expect(await heldOf(r.division.id), "premise: stored past the cap").toBe(MAX + 1);
+    await withdrawRegistration(r.auth, holder);
+    expect(await statusOfReg(holder)).toBe("withdrawn");
+    expect(await statusOfReg(w), "128 after the leaver: still full").toBe("waitlisted");
+    expect(await heldOf(r.division.id)).toBe(MAX);
+  });
+
+  it("the double free on a started division: the organiser withdrew the entrant from the table and filled its place, so the registrant's withdrawal frees nothing", async () => {
+    const { r, holder, w, entrantId } = await started(MAX - 1);
+    await patchEntrant(r.auth, entrantId, { status: "withdrawn" }); // started: through the cascade; the registration is untouched
+    expect(await entrantStatus(entrantId), "premise: the organiser's withdrawal took").toBe("withdrawn");
+    expect(await heldOf(r.division.id), "premise: 127").toBe(MAX - 1);
+    await sql`insert into entrants (division_id, kind, display_name, status) values (${r.division.id}, 'individual', 'Filler N', 'confirmed')`; // N takes the place
+    expect(await heldOf(r.division.id), "premise: 128 again").toBe(MAX);
+    await withdrawRegistration(r.auth, holder);
+    expect(await statusOfReg(holder), "premise: the registration did withdraw").toBe("withdrawn");
+    expect(await statusOfReg(w), "no place was freed: W stays waitlisted").toBe("waitlisted");
+    expect(await heldOf(r.division.id)).toBe(MAX);
+  });
+});

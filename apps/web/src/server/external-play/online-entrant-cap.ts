@@ -102,6 +102,13 @@ export async function countOnlineHeld(db: Db, divisionId: string): Promise<numbe
   return row!.n;
 }
 
+/** 1 when the entrant is still in the field (not withdrawn or disqualified), else 0: the place it holds in the count above. */
+async function liveEntrantCount(tx: Tx, entrantId: string): Promise<number> {
+  const [row] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where id = ${entrantId} and status not in ${tx([...DEPARTED_STATUS_KEYS])}`;
+  return row!.n;
+}
+
 /** The `division:` advisory lock every format writer takes (same key spelling), for a door that is about to count and then write. */
 export async function lockDivisionForCap(tx: Tx, divisionId: string): Promise<void> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
@@ -189,13 +196,23 @@ export async function lockForPromotionCap(tx: Tx, divisionId: string, guard: Onl
  *  then withdraws too - so "a registration left" is not "a place was freed". The truth is the count (`countOnlineHeld`, read under the
  *  `division:` lock) against `min(plan cap, 128)`: at or over it the promotion is skipped and the entry stays waitlisted, to be picked
  *  by the next place that really frees. A division that does not play online (config read under the lock) never holds anything back. */
-export async function onlineCapHoldsPromotion(tx: Tx, divisionId: string, guard: OnlineCapGuard | undefined): Promise<boolean> {
+export async function onlineCapHoldsPromotion(
+  tx: Tx,
+  divisionId: string,
+  guard: OnlineCapGuard | undefined,
+  leavingEntrantId: string | null = null,
+): Promise<boolean> {
   if (!guard) return false;
   await lockDivisionForCap(tx, divisionId); // re-entrant: a no-op when the caller took it early
   const [division] = await tx<{ sport_key: string; config: unknown }[]>`select sport_key, config from divisions where id = ${divisionId}`;
   if (!division || !divisionPlaysOnline(division)) return false;
   const cap = effectiveEntrantCap(true, guard.planLimit)!;
-  const held = await countOnlineHeld(tx, divisionId);
+  // The place that is LEAVING is not held (fix round 3): after Start a withdrawal's entrant leaves through the table withdrawal, run
+  // after this transaction commits, so it is still live while the promotion is decided - count it and a started division at its cap
+  // would never serve its waitlist. Excluded only while it IS live: an entrant already gone (an organiser withdrew it from the table
+  // and filled the place) is not counted to begin with, so subtracting it again would free the place twice.
+  const leaving = leavingEntrantId === null ? 0 : await liveEntrantCount(tx, leavingEntrantId);
+  const held = (await countOnlineHeld(tx, divisionId)) - leaving;
   if (held < cap) return false;
   log.warn({ divisionId, held, cap }, "registrations: waitlist promotion held - the online division already holds its cap");
   return true;
