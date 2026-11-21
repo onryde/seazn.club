@@ -578,6 +578,22 @@ test.describe("X-ADJ-4 Adjust points", () => {
       const select = dialog.getByTestId("adjust-points-entrant");
       await expect(select).toBeEnabled();
       await expect(select.locator("option"), `${width}: Choose plus the four members`).toHaveCount(5);
+      // B3 ruling 4: an amount past 999 is named under the stepper and Apply waits; 999 itself is taken. Nothing is written here.
+      await select.selectOption(top);
+      await dialog.getByTestId("adjust-points-reason").fill(REASON);
+      const field = dialog.getByTestId("adjust-points-delta");
+      await field.fill("1000");
+      await expect(dialog.getByTestId("adjust-points-range"), `${width}: the bound, in the dictionary's words`).toHaveText(
+        uiString("en", "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE", { max: "999" }),
+      );
+      await expect(dialog.getByTestId("adjust-points-apply"), `${width}: past the bound, Apply waits`).toBeDisabled();
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/b3-range-${width}.png`, fullPage: false });
+      await field.fill("-999");
+      await expect(dialog.getByTestId("adjust-points-range")).toHaveCount(0);
+      await expect(dialog.getByTestId("adjust-points-apply"), `${width}: 999 either way is taken`).toBeEnabled();
+      await field.fill("");
+      await dialog.getByTestId("adjust-points-reason").fill("");
       if (desk === 0) {
         await select.selectOption(top);
         for (let i = 0; i < 3; i++) await dialog.getByTestId("adjust-points-decrease").click();
@@ -624,5 +640,62 @@ test.describe("X-ADJ-4 Adjust points", () => {
       pub++;
     }
     expect(pub).toBe(3);
+  });
+});
+
+test.describe("B3 ruling 3 a carried table names the adjustment it carries", () => {
+  test("the next stage's table says the −3 was carried from the first, under it, at 1280, 768 and 320", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `B3C ${TAG}`, visibility: "public" });
+    expect(comp.status).toBe(201);
+    const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    expect(div.status).toBe(201);
+    const names = ["Marsh Lane Wanderers Community Football Club", "Harbour Vale", "Dunmore Park", "Kilbride Rovers"].map((n) => `${n} ${TAG}`);
+    const ents = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div.data!.id}/entrants`, "POST", names.map((display_name, i) => ({ kind: "individual", display_name, seed: i + 1 })));
+    expect(ents.status).toBe(201);
+    const ids = ents.data!.map((e) => e.id);
+    const stages = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", [
+      { seq: 1, kind: "league", name: "Table", config: { legs: 1 } },
+      {
+        seq: 2,
+        kind: "league",
+        name: "Super pool",
+        config: { legs: 1 },
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "on_complete", carry: "points" },
+      },
+    ]);
+    expect(stages.status).toBe(201);
+    const [first, second] = stages.data!.map((x) => x.id) as [string, string];
+    expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBe(200);
+    const lines = (await apiJson<Fx[]>(request, `/api/v1/divisions/${div.data!.id}/fixtures`)).data!.filter((f) => f.home_entrant_id && f.away_entrant_id);
+    expect(lines, "premise: every line of four").toHaveLength(6);
+    for (const f of lines) {
+      const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "generic.result", payload: { p1Score: 2, p2Score: 0 } });
+      expect(res.status).toBe(201);
+    }
+    const REASON = "fielded an ineligible player";
+    const adjusted = ids[0]!;
+    expect((await apiJson(request, `/api/v1/stages/${first}/adjustments`, "POST", { entrant_id: adjusted, delta: -3, reason: REASON })).status).toBe(201);
+    expect((await apiJson(request, `/api/v1/stages/${first}/complete`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/stages/${second}/generate`, "POST")).status).toBeLessThan(300);
+
+    const orgs = await apiJson<{ slug: string }[]>(request, "/api/orgs");
+    const orgSlug = (orgs.data ?? (orgs as unknown as { slug: string }[]))[0]!.slug;
+    await page.goto(`/live/${orgSlug}/${comp.data!.slug}/${div.data!.slug}?tab=standings`);
+    await dismissCookieBanner(page);
+    const carried = dictString("en", "table.adjustmentNote.points.carried.other", { amount: "\u22123", stage: "Table", reason: REASON, date: "" }).replace(/[,.]?\s*\.?$/, "");
+    const own = dictString("en", "table.adjustmentNote.points.other", { amount: "\u22123", reason: REASON, date: "" }).replace(/[,.]?\s*\.?$/, "");
+    let checked = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      const notes = page.getByTestId(`standings-adjustment-note-${adjusted}`).filter({ visible: true });
+      await expect(notes.filter({ hasText: carried }), `${width}: the carried table names it`).toHaveCount(1);
+      await expect(notes.filter({ hasText: own }).filter({ hasNotText: "carried" }), `${width}: the first table keeps its own line`).toHaveCount(1);
+      await expect(notes.filter({ hasText: carried }).first()).toContainText(dictString("en", "table.adjustmentNote.lead", { name: names[0]! }));
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/b3-carried-${width}.png`, fullPage: true });
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
