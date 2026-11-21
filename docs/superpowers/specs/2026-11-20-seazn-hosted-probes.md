@@ -19,7 +19,7 @@ Cloudflare:
 Bunny:
 
 - **B1. Fetch answers the id.** `POST /library/{id}/videos/fetch` with the C5 URL works and its body carries the new video's `id`. Plan decision: **no title search** anywhere (the old `findByTitle` is gone).
-- **B2. Encoding.** 200 s of video encoded in about 2.5 min; video statuses seen 2 → 3 → 4. The library's resolutions are capped at **720p** (owner setting): nothing may assume a 1080p replay.
+- **B2. Encoding.** 200 s of video encoded in about 2.5 min; video statuses seen 2 → 3 → 4. The library's resolutions are capped at **720p** (owner setting): nothing may assume a 1080p replay. (B9, 2026-11-21: not so on the Bunny POC library, where a 1080p source encoded to 1080p.)
 - **B3. Security (owner turned on):** Block direct url file access (referrer allow-list), Embed view token authentication, CDN token authentication. One library token key signs both tokens.
 - **B4. Embed.** With no or a bad token the embed shows an error page. With `token = hex(sha256(tokenKey + videoGuid + expires))` at `https://iframe.mediadelivery.net/embed/{libraryId}/{guid}?token=…&expires=…` it plays. Plan decision: **replays play in Bunny's embed player (iframe) with this token; live stays hls.js on Cloudflare.** The spec preferred one player for both, but direct Bunny HLS needs an allowed `Referer` and a per-path CDN token on every request, which the embed carries for us.
 - **B5. Direct files** need BOTH an allowed `Referer` AND a CDN token: `https://{cdn}/bcdn_token={t}&expires={e}&token_path=%2F{guid}%2F/{guid}/playlist.m3u8`, `t = base64url-no-pad(sha256(tokenKey + "/{guid}/" + expires + "token_path=/{guid}/"))` (a plain sha256, not an HMAC). So an organiser's download goes through our server (Task 26).
@@ -75,8 +75,13 @@ In this section `{lib}`, `{cdn}` and `{guid}` stand for real values, and `<token
 
 **Status (2026-11-21): RUN twice, on the owner's Bunny POC library.**
 
+- The POC library is the one whose credentials are in `~/.config/seazn/bunny-poc.env`. It is not confirmed to be the
+  staging library that Operator setup Phase 2 configures, so the B3 and B9 results transfer to that library only if
+  the two are the same.
 - Each run created 3 items and deleted 3 (two videos, then the collection, each answering 200). Nothing was skipped.
-- Run 2 is the committed probe. It ends red on exactly one assertion: the B9 cap.
+- Run 2 was the live run. It went red on exactly one assertion: the B9 cap. The probe now checks the cap in its own
+  test, titled as an owner library setting rather than code, so that a red there is never read as a vendor fact that
+  moved. The probe has not been re-run live since that split.
 
 - **B7. Collections work.**
   - `POST /library/{lib}/collections {name}` answers 200, with a `guid` and the name echoed back.
@@ -98,16 +103,21 @@ In this section `{lib}`, `{cdn}` and `{guid}` stand for real values, and `<token
     segment was fetched after the expiry (it answered 200).
   - What settles it is the CDN token the embed hands its own player:
     - It is the path form, `bcdn_token=<token>&expires=…&token_path=…`.
-    - Its `expires` is the embed's `expires` + 35 941 s. That is 10 h (36 000 s) after the embed page rendered,
-      whatever the embed's own `expires` was.
+    - Its `expires` is the embed's `expires` + 35 941 s, which is 10 h (36 000 s) after the embed page rendered.
+      This was measured for one embed `expires` only (now + 60 s, in run 2; run 1 did not read the token).
+      *Inferred, not measured:* whether Bunny anchors that time to the page render or to the embed's `expires`. One
+      sample fits both rules, and under either one the token lasts at least 10 h after render.
     - At expiry + 127 s, the embed's playlist and last segment URLs still answer 200 with the iframe's `Referer`
       (`https://iframe.mediadelivery.net/`), and 403 with no `Referer`.
   - **So the embed token gates only the page load. Once a replay has loaded, it can keep playing for about 10 h.**
     Task 25 needs no `src` swap, and `REPLAY_EMBED_TOKEN_TTL_SECONDS = 3600` stands. A viewer who reloads after the
     expiry needs a fresh embed URL from the route, as the control shows.
   - The embed also calls Bunny's own hosts: `fonts.bunny.net`, the `edgezone-*.bunnyinfra.net` edge probes,
-    `metrics-bunny.net`, `rum-metrics.bunny.net` and `bunnycdn-video-assets.b-cdn.net`. Those are the iframe's own
-    requests, governed by the iframe's CSP, so our page still needs only `frame-src https://iframe.mediadelivery.net`.
+    `metrics-bunny.net`, `rum-metrics.bunny.net` and `bunnycdn-video-assets.b-cdn.net` (measured).
+    *Inferred, not measured:* these are the iframe's own requests, governed by the iframe's CSP, so our page should
+    need only `frame-src https://iframe.mediadelivery.net`. That conclusion is reasoned from how a cross-origin
+    iframe's CSP works: the probe page had no CSP, and the embed was never driven under `proxy.ts`'s CSP. Task 25 is
+    to confirm it on stg.
 - **B9. The MP4 file name is as planned, but the library is NOT capped at 720p.**
   - Every video read `hasMP4Fallback: true`.
   - `https://{cdn}/bcdn_token=<token>&expires=…&token_path=%2F{guid}%2F/{guid}/play_{h}p.mp4`, with the B5 token,
@@ -123,7 +133,8 @@ In this section `{lib}`, `{cdn}` and `{guid}` stand for real values, and `<token
     `play_1080p.mp4` answered 200. The library is not capped at 720p, which contradicts B2 and the operator setup's
     "resolutions capped at 720p". (The 720p source listed `240p` to `720p` only.) The list comes back unordered, so it
     must be parsed and the maximum taken, not the last item.
-  - The probe stays red until the owner caps the library or the plan accepts 1080p replays.
+  - The probe's library-setting test, which only the 1080p `hd` source can fail, stays red until the owner caps the
+    library or the plan accepts 1080p replays.
   - File sizes:
     - 183 s at 720p was 66.7 to 69.0 MB, about 3 Mbit/s. A 3 h match is then about 4 GB, more than the 2–3 GB
       Task 26 assumes.

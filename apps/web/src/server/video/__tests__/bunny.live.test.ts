@@ -7,9 +7,9 @@
 //       in headless Chrome on a page served, by request interception, from an allowed referrer host (no request
 //       reaches seazn.club). A control embed whose `expires` has already passed must be refused, or the main result
 //       means nothing.
-//   B9  MP4 fallback at the 720p cap: `availableResolutions` holds nothing above 720p, also for a 1080p source;
-//       `play_{h}p.mp4` under the B5 CDN token answers 200 with an allowed `Referer` and 403 without one, for the
-//       highest `h` listed.
+//   B9  MP4 fallback: `play_{h}p.mp4` under the B5 CDN token answers 200 with an allowed `Referer` and 403 without
+//       one, for the highest `h` listed. The 720p cap (`availableResolutions` holds nothing above 720p, also for a
+//       1080p source) is an owner library setting, so it is checked in its own test.
 //   B10 delete: `DELETE /videos/{id}` answers 200 and the video then reads 404. (The brief expected a second DELETE
 //       to answer 404; it answers 200, so the probe pins what was measured.)
 //   B8 also reads the CDN token the embed was handed (its form and its own `expires`) and re-requests the embed's
@@ -19,7 +19,8 @@
 // credentials file; .env.local is never read for them). Without the flag nothing else is read and the file skips
 // loudly. CI never sets the flag.
 //
-// SAFETY: the target is the owner's Bunny POC/staging library, nothing else. This run creates one collection and two
+// SAFETY: the target is the owner's Bunny POC library (the one ~/.config/seazn/bunny-poc.env names), nothing else;
+// whether it is also the staging library of Operator setup Phase 2 is not confirmed. This run creates one collection and two
 // videos and deletes only those, each by the id its own create/fetch answered, tracked in-process. No list endpoint is
 // ever called: `bunny()` refuses any GET or DELETE that is not a single id path. Before each delete the item is re-read
 // by id (a video must carry its own guid and sit in this run's collection or under this run's title; the collection
@@ -114,6 +115,8 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
   const deleted = new Set<string>();
   const ledger = { created: [] as string[], deleted: [] as string[], skipped: [] as string[] };
   const obs: Record<string, unknown> = {};
+  // Each video as read once it finished encoding. The first test fills it; the library-setting test reads it.
+  const playable: Partial<Record<SourceKey, BunnyVideo>> = {};
   let browser: Browser | null = null;
 
   /** Strips anything secret from text that came back from the vendor or the browser. */
@@ -210,7 +213,7 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
     expect(ledger.skipped).toEqual([]);
   }, 3 * 60_000);
 
-  it("observes collections, the MP4 fallback at the cap, the embed past its expiry, and delete", async () => {
+  it("observes collections, the MP4 fallback, the embed past its expiry, and delete", async () => {
     // ---- B7: a collection, and two fetches into it. ----
     const coll = await bunny<{ guid?: string; name?: string }>("POST", "/collections", { name: RUN });
     obs.collectionCreate = { status: coll.status, hasGuid: typeof coll.json?.guid === "string", nameEcho: coll.json?.name === RUN };
@@ -231,7 +234,6 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
     }
 
     // Wait for both to finish encoding (video API status 4; B2), recording the status sequence each passed through.
-    const playable: Partial<Record<SourceKey, BunnyVideo>> = {};
     const statusSeq: Record<SourceKey, number[]> = { long: [], hd: [] };
     const encodeDeadline = Date.now() + 12 * 60_000;
     while (Object.keys(playable).length < 2) {
@@ -470,7 +472,6 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
       expect.soft(playable[key]!.collectionId, `B7 GET /videos/{id} (${key}) names the collection`).toBe(collectionId);
       const heights = heightsOf(playable[key]);
       expect.soft(heights.length, `B9 ${key} lists at least one resolution`).toBeGreaterThan(0);
-      expect.soft(Math.max(0, ...heights), `B9 ${key}: nothing above 720p`).toBeLessThanOrEqual(720);
       const m = obs[`mp4_${key}`] as { withAllowedReferer?: { status: number }; withoutReferer?: number };
       expect.soft(m.withAllowedReferer?.status, `B9 ${key}: play_{top}p.mp4 with an allowed Referer`).toBe(200);
       expect.soft(m.withoutReferer, `B9 ${key}: play_{top}p.mp4 with no Referer`).toBe(403);
@@ -487,4 +488,13 @@ describe.skipIf(!GATE.enabled)("Bunny Stream — collections, embed past expiry,
     expect.soft(reachedEnd, "B8 the embed played to its end").toBe(true);
     expect.soft(embed.wallSecondsAfterExpiry as number, "B8 the run watched well past the expiry").toBeGreaterThan(60);
   }, 30 * 60_000);
+
+  // An OWNER LIBRARY SETTING, not code and not vendor behaviour (Operator setup, Phase 2: "resolutions capped at
+  // 720p"; B2). Kept in its own test so a red here is never mistaken for a vendor fact that moved. Only `hd` (a 1080p
+  // source) can witness the cap; `long` is a 720p source and cannot. Red on 2026-11-21 (B9): owner action pending.
+  it("library setting, not code (Operator setup Phase 2; owner action pending): a 1080p source lists nothing above 720p", () => {
+    const heights = heightsOf(playable.hd);
+    expect(heights.length, "the hd video was read once encoded (the first test reached that step)").toBeGreaterThan(0);
+    expect(Math.max(...heights), "B9 library setting: the 1080p source's highest listed resolution").toBeLessThanOrEqual(720);
+  });
 });
