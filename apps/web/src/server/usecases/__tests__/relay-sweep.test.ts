@@ -20,7 +20,7 @@
 // database's now() is judged on the rig's clock, which by then lags the database by however long the rig took to build,
 // so `sweep()` first moves a lagging rig clock forward to the real now (never backward — the retention test runs days
 // ahead on purpose). Second-scale thresholds carry a 60 s margin for the same reason.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -119,7 +119,7 @@ const OWN = relayEnvironment();
 /** Another deployment's identity: provably not this one's, whatever this one is called. */
 const FOREIGN = `${OWN}-elsewhere`;
 
-async function rig(mode: "passthrough" | "composed" = "passthrough") {
+async function rig(mode: "passthrough" | "composed" = "passthrough", opts: { seazn?: boolean } = {}) {
   const seeded = await seedOrg();
   // A8: seedOrg's auth.userId is null and createSession refuses a start nobody made (403) — a REAL users row starts it.
   const auth = { ...seeded.auth, userId: await rigUser() };
@@ -139,7 +139,12 @@ async function rig(mode: "passthrough" | "composed" = "passthrough") {
   const runner = new FakeRunner();
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test" };
   await pairPresentPhone(fixtureId, { at: deps.now() });   // A7 (capture QR v2 T6): W5 refuses a Go live with no present phone
-  const { sessionId } = await createSession(auth, fixtureId, { mode, targetId: target.id }, deps);
+  // Seazn-hosted video Task 18: the org's own Seazn row (V540's trigger made it; read, never inserted). The caller holds
+  // SEAZN_HOSTED_LIVE on for the start — admission refuses a Seazn start with it off.
+  const targetId = opts.seazn
+    ? (await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`)[0]!.id
+    : target.id;
+  const { sessionId } = await createSession(auth, fixtureId, { mode, targetId }, deps);
   const state = async (sid = sessionId) => (await sql<{
     state: string; fail_reason: string | null; machine_id: string | null; runner_retries: number; runner_state: string; runner_gone_confirmed_at: Date | null;
   }[]>`
@@ -200,6 +205,7 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0,
       cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,   // R2004 1c
       framesPurged: 0, framePurgesFailed: 0,   // R4 S9 7d
+      seaznHeld: 0, seaznHeldPastPromise: 0,   // Seazn-hosted video Task 18
     });
     expect(listMachines).not.toHaveBeenCalled();   // no composed session in scope ever held a runner
     expect(listInputVideos, "R2004 1c: no ended composed session, no camera listed").not.toHaveBeenCalled();
@@ -1694,5 +1700,119 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(remove.mock.calls.map(([input, uid]) => [input, uid]), "B's output, removed from B").toEqual([[programme.ingest_input_id, out], [programme.ingest_input_id, out]]);
     expect(await sweep(r)).toMatchObject({ outputsReleased: 0, outputReleasesFailed: 0 });
     expect(remove).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Seazn-hosted video, Phase 1 Task 18 (controller ruling 2026-11-20): every `destination_kind = 'seazn'` programme recording
+// is HELD past RECORDING_RETENTION_DAYS whatever SEAZN_HOSTED_LIVE and SEAZN_HOSTED_REPLAY say, so Phase 1 never deletes a
+// replay Phase 2 will move; Cloudflare's own 30-day deleteRecordingAfterDays is the backstop. A held recording past the
+// promise is alerted ONCE, ever (the seazn_held_alerts mark, V540). The hold only REMOVES from the delete set: the camera
+// step (1c) and every other destination are unchanged, and the ownership filter (I1(c), C6) still skips foreign videos.
+// Every session ends through the REAL path (Go live → stop → completed), on the fake ports.
+// ---------------------------------------------------------------------------------------------------------------
+describe.skipIf(!HAS_DB)("Seazn-hosted video Task 18: the sweep holds Seazn programme recordings past 3 days", () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const HELD_MESSAGE = "relay sweep: a Seazn recording past 3 days has not reached Bunny";
+  const heldReports = () => sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.seazn_held");
+  /** Older than the 3-day promise by a day: past retention for a video AND for an ended session's inputs. */
+  const pastPromise = () => new Date(Date.now() - (RECORDING_RETENTION_DAYS + 1) * DAY_MS);
+  const alertRows = (videoId: string) => sql<{ session_id: string }[]>`select session_id from seazn_held_alerts where cf_video_id = ${videoId}`;
+
+  /** A composed session to `seazn` (or the pasted YouTube key), live, its recordings made, ended, and its end dated past the
+   *  promise so retention would take its inputs too. Video ids are unique per run: the alert mark is keyed by them. */
+  async function endedComposed(o: { seazn: boolean; programmeAge: "old" | "fresh"; camera?: number }) {
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+    const r = await rig("composed", { seazn: o.seazn });
+    const [{ kind }] = await sql<{ kind: string | null }[]>`select destination_kind as kind from fixture_stream_sessions where id = ${r.sessionId}`;
+    expect(kind, "PREMISE: admission copied the destination's kind").toBe(o.seazn ? "seazn" : "youtube");
+    await goLive(r);
+    const rows = await sql<{ role: string; ingest_input_id: string }[]>`
+      select role, ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId} order by role`;
+    expect(rows.map((x) => x.role), "PREMISE: a composed session holds a camera and a programme input").toEqual(["camera", "programme"]);
+    const [camera, programme] = [rows[0]!.ingest_input_id, rows[1]!.ingest_input_id];
+    const tag = randomUUID().slice(0, 8);
+    const cameraVideos = Array.from({ length: o.camera ?? 0 }, (_, k) => `vc${k}-${tag}`);
+    for (const v of cameraVideos) r.ingest.addVideo({ videoId: v, inputId: camera, createdAt: justBefore(), inProgress: false });
+    const programmeVideo = `vp-${tag}`;
+    r.ingest.addVideo({ videoId: programmeVideo, inputId: programme, createdAt: o.programmeAge === "old" ? pastPromise().toISOString() : justBefore(), inProgress: false });
+    await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    expect((await r.state()).state, "PREMISE: the session ended").toBe("completed");
+    await sql`update fixture_stream_sessions set ended_at = ${pastPromise()} where id = ${r.sessionId}`;
+    vi.unstubAllEnvs();
+    return { r, camera, programme, cameraVideos, programmeVideo };
+  }
+  const listedIds = async (r: Rig) => (await r.ingest.listVideos({ createdBefore: new Date(Date.now() + DAY_MS) })).map((v) => v.videoId);
+
+  it.each([
+    { live: "true", replay: "false" },   // Phase 1 shipped, Phase 2 not yet (the ruling's case)
+    { live: "true", replay: "true" },    // Phase 2 on, but this recording has no replay row
+    { live: "false", replay: "false" },  // LIVE turned off after the match streamed: the hold reads no flag
+  ])("LIVE $live, REPLAY $replay: a 4-day-old Seazn programme recording is held — not deleted, its input deferred — and alerted ONCE; a second pass alerts nothing", async ({ live, replay }) => {
+    const { r, camera, programme, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", live);
+    vi.stubEnv("SEAZN_HOSTED_REPLAY", replay);
+    sentry.captureError.mockClear();
+    const first = await sweep(r);
+    expect(first).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0, foreignVideosSkipped: 0, retentionFailed: 0 });
+    expect(r.ingest.deletedVideos, "the held recording is never deleted").toEqual([]);
+    expect(await listedIds(r)).toContain(programmeVideo);
+    expect(r.ingest.deletedInputs, "the camera input (no recordings) goes; the programme input still names a held video").toEqual([camera]);
+    expect(first).toMatchObject({ inputsDeleted: 1, inputsDeferred: 1 });
+    const [prow] = await sql<{ ingest_input_id: string | null }[]>`select ingest_input_id from fixture_stream_inputs where session_id = ${r.sessionId} and role = 'programme'`;
+    expect(prow!.ingest_input_id, "the programme row keeps its provider id").toBe(programme);
+    expect(heldReports(), "one alert for the recording").toHaveLength(1);
+    expect((heldReports()[0]![0] as Error).message).toBe(HELD_MESSAGE);
+    expect(heldReports()[0]![1]).toEqual({ route: "relay.sweep.seazn_held", extra: { sessionId: r.sessionId, cfVideoId: programmeVideo } });
+    expect(await alertRows(programmeVideo), "the mark remembers it").toEqual([{ session_id: r.sessionId }]);
+    // The next day: still held, still deferred — and silent.
+    r.tick(DAY_MS);
+    const second = await sweep(r);
+    expect(second).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0, inputsDeleted: 0, inputsDeferred: 1 });
+    expect(r.ingest.deletedVideos).toEqual([]);
+    expect(heldReports(), "no second alert for the same recording").toHaveLength(1);
+    expect(await alertRows(programmeVideo)).toHaveLength(1);
+  });
+
+  it("the regression: a 4-day-old YouTube programme recording is still deleted, then its input — nothing held, nothing alerted (mutant: drop the destination predicate → red)", async () => {
+    const { r, camera, programme, programmeVideo } = await endedComposed({ seazn: false, programmeAge: "old" });
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ seaznHeld: 0, seaznHeldPastPromise: 0, videosDeleted: 1, inputsDeleted: 2, inputsDeferred: 0, retentionFailed: 0 });
+    expect(r.ingest.deletedVideos).toEqual([programmeVideo]);
+    expect([...r.ingest.deletedInputs].sort()).toEqual([camera, programme].sort());
+    expect(heldReports()).toEqual([]);
+    expect(await alertRows(programmeVideo)).toEqual([]);
+  });
+
+  it("a Seazn session's CAMERA recordings still go at the first pass after its end (step 1c, unchanged); a fresh programme recording is held but not yet alerted", async () => {
+    const { r, cameraVideos, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "fresh", camera: 2 });
+    sentry.captureError.mockClear();
+    const res = await sweep(r);
+    expect(res).toMatchObject({ cameraRecordingsDeleted: 2, cameraRecordingsRefused: 0, cameraInputsCleared: 1, seaznHeld: 1, seaznHeldPastPromise: 0, videosDeleted: 0 });
+    expect([...r.ingest.deletedVideos].sort(), "the camera's two, never the programme's").toEqual([...cameraVideos].sort());
+    expect(await listedIds(r)).toContain(programmeVideo);
+    expect(heldReports(), "inside the promise: no alert").toEqual([]);
+    expect(await alertRows(programmeVideo)).toEqual([]);
+  });
+
+  it("C6: beside the held Seazn video, 4-day-old recordings of inputs this database does not own and one with NO input are never deleted — counted as foreign — and the held one is still held", async () => {
+    const { r, programmeVideo } = await endedComposed({ seazn: true, programmeAge: "old" });
+    const foreign = [
+      { videoId: `vf1-${randomUUID().slice(0, 8)}`, inputId: `foreign-${randomUUID()}` },
+      { videoId: `vf2-${randomUUID().slice(0, 8)}`, inputId: `foreign-${randomUUID()}` },
+      { videoId: `vf3-${randomUUID().slice(0, 8)}`, inputId: null },
+    ];
+    for (const f of foreign) r.ingest.addVideo({ ...f, createdAt: pastPromise().toISOString(), inProgress: false });
+    vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+    const res = await sweep(r);
+    expect(res.foreignVideosSkipped, "anti-vacuity: every foreign and input-less recording was seen and skipped").toBe(foreign.length);
+    expect(res).toMatchObject({ seaznHeld: 1, seaznHeldPastPromise: 1, videosDeleted: 0 });
+    expect(r.ingest.deletedVideos, "nothing deleted: not the held one, not a foreign one").toEqual([]);
+    const left = await listedIds(r);
+    for (const v of [programmeVideo, ...foreign.map((f) => f.videoId)]) expect(left).toContain(v);
+    for (const f of foreign) if (f.inputId) expect(r.ingest.deletedInputs).not.toContain(f.inputId);
   });
 });

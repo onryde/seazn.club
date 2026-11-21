@@ -25,7 +25,8 @@ import "server-only";
 //   4. RETENTION — retentionPlan (domain/retention.ts) over the port's ONE video listing, restricted to recordings whose
 //      input this database owns (I1(c)), and the terminal inputs; videos
 //      BEFORE inputs (C2), inputs re-planned over what the pass actually deleted; a 409 is reported and retried tomorrow;
-//      a FULL page is flagged, never read as the whole set (A13).
+//      a FULL page is flagged, never read as the whole set (A13). A Seazn session's programme recordings are HELD (Seazn
+//      Task 18), whatever the flags, and one past the promise is alerted once, ever.
 //   5. VIDEO FACTS (ruling 13 item 5, Dd), 6. SUMMARIES, 7. SAMPLE RETENTION, 7b. PHONE-BEAT RETENTION (W10, 24 h),
 //   7c. CAPTURE-RECORD RETENTION (spec 2026-10-12 §9, 30 days), 7d. ORPHAN SPONSOR FRAMES (R4 S9, session end + 24 h),
 //   8. ONE storage snapshot.
@@ -81,6 +82,8 @@ export interface SweepResult {
   videosListed: number; listingTruncated: boolean;
   videosDeleted: number; videosDeferred: number; inputsDeleted: number; inputsDeferred: number; retentionFailed: number;
   foreignVideosSkipped: number;    // I1(c): past retention, but traceable to no input this database owns — never deleted
+  seaznHeld: number;               // Seazn Task 18: listed recordings of a Seazn session's programme input — never deleted here
+  seaznHeldPastPromise: number;    // Seazn Task 18: those of them past RECORDING_RETENTION_DAYS (each alerted once, ever)
   headroomMinutes: number;
   videosSeen: number; recordingsFinalised: number; summariesWritten: number; samplesDeleted: number;   // ruling 13 + Dd
   beatsDeleted: number;            // W10: phone-beat history past PHONE_BEAT_RETENTION_HOURS
@@ -258,6 +261,7 @@ export async function sweepStreamSessions(
     cameraInputsCleared: 0, cameraRecordingsDeleted: 0, cameraRecordingsDeferred: 0, cameraRecordingsRefused: 0, cameraListingsTruncated: 0,
     videosListed: 0, listingTruncated: false,
     videosDeleted: 0, videosDeferred: 0, inputsDeleted: 0, inputsDeferred: 0, retentionFailed: 0, foreignVideosSkipped: 0,
+    seaznHeld: 0, seaznHeldPastPromise: 0,
     headroomMinutes: 0, videosSeen: 0, recordingsFinalised: 0, summariesWritten: 0, samplesDeleted: 0, beatsDeleted: 0, recordsDeleted: 0,
     framesPurged: 0, framePurgesFailed: 0, framesBucketPublic: null,
   };
@@ -527,7 +531,23 @@ export async function sweepStreamSessions(
     union
     select ingest_input_uid as uid from fixture_stream_sessions where ingest_input_uid in ${sql(namedInputs)}`).map((r) => r.uid));
   const isOwned = (v: RetainedVideo) => v.inputId !== null && owned.has(v.inputId);
-  const ownedVideos = videos.filter(isOwned);
+  // Seazn Task 18 (controller ruling 2026-11-20): a recording of a Seazn session's PROGRAMME input is the replay Phase 2
+  // moves to Bunny, so it is HELD here whatever SEAZN_HOSTED_LIVE / SEAZN_HOSTED_REPLAY say (no flag is read); its deletion
+  // is the mover's or the Bunny webhook's once a playable copy exists (Tasks 24, 27), or Cloudflare's own at 30 days. The
+  // hold only REMOVES from the owned set — it can never add a video to a delete. Its input stays named by a listed video, so
+  // C2's rule below defers it. Keyed by the programme row's uid and by the session's own output uid (provision.ts: the
+  // programme on a composed session, kept after the input row lets go of its id). Unscoped, as ownership is.
+  const heldBy = new Map(namedInputs.length === 0 ? [] : (await sql<{ uid: string; session_id: string }[]>`
+    select i.ingest_input_id as uid, s.id as session_id from fixture_stream_inputs i
+      join fixture_stream_sessions s on s.id = i.session_id
+     where s.destination_kind = 'seazn' and i.role = 'programme' and i.ingest_input_id in ${sql(namedInputs)}
+    union
+    select s.ingest_input_uid as uid, s.id as session_id from fixture_stream_sessions s
+     where s.destination_kind = 'seazn' and s.ingest_input_uid in ${sql(namedInputs)}`).map((r) => [r.uid, r.session_id] as const));
+  const isHeld = (v: RetainedVideo) => v.inputId !== null && heldBy.has(v.inputId);
+  const heldVideos = videos.filter((v) => isOwned(v) && isHeld(v));
+  const ownedVideos = videos.filter((v) => isOwned(v) && !isHeld(v));
+  out.seaznHeld = heldVideos.length;
   out.foreignVideosSkipped = retentionPlan(videos.filter((v) => !isOwned(v)), [], now).deleteVideos.length;
   if (out.foreignVideosSkipped > 0) {
     log.warn({ count: out.foreignVideosSkipped }, "relay sweep: recordings past retention that trace to no input this database owns were left untouched");
@@ -569,6 +589,26 @@ export async function sweepStreamSessions(
         captureError(err, { route: "relay.sweep.retention", extra: { inputRowId: i.inputRowId } });
         log.error({ inputRowId: i.inputRowId, err: String(err) }, "relay sweep: an input's delete failed — its id is kept; the next pass retries it");
       }
+    }
+  }
+  // Seazn Task 18: a held recording past the promise is alerted ONCE per recording, ever — the seazn_held_alerts row (V540)
+  // is the memory. Phase 1 has no replay table, so "no playable replay" holds for every recording (Task 23 adds the table;
+  // the replay check belongs with it). After the deletes, so an alert fault can never cost the pass its retention.
+  const pastPromise = retentionPlan(heldVideos, [], now).deleteVideos;
+  out.seaznHeldPastPromise = pastPromise.length;
+  if (pastPromise.length > 0) {
+    try {
+      const alerted = new Set((await sql<{ id: string }[]>`
+        select cf_video_id as id from seazn_held_alerts where cf_video_id in ${sql(pastPromise)}`).map((r) => r.id));
+      for (const videoId of pastPromise) {
+        if (alerted.has(videoId)) continue;
+        const sessionId = heldBy.get(heldVideos.find((v) => v.videoId === videoId)!.inputId!)!;
+        captureError(new Error("relay sweep: a Seazn recording past 3 days has not reached Bunny"), { route: "relay.sweep.seazn_held", extra: { sessionId, cfVideoId: videoId } });
+        await sql`insert into seazn_held_alerts (cf_video_id, session_id) values (${videoId}, ${sessionId}) on conflict (cf_video_id) do nothing`;
+      }
+    } catch (err) {
+      captureError(err, { route: "relay.sweep.seazn_held" });
+      log.error({ err: String(err) }, "relay sweep: a Seazn held-recording alert could not be recorded — the next pass retries it");
     }
   }
 
