@@ -117,6 +117,12 @@ export interface PhaseFixture {
    *  reader of `stage_round_opens`); false for every board of a division that does not play online. Status-free —
    *  each attention arm already asks the status it needs. */
   awaitsRoundOpen: boolean;
+  /** Match Day online (gaps wave A6, spec 2026-11-05 section 5.4: "a hold is never counted twice") - an ONLINE board the desk raises its
+   *  own per-board `board_held` row for. Such a board's slot passing is not a second thing owed: its decision is that row, and
+   *  `result_missing` would count the same board again beside it. The caller reads it from the rows it is about to add
+   *  (`onlineBoardAttentions`); absent (every division that does not play online, and a division whose held read failed) reads as
+   *  not held, so the older row is still raised rather than nothing. */
+  heldOnline?: boolean;
   /** W5 T5 (X-CU-12, RB5-L13): a late entrant's catch-up line (`isCatchUpExtKey`: `rr-cu-` / `rr-by-`), written with no time and
    *  no court. Counted apart inside `unscheduled` — the count IS the desk's flag, so it clears as each line is given a slot.
    *  Optional: absent reads as no catch-up line. */
@@ -1057,12 +1063,12 @@ export function resolveAttention(input: PhaseInput): Attention[] {
         elapsed >= NOT_RECORDING_GRACE_MINUTES
       ) {
         notRecording.push({ id: f.id, since: elapsed });
-      } else if (!f.awaitsRoundOpen && isResultMissing(f, nowMs)) {
+      } else if (!f.awaitsRoundOpen && f.heldOnline !== true && isResultMissing(f, nowMs)) {
         // Behaviour unchanged: the predicate is the same three terms, now
         // EXPORTED so the run sheet's "Needs result" chip can ask this
         // module the question instead of inventing its own answer. R4: never
         // a board waiting on its online round's open (the run sheet's
-        // `owesResult` says the same through its `unopened` entry).
+        // `owesResult` says the same through its `unopened` entry). A6: nor a board the desk already raises as `board_held` - one raise.
         resultMissing.push(f.id);
       }
     }

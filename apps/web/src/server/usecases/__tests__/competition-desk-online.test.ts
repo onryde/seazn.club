@@ -51,7 +51,7 @@ import type { Attention } from "@/lib/division-phase";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n";
 import { HELD_TITLE_KEYS } from "@/components/v2/external-play-held-copy";
-import { needsYouItems } from "@/components/v2/desk/needs-you";
+import { needsYouHome, needsYouItems } from "@/components/v2/desk/needs-you";
 import { MatchDayView } from "@/server/api-v1/schemas";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -776,5 +776,122 @@ describe.runIf(HAS_DB)("the wire: the per-board Needs-you rows survive Match Day
     expect(wire.online_rounds.map((x) => x.key), "MD-R22: the round the row names is a round the same answer lists").toContain(heldRow.round_key);
     expect(flaggedRow.fixture_id).toBe(flagged.fixtureId);
     expect(flaggedRow.round_key, "a flagged board opens its board, never a round").toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Gaps wave A6, two carried findings of the B6 batch review, each decided by the spec's own words (2026-11-05, sections 5.4 and 5.5 / the
+// day rule at "What makes an online round part of today").
+describe.runIf(HAS_DB)("a hold is raised ONCE (spec 5.4: 'a hold is never counted twice') - a held board whose slot has passed is board_held, not also result_missing", () => {
+  const ago = (minutes: number): Date => new Date(NOW.getTime() - minutes * MIN);
+  const resultMissing = (list: Attention[]): string[] => list.filter((a) => a.kind === "result_missing").flatMap((a) => a.fixtureIds).sort();
+
+  it("EMPTY CASE FIRST: two dated boards of an opened round whose slot has passed, nothing held - both owe a result, and neither is a held board", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [a, b] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+
+    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+
+    expect(resultMissing(list), "premise: the slot-passed boards owe results").toEqual([a.fixtureId, b.fixtureId].sort());
+    expect(heldIds(list)).toEqual([]);
+  });
+
+  it("the same round with one board held: that board is board_held ONLY; the other still owes its result", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [held, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await hold(r, held, "no_show_white");
+
+    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+
+    expect(heldIds(list), "the hold is one board_held row").toEqual([held.fixtureId]);
+    expect(resultMissing(list), "...and the held board is not ALSO a missing result; the board beside it still is").toEqual([other.fixtureId]);
+    // The count a person reads is the sum of the rows: one thing for the held board, one for the board that owes a result.
+    const rows = rowsOf(await deskOf(r.owner, r.competitionId), r).filter((i) => i.kind === "board_held" || i.kind === "result_missing");
+    expect(rows.map((i) => i.kind).sort(), "the held board is counted once").toEqual(["board_held", "result_missing"]);
+  });
+
+  it("EVERY held board of the division is left out of result_missing, not only the first; a flagged board that is not held keeps its own row set", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 3, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [h1, h2, plain] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
+    await hold(r, h1, "no_show_white");
+    await hold(r, h2, "provider_error");
+
+    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+
+    expect(heldIds(list)).toEqual([h1.fixtureId, h2.fixtureId].sort());
+    expect(resultMissing(list)).toEqual([plain.fixtureId]);
+  });
+
+  it("only a HELD board is left out: a board with an open flag (a report to review, not the decision) keeps its missing result beside its board_flagged row", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [flagged, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await bridgeRow(flagged.fixtureId, r.orgId, { status: "live", moves: 10 });
+    await openFlag(r.orgId, flagged.fixtureId, { kind: "multiple_devices" });
+
+    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+
+    expect(flaggedIds(list), "premise: the flag is its own row").toEqual([flagged.fixtureId]);
+    expect(heldIds(list)).toEqual([]);
+    expect(resultMissing(list), "the flagged board still owes its result, as does the plain one").toEqual([flagged.fixtureId, other.fixtureId].sort());
+  });
+
+  it("a division whose held read FAILED falls back to the older row: result_missing is raised for the held board rather than nothing (the safe direction)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [held, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await hold(r, held, "no_show_white");
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      vi.mocked(listNeedsOrganiserExternalPlay).mockRejectedValueOnce(new Error("boom: the held read is down"));
+      const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+      expect(heldIds(list), "premise: the read failed, so no board_held row").toEqual([]);
+      expect(resultMissing(list), "with no hold raised, the board's missing result is still told").toEqual([held.fixtureId, other.fixtureId].sort());
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
+describe.runIf(HAS_DB)("T5 M4: a round listed for a hold or a flag while the day is not a match day (spec: opened today, a live window or a game on file makes the day)", () => {
+  const ago = (minutes: number): Date => new Date(NOW.getTime() - minutes * MIN);
+  const YESTERDAY = 26 * 60;
+
+  it("a link hold and a flagged-after-finish board of a round opened YESTERDAY: fixtures_today is 0, the page is the competition's, and the round still lists both boards their rows open", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: null });
+    const [linkHeld, flagged] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await openStamp(r, 1, ago(YESTERDAY));
+    await bridgeRow(linkHeld.fixtureId, r.orgId, { status: "needs_organiser", reason: "lichess_unlinked", hold: true });
+    await flaggedBoard(r, flagged, 1);
+
+    const view = await getMatchDay(r.owner, r.competitionId, NOW);
+
+    expect(view.fixtures_today, "no match today by the spec's day rule: the round opened yesterday, its window is long closed, no game is live").toBe(0);
+    expect(needsYouHome(view.fixtures_today), "so the Needs-you list lives on the competition page").toBe("competition");
+    // ...and yet Match Day lists the round (its latest opened one), with both boards: the asymmetry is the spec's, and nothing dead-ends.
+    expect(view.online_rounds.map((x) => x.key), "the round is listed").toEqual([`${r.stageId}:1`]);
+    const boards = view.online_rounds[0]!.round!.boards.map((b) => b.fixtureId).sort();
+    expect(boards, "both boards of the round are on its row").toEqual([linkHeld.fixtureId, flagged.fixtureId].sort());
+    const desk = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+    expect(heldIds(desk)).toEqual([linkHeld.fixtureId]);
+    expect(flaggedIds(desk)).toEqual([flagged.fixtureId]);
+    for (const id of [...heldIds(desk), ...flaggedIds(desk)]) expect(boards, `the Needs-you row for ${id} resolves to a board Match Day lists`).toContain(id);
+  });
+
+  it("the differential: the same round opened TODAY is a match day, and the Needs-you list moves to Match Day", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: null });
+    const [linkHeld, flagged] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await openStamp(r, 1, ago(5));
+    await bridgeRow(linkHeld.fixtureId, r.orgId, { status: "needs_organiser", reason: "lichess_unlinked", hold: true });
+    await flaggedBoard(r, flagged, 1);
+
+    const view = await getMatchDay(r.owner, r.competitionId, NOW);
+
+    expect(view.fixtures_today, "an online night is a match day from the moment its first round is opened").toBeGreaterThan(0);
+    expect(needsYouHome(view.fixtures_today)).toBe("match_day");
+    expect(view.online_rounds.map((x) => x.key)).toEqual([`${r.stageId}:1`]);
   });
 });

@@ -798,6 +798,8 @@ export async function getCompetitionDesk(
     // The rows "N of M played" leaves out (`countsAsMatch`, below): every bye line but one awaiting its walkover.
     const notMatches = rows.filter((x) => !countsAsMatch(x));
     const stageKindById = new Map(divisionStages.map((x) => [x.id, x.kind]));
+    // The boards this division raises `board_held` for: each is one row already, so it is not also `result_missing` (spec 5.4, A6).
+    const heldBoardIds = new Set((boardAttentions.get(d.id) ?? []).flatMap((a) => (a.kind === "board_held" ? [a.fixtureId] : [])));
     const phaseFixtures: PhaseFixture[] = work.map((x) => ({
       id: x.id,
       status: x.status,
@@ -819,6 +821,7 @@ export async function getCompetitionDesk(
       awaitsSettle: fixtureAwaitsSettle(stageKindById.get(x.stage_id), x),
       awaitsRoundOpen:
         onlineIds.has(d.id) && x.round_no !== null && !openedRounds.has(roundKey(x.stage_id, x.round_no)),
+      heldOnline: heldBoardIds.has(x.id),
       // W5 T5 (X-CU-12): a late entrant's catch-up line, counted apart in `unscheduled` while it has no slot.
       catchUp: isCatchUpExtKey(x.ext_key),
     }));

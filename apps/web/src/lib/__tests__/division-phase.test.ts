@@ -736,6 +736,22 @@ describe("resolveAttention", () => {
       missing([fx({ id: "u", ...past, awaitsRoundOpen: true }), fx({ id: "o", ...past }), fx({ id: "o2", ...past })]),
     ).toEqual({ kind: "result_missing", count: 2, fixtureIds: ["o", "o2"] });
   });
+  // Gaps wave A6 (spec 2026-11-05 5.4, "a hold is never counted twice"): an online board the desk raises `board_held` for is that one row.
+  it("A6: result_missing skips a board the desk holds (heldOnline); a board with the flag false or absent, and the rest of the division, are owed as before", () => {
+    const past = { scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 };
+    const missing = (fixtures: PhaseFixture[]) => resolveAttention(input({ fixtures })).find((a) => a.kind === "result_missing");
+    expect(missing([fx({ id: "h", ...past, heldOnline: true })]), "the empty case: only a held board").toBeUndefined();
+    expect(missing([fx({ id: "h", ...past, heldOnline: false })]), "the positive pair: the flag false").toEqual({ kind: "result_missing", count: 1, fixtureIds: ["h"] });
+    expect(missing([fx({ id: "h", ...past })]), "absent reads as not held").toEqual({ kind: "result_missing", count: 1, fixtureIds: ["h"] });
+    expect(
+      missing([fx({ id: "h", ...past, heldOnline: true }), fx({ id: "o", ...past }), fx({ id: "h2", ...past, heldOnline: true }), fx({ id: "o2", ...past })]),
+      "mixed: the held boards are neither counted nor named",
+    ).toEqual({ kind: "result_missing", count: 2, fixtureIds: ["o", "o2"] });
+    // The two guards are independent: a board that is held AND awaits its round's open owes nothing either way; neither flag alone is covered by the other.
+    expect(missing([fx({ id: "x", ...past, heldOnline: true, awaitsRoundOpen: true })])).toBeUndefined();
+    expect(missing([fx({ id: "y", ...past, heldOnline: false, awaitsRoundOpen: true })]), "awaitsRoundOpen alone still skips").toBeUndefined();
+    expect(missing([fx({ id: "z", ...past, heldOnline: true, awaitsRoundOpen: false })]), "heldOnline alone still skips").toBeUndefined();
+  });
   it("result_missing is not raised while the match window is still open", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 90 })];
     expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "result_missing")).toBe(false);
