@@ -85,7 +85,9 @@ describe("the client swap", () => {
     expect(h.calls).toBe(0);
     // Two places: the bar (max-sm:hidden) and the phone panel's auth block.
     expect(html.split('href="/dashboard"')).toHaveLength(3);
-    expect(html).not.toContain('href="/login');
+    // The signed-out pair stays only as the slot's sizer: invisible and inert (so not focusable), never in the panel.
+    expect(html.split('href="/login"')).toHaveLength(2);
+    expect(html).toMatch(/<div class="[^"]*\binvisible\b[^"]*" inert="">\s*<a [^>]*href="\/login"/);
   });
 
   it("without it (no cookie, another cookie, the hint set to 0) the signed-out actions stay", async () => {
@@ -101,14 +103,22 @@ describe("the client swap", () => {
     h.clientSnapshot = false;
     vi.stubGlobal("document", { cookie: `${SESSION_HINT_COOKIE}=1` });
     const html = renderToStaticMarkup(<NavSessionSwap signedOut={<b>out</b>} signedIn={<i>in</i>} />);
-    expect(html).toBe("<b>out</b>");
+    expect(html).toContain("<b>out</b>");
+    expect(html).not.toContain("<i>in</i>");
+    expect(html).not.toContain("invisible");
   });
 
   it("NavSessionSwap draws signedIn exactly when the hint is set", () => {
     withCookie(`${SESSION_HINT_COOKIE}=1`);
-    expect(renderToStaticMarkup(<NavSessionSwap signedOut={<b>out</b>} signedIn={<i>in</i>} />)).toBe("<i>in</i>");
+    const hinted = renderToStaticMarkup(<NavSessionSwap signedOut={<b>out</b>} signedIn={<i>in</i>} />);
+    expect(hinted).toContain("<i>in</i>");
+    // The sizer: the signed-out node is still there (so the slot keeps its width) but cannot be seen or focused.
+    expect(hinted).toMatch(/class="[^"]*\binvisible\b[^"]*" inert=""><b>out<\/b>/);
     withCookie("a=1");
-    expect(renderToStaticMarkup(<NavSessionSwap signedOut={<b>out</b>} signedIn={<i>in</i>} />)).toBe("<b>out</b>");
+    const plain = renderToStaticMarkup(<NavSessionSwap signedOut={<b>out</b>} signedIn={<i>in</i>} />);
+    expect(plain).toContain("<b>out</b>");
+    expect(plain).not.toContain("<i>in</i>");
+    expect(plain).not.toContain("inert");
   });
 });
 

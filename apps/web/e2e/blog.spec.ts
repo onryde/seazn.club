@@ -135,6 +135,40 @@ test.describe("signed out", () => {
 // The default project state is a real signed-in session (auth.setup.ts: a magic-link login, which sets BOTH cookies). The page
 // is cached and shared, so it was drawn for a stranger; the swap happens in the browser from the readable hint cookie.
 test.describe("signed in", () => {
+  test("nothing in the bar moves when the Dashboard swap happens (every frame, then against a signed-out visit)", async ({ page, browser }) => {
+    // Sample the left edge of every bar link on every animation frame from the first paint, so a jump that lasts a single
+    // frame is caught, then compare the settled signed-in bar with the signed-out one.
+    await page.addInitScript(() => {
+      const samples: string[] = [];
+      (window as unknown as { __barSamples: string[] }).__barSamples = samples;
+      const tick = () => {
+        const bar = document.querySelector("[data-mk-nav]");
+        if (bar) {
+          const xs = [...bar.querySelectorAll("a.mk-nav-link, button")].filter((e) => !(e as HTMLElement).closest("[data-testid=nav-session-slot]")).map((e) => Math.round((e as HTMLElement).getBoundingClientRect().left * 2) / 2);
+          if (xs.length) samples.push(xs.join(","));
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+    await visit(page, "/blog", 1280);
+    const bar = page.locator("[data-mk-nav]");
+    await expect(bar.getByRole("link", { name: /Dashboard/ })).toBeVisible();
+    await page.waitForTimeout(300);
+    const samples = await page.evaluate(() => (window as unknown as { __barSamples: string[] }).__barSamples);
+    const distinct = [...new Set(samples)];
+    expect(samples.length, "anti-vacuity: frames sampled").toBeGreaterThan(5);
+    expect(distinct.length, `the other bar items stayed put in every frame: ${distinct.join(" | ")}`).toBe(1);
+    const left = async (pg: Page) => pg.locator("[data-mk-nav]").getByRole("link", { name: "Blog", exact: true }).evaluate((e) => Math.round(e.getBoundingClientRect().left * 2) / 2);
+    const signedInLeft = await left(page);
+    const ctx = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 900 } });
+    const out = await ctx.newPage();
+    await visit(out, "/blog", 1280);
+    await expect(out.locator("[data-mk-nav]").getByRole("link", { name: "Log in" })).toBeVisible();
+    expect(await left(out), "the Blog link is where it is for a signed-out visitor").toBe(signedInLeft);
+    await ctx.close();
+  });
+
   test("the bar swaps its sign-in actions for Dashboard after hydration, with no server read of the session", async ({ page, playwright, baseURL }) => {
     await visit(page, "/blog", 1280);
     const bar = page.locator("[data-mk-nav]");

@@ -24,6 +24,7 @@ export default async function BlogIndexPage() {
     postOne: t(d, "blog.index.postOne"),
     postMany: t(d, "blog.index.postMany"),
     empty: t(d, "blog.index.empty"),
+    none: t(d, "blog.index.none"),
   };
   return (
     <main>

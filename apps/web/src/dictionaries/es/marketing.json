@@ -1578,6 +1578,7 @@
   "blog.index.postOne": "{n} artículo",
   "blog.index.postMany": "{n} artículos",
   "blog.index.empty": "Todavía no hay artículos para este deporte.",
+  "blog.index.none": "Todavía no hay artículos. Los primeros están en camino.",
   "blog.post.updated": "Actualizado el {date}",
   "blog.post.handlesTitle": "Cómo lo gestiona Seazn",
   "blog.post.handlesBody": "El centro de ayuda muestra dónde encontrarlo en Seazn y cómo configurarlo.",

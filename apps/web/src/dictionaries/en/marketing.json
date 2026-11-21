@@ -1578,6 +1578,7 @@
   "blog.index.postOne": "{n} post",
   "blog.index.postMany": "{n} posts",
   "blog.index.empty": "No posts for this sport yet.",
+  "blog.index.none": "No posts yet. The first ones are on their way.",
   "blog.post.updated": "Updated {date}",
   "blog.post.handlesTitle": "How Seazn handles it",
   "blog.post.handlesBody": "The help centre shows where to find this in Seazn and how to set it up.",

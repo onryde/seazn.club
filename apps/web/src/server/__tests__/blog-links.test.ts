@@ -34,6 +34,28 @@ describe("which links are read", () => {
   });
 });
 
+describe("the other spellings of a link", () => {
+  it("reads an absolute link to our own origin and a reference-style definition, and still skips another site's /help", () => {
+    const md = [
+      "[abs](https://seazn.club/help/divisions/settings#x) [www](https://www.seazn.club/blog/a-post) [other](https://example.com/help/zzz)",
+      "[lookalike](https://seazn.club.evil.example/help/zzz)",
+      "See [the guide][g] and [another][b].",
+      "",
+      "[g]: /help/divisions/settings",
+      "  [b]: <https://seazn.club/blog/never-written> \"title\"",
+      "[ext]: https://example.com/help/zzz",
+    ].join("\n");
+    expect(blogBodyLinks(md)).toEqual(["/help/divisions/settings#x", "/blog/a-post", "/help/divisions/settings", "/blog/never-written"]);
+  });
+
+  it("a dead link in either spelling fails the check", () => {
+    const problems = blogLinkProblems("[a](https://seazn.club/help/gone)\n\n[r]: /blog/never-written", stub);
+    expect(problems).toHaveLength(2);
+    expect(problems.join(" ")).toContain("/help/gone");
+    expect(problems.join(" ")).toContain("never-written");
+  });
+});
+
 describe("which links resolve", () => {
   it("passes live links (fragment, query and trailing slash ignored; the blog index is always there)", () => {
     const md = "[a](/help/divisions/settings#top) [b](/blog/how-standings-points-work/) [c](/help) [d](/blog) [e](/help?x=1)";

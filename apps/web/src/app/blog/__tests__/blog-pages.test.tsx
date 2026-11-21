@@ -30,6 +30,22 @@ import es from "@/dictionaries/es/marketing.json";
 import fr from "@/dictionaries/fr/marketing.json";
 import nl from "@/dictionaries/nl/marketing.json";
 
+// Lets one test give the pilot related slugs that RESOLVE (the pilot's own do not yet): a hoisted switch, pass-through when off.
+const rel = vi.hoisted(() => ({ on: false as boolean, related: [] as string[], find: null as null | ((slug: string) => unknown) }));
+vi.mock("@/server/blog-content", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/blog-content")>();
+  return {
+    ...real,
+    blogPost: (slug: string) => {
+      if (!rel.on) return real.blogPost(slug);
+      const found = rel.find ? rel.find(slug) : null;
+      if (found) return found as ReturnType<typeof real.blogPost>;
+      const post = real.blogPost(slug);
+      return post && slug === "how-standings-points-work" ? { ...post, related: rel.related } : post;
+    },
+  };
+});
+
 // The shell's display face (components/marketing/marketing-shell.tsx) is next/font, which only exists inside a Next build.
 vi.mock("next/font/google", () => ({ Barlow_Condensed: () => ({ variable: "--mk-font-display", className: "" }) }));
 vi.mock("next/navigation", () => ({
@@ -126,6 +142,24 @@ describe("the post page, through the real renderer (the pilot)", () => {
     expect(post.related.every((s) => blogPost(s) === null), "premise: none resolves today").toBe(true);
     for (const slug of post.related) expect(markup, slug).not.toContain(blogUrl(slug));
     expect(markup).not.toContain('data-testid="blog-related"');
+  });
+
+  it("related cards on the real page: resolved slugs are linked in front-matter order, with their titles; an unresolved one is not", async () => {
+    const [a, b] = ["how-swiss-pairs-round-two", "who-wins-a-two-way-tie"].map((slug) => fixturePosts.find((p) => p.slug === slug)!);
+    rel.on = true;
+    rel.related = [b!.slug, "planned-but-unwritten", a!.slug];
+    rel.find = (slug) => fixturePosts.find((p) => p.slug === slug) ?? null;
+    try {
+      const markup = await html(PILOT);
+      const section = /data-testid="blog-related".*?<\/section>/s.exec(markup)![0];
+      const links = [...section.matchAll(/<a [^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gs)].map((m) => [m[1], text(m[2]!).trim().split(" ").slice(0, 3).join(" ")]);
+      expect(links.map((l) => l[0])).toEqual([blogUrl(b!.slug), blogUrl(a!.slug)]);
+      for (const post of [b!, a!]) expect(text(section), post.slug).toContain(post.title);
+      expect(links).toHaveLength(2);
+      expect(section).not.toContain("planned-but-unwritten");
+    } finally {
+      rel.on = false;
+    }
   });
 
   it("'On this page' lists the body's sections and then 'How Seazn handles it'", async () => {
@@ -231,10 +265,13 @@ describe("structured data", () => {
       const ld = blogPostingLd(p);
       expect(JSON.stringify(ld), p.slug).not.toContain('"Person"');
       expect(ld.dateModified, p.slug).toBe(p.updated ?? p.date);
+      // The image is the per-post share card, a route that exists for this very slug.
+      expect(ld.image, p.slug).toMatch(new RegExp(`/blog/${p.slug}/opengraph-image$`));
       expect(blogPostBreadcrumbLd(p).itemListElement).toHaveLength(2);
       checked++;
     }
     expect(checked).toBe(fixturePosts.length + realPosts.length);
+    expect(ogRoute.generateStaticParams().map((x: { slug: string }) => x.slug)).toContain(PILOT);
     expect(fixturePosts.some((p) => p.updated), "premise: one fixture has an update").toBe(true);
   });
 
@@ -288,7 +325,7 @@ describe("the index", () => {
   });
 
   it("the island prints the chip rail as pressed-state buttons, an every-sport mark, and the sport tags", () => {
-    const labels = { filterLabel: "Show posts for", allSports: "All sports", everySport: "Every sport", topics: "Topics", postOne: "{n} post", postMany: "{n} posts", empty: "none" };
+    const labels = { filterLabel: "Show posts for", allSports: "All sports", everySport: "Every sport", topics: "Topics", postOne: "{n} post", postMany: "{n} posts", empty: "none for this sport", none: "no posts at all" };
     const out = renderToStaticMarkup(<BlogIndex groups={model.groups} chips={model.chips} total={model.total} labels={labels} />);
     expect(out.match(/aria-pressed="true"/g)).toHaveLength(1);
     expect(out.match(/<button /g)).toHaveLength(4);
@@ -300,6 +337,28 @@ describe("the index", () => {
     // No chips: no filter bar at all (a blog of every-sport posts has nothing to filter).
     const none = renderToStaticMarkup(<BlogIndex groups={model.groups} chips={[]} total={4} labels={labels} />);
     expect(none).not.toContain("<button");
+  });
+
+  it("the chip rail is a scrolling box a keyboard can reach (tabindex, role, name), and every chip is a 44px touch target", () => {
+    const labels = { filterLabel: "Show posts for", allSports: "All sports", everySport: "Every sport", topics: "Topics", postOne: "{n} post", postMany: "{n} posts", empty: "none for this sport", none: "no posts at all" };
+    const out = renderToStaticMarkup(<BlogIndex groups={model.groups} chips={model.chips} total={model.total} labels={labels} />);
+    const rail = /<div [^>]*role="group"[^>]*>/.exec(out)![0];
+    expect(rail).toContain('tabindex="0"');
+    expect(rail).toContain('aria-labelledby="blog-sport-filter"');
+    expect(rail).toMatch(/overflow-x-auto/);
+    const buttons = out.match(/<button [^>]*>/g)!;
+    expect(buttons).toHaveLength(4);
+    for (const b of buttons) {
+      expect(b).toContain("min-h-11");
+      expect(b, "no breakpoint shrinks it below 44px").not.toMatch(/\b(?:sm|md|lg|xl):min-h-\d\b/);
+    }
+  });
+
+  it("an empty blog says there are no posts; a sport with none says so for that sport", () => {
+    const labels = { filterLabel: "f", allSports: "a", everySport: "e", topics: "Topics", postOne: "{n} post", postMany: "{n} posts", empty: "none for this sport", none: "no posts at all" };
+    const zero = renderToStaticMarkup(<BlogIndex groups={[]} chips={[]} total={0} labels={labels} />);
+    expect(zero).toContain("no posts at all");
+    expect(zero).not.toContain("none for this sport");
   });
 });
 

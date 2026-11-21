@@ -126,7 +126,8 @@ test.describe("signed out", () => {
       // Tablets: Product, Sports, Blog, Pricing, Live, the Help icon, then the sign-in actions, all on ONE row and inside the bar.
       const items = bar.locator("nav > *:visible");
       const rects = await items.evaluateAll((els) => els.map((e) => { const r = e.getBoundingClientRect(); return { y: r.y + r.height / 2, right: r.right, left: r.left, h: r.height, t: (e.textContent ?? "").trim() || e.getAttribute("aria-label") }; }));
-      expect(rects.length, "Product, Sports, Blog, Pricing, Live, Help, Log in, Start free").toBe(8);
+      // Product, Sports, Blog, Pricing, Live, Help, and the sign-in slot (Log in + Start free, one box that also holds "Dashboard").
+      expect(rects.length, "six bar items and the sign-in slot").toBe(7);
       const rowY = rects[0]!.y;
       for (const r of rects) expect(Math.abs(r.y - rowY), `${r.t} sits on the bar's one row`).toBeLessThanOrEqual(2);
       for (const r of rects) {

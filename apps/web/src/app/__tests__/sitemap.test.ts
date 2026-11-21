@@ -192,7 +192,7 @@ describe("sitemap.xml: reads and fallback", () => {
     // The help tree has real /help/formats pages (the format gallery): they are not the deleted /formats route, so they are
     // exempt by their prefix, and the premise below proves the exemption has something to exempt.
     expect(out.filter((u) => u.startsWith(`${BASE}/help/formats`)).length).toBeGreaterThan(0);
-    const gone = out.filter((u) => !u.startsWith(`${BASE}/help/`) && /\/(discover|formats|use-cases)(\/|$)|\/[a-z]{2}\/scheduling$/.test(new URL(u).pathname));
+    const gone = out.filter((u) => !u.startsWith(`${BASE}/help/formats`) && /\/(discover|formats|use-cases)(\/|$)|\/[a-z]{2}\/scheduling$/.test(new URL(u).pathname));
     expect(gone).toEqual([]);
   });
 });

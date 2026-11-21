@@ -111,6 +111,7 @@ export interface BlogIndexLabels {
   postOne: string;
   postMany: string;
   empty: string;
+  none: string;
 }
 
 /** Whether a post shows under a sport chip: a post for every sport shows under all of them. */

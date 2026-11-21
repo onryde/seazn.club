@@ -56,7 +56,7 @@ export function BlogExample({ id, result, swipeHint }: { id: string; result: Exa
               </tbody>
             </table>
           </div>
-          <p className="mt-1.5 text-xs text-slate-500 md:hidden max-md:px-4">{swipeHint}</p>
+          <p className="mt-1.5 text-xs text-slate-500 md:hidden">{swipeHint}</p>
         </figure>
       ) : null}
       {diagram ? <BlogDiagram model={diagram} /> : null}

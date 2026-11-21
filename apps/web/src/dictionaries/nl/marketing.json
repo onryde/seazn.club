@@ -1578,6 +1578,7 @@
   "blog.index.postOne": "{n} artikel",
   "blog.index.postMany": "{n} artikelen",
   "blog.index.empty": "Nog geen artikelen voor deze sport.",
+  "blog.index.none": "Nog geen artikelen. De eerste komen eraan.",
   "blog.post.updated": "Bijgewerkt op {date}",
   "blog.post.handlesTitle": "Hoe Seazn dit regelt",
   "blog.post.handlesBody": "Het helpcentrum laat zien waar je dit in Seazn vindt en hoe je het instelt.",

@@ -5,14 +5,17 @@ import "server-only";
 // `assertBlogLinks` while it renders, which makes a dead link a BUILD failure (generateStaticParams renders every
 // post), and blog-links.test.ts runs the same check over every post on disk.
 //
-// A link is the target of Markdown `[text](/help/...)` (or an HTML `href="/help/..."`). The path decides; a `#fragment`
+// A link is the target of Markdown `[text](/help/...)`, an HTML `href="/help/..."` or a reference definition. The path decides; a `#fragment`
 // is not checked (a heading's id moves with its text, and help's ids are P1's to own).
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { blogUrl } from "@/lib/blog";
 import { helpUrl } from "@/lib/help";
 import { allBlogPosts, type BlogPost } from "@/server/blog-content";
 
-const LINK = /(?:\]\(\s*|href=["'])(\/(?:help|blog)(?:[/?#][^)\s"']*)?)(?=[)\s"'])/g;
+// Three spellings of a link: inline `[t](target)`, an HTML `href`, and a reference definition `[ref]: target` on its own
+// line. The target may carry this site's own origin (an absolute link to our own page is still a link to check); another
+// site's /help/... is somebody else's page and is left alone.
+const LINK = /(?:\]\(\s*|href=["']|^[ \t]{0,3}\[[^\]\n]+\]:[ \t]*<?)(?:https?:\/\/(?:www\.)?seazn\.club)?(\/(?:help|blog)(?:[/?#][^)\s"'>]*)?)(?=[)\s"'>]|$)/gm;
 
 /** The `/help` and `/blog` targets a body links to, as written (query and fragment kept). */
 export function blogBodyLinks(markdown: string): string[] {

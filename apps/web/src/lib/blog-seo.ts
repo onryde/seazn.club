@@ -67,6 +67,8 @@ export function blogPostingLd(post: BlogPostMeta) {
     publisher: publisher(),
     mainEntityOfPage: { "@type": "WebPage", "@id": url },
     url,
+    // The per-post card (opengraph-image.tsx), the same picture the share preview shows.
+    image: `${url}/opengraph-image`,
   };
 }
 

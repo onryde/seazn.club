@@ -662,6 +662,7 @@ export type DictionaryKey =
   | "blog.index.everySport"
   | "blog.index.filterLabel"
   | "blog.index.lede"
+  | "blog.index.none"
   | "blog.index.postMany"
   | "blog.index.postOne"
   | "blog.index.title"

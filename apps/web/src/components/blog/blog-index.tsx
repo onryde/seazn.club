@@ -28,7 +28,8 @@ export function BlogIndex({ groups, chips, total, labels }: { groups: BlogIndexG
           <div
             role="group"
             aria-labelledby="blog-sport-filter"
-            className="flex gap-2 overflow-x-auto pb-2 [scrollbar-width:none] md:flex-wrap md:overflow-visible md:pb-0 [&::-webkit-scrollbar]:hidden"
+            tabIndex={0}
+            className="flex gap-2 overflow-x-auto pb-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-500 [scrollbar-width:none] md:flex-wrap md:overflow-visible md:pb-0 [&::-webkit-scrollbar]:hidden"
           >
             {[{ key: ALL, label: labels.allSports, count: total }, ...chips].map((c) => (
               <button
@@ -36,7 +37,7 @@ export function BlogIndex({ groups, chips, total, labels }: { groups: BlogIndexG
                 type="button"
                 aria-pressed={sport === c.key}
                 onClick={() => setSport(c.key)}
-                className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-500 md:min-h-9 ${
+                className={`inline-flex min-h-11 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-3.5 text-sm transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-purple-500 ${
                   sport === c.key ? "border-purple-300 bg-purple-100 font-semibold text-purple-800" : "border-slate-200 bg-white text-slate-700 hover:border-purple-200"
                 }`}
               >
@@ -95,7 +96,7 @@ export function BlogIndex({ groups, chips, total, labels }: { groups: BlogIndexG
               </ul>
             </section>
           ))}
-          {visible.length === 0 ? <p className="mt-2 rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600">{labels.empty}</p> : null}
+          {visible.length === 0 ? <p className="mt-2 rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-600">{total === 0 ? labels.none : labels.empty}</p> : null}
         </div>
       </div>
     </div>
