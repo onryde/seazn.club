@@ -189,11 +189,14 @@ describe("a board opened from the list: full-screen on a phone, kept through the
     expect(p.round).toBeNull();
     expect(p.selected).toMatchObject({ kind: "board", id: "b-2", name: "Board 2 · Okafor v Haas" });
     expect(p.listHiddenOnPhone).toBe(true);
-    // Back: the phone is on the list; the board is still the desktop's focus.
+    // Back (MD-R35): the phone is on the list AND the board is out of focus - a hidden panel would keep its cameras joined behind the list.
+    // The desktop's focus falls back to its default (the first round); a desktop has no Back to press.
     (p.board!.onBack as () => void)();
     const back = parts(island.tree());
     expect(back.listHiddenOnPhone).toBe(false);
-    expect(back.board).toMatchObject({ hiddenOnPhone: true });
+    expect(back.board, "the board is no longer the focus").toBeNull();
+    expect(back.round, "the default focus is the day's first round, hidden behind the list on a phone").toMatchObject({ hiddenOnPhone: true });
+    expect(back.selected, "no board row is highlighted: the round is").toMatchObject({ kind: "round" });
   });
 
   it("a poll that still lists the board keeps it focused - the NEW row, the same board - and the phone where it was", async () => {
@@ -578,6 +581,56 @@ describe("the board in focus's cameras: only a watchable side is joined, only fo
     island.unmount();
     await settle();
     expect([...sdk.open.values()].reduce((a, b) => a + b, 0), "the page going away left everything").toBe(0);
+  });
+
+  it("MD-R35 (phone): 'Back to the list' LEAVES both meetings - the board is no longer in focus, nothing is held in a hidden panel - and opening the board again rejoins on the kept tokens", async () => {
+    const boards = [camBoard("cam-back", both())];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards)));
+    const total = () => [...sdk.open.values()].reduce((a, b) => a + b, 0);
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("cam-back");
+    await settle();
+    await settle();
+    expect(total(), "premise: the opened board's two meetings are joined").toBe(2);
+    expect(parts(island.tree()).board, "premise: its panel is on the screen").not.toBeNull();
+    expect(parts(island.tree()).listHiddenOnPhone, "premise: the list is hidden behind it on a phone").toBe(true);
+
+    // The phone's Back (the one control that leaves a board on a phone): the list shows, and the board is let go.
+    (parts(island.tree()).board!.onBack as () => void)();
+    await settle();
+    await settle();
+    const after = parts(island.tree());
+    expect(after.listHiddenOnPhone, "the list is back").toBe(false);
+    expect(after.board, "no board is in focus: nothing is keeping its meetings").toBeNull();
+    expect(total(), "both meetings were left").toBe(0);
+    expect(sdk.leaves, "by the SDK's own leave, twice").toHaveLength(2);
+    // A poll while on the list asks for nothing and joins nothing.
+    net.next = nightOf(boards, at(1));
+    poll.tick!();
+    await settle();
+    expect(net.joins, "no new POST on the list").toHaveLength(2);
+    expect(total(), "and still nothing joined").toBe(0);
+    // Open it again: both meetings are joined again, on the tokens the first visit kept (no new POST).
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("cam-back");
+    await settle();
+    await settle();
+    expect(total(), "the return joins both meetings again").toBe(2);
+    expect(net.joins, "without a new POST: the kept tokens").toHaveLength(2);
+    island.unmount();
+    await settle();
+    expect(total(), "the page going away left everything").toBe(0);
+  });
+
+  it("MD-R35 (desktop): the focused board's meetings are held across polls while it stays in focus - there is no Back to press (the control is `md:hidden`), so the desktop's focus is untouched", async () => {
+    const boards = [camBoard("cam-desk", both())];
+    const island = renderIsland(MatchDayShell, props(nightOf(boards), { focusBoardId: "cam-desk" }));
+    await settle();
+    await drive(island, boards, 3);
+    const total = () => [...sdk.open.values()].reduce((a, b) => a + b, 0);
+    expect(parts(island.tree()).board, "still in focus").not.toBeNull();
+    expect(total(), "both meetings still joined after three polls").toBe(2);
+    expect(sdk.leaves, "nothing was left").toEqual([]);
+    expect(net.joins, "and nothing was asked again").toHaveLength(2);
+    island.unmount();
   });
 
   it("SEQUENCE through the shell's own poll: refused NOT_STARTED -> the day's next poll while the side is still watchable -> joined, with no press (the poll key reaches the hook)", async () => {

@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useId, useMemo, useReducer, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { arbiterDecision, decisionRunner, initialArbiterDecision, type ArbiterDecisionState, type SettleChoice } from "../arbiter-decision";
-import { BoardCameras, anyUnavailable } from "./board-cameras";
+import { BoardCameras, CamerasToggle, anyUnavailable } from "./board-cameras";
 import { camerasOffered, defaultCameraMode, type JoinViews, type MeetingKey } from "./online/arbiter-joins";
 import { CARD, CHIP_NEUTRAL, FlagCard, MUTED, SOFT, useFmt } from "../arbiter-flag-cards";
 import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
@@ -157,6 +157,9 @@ export function BoardFocus(p: BoardFocusProps) {
   // watch, the board otherwise), which follows the board's state until the organiser picks.
   const [pickedMode, setPickedMode] = useState<CameraMode | null>(null);
   const cameraMode = pickedMode ?? defaultCameraMode(board, reader);
+  // The cameras' fold (MD-R36: its press is on the state row, the strip is in the rest column, so the state is the panel's): a HELD board opens
+  // folded, the decision is what its organiser came for. Read once, from the row the panel was opened on - a poll never refolds or reopens it.
+  const [camerasFolded, setCamerasFolded] = useState(() => row.state.kind === "on_hold");
   // A press re-reads the board straight away AND refreshes the day: the panel's own answer must not wait for the day's read to succeed.
   const refresh = useCallback(() => {
     setReloadKey((n) => n + 1);
@@ -215,6 +218,8 @@ export function BoardFocus(p: BoardFocusProps) {
       joins={p.joins}
       cameraMode={cameraMode}
       onCameraMode={setPickedMode}
+      camerasFolded={camerasFolded}
+      onCamerasFolded={setCamerasFolded}
     />
   );
 }
@@ -240,6 +245,9 @@ export type BoardPanelViewProps = {
   /** Which of the cameras and the board shows below lg (both show from lg). Only read where both exist. */
   cameraMode: CameraMode;
   onCameraMode(mode: CameraMode): void;
+  /** The cameras' strip folded to one line, and the setter its toggle (on the state row) calls. Only read where the cameras are offered. */
+  camerasFolded: boolean;
+  onCamerasFolded(folded: boolean): void;
 };
 
 /** The chip a flag wears for a reader who has no editor's role: the kind and nothing of what it found or whom it names. A kind added to
@@ -259,6 +267,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
   const f = useFmt(nowMs, round.tz);
   const decideId = useId();
   const outageId = useId();
+  const camerasId = useId();
 
   const editor = reader.editor;
   const may = { start: mayPress(reader, "start"), finish: mayPress(reader, "finish") };
@@ -348,10 +357,23 @@ export function BoardPanelView(p: BoardPanelViewProps) {
               {word.text}
               {word.sub !== null && <span className="ml-2 font-medium text-slate-600">{word.sub}</span>}
             </p>
-            {matchHref !== null && (
-              <Link href={matchHref} data-testid="md-open-pad" className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5">
-                {f.t("matchDay.focus.openMatch")}
-              </Link>
+            {(cameras !== null || matchHref !== null) && (
+              <div className="flex min-w-0 shrink-0 flex-wrap items-center justify-end gap-x-3 gap-y-1">
+                {cameras !== null && (
+                  <CamerasToggle
+                    folded={p.camerasFolded}
+                    onToggle={() => p.onCamerasFolded(!p.camerasFolded)}
+                    controlsId={camerasId}
+                    f={f}
+                    className={hideCamerasBelowLg ? "max-lg:hidden" : ""}
+                  />
+                )}
+                {matchHref !== null && (
+                  <Link href={matchHref} data-testid="md-open-pad" className="btn btn-ghost min-h-11 shrink-0 text-sm lg:min-h-0 lg:py-1.5">
+                    {f.t("matchDay.focus.openMatch")}
+                  </Link>
+                )}
+              </div>
             )}
           </div>
 
@@ -435,7 +457,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
         <div data-testid="md-board-rest" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-2 lg:row-start-2 lg:gap-3" : ""}`}>
           {cameras !== null && (
             <div data-testid="md-board-cameras" className={`min-w-0${hideCamerasBelowLg ? " max-lg:hidden" : ""}`}>
-              <BoardCameras board={board} views={cameras.views} f={f} dict={ctx.dict} onRetry={cameras.retry} />
+              <BoardCameras board={board} views={cameras.views} f={f} dict={ctx.dict} onRetry={cameras.retry} folded={p.camerasFolded} bodyId={camerasId} />
             </div>
           )}
 
@@ -487,6 +509,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           />
           {may.finish && outageOffered(board, cameras !== null && anyUnavailable(board, cameras.views)) && (
             <OutageCard
+              gameOnFile={board.canResync}
               busy={decision.busy !== null}
               overriding={decision.busy?.kind === "override"}
               onOverride={p.on.override}

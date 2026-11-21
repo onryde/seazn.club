@@ -1285,11 +1285,13 @@ test("match day board panel, cameras: the switch, the folded held cameras and 43
   await expect(position).toBeVisible();
   await expect(position.locator("cg-board piece"), "the real board mounted with every piece").toHaveCount(32);
   await expect(cameras, "the cameras give the phone up").toBeHidden();
+  await expect(page.getByTestId("md-cameras-toggle"), "and so does their fold press (it is on the state row, MD-R36)").toBeHidden();
   await expect(page.getByTestId("md-board-seats"), "the seat cards name the players when the tiles are hidden").toBeVisible();
   await check("the live board, board");
   // And back: the cameras return without a reload.
   await buttons.nth(0).click();
   await expect(cameras).toBeVisible();
+  await expect(page.getByTestId("md-cameras-toggle")).toBeVisible();
   await expect(position).toBeHidden();
 
   // The order a phone reads in the DOM (the switch hides one of the two, it never reorders them): board, THEN cameras.

@@ -7927,6 +7927,8 @@
   "arbiter.outage.title": "La vidéo est indisponible pour le moment",
   "arbiter.outage.body": "Les joueurs ne peuvent pas prendre place tant qu'une caméra est exigée. Vous pouvez laisser cet échiquier démarrer sans vidéo. C'est inscrit au journal d'audit.",
   "arbiter.outage.cta": "Laisser cet échiquier se jouer sans vidéo",
+  "arbiter.outage.bodyStarted": "Cette partie est déjà en cours. Vous pouvez laisser cet échiquier continuer sans vidéo ; les preuves de caméra s'arrêtent ici. C'est inscrit au journal d'audit.",
+  "arbiter.outage.ctaStarted": "Laisser cet échiquier continuer sans vidéo",
   "arbiter.empty.title": "Aucune ronde n'est encore ouverte",
   "arbiter.empty.body": "Les échiquiers apparaissent ici dès que vous ouvrez une ronde. Les signalements sont enregistrés, que quelqu'un observe ou non.",
   "arbiter.emptyBoards": "Cette ronde n'a aucun échiquier à observer.",

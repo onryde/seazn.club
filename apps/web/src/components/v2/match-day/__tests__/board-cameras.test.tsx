@@ -19,7 +19,7 @@ import nlUi from "@/dictionaries/nl/ui.json";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
 import type { Dict } from "@/lib/i18n-constants";
 import { useFmt, type Fmt } from "../../arbiter-flag-cards";
-import { BoardCameras, anyUnavailable, tileView, tileWord } from "../board-cameras";
+import { BoardCameras, CamerasToggle, anyUnavailable, tileView, tileWord } from "../board-cameras";
 import type { JoinViews } from "../online/arbiter-joins";
 import type { ArbiterVideoView } from "../online/arbiter-video";
 import type { MatchDayBoardRow } from "@/lib/match-day/types";
@@ -48,14 +48,14 @@ const count = (h: string, testid: string) => h.split(`data-testid="${testid}"`).
 const tagOf = (h: string, testid: string): string | null => new RegExp(`<[a-z]+[^>]*data-testid="${testid}"[^>]*>`).exec(h)?.[0] ?? null;
 
 /** The component the view needs a formatter for, mounted under the English dictionary. */
-function Probe(p: { board: ArbiterBoard; views: JoinViews; onRetry?: (key: string) => void }) {
+function Probe(p: { board: ArbiterBoard; views: JoinViews; onRetry?: (key: string) => void; folded: boolean }) {
   const f = useFmt(NOW, "Europe/London");
-  return <BoardCameras board={toRow(p.board)} views={p.views} f={f} dict={dict} onRetry={p.onRetry ?? (() => {})} />;
+  return <BoardCameras board={toRow(p.board)} views={p.views} f={f} dict={dict} onRetry={p.onRetry ?? (() => {})} folded={p.folded} bodyId="cams-body" />;
 }
-const render = (board: ArbiterBoard, views: JoinViews, onRetry?: (key: string) => void) =>
+const render = (board: ArbiterBoard, views: JoinViews, onRetry?: (key: string) => void, folded = false) =>
   renderToStaticMarkup(
     <DictProvider dict={dict} locale="en">
-      <Probe board={board} views={views} onRetry={onRetry} />
+      <Probe board={board} views={views} onRetry={onRetry} folded={folded} />
     </DictProvider>,
   );
 /** A formatter for the pure word table. */
@@ -235,7 +235,7 @@ describe("BoardCameras: two tiles, White first", () => {
     expect(checked).toBe(7);
     // Wired: each tile's press hands ITS meeting key to the shell (White's is the home side here).
     const onRetry = vi.fn();
-    const ui = renderIsland(BoardCameras, { board: toRow(LIVE_BOARD), views: viewsOf(LIVE_BOARD, { home: { kind: "error" }, away: { kind: "fault" } }), f: fmtOf(), dict, onRetry });
+    const ui = renderIsland(BoardCameras, { board: toRow(LIVE_BOARD), views: viewsOf(LIVE_BOARD, { home: { kind: "error" }, away: { kind: "fault" } }), f: fmtOf(), dict, onRetry, folded: false, bodyId: "cams-body" });
     const presses = ui.tree().filter((e) => propsOf(e)["data-testid"] === "md-camera-retry");
     expect(presses, "one per failed tile").toHaveLength(2);
     for (const press of presses) (propsOf(press).onClick as () => void)();
@@ -255,76 +255,78 @@ describe("BoardCameras: two tiles, White first", () => {
   });
 });
 
-describe("BoardCameras: the fold", () => {
+describe("BoardCameras: the fold (the PANEL's state: a held board opens folded - board-focus.test.tsx; the press is the state row's - CamerasToggle below)", () => {
   const heldBoard = held(1, { fixtureId: "b-held", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
 
-  it("a HELD board opens FOLDED (MD-R33: the decision is what its organiser came for): a status line per tile, no video box, no <video>", () => {
-    const h = render(heldBoard, viewsOf(heldBoard, { home: WATCHING, away: WATCHING }));
+  it("FOLDED (MD-R33): one status line - a colour square, the presence mark and the word per tile, no video box, no <video>, and NO toggle in the strip (it is on the state row)", () => {
+    const h = render(heldBoard, viewsOf(heldBoard, { home: WATCHING, away: WATCHING }), undefined, true);
     expect(tagOf(h, "md-cameras")).toContain('data-folded="true"');
     expect(h).not.toContain("aspect-video");
     expect(h).not.toContain("<video");
-    // The status line still says who and how: name, mark, and the one word.
-    expect(tile(h, "white")).toContain(esc("Ada Lovelace"));
+    expect(count(h, "md-cameras-toggle"), "the strip carries no toggle of its own").toBe(0);
     expect(wordOf(h, "white")).toBe(esc(t("arbiter.tile.live")));
-    expect(tagOf(h, "md-cameras-toggle")).toContain('aria-expanded="false"');
-    expect(h).toContain(esc(t("matchDay.cameras.show")));
-  });
-
-  it("folded is ONE line (the MD-R33 budget): the section is a wrapping row, the body drops out of the box tree so both tiles and the toggle are siblings in it; each tile names its colour and carries the player's name as its title and as screen-reader text", () => {
-    const h = render(heldBoard, viewsOf(heldBoard, { home: WATCHING, away: WATCHING }));
-    expect(tagOf(h, "md-cameras")).toMatch(/class="[^"]*\bflex-wrap\b/);
-    const body = /<div id="[^"]+" class="([^"]*)"/.exec(h)![1]!;
-    expect(body, "the body is out of the box tree").toBe("contents");
+    expect(count(h, "md-camera-colour"), "a colour square per tile").toBe(2);
+    // The square is for the eye; the name and the colour are the tile's title and its screen-reader text.
     let checked = 0;
-    for (const [colour, who] of [["white", "Ada Lovelace"], ["black", "Ben Carson"]] as const) {
+    for (const [colour, who, word] of [["white", "Ada Lovelace", "arbiter.colour.white"], ["black", "Ben Carson", "arbiter.colour.black"]] as const) {
       const fig = tile(h, colour);
-      expect(fig, `${colour}: the name is the title`).toContain(`title="${esc(who)}"`);
-      expect(fig, `${colour}: and screen-reader text`).toMatch(new RegExp(`class="sr-only">${esc(who)}`));
-      expect(fig, `${colour}: the colour is the visible label`).toContain(esc(t(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black")));
-      expect(fig, `${colour}: no video box`).not.toContain("aspect-video");
+      expect(fig, `${colour}: the title names the colour and the player`).toContain(`title="${esc(t(word))} · ${esc(who)}"`);
+      expect(fig, `${colour}: and the screen-reader text`).toMatch(new RegExp(`class="sr-only">${esc(t(word))} · ${esc(who)}`));
+      expect(fig, `${colour}: the square is hidden from a screen reader`).toMatch(/data-testid="md-camera-colour"/);
       checked += 1;
     }
-    expect(checked, "both tiles").toBe(2);
-    // Unfolded it is a column again: a grid body, the name VISIBLE (not screen-reader only) under the box.
-    const open = render(live(3, { ...LIVE_BOARD }), new Map());
-    expect(/<div id="[^"]+" class="([^"]*)"/.exec(open)![1]).toContain("grid");
-    expect(open, "the name is visible, not screen-reader only").not.toMatch(/class="sr-only">Ada Lovelace/);
-    expect(open).toContain(">Ada Lovelace<");
+    expect(checked).toBe(2);
+    expect(tile(h, "white")).toContain("bg-white");
+    expect(tile(h, "black")).toContain("bg-slate-900");
   });
 
-  it("the pair: every other state of a board that is still to be played opens UNFOLDED", () => {
+  it("folded is ONE line (the MD-R33 budget): the section is a wrapping row and the body drops out of the box tree so both tiles are siblings in it", () => {
+    const h = render(heldBoard, viewsOf(heldBoard, { home: WATCHING, away: WATCHING }), undefined, true);
+    expect(tagOf(h, "md-cameras")).toMatch(/class="[^"]*\bflex-wrap\b/);
+    expect(/<div id="cams-body" class="([^"]*)"/.exec(h)![1], "the body is out of the box tree").toBe("contents");
+  });
+
+  it("UNFOLDED: a video box per tile, the player's name VISIBLE (not screen-reader only) under it, the body a grid - whatever the board's state", () => {
     let checked = 0;
-    for (const board of [live(3, { ...LIVE_BOARD }), withState({ kind: "checking_in" }, { ...LIVE_BOARD, state: { kind: "checking_in" } }), withState({ kind: "result", score: "1-0", noResult: false }, { ...LIVE_BOARD, state: { kind: "result", score: "1-0", noResult: false } })]) {
-      const h = render(board, new Map());
+    for (const board of [live(3, { ...LIVE_BOARD }), heldBoard, withState({ kind: "checking_in" }, { ...LIVE_BOARD, state: { kind: "checking_in" } }), withState({ kind: "result", score: "1-0", noResult: false }, { ...LIVE_BOARD, state: { kind: "result", score: "1-0", noResult: false } })]) {
+      const h = render(board, new Map(), undefined, false);
       expect(tagOf(h, "md-cameras"), board.state.kind).toContain('data-folded="false"');
+      expect(/<div id="cams-body" class="([^"]*)"/.exec(h)![1], board.state.kind).toContain("grid");
+      expect((h.match(/aspect-video/g) ?? []).length, `${board.state.kind}: a video box per tile`).toBe(2);
+      expect(h, `${board.state.kind}: the name is visible`).toContain(`>${esc(board.white.name)}<`);
+      expect(h, `${board.state.kind}: not screen-reader only`).not.toMatch(/class="sr-only">(White|Black) · /);
+      expect(count(h, "md-cameras-toggle"), "and no toggle in the strip").toBe(0);
       checked += 1;
     }
-    expect(checked).toBe(3);
+    expect(checked).toBe(4);
+  });
+});
+
+describe("CamerasToggle: the fold's one press (it lives on the state row, MD-R36)", () => {
+  const toggleOf = (folded: boolean, onToggle: () => void = () => {}, className?: string) =>
+    renderIsland(CamerasToggle, { folded, onToggle, controlsId: "cams-body", f: fmtOf(), ...(className === undefined ? {} : { className }) });
+  const btn = (ui: ReturnType<typeof toggleOf>) => ui.tree().find((e) => propsOf(e)["data-testid"] === "md-cameras-toggle")!;
+
+  it("says what it will do: Show video while folded (aria-expanded false), Hide video while open (true); it names the strip it controls", () => {
+    const folded = toggleOf(true);
+    expect(propsOf(btn(folded))["aria-expanded"]).toBe(false);
+    expect(propsOf(btn(folded))["aria-controls"]).toBe("cams-body");
+    expect(folded.text()).toBe(t("matchDay.cameras.show"));
+    const open = toggleOf(false);
+    expect(propsOf(btn(open))["aria-expanded"]).toBe(true);
+    expect(open.text()).toBe(t("matchDay.cameras.hide"));
   });
 
-  it("the toggle unfolds and folds again, and says which it will do (aria-expanded + its label); the joins are not its business", () => {
-    const ui = renderIsland(BoardCameras, { board: toRow(heldBoard), views: viewsOf(heldBoard, { home: WATCHING, away: WATCHING }), f: fmtOf(), dict, onRetry: () => {} });
-    const sectionOf = () => ui.tree().find((e) => propsOf(e)["data-testid"] === "md-cameras")!;
-    const toggle = () => ui.tree().find((e) => propsOf(e)["data-testid"] === "md-cameras-toggle")!;
-    expect(propsOf(sectionOf())["data-folded"]).toBe("true");
-    expect(propsOf(toggle())["aria-expanded"]).toBe(false);
-    (propsOf(toggle()).onClick as () => void)();
-    expect(propsOf(sectionOf())["data-folded"], "unfolded").toBe("false");
-    expect(propsOf(toggle())["aria-expanded"]).toBe(true);
-    expect(ui.text()).toContain(t("matchDay.cameras.hide"));
-    (propsOf(toggle()).onClick as () => void)();
-    expect(propsOf(sectionOf())["data-folded"], "folded again").toBe("true");
-    expect(ui.text()).toContain(t("matchDay.cameras.show"));
-  });
-
-  it("the toggle is a phone-sized tap below lg (44px) and keeps its footprint small from lg", () => {
-    const h = render(heldBoard, new Map());
-    const tag = tagOf(h, "md-cameras-toggle")!;
-    expect(tag).toMatch(/max-lg:min-h-11/);
-    expect(tag).toMatch(/aria-controls="/);
-    // The body it controls carries that id.
-    const id = /aria-controls="([^"]+)"/.exec(tag)![1]!;
-    expect(h).toContain(`id="${id}"`);
+  it("a press calls onToggle once; it is a phone-sized tap below lg (44px) and keeps its footprint small from lg; a class from outside (the phone's hide) is kept", () => {
+    const calls: number[] = [];
+    const ui = toggleOf(true, () => calls.push(1), "max-lg:hidden");
+    (propsOf(btn(ui)).onClick as () => void)();
+    expect(calls).toEqual([1]);
+    const cls = String(propsOf(btn(ui)).className);
+    expect(cls).toMatch(/max-lg:min-h-11/);
+    expect(cls.split(/\s+/), "the caller's class is kept").toContain("max-lg:hidden");
+    const plain = String(propsOf(btn(toggleOf(true))).className);
+    expect(plain, "no stray space without one").toBe(plain.trim());
   });
 });
 

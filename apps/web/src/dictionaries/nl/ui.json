@@ -7927,6 +7927,8 @@
   "arbiter.outage.title": "Video is nu niet beschikbaar",
   "arbiter.outage.body": "Spelers kunnen niet plaatsnemen zolang een camera verplicht is. Je kunt dit bord zonder video laten starten. Dit wordt in het auditlogboek vastgelegd.",
   "arbiter.outage.cta": "Dit bord zonder video laten spelen",
+  "arbiter.outage.bodyStarted": "Deze partij is al bezig. Je kunt dit bord zonder video laten doorgaan; camerabewijs stopt hier. Dit wordt in het auditlogboek vastgelegd.",
+  "arbiter.outage.ctaStarted": "Dit bord zonder video laten doorgaan",
   "arbiter.empty.title": "Er is nog geen ronde geopend",
   "arbiter.empty.body": "Borden verschijnen hier zodra je een ronde opent. Meldingen worden vastgelegd, of er nu iemand meekijkt of niet.",
   "arbiter.emptyBoards": "Deze ronde heeft geen borden om te bekijken.",

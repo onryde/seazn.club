@@ -215,10 +215,19 @@ export function outageOffered(b: Pick<ArbiterBoard, "cameraPolicy" | "playable" 
   return b.cameraPolicy === "required" && b.playable && !b.videoOverridden && unavailable;
 }
 
+/** The words of the outage card, by whether a GAME IS ON FILE (`ArbiterBoard.canResync`: the loader's "a game is on file at Lichess and the board
+ *  is not over"). Before one, the card is about SEATING ("players can't take a seat ... let this board start without video"); once there is one,
+ *  the players are seated and playing, and the override means "carry on without video; camera evidence stops here" (MD-R37). The decision and
+ *  its gate are the same either way: only the sentence and the button say which. */
+export function outageWords(gameOnFile: boolean): { body: "arbiter.outage.body" | "arbiter.outage.bodyStarted"; cta: "arbiter.outage.cta" | "arbiter.outage.ctaStarted" } {
+  return gameOnFile ? { body: "arbiter.outage.bodyStarted", cta: "arbiter.outage.ctaStarted" } : { body: "arbiter.outage.body", cta: "arbiter.outage.cta" };
+}
+
 /** "Let this board play without video": the decision that unblocks a board whose camera the vendor cannot give, written to the audit log
  *  (D11). A decision that FINISHES nothing and STARTS nothing the freeze guards: the video override is scoring-side (owner O4 lists it with
  *  the decisions that stay offered), so its gate is `finish`. `children` is anything the card carries under the button. */
 export function OutageCard({
+  gameOnFile,
   busy,
   overriding,
   onOverride,
@@ -227,6 +236,8 @@ export function OutageCard({
   className,
   children,
 }: {
+  /** The board's `canResync`: which sentence and which button (`outageWords`). */
+  gameOnFile: boolean;
   busy: boolean;
   overriding: boolean;
   onOverride(): void;
@@ -235,13 +246,14 @@ export function OutageCard({
   className: string;
   children?: ReactNode;
 }) {
+  const words = outageWords(gameOnFile);
   return (
-    <section aria-labelledby={headingId} data-testid="arbiter-outage" className={className}>
+    <section aria-labelledby={headingId} data-testid="arbiter-outage" data-game={gameOnFile ? "on-file" : "none"} className={className}>
       <span className="text-[11px] font-semibold tracking-[0.06em] uppercase">{f.t("arbiter.outage.eyebrow")}</span>
       <h2 id={headingId} className="m-0 text-[15px] font-semibold">
         {f.t("arbiter.outage.title")}
       </h2>
-      <p className="m-0 text-[13px] leading-[1.45]">{f.t("arbiter.outage.body")}</p>
+      <p className="m-0 text-[13px] leading-[1.45]">{f.t(words.body)}</p>
       <button
         type="button"
         onClick={onOverride}
@@ -249,7 +261,7 @@ export function OutageCard({
         aria-busy={overriding || undefined}
         className="min-h-11 cursor-pointer rounded-[10px] bg-[#713f12] px-3 text-[15px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {f.t("arbiter.outage.cta")}
+        {f.t(words.cta)}
       </button>
       {children}
     </section>

@@ -417,6 +417,9 @@ describe("useArbiterJoins: a refusal that the poll mends (VIDEO_MEETING_NOT_STAR
     expect(m.kind(A_HOME)).toBe("watching");
     expect(w.live(A_HOME)).toBe(1);
     expect(w.maxOpen(), "never two live joins on the meeting").toBe(1);
+    // The polls that landed while it was out were not queued behind it: once it answers, still the ONE re-open (a poll that started a second
+    // join would sit in the serial chain, unseen above, and run now).
+    expect(w.postsOf(A_HOME), "after the answer: the first join and the one re-open, nothing queued behind them").toBe(2);
   });
 
   it("a side that becomes joinable on a poll simply appears in `keys` and opens (it was never POSTed before)", async () => {
