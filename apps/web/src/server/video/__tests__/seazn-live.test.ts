@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
+import { log } from "@/server/logger";
 import { heartbeat } from "@/server/usecases/stream-sessions";
 import { liveSeaznFixtureIds, seaznWatchUrls } from "../seazn-live";
 import { installSeaznEnv, kindOf, live, goLive, seaznRig as rig, stopAndSettle } from "./_seazn-session-rig";
@@ -139,6 +140,33 @@ describe.skipIf(!HAS_DB)("seaznWatchUrls: the phone's Watch live link", () => {
       expect([...(await seaznWatchUrls(r.auth.orgId, [f], origin))], `origin ${JSON.stringify(origin)}`).toEqual([]);
     }
     expect([...(await seaznWatchUrls(r.auth.orgId, [f], "https://stg.seazn.club")).keys()], "the positive pair: staging's own host").toEqual([f]);
+  });
+
+  it("a link the phone's contract would refuse is left out and logged by match id: an upper-case host, a path in the origin and userinfo give none; a lower-case host with a port still does", async () => {
+    // The phone parses the whole day read strictly: ONE refused link would refuse every row, so the producer never emits one.
+    const r = await rig();
+    const [f] = r.fixtureIds;
+    await live(r, f, r.seazn);
+    const slugs = await slugsOf(f);
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      let refused = 0;
+      for (const origin of ["https://Seazn.club", "https://seazn.club/app", "https://user:pw@seazn.club", "https://seazn.club/app/"]) {
+        expect([...(await seaznWatchUrls(r.auth.orgId, [f], origin))], `origin ${origin}: no link, though the match is on air`).toEqual([]);
+        refused++;
+      }
+      expect(refused, "anti-vacuity: four refused origins were asked").toBe(4);
+      expect(warn, "one warning per dropped link").toHaveBeenCalledTimes(4);
+      for (const call of warn.mock.calls) expect(call[0], "the warning names the match").toEqual({ fixtureId: f });
+      const logged = JSON.stringify(warn.mock.calls);
+      for (const leak of ["Seazn.club", "seazn.club", "/live/", slugs.org, slugs.comp]) expect(logged, `the log carries no part of the address (${leak})`).not.toContain(leak);
+      // The positive pair: the same match on an origin the contract admits (a lower-case host with a port) gives its link, and no warning.
+      warn.mockClear();
+      expect([...(await seaznWatchUrls(r.auth.orgId, [f], "https://seazn.club:8443"))]).toEqual([[f, watchUrl("https://seazn.club:8443", slugs, f)]]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("org scope: another organisation's ask for this match gets no link", async () => {

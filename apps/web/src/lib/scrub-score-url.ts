@@ -104,7 +104,7 @@
 // loses its `token=` like `request.query_string` does; where it names a body-credential route, the serialised body in
 // `http.request.body.data` goes with the request body (`scrubSpanData`).
 import type * as Sentry from "@sentry/nextjs";
-import type { CaptureResult } from "posthog-js";
+import type { CaptureResult, CapturedNetworkRequest } from "posthog-js";
 import { LOCALES } from "./i18n-constants";
 import { OVERLAY_KEY_PARAM } from "./realtime-purpose";
 
@@ -416,6 +416,18 @@ export function posthogBeforeSend(event: CaptureResult | null): CaptureResult | 
   const pathname: unknown = event.properties?.$pathname;
   if (typeof pathname === "string" && isAdminPath(pathname)) return null;
   return scrubScoreTokens(event);
+}
+
+/**
+ * PostHog `session_recording.maskCapturedNetworkRequestFn` (the current name; `maskNetworkRequestFn` is its deprecated twin). When the
+ * project's network recording is on, a replay stores every request the page made: its URL (`name`), headers and bodies. `before_send`
+ * does not see them (it runs on events, and a replay's network entries ride `$snapshot` frames inside the recorder), so a signed
+ * Cloudflare playback URL, whose token is a PATH segment, would reach PostHog in hls.js's manifest, playlist and segment requests,
+ * and a scoring token in a request's URL or Bearer header with it. The request goes through the same scrubber as every other string
+ * and is returned (never dropped: a replay keeps its timing). A request with nothing to scrub keeps its reference.
+ */
+export function maskCapturedNetworkRequest(request: CapturedNetworkRequest): CapturedNetworkRequest {
+  return scrubScoreTokens(request);
 }
 
 /** A phone route's event (capture QR v2 §6.3): its request URL or its transaction names `/api/v1/capture/`. */

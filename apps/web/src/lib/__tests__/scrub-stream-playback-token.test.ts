@@ -152,4 +152,44 @@ describe("a signed Cloudflare playback URL never reaches Sentry or PostHog with 
     };
     expectClean(posthogBeforeSend(event as never), [p.token], 1);
   });
+
+  // The review of Task 17 (unverified, owner check pending): `ph-no-capture` hides DOM, not network. When the PostHog project records
+  // network requests, a replay stores each request's URL, and the player's hls.js asks for the manifest, every playlist and every
+  // segment with the token in the path. `before_send` never sees those entries, so the recorder's own hook is the door.
+  it("PostHog session recording: the init hands the recorder a network mask, and the manifest, playlist and segment requests lose the token", async () => {
+    vi.stubEnv("NEXT_PUBLIC_POSTHOG_KEY", "phc_test");
+    vi.stubGlobal("document", { cookie: "" });
+    await import("../../instrumentation-client");
+    const posthog = (await import("posthog-js")).default;
+    const calls = vi.mocked(posthog.init).mock.calls;
+    expect(calls, "the client config calls posthog.init once").toHaveLength(1);
+    const recording = (calls[0]![1] as Options).session_recording as Options | undefined;
+    expect(recording, "session_recording is configured").toBeDefined();
+    const mask = recording!.maskCapturedNetworkRequestFn;
+
+    const p = await produced();
+    const own = "https://seazn.club/api/v1/public/fixtures/3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b/video";
+    // A performance-entry-shaped request as the recorder builds it: `name` is the URL.
+    const request = (name: string, extra: Record<string, unknown> = {}) => ({ name, entryType: "resource", initiatorType: "xmlhttprequest", method: "GET", status: 200, ...extra });
+    let checked = 0;
+    for (const url of [p.live, p.replay, p.variant, p.segment, p.download]) {
+      const out = run(mask, request(url)) as { name: string; status: number; method: string } | null | undefined;
+      expect(out, "a request is masked, never dropped").toBeTruthy();
+      expectClean(out, [p.token, p.recordingToken, p.downloadToken], 1);
+      expect(out!.name.startsWith(`https://${HOST}/[token]/`), `the host and the rest of the path stay (${out!.name})`).toBe(true);
+      expect([out!.status, out!.method], "the entry keeps its timing and status fields").toEqual([200, "GET"]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: five signed URLs were masked").toBe(5);
+
+    // The headers and bodies the recorder may also hold go through the same scrubber (a scoring link's token, as a Bearer).
+    const scoring = "dl_Q2hvb3NlIGEgcmVhbGx5IGxvbmcgcmFuZG9tIHRva2Vu_Ab-9";
+    const withHeaders = run(mask, request(`https://seazn.club/score/${scoring}`, { requestHeaders: { authorization: `Bearer ${scoring}` } }));
+    expect(JSON.stringify(withHeaders)).not.toContain(scoring);
+    expect(JSON.stringify(withHeaders)).toContain("[token]");
+
+    // The negative pair: our own request has nothing to scrub, comes back whole and is not dropped.
+    const untouched = request(own, { requestHeaders: { accept: "application/json" } });
+    expect(run(mask, untouched)).toEqual(untouched);
+  });
 });

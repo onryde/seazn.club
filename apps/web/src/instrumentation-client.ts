@@ -5,7 +5,7 @@ import posthog from "posthog-js";
 import * as Sentry from "@sentry/nextjs";
 import { analyticsConsented } from "@/lib/consent";
 import { stopReplayBeforeNavigatingTo } from "@/lib/replay-guard";
-import { posthogBeforeSend } from "@/lib/scrub-score-url";
+import { maskCapturedNetworkRequest, posthogBeforeSend } from "@/lib/scrub-score-url";
 
 // Sentry.init is NOT called on the client today. The client options live in ../sentry.client.config.ts, but @sentry/nextjs
 // only picks that file up in its WEBPACK integration (config/webpack.js, getClientSentryConfigFile); this app builds with
@@ -63,6 +63,10 @@ if (key && !analyticsSuppressed()) {
       // device-link tokens (/score/<token> is a live scoring credential) out
       // of every URL-valued property before anything leaves.
       before_send: posthogBeforeSend,
+      // before_send never sees a replay's network entries (they ride the recorder's own frames): when the project records network
+      // requests, each one's URL, headers and bodies go through the same scrubber first. A signed Cloudflare playback URL carries
+      // its token as a path segment, and the match player's hls.js requests it from this page.
+      session_recording: { maskCapturedNetworkRequestFn: maskCapturedNetworkRequest },
     });
     if (analyticsConsented()) posthog.opt_in_capturing();
   } catch {

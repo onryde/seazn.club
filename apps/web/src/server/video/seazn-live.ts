@@ -17,6 +17,8 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import { siteOrigin } from "@/lib/site-origin";
+import { CAPTURE_MATCHDAY_WATCH_URL_RE } from "@/server/api-v1/capture-schemas";
+import { log } from "@/server/logger";
 
 /** The matches among `fixtureIds` that are on air to Seazn now. */
 export async function liveSeaznFixtureIds(orgId: string, fixtureIds: readonly string[]): Promise<ReadonlySet<string>> {
@@ -41,7 +43,8 @@ const isHttpsOrigin = (origin: string): boolean => {
 };
 
 /** The on-air matches among `fixtureIds` whose public page is readable, each with that page's address on `origin` (default: this
- *  deployment's own host). Empty for an origin that is not https. */
+ *  deployment's own host). Empty for an origin that is not https; a link the phone's contract
+ *  (`CAPTURE_MATCHDAY_WATCH_URL_RE`) would refuse is left out and logged (by match id, never the address). */
 export async function seaznWatchUrls(
   orgId: string,
   fixtureIds: readonly string[],
@@ -59,5 +62,16 @@ export async function seaznWatchUrls(
       join organizations o on o.id = c.org_id
      where v.id in ${sql(onAir)} and c.org_id = ${orgId} and d.status <> 'setup'`;
   const base = origin.replace(/\/$/, "");
-  return new Map(rows.map((r) => [r.id, `${base}${routes.publicFixture(r.org_slug, r.comp_slug, r.div_slug, r.id)}`]));
+  const links = new Map<string, string>();
+  for (const r of rows) {
+    const url = `${base}${routes.publicFixture(r.org_slug, r.comp_slug, r.div_slug, r.id)}`;
+    // The phone parses the WHOLE day read strictly, so ONE link its contract refuses (an upper-case host, a path or userinfo in the
+    // origin) would make it refuse every row. Never emit a value the contract refuses: drop it and say so, naming the match, never the address.
+    if (!CAPTURE_MATCHDAY_WATCH_URL_RE.test(url)) {
+      log.warn({ fixtureId: r.id }, "seaznWatchUrls: the built watch link fails the phone contract; link left out");
+      continue;
+    }
+    links.set(r.id, url);
+  }
+  return links;
 }
