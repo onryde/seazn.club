@@ -390,7 +390,6 @@ describe("B4 re-review N-3: a late add past the format's max says it in the late
   const msgIn = (locale: L) => (key: string, vars?: Record<string, string | number>) => t(DICTS[locale], key, vars);
   // A league at its max takes one more: the field the add would make, never one the division holds (the add is rolled back).
   const VARS = { max: LEAGUE_MAX, entrants: LEAGUE_MAX + 1 };
-  const flush = () => new Promise((r) => setTimeout(r, 0));
 
   it("the server's English is the sentence's own en, not the draw doors' 'This division has {entrants}' (false: nothing was added)", () => {
     const err = formatMaxLateEntryRefusal(VARS.max, VARS.entrants);
@@ -429,15 +428,13 @@ describe("B4 re-review N-3: a late add past the format's max says it in the late
       } as never);
       const tap = island.tree().find((e) => propsOf(e)["data-testid"] === "table-waiting-place")!;
       (propsOf(tap).onClick as () => void)();
-      let row: ReactElement | undefined;
-      for (let i = 0; i < 20 && row === undefined; i++) {
-        await flush();
-        row = island.tree().find((e) => propsOf(e)["data-testid"] === "table-waiting-outcome");
-      }
+      // Waited on by condition, as the sibling cases do: the refusal crosses the real v1 handler, and on a loaded machine twenty
+      // zero-delay ticks were not enough for the row to render (seen at load ~40: the tap sent, its answer taken, no row yet).
+      const row = await vi.waitFor(() => island.tree().find((e) => propsOf(e)["data-testid"] === "table-waiting-outcome") ?? Promise.reject(new Error("no outcome row yet")), { timeout: 15_000 });
       // By membership, not `.at(-1)`: the board case's advisory `/schedule/validate` (debounced) can land late from an earlier test.
       expect(net.calls.filter((c) => /\/late-entrants\/e-late\/place$/.test(c)), `premise ${locale}: the place tap was sent once`).toHaveLength(1);
       // The row's sentence: its first line (the Withdraw / refund buttons follow it in the same box).
-      const line = row ? ((propsOf(row).children as unknown[]).flat().find((c) => (c as ReactElement | null)?.type === "p") as ReactElement | undefined) : undefined;
+      const line = (propsOf(row).children as unknown[]).flat().find((c) => (c as ReactElement | null)?.type === "p") as ReactElement | undefined;
       expectSaid(line ? textOf(line) : null, locale, said(locale, FORMAT_MAX_LATE_ENTRY.key, VARS), server.message, "waiting strip");
       checked++;
     }
