@@ -46,6 +46,21 @@ function isKioskBoard(pathname: string | null | undefined): boolean {
 }
 
 /**
+ * The scoring pad, `/score/<token>` (OWNER RULING, 2026-11-13). A scorer at a court holds a phone and taps the pad's
+ * bottom controls; the banner sat over them, and there is nothing to consent to there: PostHog inits
+ * `opt_out_capturing_by_default` and only opts in on an explicit Accept (`instrumentation-client.ts`), so a
+ * banner-free page captures nothing. Essential cookies are unaffected, and a visitor who already accepted elsewhere
+ * keeps that choice. (`/q/<token>/score/<fixture>` only redirects here, so it needs no rule of its own.)
+ *
+ * Matched on the SHAPE of the path (`score`, then exactly one token), not a bare substring, so `/live/<org>/scores`
+ * or a deeper page with a `score` segment keeps its banner.
+ */
+function isScorePad(pathname: string | null | undefined): boolean {
+  const parts = pathname?.split("/").filter(Boolean) ?? [];
+  return parts.length === 2 && parts[0] === "score";
+}
+
+/**
  * Set on `<html>` while the banner is on screen, and removed when it goes. The one signal a page has that the banner
  * covers the bottom of the viewport: a docked control there un-docks while it is set, so it neither hides under the
  * banner nor covers its buttons (the quick match Start bar, components/quick-match/setup-form.tsx, which names this
@@ -83,8 +98,8 @@ export function CookieConsent() {
   const visible = override ?? prompt;
   const locale = useSyncExternalStore(localeNeverNotifies, readActiveLocale, defaultLocaleOnServer);
   const pathname = usePathname();
-  // Whether the banner is actually painted: the overlay and the kiosk board never show it.
-  const showing = visible && !pathname?.startsWith(OVERLAY_SEGMENT) && !isKioskBoard(pathname);
+  // Whether the banner is actually painted: the overlay, the kiosk board and the scoring pad never show it.
+  const showing = visible && !pathname?.startsWith(OVERLAY_SEGMENT) && !isKioskBoard(pathname) && !isScorePad(pathname);
 
   useEffect(() => {
     // `document` is always there in a browser; the node test harnesses run effects without one.
@@ -147,6 +162,8 @@ export function CookieConsent() {
   // component is mounted once in the ROOT layout, as a sibling of `children`,
   // so no nested layout can unmount it.
   if (isKioskBoard(pathname)) return null;
+  // The scoring pad, for the reasons on isScorePad above; here for the same root-layout reason.
+  if (isScorePad(pathname)) return null;
 
   if (!showing) return null;
 
