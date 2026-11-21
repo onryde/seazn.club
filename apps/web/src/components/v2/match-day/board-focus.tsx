@@ -358,7 +358,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           below it; below lg a Cameras / Board switch (in the head) hides whichever of the two is not picked, from lg both show. */}
       <div
         data-testid="md-board-grid"
-        className={`grid min-w-0 gap-4${twoCol ? " lg:grid-cols-[minmax(0,min(420px,42%))_1fr] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-y-3" : ""}`}
+        className={`grid min-w-0 gap-4${twoCol ? " lg:grid-cols-[minmax(0,min(420px,42%))_1fr] lg:grid-rows-[auto_1fr] lg:items-start lg:gap-y-2 xl:gap-y-3" : ""}`}
       >
         <div data-testid="md-board-head" className={`flex min-w-0 flex-col gap-4${twoCol ? " lg:col-start-2 lg:row-start-1" : ""}`}>
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -463,7 +463,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           )}
 
         </div>
-        <div data-testid="md-board-rest" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-2 lg:row-start-2 lg:gap-3" : ""}`}>
+        <div data-testid="md-board-rest" className={`flex min-w-0 flex-col gap-4 empty:hidden${twoCol ? " lg:col-start-2 lg:row-start-2 lg:gap-2 xl:gap-3" : ""}`}>
           {cameras !== null && (
             <div data-testid="md-board-cameras" className={`min-w-0${hideCamerasBelowLg ? " max-lg:hidden" : ""}`}>
               <BoardCameras board={board} views={cameras.views} f={f} dict={ctx.dict} onRetry={cameras.retry} folded={p.camerasFolded} bodyId={camerasId} />
@@ -471,7 +471,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
           )}
 
           {holdBody !== null && holdReason !== null && (
-            <section data-testid="md-board-hold" data-reason={holdReason} className={`flex flex-col gap-1.5 ${CARD_BOX} border-[#f1c4c0] lg:order-1`}>
+            <section data-testid="md-board-hold" data-reason={holdReason} className={`flex flex-col gap-1.5 ${CARD_BOX} border-[#f1c4c0] lg:order-1 lg:max-xl:gap-1 lg:max-xl:p-2.5`}>
               <span className="self-start rounded-full bg-[#fde8e6] px-2.5 py-[3px] text-xs font-semibold text-[#7f1d1d]">{f.t(HELD_TITLE_KEYS[holdReason])}</span>
               {/* 13px (the phone's size) from lg up to xl, 14px from xl: the narrowest lg (1024 x 768) is where the 168-character reason (Dutch longest) wraps most and Settle
                   ended 10px below the fold at 14px (fix round 1, B6); the 1280 pins are untouched, the body is 14px there as before. */}
@@ -515,7 +515,7 @@ export function BoardPanelView(p: BoardPanelViewProps) {
             on={p.on}
             f={f}
             headingId={decideId}
-            className={`flex flex-col gap-2 ${CARD_BOX} lg:order-2`}
+            className={`flex flex-col gap-2 ${CARD_BOX} lg:order-2 lg:max-xl:gap-1.5 lg:max-xl:p-2.5`}
           />
           {may.finish && outageOffered(board, cameras !== null && anyUnavailable(board, cameras.views)) && (
             <OutageCard

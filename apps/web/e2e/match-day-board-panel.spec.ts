@@ -606,6 +606,9 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
   // MD-R36: English AND Dutch (its words are the longest in the folded strip and in the reason), the 168-character account change in both and
   // the short mismatch in English. The measured bottoms are attached to the run (annotation "MD-R33 measure"), not printed.
   const DECISION_HEADROOM = 40;
+  /** Fix round 2: Settle at 1024 x 768 keeps real headroom too (the long Dutch reason measured 764 against 768 = 4px, and CI's fonts wrap a line differently: the B10
+   *  class). 20px is the least the review asked for; from lg to xl the right column's gaps and card padding are tighter to buy it, never the type. */
+  const SETTLE_HEADROOM_1024 = 20;
   for (const locale of ["en", "nl"] as const) {
     test(`(MD-R33 with cameras, ${locale}) a HELD board with cameras, two flags and a LONG reason - the 168-character account change${locale === "en" ? " as well as the short mismatch" : ""} - keeps its whole decision on a 1280 x 800 screen, the cameras at the right column's top, their fold press on the state row`, async ({ page }) => {
       test.setTimeout(budget(4, 4));
@@ -705,15 +708,22 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
         });
         expect(settle.scrollY, "measured from the top of the page").toBe(0);
         // Where the right column's height goes at the narrowest lg (heights, not tops: a row that grows is the one to trim).
-        const rowsAt1024 = await Promise.all(["md-online-state", "md-board-cameras", "md-board-hold", "arbiter-decision", "md-board-flags"].map(async (id) => {
+        const rowsAt1024 = await Promise.all(["md-online-state", "md-cameras-toggle", "md-open-pad", "md-board-cameras", "md-board-hold", "arbiter-decision", "md-board-flags"].map(async (id) => {
+          if ((await page.getByTestId(id).count()) === 0) return `${id} -`;
           const b = await page.getByTestId(id).first().evaluate((el) => {
             const r = el.getBoundingClientRect();
-            return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY };
+            return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY, left: r.left, right: r.right };
           });
-          return `${id} ${Math.round(b.top)}-${Math.round(b.bottom)}`;
+          return `${id} y${Math.round(b.top)}-${Math.round(b.bottom)} x${Math.round(b.left)}-${Math.round(b.right)}`;
         }));
-        test.info().annotations.push({ type: "MD-R33 measure", description: `${locale} / ${label} at 1024x768: Settle bottom ${Math.round(settle.bottom)} (${rowsAt1024.join(", ")})` });
-        expect(settle.bottom, `${locale} / ${label}: Settle ends inside the 768px screen at 1024 (it ended at ${Math.round(settle.bottom)})`).toBeLessThanOrEqual(768);
+        const decisionParts = await decision(page).evaluate((el) =>
+          [...el.querySelectorAll(":scope > *, :scope > [data-testid='arbiter-quiet-decisions'] > *")].map((c) => {
+            const r = c.getBoundingClientRect();
+            return `${c.tagName.toLowerCase()} y${Math.round(r.top + window.scrollY)}-${Math.round(r.bottom + window.scrollY)} x${Math.round(r.left)}-${Math.round(r.right)}`;
+          }),
+        );
+        test.info().annotations.push({ type: "MD-R33 measure", description: `${locale} / ${label} at 1024x768: Settle bottom ${Math.round(settle.bottom)} (${rowsAt1024.join(", ")}) decision parts: ${decisionParts.join(" | ")}` });
+        expect(settle.bottom, `${locale} / ${label}: Settle ends ${SETTLE_HEADROOM_1024}px inside the 768px screen at 1024 (it ended at ${Math.round(settle.bottom)})`).toBeLessThanOrEqual(768 - SETTLE_HEADROOM_1024);
         settleChecked += 1;
       }
       expect(settleChecked, "every reason was measured at 1024").toBe(measured.length);
