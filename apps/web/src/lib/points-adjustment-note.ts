@@ -35,6 +35,38 @@ export interface PointsAdjustmentRecord {
   unit: AdjustmentUnit;
   points_unit: PointsDisplayUnit;
   at: string;
+  /** B3 ruling 3: set on a COPY of a source stage's row, filed under the stage its table was carried into (`withCarriedAdjustments`)
+   *  - the source stage, named, for the destination's footnote. Never on a row the ledger fold reads (`activePointsAdjustments`). */
+  carried_from?: { stage_id: string; stage_name: string };
+}
+
+/** B3 ruling 3: one carry of a finished table into the next stage, as its `standings_carried` row records it (the newest per
+ *  destination): the destination, the source and its name, the carry's mode and the entrants carried. */
+export interface AdjustmentCarry {
+  into: string;
+  from: string;
+  fromName: string;
+  mode: "points" | "full";
+  entrants: readonly string[];
+}
+
+/**
+ * B3 ruling 3: a carried table carries its adjustments - a carry's opening is the source's folded row, adjustment and all - so the
+ * destination's footnote names each one it carries, "carried from <stage>". Each source row of a carried entrant is copied under the
+ * destination with `carried_from`; the source keeps its own. A "points" carry moves points only (engine `carryDeltas`: won 0), so
+ * it carries a points adjustment and never a wins one; a "full" carry moves both. No carry: the records unchanged.
+ */
+export function withCarriedAdjustments(records: readonly PointsAdjustmentRecord[], carries: readonly AdjustmentCarry[]): PointsAdjustmentRecord[] {
+  const out = [...records];
+  for (const c of carries) {
+    const carried = new Set(c.entrants);
+    for (const r of records) {
+      if (r.stage_id !== c.from || r.carried_from !== undefined || !carried.has(r.entrant_id)) continue;
+      if (r.unit === "wins" && c.mode !== "full") continue;
+      out.push({ ...r, stage_id: c.into, carried_from: { stage_id: c.from, stage_name: c.fromName } });
+    }
+  }
+  return out;
 }
 
 /** A ledger row as the readers load it: `at` is the row's `created_at` as ISO text. */
@@ -90,6 +122,8 @@ export interface AdjustmentNote {
   pointsUnit: PointsDisplayUnit;
   reason: string;
   at: string;
+  /** B3 ruling 3: the source stage's name when the table carried this adjustment in. */
+  carriedFrom?: string;
 }
 
 /**
@@ -115,6 +149,7 @@ export function adjustmentNotesFor(
       pointsUnit: r.points_unit,
       reason: r.reason,
       at: r.at,
+      ...(r.carried_from === undefined ? {} : { carriedFrom: r.carried_from.stage_name }),
     }));
 }
 
@@ -131,8 +166,9 @@ export function adjustmentShownCount(delta: number, unit: AdjustmentUnit, points
   return unit === "points" && pointsUnit === "half" ? magnitude / 2 : magnitude;
 }
 
-/** The dictionary key of the amount's noun phrase, by unit and plural category (`one` or `other`). */
-export function adjustmentBodyKey(unit: AdjustmentUnit, count: number, locale: string): TKey {
+/** The dictionary key of the amount's noun phrase, by unit and plural category (`one` or `other`) - its "carried from" form when
+ *  the table carried the adjustment in (B3 ruling 3). */
+export function adjustmentBodyKey(unit: AdjustmentUnit, count: number, locale: string, carried = false): TKey {
   let category: Intl.LDMLPluralRule = "other";
   try {
     category = new Intl.PluralRules(locale).select(count);
@@ -140,7 +176,7 @@ export function adjustmentBodyKey(unit: AdjustmentUnit, count: number, locale: s
     category = count === 1 ? "one" : "other";
   }
   const form = category === "one" ? "one" : "other";
-  return `table.adjustmentNote.${unit}.${form}` as TKey;
+  return `table.adjustmentNote.${unit}${carried ? ".carried" : ""}.${form}` as TKey;
 }
 
 /** One footnote line, resolved: the bold lead ("Marsh Lane:") and the sentence after it. */
@@ -162,8 +198,9 @@ export function adjustmentNoteText(
     key: String(note.seq),
     entrantId: note.entrantId,
     lead: msg("table.adjustmentNote.lead", { name: note.name }),
-    body: msg(adjustmentBodyKey(note.unit, count, locale), {
+    body: msg(adjustmentBodyKey(note.unit, count, locale, note.carriedFrom !== undefined), {
       amount: adjustmentAmountText(note.delta, note.unit, note.pointsUnit),
+      ...(note.carriedFrom === undefined ? {} : { stage: note.carriedFrom }),
       reason: note.reason.trim(),
       date: dateOf(note.at) ?? note.at.slice(0, 10),
     }),

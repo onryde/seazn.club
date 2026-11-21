@@ -275,6 +275,33 @@ describe.skipIf(!HAS_DB)("Adjust points (W5 app PR B Task 7, C5)", () => {
     expect((await loadPointsAdjustments(r.divisionId)).map((a) => a.delta), "the bounds themselves").toEqual([999, -999]);
   });
 
+  // B3 ruling 2 (m-9): an adjustment is not a result. On a started table where nothing has been played, it moves its entrant but
+  // the rest stay level - and a level table with nothing played draws no lots (W2d §5.8 step 1, anti-goal 3): its residual classes
+  // take seed then id. The engine counts an adjustment as "holding something", so without the app's hold it drew lots for an unplayed
+  // pool and stored them. Both units of the registry (points-led football, wins-led badminton); a sport whose cascade lists `seed`
+  // before the lot (tennis, ice hockey) splits these classes by seed and never reaches the lot either way.
+  it("B3 ruling 2 an adjustment on a table with nothing played draws no lots; the first level result draws as before", async () => {
+    let swept = 0;
+    for (const sport of [FOOTBALL, BADMINTON]) {
+      const r = await rig({ n: 4, sport });
+      await startDivision(r.auth, r.divisionId);
+      const [p1, p2, p3, p4] = r.ids as [string, string, string, string];
+      await adjustPoints(r.auth, r.stageId, { entrant_id: p4, delta: -1, reason: REASON });
+      expect(await lotsRows(r.stageId), `${sport.key}: nothing played, nothing drawn`).toEqual([]);
+      expect(order(await table(r.stageId)), `${sport.key}: the level three by seed (seed = position), the adjusted last`).toEqual([p1, p2, p3, p4]);
+      // the positive pair: P1 beats P3 and P2 beats P4 by the same score - P1 and P2 level on everything, so the lot splits them
+      const lines = await rowsOf(r.stageId);
+      const a = lineBetween(lines, p1, p3);
+      const b = lineBetween(lines, p2, p4);
+      await win(r, a.id, a.home_entrant_id, p1);
+      await win(r, b.id, b.home_entrant_id, p2);
+      const drawn = await lotsRows(r.stageId);
+      expect(drawn.map((d) => [...d.members].sort()), `${sport.key}: played now, the level pair is drawn`).toContainEqual([p1, p2].sort());
+      swept++;
+    }
+    expect(swept).toBe(2);
+  });
+
   it("X-ADJ-4 an adjustment that breaks a lots-split tie re-ranks without the stale draw (Review Focus 2)", async () => {
     const r = await levelPair(FOOTBALL);
     const [p1, p2, p3, p4] = r.ids as [string, string, string, string];

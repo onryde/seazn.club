@@ -6,6 +6,17 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-11-21",
+    title: "Points adjustments on league, group and Swiss tables; a finished table keeps its qualification markers",
+    lines: [
+      "New: POST /stages/{id}/adjustments moves an entrant's table points by delta (a whole number, at most 999 either way, in the table's ranking unit: points, or matches won where the table ranks wins first; a half-point rule counts half-points) with a required reason. GET /stages/{id}/adjustments lists the stage's active adjustments, its unit and the entrants an adjustment can be made for. DELETE /stages/{id}/adjustments/{seq} undoes one. Only a started, not-finished league, group or Swiss stage takes one; every refusal is named (RR_ADJUST_*, 422, or 409 RR_ADJUST_ALREADY_UNDONE).",
+      "Each active adjustment is printed under its table on every surface, and under the next stage's table when that stage carries the points over (\"carried from\" the stage it was made in). The hub's table carries them as adjustmentNotes (lead and body, in the organisation's language).",
+      "The hub's qualification legend: legend.open is now nullable. A finished table shows no still-open status, so open is null there; a live table still has its text.",
+      "POST /stages/{id}/seed-proposal/confirm: when a tie pick re-draws the first round and the request also edits a slot outside the tie, nothing is seated; the reply is 409 SEEDING_PROPOSAL_STALE with details { reason: \"redrawn\", reproposed: <the new draft's id> }. Review that draft and send the edits again.",
+      "These land in v1 in place: no client outside the web app uses the API yet.",
+    ],
+  },
+  {
     date: "2026-11-17",
     title: "Breaking: a league or group withdrawal under half played removes signed-off results too",
     lines: [

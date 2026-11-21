@@ -64,6 +64,7 @@ import { bracketRosterOf, drawSeedsOf } from "./bracket-roster";
 import { rootBracketOrder } from "./knockout-draw";
 import { locksThatFit } from "@/lib/rank-override";
 import { stageSeatingOf, type StageSeating } from "./stage-seating";
+import { cascadeWhileNothingPlayed } from "./adjusted-empty-table";
 
 type Tx = postgres.TransactionSql;
 
@@ -682,7 +683,8 @@ function toTableStage(
     // americano rides the league fold (Jul3/08 §3)
     kind: (inputs.stage.kind === "americano" ? "league" : inputs.stage.kind) as TableStage["kind"],
     entrants: inputs.entrants,
-    rules: { points: inputs.rules.points, tiebreakers: inputs.rules.tiebreakers, crossGroup: inputs.rules.crossGroup },
+    // B3 ruling 2: no lot while the table's only content is adjustments (`cascadeWhileNothingPlayed`).
+    rules: { points: inputs.rules.points, tiebreakers: cascadeWhileNothingPlayed(inputs.rules.tiebreakers, { fixtures: inputs.tableFixtures, openings: Array.isArray(inputs.stage.config?.carry_deltas) ? (inputs.stage.config.carry_deltas as { played: number; points: number }[]) : [], adjustments: adjustments.length }), crossGroup: inputs.rules.crossGroup },
     ...(inputs.module.winsCount === undefined ? {} : { winsCount: inputs.module.winsCount }),
     gamePoints: gamePointsReader(gamePoints),
     lotsDraws,

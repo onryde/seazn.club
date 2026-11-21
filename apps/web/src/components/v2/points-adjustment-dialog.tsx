@@ -13,7 +13,7 @@
 // one specific action, focus trapped, Escape closes unless sending.
 import { useEffect, useRef, useState } from "react";
 import type { MessageKey } from "@/lib/messages";
-import { intlLocaleFor } from "@/lib/public-date-locale";
+import { formatPublicInstant } from "@/lib/public-date-locale";
 import { adjustmentAmountText, adjustmentShownCount, type AdjustmentUnit, type PointsDisplayUnit } from "@/lib/points-adjustment-note";
 import { ADJUST_DELTA_MAX, adjustDeltaInRange } from "@/lib/points-adjustment-offer";
 
@@ -43,6 +43,8 @@ export interface PointsAdjustmentDialogProps {
   msg: Msg;
   locale: string;
   stageName: string;
+  /** The competition's clock (`scheduleSettings.tz`) - the one the footnote under the table dates the same row in (B3 m-7). */
+  tz: string;
   names: Readonly<Record<string, string>>;
   load: () => Promise<AdjustmentsRead>;
   apply: (input: { entrant_id: string; delta: number; reason: string }) => Promise<DialogAnswer>;
@@ -63,6 +65,12 @@ export function adjustmentAmountPhrase(msg: Msg, locale: string, delta: number, 
     // keep the count === 1 reading
   }
   return msg(`adjustPoints.amount.${unit}.${form}` as MessageKey, { amount: adjustmentAmountText(delta, unit, pointsUnit) });
+}
+
+/** An adjustment's date as the footnote under the table prints it: day-month (owner ruling 2026-09-16, "21 Nov 2026") in the
+ *  competition's clock, never the browser's (B3 m-7, ruling 5) - an organiser abroad sees the date the public sees. */
+export function adjustmentDateText(locale: string, tz: string, iso: string): string {
+  return formatPublicInstant(locale, tz, iso, { dateStyle: "medium" }) ?? iso.slice(0, 10);
 }
 
 /** The typed amount, in the table's shown unit, as the STORED delta (a half-point rule stores half-points). Not a number ⇒ 0. */
@@ -152,14 +160,7 @@ export function PointsAdjustmentDialog(props: PointsAdjustmentDialogProps) {
   const delta = storedDelta(typed, unit, pointsUnit);
   const blocked = applyBlocked({ entrant, delta, reason, sending });
   const nameOf = (id: string) => props.names[id] ?? id;
-  const dateOf = (iso: string) => {
-    try {
-      // The footnote's own rule (owner ruling 2026-09-16): English is day-month, "21 Nov 2026", never bare en's "Nov 21, 2026".
-      return new Intl.DateTimeFormat(intlLocaleFor(locale), { dateStyle: "medium" }).format(new Date(iso));
-    } catch {
-      return iso.slice(0, 10);
-    }
-  };
+  const dateOf = (iso: string) => adjustmentDateText(locale, props.tz, iso);
   const step = (by: number) => setTyped(shownDelta(delta + by, unit, pointsUnit));
 
   const run = async (op: () => Promise<DialogAnswer>, okKey: MessageKey, after?: () => void) => {

@@ -14,6 +14,8 @@ import {
   activePointsAdjustments,
   adjustmentNoteText,
   adjustmentNotesFor,
+  withCarriedAdjustments,
+  type AdjustmentCarry,
   type AdjustmentLedgerRow,
 } from "@/lib/points-adjustment-note";
 import { adjustRefusalCode, pointsAdjustmentOffered } from "@/lib/points-adjustment-offer";
@@ -128,6 +130,51 @@ describe("the footnote's words (R24 pick 15 A; C7)", () => {
   it("another language picks its own plural (fr: 1 is singular)", () => {
     const x = adjustmentNoteText(note(-1, "points"), msgOf(fr), dateOf, "fr");
     expect(`${x.lead} ${x.body}`).toBe("Marsh Lane : −1 point, fielded an ineligible player, 16 Nov 2026.");
+  });
+});
+
+describe("B3 ruling 3: a carried table names the adjustment it carries", () => {
+  const msgOf = (dict: unknown) => (key: TKey, vars?: Record<string, string | number>) => t(dict as Dict, key, vars);
+  const dateOf = () => "16 Nov 2026";
+  // stage-1's ledger: a points adjustment on a, a wins adjustment on b, a points adjustment on c (c is not carried)
+  const records = activePointsAdjustments([
+    adj(1, "a", -3),
+    row(2, { stage_id: S, entrant_id: "b", delta: -1, reason: "Late kick-off", unit: "wins", points_unit: "whole" }),
+    adj(3, "c", -2),
+  ]);
+  const carry = (mode: "points" | "full"): AdjustmentCarry => ({ into: "stage-2", from: S, fromName: "Group stage", mode, entrants: ["a", "b"] });
+
+  it("the empty case: no carry, the records unchanged", () => {
+    expect(records).toHaveLength(3);
+    expect(withCarriedAdjustments(records, [])).toEqual(records);
+  });
+
+  it("a points carry takes a points adjustment of a carried entrant - never a wins one (it carries points only), never an uncarried entrant's", () => {
+    const out = withCarriedAdjustments(records, [carry("points")]);
+    const carried = out.filter((r) => r.stage_id === "stage-2");
+    expect(carried.map((r) => [r.seq, r.entrant_id, r.carried_from])).toEqual([[1, "a", { stage_id: S, stage_name: "Group stage" }]]);
+    expect(out.filter((r) => r.stage_id === S), "the source table keeps its own three").toHaveLength(3);
+  });
+
+  it("a full carry takes both units", () => {
+    const carried = withCarriedAdjustments(records, [carry("full")]).filter((r) => r.stage_id === "stage-2");
+    expect(carried.map((r) => r.entrant_id)).toEqual(["a", "b"]);
+  });
+
+  it("the destination's footnote says where it came from; the source's does not (4 locales carry the key)", () => {
+    const out = withCarriedAdjustments(records, [carry("full")]);
+    const names = { a: "Marsh Lane", b: "Hill Park", c: "Dale" };
+    const [dest] = adjustmentNotesFor("stage-2", ["a"], out, names);
+    const [source] = adjustmentNotesFor(S, ["a"], out, names);
+    const line = (n: typeof dest, dict: unknown, locale: string) => {
+      const x = adjustmentNoteText(n!, msgOf(dict), dateOf, locale);
+      return `${x.lead} ${x.body}`;
+    };
+    expect(line(dest, en, "en")).toBe("Marsh Lane: −3 points carried from Group stage, Fielded an ineligible player, 16 Nov 2026.");
+    expect(line(source, en, "en")).toBe("Marsh Lane: −3 points, Fielded an ineligible player, 16 Nov 2026.");
+    const wins = adjustmentNotesFor("stage-2", ["b"], out, names)[0]!;
+    expect(line(wins, en, "en")).toBe("Hill Park: −1 win carried from Group stage, Late kick-off, 16 Nov 2026.");
+    expect(line(dest, fr, "fr")).toContain("Group stage");
   });
 });
 

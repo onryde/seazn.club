@@ -9,7 +9,7 @@ import en from "@/dictionaries/en/ui.json";
 import type { MessageKey } from "@/lib/messages";
 import { t, type TKey } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
-import { PointsAdjustmentDialog, type AdjustmentsRead, type DialogAnswer, adjustmentAmountPhrase, applyBlocked, shownDelta, storedDelta } from "../points-adjustment-dialog";
+import { PointsAdjustmentDialog, type AdjustmentsRead, type DialogAnswer, adjustmentAmountPhrase, adjustmentDateText, applyBlocked, shownDelta, storedDelta } from "../points-adjustment-dialog";
 
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en as Dict, key as TKey, vars);
 
@@ -42,6 +42,16 @@ describe("the phrase the dialog echoes is the footnote's", () => {
   });
 });
 
+describe("B3 m-7 (ruling 5): an adjustment's date in the dialog is the footnote's - the competition's clock, never the browser's", () => {
+  it("an instant late on 16 Nov UTC is 17 Nov in Auckland and 16 Nov in London; an unreadable instant shows its own date part", () => {
+    // 23:30Z on 16 Nov 2026: Auckland is UTC+13 in November (NZDT), London UTC+0 (GMT) - two calendar days for one instant
+    const at = "2026-11-16T23:30:00.000Z";
+    expect(adjustmentDateText("en", "Pacific/Auckland", at)).toBe("17 Nov 2026");
+    expect(adjustmentDateText("en", "Europe/London", at)).toBe("16 Nov 2026");
+    expect(adjustmentDateText("en", "Pacific/Auckland", "not a date")).toBe("not a date");
+  });
+});
+
 describe("Apply waits for the server's three checks", () => {
   it("a member, a non-zero amount and a reason; never while sending", () => {
     const ok = { entrant: "e1", delta: -3, reason: "Fielded an ineligible player", sending: false };
@@ -62,6 +72,7 @@ describe("Apply waits for the server's three checks", () => {
         msg,
         locale: "en",
         stageName: "Group stage",
+        tz: "Europe/London",
         names: {},
         load: () => new Promise<AdjustmentsRead>(() => {}),
         apply: async (): Promise<DialogAnswer> => ({ ok: true }),

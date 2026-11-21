@@ -2467,6 +2467,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           msg={msg}
           locale={locale}
           stageName={adjusting.name}
+          tz={tz}
           names={entrantNames}
           load={() => apiV1<AdjustmentsRead>(`/api/v1/stages/${adjusting.id}/adjustments`)}
           apply={async (input) => {

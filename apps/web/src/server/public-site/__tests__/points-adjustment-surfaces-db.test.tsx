@@ -31,7 +31,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { startDivision } from "@/server/usecases/schedule";
 import { scoreEvent } from "@/server/usecases/scoring";
-import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { completeStage, createStages, generateStageFixtures } from "@/server/usecases/stages";
 import { adjustPoints, undoPointsAdjustment } from "@/server/usecases/points-adjustments";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
@@ -106,6 +106,60 @@ describe.skipIf(!HAS_DB)("X-ADJ-4 the footnote shows on every surface (real prod
     await undoPointsAdjustment(auth, stage!.id, adjustment.seq);
     const off = await surfaces();
     expect(off).toEqual({ embed: false, hub: false, page: false });
+  });
+
+  it("B3 ruling 3: a table carried into the next stage names the adjustment it carries, on the page's chain and the hub", async () => {
+    const { auth } = await seedOrg("pro");
+    const suffix = randomUUID().slice(0, 8);
+    const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `ADJC ${suffix}`, visibility: "private", branding: {} });
+    await sql`update competitions set visibility = 'public' where id = ${comp.id}`;
+    const div = await createDivision(auth, comp.id, { name: "Open", slug: `open-${suffix}`, sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    const ents = await createEntrants(auth, div.id, NAMES.map((n, i) => ({ kind: "individual" as const, display_name: n, seed: i + 1, members: [] })));
+    const id = Object.fromEntries(ents.map((e, i) => [NAMES[i]!, e.id]));
+    const nameOf = Object.fromEntries(ents.map((e) => [e.id, e.display_name]));
+    const [first, second] = await createStages(auth, div.id, [
+      { seq: 1, kind: "league", name: "Table", config: {} },
+      {
+        seq: 2,
+        kind: "league",
+        name: "Super pool",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 4 }] }], placement: "rank_order", timing: "on_complete", carry: "points" },
+      },
+    ] as never);
+    await generateStageFixtures(auth, first!.id);
+    await startDivision(auth, div.id);
+    const lines = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+      select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${first!.id} and home_entrant_id is not null and away_entrant_id is not null`;
+    for (const l of lines) {
+      const home = nameOf[l.home_entrant_id]! < nameOf[l.away_entrant_id]!;
+      await scoreEvent(auth, l.id, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(auth, l.id, { expected_seq: 1, type: "generic.result", payload: home ? { p1Score: 3, p2Score: 1 } : { p1Score: 1, p2Score: 3 } });
+    }
+    expect(lines, "premise: every line of four").toHaveLength(6);
+    await adjustPoints(auth, first!.id, { entrant_id: id.Ben!, delta: -3, reason: "fielded an ineligible player" });
+    await completeStage(auth, first!.id);
+    const [dest] = await sql<{ config: { carry_deltas?: { entrantId: string; points: number }[] } }[]>`select config from stages where id = ${second!.id}`;
+    const carried = dest!.config.carry_deltas ?? [];
+    expect(carried.map((d) => d.entrantId).sort(), "premise: all four carried").toEqual(Object.values(id).sort());
+
+    const CARRIED = "Ben: −3 points carried from Table, fielded an ineligible player,";
+    const records = await loadPointsAdjustments(div.id);
+    const destNotes = adjustmentNotesFor(second!.id, carried.map((d) => d.entrantId), records, nameOf);
+    const page = (notes: typeof destNotes) =>
+      text(renderToStaticMarkup(createElement(StandingsTable, { rows: [], metricSpecs: [], cascade: ["points"], entrantNames: nameOf, dict: en as Dict, adjustmentNotes: notes })));
+    expect(page(destNotes), "the carried table names it").toContain(CARRIED);
+    const sourceNotes = adjustmentNotesFor(first!.id, Object.values(id), records, nameOf);
+    expect(page(sourceNotes), "the source table keeps its own line").toContain(LINE);
+    expect(page(sourceNotes)).not.toContain("carried from");
+    // the hub draws a table once it has one: the destination's fixtures generated, its table folds from the carried openings
+    await generateStageFixtures(auth, second!.id);
+    const doc = CompetitionHubDoc.parse(await loadCompetitionHub((await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`)[0]!.slug, comp.slug, new Date(), { uncached: true }));
+    const hub = doc.tables.filter((t) => t.divisionId === div.id).map((t) => (t.adjustmentNotes ?? []).map((n) => `${n.lead} ${n.body}`));
+    expect(hub, "the hub draws both tables").toHaveLength(2);
+    expect(hub.flat().filter((x) => x.startsWith(CARRIED)), "the hub names it under the carried table").toHaveLength(1);
+    expect(hub.flat().filter((x) => x.startsWith(LINE)), "and keeps the source's own line").toHaveLength(1);
+    expect(hub.every((notes) => notes.length === 1), "one line per table").toBe(true);
   });
 
   it("the three page files that print a table (the live page, the org page, the embed) each run that chain", () => {
