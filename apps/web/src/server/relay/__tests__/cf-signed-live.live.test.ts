@@ -62,6 +62,46 @@ const RECORDING = { mode: "automatic", requireSignedURLs: true, allowedOrigins: 
 const PROBE_NAME = "seazn-task7-probe";   // the input's meta name; the cleanup re-check requires it
 const FEED_MAX_SECONDS = 300;   // ffmpeg's own cap; the run stops it earlier, after the expiry probe
 
+/** The test feed, everything but the output. History (2026-11-21, owner runs):
+ *  - Runs 1–2 sent `testsrc -tune zerolatency -g 60 -b:v 2500k`: measured locally at ~1.1 Mbps, under Stream Live's
+ *    2–14 Mbps input floor, with keyframes on the 2 s edge
+ *    (developers.cloudflare.com/stream/stream-live/start-stream-live/#requirements). Cloudflare served 204, then closed.
+ *  - Run 3 sent testsrc2 at CBR 3 Mbps, 4 s GOP, `-preset veryfast`, on a loaded x86 Mac: ffmpeg stalled ~31 s at the
+ *    start ("Resumed reading … after a lag of 30.944s"), the input went connected → disconnected, ffmpeg exited at 33 s.
+ *  So the feed is now as cheap as libx264 allows: SMPTE bars (no per-frame drawing), `ultrafast` + `zerolatency`,
+ *  still 1280x720@30, still true CBR 3 Mbps (`nal-hrd=cbr` pads a static picture up to the rate) and a fixed closed
+ *  4 s GOP. Measured locally with no network: 13.6x real time, 3,112 kbps, keyframes every 4.0 s. */
+function feedArgs(seconds: number): string[] {
+  return [
+    "-f", "lavfi", "-i", "smptebars=size=1280x720:rate=30",
+    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
+    "-t", String(seconds),
+    "-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-profile:v", "high", "-pix_fmt", "yuv420p",
+    "-g", "120", "-keyint_min", "120", "-sc_threshold", "0",
+    "-b:v", "3000k", "-minrate", "3000k", "-maxrate", "3000k", "-bufsize", "6000k", "-x264-params", "nal-hrd=cbr",
+    "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "128k",
+  ];
+}
+
+const PREFLIGHT_SECONDS = 10;
+const PREFLIGHT_MIN_SPEED = 1.5;
+
+/** Encode PREFLIGHT_SECONDS of the feed locally, as fast as it goes, to nowhere (no network, no Cloudflare). A machine
+ *  that cannot do it at PREFLIGHT_MIN_SPEED x real time would stall a live push (run 3), so the probe refuses to spend a
+ *  Cloudflare input on it. */
+function preflightSpeed(): Promise<number> {
+  return new Promise((resolveSpeed, reject) => {
+    const started = Date.now();
+    const p = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", ...feedArgs(PREFLIGHT_SECONDS), "-f", "null", "-"], { stdio: ["ignore", "ignore", "pipe"] });
+    let err = "";
+    p.stderr!.on("data", (d: Buffer) => { err = (err + d.toString()).slice(-500); });   // no secret: the output is null
+    p.on("error", (e: NodeJS.ErrnoException) => reject(new Error(e.code === "ENOENT" ? "ffmpeg is not installed (ENOENT)" : `ffmpeg failed to start: ${e.code ?? e.message}`)));
+    p.on("exit", (code) => code === 0
+      ? resolveSpeed(PREFLIGHT_SECONDS / ((Date.now() - started) / 1000))
+      : reject(new Error(`preflight encode exited ${code}: ${err}`)));
+  });
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const note = (s: string) => console.log("LIVE  " + s);
 
@@ -170,6 +210,13 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
   }, 8 * 60_000);
 
   it("observes the lock in progress, the expiry, the lock after the end, and the PUT", async () => {
+    // 0. Preflight, before anything is created on Cloudflare: can this machine encode the feed in real time?
+    const speed = await preflightSpeed();
+    obs.preflightSpeed = Math.round(speed * 10) / 10;
+    if (speed < PREFLIGHT_MIN_SPEED) {
+      throw new Error(`preflight: ffmpeg encodes the feed at ${speed.toFixed(2)}x real time (< ${PREFLIGHT_MIN_SPEED}x) on this machine; a live push would stall. Nothing was created on Cloudflare. Retry when the machine is less loaded.`);
+    }
+
     // 1. Create the throwaway input. deleteRecordingAfterDays (30, the floor) is a leak backstop only.
     const created = await cf<{ uid: string; rtmps: { url: string; streamKey: string }; recording?: Record<string, unknown> }>(
       "POST", "/live_inputs", { meta: { name: PROBE_NAME }, recording: RECORDING, deleteRecordingAfterDays: 30 });
@@ -183,25 +230,8 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
 
     // 2. Publish the test feed. The stream key is argv to ffmpeg only.
     const target = `${created.result!.rtmps.url}${created.result!.rtmps.streamKey}`;
-    // Runs 1 and 2 (2026-11-21) connected, made a recording, served only 204 and were then closed by Cloudflare (ffmpeg
-    // 187, "End of file" writing to the muxer). Their feed broke two of Stream Live's stated input requirements
-    // (developers.cloudflare.com/stream/stream-live/start-stream-live/#requirements): a combined bitrate of 2–14 Mbps
-    // (`-b:v 2500k` is an ABR TARGET; on lavfi `testsrc`, an almost static pattern, x264 undershoots it far below
-    // 2 Mbps) and a steady 2–10 s keyframe interval (`-g 60` = exactly 2 s, the edge, with scene-cut keyframes allowed).
-    // This feed is the shape the R1 plan and the capture-QR PR pushed to Cloudflare successfully (testsrc2 + sine,
-    // libx264 veryfast, no `-tune zerolatency`), made CBR with NAL-HRD padding so the wire rate cannot undershoot, and
-    // given a fixed closed 4 s GOP (Cloudflare's recommendation) with scene cuts off.
-    ffmpeg = spawn("ffmpeg", [
-      "-hide_banner", "-loglevel", "warning", "-re",
-      "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30",
-      "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-      "-t", String(FEED_MAX_SECONDS),
-      "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
-      "-g", "120", "-keyint_min", "120", "-sc_threshold", "0",
-      "-b:v", "3000k", "-minrate", "3000k", "-maxrate", "3000k", "-bufsize", "6000k", "-x264-params", "nal-hrd=cbr",
-      "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "128k",
-      "-f", "flv", "-flvflags", "no_duration_filesize", target,
-    ], { stdio: ["ignore", "ignore", "pipe"] });
+    ffmpeg = spawn("ffmpeg", ["-hide_banner", "-loglevel", "warning", "-re", ...feedArgs(FEED_MAX_SECONDS), "-f", "flv", "-flvflags", "no_duration_filesize", target],
+      { stdio: ["ignore", "ignore", "pipe"] });
     const ffStartedAt = Date.now();
     let ffExitAfterMs: number | null = null;
     ffmpeg.on("exit", () => { ffExitAfterMs = Date.now() - ffStartedAt; });
