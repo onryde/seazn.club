@@ -7,7 +7,9 @@
 // (api-v1/schemas/) — never i18n keys themselves. This module is the
 // ONE place a code becomes display text.
 import { describe, expect, it } from "vitest";
-import { seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { PROPOSAL_STALE_SUPERSEDED, seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";
 import { LOCALES } from "@/lib/i18n-constants";
 
 describe("seedingErrorMessage — mechanics", () => {
@@ -108,5 +110,30 @@ describe("seedingErrorMessage — real dictionaries, all 4 locales, every code",
     const fr = seedingErrorMessage("fr", "SEEDING_TIE_UNRESOLVED", "x");
     const all = [en, nl, es, fr];
     expect(new Set(all).size).toBe(4);
+  });
+});
+
+// W5 stress fix F5: SEEDING_PROPOSAL_STALE with `reason: "superseded"` (a newer draft replaced this one) renders its own copy,
+// never "standings changed". Expected values are the dictionary files' own entries, read here, not the resolver's output.
+describe("seedingErrorMessage — a superseded draft (F5)", () => {
+  const files = Object.fromEntries(
+    LOCALES.map((l) => [l, JSON.parse(readFileSync(resolve(__dirname, `../../dictionaries/${l}/errors.json`), "utf8")) as Record<string, string>]),
+  );
+  let checked = 0;
+  for (const locale of LOCALES) {
+    it(`${locale}: reason superseded -> the superseded copy; no reason -> the standings copy`, () => {
+      const superseded = files[locale]!["seeding.proposalSuperseded"];
+      const stale = files[locale]!["seeding.SEEDING_PROPOSAL_STALE"];
+      expect(superseded, `${locale} has the copy`).toBeTypeOf("string");
+      expect(superseded).not.toBe(stale);
+      expect(seedingErrorMessage(locale, "SEEDING_PROPOSAL_STALE", "x", { reason: PROPOSAL_STALE_SUPERSEDED, newer: "p2" })).toBe(superseded);
+      expect(seedingErrorMessage(locale, "SEEDING_PROPOSAL_STALE", "x")).toBe(stale);
+      // Another code carrying the same reason is not re-routed: the variant is SEEDING_PROPOSAL_STALE's alone.
+      expect(seedingErrorMessage(locale, "SEEDING_ALREADY_CONFIRMED", "x", { reason: PROPOSAL_STALE_SUPERSEDED })).toBe(files[locale]!["seeding.SEEDING_ALREADY_CONFIRMED"]);
+      checked++;
+    });
+  }
+  it("anti-vacuity: every locale was checked", () => {
+    expect(checked).toBe(LOCALES.length);
   });
 });

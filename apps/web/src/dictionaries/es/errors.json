@@ -7,6 +7,7 @@
   "seeding.SEEDING_BESTNTH_UNEQUAL_POOLS": "Estos grupos han jugado un número distinto de partidos, así que sus clasificaciones todavía no se pueden comparar.",
   "seeding.SEEDING_ALREADY_CONFIRMED": "Las posiciones de esta fase ya están cubiertas por una propuesta confirmada.",
   "seeding.SEEDING_PROPOSAL_STALE": "La clasificación cambió desde que se calculó esta propuesta. Vuelve a calcularla para ver los clasificados actuales.",
+  "seeding.proposalSuperseded": "Una propuesta más reciente reemplazó a esta. Revisa la nueva propuesta y confírmala en su lugar.",
   "seeding.SEEDING_EDIT_UNKNOWN_SLOT": "Una de tus ediciones hace referencia a una posición que esta propuesta no tiene. Vuelve a calcular la propuesta e inténtalo de nuevo.",
   "seeding.SEEDING_TIE_UNRESOLVED": "Resuelve todos los empates antes de confirmar: elige qué participante ocupa cada posición.",
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "El mismo participante está asignado a más de una posición. Corrige tus ediciones e inténtalo de nuevo.",

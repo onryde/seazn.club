@@ -45,7 +45,10 @@ export type RoundRobinRefusalCode =
   | "RR_REGENERATE_WOULD_DROP_ADD_MATCH"
   // Final fix wave (m1): deleting a setup-phase entrant whose line holds recorded match data (a team sheet, match rules, a result
   // voided since). A code from W5's own row set, kept without the RR_ prefix: it is the wire code the reconcile has always thrown.
-  | "ENTRANT_FIXTURES_HAVE_RESULTS";
+  | "ENTRANT_FIXTURES_HAVE_RESULTS"
+  // W5 stress fix F7: more pools than the pool-key alphabet holds (`POOL_COUNT_MAX`, A-Z) - the create door (the schema's ceiling,
+  // mapped by name in api-v1/http.ts) and Start (generators.ts `poolCount`). Details: `max`, and at Start `pools`, the count asked.
+  | "RR_TOO_MANY_POOLS";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -136,7 +139,16 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     en: "This entrant's fixtures hold recorded match data. Clear it before deleting the entrant.",
     key: "roundrobin.refusal.ENTRANT_FIXTURES_HAVE_RESULTS",
   },
+  RR_TOO_MANY_POOLS: {
+    status: 422,
+    en: "A group stage can have at most {max} pools, one for each letter from A to Z.",
+    key: "roundrobin.refusal.RR_TOO_MANY_POOLS",
+  },
 };
+
+/** The stage schema's issue message for a pool count past `POOL_COUNT_MAX` (`config.pools.count`): api-v1/http.ts finds the issue
+ *  by this exact message and answers RR_TOO_MANY_POOLS by name, the way it finds COUNTRY_SEPARATION_NOT_OFFERED's. */
+export const TOO_MANY_POOLS_ISSUE = "pools.count is past the pool-key alphabet (RR_TOO_MANY_POOLS)";
 
 /** Whether a wire code is one of this table's — a client's branch to say a round-robin refusal in the reader's language.
  *  Own keys only: a prototype name is no code. */

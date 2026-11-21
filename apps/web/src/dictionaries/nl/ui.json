@@ -2938,6 +2938,7 @@
   "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "De competitie zou opnieuw ingedeeld moeten worden, en dat wist wat al bij de wedstrijden is ingesteld (officials, teamopstellingen, scoreapparaten, streams, beschikbaarheid van spelers of baanoproepen). Gebruik Wedstrijden herbouwen — dat laat eerst zien wat het wist.",
   "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH": "De competitie zou opnieuw ingedeeld moeten worden, en dat verwijdert de wedstrijden die je met Wedstrijd toevoegen hebt toegevoegd. Wedstrijden herbouwen verwijdert ze ook: noteer ze eerst en gebruik het daarna.",
   "roundrobin.refusal.ENTRANT_FIXTURES_HAVE_RESULTS": "De wedstrijden van deze deelnemer bevatten opgeslagen wedstrijdgegevens. Wis ze voordat je de deelnemer verwijdert.",
+  "roundrobin.refusal.RR_TOO_MANY_POOLS": "Een groepsfase kan hoogstens {max} poules hebben, één voor elke letter van A tot Z.",
   "knockout.addToBracket": "Toevoegen aan schema",
   "knockout.lateEntry.tookBye": "{name} speelt tegen {holder}, die een bye had.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} neemt de plek van {withdrawn} in tegen {opponent}.",

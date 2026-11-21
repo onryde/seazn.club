@@ -150,6 +150,12 @@ export const CROSS_POOL_REFUSAL_CODES: ReadonlySet<string> = new Set([
   "SEEDING_CROSS_POOL_DRAW_TOO_LARGE",
 ]);
 
+/** W5 stress fix F5: SEEDING_PROPOSAL_STALE's `reason` when a NEWER draft replaced the one being confirmed (a Recompute / POST
+ *  /seed-proposal), not a standings change; the reply also names it (`newer`). The code stays SEEDING_PROPOSAL_STALE, so every
+ *  reader that takes it as "look again" (the progression panel's refresh, plate-field, quick-match advance, match-day MD_STALE)
+ *  still does; only the copy differs (`seeding.proposalSuperseded`). */
+export const PROPOSAL_STALE_SUPERSEDED = "superseded";
+
 function isSeedingErrorCode(code: string): code is SeedingErrorCode {
   return (SEEDING_ERROR_CODES as readonly string[]).includes(code);
 }
@@ -166,5 +172,6 @@ export function seedingErrorMessage(
 ): string {
   if (!isSeedingErrorCode(code)) return fallback;
   const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
+  if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_SUPERSEDED) return t(dict, "seeding.proposalSuperseded", vars);
   return t(dict, `seeding.${code}`, vars);
 }

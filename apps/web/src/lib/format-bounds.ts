@@ -28,6 +28,11 @@ export const FORMAT_BOUNDS = {
 
 export type FormatBoundKey = keyof typeof FORMAT_BOUNDS;
 
+/** W5 stress fix F7: the most pools any group stage can hold, at any door - one per pool KEY, and a pool's key is one capital
+ *  letter A to Z (`POOL_KEYS`, server/usecases/stages/generators.ts; pinned equal by `too-many-pools.test.ts`). The builder's
+ *  own knob stops lower (`FORMAT_BOUNDS.pools`); this is the API's and Start's ceiling. Past it: RR_TOO_MANY_POOLS. */
+export const POOL_COUNT_MAX = 26;
+
 /** True when `value` is a whole number inside the field's bounds. A stored value outside them is shown as it is, with
  *  an explanation — never clamped silently (Match Day D1). */
 export function withinFormatBounds(field: FormatBoundKey, value: number): boolean {

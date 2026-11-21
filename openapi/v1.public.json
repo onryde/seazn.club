@@ -17872,7 +17872,7 @@
                               "count": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 9007199254740991
+                                "maximum": 26
                               }
                             },
                             "required": [
@@ -18356,7 +18356,7 @@
                                 "count": {
                                   "type": "integer",
                                   "minimum": 1,
-                                  "maximum": 9007199254740991
+                                  "maximum": 26
                                 }
                               },
                               "required": [
@@ -19376,7 +19376,7 @@
                               "count": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 9007199254740991
+                                "maximum": 26
                               }
                             },
                             "required": [
@@ -19860,7 +19860,7 @@
                                 "count": {
                                   "type": "integer",
                                   "minimum": 1,
-                                  "maximum": 9007199254740991
+                                  "maximum": 26
                                 }
                               },
                               "required": [

@@ -4,6 +4,7 @@ import "server-only";
 
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { PROPOSAL_STALE_SUPERSEDED } from "@/lib/seeding-error";
 import { type ComparisonBasis, type ProgressionSpec, type SourceShape, type SourceTables } from "@seazn/engine/competition";
 import { resolveStoredProgression } from "../stored-progression";
 import { BYE_SLOT_LABEL } from "@/lib/bye-line";
@@ -503,6 +504,19 @@ export async function confirmSeedProposal(
       );
     }
     if (proposal.status === "stale") {
+      // W5 stress fix F5: a draft a NEWER one replaced (a Recompute: the POST marks the old draft stale and inserts the new one)
+      // says so and names the newest, instead of "standings changed" when nothing had. Same code, so every look-again reader
+      // still reads it as one (`PROPOSAL_STALE_SUPERSEDED`, lib/seeding-error.ts).
+      const [newer] = await tx<{ id: string }[]>`
+        select n.id from stage_seed_proposals n join stage_seed_proposals p on p.id = ${proposal.id}
+         where n.stage_id = p.stage_id and n.created_at > p.created_at
+         order by n.created_at desc, n.id limit 1`;
+      if (newer !== undefined) {
+        throw new HttpError(409, "a newer proposal replaced this one — review the newer proposal", "SEEDING_PROPOSAL_STALE", {
+          reason: PROPOSAL_STALE_SUPERSEDED,
+          newer: newer.id,
+        });
+      }
       throw new HttpError(409, "standings changed since this proposal was computed — recompute it first", "SEEDING_PROPOSAL_STALE");
     }
     // W5 app PR B D-B2-1: on a draft drawn across pools, the ties this confirm answers (a pick, or the edits that fill a tie's

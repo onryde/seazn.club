@@ -21,6 +21,9 @@ import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { featureReason } from "@/lib/feature-copy";
 import { SWISS_REFUSALS, SWISS_REQUESTED_BYES_DEFERRED_MESSAGE } from "@/lib/swiss-refusals";
 import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE, KNOCKOUT_REFUSALS } from "@/lib/knockout-refusals";
+import { POOL_COUNT_MAX } from "@/lib/format-bounds";
+import { TOO_MANY_POOLS_ISSUE } from "@/lib/roundrobin-refusals";
+import { roundRobinRefusal } from "@/server/usecases/roundrobin-refusal";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { runRequestContext } from "@/server/request-context";
@@ -217,6 +220,12 @@ async function v1Inner<T>(
       if (country !== null) {
         const row = KNOCKOUT_REFUSALS.COUNTRY_SEPARATION_NOT_OFFERED;
         return errorResponse(requestId, row.status, "COUNTRY_SEPARATION_NOT_OFFERED", row.en, { field: country.field, issues: err.issues });
+      }
+      // W5 stress fix F7: more pools than A-Z holds is refused by NAME (the round-robin table's row), with the ceiling for the copy.
+      const pools = tooManyPoolsOf(err.issues);
+      if (pools !== null) {
+        const named = roundRobinRefusal("RR_TOO_MANY_POOLS", { max: POOL_COUNT_MAX });
+        return errorResponse(requestId, named.status, named.code!, named.message, { max: POOL_COUNT_MAX, field: pools.field, issues: err.issues });
       }
       return errorResponse(requestId, 400, "VALIDATION", "Invalid input", {
         issues: err.issues,
@@ -429,6 +438,13 @@ export function swissRequestedByesOf(issues: readonly IssueLike[]): { field: str
  *  Null for any other refusal. */
 export function countrySeparationOf(issues: readonly IssueLike[]): { field: string } | null {
   const path = pathOfIssueMessage(issues, COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE, []);
+  return path === null ? null : { field: pathText(path) };
+}
+
+/** W5 stress fix F7: a `config.pools.count` past `POOL_COUNT_MAX` in a refusal (`StageConfig`), found by its own issue message as
+ *  `countrySeparationOf` finds its key. Null for any other refusal. */
+export function tooManyPoolsOf(issues: readonly IssueLike[]): { field: string } | null {
+  const path = pathOfIssueMessage(issues, TOO_MANY_POOLS_ISSUE, []);
   return path === null ? null : { field: pathText(path) };
 }
 

@@ -12,6 +12,7 @@ import { byeAward } from "@/lib/fixture-bye";
 import { rrExtKey } from "@/lib/roundrobin-reconcile";
 import type { Tx, GenFixture, ActiveEntrant } from "./types";
 import { knockoutRefusal } from "../knockout-refusal";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 import { HttpError } from "@/lib/errors";
 // The draw primitives moved to the engine-db layer (competition.ts reads them; usecases import engine-db, never the reverse).
 import { knockoutDraws, knockoutDrawOrder } from "@/server/engine-db/knockout-draw";
@@ -400,6 +401,8 @@ export const POOL_KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 export function poolCount(cfg: Record<string, unknown>): number {
   const pools = cfg.pools as { count?: unknown } | undefined;
   const count = typeof pools?.count === "number" ? pools.count : 1;
+  // W5 stress fix F7: past the alphabet is refused by NAME (a stage stored through the API before its door had this ceiling).
+  if (Number.isInteger(count) && count > POOL_KEYS.length) throw roundRobinRefusal("RR_TOO_MANY_POOLS", { max: POOL_KEYS.length, pools: count });
   if (!Number.isInteger(count) || count < 1 || count > POOL_KEYS.length) {
     throw new EngineError("CONFIG_INVALID", `invalid pool count ${String(count)}`, { count });
   }

@@ -2938,6 +2938,7 @@
   "roundrobin.refusal.RR_REGENERATE_WOULD_CLEAR_SETUP": "Habría que sortear la tabla de nuevo, y eso borra la configuración que ya tienen sus partidos (árbitros, alineaciones, dispositivos de anotación, emisiones, disponibilidad de jugadores o llamadas a pista). Usa Reconstruir enfrentamientos: antes te muestra lo que borra.",
   "roundrobin.refusal.RR_REGENERATE_WOULD_DROP_ADD_MATCH": "Habría que sortear la tabla de nuevo, y eso elimina los partidos que añadiste con Añadir partido. Reconstruir enfrentamientos también los elimina: anótalos antes y luego úsalo.",
   "roundrobin.refusal.ENTRANT_FIXTURES_HAVE_RESULTS": "Los partidos de este participante tienen datos de partido registrados. Bórralos antes de eliminar al participante.",
+  "roundrobin.refusal.RR_TOO_MANY_POOLS": "Una fase de grupos puede tener como máximo {max} grupos, uno por cada letra de la A a la Z.",
   "knockout.addToBracket": "Añadir al cuadro",
   "knockout.lateEntry.tookBye": "{name} juega contra {holder}, que tenía un descanso.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} ocupa el puesto de {withdrawn} contra {opponent}.",

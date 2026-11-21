@@ -17,6 +17,8 @@ import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { undoRefusalText } from "@/lib/undo-refusals";
 import { ScheduleGateDialog } from "@/components/v2/board/schedule-gate-dialog";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
@@ -146,6 +148,10 @@ export function LaunchActions({
         // W4 B2 fix round 1 (G1): Start reconciles a root knockout drawn before its roster moved, and refuses by name when
         // that would redraw over organiser setup — the knockout table's sentence, in the reader's language.
         setError(knockoutRefusalText(err.code, err.extra, msg));
+      } else if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
+        // W5 stress fix F7: a round-robin refusal (a stored group stage of more pools than A-Z holds, RR_TOO_MANY_POOLS, or a
+        // redraw Start would make over setup) - the table's sentence in the reader's language, never the server's English.
+        setError(undoRefusalText(err.code, err.extra, msg));
       } else {
         setError(err instanceof Error ? err.message : msg("launch.failedStart"));
       }
