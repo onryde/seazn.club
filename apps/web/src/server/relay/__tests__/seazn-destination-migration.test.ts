@@ -9,7 +9,7 @@
 // plain `sql` client: RLS is FORCEd with zero policies (the V430 pattern), so app_user would see nothing.
 import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -23,6 +23,23 @@ const failure = async (p: PromiseLike<unknown>): Promise<string> => {
   }
   return "landed";
 };
+
+/** Runs `fn` in a transaction that is ALWAYS rolled back: a probe that deletes an org's seazn row can never leave that org
+ *  without one, even if the run dies mid-test, so the every-org sweep below never sees a half-state (review m3). */
+const ROLLBACK = new Error("rollback: probes leave nothing behind");
+async function rolledBack(fn: (tx: Tx) => Promise<void>): Promise<void> {
+  try {
+    await sql.begin(async (tx) => {
+      await fn(tx);
+      throw ROLLBACK;
+    });
+  } catch (e) {
+    if (e !== ROLLBACK) throw e;
+  }
+}
+/** One statement under a savepoint, so a refusal leaves the surrounding transaction usable for the next probe. */
+const probe = (tx: Tx, q: (sp: Tx) => PromiseLike<unknown>): Promise<string> =>
+  failure(tx.savepoint((sp) => q(sp as Tx)));
 
 type TargetRow = { kind: string; label: string; watch_url: string | null; rtmp: boolean; conn: boolean; archived: boolean };
 const seaznRows = (orgId: string) => sql<TargetRow[]>`
@@ -82,27 +99,38 @@ describe.skipIf(!HAS_DB)("V540__seazn_destination.sql — the Seazn destination 
   it("a second seazn row for one org is refused by org_stream_targets_one_seazn; another org's is its own key", async () => {
     const a = await seedOrg();
     const b = await seedOrg();
-    const insertSeazn = (orgId: string) => sql`insert into org_stream_targets (org_id, kind, label) values (${orgId}, 'seazn', 'Seazn')`;
-    expect(await failure(insertSeazn(a.auth.orgId)), "a second row on org a").toBe("23505:org_stream_targets_one_seazn");
-    await sql`delete from org_stream_targets where org_id = ${b.auth.orgId} and kind = 'seazn'`;
-    expect(await failure(insertSeazn(b.auth.orgId)), "org b's slot once freed").toBe("landed");
+    let probes = 0;
+    await rolledBack(async (tx) => {
+      const insertSeazn = (orgId: string) => probe(tx, (sp) => sp`insert into org_stream_targets (org_id, kind, label) values (${orgId}, 'seazn', 'Seazn')`);
+      expect(await insertSeazn(a.auth.orgId), "a second row on org a").toBe("23505:org_stream_targets_one_seazn");
+      await tx`delete from org_stream_targets where org_id = ${b.auth.orgId} and kind = 'seazn'`;
+      expect(await insertSeazn(b.auth.orgId), "org b's slot once freed").toBe("landed");
+      probes = 2;
+    });
+    expect(probes, "probes run").toBe(2);
   });
 
   it("one_source: a seazn row may hold no key and no connection; any other kind still needs exactly one source", async () => {
     const { auth } = await seedOrg();
     const orgId = auth.orgId;
-    await sql`delete from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`;
     const key = Buffer.from("not-a-real-envelope");
-    expect(await failure(sql`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'seazn', 'Seazn', ${key})`),
-      "a seazn row with a key").toBe("23514:org_stream_targets_one_source");
-    expect(await failure(sql`insert into org_stream_targets (org_id, kind, label) values (${orgId}, 'youtube', 'No source')`),
-      "a youtube row with neither source (the regression)").toBe("23514:org_stream_targets_one_source");
-    expect(await failure(sql`insert into org_stream_targets (org_id, kind, label) values (${orgId}, 'seazn', 'Seazn')`),
-      "a seazn row with neither source").toBe("landed");
-    expect(await failure(sql`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'youtube', 'Pasted', ${key})`),
-      "a pasted youtube row").toBe("landed");
-    expect(await failure(sql`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'ufo', 'x', ${key})`),
-      "an unknown kind").toBe("23514:org_stream_targets_kind_check");
+    let probes = 0;
+    await rolledBack(async (tx) => {
+      await tx`delete from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`;
+      expect(await probe(tx, (sp) => sp`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'seazn', 'Seazn', ${key})`),
+        "a seazn row with a key").toBe("23514:org_stream_targets_one_source");
+      expect(await probe(tx, (sp) => sp`insert into org_stream_targets (org_id, kind, label) values (${orgId}, 'youtube', 'No source')`),
+        "a youtube row with neither source (the regression)").toBe("23514:org_stream_targets_one_source");
+      expect(await probe(tx, (sp) => sp`insert into org_stream_targets (org_id, kind, label) values (${orgId}, 'seazn', 'Seazn')`),
+        "a seazn row with neither source").toBe("landed");
+      expect(await probe(tx, (sp) => sp`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'youtube', 'Pasted', ${key})`),
+        "a pasted youtube row").toBe("landed");
+      expect(await probe(tx, (sp) => sp`insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${orgId}, 'ufo', 'x', ${key})`),
+        "an unknown kind").toBe("23514:org_stream_targets_kind_check");
+      probes = 5;
+    });
+    expect(probes, "probes run").toBe(5);
+    expect(await seaznRows(orgId), "the rollback restored the org's one seazn row").toHaveLength(1);
   });
 
   it("two live sessions on one seazn target both land; two on one pasted target still collide on one_active_target", async () => {
@@ -132,6 +160,12 @@ describe.skipIf(!HAS_DB)("V540__seazn_destination.sql — the Seazn destination 
        where p.proname = 'ensure_seazn_target' and p.pronamespace = current_schema()::regnamespace`;
     expect(fn?.definer).toBe(true);
     expect(fn?.config?.some((c) => /^search_path=.*pg_temp/.test(c))).toBe(true);
+    // The definer function is off the execute list (review m4): neither app_user nor PUBLIC holds EXECUTE on it.
+    const [priv] = await sql<{ app_user: boolean; public_x: boolean }[]>`
+      select has_function_privilege('app_user', p.oid, 'execute') as app_user,
+             coalesce(exists (select 1 from aclexplode(p.proacl) a where a.grantee = 0 and a.privilege_type = 'EXECUTE'), true) as public_x
+        from pg_proc p where p.proname = 'ensure_seazn_target' and p.pronamespace = current_schema()::regnamespace`;
+    expect(priv).toEqual({ app_user: false, public_x: false });
   });
 
   it("seazn_held_alerts and seazn_locked_videos exist with RLS enabled AND forced, no policy, and RESTRICT foreign keys", async () => {
@@ -169,5 +203,27 @@ describe.skipIf(!HAS_DB)("V540__seazn_destination.sql — the Seazn destination 
     expect(await failure(sql`insert into seazn_locked_videos (cf_video_id, input_row_id) values (${video}, ${input!.id})`), "second lock")
       .toBe("23505:seazn_locked_videos_pkey");
     expect(await failure(sql`delete from fixture_stream_inputs where id = ${input!.id}`), "a locked input cannot be deleted").toMatch(/^23503:/);
+  });
+
+  it("written once is a guard: a session's destination_kind cannot change; an input's access goes null -> value once and is then fixed", async () => {
+    const r = await rig();
+    const sid = await insertSession(r, r.pastedId, "youtube");
+    expect(await failure(sql`update fixture_stream_sessions set destination_kind = 'seazn' where id = ${sid}`), "youtube -> seazn")
+      .toBe("23514:fixture_stream_sessions_destination_kind_fixed");
+    expect(await failure(sql`update fixture_stream_sessions set destination_kind = null where id = ${sid}`), "youtube -> null")
+      .toBe("23514:fixture_stream_sessions_destination_kind_fixed");
+    expect(await failure(sql`update fixture_stream_sessions set destination_kind = 'youtube', state = 'ending' where id = ${sid}`),
+      "the same value, beside another column").toBe("landed");
+
+    const [input] = await sql<{ id: string }[]>`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0) returning id`;
+    const first = { signed: true, allowedOrigins: ["seazn.club"] };
+    expect(await failure(sql`update fixture_stream_inputs set access = ${sql.json(first)} where id = ${input!.id}`), "null -> value")
+      .toBe("landed");
+    expect(await failure(sql`update fixture_stream_inputs set access = ${sql.json({ signed: false })} where id = ${input!.id}`), "value -> other value")
+      .toBe("23514:fixture_stream_inputs_access_fixed");
+    expect(await failure(sql`update fixture_stream_inputs set access = null where id = ${input!.id}`), "value -> null")
+      .toBe("23514:fixture_stream_inputs_access_fixed");
+    expect(await failure(sql`update fixture_stream_inputs set access = ${sql.json(first)}, recordings_locked_at = now() where id = ${input!.id}`),
+      "the same value, beside another column").toBe("landed");
   });
 });

@@ -51,11 +51,24 @@ select id, 'seazn', 'Seazn', null from organizations
 on conflict (org_id) where kind = 'seazn' do nothing;
 
 -- ─── 3. fixture_stream_inputs: the signed settings an input was created with, and the recordings-locked mark ────────
--- access: `{"signed":true,"allowedOrigins":[…]}`, written once by provisioning and never updated (Task 12).
+-- access: `{"signed":true,"allowedOrigins":[…]}`, written once by provisioning and never changed after (Task 12; guarded below).
 -- recordings_locked_at: every recording of a finished programme input is locked (Task 13), so it is never listed again.
 alter table fixture_stream_inputs
   add column access jsonb null,
   add column recordings_locked_at timestamptz null;
+
+-- "Written once" is a guard, not a comment: once access holds a value, no update may change it (null -> value is the one
+-- write provisioning makes). ingest-cf.ts never re-sends `recording` on a live input, so the stored settings must stay the
+-- ones the input was created with.
+create function fixture_stream_inputs_access_fixed() returns trigger language plpgsql as $$
+begin
+  raise exception 'fixture_stream_inputs.access is written once and never changed (input %)', old.id
+    using errcode = 'check_violation', constraint = 'fixture_stream_inputs_access_fixed';
+end $$;
+create trigger fixture_stream_inputs_access_fixed
+  before update of access on fixture_stream_inputs
+  for each row when (old.access is not null and new.access is distinct from old.access)
+  execute function fixture_stream_inputs_access_fixed();
 
 -- ─── 4. the two one-per-recording marks (the V430 pattern: enable + force RLS, no policy, no grant) ─────────────────
 -- The sweep hold's one alert per recording (Task 18). It needs no replay row, so it works in Phase 1.
@@ -84,6 +97,18 @@ alter table seazn_locked_videos force  row level security;
 -- row at once, so a seazn session leaves the index. destination_kind is written once at admission (start.ts) and never
 -- updated, so the predicate is stable for a row's whole life. Drop and recreate share this migration's transaction, and
 -- DROP INDEX holds the table's ACCESS EXCLUSIVE lock until commit, so no window admits two active pasted sessions.
+-- The stability is a guard, not a comment: an update that changes destination_kind is refused, so no row can move across
+-- the predicate below after admission.
+create function fixture_stream_sessions_destination_kind_fixed() returns trigger language plpgsql as $$
+begin
+  raise exception 'fixture_stream_sessions.destination_kind is written once at admission (session %)', old.id
+    using errcode = 'check_violation', constraint = 'fixture_stream_sessions_destination_kind_fixed';
+end $$;
+create trigger fixture_stream_sessions_destination_kind_fixed
+  before update of destination_kind on fixture_stream_sessions
+  for each row when (new.destination_kind is distinct from old.destination_kind)
+  execute function fixture_stream_sessions_destination_kind_fixed();
+
 drop index fixture_stream_sessions_one_active_target;
 create unique index fixture_stream_sessions_one_active_target
   on fixture_stream_sessions (target_id)
