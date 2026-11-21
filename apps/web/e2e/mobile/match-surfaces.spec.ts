@@ -757,12 +757,27 @@ test("match day online block: boards are rows of the list; a row opens its panel
   const ids = await rows.evaluateAll((els) => els.map((e) => e.getAttribute("data-fixture-id")));
   expect(new Set(ids), "each seeded board is one row, once").toEqual(new Set(r.boards.map((b) => b.fixtureId)));
 
-  // ── the default: a phone shows the LIST (nothing was opened); from md the first row of the list is focused beside it ────────────
+  // ── the default: a phone shows the LIST (nothing was opened); from md the FIRST ROW of the whole list is focused beside it ─────────
+  // Design 2026-11-05 §5.2: the desktop's default focus "stays the first row of the whole list, so a court when any court is listed" - the
+  // online block is the list's LAST block, so a day with a court focuses that court, not this test's round (B11: at tablet-834 a free
+  // "Court 1" came first and the old "the focus is the online round" read red). So the default is asserted as the RULE - the list's first
+  // row is the focused one - and this test's own round is addressed by its key, then opened by its row.
+  const roundKey = `${r.stageId}:1`;
+  const ownRound = block.locator(`[data-testid="md-round-row"][data-key="${roundKey}"]`);
+  await expect(ownRound, "this test's own round (its stage, round 1) has the one row of the online block").toHaveCount(1);
   if (phone) {
     await expect(page.getByTestId("md-focus"), "a phone opens on the list").toBeHidden();
   } else {
+    const listRows = page.getByTestId("md-list").locator('[data-testid="md-court-row"], [data-testid="md-no-court-row"], [data-testid="md-round-row"], [data-testid="md-board-row"]');
+    expect(await listRows.count(), "anti-vacuity: the list has rows").toBeGreaterThan(0);
     await expect(page.getByTestId("md-focus"), "from md the first row is focused beside the list").toBeVisible();
+    await expect(listRows.first(), "the list's first row is the focused one (a court when a court is listed, else the round)").toHaveAttribute("aria-current", "true");
+    await expect(page.getByTestId("md-focus"), "no board is the default focus").not.toHaveAttribute("data-online", "board");
+    // The round row opens its panel beside the list, addressed by ITS key (not "the first row").
+    await ownRound.click();
     await expect(page.getByTestId("md-focus")).toHaveAttribute("data-online", "round");
+    await expect(page.getByTestId("md-focus"), "the panel is this round's").toHaveAttribute("data-key", roundKey);
+    await expect(ownRound).toHaveAttribute("aria-current", "true");
   }
 
   // ── nothing scrolls sideways, nothing is clipped inside the block ────────────────────────────────────────────────────────────────
@@ -773,6 +788,15 @@ test("match day online block: boards are rows of the list; a row opens its panel
 
   // ── every row is a 44px target, hit-tested ───────────────────────────────────────────────────────────────────────────────────────
   await assertTapFloor(block.getByTestId("md-round-row"), "the round row");
+  // B4 (T6 carry): "Round 1" never breaks inside the round row's title ("Round / 1" at 768, where the right column leaves the title a narrow
+  // track). The tail is one no-wrap unit: ONE client rect on every width (a wrapped inline run has one rect per line).
+  const tailRects = await ownRound.locator("[data-md-round-tail]").evaluate((el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return { rects: range.getClientRects().length, text: el.textContent ?? "" };
+  });
+  expect(tailRects.text, "the tail is the label and the number (the dictionary's words after the division)").toBe(uiEn["matchDay.online.round"]!.split("·")[1]!.replace("{round}", "1").trim());
+  expect(tailRects.rects, `"${tailRects.text}" stays on one line at ${width}px`).toBe(1);
   for (let i = 0; i < r.boards.length; i += 1) await assertTapFloor(rows.nth(i), `board row ${i + 1}`);
 
   // ── a presence ring never stands alone on a line (controller finding V1): each ring is on the line of the LAST client rect of its name's last
