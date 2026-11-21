@@ -85,6 +85,11 @@
 // claim, the funnel start's resend, a registrant's withdraw / checkout / resend, and a team's join POST) and every route with a secret in its path (`SECRET_PATH_ROUTES`: the invite and claim
 // accepts, check-in, revoke). Only a Sentry event has a body to drop.
 //
+// The replay host's CDN token rides a URL PATH (Seazn-hosted video, Task 22 review I2): an organiser's download is fetched by the
+// server from `https://{cdn}/bcdn_token=<token>&expires=…&token_path=…/{video}/play_{h}p.mp4` (probe B5), and the server SDK's
+// fetch instrumentation drops only a URL's query, so the path reaches the outgoing request's breadcrumb and span. Every
+// `bcdn_token=` value becomes `[token]`; `expires`, `token_path` and the file name stay (none of them signs anything).
+//
 // A sampled TRANSACTION carries the request's query string a second time, in its span data, WITH its `?` and beside a URL
 // that has none: `http.query` in `contexts.trace.data` and an outgoing request's breadcrumb (@sentry/opentelemetry
 // `getRequestSpanData`), `url.query` in a span's data (@sentry/core `getHttpSpanDetailsFromUrlObject`). Where the event, or
@@ -151,6 +156,9 @@ const JOIN_CODE_NAMES = JOIN_CODE_PARAMS.join("|");
 const JOIN_CODE_QUERY = new RegExp(`((?:^|[?&])(?:${JOIN_CODE_NAMES})=)[^&#\\s"'<>]+`, "g");
 /** The same parameter URL-ENCODED inside another URL: `%3Fjoin_code%3D` / `%26join%3D`, at any encoding depth, either hex case. */
 const ENCODED_JOIN_CODE = new RegExp(`(%(?:25)*(?:3[Ff]|26)(?:${JOIN_CODE_NAMES})%(?:25)*3[Dd])[^%&#\\s"'<>]+`, "g");
+/** The replay host's CDN token (probe B5), a path segment `bcdn_token=<token>&expires=…`: the value up to the next `&`, `/`,
+ *  `?`, `#`, quote, angle bracket or space. Any value, not only the token's own 43 characters. */
+const BUNNY_CDN_TOKEN = /(bcdn_token=)[^&/?#\s"'<>]+/g;
 /** A capture code in a phone route's path: everything up to the next `/`, `?`, `#`, quote, angle bracket or space. */
 const CAPTURE_PATH = /(\/capture\/codes\/)[^/?#\s"'<>]+/g;
 /** The same path URL-ENCODED inside another URL, at any encoding depth, either hex case. */
@@ -275,6 +283,7 @@ const MAYBE_TOKEN = new RegExp(
     `${RELAY_PAGE_TOKEN_PARAM}%`,
     "\\/capture\\/codes\\/",
     "capture%(?:25)*2[Ff]codes%",
+    "bcdn_token=",
     `(?:${JOIN_CODE_NAMES})=`,
     `(?:${JOIN_CODE_NAMES})%`,
     "(?:^|[?&])t=",
@@ -297,11 +306,13 @@ export function scrubTokenQuery(query: string): string {
  *  match-room token in a `t=` query value (plain or encoded) becomes `[token]`, a team's join code in a
  *  `join_code=` / `join=` query value (plain or encoded) becomes `[code]`, the secret after a
  *  `SECRET_PATH_ROUTES` route root (`/claim/`, `/join/`, `/checkin/`, …; plain or encoded) becomes `[token]`, and a
- *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, and a bare
- *  quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
+ *  one-time sign-in token in the `token=` query value of a one-time route (plain or encoded) becomes `[token]`, a replay CDN
+ *  token after `bcdn_token=` becomes `[token]`, and a bare quick match home token `qm_…` left anywhere else becomes `qm_[token]`. */
 export function scrubScoreUrl(value: string): string {
   if (!MAYBE_TOKEN.test(value)) return value;
   return value
+    // First, for the same reason as the room JWT below: a CDN token is random base64url too, and a `dl_` run inside it would be half-eaten.
+    .replace(BUNNY_CDN_TOKEN, "$1[token]")
     // First: a room JWT is random base64url and can contain a `dl_` run, which BARE_TOKEN would half-eat and so break the JWT shape (C43).
     .replace(ROOM_TOKEN_QUERY, "$1[token]")
     .replace(ENCODED_ROOM_TOKEN, "$1[token]")

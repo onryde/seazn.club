@@ -152,6 +152,14 @@ describe("BunnyReplayHost: the API calls (AccessKey header, library base URL)", 
     for (const c of calls) expect(c.headers.accesskey).toBe(CONFIG.apiKey);
   });
 
+  it("remove: a present video whose DELETE fails is never reported deleted (one DELETE, the status and the id in the message)", async () => {
+    const { host, calls } = harness((c) => (c.method === "DELETE" ? { status: 500, body: { message: "boom" } } : { status: 200, body: videoBody({ status: 4 }) }));
+    const message = await errorOf(host.remove(GUID));
+    expect(message).toMatch(/remove: HTTP 500/);
+    expect(message).toContain(GUID);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+  });
+
   it("watchMinutes is Task 30's and refuses until it is built", async () => {
     const { host, calls } = harness(() => ({ status: 200, body: {} }));
     const port: ReplayHost = host; // called as the application layer calls it

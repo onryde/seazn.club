@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BUNNY_ENV_NAMES } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
+import { log } from "@/server/logger";
 import { defaultDeps, replayOf, type SessionDeps } from "@/server/usecases/stream-sessions/deps";
 import { BunnyReplayHost } from "../replay-bunny";
 import { replayDriver, setReplayDriverForTest } from "../replay-driver";
@@ -13,6 +14,8 @@ import { FakeReplayHost } from "../replay-fake";
 beforeEach(() => { vi.stubEnv("ENV_NAME", "local"); });
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   setReplayDriverForTest(null);
   setRelayDriversForTest(null);
 });
@@ -68,6 +71,19 @@ describe("replayDriver", () => {
     const next = replayDriver();
     expect(next).toBeInstanceOf(BunnyReplayHost);
     expect(next).not.toBe(host);
+  });
+
+  it("the Bunny adapter the driver builds sends its above-720p warning to the server log, naming the video id", async () => {
+    // The adapter takes the global fetch when it is built, so the stub goes in first: no request leaves the process.
+    const guid = "3f1c2a9e-0b7d-4c55-9a61-2d8e4f7b1c03";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ guid, status: 4, length: 28, availableResolutions: "360p,720p,1080p" }), { status: 200 })));
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    setEnv({ REPLAY_DRIVER: "bunny", ...BUNNY_ENV });
+    const v = await replayDriver().video(guid);
+    expect([...v.heights].sort((a, b) => a - b)).toEqual([360, 720]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toEqual({ videoId: guid });
+    expect(String(warn.mock.calls[0][1])).toMatch(/720p/);
   });
 
   it("a misspelt REPLAY_DRIVER throws naming the variable", () => {
