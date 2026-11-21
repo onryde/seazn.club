@@ -1,10 +1,11 @@
-import { test, expect, type APIRequestContext } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, showAllFormats, stageCardOf } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
-import { buildTemplateStages } from "../src/lib/format-templates";
+import { STAGE_TEMPLATES, buildTemplateStages } from "../src/lib/format-templates";
 import { crossPoolDraw } from "@seazn/engine/scheduling";
 import { swissDrawSeed } from "../src/lib/swiss-draw";
 import { dictString, uiString } from "./spectator-w2-kit";
+import { rowToggle, saveRoster, seedPair, seedPlayer, storedMembers, uiEn } from "./entrant-rename-kit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -697,5 +698,626 @@ test.describe("B3 ruling 3 a carried table names the adjustment it carries", () 
       checked++;
     }
     expect(checked).toBe(3);
+  });
+});
+
+// ===========================================================================================================================
+// W5 app PR B, Task 8 (T5-a, T5-c): the seven round-robin ROWS, each through the real desk and the page a person opens, and the
+// badminton doubles league. One describe per row (`ROWS`, counted and asserted below): the seats on the public Standings tab, a late
+// entry (X-CU-7, X-CU-9), a withdrawal on one side of the cut line (X-PO-2, X-WDT-7), the field played out, one points adjustment made
+// in the desk's dialog BEFORE Complete (X-ADJ-1..4), Complete, and the frozen cut: Qualified / Out on every table, then the same
+// markers once the next stage is seated from the draft (X-QS-1, X-QS-2). The pooled rows also drive the pool of one (X-BD-5 / C38): refused by name, nothing written.
+//
+// Every expected value comes from the rulebook, never from a page or the code under test: in each table the HIGHER SEED wins every
+// meeting (1-0), so a member's wins are the number of actives seeded below her, a win pays 3 (the generic variant), a leaver is
+// ranked last whatever she scored (X-WDT-7), and an adjustment is added to the points the table folds before its order is read.
+// `modelTable` is that arithmetic, and it refuses a tie (a tie would be broken by a rule this spec does not model). The pool a
+// newcomer lands in and the pools' membership are read off the stage's own lines, never assumed - the late entrant takes the
+// product's pick (the smallest pool), and the model follows the lines.
+//
+// Setup (competition, entrants, the stages a template builds, Generate, Start, the scorer's result door, Complete, the draft's confirm)
+// is the real API; the late entry and the withdrawal are the routes the desk's Add and Withdraw call (app PR A's X-CU-7 / X-CU-11 and
+// X-WDT specs drive those forms by hand); the points adjustment is made BY HAND in the stage card's dialog. What the desk shows - who is
+// seated, who went through, what the table says of the leaver - is read on the public Standings tab at 1280, 768 and 320.
+
+const pad2 = (i: number) => String(i).padStart(2, "0");
+
+type RowKey = "league" | "league_ko" | "groups_ko" | "group_stepladder" | "group_playoffs" | "group_only" | "group_group_ko";
+interface RowSpec {
+  key: RowKey;
+  /** The rule ids this row's test carries in its title. */
+  ids: string;
+  /** The field at Start, before the late entry (the late entrant is seed n + 1). */
+  n: number;
+  /** Pools in the first stage; 0 is a league. */
+  pools: number;
+  /** Seats the first stage hands the next one, in all (an even share of every pool); 0 when the row has no cut. */
+  qualified: number;
+  /** The seed of the entrant who withdraws, and the side of the cut her place was on (a guard, checked against the seeds). */
+  leaver: { seed: number; side: "above" | "below" | "none" };
+  /** The points adjustment, made in the desk's dialog (the late entrant is seed n + 1). */
+  adjust: { seed: number; delta: number };
+}
+
+/** The gallery's field for `group_group_ko`: one of the catalog's own offered sizes (asserted), pools of four. */
+const GALLERY_FIELD = 12;
+
+const ROWS: RowSpec[] = [
+  { key: "league", ids: "X-PO-1, X-CU-7, X-WDT-7, X-ADJ-1, X-ADJ-4", n: 6, pools: 0, qualified: 0, leaver: { seed: 3, side: "none" }, adjust: { seed: 1, delta: -30 } },
+  { key: "league_ko", ids: "X-CU-7, X-WDT-7, X-ADJ-1, X-ADJ-4, X-QS-1, X-QS-2", n: 6, pools: 0, qualified: 4, leaver: { seed: 2, side: "above" }, adjust: { seed: 1, delta: -30 } },
+  { key: "groups_ko", ids: "X-PO-1, X-PO-2, X-CU-7, X-WDT-7, X-ADJ-1, X-ADJ-4, X-QS-1, X-QS-2", n: 8, pools: 2, qualified: 4, leaver: { seed: 3, side: "above" }, adjust: { seed: 1, delta: -30 } },
+  { key: "group_stepladder", ids: "X-CU-7, X-WDT-7, X-ADJ-1, X-ADJ-4, X-QS-1, X-QS-2", n: 6, pools: 0, qualified: 4, leaver: { seed: 6, side: "below" }, adjust: { seed: 3, delta: -30 } },
+  { key: "group_playoffs", ids: "X-CU-7, X-WDT-7, X-ADJ-1, X-ADJ-4, X-QS-1, X-QS-2", n: 6, pools: 0, qualified: 4, leaver: { seed: 5, side: "below" }, adjust: { seed: 7, delta: 30 } },
+  { key: "group_only", ids: "X-PO-1, X-PO-2, X-CU-7, X-WDT-7, X-ADJ-1, X-ADJ-4", n: 8, pools: 2, qualified: 0, leaver: { seed: 6, side: "none" }, adjust: { seed: 2, delta: -30 } },
+  { key: "group_group_ko", ids: "X-PO-1, X-PO-2, X-CU-7, X-CU-9, X-WDT-7, X-ADJ-1, X-ADJ-4, X-QS-1, X-QS-2", n: GALLERY_FIELD, pools: GALLERY_FIELD / 4, qualified: (GALLERY_FIELD / 4) * 2, leaver: { seed: 4, side: "above" }, adjust: { seed: 1, delta: -30 } },
+];
+
+const SUPER_GROUPS = JSON.parse(readFileSync(fileURLToPath(new URL("../src/server/templates/catalog/super-groups.json", import.meta.url)), "utf8")) as {
+  divisions: { entrantCountOptions: number[]; stages: { kind: string; poolSize?: number }[] }[];
+};
+
+type Line = Fx & { status: string; round_no: number };
+const SETTLED = new Set(["decided", "finalized", "forfeited", "abandoned", "voided", "cancelled"]);
+
+async function rowLines(request: APIRequestContext, divisionId: string, stageId?: string): Promise<Line[]> {
+  const all = await apiJson<Line[]>(request, `/api/v1/divisions/${divisionId}/fixtures`);
+  expect(all.status, JSON.stringify(all.error)).toBe(200);
+  return (all.data ?? []).filter((f) => stageId === undefined || f.stage_id === stageId);
+}
+
+/** A pool's members are the entrants its lines name; a league is one pool, keyed "". */
+function membersByPool(lines: Line[]): Map<string, string[]> {
+  const pools = new Map<string, Set<string>>();
+  for (const f of lines) for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id) pools.set(f.pool_id ?? "", (pools.get(f.pool_id ?? "") ?? new Set()).add(id));
+  return new Map([...pools].map(([k, s]) => [k, [...s]]));
+}
+
+interface Seeded {
+  competitionId: string;
+  divisionId: string;
+  /** Entrant id <-> seed (1-based) <-> display name. */
+  idOf: Map<number, string>;
+  seedOf: Map<string, number>;
+  nameOf: Map<string, string>;
+  /** The root table (the division's entry stage), and the stage its cut feeds with that stage's name. */
+  tableId: string;
+  nextId: string | null;
+  nextName: string | null;
+}
+
+const rowName = (key: string, seed: number) => `${key} P${pad2(seed)} ${TAG}`;
+
+/** The division a row plays: `n` seeded entrants, the stages its template builds (through the PR A gallery's `super-groups` for
+ *  `group_group_ko`), and - unless `start: false` - every stage generated (the later stages first: their progression is `setup`) and
+ *  the division started. */
+async function seedRow(request: APIRequestContext, row: RowSpec, o: { n?: number; start?: boolean } = {}): Promise<Seeded> {
+  const n = o.n ?? row.n;
+  let competitionId: string;
+  let divisionId: string;
+  let stages: { id: string; seq: number; kind: string; name: string }[] = [];
+  if (row.key === "group_group_ko") {
+    expect(SUPER_GROUPS.divisions[0]!.entrantCountOptions, "premise: the catalog offers the field this row plays").toContain(GALLERY_FIELD);
+    const made = await apiJson<{ competitionId: string; visibility: string; divisions: { id: string }[] }>(request, "/api/v1/competitions/from-template", "POST", {
+      template_key: "super-groups",
+      name: `${row.key} ${TAG}`,
+      ends_on: "2030-12-31",
+      visibility: "public",
+      sport_key: "generic",
+      variant_key: "score",
+      entrant_kind: "individual",
+      entrant_count: GALLERY_FIELD,
+    });
+    expect(made.status, JSON.stringify(made.error)).toBe(201);
+    expect(made.data!.visibility, "premise: the competition is public (the cap did not turn it private)").toBe("public");
+    expect(made.data!.divisions, "one division").toHaveLength(1);
+    competitionId = made.data!.competitionId;
+    divisionId = made.data!.divisions[0]!.id;
+    const listed = await apiJson<{ id: string; seq: number; kind: string; name: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`);
+    expect(listed.status, JSON.stringify(listed.error)).toBe(200);
+    stages = [...listed.data!].sort((a, b) => a.seq - b.seq);
+    expect(stages.map((s) => s.kind), "the gallery's shape: table, table, bracket").toEqual(SUPER_GROUPS.divisions[0]!.stages.map((s) => s.kind));
+  } else {
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `${row.key} ${TAG}`, visibility: "public" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    competitionId = comp.data!.id;
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${competitionId}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    divisionId = div.data!.id;
+  }
+  const field = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST",
+    Array.from({ length: n }, (_, i) => ({ kind: "individual", display_name: rowName(row.key, i + 1), seed: i + 1 })));
+  expect(field.status, JSON.stringify(field.error)).toBe(201);
+  if (row.key !== "group_group_ko") {
+    const drafts = buildTemplateStages(row.key, { qualified: row.qualified || 4, poolCount: row.pools || 2, swissRounds: 3, legs: 1 });
+    const made = await apiJson<{ id: string; kind: string; name: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`, "POST",
+      drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression })));
+    expect(made.status, JSON.stringify(made.error)).toBe(201);
+    stages = made.data!.map((s, i) => ({ ...s, seq: i + 1 }));
+  }
+  if (o.start !== false) {
+    for (const s of [...stages].reverse()) expect((await apiJson(request, `/api/v1/stages/${s.id}/generate`, "POST")).status, `generate ${s.name}`).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+  }
+  const idOf = new Map(field.data!.map((e, i) => [i + 1, e.id]));
+  return {
+    competitionId,
+    divisionId,
+    idOf,
+    seedOf: new Map(field.data!.map((e, i) => [e.id, i + 1])),
+    nameOf: new Map(field.data!.map((e, i) => [e.id, rowName(row.key, i + 1)])),
+    tableId: stages[0]!.id,
+    nextId: row.qualified > 0 ? stages[1]!.id : null,
+    nextName: row.qualified > 0 ? stages[1]!.name : null,
+  };
+}
+
+/** The arithmetic of the rulebook (see the header). `pools` is membership by pool (a league is one pool, ""); the result gives each
+ *  member's place within her pool, her points and her wins. A tie is refused: the order must be the rulebook's alone. */
+function modelTable(pools: Map<string, string[]>, seedOf: Map<string, number>, leaverId: string | null, adj: { id: string; delta: number } | null) {
+  const out = new Map<string, { pool: string; rank: number; points: number; won: number }>();
+  for (const [pool, members] of pools) {
+    const actives = members.filter((id) => id !== leaverId).sort((a, b) => seedOf.get(a)! - seedOf.get(b)!);
+    const scored = actives.map((id, i) => ({ id, won: actives.length - 1 - i, points: 3 * (actives.length - 1 - i) + (adj !== null && id === adj.id ? adj.delta : 0) }));
+    scored.sort((a, b) => b.points - a.points);
+    expect(new Set(scored.map((s) => s.points)).size, `premise: pool "${pool}" has no tie, so its order is the rulebook's alone`).toBe(scored.length);
+    scored.forEach((s, i) => out.set(s.id, { pool, rank: i + 1, points: s.points, won: s.won }));
+    if (leaverId !== null && members.includes(leaverId)) out.set(leaverId, { pool, rank: actives.length + 1, points: 0, won: 0 });
+  }
+  return out;
+}
+
+type StRow = { entrantId: string; name: string | null; rank: number | null; points: number; won: number; status: string };
+
+/** The stage's table as the API serves it, against the model: every member's name, place in her pool, points, wins and status. */
+async function expectTable(request: APIRequestContext, stageId: string, model: ReturnType<typeof modelTable>, nameOf: Map<string, string>, leaverId: string, when: string) {
+  const st = await apiJson<{ rows: StRow[] }>(request, `/api/v1/stages/${stageId}/standings`);
+  expect(st.status, JSON.stringify(st.error)).toBe(200);
+  const rows = st.data!.rows;
+  expect(rows.length, `${when}: a row for every member, the leaver's too`).toBe(model.size);
+  const cell = (id: string, rank: number | null, points: number, won: number, status: string) => (id === leaverId ? `${nameOf.get(id)}|${rank}|-|-|${status}` : `${nameOf.get(id)}|${rank}|${points}|${won}|${status}`);
+  expect(rows.map((r) => cell(r.entrantId, r.rank, r.points, r.won, r.status)).sort(), when).toEqual(
+    [...model].map(([id, m]) => cell(id, m.rank, m.points, m.won, id === leaverId ? "withdrawn" : "active")).sort(),
+  );
+}
+
+/** The public Standings tab of a division: `/live/{org}/{comp}/{div}?tab=standings`, from the organiser's path. */
+async function standingsUrl(request: APIRequestContext, divisionId: string): Promise<string> {
+  const m = /^\/o\/([^/]+)\/c\/([^/]+)\/d\/([^/?]+)/.exec(await divisionPath(request, divisionId));
+  expect(m, "premise: the organiser path names the org, competition and division").not.toBeNull();
+  return `/live/${m![1]}/${m![2]}/${m![3]}?tab=standings`;
+}
+
+/** A name's Qualified / Out marker on the page a person sees (hidden duplicates, like the Schedule panel's, are skipped), or null. */
+const qualOf = (page: Page, name: string) =>
+  page.locator("tr[data-qual]").filter({ hasText: name }).filter({ visible: true }).first().getAttribute("data-qual", { timeout: 2_000 }).catch(() => null);
+const rowOf = (page: Page, name: string) => page.locator("tr").filter({ hasText: name }).filter({ visible: true }).first();
+
+/** Adjust points BY HAND: the stage card's More, "Adjust points...", the dialog, the write, the notice. At 1280 (the desk). */
+async function adjustByHand(page: Page, request: APIRequestContext, divisionId: string, stageId: string, entrantId: string, delta: number, reason: string) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const card = stageCardOf(page, stageId);
+  await expect(card, "the stage card").toBeVisible({ timeout: 20_000 });
+  const trigger = card.getByTestId("stage-rail-trigger");
+  if (await trigger.isVisible()) await trigger.click();
+  await card.getByTestId("stage-more").click();
+  await card.getByTestId("stage-adjust-points").click();
+  const dialog = page.getByTestId("adjust-points-dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.getByTestId("adjust-points-entrant").selectOption(entrantId);
+  await dialog.getByTestId("adjust-points-delta").fill(String(delta));
+  await dialog.getByTestId("adjust-points-reason").fill(reason);
+  await dialog.getByTestId("adjust-points-apply").click();
+  await expect(dialog.getByTestId("adjust-points-notice")).toHaveText(uiString("en", "adjustPoints.applied"));
+  await dialog.getByTestId("adjust-points-close").click();
+  await expect(dialog).toBeHidden();
+}
+
+/** One row's whole season. See the header; each numbered step names the rule ids it carries. */
+async function driveRow(page: Page, request: APIRequestContext, row: RowSpec) {
+  const s = await seedRow(request, row);
+  const fill = (key: string, vars: Record<string, string | number> = {}) => dictString("en", key, vars);
+  const url = await standingsUrl(request, s.divisionId);
+  const cutPer = row.qualified === 0 ? 0 : row.pools === 0 ? row.qualified : row.qualified / row.pools;
+
+  // 1. The seats (X-PO-1): a Started table nobody has played shows every member, each pool its own table, and no marker (a level table has none).
+  const started = await rowLines(request, s.divisionId, s.tableId);
+  const startPools = membersByPool(started);
+  expect(startPools.size, `${row.key}: ${row.pools || 1} table(s) at Start`).toBe(row.pools || 1);
+  const evenSizes = Array.from({ length: row.pools || 1 }, (_, i) => Math.floor(row.n / (row.pools || 1)) + (i < row.n % (row.pools || 1) ? 1 : 0)).sort();
+  expect([...startPools.values()].map((m) => m.length).sort(), "the field dealt as evenly as it divides (the rulebook's snake)").toEqual(evenSizes);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(url);
+  await dismissCookieBanner(page);
+  let seats = 0;
+  for (const id of s.nameOf.keys()) {
+    await expect(page.getByText(s.nameOf.get(id)!, { exact: true }).first(), `seated: ${s.nameOf.get(id)}`).toBeAttached();
+    seats++;
+  }
+  expect(seats, "every seat of the field is listed before a result").toBe(row.n);
+  for (const k of "ABCDEFGH".slice(0, row.pools)) await expect(page.getByText(fill("table.poolLabel", { key: k }), { exact: false }).filter({ visible: true }).first(), `Group ${k}`).toBeVisible();
+  await expect(page.locator("tr[data-qual]").filter({ visible: true }), "a level table has no Qualified / Out").toHaveCount(0);
+
+  // 2. A late entry (X-CU-7): the seed after the field, one line against every member of her table, none in any other stage (X-CU-9).
+  //    A table nothing has played is offered a Rebuild instead (`rebuild_offered`), so one result - on the first line that is not the
+  //    leaver's - puts the stage in play first.
+  const leaverFirst = s.idOf.get(row.leaver.seed)!;
+  const opener = started.find((f) => f.home_entrant_id !== null && f.away_entrant_id !== null && f.home_entrant_id !== leaverFirst && f.away_entrant_id !== leaverFirst)!;
+  expect(opener, "premise: a first line that is not the leaver's").toBeTruthy();
+  const openerRes = await apiJson(request, `/api/v1/fixtures/${opener.id}/events`, "POST", {
+    expected_seq: 0, type: "generic.result", payload: s.seedOf.get(opener.home_entrant_id!)! < s.seedOf.get(opener.away_entrant_id!)! ? { p1Score: 1, p2Score: 0 } : { p1Score: 0, p2Score: 1 },
+  });
+  expect(openerRes.status, JSON.stringify(openerRes.error)).toBe(201);
+  const lateSeed = row.n + 1;
+  const late = await apiJson<{ id: string; late_entry?: { case: string } }[]>(request, `/api/v1/divisions/${s.divisionId}/entrants`, "POST",
+    [{ kind: "individual", display_name: rowName(row.key, lateSeed), seed: lateSeed }]);
+  expect(late.status, JSON.stringify(late.error)).toBe(201);
+  const lateId = late.data![0]!.id;
+  expect(late.data![0]!.late_entry?.case, "a started table takes the newcomer as catch-up lines").toBe("catch_up");
+  s.idOf.set(lateSeed, lateId);
+  s.seedOf.set(lateId, lateSeed);
+  s.nameOf.set(lateId, rowName(row.key, lateSeed));
+  const all = await rowLines(request, s.divisionId);
+  const hers = all.filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId);
+  expect(hers.length, "she has lines").toBeGreaterThan(0);
+  expect(hers.every((f) => f.stage_id === s.tableId), "she joins the entry table only - a fed stage takes nobody").toBe(true);
+  const pools = membersByPool(all.filter((f) => f.stage_id === s.tableId));
+  const herPool = [...pools.values()].find((m) => m.includes(lateId))!;
+  expect(hers.length, "one catch-up line against every other member of her table").toBe(herPool.length - 1);
+  expect([...pools.values()].reduce((sum, m) => sum + m.length, 0), "every entrant is in exactly one table").toBe(row.n + 1);
+
+  // 3. A withdrawal on one side of the cut line (X-PO-2, X-WDT-7). The side is checked against the seeds: the leaver's place, had she
+  //    stayed, is inside the per-table cut ("above") or outside it ("below").
+  const leaverId = s.idOf.get(row.leaver.seed)!;
+  const leaversPool = [...pools.values()].find((m) => m.includes(leaverId))!;
+  const had = [...leaversPool].sort((a, b) => s.seedOf.get(a)! - s.seedOf.get(b)!).indexOf(leaverId) + 1;
+  if (row.leaver.side === "above") expect(had, "premise: she was inside the cut").toBeLessThanOrEqual(cutPer);
+  if (row.leaver.side === "below") expect(had, "premise: she was outside the cut").toBeGreaterThan(cutPer);
+  if (row.leaver.side === "none") expect(cutPer, "premise: this row has no cut").toBe(0);
+  const out = await apiJson<{ policy: string }>(request, `/api/v1/entrants/${leaverId}/withdraw`, "POST");
+  expect(out.status, JSON.stringify(out.error)).toBe(200);
+  expect(out.data?.policy, "nothing of hers was played: under half, her lines are taken out").toBe("expunge");
+  const afterLeave = await rowLines(request, s.divisionId, s.tableId);
+  const leaversLines = afterLeave.filter((f) => f.home_entrant_id === leaverId || f.away_entrant_id === leaverId);
+  expect(leaversLines.length, "her lines stay on the board").toBe(leaversPool.length - 1);
+  expect(leaversLines.every((f) => f.status === "abandoned"), "and are taken out").toBe(true);
+  await page.goto(url);
+  for (const id of s.nameOf.keys()) await expect(page.getByText(s.nameOf.get(id)!, { exact: true }).first(), `still listed: ${s.nameOf.get(id)}`).toBeAttached();
+  await expect(rowOf(page, s.nameOf.get(leaverId)!), "the leaver's row stays on the table").toBeVisible();
+  // One result is in (the opener): the table it is in now has verdicts for the rows still in the field; a level table (every other pool)
+  // has none, a departed row has none, and a row with no cut to read has none either.
+  const marked = cutPer > 0 ? pools.get(opener.pool_id ?? "")!.filter((id) => id !== leaverId) : [];
+  await expect(page.locator("tr[data-qual]").filter({ visible: true }), "verdicts only in the table that has a result, and never on the leaver").toHaveCount(marked.length);
+  for (const id of marked) expect(await qualOf(page, s.nameOf.get(id)!), `${s.nameOf.get(id)} carries a live verdict`).not.toBeNull();
+  expect(await qualOf(page, s.nameOf.get(leaverId)!), "the leaver carries none").toBeNull();
+
+  // 4. The field plays out: in every table the higher seed wins every meeting.
+  let played = 0;
+  for (const f of afterLeave) {
+    if (SETTLED.has(f.status) || f.home_entrant_id === null || f.away_entrant_id === null) continue;
+    if (f.home_entrant_id === leaverId || f.away_entrant_id === leaverId) continue;
+    const homeWins = s.seedOf.get(f.home_entrant_id)! < s.seedOf.get(f.away_entrant_id)!;
+    const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "generic.result", payload: homeWins ? { p1Score: 1, p2Score: 0 } : { p1Score: 0, p2Score: 1 } });
+    expect(res.status, JSON.stringify(res.error)).toBe(201);
+    played++;
+  }
+  const expectedLines = [...pools.values()].reduce((sum, m) => {
+    const actives = m.includes(leaverId) ? m.length - 1 : m.length;
+    return sum + (actives * (actives - 1)) / 2;
+  }, 0);
+  expect(played + 1, "every line between two actives (the opener's included): a round robin of each table's actives").toBe(expectedLines);
+  const before = modelTable(pools, s.seedOf, leaverId, null);
+  await expectTable(request, s.tableId, before, s.nameOf, leaverId, "played out, before the adjustment");
+
+  // 5. One points adjustment, by hand in the desk's dialog (X-ADJ-1, X-ADJ-4): it moves the adjusted entrant in the table the cut reads.
+  const adjustedId = s.idOf.get(row.adjust.seed)!;
+  const REASON = "points adjustment ruled by the organiser";
+  await adjustByHand(page, request, s.divisionId, s.tableId, adjustedId, row.adjust.delta, REASON);
+  const model = modelTable(pools, s.seedOf, leaverId, { id: adjustedId, delta: row.adjust.delta });
+  expect(model.get(adjustedId)!.rank, "premise: the adjustment moves her (differential)").not.toBe(before.get(adjustedId)!.rank);
+  await expectTable(request, s.tableId, model, s.nameOf, leaverId, "after the adjustment");
+
+  // 6. Complete, and the frozen cut (X-QS-1, X-QS-2): Qualified / Out on every table, from the final order, then the same once seated.
+  expect((await apiJson(request, `/api/v1/stages/${s.tableId}/complete`, "POST")).status, "Complete").toBe(200);
+  const want = new Map<string, "qualified" | "out" | null>();
+  for (const [id, m] of model) want.set(s.nameOf.get(id)!, id === leaverId || cutPer === 0 ? null : m.rank <= cutPer ? "qualified" : "out");
+  const expectedThrough = new Set([...model].filter(([id, m]) => cutPer > 0 && id !== leaverId && m.rank <= cutPer).map(([id]) => id));
+  const readMarkers = async (when: string) => {
+    let checked = 0;
+    for (const [name, kind] of want) {
+      if (kind === null) continue;
+      await expect.poll(() => qualOf(page, name), `${when}: ${name}`).toBe(kind);
+      checked++;
+    }
+    return checked;
+  };
+  const readPage = async (when: string) => {
+    await page.reload();
+    let widths = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const name of want.keys()) await expect(page.getByText(name, { exact: true }).first(), `${when} ${width}: ${name} still listed`).toBeAttached();
+      await expect(rowOf(page, s.nameOf.get(leaverId)!), `${when} ${width}: the leaver's row stays`).toBeVisible();
+      expect(await qualOf(page, s.nameOf.get(leaverId)!), `${when} ${width}: a leaver reads neither Qualified nor Out`).toBeNull();
+      // X-ADJ-4: the table says why, under it - the adjusted entrant's footnote names her and the reason.
+      const note = page.getByTestId(`standings-adjustment-note-${adjustedId}`).filter({ visible: true }).first();
+      await expect(note, `${when} ${width}: the adjustment's footnote`).toBeVisible();
+      await expect(note).toContainText(fill("table.adjustmentNote.lead", { name: s.nameOf.get(adjustedId)! }));
+      await expect(note).toContainText(REASON);
+      if (cutPer === 0) {
+        await expect(page.locator("tr[data-qual]").filter({ visible: true }), `${when} ${width}: no cut, no marker`).toHaveCount(0);
+        await expect(page.getByTestId("qual-legend").filter({ visible: true })).toHaveCount(0);
+      } else {
+        const checked = await readMarkers(`${when} ${width}`);
+        expect(checked, "every member who stayed carries a verdict").toBe(row.n);
+        const legend = page.getByTestId("qual-legend").filter({ visible: true }).first();
+        await expect(legend).toContainText(fill("table.qual.legend.qualified"));
+        await expect(legend, "a finished table has nothing still open").not.toContainText(fill("table.qual.legend.open"));
+        await expect(page.getByText(fill("table.qual.cutFrozen.other", { n: cutPer, next: s.nextName! }), { exact: false }).filter({ visible: true }), `${when} ${width}: each table says its cut went through`).toHaveCount(row.pools || 1);
+      }
+      await expectNoHorizontalScroll(page);
+      widths++;
+    }
+    expect(widths).toBe(3);
+  };
+  await page.goto(url);
+  await dismissCookieBanner(page);
+  await readPage("completed");
+  if (cutPer === 0) return;
+
+  // The draft the desk offers is the same set the markers froze (the seam: the page and the seating agree), and confirming seats it.
+  const proposal = await apiJson<Draft>(request, `/api/v1/stages/${s.nextId}/seed-proposal`, "POST");
+  expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
+  expect(new Set(proposal.data!.computed.qualifiers.map((q) => q.entrantId)), "the draft seats exactly who the markers say went through").toEqual(expectedThrough);
+  expect(proposal.data!.computed.qualifiers, "anti-vacuity: the draft seats the cut").toHaveLength(row.qualified);
+  expect(proposal.data!.computed.ties, "the order is the rulebook's alone: no tie to pick").toHaveLength(0);
+  const confirmed = await apiJson(request, `/api/v1/stages/${s.nextId}/seed-proposal/confirm`, "POST", { proposalId: proposal.data!.id });
+  expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+  await readPage("seated");
+}
+
+/** `drive` titles: the row key first, then what the test is, then the rule ids. */
+let registeredRows = 0;
+for (const row of ROWS) {
+  registeredRows++;
+  test.describe(`${row.key}: ${row.ids}`, () => {
+    test(`${row.ids} - a late entry, a leaver ${row.leaver.side === "none" ? "mid-table" : `${row.leaver.side} the line`}, one points adjustment${row.qualified > 0 ? " and the frozen cut" : " and a table with no cut"}, at 1280, 768 and 320`, async ({ page, request }) => {
+      test.setTimeout(300_000);
+      await driveRow(page, request, row);
+    });
+
+    if (row.pools > 0) {
+      test(`X-BD-5 a pool of one is refused by name and writes nothing (${row.key})`, async ({ page, request }) => {
+        test.setTimeout(150_000);
+        // 2P - 1 entrants dealt into P pools: the snake leaves one pool holding ONE entrant, which the draw refuses (C38; every pool needs 2).
+        const s = await seedRow(request, row, { n: 2 * row.pools - 1, start: false });
+        const refused = await apiJson(request, `/api/v1/stages/${s.tableId}/generate`, "POST");
+        expect(refused.status).toBe(422);
+        expect(refused.error?.code).toBe("STAGE_NOT_READY");
+        const extra = refused.error as unknown as { reason: string; groups: number; entrants: number; required: number; suggested: number | null };
+        expect(extra.reason, "the refusal's own reason").toBe("group_too_few_entrants");
+        expect([extra.groups, extra.entrants, extra.required], "groups, entrants, and the 2-per-group floor").toEqual([row.pools, 2 * row.pools - 1, row.pools * 2]);
+        if (extra.suggested !== null) expect(extra.suggested, "the count that works is fewer pools").toBeLessThan(row.pools);
+        expect(await rowLines(request, s.divisionId), "nothing was written").toHaveLength(0);
+
+        // The desk says it in the reader's words, from the same refusal (the dictionary's sentence, never the server's English).
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.goto(await divisionPath(request, s.divisionId, "?tab=fixtures"));
+        await dismissCookieBanner(page);
+        const card = stageCardOf(page, s.tableId);
+        await expect(card).toBeVisible({ timeout: 20_000 });
+        const vars = { required: extra.required, have: extra.entrants, groups: extra.groups };
+        const key = typeof extra.suggested === "number" && extra.suggested >= 2 ? "schedule.error.tooFewGroupEntrantsSuggest" : "schedule.error.tooFewGroupEntrantsAdd";
+        const sentence = uiString("en", key, extra.suggested !== null ? { ...vars, suggested: extra.suggested } : vars);
+        const answered = page.waitForResponse((r) => r.url().endsWith(`/api/v1/stages/${s.tableId}/generate`) && r.request().method() === "POST");
+        await card.getByTestId("stage-generate").click();
+        expect((await answered).status(), "the desk's Generate gets the same refusal").toBe(422);
+        let widths = 0;
+        for (const width of [1280, 768, 320]) {
+          await page.setViewportSize({ width, height: 900 });
+          await expect(page.getByText(sentence, { exact: false }).filter({ visible: true }).first(), `${width}: the refusal reads in the dictionary's words`).toBeVisible();
+          await expectNoHorizontalScroll(page);
+          widths++;
+        }
+        expect(widths).toBe(3);
+        expect(await rowLines(request, s.divisionId), "the desk's attempt wrote nothing either").toHaveLength(0);
+      });
+    }
+  });
+}
+
+test.describe("the seven round-robin rows are all driven", () => {
+  test("every template whose first stage is a table has a row, and so does the gallery's table -> table -> bracket (7 rows)", () => {
+    const knobs = { qualified: 4, swissRounds: 3, poolCount: 2, legs: 1 };
+    const tableFirst = STAGE_TEMPLATES.filter((t) => ["league", "group"].includes(t.build(knobs)[0]?.kind ?? "")).map((t) => t.key);
+    expect(tableFirst.length, "anti-vacuity: the registry names round-robin templates").toBeGreaterThan(0);
+    const gallery = SUPER_GROUPS.divisions[0]!.stages.map((st) => st.kind);
+    expect(gallery, "the super-groups template is table, table, bracket").toEqual(["group", "group", "knockout"]);
+    expect([...tableFirst, "group_group_ko"].sort(), "every round-robin row of the registry plus the gallery's has a describe here").toEqual(ROWS.map((r) => r.key).sort());
+    expect(ROWS).toHaveLength(7);
+    expect(registeredRows, "one describe registered per row").toBe(7);
+    expect(new Set(ROWS.map((r) => r.key)).size, "no row twice").toBe(7);
+  });
+});
+
+// W5 app PR B Task 8 (T5-c): the badminton DOUBLES league walkthrough. Pairs, not individuals: a late pair joins a started league
+// (X-CU-7, catch-up lines), a pair that loses a partner in the roster editor withdraws (ruling 282, X-RP-3 - the editor's own Save),
+// and the table ranks the rest on wins (badminton is wins-first) with the leaver last (X-WDT-7). Matches are walkovers (a real
+// result is 42+ rallies; a walkover credits 2-0 in games and counts the same way, BD-WO-1). The better pair (by the order made
+// here) wins every meeting. At 1280, 768 and 320, no horizontal scroll.
+test.describe("badminton doubles league", () => {
+  test("X-CU-7, X-RP-3 (ruling 282), X-WDT-7 a late pair, a pair that loses a partner withdraws, and the table", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Doubles ${TAG}`, visibility: "public" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Doubles", sport_key: "badminton", variant_key: "bwf", config: {} });
+    expect(div.status, JSON.stringify(div.error)).toBe(201);
+    const divisionId = div.data!.id;
+    // Five pairs, best first; the third will lose a partner.
+    const names = [`Doubles Pair 1 ${TAG}`, `Doubles Pair 2 ${TAG}`, "Harbourside Shuttlers Badminton Club Ladies", `Doubles Pair 4 ${TAG}`, `Doubles Pair 5 ${TAG}`];
+    expect(names[2]!.length, "premise: the leaver carries a realistic 43-character name").toBe(43);
+    const players: { id: string; name: string }[][] = [];
+    for (let i = 0; i < 5; i++) players.push([await seedPlayer(request, `Dbl${i + 1}a`), await seedPlayer(request, `Dbl${i + 1}b`)]);
+    const pairIds: string[] = [];
+    for (let i = 0; i < 5; i++) pairIds.push(await seedPair(request, divisionId, players[i]!, names[i]!));
+    const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "league", name: "League", config: {} });
+    expect(stage.status, JSON.stringify(stage.error)).toBe(201);
+    const stageId = stage.data!.id;
+    expect((await apiJson(request, `/api/v1/stages/${stageId}/generate`, "POST")).status).toBe(200);
+    expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+    expect(await rowLines(request, divisionId, stageId), "five pairs: ten lines").toHaveLength(10);
+
+    // A table nothing has played is offered a Rebuild, not catch-up lines: one walkover (not the leaver's line) puts the league in play.
+    const opening = (await rowLines(request, divisionId, stageId)).find((f) => f.home_entrant_id !== pairIds[2] && f.away_entrant_id !== pairIds[2])!;
+    const openerLoser = pairIds.indexOf(opening.home_entrant_id!) < pairIds.indexOf(opening.away_entrant_id!) ? opening.away_entrant_id! : opening.home_entrant_id!;
+    const openRes = await apiJson(request, `/api/v1/fixtures/${opening.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: openerLoser, reason: "walkover" } });
+    expect(openRes.status, JSON.stringify(openRes.error)).toBe(201);
+
+    // A late pair (X-CU-7): two new people, one line against every pair.
+    const lateName = `Doubles Late Pair ${TAG}`;
+    const latePeople = [await seedPlayer(request, "DblLateA"), await seedPlayer(request, "DblLateB")];
+    const add = await apiJson<{ id: string; late_entry?: { case: string } }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST",
+      [{ kind: "pair", display_name: lateName, members: latePeople.map((p) => ({ person_id: p.id, is_captain: false, roles: [] })) }]);
+    expect(add.status, JSON.stringify(add.error)).toBe(201);
+    const lateId = add.data![0]!.id;
+    expect(add.data![0]!.late_entry?.case, "a started league takes the late pair as catch-up lines").toBe("catch_up");
+    const ranked = [...pairIds, lateId]; // best first: the late pair plays last in the order
+    const nameOfId = new Map(ranked.map((id, i) => [id, i < 5 ? names[i]! : lateName]));
+    const linesNow = await rowLines(request, divisionId, stageId);
+    expect(linesNow.filter((f) => f.home_entrant_id === lateId || f.away_entrant_id === lateId), "one line against each of the five pairs").toHaveLength(5);
+    expect(linesNow, "six pairs: fifteen lines").toHaveLength(15);
+
+    // Ruling 282, through the desk's roster editor: dropping a partner withdraws the pair (X-RP-3) and takes her lines out.
+    const leaverId = pairIds[2]!;
+    const goes = players[2]![1]!;
+    const roster = await storedMembers(request, leaverId);
+    await page.goto(await divisionPath(request, divisionId, "?tab=entrants"));
+    await dismissCookieBanner(page);
+    const toggle = rowToggle(page, names[2]!);
+    await expect(toggle).toBeVisible({ timeout: 20_000 });
+    await toggle.click();
+    const box = page.getByTestId("entrant-roster");
+    await expect(box.getByText(goes.name, { exact: true })).toBeVisible();
+    await box.locator("div", { has: page.getByText(goes.name, { exact: true }) }).last().getByRole("button", { name: uiEn["entrants.roster.remove"] }).click();
+    const sent = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/v1/entrants/${leaverId}` && r.request().method() === "PATCH", { timeout: 30_000 });
+    await saveRoster(page).click();
+    expect((await sent).status(), "the roster editor's Save").toBe(200);
+    await expect.poll(async () => (await apiJson<{ status: string }>(request, `/api/v1/entrants/${leaverId}`)).data!.status, { timeout: 20_000 }).toBe("withdrawn");
+    expect(await storedMembers(request, leaverId), "the pair's record keeps both people").toBe(roster);
+    const taken = (await rowLines(request, divisionId, stageId)).filter((f) => f.home_entrant_id === leaverId || f.away_entrant_id === leaverId);
+    expect(taken, "five lines were hers (one against each other pair, the late pair's included)").toHaveLength(5);
+    expect(taken.every((f) => f.status === "abandoned"), "all taken out").toBe(true);
+
+    // The field plays out by walkover: the pair earlier in `ranked` wins every meeting (the loser's side forfeits).
+    const rank = new Map(ranked.map((id, i) => [id, i]));
+    let played = 0;
+    for (const f of (await rowLines(request, divisionId, stageId)).filter((l) => !SETTLED.has(l.status))) {
+      const [h, a] = [f.home_entrant_id!, f.away_entrant_id!];
+      const loser = rank.get(h)! < rank.get(a)! ? a : h;
+      const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", { expected_seq: 0, type: "core.forfeit", payload: { by: loser, reason: "walkover" } });
+      expect(res.status, JSON.stringify(res.error)).toBe(201);
+      played++;
+    }
+    expect(played + 1, "five actives: ten meetings, the opener's among them").toBe(10);
+
+    // The table: wins first. The actives in order of `ranked` win 4, 3, 2, 1, 0 matches; the leaver is last with her row kept.
+    const actives = ranked.filter((id) => id !== leaverId);
+    const st = await apiJson<{ rows: StRow[] }>(request, `/api/v1/stages/${stageId}/standings`);
+    expect(st.status, JSON.stringify(st.error)).toBe(200);
+    const got = st.data!.rows.map((r) => `${r.name}|${r.rank}|${r.entrantId === leaverId ? "-" : r.won}|${r.status}`).sort();
+    const want = [
+      ...actives.map((id, i) => `${nameOfId.get(id)}|${i + 1}|${actives.length - 1 - i}|active`),
+      `${names[2]}|${actives.length + 1}|-|withdrawn`,
+    ].sort();
+    expect(got, "the doubles table: wins first, the leaver last").toEqual(want);
+
+    // The page: every pair listed (the leaver's row stays), at 1280, 768 and 320.
+    await page.goto(await standingsUrl(request, divisionId));
+    let widths = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const id of ranked) await expect(page.getByText(nameOfId.get(id)!, { exact: true }).first(), `${width}: ${nameOfId.get(id)}`).toBeAttached();
+      await expect(rowOf(page, names[2]!), `${width}: the leaver's row stays`).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      widths++;
+    }
+    expect(widths).toBe(3);
+  });
+});
+
+// W5 app PR B Task 8 (controller addition, owner discussion 2026-11-21): the public HUB at scale. One competition, 20 divisions (the
+// Pro plan's per-competition limit) of 30 entrants each in mixed formats, started: the page a spectator opens first. Measured, at
+// 1280, 768 and 320: the document's bytes, the server's time to first byte, the DOM node count - printed, annotated on the test, and held
+// to a ceiling that was set after measuring (HUB_CEILING). A regression that grows the hub with its divisions fails here. The page must
+// also list all twenty divisions: the count is read off the hub JSON and off the page's own chip (anti-vacuity), never assumed.
+const HUB_DIVISIONS = 20;
+const HUB_FIELD = 30;
+// Measured 2026-11-21 against a fresh prod build of this branch (local, one machine): 3,885,322 bytes of document (decoded; 184 KB on the
+// wire under gzip) for 2,856 fixtures - 99% of it ONE flight chunk, the competition's matches serialised into the page - 132 DOM nodes,
+// and a time to first byte of 952 ms on the cold first load and 23-53 ms warm. The ceilings are 1.25x the bytes (the document grows with
+// the fixtures: a regression that doubles the payload, or serialises the entrants a second time, fails), ~1.9x the nodes, and a TTFB far
+// above the cold figure (CI's machine is slower and shared - the time is a tripwire for a blocked render, not a benchmark).
+const HUB_CEILING = { htmlBytes: 4_900_000, domNodes: 250, ttfbMs: 6_000 };
+test.describe("hub: a competition with many divisions", () => {
+  test("20 divisions of 30 entrants in mixed formats: the hub lists all twenty, stays under its measured ceiling, and does not scroll sideways at 1280, 768 and 320", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `Hub ${TAG}`, visibility: "public" });
+    expect(comp.status, JSON.stringify(comp.error)).toBe(201);
+    const formats = ["league", "groups_ko", "swiss", "knockout", "group_only"] as const;
+    let started = 0;
+    for (let d = 0; d < HUB_DIVISIONS; d++) {
+      const format = formats[d % formats.length]!;
+      const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: `Hub ${pad2(d + 1)} ${format}`, sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+      expect(div.status, `division ${d + 1}: ${JSON.stringify(div.error)}`).toBe(201);
+      const divisionId = div.data!.id;
+      const ents = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST",
+        Array.from({ length: HUB_FIELD }, (_, i) => ({ kind: "individual", display_name: `Hub D${pad2(d + 1)} P${pad2(i + 1)} ${TAG}`, seed: i + 1 })));
+      expect(ents.status, JSON.stringify(ents.error)).toBe(201);
+      const drafts: ReturnType<typeof buildTemplateStages> = format === "swiss"
+        ? [{ kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null }]
+        : format === "knockout"
+          ? [{ kind: "knockout", name: "Bracket", config: {}, progression: null }]
+          : buildTemplateStages(format, { qualified: 8, poolCount: 4, swissRounds: 3, legs: 1 });
+      const stages = await apiJson<{ id: string; kind: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`, "POST",
+        drafts.map((x, i) => ({ seq: i + 1, kind: x.kind, name: x.name, config: x.config, progression: x.progression })));
+      expect(stages.status, JSON.stringify(stages.error)).toBe(201);
+      if (format !== "swiss") for (const st of [...stages.data!].reverse()) expect((await apiJson(request, `/api/v1/stages/${st.id}/generate`, "POST")).status, `division ${d + 1} generate`).toBe(200);
+      expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status, `division ${d + 1} start`).toBe(200);
+      if (format === "swiss") expect((await apiJson(request, `/api/v1/stages/${stages.data![0]!.id}/generate`, "POST")).status, "Swiss round one").toBe(200);
+      started++;
+    }
+    expect(started, "twenty divisions made and started").toBe(HUB_DIVISIONS);
+
+    const orgs = await apiJson<{ slug: string }[]>(request, "/api/orgs");
+    const orgSlug = (orgs.data ?? (orgs as unknown as { slug: string }[]))[0]!.slug;
+    const hub = await apiJson<{ divisions: { entrantCount: number }[] }>(request, `/api/v1/public/orgs/${orgSlug}/competitions/${comp.data!.slug}/hub`);
+    expect(hub.status, JSON.stringify(hub.error)).toBe(200);
+    expect(hub.data!.divisions, "the hub JSON lists every division").toHaveLength(HUB_DIVISIONS);
+    expect(hub.data!.divisions.reduce((sum, x) => sum + x.entrantCount, 0), "and every entrant").toBe(HUB_DIVISIONS * HUB_FIELD);
+
+    const measured: Record<string, { htmlBytes: number; ttfbMs: number; domNodes: number }> = {};
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      const res = await page.goto(`/live/${orgSlug}/${comp.data!.slug}`, { waitUntil: "load" });
+      expect(res?.status()).toBe(200);
+      await dismissCookieBanner(page);
+      const htmlBytes = (await res!.body()).length;
+      const { ttfbMs, domNodes } = await page.evaluate(() => {
+        const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming;
+        return { ttfbMs: Math.round(nav.responseStart - nav.requestStart), domNodes: document.getElementsByTagName("*").length };
+      });
+      measured[String(width)] = { htmlBytes, ttfbMs, domNodes };
+      await expect(page.getByTestId("mh-hero-divisions"), `${width}: the page's own count of divisions`).toHaveText(dictString("en", "landing.divisions.other", { count: HUB_DIVISIONS }));
+      await expectNoHorizontalScroll(page);
+    }
+    console.log(`HUB-METRICS ${JSON.stringify({ divisions: HUB_DIVISIONS, field: HUB_FIELD, measured })}`);
+    test.info().annotations.push({ type: "hub-metrics", description: JSON.stringify(measured) });
+    expect(Object.keys(measured), "all three widths measured").toHaveLength(3);
+    for (const [width, m] of Object.entries(measured)) {
+      expect(m.htmlBytes, `${width}: the document's bytes`).toBeLessThanOrEqual(HUB_CEILING.htmlBytes);
+      expect(m.domNodes, `${width}: the DOM node count`).toBeLessThanOrEqual(HUB_CEILING.domNodes);
+      expect(m.ttfbMs, `${width}: time to first byte (ms)`).toBeLessThanOrEqual(HUB_CEILING.ttfbMs);
+    }
   });
 });
