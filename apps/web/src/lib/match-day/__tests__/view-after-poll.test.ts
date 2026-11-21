@@ -7,24 +7,28 @@
 // Where an expected value comes from: the marker's meaning is the type's own sentence (types.ts `online_failed`); the rounds are fixture
 // objects compared by identity, so "kept" means the very array the page held. Anti-vacuity: each case counts what it compared.
 import { describe, expect, it } from "vitest";
+import type { NeedsYouItem } from "@/components/v2/desk/needs-you";
 import type { MatchDayView } from "../types";
 import { viewAfterPoll } from "../view";
 import { checkinRound, onlineView, pairedRound } from "../../../components/v2/match-day/__tests__/_online-fixtures";
 
 const prev = (): MatchDayView => onlineView([checkinRound("stage-1:3"), pairedRound("stage-2:1")], { now: "2026-11-19T18:00:00.000Z" });
+const row = (key: string, kind: NeedsYouItem["kind"]): NeedsYouItem => ({ key, severity: "amber", kind, title: key, sub: "", action: { label: "Open", href: "/" } });
 const polled = (over: Partial<MatchDayView>): MatchDayView => ({ ...onlineView([], { now: "2026-11-19T18:01:00.000Z" }), ...over });
 
 describe("viewAfterPoll", () => {
-  it("a poll whose online read FAILED keeps the rounds the page had and takes the rest of the day from the poll; the marker stays so the page says so", () => {
-    const had = prev();
-    const next = polled({ online_failed: true, online_rounds: [], results_owed: 4, fixtures_today: 7 });
+  it("a poll whose online read FAILED keeps what the page had of the online half - the rounds, and the Needs-you rows and results-owed count that came with the same two listers - and takes the rest of the day from the poll; the marker stays so the page says so", () => {
+    const had = { ...prev(), needs_you: [row("d1:board_held:f1", "board_held"), row("d1:board_flagged:f2", "board_flagged")], results_owed: 3 };
+    const next = polled({ online_failed: true, online_rounds: [], needs_you: [], results_owed: 4, fixtures_today: 7 });
 
     const out = viewAfterPoll(had, next);
 
     expect(out.online_rounds, "the very rounds the page held").toBe(had.online_rounds);
     expect(out.online_rounds, "premise: it held something").toHaveLength(2);
+    expect(out.needs_you, "the desk's rows are the last answer's: the poll's has no board rows because the lister could not be read").toBe(had.needs_you);
+    expect(out.needs_you.map((r) => r.kind), "premise: the page held its two board rows").toEqual(["board_held", "board_flagged"]);
+    expect(out.results_owed, "the count beside those rows is held with them, never raised or lowered by a read that failed").toBe(3);
     expect(out.now, "the day itself is the poll's").toBe(next.now);
-    expect(out.results_owed).toBe(4);
     expect(out.fixtures_today).toBe(7);
     expect(out.online_failed, "still marked: this poll's online half is stale").toBe(true);
   });
@@ -39,14 +43,19 @@ describe("viewAfterPoll", () => {
   });
 
   it("the sequence: answer, failure, failure, answer - the rounds are held through both failures and replaced by the next answer", () => {
-    let page = prev();
+    let page = { ...prev(), needs_you: [row("d1:board_held:f1", "board_held")], results_owed: 2 };
     const first = page.online_rounds;
+    const firstRows = page.needs_you;
     for (const n of [1, 2]) {
-      page = viewAfterPoll(page, polled({ online_failed: true, online_rounds: [], now: `2026-11-19T18:0${n}:00.000Z` }));
+      page = viewAfterPoll(page, polled({ online_failed: true, online_rounds: [], needs_you: [], results_owed: 9, now: `2026-11-19T18:0${n}:00.000Z` }));
       expect(page.online_rounds, `failure ${n} holds the first answer`).toBe(first);
+      expect(page.needs_you, `failure ${n} holds the first answer's rows`).toBe(firstRows);
+      expect(page.results_owed, `failure ${n} holds the first answer's count`).toBe(2);
     }
-    page = viewAfterPoll(page, polled({ online_failed: false, online_rounds: [pairedRound("stage-2:2")], now: "2026-11-19T18:03:00.000Z" }));
+    page = viewAfterPoll(page, polled({ online_failed: false, online_rounds: [pairedRound("stage-2:2")], needs_you: [], results_owed: 1, now: "2026-11-19T18:03:00.000Z" }));
     expect(page.online_rounds.map((r) => r.key)).toEqual(["stage-2:2"]);
+    expect(page.needs_you, "an answered poll's empty rows are the answer: the held row left").toEqual([]);
+    expect(page.results_owed).toBe(1);
     expect(page.online_failed).toBe(false);
   });
 

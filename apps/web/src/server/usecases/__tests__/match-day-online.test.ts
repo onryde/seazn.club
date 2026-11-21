@@ -61,7 +61,7 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 });
 
 import { GET as matchDayRoute } from "@/app/api/v1/competitions/[id]/match-day/route";
-import { isMatchDayView } from "@/lib/match-day/view";
+import { isMatchDayView, viewAfterPoll } from "@/lib/match-day/view";
 import { MatchDayView } from "@/server/api-v1/schemas";
 import { createApiKey } from "../api-keys";
 import { forgetOnlineChessFlagCache, onlineChessOffered } from "../external-play/online-chess-flag";
@@ -849,6 +849,77 @@ describe.runIf(HAS_DB)("getMatchDay - each queue lister is read ONCE per online 
     await getCompetitionDesk(day.auth, day.comp.id, new Date(T0));
     expect(asked().held, "a second desk read is a second read (nothing is kept between calls)").toHaveBeenCalledTimes(4);
     expect(asked().flagged).toHaveBeenCalledTimes(4);
+  });
+
+  // Fix round 1 (m1, m2): the share carries FAILURES too, and a failure is one failure for both readers. These drive a REAL rejection of the
+  // lister (the spy wraps the real one and is told to reject once) through the real `getMatchDay`, desk and online read both - never a
+  // mocked `readOnlineRounds`, which would prove the catch and nothing about what the listers' failure does to the readers.
+  const isBoardRow = (i: { kind: string }): boolean => i.kind === "board_held" || i.kind === "board_flagged";
+  it.each([["held"], ["flagged"]] as const)(
+    "a %s lister that REJECTS is one failure for both readers: the poll says online_failed, each reader keeps its own answer, and the page holds the last good one",
+    async (which) => {
+      const { day, divisions } = await twoDivisionsWithABoardEach();
+      const now = new Date(T0);
+      const good = await getMatchDay(day.auth, day.comp.id, now);
+      expect(good.online_failed, "premise: the good poll is answered").toBe(false);
+      expect(good.needs_you.filter(isBoardRow), "premise: a held and a flagged board in each of the two divisions").toHaveLength(4);
+      expect(good.online_rounds, "premise: both divisions have a round").toHaveLength(2);
+      asked().held.mockClear();
+      asked().flagged.mockClear();
+      asked()[which].mockRejectedValueOnce(new Error(`boom: the ${which} lister is down`));
+      const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+      try {
+        const down = await getMatchDay(day.auth, day.comp.id, now);
+
+        // ONE failure: each division asked once, and the rejection went to both readers (a third or fourth ask would be a re-read).
+        expect(asked()[which], "the failing lister was asked once per division: the second reader got the first one's rejection").toHaveBeenCalledTimes(divisions.length);
+        expect(down.online_failed, "marked: the online half of this poll was not read").toBe(true);
+        expect(down.online_rounds, "the online read fails closed (MD-R9)").toEqual([]);
+        // Each reader keeps its own answer. The desk leaves out the ONE division whose read failed and keeps the other's two rows.
+        expect(down.needs_you.filter(isBoardRow), "the desk answers without the failed division's boards, the other division's kept").toHaveLength(2);
+        expect(down.courts, "the courts are answered whole").toEqual(good.courts);
+        const events = logged.mock.calls.map((c) => (c[0] as { event?: string }).event ?? "online-read");
+        expect(events.sort(), "one log line per reader that kept its own answer").toEqual(["competition_desk_boards_failed", "online-read"]);
+
+        // The PAGE holds the last good answer: its Needs-you rows, its results-owed count and its rounds, the very ones it had.
+        const page = viewAfterPoll(good, down);
+        expect(page.needs_you, "the desk's rows are the last answer's").toBe(good.needs_you);
+        expect(page.results_owed).toBe(good.results_owed);
+        expect(page.online_rounds).toBe(good.online_rounds);
+        expect(page.online_failed, "and still marked").toBe(true);
+
+        // The sequence: the next poll answers, and the marker and the hold are gone with the failure.
+        const up = await getMatchDay(day.auth, day.comp.id, now);
+        expect(up.online_failed).toBe(false);
+        expect(viewAfterPoll(page, up), "an answered poll is taken whole").toBe(up);
+        expect(up.needs_you.filter(isBoardRow)).toHaveLength(4);
+      } finally {
+        logged.mockRestore();
+      }
+    },
+  );
+
+  it("a lister that rejects for a division the online read never asks about (not started: nothing paired) still marks the poll online_failed - the marker is the share's, not the online read's", async () => {
+    const day = await seedDay();
+    const d = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid C", fixtures: 2 });
+    await sql`update divisions set status = 'scheduled' where id = ${d.divisionId}`;
+    const now = new Date(T0);
+    asked().held.mockClear();
+    asked().held.mockRejectedValueOnce(new Error("boom: the held lister is down"));
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const view = await getMatchDay(day.auth, day.comp.id, now);
+
+      expect(asked().held, "premise: the desk asked the lister for this division").toHaveBeenCalledTimes(1);
+      expect(view.online_rounds.map((r) => [r.division_id, r.phase]), "premise: the online read ANSWERED - a not-started row, no lister asked").toEqual([[d.divisionId, "not_started"]]);
+      expect(logged.mock.calls.map((c) => (c[0] as { event?: string }).event), "premise: only the desk's read failed").toEqual(["competition_desk_boards_failed"]);
+      expect(view.online_failed, "yet the poll is marked: the desk's board rows were not read, and the page must hold the last ones").toBe(true);
+    } finally {
+      logged.mockRestore();
+    }
+    asked().held.mockClear();
+    const later = await getMatchDay(day.auth, day.comp.id, now);
+    expect(later.online_failed, "the next poll, read whole, is not marked").toBe(false);
   });
 });
 
