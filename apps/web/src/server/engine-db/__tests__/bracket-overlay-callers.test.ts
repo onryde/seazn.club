@@ -178,7 +178,7 @@ const SITES: readonly { file: string; count: number; case: string; override?: fa
   // stg cfg-defaults fix: the third is the freeze's own read, the resolution in its "stored" form (fixture-cfg.ts) — the
   // fold's cfg carries the schema's defaults, the snapshot does not. The first-event case drives it.
   { file: "apps/web/src/server/engine-db/append-event.ts", count: 3, case: "append-event.ts appendEvent" },
-  { file: "apps/web/src/server/engine-db/competition.ts", count: 2, case: "competition.ts loadStageInputs" },
+  { file: "apps/web/src/server/engine-db/competition/stage-inputs.ts", count: 2, case: "competition.ts loadStageInputs" },
   { file: "apps/web/src/server/public-site/match-centre-load.ts", count: 1, case: "match-centre-load.ts loadMatchCentre" },
   // W2c Task 19: the second is `loadFixtureMatchRules` - the console block's "what this match plays now" (its `effective`).
   // Match Day C2: the third is `fixtureFormatLines` - that block's line, read-only, for many fixtures at once.
