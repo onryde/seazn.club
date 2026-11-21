@@ -20,7 +20,7 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { fixtureCalledSql, stageHasStarted } from "../fixture-started-sql";
 import { insertFixtureRows } from "../fixture-insert";
-import { formatMaxEntrants, START_LINE_BUDGET } from "@/lib/format-max-entrants";
+import { formatMaxEntrants, formatMaxGate, START_LINE_BUDGET } from "@/lib/format-max-entrants";
 import { roundRobinRefusal } from "../roundrobin-refusal";
 // W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
 import { reconcileRootBracket } from "../bracket-reconcile";
@@ -295,6 +295,23 @@ async function reconcileRoundRobinGenerate(
 }
 
 /**
+ * W5 B4 review m-1: Start's own ask of the format's max. A first stage drawn BEFORE Start (a Generate in setup) is not drawn again by
+ * Start (`startDivision` generates only an undrawn stage, or reconciles a drifted root knockout), so the draw's gate in
+ * `generateStageFixturesTx` never runs for it - and sign-ups since the draw can have taken the field past the max. The division
+ * page disables Start for that field (launch-actions.tsx); this is the server agreeing, by the same name, before any write. Before
+ * Start only (the caller asks it for an unstarted division): a started table takes late entries and is never refused for its size.
+ * The field is the division's active roster, as the draw counts it; the first stage by `seq` is the one Start opens.
+ */
+export async function refuseFormatTooManyAtStart(tx: Tx, divisionId: string): Promise<void> {
+  const stages = await tx<{ kind: string; config: Record<string, unknown> }[]>`
+    select kind, config from stages where division_id = ${divisionId} order by seq`;
+  const [{ n }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+  const gate = formatMaxGate(stages, n);
+  if (gate !== null) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max: gate.max, entrants: gate.entrants });
+}
+
+/**
  * The main write of a Generate (doc 08 §3), in the CALLER's transaction: everything `generateStageFixtures` does
  * between its pre-flight and its post-commit work, unchanged in behaviour. Extracted (W3 T1, X-RB-1) so
  * `rebuildStageFixtures` can delete and regenerate in ONE transaction — a regenerate that throws then rolls the
@@ -435,7 +452,10 @@ export async function generateStageFixturesTx(
   // the real generators' count). First draw only - Start's, a Generate before it, Rebuild's after its delete: a stage that holds
   // lines is reconciled or paired a round at a time, and refusing a Swiss's next Pair because late entries grew its field
   // would strand a running event. Every door that draws runs this function, so the one check holds them all.
-  if (existing.length === 0) {
+  // B4 review m-1: a stage drawn BEFORE Start is still unstarted, so its reconciles are asked too - a league drawn at its max that
+  // then took sign-ups must not start (the division page's Start is disabled for that field; the server agrees). Only a started
+  // division's passes are exempt (division status, under the `division:` lock taken above).
+  if (existing.length === 0 || !(await divisionHasStarted(tx, stage.division_id))) {
     const max = formatMaxEntrants(stage);
     if (max !== null && entrants.length > max) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max, entrants: entrants.length, stageId });
   }

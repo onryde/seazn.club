@@ -385,6 +385,74 @@ describe.skipIf(!HAS_DB)("F8: insertFixtureRows numbers the lines once per call"
   });
 });
 
+// W5 B4 review m-4: the batch's numbering and the V263 trigger's (the single-row writers': ad-hoc, a Swiss late entry, a restore)
+// must take the SAME advisory key, or the two read the division's max side by side and hand out one number twice. Every caller holds
+// `division:` today, so the bug would be latent - this pins the key itself, on two real connections, in both orders: the second
+// writer WAITS on the first's numbering key (an ungranted advisory lock while the first is still open), then numbers after it, and the
+// division's numbers come out unique and gap-free. A key the trigger does not take reds here: the second writer waits on the first's
+// uncommitted row instead (a transactionid lock), and fails on the unique index once the first commits.
+describe.skipIf(!HAS_DB)("F8: the batch and the trigger number under ONE key (m-4)", () => {
+  type T = Parameters<Parameters<typeof withTenant>[1]>[0];
+  it("a writer holding the numbering key makes the other WAIT, then number after it - batch first and trigger first", { timeout: 120_000 }, async () => {
+    let checked = 0;
+    for (const order of ["batch first", "trigger first"] as const) {
+      const rig = await emptyStage();
+      const batch = unnumberedRows(rig.stageId, rig.divisionId, 5, `${order === "batch first" ? "a" : "b"}-batch`);
+      const [single] = unnumberedRows(rig.stageId, rig.divisionId, 1, `${order === "batch first" ? "a" : "b"}-one`);
+      const byBatch = (tx: T) => insertFixtureRows(tx, batch);
+      const byTrigger = (tx: T) => tx`insert into fixtures ${tx(single as never)}`;
+      const [firstWrite, secondWrite] = order === "batch first" ? [byBatch, byTrigger] : [byTrigger, byBatch];
+
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let holding!: () => void;
+      const isHolding = new Promise<void>((resolve) => (holding = resolve));
+      const first = withTenant(rig.auth.orgId, async (tx) => {
+        await firstWrite(tx);
+        holding();
+        await released;
+      });
+      await isHolding;
+      let secondPid = 0;
+      const second = withTenant(rig.auth.orgId, async (tx) => {
+        secondPid = (await tx<{ pid: number }[]>`select pg_backend_pid() as pid`)[0]!.pid;
+        await secondWrite(tx);
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      // The second writer is blocked - and on WHICH lock is the point: the numbering key (advisory), not the first's row. The holder
+      // is released whatever this finds, so a red here never leaves a transaction open behind it (the file's afterAll would hang).
+      try {
+        const waitingOn = await vi.waitFor(
+          async () => {
+            const rows = await sql<{ locktype: string }[]>`select locktype from pg_locks where pid = ${secondPid} and not granted`;
+            if (secondPid === 0 || rows.length === 0) throw new Error("the second writer is not blocked yet");
+            return rows.map((r) => r.locktype);
+          },
+          { timeout: 30_000, interval: 50 },
+        );
+        expect(waitingOn, `${order}: the second writer waits on the numbering key itself`).toEqual(["advisory"]);
+      } finally {
+        release();
+      }
+      await first;
+      expect(await second, `${order}: the second writer goes through once the first commits`).toBeNull();
+
+      const nos = await sql<{ fixture_no: number; ext_key: string }[]>`
+        select fixture_no, ext_key from fixtures where division_id = ${rig.divisionId} order by fixture_no`;
+      expect(nos.map((r) => r.fixture_no), `${order}: unique and gap-free`).toEqual([1, 2, 3, 4, 5, 6]);
+      const firstKeys = (order === "batch first" ? batch : [single!]).map((r) => r.ext_key);
+      expect(
+        nos.slice(0, firstKeys.length).map((r) => r.ext_key),
+        `${order}: the writer that held the key numbered first, in its row order`,
+      ).toEqual(firstKeys);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both orders").toBe(2);
+  });
+});
+
 describe.skipIf(!HAS_DB)("F1: no driver message reaches a 500's body", () => {
   async function bodyOf(err: unknown) {
     const res = await v1(async () => {

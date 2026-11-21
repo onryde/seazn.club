@@ -16,7 +16,7 @@ import { formatMaxEntrants, START_LINE_BUDGET } from "@/lib/format-max-entrants"
 import { v1 } from "@/server/api-v1/http";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, deleteEntrant } from "../entrants";
 import { createPerson } from "../persons";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
@@ -32,6 +32,9 @@ afterAll(async () => {
 });
 
 const LEAGUE = { kind: "league", config: { legs: 1 } };
+// Eight legs: the cheapest table whose max is a small field (the engine's count, pinned below), so a started-at-max case costs ~5,000
+// lines rather than a 100-entrant roster's worth of sign-ups and a 4,950-line Start.
+const LEAGUE_8 = { kind: "league", config: { legs: 8 } };
 const FOUR_POOLS = { kind: "group", config: { legs: 1, pools: { count: 4 } } };
 
 async function rig(entrants: number, stage?: { kind: string; config: Record<string, unknown> }, withPersons = false) {
@@ -179,5 +182,75 @@ describe.skipIf(!HAS_DB)("F8: a draw no field bounds is held to the budget by it
     const ok = await rig(8, { kind: "americano", config: { mode: "americano", courtCount: 2, rounds: at } }, true);
     expect((await routed(() => generateStageFixtures(ok.auth, ok.stageId!))).status).toBe(200);
     expect(await linesOf(ok.divisionId)).toBe(engineLines(at));
+  });
+});
+
+/** One more entrant through the organiser's own add (`createEntrants`): after Start that is the late-entry door, which places the
+ *  newcomer's catch-up lines (`admitTableLateEntrant`, source "organiser"); before Start it only joins the field. */
+async function addOne(r: { auth: Awaited<ReturnType<typeof rig>>["auth"]; divisionId: string }, name: string) {
+  const [row] = (await createEntrants(r.auth, r.divisionId, [{ kind: "individual", display_name: name, seed: 999, members: [] }] as never)) as { id: string }[];
+  return row!.id;
+}
+
+describe.skipIf(!HAS_DB)("F8: only a STARTED division's passes are exempt (B4 review I-2, m-1)", () => {
+  it("premise: an eight-leg league's max is the engine's - the largest field whose 8 legs fit the budget", () => {
+    const max = formatMaxEntrants(LEAGUE_8)!;
+    expect(roundRobinFixtureCount(max, 8)).toBeLessThanOrEqual(START_LINE_BUDGET);
+    expect(roundRobinFixtureCount(max + 1, 8)).toBeGreaterThan(START_LINE_BUDGET);
+    expect(max, "a small field, so the cases below stay cheap").toBeLessThan(64);
+  });
+
+  // I-2: the exemption that keeps a running event alive. A started table that grew past its max (here by the organiser's late add)
+  // is reconciled, never refused for its size - a Swiss's next Pair rides the same condition (`existing.length === 0 || not
+  // started`, generate-tx.ts); a 666-entrant Swiss with a decided round 1 is too costly for this suite, the league is its witness.
+  it("a league started at its max takes a late add, and a Generate on the running table is never FORMAT_TOO_MANY_ENTRANTS", { timeout: 240_000 }, async () => {
+    const max = formatMaxEntrants(LEAGUE_8)!;
+    const r = await rig(max, LEAGUE_8);
+    expect((await routed(() => startDivision(r.auth, r.divisionId))).status).toBe(200);
+    expect(await linesOf(r.divisionId)).toBe(roundRobinFixtureCount(max, 8));
+
+    // The late add is accepted and placed: the newcomer's eight legs against everyone, the field now one past the max.
+    const late = await addOne(r, "Late");
+    expect(await linesOf(r.divisionId), "the catch-up lines: the table of max + 1").toBe(roundRobinFixtureCount(max + 1, 8));
+    const [{ n: field }] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${r.divisionId} and status in ('registered','confirmed')`;
+    expect(field, "premise: the running field is past the format's max").toBe(max + 1);
+    expect((await sql`select 1 from fixtures where division_id = ${r.divisionId} and (home_entrant_id = ${late} or away_entrant_id = ${late})`).length).toBe(8 * max);
+
+    // Generate on the running table: the named no-op (nobody waiting), never a refusal for the field's size.
+    const gen = await routed(() => generateStageFixtures(r.auth, r.stageId!));
+    expect(gen.error?.code, "never refused for its size once started").not.toBe("FORMAT_TOO_MANY_ENTRANTS");
+    expect(gen.status).toBe(200);
+    expect(await linesOf(r.divisionId), "nothing redrawn").toBe(roundRobinFixtureCount(max + 1, 8));
+  });
+
+  // m-1: a stage drawn BEFORE Start is still unstarted. The division page disables Start for a field past the max (launch-actions.tsx);
+  // the server agrees, for a reconcile as for a first draw - and withdrawals back under the max let it start. The draw is an EVEN field
+  // one under the max, and two sign-ups keep it even: a pool that is odd, or flips parity, is redrawn from scratch (`roundRobinShape`,
+  // a first draw, which the gate always asked), so only an even-to-even arrival reaches the in-place PATCH - the path this case exists
+  // for (premise below: the max is odd, so max - 1 and max + 1 are both even).
+  it("drawn before Start under its max, then two sign-ups past it: Generate and Start refused by name, the draw untouched; back under it starts", { timeout: 240_000 }, async () => {
+    const max = formatMaxEntrants(LEAGUE_8)!;
+    expect(max % 2, "premise: the max is odd, so max - 1 and max + 1 are both even (the patch path)").toBe(1);
+    const r = await rig(max - 1, LEAGUE_8);
+    expect((await routed(() => generateStageFixtures(r.auth, r.stageId!))).status).toBe(200);
+    const drawn = roundRobinFixtureCount(max - 1, 8);
+    expect(await linesOf(r.divisionId)).toBe(drawn);
+
+    const extra = [await addOne(r, "One more"), await addOne(r, "Two more")];
+    const unstarted = await statusOf(r.divisionId);
+    const regen = await routed(() => generateStageFixtures(r.auth, r.stageId!));
+    expect(regen.status).toBe(422);
+    expect(regen.error).toMatchObject({ code: "FORMAT_TOO_MANY_ENTRANTS", max, entrants: max + 1 });
+    const start = await routed(() => startDivision(r.auth, r.divisionId));
+    expect(start.status).toBe(422);
+    expect(start.error).toMatchObject({ code: "FORMAT_TOO_MANY_ENTRANTS", max, entrants: max + 1 });
+    expect(await linesOf(r.divisionId), "the draw untouched").toBe(drawn);
+    expect(await statusOf(r.divisionId), "still unstarted").toBe(unstarted);
+
+    // The sequence: the sign-ups leave, the field is the drawn one again, and Start goes through on the same draw.
+    for (const id of extra) await deleteEntrant(r.auth, id);
+    expect((await routed(() => startDivision(r.auth, r.divisionId))).status).toBe(200);
+    expect(await statusOf(r.divisionId)).toBe("active");
+    expect(await linesOf(r.divisionId)).toBe(drawn);
   });
 });
