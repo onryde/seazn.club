@@ -495,6 +495,9 @@ describe("BoardPanelView: who is offered which decision", () => {
     expect(both![1], "out of the box tree below lg").toMatch(/(^|\s)contents(\s|$)/);
     expect(both![1], "two columns from lg").toMatch(/(^|\s)lg:grid-cols-2(\s|$)/);
     expect(both![1], "a lone button takes the row").toContain("lg:[&amp;&gt;:only-child]:col-span-2"); // the markup's own escaping of lg:[&>:only-child]:col-span-2
+    for (const cls of ["lg:[&amp;&gt;button]:px-2", "lg:[&amp;&gt;button]:text-sm", "lg:[&amp;&gt;button]:leading-snug"]) {
+      expect(both![1], `from lg the pair's buttons are tighter (${cls}): a long label wraps to two lines, not three`).toContain(cls);
+    }
     expect(has(both![2]!, resync) && has(both![2]!, goOn), "both quiet buttons are in it").toBe(true);
     expect(has(both![2]!, settle), "Settle is the primary press, on a row of its own").toBe(false);
     // One alone (no flag to close): the group holds just the resync.
