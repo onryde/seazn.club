@@ -8,6 +8,7 @@
   "seeding.SEEDING_ALREADY_CONFIRMED": "De posities van deze fase zijn al ingevuld vanuit een bevestigd voorstel.",
   "seeding.SEEDING_PROPOSAL_STALE": "De stand is gewijzigd sinds dit voorstel werd berekend. Bereken het opnieuw om de actuele geplaatsten te zien.",
   "seeding.proposalSuperseded": "Een nieuwer voorstel heeft dit voorstel vervangen. Bekijk het nieuwe voorstel en bevestig dat in plaats daarvan.",
+  "seeding.proposalRedrawn": "Je keuze bij de gelijke stand heeft de eerste ronde opnieuw geloot, dus je andere wijzigingen passen niet meer bij de plaatsen. Dit is het nieuwe concept: maak die wijzigingen opnieuw en bevestig dan.",
   "seeding.SEEDING_EDIT_UNKNOWN_SLOT": "Een van je wijzigingen verwijst naar een positie die dit voorstel niet heeft. Bereken het voorstel opnieuw en probeer het nogmaals.",
   "seeding.SEEDING_TIE_UNRESOLVED": "Los elke gelijke stand op voordat je bevestigt — kies welke deelnemer elke positie invult.",
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "Dezelfde deelnemer is aan meer dan één positie toegewezen. Corrigeer je wijzigingen en probeer het opnieuw.",

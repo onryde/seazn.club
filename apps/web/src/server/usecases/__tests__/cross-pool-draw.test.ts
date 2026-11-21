@@ -11,6 +11,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { PROPOSAL_STALE_REDRAWN, PROPOSAL_STALE_SUPERSEDED } from "@/lib/seeding-error";
 import { shuffle } from "@seazn/engine/core";
 import { swissDrawSeed } from "@/lib/swiss-draw";
 import { crossPoolDraw, seedPositions, nextPowerOfTwo } from "@seazn/engine/scheduling";
@@ -599,5 +600,152 @@ describe.skipIf(!HAS_DB)("D-B2-1 a tie pick re-draws round one: pool-mates still
     const expected = geometry(engineSeats(b, [a1, b1], false, [a2], draft.computed.crossPoolDraw!.seed));
     await confirmSeedProposal(b.auth, b.koId, { proposalId: draft.id, edits: [{ destinationSlot: tie.slots[0]!, entrantId: a2 }] });
     expect(named(b, await actual(b))).toEqual(named(b, expected));
+  });
+
+  // I-1 (B2 review; ruling, controller under the owner's standing "apply rec"): a confirm that answers a tie AND edits a seat outside
+  // it made those edits against the DRAFT's seats, but the answer re-draws round one - an edit replayed over the re-draw lands on
+  // whoever the draw moved there. Such a confirm stores the re-drawn slate as a new draft and answers 409 SEEDING_PROPOSAL_STALE
+  // {reason: redrawn, reproposed}; the organiser confirms the seats they now see (F11's pattern). A pick alone still re-draws and
+  // confirms; edits alone on a drawn draft are placed as made.
+  // Scene: 12 into 4 (A = 1,8,9; B = 2,7,10; C = 3,6,11; D = 4,5,12), the winners and the two best runners-up into an 8-draw: byes to
+  // seeds 1 and 2, then 4 v 5 and 3 v 6. Every winner beats her runner-up 1-0 and her third by 9 - her seed, so no two winners are
+  // level and tier 1 keeps its places; each runner-up beats her third by A 2, B 4, C 3, D 3 - B2 is the best runner-up and C2, D2 are
+  // level on every key for the second seat: one flagged tie, one seat. Whichever of them the draft seats there (the engine's last
+  // resort), the other is the pick, and the re-draw moves B2 (C2 cannot take seed 6 against C1) - asserted from the engine below.
+  const runnersLevel: Score = (w, l) => (w <= 4 ? (l <= 8 ? [1, 0] : [9 - w, 0]) : [({ 5: 3, 6: 3, 7: 4, 8: 2 } as Record<number, number>)[w]!, 0]);
+  const levelScene = async () => {
+    const b = await build({ entrants: 12, pools: 4, kind: "knockout", take: [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 2 }], score: runnersLevel });
+    expect((await completeStage(b.auth, b.srcId)).completed).toBe(true);
+    const draft = (await getSeedProposal(b.auth, b.koId))!;
+    const id = (s: number) => [...b.seedOf.entries()].find(([, v]) => v === s)![0];
+    const [a1, b1, c1, d1, d2, c2, b2, a2] = [1, 2, 3, 4, 5, 6, 7, 8].map(id) as [string, string, string, string, string, string, string, string];
+    expect([a1, b1, c1, d1, a2, b2, c2, d2].map((x) => b.poolOf.get(x)).join(""), "the premise: the snake's pools").toBe("ABCDABCD");
+    expect(draft.computed.crossPoolDraw?.refused, "the premise: the draft is drawn").toBeUndefined();
+    const ranked = [...draft.computed.qualifiers].sort((x, y) => x.rank - y.rank).map((q) => q.entrantId);
+    expect(ranked.slice(0, 4), "the premise: tier 1 holds its places").toEqual([a1, b1, c1, d1]);
+    expect(draft.computed.ties, "the premise: one flagged tie").toHaveLength(1);
+    const tie = draft.computed.ties[0]!;
+    expect(new Set(tie.entrantIds), "the premise: C2 and D2 level").toEqual(new Set([c2, d2]));
+    expect(tie.slots, "the premise: one seat").toHaveLength(1);
+    const drafted = draft.computed.qualifiers.find((q) => q.destinationSlot === tie.slots[0])!.entrantId;
+    const picked = drafted === c2 ? d2 : c2;
+    // The engine's draw over the picked slate: tier 1 in place, tier 2 B2 then the pick (the pick ordered it, so not a tied run).
+    const redrawn = engineSeats(b, [a1, b1, c1, d1], false, [b2, picked], draft.computed.crossPoolDraw!.seed);
+    expect(redrawn.indexOf(b2) + 1, "the premise: the re-draw moves B2 off her draft seat").not.toBe(ranked.indexOf(b2) + 1);
+    return { b, draft, tie, d1, a2, b2, drafted, picked, redrawn };
+  };
+  const slotOf = (p: { computed: { qualifiers: { destinationSlot: string; entrantId: string }[] } }, entrantId: string) =>
+    p.computed.qualifiers.find((q) => q.entrantId === entrantId)!.destinationSlot;
+  /** The 409 a re-drawn confirm answers, read; then the stored re-proposal, checked against the engine's draw. */
+  const expectReproposed = async (s: Awaited<ReturnType<typeof levelScene>>, err: HttpError | null) => {
+    expect(err?.status, "never confirmed over the re-drawn seats").toBe(409);
+    expect(err?.code).toBe("SEEDING_PROPOSAL_STALE");
+    expect(err?.extra).toMatchObject({ reason: PROPOSAL_STALE_REDRAWN });
+    expect(await filledLines(s.b), "nothing filled").toBe(0);
+    const fresh = (await getSeedProposal(s.b.auth, s.b.koId))!;
+    expect(fresh.id, "a new draft").not.toBe(s.draft.id);
+    expect(err?.extra, "the reply names the stored re-proposal").toMatchObject({ reproposed: fresh.id });
+    expect(await seats(s.b), "the re-proposal seats the engine's draw over the picked slate").toEqual(s.redrawn);
+    expect(fresh.computed.ties, "the tie is answered").toEqual([]);
+    expect(fresh.computed.crossPoolDraw, "drawn with the draft's stored seed").toEqual({ seed: s.draft.computed.crossPoolDraw!.seed });
+    expect(fresh.computed.standingsHash).toBe(s.draft.computed.standingsHash);
+    // Each seat keeps the table's comparison basis (who was level is a fact of the table, not of the pick): the tied seat still
+    // lists C2 and D2 as level. Read off the draft (the resolver's), seat by seat.
+    const bases = (p: typeof fresh) => p.computed.qualifiers.map((q) => JSON.stringify(q.basis ?? null)).sort();
+    expect(bases(fresh)).toEqual(bases(s.draft));
+    expect(s.draft.computed.qualifiers.some((q) => (q.basis?.levelWith.length ?? 0) > 0), "the premise: a seat names who was level").toBe(true);
+    return fresh;
+  };
+  const noPoolMates = (b: Built, r: { pairs: string[] }) => {
+    for (const pair of r.pairs) {
+      const [x, y] = pair.split(" v ");
+      expect(b.poolOf.get(x!), `${label(b, x!)} v ${label(b, y!)}`).not.toBe(b.poolOf.get(y!));
+    }
+    return r.pairs.length;
+  };
+
+  it("I-1 a tie pick with an edit outside the tie re-proposes the re-drawn slate (409); the edit made again on it seats as shown", async () => {
+    const s = await levelScene();
+    const { b, draft, tie, a2, b2, picked } = s;
+    // The organiser picks the other runner-up and puts A2 where the DRAFT shows B2. Replayed over the re-draw, that edit landed on
+    // the pick: B2 (replaced) stayed seated and the pick sat nowhere - and the confirm succeeded.
+    const err = await refusal(
+      confirmSeedProposal(b.auth, b.koId, { proposalId: draft.id, tiePicks: [{ slots: tie.slots, order: [picked, s.drafted] }], edits: [{ destinationSlot: slotOf(draft, b2), entrantId: a2 }] }),
+    );
+    const fresh = await expectReproposed(s, err);
+    // The answered draft is spent: confirming it again names the newer one (F5).
+    const again = await refusal(confirmSeedProposal(b.auth, b.koId, { proposalId: draft.id }));
+    expect(again?.code).toBe("SEEDING_PROPOSAL_STALE");
+    expect(again?.extra).toMatchObject({ reason: PROPOSAL_STALE_SUPERSEDED, newer: fresh.id });
+    // The edit made again, where the re-proposal shows B2.
+    await confirmSeedProposal(b.auth, b.koId, { proposalId: fresh.id, edits: [{ destinationSlot: slotOf(fresh, b2), entrantId: a2 }] });
+    const got = await actual(b);
+    expect(named(b, got), "the re-proposal with A2 in B2's seat").toEqual(named(b, geometry(s.redrawn.map((x) => (x === b2 ? a2 : x)))));
+    const seated = new Set([...got.pairs.flatMap((p) => p.split(" v ")), ...got.byes]);
+    expect(seated.has(picked), "the pick is seated").toBe(true);
+    expect(seated.has(b2), "the entrant the organiser replaced is not").toBe(false);
+    expect(noPoolMates(b, got), "6 into 8: two real round-one matches").toBe(2);
+  });
+
+  it("I-1 a tie pick with a swap of two seats outside the tie re-proposes (409, not SEEDING_SLOT_DOUBLE_ASSIGNED); the swap on it seats", async () => {
+    const s = await levelScene();
+    const { b, draft, tie, d1, b2, picked } = s;
+    const swap = (p: Parameters<typeof slotOf>[0]) => [
+      { destinationSlot: slotOf(p, b2), entrantId: d1 },
+      { destinationSlot: slotOf(p, d1), entrantId: b2 },
+    ];
+    const err = await refusal(confirmSeedProposal(b.auth, b.koId, { proposalId: draft.id, tiePicks: [{ slots: tie.slots, order: [picked, s.drafted] }], edits: swap(draft) }));
+    expect(err?.code, "a clean swap on the screen the organiser saw is never refused as a double assignment").not.toBe("SEEDING_SLOT_DOUBLE_ASSIGNED");
+    const fresh = await expectReproposed(s, err);
+    await confirmSeedProposal(b.auth, b.koId, { proposalId: fresh.id, edits: swap(fresh) });
+    const got = await actual(b);
+    expect(named(b, got), "the re-proposal with B2 and D1 swapped").toEqual(named(b, geometry(s.redrawn.map((x) => (x === b2 ? d1 : x === d1 ? b2 : x)))));
+    expect(noPoolMates(b, got)).toBe(2);
+  });
+
+  it("I-1 the desk's route: edits that fill the tied seat and another seat are the same rule - re-proposed (409)", async () => {
+    // progression-panel.tsx answers a tie through `edits[]` only.
+    const s = await levelScene();
+    const { b, draft, tie, a2, b2, picked } = s;
+    const err = await refusal(
+      confirmSeedProposal(b.auth, b.koId, {
+        proposalId: draft.id,
+        edits: [
+          { destinationSlot: tie.slots[0]!, entrantId: picked },
+          { destinationSlot: slotOf(draft, b2), entrantId: a2 },
+        ],
+      }),
+    );
+    await expectReproposed(s, err);
+  });
+
+  it("I-1 a tie pick alone still re-draws and confirms in one call (no re-proposal)", async () => {
+    const s = await levelScene();
+    const { b, draft, tie, picked } = s;
+    await confirmSeedProposal(b.auth, b.koId, { proposalId: draft.id, tiePicks: [{ slots: tie.slots, order: [picked, s.drafted] }] });
+    const after = (await getSeedProposal(b.auth, b.koId))!;
+    expect([after.id, after.status], "the draft itself is confirmed").toEqual([draft.id, "confirmed"]);
+    const got = await actual(b);
+    expect(named(b, got), "the engine's draw over the picked slate").toEqual(named(b, geometry(s.redrawn)));
+    expect(noPoolMates(b, got)).toBe(2);
+  });
+
+  it("I-1 edits alone on a drawn draft (no tie to answer) are placed as made, in one call", async () => {
+    // X-PD-1's scene (12 into 3, decisive): drawn, no tie. The organiser replaces the bottom qualifier with her own pool's third.
+    const b = await build({ entrants: 12, pools: 3, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive });
+    await completeStage(b.auth, b.srcId);
+    const draft = (await getSeedProposal(b.auth, b.koId))!;
+    expect(draft.computed.crossPoolDraw?.refused, "the premise: drawn").toBeUndefined();
+    expect(draft.computed.crossPoolDraw?.seed).toEqual(expect.any(Number));
+    expect(draft.computed.ties, "the premise: no tie").toEqual([]);
+    const order = await seats(b);
+    const out = order[5]!;
+    const pool = b.poolOf.get(out)!;
+    const third = [...b.poolOf.entries()].filter(([x, p]) => p === pool && !order.includes(x)).sort(([x], [y]) => b.seedOf.get(x)! - b.seedOf.get(y)!)[0]![0];
+    await confirmSeedProposal(b.auth, b.koId, { proposalId: draft.id, edits: [{ destinationSlot: slotOf(draft, out), entrantId: third }] });
+    expect((await getSeedProposal(b.auth, b.koId))!.id, "no re-proposal").toBe(draft.id);
+    const got = await actual(b);
+    expect(named(b, got)).toEqual(named(b, geometry(order.map((x) => (x === out ? third : x)))));
+    expect(noPoolMates(b, got)).toBe(2);
   });
 });

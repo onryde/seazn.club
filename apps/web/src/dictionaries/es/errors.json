@@ -8,6 +8,7 @@
   "seeding.SEEDING_ALREADY_CONFIRMED": "Las posiciones de esta fase ya están cubiertas por una propuesta confirmada.",
   "seeding.SEEDING_PROPOSAL_STALE": "La clasificación cambió desde que se calculó esta propuesta. Vuelve a calcularla para ver los clasificados actuales.",
   "seeding.proposalSuperseded": "Una propuesta más reciente reemplazó a esta. Revisa la nueva propuesta y confírmala en su lugar.",
+  "seeding.proposalRedrawn": "Tu elección en el empate volvió a sortear la primera ronda, así que tus otros cambios ya no coinciden con los puestos. Este es el nuevo borrador: vuelve a hacer esos cambios y confírmalo.",
   "seeding.SEEDING_EDIT_UNKNOWN_SLOT": "Una de tus ediciones hace referencia a una posición que esta propuesta no tiene. Vuelve a calcular la propuesta e inténtalo de nuevo.",
   "seeding.SEEDING_TIE_UNRESOLVED": "Resuelve todos los empates antes de confirmar: elige qué participante ocupa cada posición.",
   "seeding.SEEDING_SLOT_DOUBLE_ASSIGNED": "El mismo participante está asignado a más de una posición. Corrige tus ediciones e inténtalo de nuevo.",

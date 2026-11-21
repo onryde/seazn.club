@@ -2,6 +2,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
 import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, showAllFormats } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { buildTemplateStages } from "../src/lib/format-templates";
+import { crossPoolDraw } from "@seazn/engine/scheduling";
 import { dictString, uiString } from "./spectator-w2-kit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -310,5 +311,132 @@ test.describe("X-PD-1 the quarter-finals cross the pools", () => {
       widths++;
     }
     expect(widths).toBe(3);
+  });
+});
+
+/** 12 into 4 pools of 3 (snake), Top 6 - the four winners and the two best runners-up into an 8-draw: byes to seeds 1 and 2, then
+ *  4 v 5 and 3 v 6. Pools are lettered by their best seed. Every winner beats her runner-up 1-0 and her third by her pool's margin
+ *  (A 8, B 7, C 6, D 5), so no two winners are level and they keep seeds 1-4; each runner-up beats her third by A 2, B 4, C 3, D 3 -
+ *  B2 is the best runner-up, and C2 and D2 are level on every key for the last seat: one flagged tie. */
+async function seedRunnersLevel(request: APIRequestContext) {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `I1 ${TAG}`, visibility: "private" });
+  expect(comp.status).toBe(201);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+  expect(div.status).toBe(201);
+  const divisionId = div.data!.id;
+  const field = await apiJson<{ id: string; display_name: string }[]>(request, `/api/v1/divisions/${divisionId}/entrants`, "POST",
+    Array.from({ length: 12 }, (_, i) => ({ kind: "individual", display_name: `Level ${i + 1} ${TAG}`, seed: i + 1 })));
+  expect(field.status).toBe(201);
+  const seedOf = new Map(field.data!.map((e, i) => [e.id, i + 1]));
+  const nameOf = new Map(field.data!.map((e) => [e.id, e.display_name]));
+  const drafts = buildTemplateStages("groups_ko", { qualified: 6, poolCount: 4, swissRounds: 3, legs: 1 });
+  const stages = await apiJson<{ id: string; kind: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`, "POST",
+    drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression })));
+  expect(stages.status).toBe(201);
+  const groupId = stages.data!.find((s) => s.kind === "group")!.id;
+  const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
+  expect((await apiJson(request, `/api/v1/stages/${koId}/generate`, "POST")).status).toBe(200);
+  expect((await apiJson(request, `/api/v1/stages/${groupId}/generate`, "POST")).status).toBe(200);
+  expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
+  const lines = ((await apiJson<Fx[]>(request, `/api/v1/divisions/${divisionId}/fixtures`)).data ?? []).filter((f) => f.stage_id === groupId);
+  const byPool = new Map<string, Set<string>>();
+  for (const f of lines) for (const id of [f.home_entrant_id, f.away_entrant_id]) if (id) byPool.set(f.pool_id ?? "", (byPool.get(f.pool_id ?? "") ?? new Set()).add(id));
+  const pools = [...byPool.values()].map((m) => [...m].sort((a, b) => seedOf.get(a)! - seedOf.get(b)!)).sort((a, b) => seedOf.get(a[0]!)! - seedOf.get(b[0]!)!);
+  expect(pools.map((p) => p.map((id) => seedOf.get(id))), "the premise: the snake's pools").toEqual([[1, 8, 9], [2, 7, 10], [3, 6, 11], [4, 5, 12]]);
+  const poolOf = new Map(pools.flatMap((members, p) => members.map((id) => [id, "ABCD"[p]!] as const)));
+  const winnerMargin = { A: 8, B: 7, C: 6, D: 5 } as Record<string, number>;
+  const runnerMargin = { A: 2, B: 4, C: 3, D: 3 } as Record<string, number>;
+  let scored = 0;
+  for (const f of lines) {
+    const [h, a] = [f.home_entrant_id!, f.away_entrant_id!];
+    const members = pools["ABCD".indexOf(poolOf.get(h)!)]!;
+    const [hi, ai] = [members.indexOf(h), members.indexOf(a)];
+    const winnerIndex = Math.min(hi, ai);
+    const margin = winnerIndex === 1 ? runnerMargin[poolOf.get(h)!]! : Math.max(hi, ai) === 1 ? 1 : winnerMargin[poolOf.get(h)!]!;
+    const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", {
+      expected_seq: 0, type: "generic.result", payload: hi < ai ? { p1Score: margin, p2Score: 0 } : { p1Score: 0, p2Score: margin },
+    });
+    expect(res.status).toBe(201);
+    scored++;
+  }
+  expect(scored, "every meeting of the four pools").toBe(4 * 3);
+  expect((await apiJson(request, `/api/v1/stages/${groupId}/complete`, "POST")).status).toBe(200);
+  const [[a1, a2], [b1, b2], [c1, c2], [d1, d2]] = pools as [string, string][];
+  return { divisionId, koId, poolOf, nameOf, a1: a1!, b1: b1!, c1: c1!, d1: d1!, a2: a2!, b2: b2!, c2: c2!, d2: d2! };
+}
+
+type Draft = { id: string; computed: { qualifiers: { rank: number; entrantId: string; destinationSlot: string }[]; ties: { slots: string[]; entrantIds: string[] }[]; crossPoolDraw?: { seed: number; refused?: unknown } } };
+
+test.describe("I-1 a tie pick with another change on a drawn draft", () => {
+  test("the pick re-draws round one: the desk shows the new draft with the changes cleared, and the change made again confirms, at 1280, 768 and 320", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const s = await seedRunnersLevel(request);
+    const proposal = await apiJson<Draft>(request, `/api/v1/stages/${s.koId}/seed-proposal`, "POST");
+    expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
+    const draft = proposal.data!;
+    expect(draft.computed.crossPoolDraw?.refused, "the premise: drawn").toBeUndefined();
+    expect(draft.computed.ties, "the premise: one flagged tie").toHaveLength(1);
+    const tie = draft.computed.ties[0]!;
+    expect(new Set(tie.entrantIds), "the premise: C2 and D2 level").toEqual(new Set([s.c2, s.d2]));
+    const drafted = draft.computed.qualifiers.find((q) => q.destinationSlot === tie.slots[0])!.entrantId;
+    const picked = drafted === s.c2 ? s.d2 : s.c2;
+    // What the new draft must show: the engine's draw over the picked slate - the winners in place, then B2 and the pick.
+    const redrawn = crossPoolDraw(
+      [...[s.a1, s.b1, s.c1, s.d1].map((entrantId) => ({ entrantId, pool: s.poolOf.get(entrantId)!, tier: 1 })), ...[s.b2, picked].map((entrantId) => ({ entrantId, pool: s.poolOf.get(entrantId)!, tier: 2 }))],
+      "single_elim",
+      draft.computed.crossPoolDraw!.seed,
+    ).order;
+    expect(redrawn.indexOf(s.b2) + 1, "the premise: the re-draw moves B2").not.toBe(draft.computed.qualifiers.find((q) => q.entrantId === s.b2)!.rank);
+
+    await page.goto(await divisionPath(request, s.divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const panel = page.locator('[data-progression-state="draft"]');
+    await expect(panel).toBeVisible();
+    const rowOf = (slot: string) => panel.locator(`tr[data-progression-row="${slot}"] select`);
+    const slotShowing = async (entrantId: string) => {
+      const rows = await panel.locator("tr[data-progression-row]").evaluateAll((els) =>
+        els.map((r) => ({ slot: r.getAttribute("data-progression-row")!, name: (r.querySelector("select") as HTMLSelectElement).selectedOptions[0]?.textContent ?? "" })));
+      return rows.find((r) => r.name === s.nameOf.get(entrantId))?.slot;
+    };
+    const shown = async () =>
+      (await panel.locator("tr[data-progression-row]").evaluateAll((els) =>
+        els.map((r) => ({ rank: Number(r.querySelector("td")?.textContent), name: (r.querySelector("select") as HTMLSelectElement).selectedOptions[0]?.textContent ?? "" }))))
+        .sort((x, y) => x.rank - y.rank)
+        .map((r) => r.name);
+    // The organiser picks the other runner-up for the tied seat and puts A2 where the draft shows B2.
+    await rowOf(tie.slots[0]!).selectOption({ label: s.nameOf.get(picked)! });
+    await rowOf((await slotShowing(s.b2))!).selectOption({ label: s.nameOf.get(s.a2)! });
+    await panel.getByRole("button", { name: uiString("en", "progression.confirmCta") }).click();
+    const alert = panel.getByRole("alert");
+    await expect(alert).toHaveText(fillErr("seeding.proposalRedrawn", {}));
+    const ko = async () => ((await apiJson<KoFx[]>(request, `/api/v1/divisions/${s.divisionId}/fixtures`)).data ?? []).filter((f) => f.stage_id === s.koId);
+    expect((await ko()).filter((f) => f.home_entrant_id !== null || f.away_entrant_id !== null), "nothing seated").toHaveLength(0);
+    // The desk now shows the new draft exactly: no tie left, the engine's seats, none of the changes made against the old seats.
+    await expect(panel.locator('tr[data-progression-tied="true"]')).toHaveCount(0);
+    await expect.poll(shown, { message: "the new draft, the changes cleared" }).toEqual(redrawn.map((id) => s.nameOf.get(id)!));
+    let widths = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await alert.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await expect(alert).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/i1-redrawn-${width}.png` });
+      widths++;
+    }
+    expect(widths).toBe(3);
+
+    // The change made again, where the new draft shows B2.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await rowOf((await slotShowing(s.b2))!).selectOption({ label: s.nameOf.get(s.a2)! });
+    await panel.getByRole("button", { name: uiString("en", "progression.confirmCta") }).click();
+    await expect(page.locator('[data-progression-state="confirmed"]')).toBeVisible({ timeout: 30_000 });
+    const lines = await ko();
+    const first = Math.min(...lines.map((f) => f.round_no));
+    const r1 = lines.filter((f) => f.round_no === first);
+    const pairs = r1.filter((f) => f.home_entrant_id !== null && f.away_entrant_id !== null);
+    expect(pairs, "6 into 8: two real round-one matches").toHaveLength(2);
+    for (const f of pairs) expect(s.poolOf.get(f.home_entrant_id!), `${s.nameOf.get(f.home_entrant_id!)} v ${s.nameOf.get(f.away_entrant_id!)}`).not.toBe(s.poolOf.get(f.away_entrant_id!));
+    const seated = new Set(r1.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null));
+    expect([seated.has(picked), seated.has(s.a2), seated.has(s.b2)], "the pick and A2 seated, B2 (replaced) not").toEqual([true, true, false]);
   });
 });

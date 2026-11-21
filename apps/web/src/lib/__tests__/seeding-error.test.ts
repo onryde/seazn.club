@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { PROPOSAL_STALE_SUPERSEDED, seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";
+import { PROPOSAL_STALE_REDRAWN, PROPOSAL_STALE_SUPERSEDED, seedingErrorMessage, SEEDING_ERROR_CODES, type SeedingErrorCode } from "@/lib/seeding-error";
 import { LOCALES } from "@/lib/i18n-constants";
 
 describe("seedingErrorMessage — mechanics", () => {
@@ -135,5 +135,29 @@ describe("seedingErrorMessage — a superseded draft (F5)", () => {
   }
   it("anti-vacuity: every locale was checked", () => {
     expect(checked).toBe(LOCALES.length);
+  });
+});
+
+// W5 app PR B review I-1: SEEDING_PROPOSAL_STALE with `reason: "redrawn"` (a tie answer re-drew round one, so the confirm's other edits
+// were stored as a new draft to make again) renders its own copy - never "standings changed", never the superseded copy. Expected
+// values are the dictionary files' own entries, read here.
+describe("seedingErrorMessage — a re-drawn draft (I-1)", () => {
+  const files = Object.fromEntries(
+    LOCALES.map((l) => [l, JSON.parse(readFileSync(resolve(__dirname, `../../dictionaries/${l}/errors.json`), "utf8")) as Record<string, string>]),
+  );
+  let checked = 0;
+  for (const locale of LOCALES) {
+    it(`${locale}: reason redrawn -> the redrawn copy, distinct from the standings and superseded copies`, () => {
+      const redrawn = files[locale]!["seeding.proposalRedrawn"];
+      expect(redrawn, `${locale} has the copy`).toBeTypeOf("string");
+      expect(redrawn).not.toBe(files[locale]!["seeding.SEEDING_PROPOSAL_STALE"]);
+      expect(redrawn).not.toBe(files[locale]!["seeding.proposalSuperseded"]);
+      expect(seedingErrorMessage(locale, "SEEDING_PROPOSAL_STALE", "x", { reason: PROPOSAL_STALE_REDRAWN, reproposed: "p2" })).toBe(redrawn);
+      checked++;
+    });
+  }
+  it("anti-vacuity: every locale was checked, and the copies differ across locales", () => {
+    expect(checked).toBe(LOCALES.length);
+    expect(new Set(LOCALES.map((l) => files[l]!["seeding.proposalRedrawn"])).size).toBe(LOCALES.length);
   });
 });

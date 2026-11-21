@@ -156,6 +156,12 @@ export const CROSS_POOL_REFUSAL_CODES: ReadonlySet<string> = new Set([
  *  still does; only the copy differs (`seeding.proposalSuperseded`). */
 export const PROPOSAL_STALE_SUPERSEDED = "superseded";
 
+/** W5 app PR B review I-1: SEEDING_PROPOSAL_STALE's `reason` when a confirm answered a tie on a draft drawn across pools AND
+ *  edited a seat outside the tie. The answer re-draws round one, so the other edits - made against the draft's seats - no longer
+ *  name the seats they were meant for: the re-drawn slate is stored as a new draft (`reproposed`) for the organiser to review and
+ *  edit again (`seeding.proposalRedrawn`). */
+export const PROPOSAL_STALE_REDRAWN = "redrawn";
+
 function isSeedingErrorCode(code: string): code is SeedingErrorCode {
   return (SEEDING_ERROR_CODES as readonly string[]).includes(code);
 }
@@ -173,5 +179,6 @@ export function seedingErrorMessage(
   if (!isSeedingErrorCode(code)) return fallback;
   const dict = BY_LOCALE[locale] ?? BY_LOCALE[DEFAULT_LOCALE];
   if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_SUPERSEDED) return t(dict, "seeding.proposalSuperseded", vars);
+  if (code === "SEEDING_PROPOSAL_STALE" && vars?.reason === PROPOSAL_STALE_REDRAWN) return t(dict, "seeding.proposalRedrawn", vars);
   return t(dict, `seeding.${code}`, vars);
 }
