@@ -10,6 +10,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { YOUTUBE_SAFETY_CHECK_LIMIT, YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS } from "@/lib/youtube";
 import { HttpError } from "@/lib/errors";
+import { cacheEnabled } from "@/lib/cache";
 import { rateLimit } from "@/lib/rate-limit";
 import { captureError } from "@/lib/sentry";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -17,6 +18,7 @@ import type { YoutubeChannelSafety } from "@/server/api-v1/schemas";
 import { channelSafetyWarning } from "./channel-safety";
 import type { YouTubePort } from "./port";
 import { YouTubeError } from "./port";
+import { takeSafetyRead } from "./safety-limit";
 import { openToken } from "./token-store";
 
 const NO_WARNING: YoutubeChannelSafety = { warn: false, young: false, shortRecent: 0 };
@@ -34,6 +36,9 @@ export async function checkChannelSafety(
   // Phase 0 review I2: each read spends Seazn's shared YouTube quota, so a connection gets YOUTUBE_SAFETY_CHECK_LIMIT reads a window;
   // past it the answer is "no warning" (fail-open, as for any read that could not be made) and YouTube is not asked. Only the limit's
   // own 429 is caught: the limiter answers it and nothing else (it fails open on a Redis outage).
+  // Fix round 2: with no Redis configured (prod today) that limiter lets every call through, so the in-process fallback
+  // (safety-limit.ts, the same budget per connection) holds it instead.
+  if (!cacheEnabled() && !takeSafetyRead(connectionId, now)) return NO_WARNING;
   try {
     await rateLimit(`yt-safety:${connectionId}`, YOUTUBE_SAFETY_CHECK_LIMIT);
   } catch (err) {

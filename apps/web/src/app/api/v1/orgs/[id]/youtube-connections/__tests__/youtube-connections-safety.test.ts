@@ -31,6 +31,8 @@ import { revokeConnection } from "@/server/youtube/token-store";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import type { YoutubeErrorCode } from "@/server/youtube/port";
 import { GET } from "../[connectionId]/safety/route";
+import { checkChannelSafety } from "@/server/youtube/safety-check";
+import { __resetSafetyReadsForTests } from "@/server/youtube/safety-limit";
 import { connect, fake, org } from "@/server/youtube/__tests__/_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -44,7 +46,7 @@ afterAll(() => {
     else process.env[k] = savedKeks[k];
   }
 });
-afterEach(() => { setYoutubeDriverForTest(null); captured.errors.length = 0; __setRateLimitCounterForTests(null); });
+afterEach(() => { setYoutubeDriverForTest(null); captured.errors.length = 0; __setRateLimitCounterForTests(null); __resetSafetyReadsForTests(); });
 
 const DAY = 86_400_000;
 const MIN = 60_000;
@@ -166,6 +168,34 @@ describe.skipIf(!HAS_DB)("GET youtube-connections/{id}/safety", () => {
     signedInAs(o2.userId);
     const other = await channel(o2, { ageDays: 1 });
     expect((await json(await safety(o2.orgId, other.connectionId))).data?.warn, "another connection's budget is its own").toBe(true);
+  });
+
+  it("I2 without Redis (prod): the in-process limit answers the 7th read in a window with ZERO port calls; the next window reads again", async () => {
+    const savedRedis = process.env.REDIS_URL;
+    delete process.env.REDIS_URL;   // the Redis limiter is inert: only the in-process fallback can hold the budget
+    try {
+      const o = await org();
+      const c = await channel(o, { ageDays: 1 });   // young: a read that reaches YouTube warns, the over-budget answer does not
+      const T0 = new Date();
+      const read = (at: Date) => checkChannelSafety(o.auth, o.orgId, c.connectionId, fake, at);
+      let inside = 0;
+      for (let i = 0; i < YOUTUBE_SAFETY_CHECK_LIMIT.max; i++) {
+        const before = portCalls();
+        expect(await read(new Date(T0.getTime() + i * 1000)), `read ${i + 1}`).toEqual({ warn: true, young: true, shortRecent: 0 });
+        expect(portCalls(), `read ${i + 1} asked YouTube`).toBeGreaterThan(before);
+        inside++;
+      }
+      expect(inside, "anti-vacuity: the whole budget was read").toBe(6);
+      const before = portCalls();
+      expect(await read(new Date(T0.getTime() + 10_000))).toEqual({ warn: false, young: false, shortRecent: 0 });
+      expect(portCalls(), "over the budget: YouTube is asked nothing").toBe(before);
+      // A new window (the injected clock past the window's end) reads again.
+      const next = new Date(T0.getTime() + YOUTUBE_SAFETY_CHECK_LIMIT.windowSeconds * 1000);
+      expect(await read(next)).toEqual({ warn: true, young: true, shortRecent: 0 });
+      expect(portCalls()).toBeGreaterThan(before);
+    } finally {
+      if (savedRedis !== undefined) process.env.REDIS_URL = savedRedis;
+    }
   });
 
   it("a DEAD grant (token killed at YouTube) is still 200 warn:false and the status is unchanged (no mark reconnect_needed)", async () => {
