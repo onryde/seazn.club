@@ -277,6 +277,13 @@ test.describe("Match Day online - the board panel", () => {
 
     // 1024 x 768, the narrowest lg: the board gives way (42% of the panel), nothing overflows.
     await open(1024, 768);
+    // B6 (T8 minor): and Settle - the last button of the decision - is whole on that screen (it was half below the fold with the two quiet decisions stacked).
+    const settle1024 = await decision(page).getByRole("button", { name: uiEn["arbiter.decide.settle"] }).evaluate((el) => {
+      const b = el.getBoundingClientRect();
+      return { top: b.top + window.scrollY, bottom: b.bottom + window.scrollY, scrollY: window.scrollY };
+    });
+    expect(settle1024.scrollY, "measured from the top of the page").toBe(0);
+    expect(settle1024.bottom, `Settle ends inside the 768px screen at 1024 (it ended at ${Math.round(settle1024.bottom)})`).toBeLessThanOrEqual(768);
     const pos1024 = await box("md-board-position");
     const grid1024 = await box("md-board-grid");
     expect(grid1024.width, "the panel is real").toBeGreaterThan(300);
@@ -598,6 +605,7 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
 
   // MD-R36: English AND Dutch (its words are the longest in the folded strip and in the reason), the 168-character account change in both and
   // the short mismatch in English. The measured bottoms are attached to the run (annotation "MD-R33 measure"), not printed.
+  const DECISION_HEADROOM = 40;
   for (const locale of ["en", "nl"] as const) {
     test(`(MD-R33 with cameras, ${locale}) a HELD board with cameras, two flags and a LONG reason - the 168-character account change${locale === "en" ? " as well as the short mismatch" : ""} - keeps its whole decision on a 1280 x 800 screen, the cameras at the right column's top, their fold press on the state row`, async ({ page }) => {
       test.setTimeout(budget(4, 4));
@@ -636,7 +644,9 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
         const dec = await box("arbiter-decision");
         expect(dec.scrollY, "measured from the top of the page").toBe(0);
         test.info().annotations.push({ type: "MD-R33 measure", description: `${locale} / ${label}: decision bottom ${Math.round(dec.bottom)}` });
-        expect(dec.bottom, `${locale} / ${label}: the decision ends inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800);
+        // B7: real headroom, not 9px. The two quiet decisions share a row from lg, which took ~50px off the column; the pin keeps 40 of them, so a taller font
+        // (CI's, an older Dutch translation) moves the line without breaking it - and a change that eats the headroom is told at once, before it eats the screen.
+        expect(dec.bottom, `${locale} / ${label}: the decision ends ${DECISION_HEADROOM}px inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800 - DECISION_HEADROOM);
         // MD-R36: the fold's press is on the state row (not in the strip), and the folded strip is ONE line in every language.
         await expect(cameras(page).getByTestId("md-cameras-toggle"), "the strip carries no toggle of its own").toHaveCount(0);
         const state = await box("md-online-state");
@@ -645,6 +655,27 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
         expect(toggle.bottom, `${locale}: ... and does not sit below it`).toBeGreaterThan(state.top);
         const strip = await box("md-cameras");
         expect(strip.bottom - strip.top, `${locale}: the folded strip is one line (it is ${Math.round(strip.bottom - strip.top)}px)`).toBeLessThanOrEqual(24);
+        // B10 (CI wrapped this strip to 44px under its fonts and this machine's did not): one line BY CONSTRUCTION, whatever the font. Squeeze the strip's column to
+        // 120px - narrower than the two words in any typeface - and it must still be one line, the words cut (ellipsis) with their whole text in the title.
+        const squeezed = await page.getByTestId("md-board-cameras").evaluate((el) => {
+          const wrap = el as HTMLElement;
+          const before = wrap.style.width;
+          wrap.style.width = "120px";
+          const strip = wrap.querySelector('[data-testid="md-cameras"]')!.getBoundingClientRect();
+          const words = [...wrap.querySelectorAll<HTMLElement>('[data-testid="md-camera-word"]')];
+          const out = {
+            height: strip.bottom - strip.top,
+            words: words.length,
+            cut: words.filter((w) => w.scrollWidth > w.clientWidth).length,
+            titled: words.filter((w) => (w.getAttribute("title") ?? "").trim() !== "" && w.getAttribute("title") === (w.textContent ?? "")).length,
+          };
+          wrap.style.width = before;
+          return out;
+        });
+        expect(squeezed.words, `${locale}: both tiles' words were measured`).toBe(2);
+        expect(squeezed.height, `${locale}: squeezed to 120px the folded strip is still one line (it is ${Math.round(squeezed.height)}px)`).toBeLessThanOrEqual(24);
+        expect(squeezed.cut, `${locale}: ... which cut the words (a squeeze that cuts nothing proves nothing)`).toBeGreaterThan(0);
+        expect(squeezed.titled, `${locale}: ... and each carries its whole word as its title`).toBe(2);
         // The right column reads: state, cameras, why it is held, the decision, the flags - each starts below the one before.
         const left = await box("md-board-left");
         const rows = [await box("md-online-state"), await box("md-board-cameras"), await box("md-board-hold"), await box("arbiter-decision"), await box("md-board-flags")];
