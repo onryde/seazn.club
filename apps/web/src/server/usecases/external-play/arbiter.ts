@@ -62,7 +62,8 @@ import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { checkedInAtOfBoards, countedCheckIns } from "./check-ins";
-import { loadOnlinePlayFixture, loadSides, onlinePlayDivisionWhere, whiteSideOf, type Side, type SidePlayer } from "./guard";
+import { loadOnlinePlayFixture, loadSides, onlinePlayDivisionWhere, type Side, type SidePlayer } from "./guard";
+import { whiteSideOfFold } from "@/server/external-play/colours";
 import { noResultOffer } from "./no-result";
 import { readNeedsReason } from "./queue";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
@@ -109,6 +110,9 @@ type BoardRow = {
   roundOpenId: string | null;
   openId: string | null;
   whiteSide: Side | null;
+  /** The pairing card's colour in the board's fold (`match_states.state.colorOfHome`: "B" = Black on home), read with the row for the board
+   *  that has no game yet and so no `whiteSide` of its own (MD-R23: one read for the round, not an owner session and a fold read per board). */
+  colorOfHome: string | null;
   moveCount: number | null;
   whiteMs: number | null;
   blackMs: number | null;
@@ -476,6 +480,7 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
+           ms.state->>'colorOfHome' as "colorOfHome",
            ep.create_sent_at as "createSentAt", ep.mint_claimed_at as "mintClaimedAt",
            o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            coalesce(ep.checkin_extensions, 0)::int as extensions,
@@ -496,6 +501,7 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
+      left join match_states ms on ms.fixture_id = f.id
       left join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
       left join fixture_video_meetings mh on mh.fixture_id = f.id and mh.side = 'home'
       left join fixture_video_meetings ma on ma.fixture_id = f.id and ma.side = 'away'
@@ -746,10 +752,9 @@ async function boardWithSides(
   ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts; flags?: FlagMode },
 ): Promise<{ board: ArbiterBoard; white: SidePlayer; black: SidePlayer }> {
   const { limitMs, policy, flagRows } = ctx;
-  const [sides, whiteSide] = await Promise.all([
-    loadSides(r),
-    r.whiteSide ?? whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }),
-  ] as const);
+  // The colours: the game's own record when there is one, else the pairing card's (the one rule, `whiteSideOfFold`, the creation and the public page read).
+  const whiteSide = r.whiteSide ?? whiteSideOfFold({ colorOfHome: r.colorOfHome });
+  const sides = await loadSides(r);
   const white = whiteSide === "home" ? sides.home : sides.away;
   const black = whiteSide === "home" ? sides.away : sides.home;
   const over = r.bridgeStatus === "finished" || r.gameOverAt !== null;
