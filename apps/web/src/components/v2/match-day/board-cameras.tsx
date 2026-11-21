@@ -136,14 +136,17 @@ export function BoardCameras({
 
   const colourWord = (colour: "white" | "black") => f.t(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black");
 
-  // Folded, the section is one wrapping row and the body drops out of the box tree (`contents`), so the two tiles are siblings in that row.
+  // Folded, the section is one row and the body drops out of the box tree (`contents`), so the two tiles are siblings in that row. Below lg it WRAPS (a
+  // phone has the height, and a word cut short there has no hover to read it by). From lg it is ONE LINE by construction (B10, MD-R33's 24px budget): no
+  // wrap, each tile shrinks, and a word that will not fit is cut with its whole text in the title - the line's height no longer depends on the font the
+  // browser measures it in (the strip wrapped to two lines under CI's fonts and not under this machine's, which a width sum cannot promise).
   return (
     <section
       data-testid="md-cameras"
       data-folded={folded ? "true" : "false"}
       role="group"
       aria-label={f.t("matchDay.cameras.group")}
-      className={folded ? "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" : "min-w-0"}
+      className={folded ? "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 lg:flex-nowrap" : "min-w-0"}
     >
       <div id={bodyId} className={folded ? "contents" : "grid min-w-0 gap-2 sm:grid-cols-2"}>
         {seats.map(({ colour, side }) => {
@@ -184,7 +187,12 @@ export function BoardCameras({
                     {colourWord(colour)} · {player.name} ·{" "}
                   </span>
                   <Mark mark={mark} dict={dict} />
-                  <span data-testid="md-camera-word" aria-live="polite" className={`min-w-0 [overflow-wrap:anywhere] ${WORD_ON_LIGHT[word.tone]}`}>
+                  <span
+                    data-testid="md-camera-word"
+                    aria-live="polite"
+                    title={word.text}
+                    className={`min-w-0 [overflow-wrap:anywhere] lg:truncate ${WORD_ON_LIGHT[word.tone]}`}
+                  >
                     {word.text}
                   </span>
                 </>

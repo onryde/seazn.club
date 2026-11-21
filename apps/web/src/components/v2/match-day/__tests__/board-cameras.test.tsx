@@ -280,9 +280,18 @@ describe("BoardCameras: the fold (the PANEL's state: a held board opens folded -
     expect(tile(h, "black")).toContain("bg-slate-900");
   });
 
-  it("folded is ONE line (the MD-R33 budget): the section is a wrapping row and the body drops out of the box tree so both tiles are siblings in it", () => {
+  it("folded is ONE line (the MD-R33 budget): a wrapping row below lg and NO wrap from lg (B10: the height cannot depend on the font), each word cut with its whole text in the title, and the body drops out of the box tree so both tiles are siblings in it", () => {
     const h = render(heldBoard, viewsOf(heldBoard, { home: WATCHING, away: WATCHING }), undefined, true);
     expect(tagOf(h, "md-cameras")).toMatch(/class="[^"]*\bflex-wrap\b/);
+    expect(tagOf(h, "md-cameras"), "from lg the row does not wrap").toMatch(/class="[^"]*\blg:flex-nowrap\b/);
+    let words = 0;
+    for (const colour of ["white", "black"] as const) {
+      const word = /<span data-testid="md-camera-word"[^>]*>/.exec(tile(h, colour))![0];
+      expect(word, `${colour}: from lg the word is cut, not wrapped`).toMatch(/class="[^"]*\blg:truncate\b/);
+      expect(word, `${colour}: and the whole word is the title`).toContain(`title="${esc(t("arbiter.tile.live"))}"`);
+      words += 1;
+    }
+    expect(words, "both tiles were read").toBe(2);
     expect(/<div id="cams-body" class="([^"]*)"/.exec(h)![1], "the body is out of the box tree").toBe("contents");
   });
 
