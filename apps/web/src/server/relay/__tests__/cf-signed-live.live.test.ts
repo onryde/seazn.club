@@ -183,19 +183,36 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
 
     // 2. Publish the test feed. The stream key is argv to ffmpeg only.
     const target = `${created.result!.rtmps.url}${created.result!.rtmps.streamKey}`;
+    // Runs 1 and 2 (2026-11-21) connected, made a recording, served only 204 and were then closed by Cloudflare (ffmpeg
+    // 187, "End of file" writing to the muxer). Their feed broke two of Stream Live's stated input requirements
+    // (developers.cloudflare.com/stream/stream-live/start-stream-live/#requirements): a combined bitrate of 2–14 Mbps
+    // (`-b:v 2500k` is an ABR TARGET; on lavfi `testsrc`, an almost static pattern, x264 undershoots it far below
+    // 2 Mbps) and a steady 2–10 s keyframe interval (`-g 60` = exactly 2 s, the edge, with scene-cut keyframes allowed).
+    // This feed is the shape the R1 plan and the capture-QR PR pushed to Cloudflare successfully (testsrc2 + sine,
+    // libx264 veryfast, no `-tune zerolatency`), made CBR with NAL-HRD padding so the wire rate cannot undershoot, and
+    // given a fixed closed 4 s GOP (Cloudflare's recommendation) with scene cuts off.
     ffmpeg = spawn("ffmpeg", [
-      "-hide_banner", "-loglevel", "error", "-re",
-      "-f", "lavfi", "-i", "testsrc=size=1280x720:rate=30",
+      "-hide_banner", "-loglevel", "warning", "-re",
+      "-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30",
       "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
       "-t", String(FEED_MAX_SECONDS),
-      "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "60", "-b:v", "2500k",
-      "-maxrate", "2500k", "-bufsize", "5000k", "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "128k", "-f", "flv", target,
+      "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "high", "-pix_fmt", "yuv420p",
+      "-g", "120", "-keyint_min", "120", "-sc_threshold", "0",
+      "-b:v", "3000k", "-minrate", "3000k", "-maxrate", "3000k", "-bufsize", "6000k", "-x264-params", "nal-hrd=cbr",
+      "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "128k",
+      "-f", "flv", "-flvflags", "no_duration_filesize", target,
     ], { stdio: ["ignore", "ignore", "pipe"] });
-    // The key is redacted from each chunk BEFORE the tail is kept, so a slice can never cut it into an unredacted piece.
+    const ffStartedAt = Date.now();
+    let ffExitAfterMs: number | null = null;
+    ffmpeg.on("exit", () => { ffExitAfterMs = Date.now() - ffStartedAt; });
+    // stderr is kept RAW in memory (bounded at 1 MiB; ffmpeg at `warning` writes a few KiB) and read only through
+    // ffTail(), which redacts the full target URL and the key over the WHOLE text before it slices. Redacting per chunk
+    // would miss a key split across two chunks, and slicing first could cut a key into an unredacted fragment.
     const streamKey = created.result!.rtmps.streamKey;
-    let ffErr = "";
+    let ffRaw = "";
+    const ffTail = (n = 500) => ffRaw.replaceAll(target, "<rtmps-url>").replaceAll(streamKey, "<key>").slice(-n);
     let ffSpawnError: string | null = null;
-    ffmpeg.stderr!.on("data", (d: Buffer) => { ffErr = (ffErr + d.toString().replaceAll(streamKey, "<key>")).slice(-2000); });
+    ffmpeg.stderr!.on("data", (d: Buffer) => { if (ffRaw.length < 1 << 20) ffRaw += d.toString(); });
     ffmpeg.on("error", (e: NodeJS.ErrnoException) => { ffSpawnError = e.code === "ENOENT" ? "ffmpeg is not installed (ENOENT)" : `ffmpeg failed to start: ${e.code ?? e.message}`; });
     note(`ffmpeg pid ${ffmpeg.pid}`);
 
@@ -203,7 +220,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     let deadline = Date.now() + 120_000;
     while (!videoUid) {
       if (ffSpawnError) throw new Error(ffSpawnError);
-      if (ffmpeg.exitCode !== null) throw new Error(`ffmpeg exited ${ffmpeg.exitCode}: ${ffErr}`);
+      if (ffmpeg.exitCode !== null) throw new Error(`ffmpeg exited ${ffmpeg.exitCode}: ${ffTail()}`);
       const mine = (await ownVideos()).filter((v) => v.status?.state === "live-inprogress");
       if (mine.length > 1) throw new Error(`expected one in-progress recording, saw ${mine.length}`);
       if (mine.length === 1) videoUid = mine[0].uid;
@@ -224,9 +241,12 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     deadline = Date.now() + 180_000;
     let liveBefore = 0;
     const baselineSeen: number[] = [];
+    const inputStatesSeen: string[] = [];
     for (;;) {
       liveBefore = await httpStatus(`${host}/${await mint(inputUid)}/manifest/video.m3u8`);
       baselineSeen.push(liveBefore);
+      const st = await cf<{ status?: { current?: { state?: string } } }>("GET", `/live_inputs/${inputUid}`);
+      inputStatesSeen.push(st.result?.status?.current?.state ?? "absent");
       if (liveBefore === 200 || Date.now() > deadline) break;
       await sleep(5_000);
     }
@@ -238,7 +258,8 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
       obs.baselineDiagnostics = {
         videoState: v.status?.state, errorReasonCode: v.status?.errorReasonCode, errorReasonText: v.status?.errorReasonText,
         inputState: inp.result?.status?.current?.state, inputReason: inp.result?.status?.current?.reason,
-        ffmpegExit: ffmpeg.exitCode, ffmpegSignal: ffmpeg.signalCode, ffmpegStderrTail: ffErr.slice(-500),   // key already redacted
+        inputStatesSeen: [...new Set(inputStatesSeen)],
+        ffmpegExit: ffmpeg.exitCode, ffmpegSignal: ffmpeg.signalCode, ffmpegExitAfterMs: ffExitAfterMs, ffmpegStderrTail: ffTail(),
       };
       throw new Error(`live HLS never answered 200 within 180 s (saw ${JSON.stringify(obs.liveHlsBaselineSeen)}); lock not attempted — see OBSERVED.baselineDiagnostics`);
     }
@@ -260,7 +281,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     obs.expiryAtPlus90 = await httpStatus(shortUrl);
     obs.liveHlsFreshTokenAtPlus90 = await httpStatus(`${host}/${await mint(inputUid)}/manifest/video.m3u8`);   // control: still live
     obs.feedStillRunningAtPlus90 = ffmpeg.exitCode === null;
-    if (ffmpeg.exitCode !== null) obs.ffmpegEarlyExit = { code: ffmpeg.exitCode, stderrTail: ffErr.slice(-500) };   // key already redacted
+    if (ffmpeg.exitCode !== null) obs.ffmpegEarlyExit = { code: ffmpeg.exitCode, stderrTail: ffTail() };
 
     // 6. Stop the feed; wait for the recording to finish (timeoutSeconds 180 after the disconnect), then re-read the lock.
     stopFeed();

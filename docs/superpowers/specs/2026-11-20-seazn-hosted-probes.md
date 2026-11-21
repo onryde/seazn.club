@@ -94,6 +94,43 @@ The feed now sends stereo 48 kHz AAC with a capped bitrate. Re-run with
 `cd apps/web && DATABASE_URL= CF_LIVE_PROBE=1 npx vitest run src/server/relay/__tests__/cf-signed-live.live.test.ts`
 and paste the `OBSERVED` and `LEDGER` lines.
 
+**C7 attempt 2 (2026-11-21, run by the owner).** EXIT=1. The probe stopped before the lock, as designed. Cleanup:
+input `dfb215db…` and video `dae51934…` were created, and both were deleted by uid (200 each). No foreign items were
+seen.
+- Live HLS answered 204 for the whole 180 s baseline.
+- `baselineDiagnostics`:
+  - The video was `live-inprogress` with no error reason.
+  - The input was `disconnected`, reason `client_disconnect`.
+  - ffmpeg had exited with code 187: "Error submitting a packet to the muxer: End of file … Error writing trailer". That
+    is Cloudflare closing the RTMPS connection.
+
+**Likely cause (medium confidence): the test feed was below Stream Live's input requirements, not a signing effect.**
+- Cloudflare requires a combined input bitrate of **2–14 Mbps** and a steady **2–10 s** keyframe interval
+  ([requirements](https://developers.cloudflare.com/stream/stream-live/start-stream-live/#requirements)).
+- The probe's feed was `testsrc` with `-tune zerolatency -g 60 -b:v 2500k`.
+- A local 12 s encode of exactly that feed, without the network, averaged **1,097 kbps** including audio. `-b:v` is an
+  average target, and x264 undershoots it badly on a near-static test pattern. The keyframes landed on the 2 s floor.
+- The same symptom showed in both runs: connected, a recording created, only 204, then a server-side close. That fits an
+  input Cloudflare accepts but cannot package.
+
+Ruled out or unlikely:
+- **URL and protocol.** RTMPS URL + key from the create answer, the form `ingest-cf.ts` uses. The connection was
+  accepted and made a recording.
+- **Codec.** H.264 + AAC-LC, both supported.
+- **`requireSignedURLs` / `allowedOrigins`.** These are playback-side. C1's input carried both and streamed.
+- **An account limit.** Ingest connected.
+- **A re-PUT before the push.** The probe's only PUT comes last, after the feed stops.
+
+The 2026-11-20 POC's own feed is not recorded anywhere in the repo, so it could not be diffed directly.
+
+**Fix:** the feed now matches the shape the R1 plan and the capture-QR PR streamed to Cloudflare successfully:
+`testsrc2` + sine, libx264 veryfast, and no `-tune zerolatency`. It also adds:
+- true CBR at 3 Mbps (`minrate = maxrate`, `nal-hrd=cbr`); the local encode measured **3,183 kbps**;
+- a fixed closed 4 s GOP (`-g 120 -keyint_min 120 -sc_threshold 0`), keyframes at 0/4/8 s;
+- ffmpeg at `-loglevel warning`, its exit time, and the input's state at each baseline poll, all in `baselineDiagnostics`.
+
+Stderr is redacted over the whole text before it is sliced.
+
 ## Task 20: Bunny, what remained open
 
 Probe: `apps/web/src/server/video/__tests__/bunny.live.test.ts`. It is gated on `BUNNY_LIVE_PROBE=1` plus the four
