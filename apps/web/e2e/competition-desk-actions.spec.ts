@@ -243,8 +243,8 @@ type Row = {
   matchDay?: true;
   /** What the landing page must offer for the work the row names. */
   land: (page: Page, rig: Rig) => Promise<void>;
-  /** Other kinds the same rig must ALSO raise on the same list (each exactly once, looked at before the click): one rig, two rows. */
-  alsoRaises?: Attention["kind"][];
+  /** Kinds the same rig must NOT raise, looked at beside the row it does (the row is asserted present first, so an empty list proves nothing). */
+  neverRaises?: Attention["kind"][];
 };
 
 const ROWS: Row[] = [
@@ -579,15 +579,17 @@ const ROWS: Row[] = [
   // for each). The row's action opens the board in
   // Match Day's own focus column - `md-focus` of THAT fixture - and the list's row for it is the current one.
   {
-    // A board held for the organiser, DATED in the past: the round's open already makes today a match day, and a board that should have been
-    // played by now raises `result_missing` too, so one rig lists both rows and the test looks at both (`alsoRaises`).
+    // A board held for the organiser, DATED in the past: the round's open already makes today a match day. A board that should have been played by
+    // now USED to raise `result_missing` too; since gaps A6 a hold is raised ONCE (spec 2026-11-05 5.4, "a hold is never counted twice"; a held board
+    // is left out of `result_missing`, `PhaseFixture.heldOnline`), so the rig keeps the late date on purpose - it is exactly the case the dedupe is for -
+    // and asserts the row's absence (`neverRaises`) beside the one row it raises.
     id: "board_held",
     kind: "board_held",
     // A board that should have been played by now makes today a match day: its Needs-you list is Match Day's (B1), not the page's.
     matchDay: true,
     // Board 1 of a round with one board: the label is the dictionary's template with the seed's own board number.
     label: en["desk.needsYou.board.action"]!.replace("{board}", "1"),
-    alsoRaises: ["result_missing"],
+    neverRaises: ["result_missing"],
     build: async (request) => {
       const r = await seedOnlineRound(request, [`Held White ${TAG}`, `Held Black ${TAG}`], { camera: "optional" });
       expect(r.boards.length, "premise: one board").toBe(1);
@@ -655,9 +657,8 @@ test.describe("competition desk: every action label lands on the control it name
       // wrong page state is worse than a red one.
       const rowEl = needs.locator(`[data-attention="${row.kind}"]`);
       await expect(rowEl, `${row.kind} was never raised — the fixture built a different state`).toHaveCount(1);
-      // One rig, more than one row: every kind it must ALSO raise is on the same list, exactly once, before anything is pressed.
-      for (const also of row.alsoRaises ?? []) {
-        await expect(needs.locator(`[data-attention="${also}"]`), `${row.id}: the rig must raise ${also} as well`).toHaveCount(1);
+      for (const never of row.neverRaises ?? []) {
+        await expect(needs.locator(`[data-attention="${never}"]`), `${row.id}: the same hold must not be counted again as ${never}`).toHaveCount(0);
       }
       // Dual mobile/desktop DOM: `:visible` picks whichever copy renders.
       const action = rowEl.locator("a:visible").first();
