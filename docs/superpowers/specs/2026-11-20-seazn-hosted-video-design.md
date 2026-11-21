@@ -107,13 +107,13 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
   signs each recording as soon as it appears.
 
 ### 5.3 Replay on Seazn
-- Once the fixture has been decided for 15 min (§5.7), and the Seazn session has ended with Cloudflare's recording ready
+- Once the fixture has been decided for 15 min (or, if it is never decided, 6 h after the session ended; §5.7), and the Seazn session has ended with Cloudflare's recording ready
   (Cloudflare: within ~60 s of the end), the server asks Bunny to fetch the recording by URL into the org's Bunny
   collection, and stores the Bunny video id against the session.
 - Bunny encodes (resolutions capped at 720p, owner setting); once Bunny reports the video playable (its webhook, with a
   slow poll as the backstop) and the copy passes the check in §5.7, the match page's Replay plays in Bunny's embed player
   with a signed embed token. Bunny's referrer allow-list (Seazn's hosts) and CDN token authentication guard its files.
-- **Order is fetch, verify, switch the player, then delete the Cloudflare copy 60 min later** (owner, 2026-11-21, §5.7).
+- **Order is fetch, verify, switch the player, then delete the Cloudflare copy 60 min later** (§5.7).
   Bunny fetches from the Cloudflare copy, so it must exist until Bunny's is verified. If the move fails it retries; the 3-day sweep skips a Seazn
   recording not yet moved and keeps it up to Cloudflare's own 30-day floor, alerting Seazn staff (my call: a replay is
   never lost to the sweep).
@@ -139,32 +139,37 @@ Seazn-owned YouTube channel (free, but upload quota ~1,600 units each, API-uploa
 - Minutes delivered per match: live from Cloudflare's analytics (`streamMinutesViewedAdaptiveGroups`, by input uid),
   replay from Bunny's statistics. Recorded per session and visible to Seazn staff. No organiser-facing number yet.
 
-### 5.7 Replay lifecycle (owner ruling 2026-11-21)
+### 5.7 Replay lifecycle (owner ruling 2026-11-21, with recommendations)
 
-The sequence, in the owner's words: **match decided → wait 15 min → move to Bunny (no time limit) → confirm the Bunny
-copy is clean and good → switch the player to Bunny → delete the Cloudflare copy 1–2 h later.** It overrides §5.3 and §5.4
-where they differ (those two sections are amended above). Four gaps between it and the first plan, and how each closes:
+**Owner ruling 2026-11-21 — the sequence, and only the sequence:** **match decided → wait 15 min → move to Bunny (no
+time limit) → confirm the Bunny copy is clean and good → switch the player to Bunny → delete the Cloudflare copy within
+1–2 h.** It overrides §5.3 and §5.4 where they differ (those two sections are amended above). The owner's own numbers are
+the 15-min delay and the delete inside 1–2 h. Everything more specific below is a **Recommendation 2026-11-21 (applied
+unless the owner objects)**, not an owner ruling. Four gaps between the sequence and the first plan, and how each closes,
+then two more recommendations:
 
-- **G-A. Trigger.** The move starts once BOTH the fixture was decided at least 15 min ago
+- **G-A. Trigger (owner ruling: 15 min).** The move starts once BOTH the fixture was decided at least 15 min ago
   (`SEAZN_REPLAY_DELAY_MINUTES = 15`) AND the session has ended past `FINALISATION_GRACE_SECONDS` (the recording is
-  finished). It was: session ended plus the grace. A fixture never decided starts no move (the 3-day sweep alert, Task 18,
-  is then the only signal).
-- **G-B. Interim playback.** From session end until a verified Bunny copy exists, the match page plays the signed
-  Cloudflare recording (the same token path as live). It was: no replay at all until Bunny was playable. When the Bunny
-  copy is verified, the player switches to Bunny's embed.
-- **G-C. "Clean and good".** Before the switch, the Bunny copy must be playable AND its length within ±2 s of the
-  Cloudflare recording's duration AND a 720p rendition listed (or the source's height, if lower). It was: Bunny
-  playable alone. A copy that fails goes down the failed path (retry; the Cloudflare copy is kept). The webhook runs the
-  same check as the poll.
-- **G-D. Delete timing.** The Cloudflare copy is deleted only once `verified_at` + `SEAZN_CF_DELETE_DELAY_MINUTES = 60`
-  has passed, so players already open on it finish and there is a rollback window. It was: delete the moment Bunny was
-  playable. The 3-day sweep hold and Cloudflare's 30-day backstop are unchanged.
-- **G-E. Recommendation 2026-11-21 (applied unless the owner objects; not an owner ruling).** A Seazn session still live
-  15 min after the fixture is decided is stopped, end reason `auto_stopped`, in every mode (switch off, operator mode,
-  automatic phone), so the move always starts. Today's automatic stop after the result (30 s for a court session, 180 s for
-  a per-fixture code) fires only when the match's Stream switch is on and the phone is automatic, or for a court stream;
-  the new rule is an extra arm for Seazn sessions and leaves that one unchanged. The organiser panel's line ("stops about
-  N after the result") must name it.
+  finished). It was: session ended plus the grace.
+- **G-B. Interim playback (recommendation).** From session end until a verified Bunny copy exists, the match page plays
+  the signed Cloudflare recording (the same token path as live). It was: no replay at all until Bunny was playable. When
+  the Bunny copy is verified, the player switches to Bunny's embed.
+- **G-C. "Clean and good" (recommendation for the two numbers).** Before the switch, the Bunny copy must be playable AND
+  its length within ±2 s of the Cloudflare recording's duration AND a 720p rendition listed (or the source's height, if
+  lower). It was: Bunny playable alone. A copy that fails goes down the failed path (retry; the Cloudflare copy is kept).
+  The webhook runs the same check as the poll.
+- **G-D. Delete timing (owner ruling: within 1–2 h; recommendation: 60 min).** The Cloudflare copy is deleted only once
+  `verified_at` + `SEAZN_CF_DELETE_DELAY_MINUTES = 60` has passed, so players already open on it finish and there is a
+  rollback window. It was: delete the moment Bunny was playable. The 3-day sweep hold and Cloudflare's 30-day backstop are
+  unchanged.
+- **G-E. Live stop (recommendation).** A Seazn session still live 15 min after the fixture is decided is stopped, end
+  reason `auto_stopped`, in every mode (switch off, operator mode, automatic phone), so the move always starts. Today's
+  automatic stop after the result (30 s for a court session, 180 s for a per-fixture code) fires only when the match's
+  Stream switch is on and the phone is automatic, or for a court stream; the new rule is an extra arm for Seazn sessions
+  and leaves that one unchanged. The organiser panel's line ("stops about N after the result") must name it.
+- **G-F. Undecided fixture (recommendation).** A fixture that is never decided (abandoned, void) would never start a
+  move under G-A. So the move also starts when the session ended at least `SEAZN_REPLAY_UNDECIDED_FALLBACK_HOURS = 6` ago
+  and the fixture is still not decided. A decided fixture still waits its 15 min.
 
 ## 6. Left to the builder
 
@@ -173,7 +178,7 @@ where they differ (those two sections are amended above). Four gaps between it a
 - Which player library (hls.js, or Cloudflare's and Bunny's own embeds) — one player for both is preferred. (Decided in
   the plan: hls.js for live, Bunny's embed for replay, since Bunny's protected files need what the embed carries.)
 - Whether the Bunny move runs from the session-end path (`persist.ts` `endedNow`) or the relay sweep, provided it
-  retries and never deletes before Bunny is playable.
+  retries and never deletes before Bunny's copy is verified and 60 min have passed (§5.7).
 - Bunny collection layout (per org recommended) and how the Bunny API key is held.
 - How signed playback tokens are minted and their lifetime. (Decided in the plan: Cloudflare's token endpoint, 1 h.)
 
@@ -185,4 +190,5 @@ where they differ (those two sections are amended above). Four gaps between it a
 3. **Billing unchanged**: a Seazn match draws the same stream credit (£3) with the same admission and balance checks;
    replay storage and all delivery are absorbed by Seazn, uncapped, measured (§5.6).
 4. All Seazn playback signed (§5.2); an unmoved recording held past 3 days (§5.3).
-5. G-E (§5.7): a Seazn session still live 15 min after the fixture is decided is stopped in every mode.
+5. The recommendations in §5.7 (G-B interim playback, G-C's ±2 s and 720p checks, the 60-min delete value, G-E, G-F) are
+   applied unless the owner objects. Only the sequence itself is the owner's ruling.
