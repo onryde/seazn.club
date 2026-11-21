@@ -175,8 +175,20 @@ export async function prepareYoutubeBroadcast(
   };
   const reused = await reuseOrClaim(ctx);
   const prepared = reused ?? (await createNew(ctx, true));
-  await noteAutoBackoff(ctx, "success");
+  // A person's clean prepare clears the window here. An AUTOMATIC start's clears only once its session has started
+  // (`clearAutoBackoffAfterStart`, from start.ts): cleared here, a fault of Seazn's own after this point (storage, admission) would
+  // reset the count before `abandonPrepared` reopens the window, so it would never grow past the base and every retry would create
+  // and delete another broadcast (Phase 0 review I1).
+  if (a.startCause !== "automatic") await noteAutoBackoff(ctx, "success");
   return prepared;
+}
+
+/** An AUTOMATIC start's session has started on this Prepared (committed and provisioned): the channel answered and the start went
+ *  through, so its window, count and code go (Phase 0 review I1; a person's start cleared them at prepare). Best effort. */
+export async function clearAutoBackoffAfterStart(p: Prepared, now: Date): Promise<void> {
+  const [row] = await sql<{ org_id: string; connection_id: string }[]>`
+    select org_id, connection_id from youtube_broadcasts where id = ${p.broadcastId}`;
+  if (row) await noteAutoBackoff({ orgId: row.org_id, connectionId: row.connection_id, now }, "success");
 }
 
 /** The automatic start's backoff (Phase 0, V538): a refusal that opens it (auto-backoff.ts `opensAutoBackoff`; null — a fault of
@@ -578,8 +590,13 @@ async function failRow(ctx: Ctx, rowId: string, ytId: string | null, code: Youtu
  *  1, I-1: the admission committed, then provisioning deleted the session, and the FK nulled `last_session_id`; a new broadcast
  *  nobody streams into would otherwise stay "upcoming" and hold its key for good; one whose session still exists has
  *  `last_session_id` set and is left to that session); reused → reservation released (state back to 'live' when last_session_id
- *  is set, else 'bound' — or 'created' for a row YouTube has no broadcast for yet). Never throws (reports). */
-export async function abandonPrepared(p: Prepared, port: YouTubePort): Promise<void> {
+ *  is set, else 'bound' — or 'created' for a row YouTube has no broadcast for yet). Never throws (reports).
+ *  Phase 0 review I1: when an AUTOMATIC start abandons a broadcast it created, the channel's backoff opens `youtube_unavailable`
+ *  (before the delete, so a failed delete still opens it): the next beat would otherwise create and delete another one on the
+ *  customer's channel. A person's start (`start` absent or not automatic) opens nothing. */
+export async function abandonPrepared(
+  p: Prepared, port: YouTubePort, start?: { startCause: StartCause; now: Date },
+): Promise<void> {
   try {
     if (p.reused) {
       await sql`
@@ -593,6 +610,9 @@ export async function abandonPrepared(p: Prepared, port: YouTubePort): Promise<v
       update youtube_broadcasts set state = 'failed', last_error_code = 'admission_refused'
        where id = ${p.broadcastId} and (state in ('created', 'bound') or (state = 'live' and last_session_id is null))
       returning org_id, connection_id, yt_broadcast_id`;
+    if (row && start?.startCause === "automatic") {
+      await noteAutoBackoff({ orgId: row.org_id, connectionId: row.connection_id, now: start.now }, "youtube_unavailable");
+    }
     if (!row || row.yt_broadcast_id === null) return;
     const ytId = row.yt_broadcast_id;
     const refresh = await openToken(sql, row.org_id, row.connection_id);

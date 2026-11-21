@@ -30,7 +30,7 @@ import {
   readTargetSecret,
   wipeStreamCodeTok,
 } from "@/server/relay/secret-columns";
-import { abandonPrepared, attachPrepared, prepareYoutubeBroadcast } from "@/server/youtube/prepare";
+import { abandonPrepared, attachPrepared, clearAutoBackoffAfterStart, prepareYoutubeBroadcast } from "@/server/youtube/prepare";
 import { recordEvent, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
@@ -402,7 +402,7 @@ export async function startBroadcast(
   // rethrown: deleted at YouTube with its row `failed`, or a reused one's reservation released; never left "upcoming" for the
   // orphan sweep. Chained AFTER the transaction has rolled back, so no lock is held across the YouTube call.
   const abandonThenRethrow = async (err: unknown): Promise<never> => {
-    if (prepared !== null) await abandonPrepared(prepared, youtube());
+    if (prepared !== null) await abandonPrepared(prepared, youtube(), { startCause: opts.startCause, now: deps.now() });
     throw err;
   };
   const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns).catch(abandonThenRethrow);   // outside the transaction; G7: fitted to the integer columns
@@ -564,9 +564,12 @@ export async function startBroadcast(
     // `last_session_id` and is left to that session's own end. A REUSED broadcast is left as it is, by `abandonPrepared`'s own
     // reused branch (it releases a reservation and never deletes): its earlier sessions stay on it, so it stays `live` and the end
     // rule ends it at their Stop + the grace; deleting it would delete a video that streamed.
-    if (prepared !== null) await abandonPrepared(prepared, youtube());
+    if (prepared !== null) await abandonPrepared(prepared, youtube(), { startCause: opts.startCause, now: deps.now() });
     throw err;
   }
+  // Phase 0 review I1: the automatic start's channel window is cleared only now that its session has started (prepare cleared a
+  // person's at once), so a start abandoned after a clean prepare keeps counting the window up.
+  if (prepared !== null && opts.startCause === "automatic") await clearAutoBackoffAfterStart(prepared, deps.now());
   return { sessionId };
 }
 
