@@ -35,6 +35,7 @@ import { CompetitionHubDoc } from "../competition-hub-schema";
 import { loadCompetitionHub } from "../competition-hub";
 import { getPublicDivision } from "../data";
 import { divisionQualification, qualificationFixtures } from "../division-qualification";
+import type { StandingsRow } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import { embedDivisionData } from "@/server/embed-data";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -43,7 +44,7 @@ import { createEntrants } from "@/server/usecases/entrants";
 import { startDivision } from "@/server/usecases/schedule";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { listStageQualificationMeta } from "@/server/usecases/stage-qualification";
-import { completeStage, createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { completeStage, confirmSeedProposal, createStages, generateStageFixtures, getSeedProposal, getStandings } from "@/server/usecases/stages";
 import { withdrawEntrantCascade } from "@/server/usecases/withdrawal";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
@@ -71,8 +72,9 @@ interface Rig {
   id: Record<string, string>;
 }
 
-/** A public generic league of four into Finals (top 2, on_complete), Started. */
-async function league(): Promise<Rig> {
+/** A public generic league of four into Finals (top 2; on_complete unless `timing` says otherwise), Started. A `setup` Finals
+ *  is generated day-one (TBD seats), as a template's is, so the confirm has seats to fill. */
+async function league(timing: "on_complete" | "setup" = "on_complete"): Promise<Rig> {
   const { auth } = await seedOrg("pro");
   const suffix = randomUUID().slice(0, 8);
   const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: `QF ${suffix}`, visibility: "private", branding: {} });
@@ -87,9 +89,10 @@ async function league(): Promise<Rig> {
       kind: "knockout",
       name: "Finals",
       config: {},
-      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing: "on_complete" },
+      progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing },
     },
   ] as never);
+  if (timing === "setup") await generateStageFixtures(auth, finals!.id);
   await generateStageFixtures(auth, table!.id);
   await startDivision(auth, div.id);
   const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${auth.orgId}`;
@@ -217,5 +220,133 @@ describe.skipIf(!HAS_DB)("X-QS-1 a finished league keeps its cut on every surfac
     expect(Object.keys(m)).toHaveLength(4);
     expect(m.Ben, "the departed has no marker").toBe("none");
     expect(m.Ann).toBe(QUALIFIED);
+  });
+});
+
+// W5 B3 fix (review I-1; controller ruling 1): a cut-line tie waiting on the organiser's pick shows no final verdict.
+// Every shipped template's knockout is `timing: "setup"` (lib/format-templates.ts), so the organiser confirms the seats - and a
+// class the engine could split only by the lot is a proposal tie the confirm refuses until it is answered (SEEDING_TIE_UNRESOLVED),
+// which the answer may resolve AGAINST the lot. The scene, played through scoreEvent: Ann beats everyone 3-1; Ben and Cat draw
+// 2-2 and each beat Dan 3-1 - level on points, difference, scored and head-to-head (generic's declared order, then the lot).
+// Expected values: the engine's own flags on the stored table (`tieUnbroken`, `tieBreak.with`, its lot order) and the cut (2).
+const TIE_SCORES: Record<string, readonly [number, number]> = {
+  "Ann,Ben": [3, 1], "Ann,Cat": [3, 1], "Ann,Dan": [3, 1], "Ben,Cat": [2, 2], "Ben,Dan": [3, 1], "Cat,Dan": [3, 1],
+};
+
+/** Every line of the table, scored per TIE_SCORES (the first-named side's score first); returns how many were played. */
+async function playTied(r: Rig): Promise<number> {
+  const nameOf = new Map(NAMES.map((n) => [r.id[n]!, n]));
+  const rows = await sql<{ id: string; home_entrant_id: string; away_entrant_id: string }[]>`
+    select id, home_entrant_id, away_entrant_id from fixtures where stage_id = ${r.stageId} and status = 'scheduled' order by round_no, seq_in_round`;
+  for (const f of rows) {
+    const [h, a] = [nameOf.get(f.home_entrant_id)!, nameOf.get(f.away_entrant_id)!];
+    const flipped = NAMES.indexOf(h) > NAMES.indexOf(a);
+    const s = TIE_SCORES[flipped ? `${a},${h}` : `${h},${a}`]!;
+    await scoreEvent(r.auth, f.id, { expected_seq: 0, type: "core.start", payload: {} });
+    await scoreEvent(r.auth, f.id, { expected_seq: 1, type: "generic.result", payload: flipped ? { p1Score: s[1], p2Score: s[0] } : { p1Score: s[0], p2Score: s[1] } });
+  }
+  return rows.length;
+}
+
+/** The organiser's console chain: its meta read (`listStageQualificationMeta`) and its tenant read of the table (`getStandings`). */
+async function orgTable(r: Rig) {
+  const data = (await getPublicDivision(...r.slugs))!;
+  const meta = (await listStageQualificationMeta(r.auth, [r.stageId])).get(r.stageId)!;
+  const module_ = builtinModules.find((m) => m.key === data.division.sport_key);
+  const snap = await getStandings(r.auth, r.stageId);
+  const view = divisionQualification({
+    module_,
+    division: data.division,
+    dict: en as Dict,
+    locale: "en",
+    fixtures: await qualificationFixtures(data.fixtures, module_, data.stages),
+    entrantStatuses: Object.fromEntries(data.entrants.map((e) => [e.id, e.status])),
+    entrantNames: Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name])),
+  })({ id: r.stageId, kind: "league", ...meta } as never, { pool_id: null, rows: snap.rows as never });
+  return { meta, view };
+}
+
+/** Every surface's markers by name: the division page, the organiser console, the hub and the embed's rendered table. */
+async function everySurface(r: Rig) {
+  const page = byName(r, (await pageTable(r)).view?.rows ?? {});
+  const org = byName(r, (await orgTable(r)).view?.rows ?? {});
+  const doc = CompetitionHubDoc.parse(await loadCompetitionHub(r.slugs[0], r.slugs[1], new Date(), { uncached: true }));
+  const hubTable = doc.tables.find((t) => t.divisionId === r.divisionId && t.qualification !== null);
+  const hubLabel: Record<string, string> = { qualified: QUALIFIED, out: "Out" };
+  const hub = Object.fromEntries(NAMES.map((n) => [n, hubLabel[hubTable?.rows.find((x) => x.name === n)?.qual?.status ?? ""] ?? "none"]));
+  const root = await EmbedWidgetPage({ params: Promise.resolve({ id: r.divisionId, widget: "standings" }) });
+  const html = renderToStaticMarkup(elements(root).find((el) => el.type === StandingsTable)!);
+  const ranked = (await pageTable(r)).view;
+  return { page, org, hub, html, ranked };
+}
+
+describe.skipIf(!HAS_DB)("I-1 a cut-line tie waiting on the organiser's pick shows no final verdict (W5 B3 fix; real producer, every reader)", () => {
+  it("the lot put one of two level sides 2nd: neither reads a verdict until the pick is confirmed; then the pick's, the lot's loser through", async () => {
+    const r = await league("setup");
+    expect(await playTied(r)).toBe(6);
+
+    // premise, the engine's flags on the stored table: Ben and Cat level on everything, the lot ordered them; Ann 1st, Dan 4th
+    const snap = await getStandings(r.auth, r.stageId);
+    const rowOf = (n: string) => (snap.rows as StandingsRow[]).find((x) => x.entrantId === r.id[n])!;
+    for (const [n, other] of [["Ben", "Cat"], ["Cat", "Ben"]] as const) {
+      expect(rowOf(n).tieUnbroken, `premise: ${n} is level with ${other} on every step`).toBe(true);
+      expect(rowOf(n).tieBreak?.with, `premise: ${n}'s class`).toEqual([r.id[other]]);
+      expect(rowOf(n).tieBreak?.key).toBe("lots");
+    }
+    expect([rowOf("Ann").rank, rowOf("Dan").rank, rowOf("Ann").tieUnbroken ?? false, rowOf("Dan").tieUnbroken ?? false]).toEqual([1, 4, false, false]);
+    const lotWinner = rowOf("Ben").rank === 2 ? "Ben" : "Cat";
+    const lotLoser = lotWinner === "Ben" ? "Cat" : "Ben";
+    expect(rowOf(lotLoser).rank, "premise: the class holds 2nd and 3rd, across the cut of 2").toBe(3);
+
+    // 1. every line played, not yet Completed: the tie straddles the cut - no verdict on Ben or Cat; Ann and Dan keep theirs
+    const waiting = { Ann: QUALIFIED, Ben: "none", Cat: "none", Dan: "Out" };
+    const before = await everySurface(r);
+    expect(before.page, "division page, before Complete").toEqual(waiting);
+    expect(before.org, "organiser console, before Complete").toEqual(waiting);
+    expect(before.hub, "hub, before Complete").toEqual(waiting);
+    expect(before.ranked!.table.label, "the line still stands at the cut").toBe("Top 2 went through to Finals");
+
+    // 2. Complete (setup): a draft, its tie flagged - still nobody seated, still no verdict for the class
+    await completeStage(r.auth, r.stageId);
+    const draft = (await getSeedProposal(r.auth, r.finalsId))!;
+    expect(draft.status).toBe("draft");
+    expect(draft.computed.ties, "the proposal flags the tie").toHaveLength(1);
+    expect([...draft.computed.ties[0]!.entrantIds].sort()).toEqual([r.id.Ben!, r.id.Cat!].sort());
+    const drafted = await everySurface(r);
+    expect((await orgTable(r)).meta.qualified ?? null, "the console: a draft is not who went through").toBeNull();
+    expect(drafted.page, "division page, draft").toEqual(waiting);
+    expect(drafted.org, "organiser console, draft").toEqual(waiting);
+    expect(drafted.hub, "hub, draft").toEqual(waiting);
+    for (const n of ["Ben", "Cat"]) {
+      const rank = rowOf(n).rank!;
+      expect(drafted.html, `embed: ${n}'s rank cell carries no verdict`).not.toMatch(new RegExp(`aria-label="Rank ${rank}, (Qualified|Out), show details"`));
+    }
+    expect(drafted.html).toContain(`aria-label="Rank 1, ${QUALIFIED}, show details"`);
+    expect(drafted.html).toContain(`aria-label="Rank 4, Out, show details"`);
+
+    // 3. the organiser picks AGAINST the lot and confirms: who went through is the pick's
+    const tie = draft.computed.ties[0]!;
+    await confirmSeedProposal(r.auth, r.finalsId, { proposalId: draft.id, tiePicks: [{ slots: tie.slots, order: [r.id[lotLoser]!, r.id[lotWinner]!] }] });
+    const picked = { Ann: QUALIFIED, [lotLoser]: QUALIFIED, [lotWinner]: "Out", Dan: "Out" };
+    const after = await everySurface(r);
+    expect((await pageTable(r)).stage.qualified, "the public read: who went through").toEqual([r.id.Ann, r.id[lotLoser]]);
+    expect((await orgTable(r)).meta.qualified, "the console: who went through").toEqual([r.id.Ann, r.id[lotLoser]]);
+    expect(after.page, "division page, confirmed").toEqual(picked);
+    expect(after.org, "organiser console, confirmed").toEqual(picked);
+    expect(after.hub, "hub, confirmed").toEqual(picked);
+    expect(after.html).toContain(`aria-label="Rank ${rowOf(lotLoser).rank}, ${QUALIFIED}, show details"`);
+    expect(after.html).toContain(`aria-label="Rank ${rowOf(lotWinner).rank}, Out, show details"`);
+  });
+
+  it("the positive pair: the same tie wholly above the cut (Top 3) freezes at once - nothing waits on the pick", async () => {
+    // Ben and Cat level at 2nd-3rd, the cut at 3: both go through whatever the pick, so every row keeps its verdict.
+    const r = await league("setup");
+    await sql`update stages set progression = jsonb_set(progression, '{sources,0,take,0,to}', '3'::jsonb) where id = ${r.finalsId}`;
+    expect(await playTied(r)).toBe(6);
+    const all = { Ann: QUALIFIED, Ben: QUALIFIED, Cat: QUALIFIED, Dan: "Out" };
+    const s = await everySurface(r);
+    expect(s.page).toEqual(all);
+    expect(s.org).toEqual(all);
+    expect(s.hub).toEqual(all);
   });
 });

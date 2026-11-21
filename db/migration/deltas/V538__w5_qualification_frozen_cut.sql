@@ -13,11 +13,13 @@
 --   reads its frozen markers from `qualified` alone (apps/web/src/server/public-site/qualification-view.ts). Only into the cut's
 --   OWN destination, only beside a `topNPerGroup` cut, and only for an nth below the quota (`nth > n`, `count >= 1`): a best-Nth
 --   take into any other destination still blocks the cut, exactly as before.
--- * `qualified` — who went through from this stage into the cut's destination: the newest CONFIRMED seed proposal's qualifiers
+-- * `qualified` — who went through from this stage into the cut's destination: the newest CONFIRMED seed proposal's seats
 --   drawn from this stage (a `timing: "setup"` destination), else the destination's stored `config.qualified` (an `on_complete`
---   one, written by `seedNextStage`), else null. A draft is no one's verdict, so it is never read. A jsonb array of entrant ids;
---   the confirmed proposal's in seat order, `config.qualified` in its stored order. Public data already: the destination's
---   bracket names the same entrants once seated.
+--   one, written by `seedNextStage`), else null. A draft is no one's verdict, so it is never read. The seats are the confirm's
+--   `computed.seated` (W5 B3 fix, review I-1: who it seated once the organiser's tie picks and edits were applied - a pick may
+--   send the lot's loser through), else, for a row confirmed before the confirm wrote it, the proposed `qualifiers`. A jsonb
+--   array of entrant ids; the confirmed proposal's in seat order, `config.qualified` in its stored order. Public data already:
+--   the destination's bracket names the same entrants once seated.
 --
 -- Every other column, guard and grant is V475's, verbatim, in V537's plpgsql form (`rows 1`, `#variable_conflict use_column`:
 -- its plan-cache reason holds for the new body too). The signature changes (two OUT columns), so the function and the view are
@@ -132,7 +134,9 @@ begin
                                  q.ord)
          from confirmed cp
          cross join lateral jsonb_array_elements(
-           case when jsonb_typeof(cp.computed -> 'qualifiers') = 'array' then cp.computed -> 'qualifiers'
+           -- who the confirm SEATED (its tie picks and edits applied); a row confirmed before `seated` existed: the slate
+           case when jsonb_typeof(cp.computed -> 'seated') = 'array' then cp.computed -> 'seated'
+                when jsonb_typeof(cp.computed -> 'qualifiers') = 'array' then cp.computed -> 'qualifiers'
                 else '[]'::jsonb end
          ) with ordinality as q(value, ord)
         where jsonb_typeof(q.value -> 'entrantId') = 'string'

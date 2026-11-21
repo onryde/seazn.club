@@ -61,6 +61,11 @@ export interface SeedProposalOut {
     /** W5 app PR B T5 (FX-G5, ruling 281): the seats were drawn across the source's pools with this stored draw seed
      *  (`drawAcrossPools`); the stage card shows it (R24 pick 18 A). Absent: not a pooled field, nothing drawn. */
     crossPoolDraw?: { seed: number; refused?: CrossPoolRefused };
+    /** W5 B3 fix (review I-1): written by the confirm, on the row it confirms - who was actually SEATED, seat by seat, once the
+     *  organiser's tie picks and edits were applied (or the re-draw over them). `qualifiers` stays the slate as proposed: the cut
+     *  drift reads (`table-cut-drift.ts` and its siblings) compare it with today's cut, and a pick against the lot is no drift.
+     *  V538's `qualified` reads this (a row confirmed before it existed falls back to `qualifiers`). Absent on drafts. */
+    seated?: { entrantId: string; rank: number; source: { stageId: string } }[];
   };
 }
 
@@ -556,6 +561,8 @@ export async function confirmSeedProposal(
 
     // Step 2 — apply edits + tiePicks over the computed slate.
     const bySlot = new Map(proposal.computed.qualifiers.map((q) => [q.destinationSlot, q.entrantId] as const));
+    // The seats the final map fills: the draft's, or the re-draw's below (each slot's seed and source, for `seated`).
+    let slate: readonly WireQualifier[] = proposal.computed.qualifiers;
     for (const edit of input.edits ?? []) {
       if (!bySlot.has(edit.destinationSlot)) {
         throw new HttpError(
@@ -613,6 +620,7 @@ export async function confirmSeedProposal(
       }
       bySlot.clear();
       for (const q of redrawn) bySlot.set(q.destinationSlot, q.entrantId);
+      slate = redrawn;
     } else {
       for (const pick of input.tiePicks ?? []) {
         pick.slots.forEach((slot, i) => {
@@ -831,7 +839,17 @@ export async function confirmSeedProposal(
     for (const id of await resolveBracketSeats(tx, stageId)) filledFixtureIds.add(id);
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
-    await tx`update stage_seed_proposals set status = 'confirmed', confirmed_at = now() where id = ${proposal.id}`;
+    // W5 B3 fix (review I-1): the row records who it SEATED (`seated`), not only the slate it proposed - a tie pick or an edit
+    // may seat someone the slate ranked below the cut, and who went through is what V538 publishes and every table freezes on.
+    const seatOf = new Map(slate.map((q) => [q.destinationSlot, q] as const));
+    const seated = finalSlots.flatMap(([slot, entrantId]) => {
+      const seat = seatOf.get(slot);
+      return seat === undefined ? [] : [{ entrantId, rank: seat.rank, source: { stageId: seat.source.stageId } }];
+    });
+    await tx`
+      update stage_seed_proposals
+         set status = 'confirmed', confirmed_at = now(), computed = computed || ${tx.json({ seated } as never)}
+       where id = ${proposal.id}`;
 
     const carryMode = (progression as { carry?: "none" | "points" | "full" }).carry ?? "none";
     if (carryMode !== "none") {

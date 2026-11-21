@@ -461,6 +461,26 @@ function withdrawalVoidsResults(stageId: string, kind: string, entrantId: string
 }
 
 
+/** W5 B3 fix (review I-1): the rows of every tie class that straddles the cut - the engine's `tieUnbroken` row plus the members
+ *  its `tieBreak.with` names, read over `ranked` (the rows still in the field, in rank order: the engine's frozen `order` takes
+ *  its first `cut`). A class with members on both sides of the line is a proposal tie (`resolveProgression`) the organiser must
+ *  answer; a class wholly above or below it decides nothing about who goes through. Null when a row is marked unbroken but
+ *  names nobody (`tieUnbroken` is only ever written WITH a `tieBreak`): its class, and so the cut, cannot be read. The quick
+ *  match's `cutTies` asks the same question of a 2- or 4-seat cut and throws on a malformed class; this one fails closed. */
+function cutLineTie(ranked: readonly StandingsRow[], cut: number): Set<string> | null {
+  const position = new Map(ranked.map((r, i) => [r.entrantId, i] as const));
+  const out = new Set<string>();
+  for (const r of ranked) {
+    if (r.tieUnbroken !== true) continue;
+    const others = r.tieBreak?.with ?? [];
+    if (others.length === 0) return null;
+    const members = [r.entrantId, ...others].filter((id) => position.has(id));
+    const at = members.map((id) => position.get(id)!);
+    if (at.some((p) => p < cut) && at.some((p) => p >= cut)) for (const id of members) out.add(id);
+  }
+  return out;
+}
+
 /** The what-if sentences, by the measure the table races in (W2d P25, T17). Spelled out, like `TIE_BREAK_MSG_KEYS`. */
 type WhatIfKey = "winBy" | "loseByAtMost" | "anyWin" | "safe" | "rule" | "ruleValues";
 export const WHAT_IF_POINTS_KEYS = {
@@ -632,6 +652,12 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // runner-up below the per-group line may still go through as one of the best - so no live status (an "Out" could be false,
   // R3). Finished, the per-group order is still not who went through: only the destination's seats say (`qualified`).
   if (meta.qualifyBestNth === true && (!complete || !meta.qualified)) return null;
+  // W5 B3 fix (review I-1; controller ruling 1): while the order is the only source, a class the engine could split only by the
+  // lot (or its seed fallback) that STRADDLES the cut is a tie the confirm refuses until the organiser answers it, and the answer
+  // may send the lot's loser through - so its rows get no frozen verdict until who went through is known. Rows clear of it keep
+  // theirs. A row marked unbroken with no class named cannot say whether it straddles: no view (R3).
+  const awaitingPick = complete && !meta.qualified ? cutLineTie(contenders.filter((r) => active.get(r.entrantId) === true), cut) : new Set<string>();
+  if (awaitingPick === null) return null;
   const engine: QualificationInput = {
     rows: contenders.map((r) => ({ entrantId: r.entrantId, points: byWins ? r.won : r.points, active: active.get(r.entrantId) === true })),
     remaining: new Map(contenders.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
@@ -732,7 +758,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   const rows: Record<string, QualRowT> = {};
   ordered.forEach((r, position) => {
     const res = result.get(r.entrantId);
-    if (!res) return;
+    if (!res || awaitingPick.has(r.entrantId)) return;
     const label = statusLabel(res.status, i);
     const open = res.status.kind === "win_k" || res.status.kind === "needs_help";
     const w = open ? whatIf(r, res.status, res.ifYouLose) : null;

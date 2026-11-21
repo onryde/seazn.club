@@ -16,8 +16,10 @@
 // wins-first sports (badminton, tennis, volleyball) differ only in the live race the freeze switches off, swept in
 // qualification-view.test.ts.
 import { describe, expect, it } from "vitest";
+import { foldResults, rankStandings, type FixtureResult, type StandingsRow } from "@seazn/engine/competition";
+import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { defaultOrderOf } from "@seazn/engine/testkit";
+import { declaredCfgs, defaultOrderOf, simOptionsFor, simulateDivision } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import { QualRowView, QualTable } from "../competition-hub-schema";
@@ -206,5 +208,168 @@ describe("X-QS-1 / X-QS-2 a finished table keeps its cut, frozen (W5 app PR B Ta
     // seated, and B was NOT the best runner-up (another pool's was)
     const other = markers(buildQualificationView(input({ kind: "group", poolId: "P", ids: FOUR, fixtures: done, order: FOUR, meta: bn({ qualified: ["A", "X9"] }) })), FOUR);
     expect(other).toEqual({ A: PICK.qualified, B: PICK.out, C: PICK.out, D: PICK.out });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// W5 B3 fix (review I-1; controller ruling 1): a cut-line tie waiting on the organiser's pick shows no final verdict.
+// ---------------------------------------------------------------------------------------------------------------------
+// The engine flags every row of a class it could not separate before the lot (or its seed fallback) `tieUnbroken`, with the
+// class's other members in `tieBreak.with` (tiebreakers.js: "even with a lots decider the console should alert before KO
+// seeding"). A class that STRADDLES the cut becomes a proposal tie (`resolveProgression`) that the confirm refuses until the
+// organiser answers it (SEEDING_TIE_UNRESOLVED) - and the answer may send the lot's loser through. So until who went through
+// is known (`meta.qualified`), the class's rows carry no frozen marker. A class wholly above or wholly below the cut decides
+// nothing about who goes through: its rows keep theirs, and so does every row clear of the tie.
+//
+// Expected values: the engine's own ranking - `rankStandings` over results each sport's own fold paid, under the sport's
+// declared league order - whose `tieUnbroken` flags and `with` lists are asserted as the premise, and the declared cut.
+// The registry is swept (every sport, its first declared variant).
+
+/** One decided match of `mod` under `cfg`, as its fold paid it (the engine's simulation plays it). */
+function oneWin(mod: AnySportModule, cfg: unknown): { win: FixtureResult[0]; loss: FixtureResult[1] } {
+  const sim = simulateDivision({ ...simOptionsFor(mod, "league", 7), cfg, entrantCount: 3 });
+  const f = sim.stages[0]?.fixtures.find((x) => x.status === "decided" && x.winner !== undefined && x.result !== undefined);
+  if (f?.result === undefined) throw new Error(`premise: ${mod.key}'s simulated league decided no match with a winner`);
+  const [home, away] = f.result;
+  const win = f.winner === home.entrantId ? home : away;
+  return { win, loss: win === home ? away : home };
+}
+
+/** Each [winner, loser] pair, won exactly as the simulated match was: every win identical, every loss too. */
+function engineScene(mod: AnySportModule, cfg: unknown, wins: readonly (readonly [string, string])[]) {
+  const w = oneWin(mod, cfg);
+  const results: FixtureResult[] = wins.map(([a, b]) => [
+    { ...w.win, entrantId: a, metrics: { ...w.win.metrics } },
+    { ...w.loss, entrantId: b, metrics: { ...w.loss.metrics } },
+  ]);
+  const cascade = mod.defaultTiebreakers("league", cfg as never);
+  const { rows } = rankStandings(foldResults(FOUR, results), {
+    cascade,
+    results,
+    seeds: new Map(FOUR.map((id, i) => [id, i + 1] as const)),
+    rngSeed: 20261121,
+    countedFixtures: results.length,
+  });
+  return { rows, cascade, fixtures: wins.map(([a, b], k) => fx(k + 1, a, b, a)) };
+}
+
+function sportInput(mod: AnySportModule, cfg: unknown, s: ReturnType<typeof engineScene>, cut: number, over: Partial<StageQualMeta> = {}): QualificationViewInput {
+  return {
+    stage: { id: "S", kind: "league", meta: meta({ qualifyCount: cut, ...over }) },
+    poolId: null,
+    rows: s.rows,
+    fixtures: s.fixtures,
+    entrantStatuses: Object.fromEntries(FOUR.map((id) => [id, "confirmed"])),
+    bounds: divisionPointsBounds(mod, cfg),
+    awardAddsToLedger: divisionAwardAddsToLedger(mod, cfg),
+    cascade: s.cascade,
+    primary: mod.primaryTableKey,
+    entrantNames: Object.fromEntries(FOUR.map((id) => [id, `Team ${id}`])),
+    msg: (k: TKey, v?: Record<string, string | number>) => t(en, k, v),
+    plural: (k: string, c: number, v?: Record<string, string | number>) => plural(en, k, c, "en", v),
+  };
+}
+
+/** A leads (beats all three); B, C and D go round in a circle (B beats C, C beats D, D beats B): level on everything. */
+const LEADER_AND_CIRCLE = [["A", "B"], ["A", "C"], ["A", "D"], ["B", "C"], ["C", "D"], ["D", "B"]] as const;
+/** A, B and C go round in a circle (A beats B, B beats C, C beats A) and each beats D: three level at the top. */
+const CIRCLE_AND_TAIL = [["A", "B"], ["B", "C"], ["C", "A"], ["A", "D"], ["B", "D"], ["C", "D"]] as const;
+
+/** The engine's own tie classes: each `tieUnbroken` row with the members its `with` names, sorted. */
+const engineClasses = (rows: readonly StandingsRow[]) =>
+  [...new Set(rows.filter((r) => r.tieUnbroken === true).map((r) => [r.entrantId, ...(r.tieBreak?.with ?? [])].sort().join(",")))];
+const byRank = (rows: readonly StandingsRow[]) => [...rows].sort((a, b) => a.rank! - b.rank!).map((r) => r.entrantId);
+
+describe("I-1 a cut-line tie waiting on the organiser's pick shows no final verdict (W5 B3 fix; ruling 1)", () => {
+  it("every sport: a lot-ordered class straddling the cut reads no marker until the pick; a class wholly above or below keeps its markers, and so does every row clear of it", () => {
+    let swept = 0;
+    let flaggedSports = 0;
+    const seedSteps: string[] = [];
+    for (const mod of builtinModules) {
+      const cfg = declaredCfgs(mod)[0]!.cfg;
+      const lead = engineScene(mod, cfg, LEADER_AND_CIRCLE);
+      const top = engineScene(mod, cfg, CIRCLE_AND_TAIL);
+      const v = (s: ReturnType<typeof engineScene>, cut: number, over: Partial<StageQualMeta> = {}) => {
+        const out = buildQualificationView(sportInput(mod, cfg, s, cut, over));
+        expect(out, `${mod.key}: premise - a finished table with a cut keeps a view (cut ${cut})`).not.toBeNull();
+        const m = markers(out, FOUR);
+        expect(Object.keys(m)).toHaveLength(4);
+        return m;
+      };
+      swept++;
+      // The engine's declaration decides whether the circle reaches the lot: a `seed` step in the declared order separates the
+      // level sides by seed, so nothing is left unbroken and no pick is owed (the confirm asks nothing).
+      if (lead.cascade.includes("seed")) {
+        seedSteps.push(mod.key);
+        expect(engineClasses(lead.rows), `${mod.key}: premise - a seed step leaves no unbroken class`).toEqual([]);
+        const order = byRank(lead.rows);
+        expect(v(lead, 2), `${mod.key}: no pick owed, the order's top 2 went through`).toEqual(
+          Object.fromEntries(FOUR.map((id) => [id, order.indexOf(id) < 2 ? PICK.qualified : PICK.out])),
+        );
+        continue;
+      }
+      flaggedSports++;
+      // premise, the engine's flags: B, C and D level on everything, ranked 2-4 by the lot; A, B and C likewise at 1-3
+      expect(engineClasses(lead.rows), `${mod.key}: premise - B, C and D unbroken`).toEqual(["B,C,D"]);
+      expect(byRank(lead.rows)[0], `${mod.key}: premise - A leads`).toBe("A");
+      expect(lead.rows.find((r) => r.entrantId === "B")!.tieBreak?.key, `${mod.key}: premise - the lot ordered them`).toBe("lots");
+      expect(engineClasses(top.rows), `${mod.key}: premise - A, B and C unbroken`).toEqual(["A,B,C"]);
+      expect(byRank(top.rows)[3], `${mod.key}: premise - D last`).toBe("D");
+
+      // the class wholly below the cut: every marker stands
+      expect(v(lead, 1), `${mod.key}: cut 1, the class below it`).toEqual({ A: PICK.qualified, B: PICK.out, C: PICK.out, D: PICK.out });
+      // the class wholly above the cut: every marker stands
+      expect(v(top, 3), `${mod.key}: cut 3, the class above it`).toEqual({ A: PICK.qualified, B: PICK.qualified, C: PICK.qualified, D: PICK.out });
+      // the class straddles the cut: its rows wait on the pick; the rows clear of it keep theirs
+      expect(v(lead, 2), `${mod.key}: cut 2 crosses B, C, D`).toEqual({ A: PICK.qualified, B: "none", C: "none", D: "none" });
+      expect(v(lead, 3), `${mod.key}: cut 3 crosses B, C, D`).toEqual({ A: PICK.qualified, B: "none", C: "none", D: "none" });
+      expect(v(top, 2), `${mod.key}: cut 2 crosses A, B, C`).toEqual({ A: "none", B: "none", C: "none", D: PICK.out });
+      // the pick confirmed: who went through wins, the lot's last-ranked included
+      const lotLoser = byRank(lead.rows)[3]!;
+      const picked = v(lead, 2, { qualified: ["A", lotLoser] });
+      expect(picked, `${mod.key}: the pick sent ${lotLoser} through`).toEqual(
+        Object.fromEntries(FOUR.map((id) => [id, id === "A" || id === lotLoser ? PICK.qualified : PICK.out])),
+      );
+    }
+    expect(swept, "every builtin sport").toBe(builtinModules.length);
+    expect(flaggedSports, "anti-vacuity: sports whose declared order reaches the lot").toBeGreaterThan(0);
+    // The engine's declarations: the sports whose league default lists `seed` (a change in the engine moves this pin).
+    expect(seedSteps.sort()).toEqual(builtinModules.filter((m) => m.defaultTiebreakers("league", declaredCfgs(m)[0]!.cfg as never).includes("seed")).map((m) => m.key).sort());
+    expect(flaggedSports + seedSteps.length).toBe(swept);
+  });
+
+  it("the cut line stays where the cut is while the pick is owed; the line still says how many places went through", () => {
+    const lead = engineScene(GENERIC, CFG, LEADER_AND_CIRCLE);
+    const v = buildQualificationView(sportInput(GENERIC, CFG, lead, 2))!;
+    expect(v.table.cutIndex).toBe(2);
+    expect(v.table.label).toBe(PICK.wentThrough2);
+    expect(v.table.legend.open, "finished: nothing is still open").toBeNull();
+  });
+
+  it("a guard, not a comment: a row marked unbroken with no class named fails closed while the order is the only source", () => {
+    // `tieUnbroken` is only ever written WITH a `tieBreak` (engine tiebreakers.js; lib/table-withdrawal.ts relies on it too).
+    // A row that breaks that cannot say whom it is level with, so whether its tie crosses the cut is unknown: no view (R3).
+    const lead = engineScene(GENERIC, CFG, LEADER_AND_CIRCLE);
+    const untraced = (r: StandingsRow): StandingsRow => {
+      const bare = { ...r };
+      delete bare.tieBreak;
+      return bare;
+    };
+    const broken = { ...lead, rows: lead.rows.map((r) => (r.entrantId === "D" ? untraced(r) : r)) };
+    expect(broken.rows.find((r) => r.entrantId === "D")!.tieUnbroken, "premise: D still marked unbroken").toBe(true);
+    expect(buildQualificationView(sportInput(GENERIC, CFG, broken, 1)), "the order cannot be trusted").toBeNull();
+    // who went through is known: the order is not read, so the malformed trace changes nothing
+    const seated = markers(buildQualificationView(sportInput(GENERIC, CFG, broken, 1, { qualified: ["A"] })), FOUR);
+    expect(seated).toEqual({ A: PICK.qualified, B: PICK.out, C: PICK.out, D: PICK.out });
+  });
+
+  it("the live table is unchanged: a straddling class with a line still to play reads the live race", () => {
+    // the same circle with D v B still to play: nobody's verdict is frozen, the live race answers as it did before
+    const lead = engineScene(GENERIC, CFG, LEADER_AND_CIRCLE.slice(0, 5));
+    const fixtures = [...lead.fixtures, { ...fx(6, "D", "B", null) }];
+    const v = buildQualificationView({ ...sportInput(GENERIC, CFG, { ...lead, fixtures }, 2) });
+    expect(v, "premise: a live view").not.toBeNull();
+    expect(v!.table.legend.open).toBe("Still open");
+    expect(Object.values(v!.rows).map((r) => r.label)).not.toContain(PICK.qualified);
   });
 });
