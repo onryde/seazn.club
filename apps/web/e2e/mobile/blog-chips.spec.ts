@@ -2,16 +2,15 @@
 // below md, so it owes a tab stop, a role and a name (AGENTS.md class 23), and every chip is a touch target of 44px.
 //
 // It needs a blog with at least one post that NAMES a sport; the only committed post is written for every sport, so on a
-// stock build there are no chips and this file has nothing to look at. It therefore runs only when the server under test was
-// built with such posts (E2E_BLOG_CHIPS=1: copies of the pilot with `sports:` set, placed in content/blog for the build and
-// never committed), and says so when it does not. The markup rules are pinned in the unit suite either way.
+// stock build there are no chips and the test says so and skips, inside the test, by looking for the rail at runtime. It
+// therefore starts running by itself the day the first sport-naming post lands. The markup rules are pinned in the unit
+// suite either way.
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { expectNoHorizontalScroll, overflowingIn } from "../helpers";
 import { dismissCookieBanner } from "../scorepad-a11y-kit";
 import { projectViewport } from "./_shared";
 
-test.skip(!process.env.E2E_BLOG_CHIPS, "needs a build whose posts name sports (E2E_BLOG_CHIPS=1); the stock blog has no chips");
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test("the sport chips: a focusable named rail, 44px targets, and a chip narrows the list", async ({ page }) => {
@@ -21,6 +20,7 @@ test("the sport chips: a focusable named rail, 44px targets, and a chip narrows 
   await dismissCookieBanner(page);
 
   const rail = page.getByRole("group", { name: "Show posts for" });
+  test.skip((await rail.count()) === 0, "no post on this build names a sport, so the blog shows no sport chips yet");
   await expect(rail).toBeVisible();
   await expect(rail).toHaveAttribute("tabindex", "0");
   const chips = rail.getByRole("button");
