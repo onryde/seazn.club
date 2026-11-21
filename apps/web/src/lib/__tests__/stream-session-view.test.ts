@@ -1226,9 +1226,14 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
       }
       expect(checked, "anti-vacuity: five channel states").toBe(5);
       // What a customer reads (English), typed from the copy on purpose: the brief's sentence, and not a word about who refused.
-      expect(sentence("stream.auto.refusal.retry")).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+      expect(sentence("stream.auto.refusal.retry")).toBe("Automatic start couldn't begin: The stream couldn't start right now. Automatic start will try again later; you can also go live by hand.");
       // The brand appears in no locale's line: it is the one sentence that cannot know whose refusal it reports.
       for (const l of LOCALES) expect(dict(l)["stream.auto.refusal.retry"], l).not.toMatch(/youtube/i);
+      // Phase 0 review m4: behind this line the channel's backoff can wait up to 30 min, so no locale promises a minute
+      // (en minute, es minuto, fr minute, nl minuut).
+      let timescales = 0;
+      for (const l of LOCALES) { expect(dict(l)["stream.auto.refusal.retry"], l).not.toMatch(/minut/i); timescales++; }
+      expect(timescales, "anti-vacuity: every locale read").toBe(4);
       // The paired cases keep Seazn's own generic sentence.
       expect(reasonKey("unavailable", null), "a pasted key").toBe("stream.auto.refusal.unavailable");
       expect(reasonKey("unavailable", "no-destination"), "no destination read").toBe("stream.auto.refusal.unavailable");

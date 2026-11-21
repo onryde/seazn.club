@@ -644,7 +644,7 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     expect(await settingsOf(silent.r.fixtureId)).toMatchObject({ auto_start_refusal: "unavailable" });
     expect((await connectionViews(silent.r.auth.orgId)).get(silent.yt.connectionId)!.liveState, "nothing was learnt about live state").toBe("unknown");
     const s = await stripNow(silent.r);
-    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Automatic start will try again later; you can also go live by hand.");
   });
 
   // F1 (B4 fix round 2), through the REAL producer: Seazn's own refusal, met AFTER a clean prepare, is stored as the very same word as
@@ -663,7 +663,7 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     const read = await stripNow(full.r);
     expect(read.phone.auto?.refusal).toBe("unavailable");
     expect(read.reason).toBe("stream.auto.refusal.retry");
-    expect(messageOf(read.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+    expect(messageOf(read.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Automatic start will try again later; you can also go live by hand.");
     expect(messageOf(read.strip!)).not.toMatch(/youtube/i);
 
     const silent = await apiAutoRig();
