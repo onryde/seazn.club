@@ -68,6 +68,11 @@ and the video's error reason were not recorded in run 1. A wrong URL form is rul
   - *Against C3:* C3 saw a FINISHED recording of a signed input read `false`. Here the in-progress recording read `true`
     before anything set it. Whether Cloudflare flips it to `false` when the recording finishes is still open. That is the
     case Task 13 must cover, and it should keep signing on appearance AND re-check after `ready`.
+  - *Create echo (run 1's `OBSERVED.createEcho`; Task 12 review m6).* MEASURED. The `POST /live_inputs` that created the
+    signed input echoed `recording` as `{"mode":"automatic","timeoutSeconds":180,"requireSignedURLs":true,
+    "allowedOrigins":["seazn.club"],"hideLiveViewerCount":false}`: the origins came back as sent (same host, not
+    normalised, no scheme). `createLiveInput`'s read-back (`ingest-cf.ts` `accessNotApplied`) relies on exactly this. One
+    host only, so whether a multi-host list keeps its order is unmeasured; the read-back compares order-insensitively.
 - **C8. PUT keeps `requireSignedURLs`.** MEASURED.
   - A `PUT /live_inputs/{uid}` that re-sent the create's `recording` with `enabled: false` answered 200 and echoed
     `recording.requireSignedURLs: true`, `allowedOrigins: ["seazn.club"]`, `mode: automatic`, `timeoutSeconds: 180` and

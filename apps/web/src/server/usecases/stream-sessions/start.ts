@@ -11,7 +11,6 @@ import {
   MAX_DURATION_MINUTES,
   PHONE_SILENT_FLOOR_SECONDS,
   overlayDelayDefaultMs,
-  relayDriverMode,
   seaznHostedLive,
   seaznVideoOrigins,
   tunable,
@@ -229,7 +228,7 @@ function seaznOriginsSet(fixtureId: string, orgId: string): boolean {
     log.error({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is malformed (an entry is not a bare hostname) — Seazn start refused");
     return false;
   }
-  if (origins === null) log.warn({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is not set on this live deployment — Seazn start refused");
+  if (origins === null) log.warn({ fixtureId, orgId }, "stream session: SEAZN_VIDEO_ORIGINS is not set on this deployment — Seazn start refused");
   return origins !== null;
 }
 
@@ -330,10 +329,11 @@ export async function startBroadcast(
     log.warn({ fixtureId, orgId }, "stream session: composed mode is unavailable on this deployment — start refused");
     refuse(byMode, 0);
   }
-  // Task 11 (G5): Seazn playback is signed for the deployment's own hosts. A live relay with no SEAZN_VIDEO_ORIGINS cannot make
-  // that input, so the start is refused here — after the composed gate (which keeps answering first, by name), before any
-  // provider call. A fake relay needs none: its inputs are never played back.
-  if (seazn && relayDriverMode() === "live" && !seaznOriginsSet(fixtureId, orgId)) throw seaznVideoUnconfigured();
+  // Task 11 (G5): Seazn playback is signed for the deployment's own hosts. Provisioning creates the programme input SIGNED on
+  // EVERY relay, the fake included (Task 12, `programmeAccess`), so a deployment with no SEAZN_VIDEO_ORIGINS cannot make that
+  // input on any driver — the start is refused here, by name, whatever the driver: after the composed gate (which keeps
+  // answering first), before the row and before any provider call. Provisioning's own throw is the backstop, never reached.
+  if (seazn && !seaznOriginsSet(fixtureId, orgId)) throw seaznVideoUnconfigured();
   // B: the fixture's own stuck session is expired here, not on a tick.
   const existing = await activeSessionIdFor(fixtureId);
   if (existing) await applyExpiry(existing, deps);

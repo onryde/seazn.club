@@ -451,11 +451,17 @@ describe("CloudflareIngest", () => {
     expect(unsigned.recording).toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
   });
 
-  it("Task 12: a PROGRAMME switch whose meta has no `access` key is refused before any call — a caller cannot send an unsigned body to a signed input by forgetting the field; the camera's switch (port-effects.ts) needs none", async () => {
+  it("Task 12: a PROGRAMME switch whose meta has no `access` — the key absent, or `access: undefined` (review m1: a select that omitted the column) — is refused before any call; the camera's switch (port-effects.ts) needs none", async () => {
     const port = new FakeRecorder();
     const cf = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: "tok", recorder: port });
-    const err = await cf.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme" }).then(() => null, (e: Error) => e);
-    expect(err?.message).toMatch(/programme input .* without its access/);
+    const metas = [{ sessionId: "s_1", slot: 0, role: "programme" as const }, { sessionId: "s_1", slot: 0, role: "programme" as const, access: undefined }];
+    let checked = 0;
+    for (const m of metas) {
+      const err = await cf.setInputEnabled("in_abc", false, m).then(() => null, (e: Error) => e);
+      expect(err?.message, JSON.stringify(Object.keys(m))).toMatch(/programme input .* without its access/);
+      checked++;
+    }
+    expect(checked).toBe(2);
     expect(rec.calls, "no request was sent").toHaveLength(0);
     await new Promise((r) => setImmediate(r));
     expect(port.calls, "and none was recorded").toHaveLength(0);

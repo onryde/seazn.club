@@ -253,11 +253,11 @@ export class FakeIngest implements IngestProvider {
 
   /** The port's switch (ingest-cf.ts: `PUT /live_inputs/{uid}`). An input that is GONE — deleted, or never made by this
    *  fake — is Cloudflare's 404: success to a disable, a refusal to an enable. Task 12: it refuses what the adapter refuses — a
-   *  programme switch with no `access` key, before any call — and, as the adapter re-sends the whole recording, the input then
+   *  programme switch with no `access` (absent or `undefined`), before any call — and, as the adapter re-sends the whole recording, the input then
    *  holds the access the switch named (C8 measured a signed re-send keeping the signing; an unsigned re-send is unmeasured, and
    *  the fake reads it pessimistically, as a downgrade). */
   async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
-    if (meta.role === "programme" && !("access" in meta)) {
+    if (meta.role === "programme" && meta.access === undefined) {
       throw new Error(`FakeIngest.setInputEnabled: refused a programme input ${inputId} switch without its access — nothing was sent`);
     }
     this.record("setInputEnabled", "PUT", `/live_inputs/${inputId}`, [inputId], inputId, meta.sessionId ?? null);

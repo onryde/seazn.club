@@ -27,7 +27,7 @@ const S = (over: Partial<Session> = {}): Session => ({
   heartbeatAt: null, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null,
   startCause: "organiser", warmingAt: null, destination: "external", ...over,
 });
-const OK ={ overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding, mode: "passthrough" as Mode, composedUnavailable: false };
+const OK = { overlay: true, relay: true, balance: 1, targetBelongsToOrg: true, headroomMinutes: MAX_DURATION_MINUTES, maxDurationMinutes: MAX_DURATION_MINUTES, activeSessionId: null, restartWithinReuseWindow: false, phone: "present" as PhoneStanding, mode: "passthrough" as Mode, composedUnavailable: false };
 
 // The §6.3 gates IN ORDER — one row per gate: the fields that trip it, and the refusal it yields. Shared by the
 // per-gate `it.each` and the whole-ladder ORDER test, so the order is typed once. Order amended by owner ruling

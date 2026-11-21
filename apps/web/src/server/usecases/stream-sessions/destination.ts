@@ -50,10 +50,16 @@ export async function isSeaznTarget(exec: Tx | typeof sql, orgId: string, target
 
 /** Seazn-hosted video (Task 12, G5): the signing a Seazn session's programme input is CREATED with — signed, for the deployment's
  *  own hosts (SEAZN_VIDEO_ORIGINS). Read once, at provisioning; the input's row keeps it from then on, and nothing reads env for
- *  that input again. A LIVE relay never gets here without origins (admission answers 503 seazn_video_unconfigured first, Task 11);
- *  the fake relay's admission does not ask, so this throws by name and provisioning fails the start closed, before any input. */
+ *  that input again. No start gets here without origins: admission answers 503 seazn_video_unconfigured first on EVERY relay
+ *  driver (start.ts). This throw is the backstop, and provisioning fails closed on it. It names the variable and never quotes
+ *  its value: `seaznVideoOrigins()`'s parse error does, and provisioning logs the error it catches (Task 12 review m2). */
 export function seaznAccess(): InputAccess {
-  const allowedOrigins = seaznVideoOrigins();
+  let allowedOrigins: string[] | null;
+  try {
+    allowedOrigins = seaznVideoOrigins();
+  } catch {
+    throw new Error("stream session: SEAZN_VIDEO_ORIGINS is malformed (an entry is not a bare hostname) — a Seazn programme input cannot be created signed");
+  }
   if (allowedOrigins === null) throw new Error("stream session: SEAZN_VIDEO_ORIGINS is not set — a Seazn programme input cannot be created signed");
   return { signed: true, allowedOrigins };
 }

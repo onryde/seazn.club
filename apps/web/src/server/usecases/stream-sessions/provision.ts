@@ -30,8 +30,8 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
   let access: InputAccess | undefined;
   try {
     // Task 12 (G5): a Seazn session's programme input is created SIGNED (the camera never is). Read before any input is made,
-    // so a deployment that cannot sign — the fake relay with no SEAZN_VIDEO_ORIGINS; a live one was refused at admission — or a
-    // Seazn session that is not composed fails the start closed below with nothing at the provider to clean up.
+    // so a deployment that cannot sign (admission refuses that first, on every driver: this is the backstop) or a Seazn session
+    // that is not composed fails the start closed below with nothing at the provider to clean up.
     access = programmeAccess(provisioning);
     creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
     if (composed) {

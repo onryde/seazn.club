@@ -21,7 +21,8 @@ import "server-only";
 //   session-row   the fixture_stream_sessions row: shape, columns, Row <-> Session, loaders by id, the state sets
 //   deps          the ports the application layer works through: SessionDeps and the process defaults
 //   lookups       shared lookups: a fixture's org and competition, and its active session
-//   destination   where a session streams: destination row, decrypted key, target connection, replay link
+//   destination   where a session streams: destination row, decrypted key, target connection, replay link; is the target
+//                 Seazn (isSeaznTarget), and the signing a Seazn programme input is created with (seaznAccess, programmeAccess)
 //   persist       persisting a transition: the aggregate, the facts it made true, the cost estimate
 //   port-effects  port effects that never re-enter apply: recorded outcome, forced destroy, output release, phone-input off
 //   apply         THE seam: apply (lock, decide, persist, consume) and the post-commit effects it feeds back into

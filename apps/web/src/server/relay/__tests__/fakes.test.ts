@@ -269,6 +269,8 @@ describe("FakeIngest", () => {
     await new Promise((r) => setImmediate(r));
     const recorded = port.calls.length;
     await expect(fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme" })).rejects.toThrow(/without its access/);
+    // review m1: `access: undefined` (a select that omitted the column) is refused the same way.
+    await expect(fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme", access: undefined })).rejects.toThrow(/without its access/);
     await new Promise((r) => setImmediate(r));
     expect(port.calls.length, "refused before any call is recorded").toBe(recorded);
     expect(fake.enabledCalls, "…or counted").toEqual([]);

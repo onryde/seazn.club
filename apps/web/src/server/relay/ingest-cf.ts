@@ -529,10 +529,11 @@ export class CloudflareIngest implements IngestProvider {
    *  Task 12 (G5, C8): the re-sent recording carries the signing the input was CREATED with — `meta.access`, read from its
    *  row, never from env — and the echo is read back for it like the mode. */
   async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
-    // Only a programme input can be signed, and only its row knows. A switch that does not say (no `access` key at all) would
-    // re-send the unsigned body over a signed input, so it is refused before anything is sent; `access: null` is the row's
-    // explicit unsigned answer. The camera is never signed (the phone plays it), so its switch needs no key.
-    if (meta.role === "programme" && !("access" in meta)) {
+    // Only a programme input can be signed, and only its row knows. A switch that does not say — no `access`, or `access:
+    // undefined` (a select that omitted the column; the type allows it) — would re-send the unsigned body over a signed input,
+    // so it is refused before anything is sent; `access: null` is the row's explicit unsigned answer. The camera is never
+    // signed (the phone plays it), so its switch needs none.
+    if (meta.role === "programme" && meta.access === undefined) {
       throw new Error(this.red(`cloudflare set input enabled: refused a programme input ${inputId} switch without its access (read it from the input's row) — nothing was sent`));
     }
     // The name is the create's, rebuilt from the same three facts; a caller with no session or slot cannot name the input, and

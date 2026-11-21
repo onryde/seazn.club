@@ -59,8 +59,9 @@ export interface ProviderCallMeta { sessionId?: string | null }
  *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot).
  *  `access` (Task 12) is the signing the input was CREATED with, READ from its row (`fixture_stream_inputs.access`), never from
  *  env — so a change to SEAZN_VIDEO_ORIGINS can never alter an existing input's recording. `null` is the row's explicit
- *  unsigned answer. A PROGRAMME input's switch must carry the key (null or not): the adapter refuses one without it, so a caller
- *  cannot send an unsigned body to a signed input by forgetting the field. The camera's switch needs none (it is unsigned). */
+ *  unsigned answer. A PROGRAMME input's switch must carry it (null or a value): the adapter refuses one whose `access` is absent
+ *  OR `undefined`, so a caller cannot send an unsigned body to a signed input by forgetting the field. The camera's switch needs
+ *  none (it is unsigned). */
 export interface InputSwitchMeta extends ProviderCallMeta { slot?: number; role?: InputRole; access?: InputAccess | null }
 export interface StorageUsage { totalStorageMinutes: number; totalStorageMinutesLimit: number; videoCount: number }
 /** Dd — a recording, with every fact Cloudflare's video object carries.

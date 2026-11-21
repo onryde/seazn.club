@@ -1,7 +1,7 @@
 // Seazn-hosted video, Phase 1 Task 11: ADMISSION of a session whose destination is the org's `seazn` row (V540). It runs
 // composed whatever mode the caller named, has no external destination (no output, no broadcast, no key read), and two
-// refusals of its own: 422 seazn_unavailable (SEAZN_HOSTED_LIVE off) and 503 seazn_video_unconfigured (a live relay with no
-// SEAZN_VIDEO_ORIGINS), both before any provider call. Real Postgres, fake relay and YouTube ports on an injected clock.
+// refusals of its own: 422 seazn_unavailable (SEAZN_HOSTED_LIVE off) and 503 seazn_video_unconfigured (any relay driver with no
+// SEAZN_VIDEO_ORIGINS — Task 12 review I1: the fake signs too), both before any provider call. Real Postgres, fake relay and YouTube ports on an injected clock.
 //
 // Every start goes through a REAL producer: the organiser's Go live (`createSession`), the phone's start (`postStart`) and the
 // automatic start (a beat through `postBeat` → `maybeAutoStart`). Expectations come from the plan and the spec (one credit at
@@ -84,8 +84,8 @@ afterAll(() => {
 });
 beforeEach(() => {
   vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
-  // Task 12: provisioning signs a Seazn programme input for these hosts (seaznAccess). The fake relay's admission does not ask
-  // for them (Task 11), so a test that wants them absent says so itself.
+  // Task 12: provisioning signs a Seazn programme input for these hosts (seaznAccess), and admission asks for them on EVERY relay
+  // driver (review I1), so every Seazn start needs them; a test that wants them absent says so itself.
   vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
   vi.mocked(readTargetSecret).mockClear();
   vi.mocked(readPooledKey).mockClear();
@@ -245,26 +245,32 @@ describe.skipIf(!HAS_DB)("Seazn destination — admission", () => {
     expect((await sessionRow(sessionId)).destination_kind).toBe("seazn");
   });
 
-  it("review m1: a MALFORMED SEAZN_VIDEO_ORIGINS (a scheme on an entry) on a live relay is the same 503 seazn_video_unconfigured — never an unmapped 500 — with zero provider calls, no row, and the value never logged", async () => {
+  it("review m1 (+ Task 12 review m2): a MALFORMED SEAZN_VIDEO_ORIGINS (a scheme on an entry) is the same 503 seazn_video_unconfigured on the LIVE and the FAKE relay — never an unmapped 500 — with zero provider calls, no row, and the value never logged", async () => {
     const r = await rig();
     const [f1] = r.fixtureIds;
     const malformed = "https://seazn-malformed-origin.example";
-    vi.stubEnv("RELAY_DRIVERS", "live");
     vi.stubEnv("SEAZN_VIDEO_ORIGINS", malformed);
-    setRelayDriversForTest({ ingest: r.ingest, runner: r.runner });
     const logged: unknown[] = [];
     const spies = (["error", "warn", "info"] as const).map((lvl) => vi.spyOn(log, lvl).mockImplementation(((...a: unknown[]) => { logged.push(a); }) as never));
+    let checked = 0;
     try {
-      const err = await refusalOf(goLive(r, f1, { mode: "composed", targetId: r.seazn }));
-      expect(err).toBeInstanceOf(HttpError);
-      expect({ status: (err as HttpError).status, code: (err as HttpError).code }).toEqual({ status: 503, code: SEAZN_VIDEO_UNCONFIGURED });
-      expect(r.calls, "no provider call").toEqual([]);
-      expect(await sessionsOn(f1), "no session row").toBe(0);
-      expect(logged.length, "PREMISE: the config fault was logged").toBeGreaterThan(0);
+      for (const driver of ["live", "fake"] as const) {
+        vi.stubEnv("RELAY_DRIVERS", driver);
+        setRelayDriversForTest({ ingest: r.ingest, runner: r.runner });
+        const before = logged.length;
+        const err = await refusalOf(goLive(r, f1, { mode: "composed", targetId: r.seazn }));
+        expect(err, driver).toBeInstanceOf(HttpError);
+        expect({ status: (err as HttpError).status, code: (err as HttpError).code }, driver).toEqual({ status: 503, code: SEAZN_VIDEO_UNCONFIGURED });
+        expect(r.calls, `${driver}: no provider call`).toEqual([]);
+        expect(await sessionsOn(f1), `${driver}: no session row`).toBe(0);
+        expect(logged.length, `${driver}: PREMISE: the config fault was logged`).toBeGreaterThan(before);
+        checked++;
+      }
       expect(JSON.stringify(logged), "the env value is never echoed").not.toContain("seazn-malformed-origin");
     } finally {
       for (const sp of spies) sp.mockRestore();
     }
+    expect(checked).toBe(2);
   });
 
   it("a Seazn restart: this fixture's previous composed session left its Machine up — admission destroys it; ANOTHER fixture's ended Seazn session's Machine (still publishing to its own programme input) is left alone", async () => {
@@ -466,15 +472,16 @@ describe.skipIf(!HAS_DB)("Seazn destination — no output, a signed programme in
     expect(r.ingest.inputAccess(programme!.ingest_input_id)).toBeNull();
   });
 
-  it("seaznAccess()'s guard: on the FAKE relay (whose admission does not ask for SEAZN_VIDEO_ORIGINS, Task 11) a Seazn start with no origins fails CLOSED at provisioning — 503, no input or Machine made, no row; with the origins set the same start goes through", async () => {
+  it("review I1: on the FAKE relay (which signs the programme input too) a Seazn start with no origins is 503 seazn_video_unconfigured BY NAME at admission — zero provider calls, no row; with the origins set the same start goes through signed", async () => {
     const r = await rig();
     const [f1] = r.fixtureIds;
+    vi.stubEnv("RELAY_DRIVERS", "fake");
     vi.stubEnv("SEAZN_VIDEO_ORIGINS", "");
     const err = await refusalOf(goLive(r, f1, { mode: "composed", targetId: r.seazn }));
     expect(err).toBeInstanceOf(HttpError);
-    expect((err as HttpError).status).toBe(503);
-    expect(r.calls.length, "PREMISE: the start reached admission").toBeGreaterThan(0);
-    expect(r.calls.filter((c) => c !== "ingest.storageUsage"), "no input, output or Machine").toEqual([]);
+    expect({ status: (err as HttpError).status, code: (err as HttpError).code }, "named, never the misnamed ingest_unavailable")
+      .toEqual({ status: 503, code: SEAZN_VIDEO_UNCONFIGURED });
+    expect(r.calls, "refused before any provider call — the storage read included").toEqual([]);
     expect(await sessionsOn(f1), "no session row").toBe(0);
     vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
     const { sessionId } = await goLive(r, f1, { mode: "composed", targetId: r.seazn });
@@ -488,6 +495,12 @@ describe("Task 12: seaznAccess() and the write-once access column", () => {
     expect(seaznAccess()).toEqual({ signed: true, allowedOrigins: ["seazn.club", "stg.seazn.club"] });
     vi.stubEnv("SEAZN_VIDEO_ORIGINS", "");
     expect(() => seaznAccess()).toThrow(/SEAZN_VIDEO_ORIGINS/);
+    // Task 12 review m2: a malformed value throws by name too, and the message never quotes it (provisioning logs what it catches).
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "https://seazn-malformed-origin.example");
+    let message = "";
+    try { seaznAccess(); } catch (e) { message = String(e); }
+    expect(message, "PREMISE: a malformed value throws").toMatch(/SEAZN_VIDEO_ORIGINS/);
+    expect(message).not.toContain("seazn-malformed-origin");
   });
 
   // The assumption "a Seazn session is composed" is start.ts's coercion, and no database rule backs it — so it is a guard, not a
