@@ -12,6 +12,8 @@ import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "../form
 import { validatedStageConfig } from "../stage-defaults";
 import { refuseNewStageTable } from "../table-rule-guards";
 import { knockoutRefusal } from "../knockout-refusal";
+import { roundRobinRefusal } from "../roundrobin-refusal";
+import { formatMaxEntrants } from "@/lib/format-max-entrants";
 import { standaloneStageRefusal } from "@/lib/stage-standalone";
 import { validateFeedGraph } from "@seazn/engine/scheduling";
 import type { TiebreakerKey } from "@seazn/engine/sport";
@@ -387,6 +389,18 @@ async function insertStageBatch(
     if (!s.progression) continue;
     const row = rows.find((r) => r.seq === s.seq)!;
     await validateStageProgression(tx, row, s.progression);
+  }
+  // W5 B4 (stress F8; owner 2026-11-21, max entrants per format): a batch that sets the division's FIRST stage - a new format, or
+  // a format change (`replaceStages` runs this batch after its delete) - on a field already past that format's max is refused
+  // by name, with the max and the field, as the draw doors refuse it (`generateStageFixturesTx`). A stage added after the
+  // first leaves the format's start unchanged and is not asked.
+  const [first] = await tx<{ seq: number; kind: string; config: unknown }[]>`
+    select seq, kind, config from stages where division_id = ${divisionId} order by seq limit 1`;
+  const max = first !== undefined && rows.some((r) => r.seq === first.seq) ? formatMaxEntrants(first) : null;
+  if (max !== null) {
+    const [{ field }] = await tx<{ field: number }[]>`
+      select count(*)::int as field from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+    if (field > max) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max, entrants: field });
   }
   // Adding a stage to a completed division (e.g. finals after the league
   // wrapped the graph) reopens it — 'completed' must mean "nothing left".

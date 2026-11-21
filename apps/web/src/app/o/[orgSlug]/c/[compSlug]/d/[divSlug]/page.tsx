@@ -912,6 +912,8 @@ export default async function DivisionPage({
               // published — so the confirmation can say so. Same row, no query.
               competitionVisibility={competition.visibility}
               viewerPlan={viewerPlan}
+              // W5 B4 (F8): the field, so Start can say before the click that the format cannot start it. Already derived above.
+              activeEntrants={activeEntrantIds.length}
             />
           </div>
         </div>

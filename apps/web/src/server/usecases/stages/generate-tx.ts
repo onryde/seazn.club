@@ -20,6 +20,8 @@ import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lo
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { fixtureCalledSql, stageHasStarted } from "../fixture-started-sql";
 import { insertFixtureRows } from "../fixture-insert";
+import { formatMaxEntrants, START_LINE_BUDGET } from "@/lib/format-max-entrants";
+import { roundRobinRefusal } from "../roundrobin-refusal";
 // W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
 import { reconcileRootBracket } from "../bracket-reconcile";
 import { carriedSlotCounts, carrySlots, carrySlotsByPair } from "@/lib/rebuild-slots";
@@ -428,6 +430,16 @@ export async function generateStageFixturesTx(
     from fixtures where stage_id = ${stageId}
     order by round_no, seq_in_round`;
 
+  // W5 B4 (stress F8; owner 2026-11-21, max entrants per format): a FIRST draw of a field past its format's max is refused by name,
+  // before the draw is built. The max is the largest field whose draw fits the measured Start line budget (`formatMaxEntrants`,
+  // the real generators' count). First draw only - Start's, a Generate before it, Rebuild's after its delete: a stage that holds
+  // lines is reconciled or paired a round at a time, and refusing a Swiss's next Pair because late entries grew its field
+  // would strand a running event. Every door that draws runs this function, so the one check holds them all.
+  if (existing.length === 0) {
+    const max = formatMaxEntrants(stage);
+    if (max !== null && entrants.length > max) throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max, entrants: entrants.length, stageId });
+  }
+
   // W4 T8 (FX-G2, MB-004/005; spec §6.5): a ROOT knockout that already has its lines is reconciled, never inserted into
   // by `ext_key` (6 → 7 inserted nothing and said "up to date"; 8 → 9 seated the field twice beside a second final; a
   // line that became a bye 500'd on the bye-award bulk update below). Fed stages (`config.qualified`) keep their path.
@@ -702,6 +714,10 @@ export async function generateStageFixturesTx(
         conditional: g.conditional === true,
       };
     });
+  // W5 B4 (stress F8): the exact count of what this pass writes, whatever its kind, held to the Start line budget before the
+  // first line is written. A field past its format's max is refused by name before the draw is built (FORMAT_TOO_MANY_ENTRANTS, above);
+  // this catches the draws no field bounds - an americano's courts x rounds as an API client stored them.
+  if (newRows.length > START_LINE_BUDGET) throw roundRobinRefusal("DRAW_TOO_LARGE", { lines: newRows.length, budget: START_LINE_BUDGET });
   await insertFixtureRows(tx, newRows);
   for (const r of newRows) byKey.set(r.ext_key, r.id);
   if (roundByes !== null) await writeRoundByes(tx, stageId, roundByes);

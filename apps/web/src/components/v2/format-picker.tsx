@@ -214,6 +214,12 @@ export function formatPickerFields({
                             .join(" · ")}
                     </span>
                   )}
+                  {/* W5 B4 (F8): the picked format's max entrants, at the knobs as they stand - what the server enforces at Start. */}
+                  {picked && view.pickedMax !== null && (
+                    <span className="mt-0.5 block text-xs text-slate-500" data-testid="division-builder-max-entrants">
+                      {msg("divBuilder.card.maxEntrants", { max: view.pickedMax })}
+                    </span>
+                  )}
                 </span>
               </label>
             );

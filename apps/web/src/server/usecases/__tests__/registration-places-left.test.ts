@@ -34,7 +34,7 @@ describe("placesLeft — the public count uses submit's cap (registration redesi
   it("follows min(capacity, plan limit) − active, null only when neither caps, never below 0", () => {
     let checked = 0;
     for (const [label, capacity, planLimit, active, want] of ROWS) {
-      expect(placesLeft({ capacity, planLimit, active }), label).toBe(want);
+      expect(placesLeft({ capacity, planLimit, formatMax: null, active }), label).toBe(want);
       checked += 1;
     }
     expect(checked, "anti-vacuity: rows checked").toBe(ROWS.length);
@@ -43,7 +43,7 @@ describe("placesLeft — the public count uses submit's cap (registration redesi
 
   it("the plan limit binds when it is tighter: the answer differs from capacity − active", () => {
     // The regression case FP3 names, in the shape where the wrong answer (capacity alone) is a different number.
-    const right = placesLeft({ capacity: 32, planLimit: 4, active: 3 });
+    const right = placesLeft({ capacity: 32, planLimit: 4, formatMax: null, active: 3 });
     expect(right).toBe(1);
     expect(right).not.toBe(32 - 3);
   });
@@ -77,7 +77,7 @@ describe("promotionVerdict — an organiser's manual promotion (registration def
   it("follows the plan-then-capacity rule over every row", () => {
     let checked = 0;
     for (const [label, capacity, planLimit, active, want] of VERDICT_ROWS) {
-      expect(promotionVerdict({ capacity, planLimit, active }).kind, label).toBe(want);
+      expect(promotionVerdict({ capacity, planLimit, formatMax: null, active }).kind, label).toBe(want);
       checked += 1;
     }
     expect(checked, "anti-vacuity: rows checked").toBe(VERDICT_ROWS.length);
@@ -85,19 +85,54 @@ describe("promotionVerdict — an organiser's manual promotion (registration def
   });
 
   it("carries the numbers the refusal states, so the message never re-derives them", () => {
-    expect(promotionVerdict({ capacity: 3, planLimit: 8, active: 3 })).toEqual({ kind: "over_capacity", capacity: 3, active: 3 });
-    expect(promotionVerdict({ capacity: 9, planLimit: 4, active: 4 })).toEqual({ kind: "plan_limit", limit: 4, active: 4 });
-    expect(promotionVerdict({ capacity: null, planLimit: null, active: 0 })).toEqual({ kind: "ok" });
+    expect(promotionVerdict({ capacity: 3, planLimit: 8, formatMax: null, active: 3 })).toEqual({ kind: "over_capacity", capacity: 3, active: 3 });
+    expect(promotionVerdict({ capacity: 9, planLimit: 4, formatMax: null, active: 4 })).toEqual({ kind: "plan_limit", limit: 4, active: 4 });
+    expect(promotionVerdict({ capacity: null, planLimit: null, formatMax: null, active: 0 })).toEqual({ kind: "ok" });
   });
 
   it("agrees with placesLeft: a division with places left is exactly one a promotion passes without a confirm", () => {
     let checked = 0;
     for (const [, capacity, planLimit, active] of VERDICT_ROWS) {
-      const left = placesLeft({ capacity, planLimit, active });
-      const ok = promotionVerdict({ capacity, planLimit, active }).kind === "ok";
+      const left = placesLeft({ capacity, planLimit, formatMax: null, active });
+      const ok = promotionVerdict({ capacity, planLimit, formatMax: null, active }).kind === "ok";
       expect(ok, `capacity=${capacity} plan=${planLimit} active=${active}`).toBe(left === null || left > 0);
       checked += 1;
     }
     expect(checked).toBe(VERDICT_ROWS.length);
+  });
+});
+
+// W5 B4 (stress F8; owner 2026-11-21): the division's FORMAT max entrants (`lib/format-max-entrants.ts`: the largest field its first
+// stage can start) is the third cap, the same on every plan. Sign-up waitlists past the smallest of the three, and no confirmation
+// lifts the format's: the rule, typed from the owner's brief ("clamp to the smaller of the organiser's capacity and the format
+// max"), never from the functions. null = the division has no format yet, or one whose start no field bounds.
+type FormatRow = [label: string, capacity: number | null, planLimit: number | null, formatMax: number | null, active: number, left: number | null, verdict: "ok" | "over_capacity" | "plan_limit" | "format_max"];
+
+const FORMAT_ROWS: FormatRow[] = [
+  // The empty case first: no format, no capacity, unlimited plan - nothing caps it.
+  ["no format, no capacity, unlimited plan", null, null, null, 0, null, "ok"],
+  ["the format alone caps an otherwise uncapped division", null, null, 100, 40, 60, "ok"],
+  ["the format alone, one place left", null, null, 100, 99, 1, "ok"],
+  ["the format alone, at its max: the next is refused for good", null, null, 100, 100, 0, "format_max"],
+  ["capacity above the format's max: the format binds", 500, null, 100, 100, 0, "format_max"],
+  ["capacity below the format's max: capacity binds, and a confirm can pass it", 50, null, 100, 50, 0, "over_capacity"],
+  ["plan below the format's max: the plan binds", null, 64, 100, 64, 0, "plan_limit"],
+  ["all three met: the format wins - no plan or confirm can pass it", 100, 100, 100, 100, 0, "format_max"],
+  ["entries already past the format's max (format changed after sign-ups): full, never negative", null, null, 71, 90, 0, "format_max"],
+];
+
+describe("the format's max entrants is the third cap (W5 B4, F8)", () => {
+  it("places left is min(capacity, plan limit, format max) - active, and a promotion at the format max is refused whatever else", () => {
+    let checked = 0;
+    for (const [label, capacity, planLimit, formatMax, active, left, verdict] of FORMAT_ROWS) {
+      expect(placesLeft({ capacity, planLimit, formatMax, active }), label).toBe(left);
+      expect(promotionVerdict({ capacity, planLimit, formatMax, active }).kind, label).toBe(verdict);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: rows checked").toBe(FORMAT_ROWS.length);
+  });
+
+  it("carries the max and the count the refusal states", () => {
+    expect(promotionVerdict({ capacity: null, planLimit: null, formatMax: 100, active: 100 })).toEqual({ kind: "format_max", max: 100, active: 100 });
   });
 });

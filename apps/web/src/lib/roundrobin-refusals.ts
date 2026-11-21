@@ -62,7 +62,9 @@ export type RoundRobinRefusalCode =
   | "RR_ADJUST_NOT_FINITE"
   | "RR_ADJUST_OUT_OF_RANGE"
   | "RR_ADJUST_UNKNOWN_ENTRANT"
-  | "RR_ADJUST_ALREADY_UNDONE";
+  | "RR_ADJUST_ALREADY_UNDONE"
+  | "FORMAT_TOO_MANY_ENTRANTS"
+  | "DRAW_TOO_LARGE";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -202,6 +204,19 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 409,
     en: "This adjustment has already been undone.",
     key: "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE",
+  },
+  // W5 B4 (stress F8; owner 2026-11-21): a field past its format's max entrants (`lib/format-max-entrants.ts`), refused at the
+  // create, Generate, Rebuild and Start doors and by an organiser's promotion off the waiting list; and a draw past the line
+  // budget whatever its kind (the server's exact count, before the insert).
+  FORMAT_TOO_MANY_ENTRANTS: {
+    status: 422,
+    en: "This format allows up to {max} entrants. This division has {entrants}.",
+    key: "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS",
+  },
+  DRAW_TOO_LARGE: {
+    status: 422,
+    en: "This draw has {lines} matches. One Start can draw at most {budget}.",
+    key: "roundrobin.refusal.DRAW_TOO_LARGE",
   },
 };
 

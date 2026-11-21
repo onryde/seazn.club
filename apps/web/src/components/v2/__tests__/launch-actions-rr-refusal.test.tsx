@@ -38,6 +38,7 @@ const props = (): Parameters<typeof LaunchActions>[0] => ({
   competitionStatus: "published",
   competitionVisibility: "public",
   viewerPlan: "community",
+  activeEntrants: 2,
 } as never);
 
 async function startAndRead(): Promise<string> {

@@ -27,7 +27,8 @@ import "server-only";
 //   mail                 registration mail: cart confirmation (submit, resend) and the payment reminder message
 //   lifecycle-mail       the registrant's lifecycle mails (payment received, approved, released, withdrawn by the organiser, joined, rejected, promotion lapsed, promotion skipped): one queue producer per kind
 //   settings             organiser settings (defaults, get / put) and the public register-panel info
-//   places-left          the panel's places-left count, and an organiser promotion's verdict, against submit's cap min(capacity, plan limit); pure, sibling-only
+//   places-left          the panel's places-left count, and an organiser promotion's verdict, against submit's cap min(capacity, plan limit, format max); pure, sibling-only
+//   format-max           each division's format max entrants (its first stage's, lib/format-max-entrants.ts): the third term of that cap (submit reads it too)
 //   checkout             minting and resuming a Stripe checkout for a registration or a cart
 //   pay-token            the player payment page's token: mint, record, issue a link, resolve a token to its entry
 //   pay-page             the player payment page's document: what /r/pay/<token> shows, decided by an ordered state table
@@ -146,6 +147,7 @@ export type { GroupEntryPlayerView, GroupEntryView, GroupStatusView } from "./gr
 export type { SettledBy } from "./status-facts";
 export { sweepRegistrations } from "./sweep";
 export { rosterCapExpr, effectivePoolDeadline, soloPoolIsFull, listRegistrations } from "./list";
+export { divisionFormatMaxes } from "./format-max";
 export type { ListRegistrationsFilters, RegistrationListRow } from "./list";
 export {
   confirmRegistration,

@@ -6,6 +6,7 @@
 // Pure: the picker's state lives in the screen (`useFormatKnobs`), the derivations here.
 import { FORMAT_BOUNDS, type FormatBoundKey, withinFormatBounds } from "@/lib/format-bounds";
 import { stageGraphSizeGate, type SizeRefusal } from "@/lib/format-size-gates";
+import { formatMaxEntrants } from "@/lib/format-max-entrants";
 import { cutIssue, type CutReason } from "@/lib/field-cut-gate";
 import { MIN_POOL_SIZE, poolSizeIssue } from "@/lib/pool-size-gate";
 import {
@@ -205,6 +206,12 @@ export interface FormatPickerView {
   sizeGate: (key: string) => SizeRefusal | null;
   /** The field those reasons count (the plan's entrants). */
   planEntrants: number;
+  /** W5 B4 (stress F8; owner 2026-11-21): the most entrants the PICKED format can start, at the knobs as they stand (its first
+   *  stage's draw against the measured Start line budget, `lib/format-max-entrants.ts`); null when its start no field bounds. The
+   *  picked card shows it; the server refuses a field past it at create and Start, and the division page disables Start. No
+   *  plan field the builder takes (2..64) is past any format's max - pinned by division-builder-format-max.test.tsx, which reds
+   *  (and asks for a Next gate here) the day the plan box or the budget moves so one is. */
+  pickedMax: number | null;
 }
 
 export function formatPickerView(input: {
@@ -236,6 +243,7 @@ export function formatPickerView(input: {
     carryLocked: !input.carryAllowed && input.standingsCarry !== "none",
     sizeGate: (key) => sizeGates.get(key) ?? null,
     planEntrants: input.plan.entrants,
+    pickedMax: input.stages[0] === undefined ? null : formatMaxEntrants(input.stages[0]),
   };
 }
 

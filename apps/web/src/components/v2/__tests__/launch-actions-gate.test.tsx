@@ -120,6 +120,7 @@ const baseProps = (): LaunchProps => ({
   competitionStatus: "published",
   competitionVisibility: "public",
   viewerPlan: "community",
+  activeEntrants: 2,
 });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));

@@ -5,7 +5,7 @@
 //  B. Schedule — plan-first: opens the drag-and-drop board (generate + auto
 //     pass live there); publish and start follow from the board.
 import { ThirdPlaceUseShared, tooFewOfferFrom } from "@/components/v2/third-place-use-shared";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
@@ -25,6 +25,7 @@ import { startEntrantsLine, type EntryStage } from "@/lib/open-entry-stages";
 import { startPromotesCompetition } from "@/lib/start-promotes-competition";
 import { publishWouldList } from "@/lib/competition-listing";
 import { divisionScoringClosed } from "@/lib/division-phase";
+import { formatMaxGate } from "@/lib/format-max-entrants";
 import type { BoardConflict, BoardFixture } from "@/components/v2/board/types";
 
 interface Props {
@@ -61,6 +62,9 @@ interface Props {
    *  decision 2026-09-27). Already in the page's COLS, like `status`. */
   competitionVisibility: string;
   viewerPlan: ViewerPlan;
+  /** W5 B4 (stress F8): the division's FIELD (entrants not departed: the set the generator draws), so Start can say before the
+   *  click that the format cannot start it (`formatMaxGate`, the server's own rule). The page already holds it. */
+  activeEntrants: number;
 }
 
 export function LaunchActions({
@@ -76,8 +80,15 @@ export function LaunchActions({
   competitionStatus,
   competitionVisibility,
   viewerPlan,
+  activeEntrants,
 }: Props) {
   const msg = useMsg();
+  // W5 B4 (stress F8; owner 2026-11-21): a field past its format's max entrants cannot start - Start is disabled and says why,
+  // in the server's own sentence (the create and Start doors refuse the same field by the same name).
+  const tooMany = useMemo(
+    () => formatMaxGate([...stages].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)), activeEntrants),
+    [stages, activeEntrants],
+  );
   const msgPlural = useMsgPlural();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -166,7 +177,8 @@ export function LaunchActions({
         <button
           type="button"
           data-testid="launch-start-division"
-          disabled={busy}
+          disabled={busy || tooMany !== null}
+          aria-describedby={tooMany !== null ? "launch-start-too-many" : undefined}
           // Opens the confirmation. It does NOT start: the POST lives on the
           // dialog's own confirm, below.
           onClick={() => {
@@ -178,6 +190,11 @@ export function LaunchActions({
         >
           {busy ? msg("launch.starting") : msg("launch.start")}
         </button>
+      )}
+      {canEdit && divisionScoringClosed(status) && tooMany !== null && (
+        <span id="launch-start-too-many" data-testid="launch-start-too-many" className="text-xs text-amber-800">
+          {msg("roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", { max: tooMany.max, entrants: tooMany.entrants })}
+        </span>
       )}
       <Link href={routes.divisionSchedule(orgSlug, compSlug, divSlug)} className="btn btn-ghost px-3 py-1.5 text-xs">
         {msg("launch.schedule")}
