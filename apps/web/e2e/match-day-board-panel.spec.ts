@@ -685,6 +685,41 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
         checked += 1;
       }
       expect(checked, "every reason was measured").toBe(measured.length);
+      // B6 (review): the 1024 x 768 pin of the (MD-R33/R34) test above holds the SHORT reason only. The hold line is the tallest thing in the right column, and the
+      // 1024 column is the narrowest lg one, so the same screen with the 168-character account change (and, in Dutch, the longest quiet labels) must still show
+      // Settle - the decision's last button - whole, in every language this test runs. The button is the one decision control that opens a panel (aria-controls).
+      await page.setViewportSize({ width: 1024, height: 768 });
+      let settleChecked = 0;
+      for (const [board, label] of measured) {
+        await page.goto(`${day.matchDay}?board=${board.fixtureId}`);
+        await expect(panel(page)).toHaveAttribute("data-fixture-id", board.fixtureId, { timeout: 30_000 });
+        await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
+        await expect(decision(page)).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        if (board === longHeld) expect((await page.getByTestId("md-board-hold").innerText()).length, "premise: the reason is the long one").toBeGreaterThan(160);
+        const settleButton = decision(page).locator("button[aria-expanded][aria-controls]");
+        await expect(settleButton, "the decision has ONE button that opens a panel: Settle").toHaveCount(1);
+        const settle = await settleButton.evaluate((el) => {
+          const b = el.getBoundingClientRect();
+          return { bottom: b.bottom + window.scrollY, scrollY: window.scrollY };
+        });
+        expect(settle.scrollY, "measured from the top of the page").toBe(0);
+        // Where the right column's height goes at the narrowest lg (heights, not tops: a row that grows is the one to trim).
+        const rowsAt1024 = await Promise.all(["md-online-state", "md-board-cameras", "md-board-hold", "arbiter-decision", "md-board-flags"].map(async (id) => {
+          const b = await page.getByTestId(id).first().evaluate((el) => {
+            const r = el.getBoundingClientRect();
+            return { top: r.top + window.scrollY, bottom: r.bottom + window.scrollY };
+          });
+          return `${id} ${Math.round(b.top)}-${Math.round(b.bottom)}`;
+        }));
+        test.info().annotations.push({ type: "MD-R33 measure", description: `${locale} / ${label} at 1024x768: Settle bottom ${Math.round(settle.bottom)} (${rowsAt1024.join(", ")})` });
+        expect(settle.bottom, `${locale} / ${label}: Settle ends inside the 768px screen at 1024 (it ended at ${Math.round(settle.bottom)})`).toBeLessThanOrEqual(768);
+        settleChecked += 1;
+      }
+      expect(settleChecked, "every reason was measured at 1024").toBe(measured.length);
+      await page.setViewportSize({ width: 1280, height: 800 });
+      await page.goto(`${day.matchDay}?board=${longHeld.fixtureId}`);
+      await expect(cameras(page)).toBeVisible({ timeout: 30_000 });
       // The toggle: unfolded the tiles are video boxes; folded again they are status lines.
       await page.getByTestId("md-cameras-toggle").click();
       await expect(cameras(page)).toHaveAttribute("data-folded", "false");
