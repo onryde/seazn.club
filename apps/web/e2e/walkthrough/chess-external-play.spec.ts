@@ -421,6 +421,31 @@ async function meetingRowsOf(fixtureIds: string[]): Promise<RoomRow[]> {
   );
 }
 
+/** Every fixture of ONE stage: round 1's boards and the placeholder shells the first Generate minted for the later rounds (the Swiss stage is seeded for 3 rounds). */
+async function stageFixtureIds(stageId: string): Promise<string[]> {
+  const rows = await withDb((sql) => sql<{ id: string }[]>`select id from fixtures where stage_id = ${stageId} order by round_no, seq_in_round`);
+  return rows.map((r) => r.id);
+}
+
+/** After a pre-mint pass: THIS stage's boards AND shells each have a room for each side, whatever else is on the database. The job is global (it takes no
+ *  org) and works its candidates in the order of premint.ts `candidateRows` (round_at, round_no, org_id, stage_id, ...), so a database that has run other suites
+ *  can spend a pass's 45 s budget on other rows and defer some of ours - or defer only THEIRS and still mint every one of ours. The pass report's `scanned` and
+ *  `deferred` are global counts and therefore evidence for the failure message only, never the assertion: what this spec owns is its own stage's rooms.
+ *  The expected count is the rulebook's (two rooms a fixture, D16), never the job's report. */
+async function expectStageRooms(stageId: string, minFixtures: number, note: string): Promise<void> {
+  const ids = await stageFixtureIds(stageId);
+  expect(ids.length, `${note}: anti-vacuity - the stage has its boards and its shells (at least ${minFixtures} fixtures), so there is something to count`).toBeGreaterThanOrEqual(minFixtures);
+  const rows = await meetingRowsOf(ids);
+  const withRooms = new Set(rows.map((r) => r.fixture_id)).size;
+  expect(
+    rows.length,
+    `${note}: two rooms for each of this stage's ${ids.length} fixtures (${withRooms} of them have any). A pass that deferred rows (see its report) ran out of its wall budget on OTHER rows first: run this spec on a fresh database`,
+  ).toBe(2 * ids.length);
+  for (const id of ids) {
+    expect(rows.filter((r) => r.fixture_id === id).map((r) => r.side), `${note}: fixture ${id}: a room for each of its two sides`).toEqual(["away", "home"]);
+  }
+}
+
 /** How many of a call list there are per route, as the video fixture templated them (`"POST /meetings/:id/participants"`). */
 const routesOf = (calls: readonly { route: string }[]): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -731,18 +756,12 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const pass1 = await premintPass(page);
     const note1 = `pass 1 reported ${JSON.stringify(pass1)}`;
     expect(pass1.failed, `${note1}: no room failed`).toBe(0);
-    // A deferral is how the job says "I did not make these rooms" (a frozen competition, the vendor down for the pass, the wall budget spent): on this stack none of
-    // those is in play, so a pass that deferred anything left a room unmade and the counts below would read short for THAT reason - say so first. The job is GLOBAL,
-    // so the one honest cause on a healthy stack is a database already carrying other runs' unopened camera-on rounds: its 45 s budget paces ~45 rooms a pass and
-    // the rest of the scan (this spec's own boards among them, being the newest) is deferred - an environment fault, named as one (reference: seazn-local-env §5).
-    expect(
-      pass1.deferred,
-      `${note1}: the job deferred no room (scanned = roomsMade + failed + deferred). Deferred rows mean the pass ran out of its wall budget on a database that already holds other unopened rounds (a database that has run other suites): run this spec on a fresh one`,
-    ).toBe(0);
     // A GUARD on the server's configuration, not a test of the deferral: the server under test runs with EXTERNAL_PLAY_WINDOW_DEFER=0, which
     // never asks about windows, so 0 is forced. A server without it (other specs' rounds open beside this one) would defer the pass, and the
     // room counts below would read short for a reason that is not the job's - this fails first, and says why.
     expect(pass1.windowsOpen, `${note1}: no check-in window deferred it (EXTERNAL_PLAY_WINDOW_DEFER=0 on the server)`).toBe(0);
+    // This stage's own rooms, boards AND shells (not the job's global `deferred`, which another run's rows can raise while ours were all made).
+    await expectStageRooms(round.stageId, boardIds.length + 2, note1);
     const rooms1 = await meetingRowsOf(boardIds);
     // D16 (§5.6.1): a room PER PLAYER, so two a board. From the rulebook, never from the job's own report.
     expect(rooms1.length, `${note1}: two rooms for each of the ${boardIds.length} boards are on file`).toBe(2 * boardIds.length);
@@ -775,8 +794,8 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
     const pass2 = await premintPass(page);
     const note2 = `pass 2 reported ${JSON.stringify(pass2)}`;
     expect(pass2.failed, `${note2}: no room failed`).toBe(0);
-    expect(pass2.deferred, `${note2}: the job deferred no room`).toBe(0);
     expect(pass2.windowsOpen, `${note2}: no check-in window deferred it (the same configuration guard as pass 1's)`).toBe(0);
+    await expectStageRooms(round.stageId, boardIds.length + 2, note2);
     expect(await meetingRowsOf(boardIds), `${note2}: the same rooms are on file - none made, none replaced`).toEqual(rooms1);
     expect(callsOnMeetings(roomIds, mark2), `${note2}: the second pass made no vendor call for these boards`).toEqual([]);
     expect(video.calls.slice(mark2).filter((c) => c.route !== "POST /meetings").map((c) => c.route), `${note2}: nothing but room creations`).toEqual([]);

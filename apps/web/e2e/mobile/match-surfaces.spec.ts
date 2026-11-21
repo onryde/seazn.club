@@ -31,6 +31,13 @@ import { v3Sheet, assertTapFloor, padTile, dlDict, projectViewport, projectTag }
 
 // Not serial: no test here reads state another test writes (no module-level `let` is shared), so one red does not skip the rest (AGENTS.md class 21).
 
+/** Rows a test put into the SHARED e2e organisation that a sibling spec must not meet (a court its Match Day list would show). A test pushes the undo of what it
+ *  seeded; the hook runs them after the test, passed or failed, newest first (B11 fix round 2). */
+const undoAfterTest: Array<() => Promise<void>> = [];
+test.afterEach(async () => {
+  while (undoAfterTest.length > 0) await undoAfterTest.pop()!();
+});
+
 // W2a Task 12 (spec §5.5, UI-2 option B; BG-KO-1, BG-KO-2 per ruling 82). A drawn chess KNOCKOUT game goes to its
 // tie-break, which is the only thing the pad offers: a three-step sheet (rung → winner → optional score). Each step
 // must be reachable and hold at this width.
@@ -749,6 +756,13 @@ test("match day online block: boards are rows of the list; a row opens its panel
   // page at most widths and "it comes last" held of any order; with one free court the list has a court block and the online block beside it, in a fixed order.
   const seededCourts = await seedVenueWithCourts(request, ["Court 1"], { orgId: r.orgId });
   expect(seededCourts.courts, "premise: the court the order pin needs was made").toHaveLength(1);
+  undoAfterTest.push(() =>
+    withDb(async (sql) => {
+      // The court, then its venue: both are this test's own rows (a unique venue name), so a sibling spec's courts are never touched.
+      await sql`delete from courts where venue_id = ${seededCourts.venueId}`;
+      await sql`delete from venues where id = ${seededCourts.venueId}`;
+    }),
+  );
 
   const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
   await page.goto(matchDay, { waitUntil: "load" });
