@@ -16,6 +16,12 @@
 //
 // Every rig is a FRESH org: destinations and sessions are org-wide, and the walkthrough leg runs fully parallel.
 //
+// TWO MODES (Seazn-hosted video, Task 19). With SEAZN_HOSTED_LIVE on — the server AND this runner, e2e.yml's e2e-seazn job — every
+// org also has its fixed Seazn destination, listed FIRST on the API, the Streaming page and the match's picker, and it is the match's
+// default pick. The cases here are about the org's OWN destinations, so each reads them apart from the Seazn row (`listApi`, `rows`)
+// and states both modes where the page really differs: no empty state (the Seazn row is a list), the list's own Add, and Seazn
+// offered ahead of the org's own. Every other job runs with it off, where the Seazn row is hidden everywhere.
+//
 // Stream capacity (plan premise 11): a held destination needs a session, and every active session holds a share of the
 // fake ingest's ONE storage pool. This file takes its slots from the stream-slot pool (e2e/helpers/stream-slot-pool.ts,
 // the first `STREAM_CAPACITY − 1` keys), shared with the relay and capture walkthroughs and never the credits
@@ -39,6 +45,7 @@ import {
   liveWaitMs,
   releaseStreamSlot,
   takeStreamSlot,
+  takeWholePool,
 } from "../helpers/stream-slot-pool";
 import { disposeFakePhones, pairPhoneOnFixture, pairedPhone } from "../helpers/fake-capture-phone";
 
@@ -131,6 +138,11 @@ const en = (key: string, vars: Record<string, string | number> = {}): string => 
   });
 };
 const matchName = (no: number): string => en("breadcrumb.match", { no });
+
+/** Seazn-hosted video (Task 19): the mode this run is in — the runner's flag, which e2e.yml sets beside the server's. */
+const SEAZN_LIVE = process.env.SEAZN_HOSTED_LIVE === "true";
+/** What the match's picker offers AHEAD of the org's own destinations: Seazn's name with LIVE on, nothing with it off. */
+const SEAZN_OFFERED: string[] = SEAZN_LIVE ? [en("stream.dest.kind.seazn")] : [];
 /** The platforms' names from the product's own table (m11), never typed here. */
 const BRAND: Record<StreamPlatform, string> = STREAM_KIND_BRAND;
 /** The subline's key-hint words ("key ends …" in en), cut from the dictionary's own template around `{hint}` (m11) — so a
@@ -201,10 +213,24 @@ async function seedRig(page: Page, opts: { entrants?: number } = {}): Promise<Ri
 }
 
 interface Target { id: string; kind: string; label: string; watchUrl: string | null; keyHint: string | null; inUse: { matchNo: number | null; state: string; href: string | null } | null }
-async function listApi(page: Page, orgId: string): Promise<Target[]> {
+/** Everything the API lists for the org, the Seazn row included when LIVE is on. */
+async function listAllApi(page: Page, orgId: string): Promise<Target[]> {
   const res = await apiJson<Target[]>(page.request, `/api/v1/orgs/${orgId}/stream-targets`);
   expect(res.status, "the list reads").toBe(200);
   return res.data!;
+}
+/** The org's OWN destinations, in the API's order. The Seazn row is asserted, not dropped blind: with LIVE on, exactly one and listed
+ *  FIRST; with it off, none. */
+async function listApi(page: Page, orgId: string): Promise<Target[]> {
+  const all = await listAllApi(page, orgId);
+  const seazn = all.filter((t) => t.kind === "seazn");
+  if (SEAZN_LIVE) {
+    expect(seazn.length, "LIVE on: the API lists the org's one Seazn row").toBe(1);
+    expect(all[0]?.kind, "LIVE on: the Seazn row is listed first").toBe("seazn");
+  } else {
+    expect(seazn, "LIVE off: no Seazn row is listed").toEqual([]);
+  }
+  return all.filter((t) => t.kind !== "seazn");
 }
 async function addTargetApi(page: Page, orgId: string, t: { label: string; kind?: StreamPlatform; streamKey?: string }): Promise<Target> {
   const res = await apiJson<Target>(page.request, `/api/v1/orgs/${orgId}/stream-targets`, "POST", {
@@ -252,7 +278,25 @@ async function openStreaming(page: Page): Promise<Locator> {
   return panel;
 }
 const rowOf = (page: Page, id: string): Locator => page.locator(`[data-testid="stream-dest-row"][data-target-id="${id}"]`);
-const rows = (page: Page): Locator => page.getByTestId("stream-dest-row");
+/** The org's OWN destination rows: the fixed Seazn row (`seaznRows`) is not one of them. */
+const rows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"]:not([data-fixed="seazn"])');
+const seaznRows = (page: Page): Locator => page.locator('[data-testid="stream-dest-row"][data-fixed="seazn"]');
+/** The way to add the org's FIRST destination: the empty state's Add with LIVE off; with it on the Seazn row is already a list, so
+ *  there is no empty state and the list's own Add is the way in. */
+const ADD_FIRST: "stream-dest-add" | "stream-dest-empty-add" = SEAZN_LIVE ? "stream-dest-add" : "stream-dest-empty-add";
+/** The Streaming page with no destination of the org's own. LIVE off: the empty state and its copy, and no Seazn row. LIVE on: no
+ *  empty state — the Seazn row alone, saying what it is. */
+async function expectNoOwnDestinations(page: Page): Promise<void> {
+  await expect(rows(page), "no destination of the org's own").toHaveCount(0);
+  if (SEAZN_LIVE) {
+    await expect(page.getByTestId("stream-dest-empty"), "LIVE on: the Seazn row is a list, so there is no empty state").toHaveCount(0);
+    await expect(seaznRows(page), "LIVE on: the Seazn row alone").toHaveCount(1);
+    await expect(seaznRows(page).getByTestId("stream-dest-subline")).toHaveText(en("stream.dest.seazn.sub"));
+  } else {
+    await expect(page.getByTestId("stream-dest-empty")).toContainText(en("streamDest.empty"));
+    await expect(seaznRows(page), "LIVE off: no Seazn row").toHaveCount(0);
+  }
+}
 
 /** A row action, the width's own way: the ⋯ menu below 768, the inline button at and above it. */
 async function tapAction(row: Locator, which: "rename" | "replace" | "remove", width: number): Promise<void> {
@@ -376,17 +420,16 @@ for (const width of [320, 1280] as const) {
     const f = rig.fixtures[0]!;
     const log = mutationLog(page);
 
-    // 1. EMPTY.
+    // 1. EMPTY (of the org's own: with LIVE on, the Seazn row alone).
     let panel = await openStreaming(page);
-    await expect(page.getByTestId("stream-dest-empty")).toContainText(en("streamDest.empty"));
-    await expect(rows(page)).toHaveCount(0);
+    await expectNoOwnDestinations(page);
     await shot(panel, `S-${width}-1-empty.png`);
     await expectNoHorizontalScroll(page);
 
-    // 2. ADD a YouTube destination, from the empty state's own button.
+    // 2. ADD a YouTube destination, from the empty state's own button (with LIVE on, the list's).
     const label = `Main court ${rig.tag}`;
     const key = ytKey();
-    const form = await addViaForm(page, { platform: "youtube", label, key }, "stream-dest-empty-add");
+    const form = await addViaForm(page, { platform: "youtube", label, key }, ADD_FIRST);
     await expect(form, "a saved destination closes the form").toHaveCount(0, { timeout: SAVE_MS });
     let list = await listApi(page, rig.orgId);
     expect(list.map((t) => [t.kind, t.label, t.keyHint]), "the API holds the one destination the form saved").toEqual([["youtube", label, hintOf(key)]]);
@@ -462,14 +505,23 @@ for (const width of [320, 1280] as const) {
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
     await body.getByTestId("stream-again").click();
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
-    // The org's only destination is gone, so there is no list to open at all (the empty state below says so).
-    await expect(targetPicker(body), "gone from the fixture picker").toHaveCount(0);
-    await expect(body.getByTestId("stream-dest-empty"), "the org's only destination is gone: the picker's empty state").toBeVisible();
+    if (SEAZN_LIVE) {
+      // LIVE on: Seazn is still offered, so the picker stays — offering Seazn alone — and the archived choice is NONE (resolveStreamTarget:
+      // a saved choice archived), never Seazn put in its place.
+      expect(await offeredTargetNames(body), "gone from the fixture picker: Seazn alone is offered").toEqual(SEAZN_OFFERED);
+      await body.getByTestId("stream-target").press("Escape");
+      await expect(targetPicker(body), "the removed choice is none, not Seazn in its place").toHaveAttribute("data-value", "");
+      await expect(body.getByTestId("stream-dest-empty"), "Seazn is still there: no empty state").toHaveCount(0);
+    } else {
+      // The org's only destination is gone, so there is no list to open at all (the empty state below says so).
+      await expect(targetPicker(body), "gone from the fixture picker").toHaveCount(0);
+      await expect(body.getByTestId("stream-dest-empty"), "the org's only destination is gone: the picker's empty state").toBeVisible();
+    }
 
     // 7. RE-ADD the same key under a new name: the SAME destination comes back (D2).
     panel = await openStreaming(page);
     const label2 = `Restored ${rig.tag}`;
-    await addViaForm(page, { platform: "youtube", label: label2, key }, "stream-dest-empty-add");
+    await addViaForm(page, { platform: "youtube", label: label2, key }, ADD_FIRST);
     await expect(form).toHaveCount(0, { timeout: SAVE_MS });
     list = await listApi(page, rig.orgId);
     expect(list.map((t) => [t.id, t.label]), "the SAME id, restored under the new name").toEqual([[id, label2]]);
@@ -519,7 +571,7 @@ test("1: add with the shape warning (it warns, never blocks) and both sides of t
   const rig = await seedRig(page);
   const log = mutationLog(page);
   await openStreaming(page);
-  await page.getByTestId("stream-dest-empty-add").click();
+  await page.getByTestId(ADD_FIRST).click();
   const form = page.getByTestId("stream-dest-form");
 
   // Owner 2026-10-29: the platforms the form offers are ADDABLE_STREAM_PLATFORMS and nothing else — here one, so it is NAMED, not chosen
@@ -592,7 +644,7 @@ test("4: Remove — confirmed, the row is gone, the API list excludes it, and a 
   await rowOf(page, t.id).getByTestId("stream-dest-remove").click();
   await confirmRemove(page, t.label);
   await expect(rowOf(page, t.id)).toHaveCount(0, { timeout: SAVE_MS });
-  await expect(page.getByTestId("stream-dest-empty")).toBeVisible();
+  await expectNoOwnDestinations(page);
   expect(await listApi(page, rig.orgId)).toEqual([]);
   const again = await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${t.id}`);
   expect(again.status(), "an archived destination is not found").toBe(404);
@@ -657,7 +709,7 @@ test("6: re-add restores — Remove, then add the same key with a new name: the 
   await rowOf(page, t.id).getByTestId("stream-dest-remove").click();
   await confirmRemove(page, t.label);
   await expect(rowOf(page, t.id)).toHaveCount(0, { timeout: SAVE_MS });
-  const form = await addViaForm(page, { platform: "youtube", label: `Second ${rig.tag}`, key }, "stream-dest-empty-add");
+  const form = await addViaForm(page, { platform: "youtube", label: `Second ${rig.tag}`, key }, ADD_FIRST);
   await expect(form).toHaveCount(0, { timeout: SAVE_MS });
   expect((await listApi(page, rig.orgId)).map((x) => [x.id, x.label])).toEqual([[t.id, `Second ${rig.tag}`]]);
   await expect(rowOf(page, t.id)).toContainText(`Second ${rig.tag}`);
@@ -666,7 +718,7 @@ test("6: re-add restores — Remove, then add the same key with a new name: the 
 // ===========================================================================
 // 7 — the empty state, at every width (the screenshots' empty and add-form states)
 // ===========================================================================
-test("7: the empty state — the copy and its own Add, which opens the form; captured at 320, 768 and 1280", async ({ page }) => {
+test("7: no destination of the org's own — the empty state's copy and its Add (Seazn off), or the Seazn row alone and the list's Add (Seazn on); the Add opens the form; captured at 320, 768 and 1280", async ({ page }) => {
   const WIDTHS = [320, 768, 1280] as const;
   test.setTimeout(SEED_MS + WIDTHS.length * 2 * NAV_MS);
   const rig = await seedRig(page);
@@ -674,13 +726,15 @@ test("7: the empty state — the copy and its own Add, which opens the form; cap
   for (const width of WIDTHS) {
     await page.setViewportSize({ width, height: 900 });
     const panel = await openStreaming(page);
-    await expect(page.getByTestId("stream-dest-empty")).toContainText(en("streamDest.empty"));
-    await expect(page.getByTestId("stream-dest-add"), "the list's own Add waits for a list").toHaveCount(0);
+    await expectNoOwnDestinations(page);
+    if (SEAZN_LIVE) await expect(page.getByTestId("stream-dest-empty-add"), "LIVE on: no empty state, so no empty state's Add").toHaveCount(0);
+    else await expect(page.getByTestId("stream-dest-add"), "the list's own Add waits for a list").toHaveCount(0);
     await shot(panel, `7-${width}-empty.png`);
-    await page.getByTestId("stream-dest-empty-add").click();
+    await page.getByTestId(ADD_FIRST).click();
     const form = page.getByTestId("stream-dest-form");
     await expect(form).toBeVisible();
-    await expect(page.getByTestId("stream-dest-empty-add"), "its Add hides while the form is open").toHaveCount(0);
+    if (SEAZN_LIVE) await expect(page.getByTestId("stream-dest-add"), "the list's Add says its form is open").toHaveAttribute("aria-expanded", "true");
+    else await expect(page.getByTestId("stream-dest-empty-add"), "its Add hides while the form is open").toHaveCount(0);
     await expectAddFormOffers(form); // at every width: the addable platform named, no Twitch, no radio to tap
     await shot(panel, `7-${width}-add-form.png`);
     await form.getByTestId("stream-dest-key").fill("TestYouTube");
@@ -875,10 +929,17 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
   await page.setViewportSize({ width: 1280, height: 900 });
   const first = await seedRig(page);
   const t = await addTargetApi(page, first.orgId, { label: `Mine ${first.tag}` });
-  await seedRig(page); // signs the page in as the SECOND org's owner
+  const second = await seedRig(page); // signs the page in as the SECOND org's owner
   await openStreaming(page);
-  await expect(page.getByTestId("stream-dest-empty"), "the second org's Streaming page is empty").toBeVisible();
+  await expectNoOwnDestinations(page); // the second org's Streaming page has none of its own
   await expect(rowOf(page, t.id)).toHaveCount(0);
+  // The Seazn rows are per org (V540): the first org's is never on the second org's page, in either mode; with LIVE on, the one shown is the second's own.
+  const seaznOf = async (orgId: string) =>
+    (await withDb((sql) => sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${orgId} and kind = 'seazn'`)).map((r) => r.id);
+  const [firstSeazn, secondSeazn] = [await seaznOf(first.orgId), await seaznOf(second.orgId)];
+  expect([firstSeazn.length, secondSeazn.length], "premise: each org has its one Seazn row").toEqual([1, 1]);
+  await expect(rowOf(page, firstSeazn[0]!), "the first org's Seazn row is not on the second org's page").toHaveCount(0);
+  if (SEAZN_LIVE) await expect(seaznRows(page)).toHaveAttribute("data-target-id", secondSeazn[0]!);
   const base = `/api/v1/orgs/${first.orgId}/stream-targets`;
   const answers = [
     (await page.request.get(base)).status(),
@@ -905,10 +966,12 @@ for (const width of [320, 768, 1280] as const) {
     const yt = await addTargetApi(page, rig.orgId, { label: `Court 1 ${rig.tag}` });
     const tw = await addTargetApi(page, rig.orgId, { label: `Twitch ${rig.tag}`, kind: "twitch", streamKey: twitchKey() });
     const body = await openPhoneTab(page, rig, rig.fixtures[0]!.no);
-    expect(await offeredTargetNames(body), "the list offers both, oldest first").toEqual([yt.label, tw.label]);
+    expect(await offeredTargetNames(body), "the list offers both, oldest first (after Seazn, with LIVE on)").toEqual([...SEAZN_OFFERED, yt.label, tw.label]);
     const optionRows = body.getByTestId("stream-target-option");
-    await expect(optionRows.nth(0).getByTestId("stream-target-kind"), "a pasted key says what it is").toHaveText(en("stream.dest.kind.key", { platform: BRAND.youtube }));
-    await expect(optionRows.nth(1).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.kind.key", { platform: BRAND.twitch }));
+    const own = SEAZN_OFFERED.length; // the org's own options start after Seazn's
+    if (SEAZN_LIVE) await expect(optionRows.nth(0).getByTestId("stream-target-kind"), "Seazn says what it is").toHaveText(en("stream.dest.seazn.sub"));
+    await expect(optionRows.nth(own).getByTestId("stream-target-kind"), "a pasted key says what it is").toHaveText(en("stream.dest.kind.key", { platform: BRAND.youtube }));
+    await expect(optionRows.nth(own + 1).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.kind.key", { platform: BRAND.twitch }));
     await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
     await expect(body.locator('input[type="password"]'), "D1: no key field on the match").toHaveCount(0);
     const link = body.getByTestId("stream-manage-destinations");
@@ -941,6 +1004,22 @@ async function returnTo(page: Page): Promise<void> {
   expect(visible, "premise: the page is visible, so its listener acts on the return").toBe("visible");
 }
 
+/** The match's picker with no destination of the org's own. LIVE off: the empty state, no picker, Go live disabled. LIVE on: Seazn
+ *  alone — offered, and picked as the match's default (no choice of the organiser's own), so Go live is enabled (never tapped here). */
+async function expectPickerHasNoOwn(body: Locator, seaznId: string | null, timeout = SAVE_MS): Promise<void> {
+  if (SEAZN_LIVE) {
+    await expect(body.getByTestId("stream-dest-empty"), "LIVE on: Seazn is offered, so no empty state").toHaveCount(0, { timeout });
+    await expect(targetPicker(body), "LIVE on: Seazn, the default pick").toHaveAttribute("data-value", seaznId!, { timeout });
+    expect(await offeredTargetNames(body), "LIVE on: Seazn alone is offered").toEqual(SEAZN_OFFERED);
+    await body.getByTestId("stream-target").press("Escape");
+    await expect(body.getByTestId("stream-go-live")).toBeEnabled();
+  } else {
+    await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"), { timeout });
+    await expect(targetPicker(body)).toHaveCount(0);
+    await expect(body.getByTestId("stream-go-live")).toBeDisabled();
+  }
+}
+
 for (const width of [320, 1280] as const) {
   test(`I1 @${width}: no destinations → add on the NEW Streaming page tab → back: offered, Go live enabled → remove there → back: gone → a choice removed while the tab stayed open: Go live says it was removed and drops it`, async ({ page }) => {
     const NAVS = 3; // the rig's sign-in, the fixture page, the Streaming page tab
@@ -953,12 +1032,11 @@ for (const width of [320, 1280] as const) {
     const picker = targetPicker;
     const goLive = (b: Locator) => b.getByTestId("stream-go-live");
 
-    // 1. NO destinations: the empty copy, and Go live disabled.
+    // 1. NO destinations of the org's own: the empty copy and Go live disabled — or, with LIVE on, Seazn alone and picked.
     const body = await openPhoneTab(page, rig, f.no);
     await pairedPhone(page); // W5: a paired phone, so every Go live below is decided by the destinations alone
-    await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
-    await expect(picker(body)).toHaveCount(0);
-    await expect(goLive(body)).toBeDisabled();
+    const seaznId = SEAZN_LIVE ? (await listAllApi(page, rig.orgId))[0]!.id : null;
+    await expectPickerHasNoOwn(body, seaznId);
 
     // 2. Manage destinations → the Streaming page in a NEW tab → add one there.
     const [dir] = await Promise.all([page.context().waitForEvent("page"), body.getByTestId("stream-manage-destinations").click()]);
@@ -966,15 +1044,17 @@ for (const width of [320, 1280] as const) {
     await dir.waitForLoadState();
     await expect(dir.getByTestId("stream-destinations")).toBeVisible({ timeout: NAV_MS });
     const first = `Court 1 ${rig.tag}`;
-    const addForm = await addViaForm(dir, { platform: "youtube", label: first, key: ytKey() }, "stream-dest-empty-add");
+    const addForm = await addViaForm(dir, { platform: "youtube", label: first, key: ytKey() }, ADD_FIRST);
     await expect(addForm).toHaveCount(0, { timeout: SAVE_MS });
     const [added] = await listApi(page, rig.orgId);
     expect(added?.label, "the API holds what the Streaming page saved").toBe(first);
 
-    // 3. Back to the match (no reload): the picker offers it, picked, and Go live is enabled.
+    // 3. Back to the match (no reload): the picker offers it, picked, and Go live is enabled. With LIVE on it is offered AFTER Seazn,
+    //    and the match's default stays Seazn (the first listed: resolveStreamTarget) — the organiser has not picked here.
     await returnTo(page);
-    await expect.poll(() => offeredTargetNames(body), { message: "the return re-read the list", timeout: SAVE_MS }).toEqual([first]);
-    await expect(picker(body)).toHaveAttribute("data-value", added!.id);
+    await expect.poll(() => offeredTargetNames(body), { message: "the return re-read the list", timeout: SAVE_MS }).toEqual([...SEAZN_OFFERED, first]);
+    await body.getByTestId("stream-target").press("Escape");
+    await expect(picker(body)).toHaveAttribute("data-value", SEAZN_LIVE ? seaznId! : added!.id);
     await expect(goLive(body)).toBeEnabled();
     await expect(body.getByTestId("stream-dest-empty")).toHaveCount(0);
     await expectNoHorizontalScroll(page);
@@ -987,27 +1067,38 @@ for (const width of [320, 1280] as const) {
     await confirmRemove(dir, first);
     await expect(row).toHaveCount(0, { timeout: SAVE_MS });
     await returnTo(page);
-    await expect(body.getByTestId("stream-dest-empty"), "the return dropped the removed destination").toBeVisible({ timeout: SAVE_MS });
-    await expect(picker(body)).toHaveCount(0);
-    await expect(goLive(body)).toBeDisabled();
+    await expectPickerHasNoOwn(body, seaznId); // the return dropped the removed destination
 
     // 5. A choice removed while this tab stayed OPEN (another organiser, no return to announce it): picked here, then
     //    Go live answers 404 — the tab re-reads and drops it. It was the ONLY one, so the answer is the empty state with
     //    its way to the Streaming page, not "removed, pick another" (B5 review m-2: there is nothing to pick). Nothing starts.
+    //    With LIVE on, Seazn is left, so there IS something to pick: the answer is "removed, pick another" and an empty pick
+    //    (n1: never Seazn in its place) — and it is PICKED here first, because Seazn, not it, is the match's default.
     await dir.bringToFront();
     const second = `Court 2 ${rig.tag}`;
-    await addViaForm(dir, { platform: "youtube", label: second, key: ytKey() }, "stream-dest-empty-add");
+    await addViaForm(dir, { platform: "youtube", label: second, key: ytKey() }, ADD_FIRST);
     await expect(dir.getByTestId("stream-dest-form")).toHaveCount(0, { timeout: SAVE_MS });
     const [b] = await listApi(page, rig.orgId);
     await returnTo(page);
+    if (SEAZN_LIVE) {
+      await expect.poll(async () => (await offeredTargetIds(body)).includes(b!.id), { message: "the return read it", timeout: SAVE_MS }).toBe(true);
+      await selectTarget(body, b!.id);
+    }
     await expect(picker(body)).toHaveAttribute("data-value", b!.id, { timeout: SAVE_MS });
     const removed = await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${b!.id}`);
     expect(removed.status(), "SETUP: removed elsewhere").toBe(200);
     await expect(picker(body), "premise: nothing told this tab yet").toHaveAttribute("data-value", b!.id);
     await goLive(body).click();
-    await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it: the empty state").toBeVisible({ timeout: SAVE_MS });
-    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
-    await expect(body.getByTestId("stream-create-error"), "no 'pick another' with nothing to pick").toHaveCount(0);
+    if (SEAZN_LIVE) {
+      await expect(body.getByTestId("stream-create-error"), "Seazn is left to pick: removed, pick another").toHaveText(en("stream.error.target_removed"), { timeout: SAVE_MS });
+      await expect(picker(body), "cleared — NOT Seazn in its place").toHaveAttribute("data-value", "");
+      expect(await offeredTargetNames(body), "Seazn alone is left").toEqual(SEAZN_OFFERED);
+      await body.getByTestId("stream-target").press("Escape");
+    } else {
+      await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it: the empty state").toBeVisible({ timeout: SAVE_MS });
+      await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", /^\/o\/[^/]+\/streaming$/);
+      await expect(body.getByTestId("stream-create-error"), "no 'pick another' with nothing to pick").toHaveCount(0);
+    }
     await expect(goLive(body)).toBeDisabled();
     expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);
     await expectNoHorizontalScroll(page);
@@ -1018,14 +1109,14 @@ for (const width of [320, 1280] as const) {
     const keep = await addTargetApi(page, rig.orgId, { label: `Keep ${rig.tag}` });
     const gone = await addTargetApi(page, rig.orgId, { label: `Gone ${rig.tag}`, kind: "twitch", streamKey: twitchKey() });
     await returnTo(page);
-    await expect.poll(async () => (await offeredTargetIds(body)).length, { message: "the return read both", timeout: SAVE_MS }).toBe(2);
+    await expect.poll(async () => (await offeredTargetIds(body)).length, { message: "the return read both", timeout: SAVE_MS }).toBe(SEAZN_OFFERED.length + 2);
     await selectTarget(body, gone.id);
     expect((await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${gone.id}`)).status(), "SETUP: removed elsewhere").toBe(200);
     await goLive(body).click();
     await expect(body.getByTestId("stream-create-error")).toHaveText(en("stream.error.target_removed"), { timeout: SAVE_MS });
     await expect(picker(body), "cleared — NOT the other destination in its place").toHaveAttribute("data-value", "");
     await expect(picker(body).getByTestId("stream-target-placeholder")).toHaveText(en("stream.dest.pick"));
-    expect(await offeredTargetNames(body), "the list now offers only what is left").toEqual([`Keep ${rig.tag}`]);
+    expect(await offeredTargetNames(body), "the list now offers only what is left").toEqual([...SEAZN_OFFERED, `Keep ${rig.tag}`]);
     await expect(goLive(body), "no destination picked, nothing to start").toBeDisabled();
     await expectNoHorizontalScroll(page);
     await shot(page.locator('[data-role="fixture-stream-body"]'), `n1-${width}-removed-placeholder.png`);
@@ -1046,7 +1137,8 @@ for (const width of [320, 1280] as const) {
 // 11 — Seazn-hosted video (Task 16): the Seazn destination is listed first, picked for a new match, and fixed
 // ===========================================================================
 // Needs a server with SEAZN_HOSTED_LIVE=true AND this process started with the same variable (the flag gates the row's listing, so with
-// it off there is nothing to look at). e2e.yml sets neither today, so the case SKIPS by name on a default run — it never passes vacuously.
+// it off there is nothing to look at). e2e.yml's e2e-seazn job sets both (Task 19); every other job leaves them off, where the case SKIPS
+// by name — it never passes vacuously.
 for (const width of [320, 768, 1280] as const) {
   test(`11 @${width}: Seazn is first and selected for a new org's match, the Streaming page's Seazn row has no Rename / Replace key / Remove, and Go live starts a seazn session`, async ({ page }) => {
     test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (not set in the default e2e job)");
@@ -1059,7 +1151,7 @@ for (const width of [320, 768, 1280] as const) {
 
     // The picker: Seazn first, and checked with no pick of the organiser's own.
     const ids = await offeredTargetIds(body);
-    const seazn = (await listApi(page, rig.orgId)).find((t) => t.kind === "seazn");
+    const seazn = (await listAllApi(page, rig.orgId)).find((t) => t.kind === "seazn");
     expect(seazn, "premise: the API lists the org's Seazn row").toBeTruthy();
     expect(ids[0], "Seazn is listed first").toBe(seazn!.id);
     await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${seazn!.id}"]`)).toHaveAttribute("aria-selected", "true");
@@ -1082,9 +1174,10 @@ for (const width of [320, 768, 1280] as const) {
     await expectNoHorizontalScroll(page);
     await shot(page.locator('[data-testid="stream-destinations"]'), `16-${width}-streaming-seazn-row.png`);
 
-    // Go live starts a session whose destination is Seazn (width 1280 only: one stream slot per run).
+    // Go live starts a session whose destination is Seazn (width 1280 only: one stream per run). A Seazn start is composed, which
+    // reserves two matches of recording (R2004), so it takes the WHOLE pool, as every composed walkthrough does.
     if (width !== 1280) return;
-    await streamSlot();
+    await takeWholePool(POOL_HOLD, { creditsKeyWaitMs: 1 });
     await pairPhoneOnFixture(page, `${rig.divPath}/f/${f.no}`);
     const again = await openPhoneTab(page, rig, f.no);
     await again.getByTestId("stream-go-live").click();

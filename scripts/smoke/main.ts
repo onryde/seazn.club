@@ -97,6 +97,7 @@ import { divisionLifecycleSuite } from "./suites/divisionLifecycle.ts";
 import { gapSuite } from "./suites/gap.ts";
 import { visualSeedRoutesSuite } from "./suites/visualSeedRoutes.ts";
 import { streamTargetsSuite } from "./suites/streamTargets.ts";
+import { seaznHostedSuite } from "./suites/seaznHosted.ts";
 import { captureV2Suite } from "./suites/captureV2.ts";
 import { deviceLinkFootballSuite } from "./suites/deviceLinkFootball.ts";
 import { captureRecordSuite } from "./suites/captureRecord.ts";
@@ -893,6 +894,9 @@ export async function main() {
   // --- fixture-page stream T2b: streaming destinations over real HTTP — add, rename, replace key, remove (an archive),
   // remove again (404), re-add the same key (restored: the same id). On the shared Pro org; archives all it creates.
   await suite("streamTargets", () => streamTargetsSuite(admin, org2.id));
+  // --- Seazn-hosted video (plan Task 19): the Seazn destination present and first, refused while LIVE is off (the pick and
+  //     the start), and the public video route private, no-store. Its own Pro org; the mode comes from SEAZN_HOSTED_LIVE.
+  await suite("seaznHosted", () => seaznHostedSuite());
   // --- capture QR v2 (spec 2026-10-01 §11.1.6): the phone routes end to end — mint, claim, Go live, go-live, the
   //     descriptor's cred (and none for a second phone), the fake connect, live, Stop, over; every answer private.
   await suite("captureV2", () => captureV2Suite());

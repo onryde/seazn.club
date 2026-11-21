@@ -373,6 +373,10 @@ const WALKTHROUGH_SPECS: string[] = [
   "directory-venues-courts.spec.ts",
   // The Streaming page (2026-09-30 as a Directory tab; its own top-nav page since 2026-10-27): destinations' add, shape warning, rename, replace key, remove=archive, the in-use lock (waiting and live), re-add restores, the empty state, the phone ⋯ menu, and (T8) the fixture picker's Manage destinations link.
   "streaming-destinations.spec.ts",
+  // Seazn-hosted video (Task 19): Seazn pre-selected, a real Go live, the spectator's live player, Stop leaving the open page within one
+  // read, the stream tick's locked recording as the interim replay, and no YouTube broadcast or addOutput call. Runs (and is not
+  // skipped) only in e2e.yml's e2e-seazn job, the one with SEAZN_HOSTED_LIVE=true; holds the whole stream-slot pool (its own PoolHolder).
+  "seazn-hosted.spec.ts",
 
   // Spectator surface W1 (Task 15) — the anonymous match centre. Split
   // across two files so each stays under budget: cricket matches A (tapped

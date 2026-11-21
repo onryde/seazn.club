@@ -1,5 +1,5 @@
 // server/relay/fakes.ts — FakeIngest / FakeRunner. Two modes in one class:
-//  * SCRIPTED (unit tests): `setState`, `addVideo`, `scriptDeleteVideo`.
+//  * SCRIPTED (unit tests): `setState`, `addVideo`, `addRecording`, `scriptDeleteVideo`.
 //  * CLOCK-DERIVED (a server started with RELAY_DRIVERS=fake): an input is
 //    "connected" once `connectAfterMs` has passed since its creation, and the
 //    creation time is ENCODED IN THE INPUT ID (`fake-in-<ms>-<rand>`), so the
@@ -303,6 +303,18 @@ export class FakeIngest implements IngestProvider {
             state: v.state ?? "ready", errorReasonCode: v.errorReasonCode ?? null, signed,
           },
     );
+  }
+
+  /** Seazn Task 19: Cloudflare finishing a recording of `inputId` — a FINISHED recording (`ready`), unsigned as C3 measured a
+   *  signed input's recording to read, made on this fake's clock. The walkthrough's stand-in for the recording a real input
+   *  leaves behind (nothing in a server process adds videos otherwise), driven through the fake-ingest control route. A test
+   *  control like `addVideo`: no provider call is recorded. An input this instance never made throws (a deleted one does not:
+   *  a recording outlives its input, C2). Answers the new video's id. */
+  addRecording(inputId: string): string {
+    if (!this.inputs.has(inputId)) throw new Error(`FakeIngest.addRecording: unknown input ${inputId}`);
+    const videoId = `fake-vid-${this.clock()}-${randomBytes(4).toString("hex")}`;
+    this.addVideo({ videoId, inputId, createdAt: new Date(this.clock()).toISOString(), inProgress: false, state: "ready", durationSeconds: 60 });
+    return videoId;
   }
 
   /** Seazn Task 13: move a recording on — finish it (`inProgress: false, state: "ready"`), or read it unsigned again (C3 at

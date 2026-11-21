@@ -97,6 +97,36 @@ describe("FakeIngest", () => {
     expect((await fake.listInputVideos("in-2")).map((v) => v.videoId), "the seed changes only the input it names").toEqual(["v-theirs"]);
   });
 
+  // Seazn Task 19: the walkthrough's stand-in for Cloudflare finishing a recording of an input. A test control like addVideo:
+  // it adds a FINISHED, UNSIGNED recording (C3's measured default) of the named input and records no provider call.
+  it("Seazn Task 19: addRecording adds a finished, unsigned recording of a known input, each with its own id, and refuses an unknown input", async () => {
+    const rec = new FakeRecorder();
+    const fake = new FakeIngest({ clock: () => Date.parse("2026-11-21T12:00:00Z"), recorder: rec });
+    const { inputId } = await fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme" });
+    const other = (await fake.createLiveInput({ sessionId: "s2", slot: 0 })).inputId;
+    await new Promise((r) => setImmediate(r));
+    const before = rec.calls.length;
+    expect(await fake.listInputVideos(inputId), "EMPTY CASE FIRST: a new input holds no recording").toEqual([]);
+    const first = fake.addRecording(inputId);
+    const second = fake.addRecording(inputId);
+    expect(second, "two recordings of one input are two videos").not.toBe(first);
+    const listed = await fake.listInputVideos(inputId);
+    expect(listed.map((v) => [v.videoId, v.inputId, v.inProgress, v.state, v.signed])).toEqual([
+      [first, inputId, false, "ready", false],
+      [second, inputId, false, "ready", false],
+    ]);
+    expect(listed[0]!.createdAt, "made on the fake's own clock").toBe("2026-11-21T12:00:00.000Z");
+    expect(await fake.listInputVideos(other), "only the named input's listing").toEqual([]);
+    expect(() => fake.addRecording("fake-in-0-nope"), "an unknown input is the caller's mistake").toThrow(/unknown input/);
+    // A recording outlives its input (C2): a deleted input still gets one, as Cloudflare finishes it after the input goes.
+    await fake.deleteInput(other);
+    expect(fake.videoAccess(fake.addRecording(other))).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(rec.calls.slice(before).map((c) => c.operation), "a control, not a provider call: only the listings and the delete").toEqual([
+      "listInputVideos", "listInputVideos", "listInputVideos", "deleteInput",
+    ]);
+  });
+
   it("inputStatus has the per-input GET's shape and flips at connectAfterMs exactly", async () => {
     let now = 1_000_000;
     const fake = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
