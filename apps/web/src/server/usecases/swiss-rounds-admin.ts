@@ -59,6 +59,7 @@ import { tableStageCompletable } from "@/server/engine-db/competition";
 import { firstOwnFormat, ownFormatLoss } from "./fixture-override-guards";
 import { fixtureHasResultSql } from "./fixture-results-sql";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
+import { insertFixtureRows } from "./fixture-insert";
 import { afterScheduleWrite, divisionLockState } from "./schedule";
 import { swissRefusal } from "./swiss-refusal";
 import {
@@ -375,7 +376,7 @@ async function mintRoundShells(tx: Tx, stage: SwissStageRow, round: number, fiel
   // The round holds no row (every caller mints only a round that has none), so its keys start at b1.
   const minted = mintSwissBoardExtKeys(round, [], boards).map((key, i) => shell(key, i + 1));
   if (bye) minted.push(shell(`sw-r${round}-bye`, boards + 1));
-  if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
+  await insertFixtureRows(tx, minted);
   return minted.length;
 }
 

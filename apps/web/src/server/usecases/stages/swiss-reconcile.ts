@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { EngineError } from "@seazn/engine/core";
 import { isSwissBoardSeated, isSwissByeShellExtKey, mintSwissBoardExtKeys, swissBoardsForField, swissRoundHasPlayedResult } from "@/lib/swiss-shell";
 import { fixtureEvidenceSql } from "../fixture-results-sql";
+import { insertFixtureRows } from "../fixture-insert";
 import { chooseDoomedBoards } from "@/lib/rebuild-slots";
 import { firstOwnFormat, ownFormatLoss } from "../fixture-override-guards";
 import type { Tx, SwissExistingFixture, SwissReshape } from "./types";
@@ -239,7 +240,7 @@ export async function reconcileSwissRoundShells(
   const keys = mintSwissBoardExtKeys(target, round.map((f) => f.ext_key), Math.max(0, boards - survivors.length));
   for (const [i, key] of keys.entries()) minted.push(shell(key, survivors.length + i + 1));
   if (bye && !byeRow) minted.push(shell(`sw-r${target}-bye`, boards + 1));
-  if (minted.length > 0) await tx`insert into fixtures ${tx(minted)}`;
+  await insertFixtureRows(tx, minted);
 
   for (const row of minted) {
     kept.push({

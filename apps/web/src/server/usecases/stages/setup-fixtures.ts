@@ -11,6 +11,7 @@ import { BYE_SLOT_LABEL } from "@/lib/bye-line";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { courtNamesById } from "../schedule";
 import { stageHasStarted } from "../fixture-started-sql";
+import { insertFixtureRows } from "../fixture-insert";
 import { descriptorLabel, expandSources, placeDescriptors, resolveProgressionSource, sourceShapeOf, type SlotDescriptor, type SlotLabel } from "../stage-seeding";
 import {
   STAGE_COLS,
@@ -299,7 +300,7 @@ export async function writeProgressionSetupFixtures(
       third_place: g.thirdPlace === true,
       conditional: g.conditional === true,
     }));
-  if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+  await insertFixtureRows(tx, newRows);
   for (const r of newRows) byKey.set(r.ext_key, r.id);
   const created = newRows.length;
   const createdIds = newRows.map((r) => r.id);

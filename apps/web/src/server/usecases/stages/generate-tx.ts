@@ -19,6 +19,7 @@ import { courtNamesById, divisionLockState } from "../schedule";
 import { SCHEDULE_LOCKED_CODE, SCHEDULE_LOCKED_MESSAGE } from "@/lib/schedule-lock";
 import { fixtureHasResultSql } from "../fixture-results-sql";
 import { fixtureCalledSql, stageHasStarted } from "../fixture-started-sql";
+import { insertFixtureRows } from "../fixture-insert";
 // W4 T8 (FX-G2): a root knockout's Generate over existing lines reconciles them (bracket-reconcile.ts).
 import { reconcileRootBracket } from "../bracket-reconcile";
 import { carriedSlotCounts, carrySlots, carrySlotsByPair } from "@/lib/rebuild-slots";
@@ -701,7 +702,7 @@ export async function generateStageFixturesTx(
         conditional: g.conditional === true,
       };
     });
-  if (newRows.length > 0) await tx`insert into fixtures ${tx(newRows)}`;
+  await insertFixtureRows(tx, newRows);
   for (const r of newRows) byKey.set(r.ext_key, r.id);
   if (roundByes !== null) await writeRoundByes(tx, stageId, roundByes);
   // Loop R M-8 (R116-2's other door): F14's departed-qualifier walkover — an award over two seated sides, which a

@@ -38,6 +38,7 @@ import {
 } from "@/lib/roundrobin-late-entry";
 import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
+import { insertFixtureRows } from "./fixture-insert";
 import { placeWaitingKnockoutEntrant } from "./knockout-late-entry";
 import { roundRobinRefusal } from "./roundrobin-refusal";
 import { afterScheduleWrite } from "./schedule/after-write";
@@ -258,7 +259,7 @@ export async function applyTableLateDecision(
       conditional: false,
     };
   });
-  await tx`insert into fixtures ${tx(rows)}`;
+  await insertFixtureRows(tx, rows);
   if (consumed.length > 0) {
     const gone = consumed.map((b) => `${b.roundNo}|${b.leg}|${b.entrantId}`);
     await tx`

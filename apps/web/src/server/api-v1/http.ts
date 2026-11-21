@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 import * as Sentry from "@sentry/nextjs";
+import postgres from "postgres";
 import { EngineError, type EngineErrorCode } from "@seazn/engine/core";
 import { isLevelResultReason } from "@/lib/level-result-reason";
 import { isSettleRefusalReason } from "@/lib/settle-refusal-reason";
@@ -377,10 +378,21 @@ async function v1Inner<T>(
       );
     }
     Sentry.captureException(err);
-    const message = err instanceof Error ? err.message : "Server error";
+    // W5 stress fix F1: a database driver's or the socket's own failure (Postgres' message names relations and constraints;
+    // the driver's names its limits; a connection error names the host and port) is logged and paged above, and never
+    // read to the caller: the body says only that the server failed, and the request id ties it to the log line.
+    const message = err instanceof Error && !isDriverError(err) ? err.message : "Server error";
     log.error({ err }, "v1: unhandled error");
     return errorResponse(requestId, 500, "INTERNAL", message);
   }
+}
+
+/** W5 stress fix F1: an error the database driver or the socket raised, never an error this app wrote (those reach the
+ *  catch-all only as plain `Error`s with no code; HttpError and EngineError are answered above). A Postgres refusal is a
+ *  `PostgresError`; the driver's own failures (`MAX_PARAMETERS_EXCEEDED`, `CONNECTION_CLOSED`, ...) and a socket's
+ *  (`ECONNREFUSED`) are `Error`s carrying a string `code`. */
+function isDriverError(err: Error): boolean {
+  return err instanceof postgres.PostgresError || typeof (err as { code?: unknown }).code === "string";
 }
 
 type IssueLike = { readonly path: readonly PropertyKey[]; readonly message: string; readonly errors?: readonly (readonly IssueLike[])[] };
