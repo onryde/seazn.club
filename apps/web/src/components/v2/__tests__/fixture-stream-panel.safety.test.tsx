@@ -9,7 +9,7 @@ import { renderIsland, propsOf, walk, expandWithHooks, textOf } from "@/componen
 import { defaultTemplateFor } from "@/components/overlay/template-registry";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { StreamPhone, StreamTarget } from "@/server/api-v1/schemas";
-import type { StreamSessionView } from "@/lib/stream-session-view";
+import { createErrorText, type StreamSessionView } from "@/lib/stream-session-view";
 import { LOCALES } from "@/lib/i18n-constants";
 import { YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS } from "@/lib/youtube";
 import { readFileSync } from "node:fs";
@@ -160,6 +160,7 @@ describe("Task 16: the Phase 0 warning stays YouTube-only", () => {
     bodyOf(seazn).onGoLive();
     await settle();
     expect(bodyOf(seazn).createError?.code).toBe("seazn_composed_unavailable");
+    expect(createErrorText(bodyOf(seazn).createError!, (k) => m(k))).toBe(m("stream.error.seazn_composed_unavailable"));
     const plain = await mount({ targets: [target("t1", null)], create: refuse });
     pick(plain);
     bodyOf(plain).onGoLive();
@@ -175,6 +176,10 @@ describe("Task 16: the Phase 0 warning stays YouTube-only", () => {
       bodyOf(island).onGoLive();
       await settle();
       expect(bodyOf(island).createError?.code).toBe(code);
+      // The rendered sentence, from the dictionary the panel reads — never the unknown line.
+      const shown = createErrorText(bodyOf(island).createError!, (k) => m(k));
+      expect(shown).toBe(m(`stream.error.${code}` as MessageKey));
+      expect(shown).not.toBe(m("stream.error.unknown"));
       out.push(code);
     }
     expect(out).toHaveLength(2);

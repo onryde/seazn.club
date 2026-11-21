@@ -181,7 +181,9 @@ export function StreamDestinationsPanel({
   // The channel picker is the way in while it is open (`?youtube=pick`): the empty card's Connect YouTube would be a second one.
   const pickPending = canEdit && landing?.code === "pick" ? landing.pendingId : null;
   const channels = targets.filter((t) => t.youtube !== null);
-  const keys = targets.filter((t) => t.youtube === null);
+  // The Seazn row is neither a channel nor a pasted key (Task 16 review I1): it is drawn first, under no heading, so it never reads as a key.
+  const seaznRows = targets.filter((t) => t.kind === "seazn");
+  const keys = targets.filter((t) => t.youtube === null && t.kind !== "seazn");
   // Connect YouTube is the primary way in and comes first; Add streaming key (a pasted key) is the secondary one (owner 2026-10-30).
   const connectButton = (testid: string) => (
     <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-primary min-h-11">
@@ -258,6 +260,15 @@ export function StreamDestinationsPanel({
         </div>
       ) : (
         <div className="space-y-4">
+          {seaznRows.length > 0 && (
+            <section>
+              <div className="card overflow-visible">
+                <ul data-testid="seazn-destination-list" className="divide-y divide-slate-100" aria-label={msg("stream.dest.kind.seazn")}>
+                  {seaznRows.map((t) => <SeaznRow key={t.id} t={t} />)}
+                </ul>
+              </div>
+            </section>
+          )}
           {channels.length > 0 && (
             <section>
               {keys.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.youtube.channels")}</h2>}
@@ -275,7 +286,7 @@ export function StreamDestinationsPanel({
               {channels.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.keys.heading")}</h2>}
               <div className="card overflow-visible">
                 <ul className="divide-y divide-slate-100" aria-label={msg("streamDest.listLabel")}>
-                  {keys.map((t) => (t.kind === "seazn" ? <SeaznRow key={t.id} t={t} /> : <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />))}
+                  {keys.map((t) => <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />)}
                 </ul>
               </div>
             </section>

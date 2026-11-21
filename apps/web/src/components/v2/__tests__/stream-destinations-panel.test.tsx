@@ -939,6 +939,21 @@ describe("the Seazn row is fixed (Task 16)", () => {
     expect(html.indexOf('data-target-id="t-seazn"')).toBeLessThan(html.indexOf('data-target-id="t1"'));
   });
 
+  it("with a connected channel, Seazn and a pasted key: Seazn sits first, in its own list, and is not under the 'Stream keys' heading (I1)", () => {
+    const channel = target({
+      id: "t-ch", label: "Club channel", keyHint: null,
+      youtube: { connectionId: "c-1", channelId: "UC1", channelTitle: "Club channel", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0 } as StreamTarget["youtube"],
+    });
+    const html = panelHtml({ canEdit: true, targets: [seazn(), channel, target()] });
+    const heading = html.indexOf(`>${m("streaming.keys.heading")}<`);
+    expect(heading, "premise: the keys heading is on the page (a channel and a key are listed)").toBeGreaterThan(-1);
+    const sz = html.indexOf('data-target-id="t-seazn"');
+    expect(sz, "premise: the Seazn row is on the page").toBeGreaterThan(-1);
+    expect(sz, "Seazn is above the keys heading").toBeLessThan(heading);
+    expect(html.indexOf('data-testid="youtube-channel-list"'), "and above the channels").toBeGreaterThan(sz);
+    expect(html.indexOf('data-target-id="t1"'), "the pasted key is below the heading").toBeGreaterThan(heading);
+  });
+
   it("an org with only the Seazn row lists it (the empty card does not claim 'No destinations yet')", () => {
     const html = panelHtml({ canEdit: true, targets: [seazn()] });
     expect(rowOf(html, "t-seazn")).toContain("Seazn");
