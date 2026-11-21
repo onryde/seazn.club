@@ -1688,6 +1688,11 @@ export async function cleanup(tag: string): Promise<void> {
     // seazn_held_alerts.session_id is ON DELETE RESTRICT (V540): a held-recording alert would block the sessions cascade.
     await sql`delete from seazn_held_alerts
               where session_id in (select id from fixture_stream_sessions where org_id in (${doomedOrgs}))`;
+    // seazn_locked_videos.input_row_id is ON DELETE RESTRICT too (V540): a recording the stream tick locked (Task 13) would
+    // block the inputs cascade, so its row goes first.
+    await sql`delete from seazn_locked_videos
+              where input_row_id in (select i.id from fixture_stream_inputs i join fixture_stream_sessions s on s.id = i.session_id
+                                      where s.org_id in (${doomedOrgs}))`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;

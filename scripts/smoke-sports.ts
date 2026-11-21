@@ -171,6 +171,13 @@ async function cleanup(): Promise<void> {
       delete from seazn_held_alerts
       where session_id in (select s.id from fixture_stream_sessions s join organizations o on o.id = s.org_id
                            where o.created_by in (select id from users where email = any(${emails})))`;
+    // seazn_locked_videos.input_row_id is RESTRICT too (V540): a recording the stream tick locked would block the inputs cascade.
+    await sql`
+      delete from seazn_locked_videos
+      where input_row_id in (select i.id from fixture_stream_inputs i
+                               join fixture_stream_sessions s on s.id = i.session_id
+                               join organizations o on o.id = s.org_id
+                              where o.created_by in (select id from users where email = any(${emails})))`;
     const orgs = await sql`
       delete from organizations
       where created_by in (select id from users where email = any(${emails}))`;
