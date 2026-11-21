@@ -12,6 +12,8 @@ name: E2E
 # `mobile` entirely: they never ran, and their absence read as "not
 # applicable" rather than "untested". Separate GitHub Actions jobs have no
 # such chain — each runs and reports regardless of the others' outcome.
+# A fourth, e2e-seazn (Seazn-hosted video Task 19, 2026-11-21), is the only job
+# whose server runs SEAZN_HOSTED_LIVE=true; see the header above it.
 #
 # `e2e-mobile` also runs the FIVE width/device projects (mobile-320/360/430,
 # tablet-768/834) that `playwright.config.ts` has always defined but that no
@@ -2021,6 +2023,401 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-serial
+          path: apps/web/playwright-report
+          retention-days: 7
+
+      - name: Dev server log (on failure)
+        if: failure()
+        run: cat dev-server.log || true
+
+      - name: Placement service logs and teardown
+        if: always()
+        run: |
+          docker logs placement-e2e || true
+          docker rm -f placement-e2e >/dev/null 2>&1 || true
+
+  # ---------------------------------------------------------------------
+  # Seazn-hosted video, Task 19: the ONE job whose server runs with
+  # SEAZN_HOSTED_LIVE=true. Every other job here leaves it off, which is how
+  # production runs until the owner turns it on, so the Seazn destination is
+  # hidden there and the specs that need it skip by name. This job runs two
+  # whole walkthrough files against a LIVE-on server: seazn-hosted.spec.ts
+  # (the organiser's Go live to Seazn, the spectator's player, the Stop, the
+  # interim replay) and streaming-destinations.spec.ts (every case reads both
+  # modes; its case 11 runs only here). e2e-serial's build, seed, placement
+  # and server boot, with the walkthrough pieces the two files need (the
+  # cron secret, the compositor image, the connect delay).
+  # ---------------------------------------------------------------------
+  e2e-seazn:
+    name: Playwright e2e — Seazn-hosted, LIVE on (Postgres container)
+    runs-on: ${{ vars.E2E_RUNNER || 'ubuntu-latest' }}
+    # See e2e-parallel's timeout note: no job here had one, so a hung
+    # Playwright run burned GitHub's 360-minute default. 30, not e2e-serial's
+    # 20: this job builds as well, and its specs take the WHOLE stream-slot
+    # pool for composed sessions (seazn-hosted.spec.ts, and case 11 at three
+    # widths), so a waiter can sit out one whole hold (POOL_SLOT_WAIT_MS, 385 s
+    # at the 10 s connect delay) once per attempt, and CI retries once.
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      DATABASE_SSL: disable
+      AUTH_SECRET: ci-only-insecure-secret-please-change-in-prod-0123456789
+      # x-cron-secret for /api/cron/stream-tick: seazn-hosted.spec.ts posts the stream tick (its Seazn pass locks the fake's
+      # recording). CI-only dummy, e2e-parallel's own value; the server and the Playwright process both read this job-level var.
+      # AUTH_SECRET above is read by both as well: the compositor stand-in mints its job token with it.
+      CRON_SECRET: ci-only-e2e-cron-secret-0123456789
+      # CI-only envelope key for sealed device-link secrets (scorer sheets §4.1). Never a real key.
+      DEVICE_LINK_KEK: 0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0
+      # CI-only envelope key for players' Lichess tokens (chess design §3.1). A DIFFERENT
+      # value from DEVICE_LINK_KEK on purpose: one key must not open the other's rows.
+      LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
+      # T17 review M7: no spec in this job starts the Lichess fixture, so the
+      # port is closed — a stray reconcile is refused on the runner instead of
+      # reading lichess.org unauthenticated. Video stays unconfigured here (no
+      # REALTIMEKIT_* credentials ⇒ no call). Pinned by e2e-ci-wiring.test.ts.
+      LICHESS_BASE_URL: "http://127.0.0.1:4321"
+      # CI-only dummy keypair (kid e2e-ci-dummy-es256). Previous inlined JWK
+      # rotated out. Pass through every Start server / Playwright step; do
+      # not introduce SUPABASE_JWT_PRIVATE_KEY.
+      # Base64 JWK, named to avoid the substring "PRIVATE_KEY" — Actions
+      # strips job-env vars by NAME match, not by value shape. The plain
+      # SUPABASE_JWT_PRIVATE_KEY never appeared next to SECRET/CRON in run
+      # 34784354416, and SUPABASE_JWT_PRIVATE_KEY_B64 (base64-encoded, same
+      # value) STILL didn't survive — absent from every step env: dump in run
+      # 34830995761, job 103934064629 (PR #782 review, 2026-09-14). Do not
+      # rename this var to anything containing "PRIVATE_KEY".
+      SUPABASE_JWT_SIGNING_KEY_B64: eyJrdHkiOiJFQyIsIngiOiJfdWhQc1BWSFI3ZGdRRHpKMTJlYmtSUXhmbmY1T3YyRVFROWpyckJOYnBBIiwieSI6Ikd2TUhJa2YzYUpiWElSdTlJaGNjOXlTMWhuR0RzMUFYVm40Wjk5akZpZzAiLCJjcnYiOiJQLTI1NiIsImQiOiJEVXlsTzdFMVhSdHdidkNEcG13YUkxbDFUMFFON21DOWNUM0EwenNld2d3IiwiYWxnIjoiRVMyNTYiLCJraWQiOiJlMmUtY2ktZHVtbXktZXMyNTYiLCJ1c2UiOiJzaWcifQ==
+      SUPABASE_JWT_SECRET: ci-only-insecure-jwt-secret-please-change-in-prod-0123456789
+      NEXT_PUBLIC_SUPABASE_URL: "https://stub.supabase.co"
+      # Dummy, not a real project key — supabaseBrowser() throws without it and
+      # the overlay stays on poll with an unhandled rejection (run 34834966169).
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: sb_publishable_e2e_stub
+      NEXT_TELEMETRY_DISABLED: "1"
+      E2E_PROD_TARGET: "1"
+      # The v3 scoring pad soft-commits ONLY when an enrichment dock has chips
+      # (usesSoftCommit). Empty-dock taps and `*.clock` submit immediately. When
+      # a hold DOES apply, the event enters the durable queue at once but is not
+      # SENT for queue.ts's HOLD_MS, and a spec that polls the ledger has to wait
+      # that window out per tap. Shipped is 5s (was 12s; owner-ruled), which puts
+      # the walkthrough specs — badminton alone taps sixteen rallies — past their
+      # 180s budget. 3s here, set at JOB level so the identical value reaches
+      # both the production BUILD (NEXT_PUBLIC_* is substituted into the client
+      # bundle at build time, so the pad in the browser holds for 3s) and the
+      # Playwright runner (which imports queue.ts to derive its own waits from
+      # the same number). Setting it on only one of those two would leave the
+      # specs racing a window the browser is not using.
+      #
+      # queue.ts's `resolveHoldMs` falls back to the SHIPPED default for anything
+      # unusable, so a typo here slows this leg down rather than turning the
+      # hold off — and the shipped value keeps its own floor test, which is
+      # pinned on the default and is therefore untouched by this override.
+      NEXT_PUBLIC_SCOREPAD_HOLD_MS: "3000"
+      # Same as e2e-parallel's: the settled poll override (see that job's comment).
+      NEXT_PUBLIC_E2E_SETTLED_POLL_MS: "5000"
+      STRIPE_SECRET_KEY: sk_test_ci_e2e_dummy
+      STRIPE_WEBHOOK_SECRET: whsec_e2e_payments
+      SCHEDULING_AI_BASE_URL: "http://127.0.0.1:4319"
+      ANTHROPIC_API_KEY: sk-ant-e2e-fixture
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.pr && format('refs/pull/{0}/head', inputs.pr) || github.sha }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+          cache: pnpm
+          registry-url: https://npm.pkg.github.com
+          scope: '@onryde'
+      - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+
+      - name: Cache Flyway CLI
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/seazn-flyway
+          key: flyway-cli-10.22.0-linux-x64
+
+      - name: Bootstrap database (Flyway migrate)
+        run: npm run db:apply
+
+      - name: Sync sport catalog from the engine registry
+        run: npm run sync:sports
+
+      # There is no "Cache Next.js build cache" step here any more. It claimed
+      # the build "only pays for what changed"; it did not. Next 16 builds with
+      # Turbopack, which does not write a build cache to .next/cache unless
+      # experimental.turbopackFileSystemCacheForBuild is on — so the step
+      # restored an exact-key hit of 40 KB ("Cache Size: ~0 MB (40528 B)") in
+      # every job of every run while each one still paid a full 29-58s cold
+      # compile, and then lost the save to the same seven-way race the
+      # Playwright cache lost. Turning that flag on is a change to what we
+      # BUILD, not to how we cache it, so it is deliberately not bundled here;
+      # reinstate this step in the same commit that enables it. ci.yml's smoke
+      # job still carries the identical dead step.
+
+      #
+      # Backgrounded. This is the long pole of the setup phase (52-55s across
+      # all five e2e runners on run 32008189967) and nothing before the `wait:`
+      # below reads its output, so the placement image pull and the Chromium
+      # download ride alongside it instead of queueing behind it. Its log
+      # interleaves with theirs — that is the documented cost of `background:`,
+      # and the reason the DB steps above stay in the foreground as their own
+      # named steps rather than being folded into one blob.
+      - name: Build (production)
+        id: build
+        background: true
+        run: npm run build --workspace apps/web
+        env:
+          SKIP_TYPECHECK: "1"
+
+      #
+      # The image is PULLED from the pin (packages/scheduler/VENDORED.json) and
+      # retagged `placement-service:ci`; nothing is built here. It is a `run:`
+      # step and stays in the foreground, exactly where the build step it
+      # replaces was; backgrounding it like the production build above is a
+      # possible later optimisation, not done here. (The old reason — an
+      # undocumented backgrounded `uses:` step was measured to lose its outputs,
+      # probe run 32011114196 — applies to the cache RESTORE below, not to this.)
+      - name: Pull the pinned placement image
+        id: image
+        run: bash packages/scheduler/scripts/placement-image.sh pull
+      # Moved UP from after "Start server", where it used to sit: nothing about
+      # downloading a browser needs a database, a build or a running server, so
+      # down there it was ~16s of dead serial time. Browsers cached per
+      # Playwright version. The cache RESTORE stays in the foreground (it is
+      # ~3s, and a backgrounded actions/cache loses its outputs — see the note
+      # on the image pull above); only the download is backgrounded.
+      # RESTORE ONLY. All seven jobs used to race one key on save and six lost
+      # it every run — "Failed to save: Unable to reserve cache with key
+      # playwright-…, another job may be creating this cache" (run
+      # 32272599493). No writer here at all means no race, and it means the
+      # key must be written somewhere a PR can read it: on main, by
+      # e2e-cache-warm.yml, whose comment carries the full diagnosis of why
+      # these jobs were missing a cache that already existed.
+      - name: Restore Playwright browsers
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      # No `--with-deps`. It installed NOTHING on this image — every package it
+      # names came back "is already the newest version" on run 32272599493 —
+      # while still paying a full `apt-get update` in all seven jobs. Chromium
+      # refuses to launch with a clear host-dependency error if that ever stops
+      # being true, so the failure mode is loud, not silent.
+      - name: Install Playwright Chromium
+        id: chromium
+        background: true
+        run: npx playwright install chromium
+        working-directory: apps/web
+
+      # The setup phase's join. Everything past this point needs the artefacts
+      # the three background steps produce: the placement container needs the
+      # image, `Start server` needs .next/standalone, and Playwright needs the
+      # browser. A background step's FAILURE also surfaces here rather than
+      # where it happened — so a red on this step means "read the interleaved
+      # log above", not "the wait is broken".
+      #
+      # Serial, these three were ~90s (build 53 + image 18 + browser 16, plus
+      # cache restores) on run 32008189967. Concurrent they cost about what the
+      # build alone costs.
+      - name: Wait for build, placement image and browser
+        wait: [build, image, chromium]
+
+      - name: Start the placement service
+        run: |
+          set -euo pipefail
+          docker run -d --name placement-e2e -p 50051:50051 \
+            -e PLACEMENT_SERVICE_SECRET=ci-e2e-secret \
+            -e PLACEMENT_LOG_LEVEL=WARNING \
+            placement-service:ci
+          opened=""
+          for _ in $(seq 1 15); do
+            if timeout 1 bash -c 'echo > /dev/tcp/127.0.0.1/50051' 2>/dev/null; then opened=1; break; fi
+            sleep 1
+          done
+          if [ -z "$opened" ]; then
+            echo "::error::placement port 50051 never accepted a TCP connection within 15s"
+            docker logs placement-e2e || true
+            exit 1
+          fi
+
+      # PR #904 CI: the server SEALS every saved stream destination with RELAY_KEK
+      # (server/relay/crypto.ts); unset, POST stream-targets answers 500. A fresh random
+      # key per run, masked, and never a literal: this repository is public, so a key
+      # committed here would be anyone's. Nothing outlives the run, so nothing needs the
+      # same key twice. Pinned by e2e-ci-wiring.test.ts ("RELAY_KEK reaches every …").
+      - name: Generate a per-run RELAY_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
+
+      # YouTube Connect (plan T7, pulled forward from T20/T21): the OAuth callback SEALS the channel's refresh token with
+      # YOUTUBE_TOKEN_KEK (server/youtube/token-store.ts), and the start refuses to send anyone to Google while it is unusable.
+      # A fresh random key per run, masked, and never a literal: this repository is public. Pinned by
+      # e2e-ci-wiring.test.ts ("YOUTUBE_TOKEN_KEK reaches …").
+      - name: Generate a per-run YOUTUBE_TOKEN_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "YOUTUBE_TOKEN_KEK=$kek" >> "$GITHUB_ENV"
+
+      - name: Start server
+        env:
+          # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
+          # blank-but-defined (the empty string wins `SENTRY_DSN ?? NEXT_PUBLIC_SENTRY_DSN`), so a DSN baked into the
+          # build or present on the runner never sends a CI event to the real project. Only the SENTRY_DSN blank is
+          # load-bearing: a NEXT_PUBLIC_ value is inlined into the server chunks at build, so blanking it here is inert.
+          SENTRY_DSN: ""
+          NEXT_PUBLIC_SENTRY_DSN: ""
+          PLACEMENT_SERVICE_HOST: localhost:50051
+          PLACEMENT_SERVICE_SECRET: ci-e2e-secret
+          SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # Default pino level is info — every accepted score event + route
+          # floods the Actions log and buries the failure. warn keeps refusals
+          # and faults; silent would hide the only signal when a red is real.
+          LOG_LEVEL: warn
+          # R5 (Task 14b): server.js runs NODE_ENV=production, where an UNSET RELAY_DRIVERS now
+          # disables streaming (createSession answers 503 ingest_unavailable). The suite drives
+          # the Phone tab on the fake drivers, so it says so explicitly. Under production an
+          # explicit fake also needs ENV_NAME "local" or "ci" (m2): unset, the server refuses
+          # to boot, exactly as a deployment missing its ENV_NAME would.
+          RELAY_DRIVERS: fake
+          ENV_NAME: ci
+          # YouTube Connect: the fake YouTube (server/youtube/driver.ts), as RELAY_DRIVERS=fake picks the fake relay. Under
+          # production an UNSET YOUTUBE_DRIVER is LIVE, and the fake's routes (the control route, the fake authorize hop) also
+          # need ENV_NAME ci, set above. The redirect URI is pinned to the browser's own origin: the standalone server binds
+          # 0.0.0.0, so a base URL derived from the request would send the authorize hop to an origin whose cookies are not the
+          # browser's. Pinned by e2e-ci-wiring.test.ts.
+          YOUTUBE_DRIVER: fake
+          YOUTUBE_REDIRECT_URI: http://localhost:3000/api/youtube/connect/callback
+          # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
+          # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
+          # Exactly "1". Staging and prod never set it.
+          CAPTURE_QR_V2_ALWAYS: "1"
+          # Online chess: what starts it is behind the PostHog flag online-chess (fallback false); the
+          # override offers it to every spec and walkthrough. Exactly "1". Staging and prod never set it.
+          ONLINE_CHESS_ALWAYS: "1"
+          # A Seazn start is COMPOSED (start.ts), and a deployment whose env names no compositor image refuses every composed
+          # start (drivers.ts `composedUnavailable()`). e2e-parallel's dummy: the fake drivers never pull it.
+          RELAY_IMAGE: registry.fly.io/e2e-fake-compositor:dummy
+          # e2e-parallel's connect delay; the Playwright step below is told the same value (the stream walkthroughs derive their
+          # waits from it, e2e/helpers/stream-slot-pool.ts).
+          FAKE_INGEST_CONNECT_AFTER_MS: "10000"
+          # THIS JOB'S REASON TO EXIST (Seazn-hosted video, Task 19): LIVE on. Read per request (relay/config.ts
+          # `seaznHostedLive`); every other job leaves it unset (off), so there the Seazn destination is hidden and
+          # seazn-hosted.spec.ts and streaming-destinations.spec.ts case 11 skip by name. The origins are the bare host the
+          # browser loads the app from (PLAYWRIGHT_BASE below): a Seazn start refuses 503 seazn_video_unconfigured without them.
+          SEAZN_HOSTED_LIVE: "true"
+          SEAZN_VIDEO_ORIGINS: localhost
+        run: |
+          rm -rf apps/web/.next/standalone/apps/web/.next/static
+          cp -R apps/web/.next/static apps/web/.next/standalone/apps/web/.next/static
+          # public/ too, as the Dockerfile does — tracing does not carry it (#887).
+          rm -rf apps/web/.next/standalone/apps/web/public
+          cp -R apps/web/public apps/web/.next/standalone/apps/web/public
+          # The compiled instrumentation.js, overlaid as the Dockerfile does (see its comment): Turbopack's standalone
+          # tracing drops it and Next silently skips register() without it, so a server started from the traced tree
+          # alone never ran Sentry init, the relayDriverMode() boot check, the outbox readiness report or the public
+          # error no-store guard - CI served something production does not. The merge form (`/.`): the destination
+          # exists, and `cp -R dir dest` would nest under it.
+          cp -R apps/web/.next/server/. apps/web/.next/standalone/apps/web/.next/server/
+          node apps/web/.next/standalone/apps/web/server.js > dev-server.log 2>&1 &
+          echo "waiting for server…"
+          up=""
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:3000/api/health >/dev/null; then
+              echo "server up after ${i}s window"; up=1; break
+            fi
+            sleep 2
+          done
+          if [ -z "$up" ]; then
+            echo "server did not become healthy"; cat dev-server.log; exit 1
+          fi
+          chunk=$(ls apps/web/.next/static/chunks/*.js 2>/dev/null | head -1)
+          if [ -z "$chunk" ]; then
+            echo "no built chunks found — build output is not where expected"; exit 1
+          fi
+          asset="/_next/${chunk#apps/web/.next/}"
+          if ! curl -sf "http://localhost:3000$asset" >/dev/null; then
+            echo "static asset $asset 404s — standalone tree not staged"
+            cat dev-server.log; exit 1
+          fi
+          echo "static assets serve ($asset)"
+
+      # The probe above picks an ARBITRARY chunk (`ls … | head -1`) and only
+      # proves the standalone tree was staged. It cannot see the #19 failure
+      # mode: the bundler's own manifest naming a chunk id it never flushed,
+      # so the route's HTML asks for a script the server 500s as
+      # `content-type: text/plain`, React never hydrates, and every control
+      # on the page is dead — while the page, /api/health and this probe all
+      # stay green. Here that surfaces as N specs failing one at a time on
+      # clicks that do nothing, which reads as a flake or as the change under
+      # test. This step names the missing asset and every route referencing
+      # it instead. Same gate ci.yml runs before smoke; this build is a
+      # DIFFERENT build, so it needs its own.
+      - name: Verify every route's referenced build chunks were written (#19)
+        run: npm run check:build-chunks
+
+      # Two WHOLE files of the walkthrough project, and nothing else: the Seazn walk itself, and the Streaming page's
+      # walkthrough, whose cases read both modes (its case 11 runs only here). A file filter, never `-g` (AGENTS.md #21).
+      # The runner is told LIVE is on too: both specs read SEAZN_HOSTED_LIVE to know the mode the server is in.
+      - name: Run Playwright e2e (Seazn-hosted, LIVE on)
+        run: npx playwright test --project=walkthrough --workers=2 e2e/walkthrough/seazn-hosted.spec.ts e2e/walkthrough/streaming-destinations.spec.ts
+        working-directory: apps/web
+        env:
+          PLAYWRIGHT_BASE: http://localhost:3000
+          SUPABASE_JWT_SIGNING_KEY_B64: ${{ env.SUPABASE_JWT_SIGNING_KEY_B64 }}
+          # The same values the server was started with (see "Start server").
+          FAKE_INGEST_CONNECT_AFTER_MS: "10000"
+          SEAZN_HOSTED_LIVE: "true"
+
+      # A test that fails and then passes on retry leaves the job green, so an
+      # `if: failure()` upload threw away the only trace and screenshot of the
+      # failed attempt (entrant-rename-walkthrough, run 35841095614: flaky,
+      # nothing left to diagnose). `retain-on-failure` keeps the failed
+      # attempt's trace in the html report even when the retry passes; this
+      # step decides whether that report is worth uploading.
+      - name: Detect flaky tests
+        id: flaky
+        if: always()
+        run: |
+          node -e '
+            const fs = require("fs");
+            let n = 0;
+            try { n = JSON.parse(fs.readFileSync(process.env.REPORT, "utf8")).stats.flaky || 0; } catch {}
+            if (n > 0) console.log("::warning::" + n + " flaky test(s) — report uploaded for the failed attempt");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "flaky=" + (n > 0) + "\n");
+          '
+        env:
+          REPORT: apps/web/playwright-report/results.json
+
+      - name: Upload Playwright report (on failure or flake)
+        if: failure() || steps.flaky.outputs.flaky == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-seazn
           path: apps/web/playwright-report
           retention-days: 7
 

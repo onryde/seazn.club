@@ -1187,12 +1187,13 @@ describe("e2e CI wiring", () => {
     const passthroughs = signing.filter((v) =>
       v.includes("env.SUPABASE_JWT_SIGNING_KEY_B64"),
     );
-    expect(literals.length, "one dummy JWK per e2e job").toBe(3);
+    // Four jobs since Seazn-hosted video Task 19 added e2e-seazn (the LIVE-on job).
+    expect(literals.length, "one dummy JWK per e2e job").toBe(4);
     expect(
       passthroughs.length,
-      "Start server + Playwright, three jobs — the processes that mint / drive mint",
-    ).toBe(6);
-    expect(new Set(literals).size, "all three jobs must share the same dummy").toBe(1);
+      "Start server + Playwright, four jobs — the processes that mint / drive mint",
+    ).toBe(8);
+    expect(new Set(literals).size, "all four jobs must share the same dummy").toBe(1);
 
     const jwk = JSON.parse(Buffer.from(literals[0]!, "base64").toString("utf8")) as {
       kty?: string;
@@ -1217,7 +1218,7 @@ describe("e2e CI wiring", () => {
     );
 
     const startServers = [...yml.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)];
-    expect(startServers.length, "three e2e jobs each start a server").toBe(3);
+    expect(startServers.length, "four e2e jobs each start a server").toBe(4);
     for (const [, body] of startServers) {
       expect(body).toContain("SUPABASE_JWT_SIGNING_KEY_B64:");
     }
@@ -1225,7 +1226,7 @@ describe("e2e CI wiring", () => {
     const playwrightSteps = [
       ...yml.matchAll(/- name: Run Playwright e2e[^\n]*\n([\s\S]*?)(?=\n      - name: )/g),
     ];
-    expect(playwrightSteps.length, "three Playwright run steps").toBe(3);
+    expect(playwrightSteps.length, "four Playwright run steps").toBe(4);
     for (const [, body] of playwrightSteps) {
       expect(body).toContain("SUPABASE_JWT_SIGNING_KEY_B64:");
     }
@@ -1238,7 +1239,7 @@ describe("e2e CI wiring", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
 
     const startServers = [...yml.matchAll(/- name: Start server\n([\s\S]*?)(?=\n      - name: )/g)];
-    expect(startServers.length, "three e2e jobs each start a server").toBe(3);
+    expect(startServers.length, "four e2e jobs each start a server").toBe(4);
     for (const [, body] of startServers) {
       expect(body, "LOG_LEVEL must be on the server process, not Playwright").toMatch(
         /^\s+LOG_LEVEL:\s*warn\s*$/m,
@@ -1248,7 +1249,7 @@ describe("e2e CI wiring", () => {
     const placementStarts = [
       ...yml.matchAll(/- name: Start the placement service\n([\s\S]*?)(?=\n      - name: )/g),
     ];
-    expect(placementStarts.length, "three e2e jobs each start placement").toBe(3);
+    expect(placementStarts.length, "four e2e jobs each start placement").toBe(4);
     for (const [, body] of placementStarts) {
       expect(body).toContain("-e PLACEMENT_LOG_LEVEL=WARNING");
     }
@@ -1275,7 +1276,7 @@ describe("e2e CI wiring", () => {
   it("pins every checkout to an immutable SHA, never a branch name", () => {
     const yml = readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8");
     const refs = yml.match(/^\s*ref: \$\{\{.*$/gm) ?? [];
-    expect(refs.length, "no `ref:` on any checkout — has the workflow changed shape?").toBe(3);
+    expect(refs.length, "no `ref:` on any checkout — has the workflow changed shape? (four jobs since Task 19's e2e-seazn)").toBe(4);
     for (const ref of refs) {
       expect(
         ref,

@@ -368,6 +368,7 @@ const RUNNERS = [
   "ci.yml:smoke-e2e",
   "e2e.yml:e2e-parallel",
   "e2e.yml:e2e-serial",
+  "e2e.yml:e2e-seazn", // Seazn-hosted video Task 19: the LIVE-on job, e2e-serial's boot
   "e2e.yml:e2e-mobile",
   "bench.yml:bench",
 ];
@@ -518,7 +519,7 @@ describe("the workflows: every placement image comes from the pin", () => {
         }
       }
     }
-    expect(waits, "wait ids checked (smoke-e2e: 2, e2e: 3 each)").toBe(2 + 3 + 3 + 3);
+    expect(waits, "wait ids checked (smoke-e2e: 2, e2e: 3 each, four e2e jobs since Task 19's e2e-seazn)").toBe(2 + 3 + 3 + 3 + 3);
   });
 
   it("no workflow uses a `context: services/placement` build action or types a tag; none of the runner blocks uses build-push-action or setup-buildx-action", () => {
