@@ -74,6 +74,8 @@ const CREATE_RESULT_ORPHAN = { ...CREATE_RESULT_DROPPED, uid: "in_undeletable" }
 /** Seazn-hosted video (Task 12, G5): the signed settings a Seazn session's programme input is created with — the plan's own
  *  value, typed here, never read off the adapter. */
 const SIGNED: { signed: true; allowedOrigins: string[] } = { signed: true, allowedOrigins: ["seazn.club"] };
+/** Seazn Task 13: the playback token the fixture's Cloudflare mints — a secret until it is inside a viewer's URL. */
+const MINTED = "eyJhbGciOiJSUzI1NiJ9.minted-playback-secret.c2lnbmF0dXJl";
 
 function cfReply(c: Call): Reply {
   if (c.init.method === "POST" && c.url.endsWith("/live_inputs")) {
@@ -122,6 +124,24 @@ function cfReply(c: Call): Reply {
   if (c.init.method === "GET" && /\/live_inputs\/in_gone$/.test(c.url))
     return { status: 404, body: { success: false, errors: [{ code: 10003, message: "not found" }] } };
   if (c.init.method === "POST" && /\/outputs$/.test(c.url)) return { status: 200, body: { success: true, result: { uid: "out_1" } } };
+  // Seazn Task 13 (C1, C5): "Create signed URL tokens for videos" — `POST /stream/{uid}/token`, result `{ token }` (OpenAPI,
+  // read 2026-11-21). `in_leaky` is a refusal that QUOTES a token back in its error and its result — the redaction floor's
+  // case; `in_notoken` a 200 whose result has no token.
+  if (c.init.method === "POST" && /\/stream\/in_leaky\/token$/.test(c.url))
+    return { status: 500, body: { success: false, errors: [{ code: 10000, message: `could not mint, last was ${MINTED}` }], result: { token: MINTED } } };
+  if (c.init.method === "POST" && /\/stream\/in_notoken\/token$/.test(c.url)) return { status: 200, body: { success: true, result: {} } };
+  if (c.init.method === "POST" && /\/stream\/[^/]+\/token$/.test(c.url)) return { status: 200, body: { success: true, result: { token: MINTED } } };
+  // Seazn Task 13 (C3): "Edit video details" — `POST /stream/{uid}`, echoing the video it now holds. A healthy Cloudflare echoes
+  // what was sent (C7 measured `requireSignedURLs: true` echoed on an in-progress recording). `v_unsigned_echo` is the silent
+  // acceptance (a 200 that did not apply it), `v_gone` a video Cloudflare does not hold, `v_boom` a provider fault.
+  if (c.init.method === "POST" && /\/stream\/v_unsigned_echo$/.test(c.url))
+    return { status: 200, body: { success: true, result: { uid: "v_unsigned_echo", requireSignedURLs: false } } };
+  if (c.init.method === "POST" && /\/stream\/v_gone$/.test(c.url)) return { status: 404, body: { success: false, errors: [{ code: 10003, message: "video not found" }] } };
+  if (c.init.method === "POST" && /\/stream\/v_boom$/.test(c.url)) return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error" }] } };
+  if (c.init.method === "POST" && /\/stream\/[^/?]+$/.test(c.url)) {
+    const sent = JSON.parse(String(c.init.body)) as { requireSignedURLs?: boolean };
+    return { status: 200, body: { success: true, result: { uid: c.url.split("/").pop(), status: { state: "ready" }, requireSignedURLs: sent.requireSignedURLs ?? false } } };
+  }
   // C1: "Delete an output" answers HTTP 200 with the body `{}` (Cloudflare API docs, fetched 2026-09-29) — no `success`
   // envelope. `out_gone` is an output already removed (Cloudflare's 404), `out_boom` a provider fault.
   if (c.init.method === "DELETE" && /\/outputs\/out_gone$/.test(c.url))
@@ -316,9 +336,9 @@ describe("CloudflareIngest", () => {
     expect(Number(url.searchParams.get(LIST_VIDEOS_QUERY.limit))).toBe(LIST_VIDEOS_LIMIT_MAX);
     expect(rec.calls[0]!.init.method).toBe("GET");
     expect(vids).toEqual([
-      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
-      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null },
-      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null },
+      { videoId: "v_cam_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: true },
+      { videoId: "v_cam_done", inputId: "in_abc", createdAt: "2026-09-01T01:00:00Z", inProgress: false, durationSeconds: 30, sizeBytes: 1000, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: false },
+      { videoId: "v_cam_unnamed", inputId: null, createdAt: "2026-09-01T02:00:00Z", inProgress: false, durationSeconds: 12, sizeBytes: 500, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null },
     ]);
     expect(vids, "anti-vacuity: every fixture item mapped").toHaveLength(LIST_VIDEOS_BY_INPUT_200.result.length);
     const err = await ingest.listInputVideos("in_failed_list").catch((e: unknown) => e);
@@ -511,12 +531,12 @@ describe("CloudflareIngest", () => {
     expect(rec.calls[0]!.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream?end=2026-09-10T00%3A00%3A00.000Z&limit=1000`);
     expect(LIST_VIDEOS_PAGE_LIMIT).toBe(1000);
     expect(vids).toEqual([
-      { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null },
-      { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null },
+      { videoId: "v_live", inputId: "in_abc", createdAt: "2026-09-01T00:00:00Z", inProgress: true, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null, signed: null },
+      { videoId: "v_done", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: 61.5, sizeBytes: 734003200, width: 1280, height: 720, state: "ready", errorReasonCode: null, signed: null },
       // The differential the "map on the value" rule exists for: this one is
       // NOT live-inprogress, so a state-keyed mapping would pass its -1 straight
       // into recording_bytes.
-      { videoId: "v_err", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "error", errorReasonCode: "ERR_NON_VIDEO" },
+      { videoId: "v_err", inputId: null, createdAt: "2026-09-01T00:00:00Z", inProgress: false, durationSeconds: null, sizeBytes: null, width: null, height: null, state: "error", errorReasonCode: "ERR_NON_VIDEO", signed: null },
     ]);
     expect(await ingest.deleteVideo("v_live")).toBe("in_progress");
     expect(await ingest.deleteVideo("v_done")).toBe("deleted");
@@ -1155,6 +1175,8 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await real.listInputVideos(realCreds.inputId);
     await real.deleteVideo("v_done");
     await real.deleteInput(realCreds.inputId);
+    await real.playbackToken(realCreds.inputId, { expiresAt: BEFORE });   // Seazn Task 13: appended, so the indexes above hold
+    await real.requireSignedVideo("v_done");
 
     const fakePort = new FakeRecorder();
     const fake = new FakeIngest({ recorder: fakePort });
@@ -1170,14 +1192,17 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await fake.listInputVideos(fakeCreds.inputId);
     await fake.deleteVideo("v_done");
     await fake.deleteInput(fakeCreds.inputId);
+    await fake.playbackToken(fakeCreds.inputId, { expiresAt: BEFORE });
+    await fake.requireSignedVideo("v_done");
 
     await new Promise((r) => setImmediate(r));
     const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
     const fakeShapes = shapes(fakePort.calls, { input: fakeCreds.inputId, video: "v_done", output: fakeOut });
-    // Present twin for the comparison's own vacuity: eleven operations, in order,
+    // Present twin for the comparison's own vacuity: thirteen operations, in order,
     // and the templates really are Cloudflare's account-scoped Stream paths.
     expect(realShapes.map((s) => s.operation)).toEqual([
       "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "setInputEnabled", "storageUsage", "listVideos", "listInputVideos", "deleteVideo", "deleteInput",
+      "playbackToken", "requireSignedVideo",
     ]);
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
     expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
@@ -1186,9 +1211,13 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream");
     expect(realShapes[8]!.template).toBe("/client/v4/accounts/{id}/stream");   // R2004 review I2: the filtered account listing
     expect(realShapes[9]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
+    // Seazn Task 13: the token is minted on the uid's own `/token` path (C1); the lock is a POST to the video itself (C3).
+    expect([realShapes[11]!.method, realShapes[11]!.template]).toEqual(["POST", "/client/v4/accounts/{id}/stream/{id}/token"]);
+    expect([realShapes[12]!.method, realShapes[12]!.template]).toEqual(["POST", "/client/v4/accounts/{id}/stream/{id}"]);
     // m4: the subject id per operation. The adapter is the authority — the
-    // object the call is ABOUT — and the fake agrees on all eleven (C1: the removal is about the OUTPUT; the switch, the INPUT).
-    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input"]);
+    // object the call is ABOUT — and the fake agrees on all thirteen (C1: the removal is about the OUTPUT; the switch, the INPUT;
+    // Task 13: the token, the uid it signs; the lock, the VIDEO).
+    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input", "input", "video"]);
     expect(fakeShapes).toEqual(realShapes);
   });
 });
@@ -1254,5 +1283,84 @@ describe("server/relay/** static claims (C4, C8, C11, C12, C13)", () => {
     }
     // Present twin for the grep's own vacuity: the adapter DOES name its base.
     expect(cf).toContain("client/v4/accounts");
+  });
+});
+
+// Seazn-hosted video, Task 13 (C1, C3, C5): Cloudflare's own token endpoint (no signing key of ours) and the per-video lock.
+// The account token here is NOT "tok": `redact` is a substring replace, and the word "token" would lose its "tok" in every
+// message this block reads.
+describe("Seazn Task 13: playback tokens and the recording lock", () => {
+  const API = "cf-api-secret-t13";
+  const build = () => {
+    const rec = recorder(cfReply);
+    const port = new FakeRecorder();
+    return { rec, port, cf: new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: API, recorder: port }) };
+  };
+  /** The expiry's whole seconds, from the literal instant — never from the adapter. */
+  const AT = new Date("2026-11-21T10:00:00.750Z");
+  const AT_S = Math.floor(Date.parse("2026-11-21T10:00:00Z") / 1000);
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it("playbackToken POSTs /stream/{uid}/token with `exp` in whole seconds, and `downloadable: true` ONLY when asked (C1, C5); it answers the minted token", async () => {
+    const { rec, cf } = build();
+    expect(await cf.playbackToken("in_abc", { expiresAt: AT })).toBe(MINTED);
+    expect(await cf.playbackToken("v_rec", { expiresAt: AT, downloadable: true })).toBe(MINTED);
+    expect(await cf.playbackToken("v_rec", { expiresAt: AT, downloadable: false })).toBe(MINTED);
+    expect(rec.calls.map((c) => [c.init.method, c.url])).toEqual([
+      ["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/in_abc/token`],
+      ["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_rec/token`],
+      ["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_rec/token`],
+    ]);
+    // The bodies EXACTLY: no `downloadable` key at all unless it was asked for, so a viewer's token can never open the MP4.
+    expect(rec.calls.map((c) => JSON.parse(String(c.init.body)))).toEqual([{ exp: AT_S }, { exp: AT_S, downloadable: true }, { exp: AT_S }]);
+  });
+
+  it("no minted token reaches a provider-call record or a thrown message: a success, a refusal that quotes it back, a 200 without one, a transport failure", async () => {
+    const { cf, port } = build();
+    await cf.playbackToken("in_abc", { expiresAt: AT });
+    const messages: string[] = [];
+    for (const uid of ["in_leaky", "in_notoken"]) {
+      const err = await cf.playbackToken(uid, { expiresAt: AT }).then(() => null, (e: unknown) => e);
+      expect(err, uid).toBeInstanceOf(Error);
+      messages.push((err as Error).message);
+    }
+    const offline = new CloudflareIngest({ accountId: "acct", token: API, fetchImpl: (async () => { throw new Error("socket hang up"); }) as unknown as typeof fetch });
+    messages.push(String(await offline.playbackToken("in_abc", { expiresAt: AT }).catch((e: unknown) => (e as Error).message)));
+    expect(messages, "three failures read").toHaveLength(3);
+    expect(messages[0]).toMatch(/^cloudflare playback token: HTTP 500/);
+    expect(messages[1]).toMatch(/^cloudflare playback token: the 200 carried no token/);
+    for (const m of messages) {
+      expect(m).not.toContain(MINTED);
+      expect(m).not.toContain(API);
+    }
+    await settle();
+    const records = port.calls.filter((c) => c.operation === "playbackToken");
+    expect(records, "the success and the two refusals are recorded").toHaveLength(3);
+    expect(JSON.stringify(port.calls)).not.toContain(MINTED);
+    expect(records.map((c) => [c.method, c.subjectId, c.status])).toEqual([["POST", "in_abc", 200], ["POST", "in_leaky", 500], ["POST", "in_notoken", 200]]);
+  });
+
+  it("requireSignedVideo POSTs exactly { requireSignedURLs: true } to /stream/{videoId} and answers `set` only on an echo of true; a 200 echoing false is an error (C3); a 404 is `absent`; a 500 throws, redacted", async () => {
+    const { rec, cf, port } = build();
+    expect(await cf.requireSignedVideo("v_cam_done")).toBe("set");
+    expect([rec.calls[0]!.init.method, rec.calls[0]!.url]).toEqual(["POST", `${CLOUDFLARE_STREAM_BASE}/acct/stream/v_cam_done`]);
+    expect(JSON.parse(String(rec.calls[0]!.init.body))).toEqual({ requireSignedURLs: true });
+    await expect(cf.requireSignedVideo("v_unsigned_echo")).rejects.toThrow(/^cloudflare require signed video: not applied — requireSignedURLs sent true, echoed false/);
+    expect(await cf.requireSignedVideo("v_gone")).toBe("absent");
+    const boom = await cf.requireSignedVideo("v_boom").then(() => null, (e: unknown) => e as Error);
+    expect(boom?.message).toMatch(/^cloudflare require signed video: HTTP 500 code 10000/);
+    expect(boom?.message).not.toContain(API);
+    await settle();
+    expect(port.calls.map((c) => [c.operation, c.subjectId])).toEqual([
+      ["requireSignedVideo", "v_cam_done"], ["requireSignedVideo", "v_unsigned_echo"], ["requireSignedVideo", "v_gone"], ["requireSignedVideo", "v_boom"],
+    ]);
+  });
+
+  it("both listings carry the video's own `requireSignedURLs` as `signed` — true, false, and null when the item does not say (C3, C7)", async () => {
+    const { cf } = build();
+    const byInput = await cf.listInputVideos("in_abc");
+    expect(byInput.map((v) => [v.videoId, v.signed])).toEqual([["v_cam_live", true], ["v_cam_done", false], ["v_cam_unnamed", null]]);
+    // The pair: the fixture really holds the two values and the absence, so the mapping is not answering a constant.
+    expect(LIST_VIDEOS_BY_INPUT_200.result.map((v) => ("requireSignedURLs" in v ? v.requireSignedURLs : "absent"))).toEqual([true, false, "absent"]);
   });
 });

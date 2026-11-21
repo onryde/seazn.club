@@ -160,8 +160,9 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
         due: { kind: "every" },
         retry: false,
         manual: true,
-        // The session pass's `failed` and the YouTube end step's `failed` (route answer `data.youtube.failed`).
-        failureCounts: ["data.failed", "data.youtube.failed"],
+        // The session pass's `failed`, the YouTube end step's `failed` (route answer `data.youtube.failed`) and the Seazn
+        // pass's `failed` (Seazn-hosted Task 13, `data.seazn.failed`).
+        failureCounts: ["data.failed", "data.youtube.failed", "data.seazn.failed"],
       },
     ]);
   });
@@ -507,7 +508,9 @@ describe("JOBS table", () => {
       "relay-sweep": ["data.youtube.failed"],
       // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing). T15: and the
       // YouTube end step's YoutubeEndResult.failed (broadcasts that failed this pass and will be retried), at data.youtube.failed.
-      "stream-tick": ["data.failed", "data.youtube.failed"],
+      // Seazn-hosted T13: and the Seazn pass's SeaznPassResult.failed (a lock or listing that threw, or the whole pass), at
+      // data.seazn.failed; its `locked` / `relocked` / `refused` / `deferred` are NOT failures.
+      "stream-tick": ["data.failed", "data.youtube.failed", "data.seazn.failed"],
       // Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when another pass held the
       // lock). `deferred` is NOT a failure (the pass budget ran out; the next firing reaches the rest).
       "external-play": ["data.failed", "data.skipped"],

@@ -18,6 +18,8 @@
 //   - The SESSION pass is scoped to this file's org by a wrapper on `tickOpenSessions` (its test-only `orgIds`): an unscoped pass would
 //     tick every other suite's open sessions with THIS file's fakes. The wrapper refuses when no scope is set, so it can never go
 //     unscoped by accident; the options the ROUTE passed are recorded before the scope is added, and are asserted.
+//   - Seazn Task 13: the SEAZN pass (`lockSeaznRecordings`) is scoped the same way and for the same reason — unscoped, it would list
+//     every other suite's Seazn programme inputs through this file's fake and mark their finished ones.
 //
 // Expected values are the spec's and Google's literals, typed here and never imported from the code under test: grace 5 minutes after
 // Stop (D4), the warming timeout 10 minutes, the YouTube slice 15 s of the tick's 45 s.
@@ -33,7 +35,7 @@ const hdrs = vi.hoisted(() => ({ store: new Headers() }));
 vi.mock("next/headers", () => ({ headers: async () => hdrs.store }));
 
 /** The session pass, wrapped: records what the ROUTE passed, then scopes the real pass to this file's org. */
-const pass = vi.hoisted(() => ({ orgIds: null as string[] | null, routeOpts: [] as unknown[] }));
+const pass = vi.hoisted(() => ({ orgIds: null as string[] | null, routeOpts: [] as unknown[], seaznOpts: [] as unknown[] }));
 vi.mock("@/server/usecases/stream-sessions", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/usecases/stream-sessions")>();
   return {
@@ -42,6 +44,18 @@ vi.mock("@/server/usecases/stream-sessions", async (importOriginal) => {
       pass.routeOpts.push(opts);
       if (!pass.orgIds) throw new Error("test: no org scope set for the session pass — an unscoped pass would tick every other suite's open sessions");
       return real.tickOpenSessions(deps, { ...opts, orgIds: pass.orgIds });
+    }),
+  };
+});
+
+vi.mock("@/server/usecases/seazn-recordings", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/usecases/seazn-recordings")>();
+  return {
+    ...real,
+    lockSeaznRecordings: vi.fn(async (deps: Parameters<typeof real.lockSeaznRecordings>[0], opts: Parameters<typeof real.lockSeaznRecordings>[1]) => {
+      pass.seaznOpts.push(opts);
+      if (!pass.orgIds) throw new Error("test: no org scope set for the Seazn pass — an unscoped pass would list every other suite's inputs");
+      return real.lockSeaznRecordings(deps, { ...opts, orgIds: pass.orgIds });
     }),
   };
 });
@@ -86,6 +100,7 @@ beforeEach(() => {
   sentry.captureError.mockClear();
   pass.orgIds = null;
   pass.routeOpts = [];
+  pass.seaznOpts = [];
   vi.stubEnv("CRON_SECRET", SECRET);
   vi.stubEnv("OAUTH_BASE_URL", "");
   vi.stubEnv("NEXT_PUBLIC_BASE_URL", "");
@@ -219,7 +234,7 @@ async function leadTheQueue(...broadcastIds: string[]): Promise<void> {
 interface Counters { ended: number; neverLive: number; orphans: number; failed: number; deferred: number }
 interface Answer {
   ok: boolean;
-  data: { disabled?: true; ticked: number; ended: number; failed: number; deferred: number; youtube: Counters };
+  data: { disabled?: true; ticked: number; ended: number; failed: number; deferred: number; youtube: Counters; seazn: Record<string, number> };
 }
 const call = async () => {
   const res = await POST(new Request("http://internal:3000/api/cron/stream-tick", { method: "POST", headers: { "x-forwarded-host": "app.example" } }));
@@ -252,9 +267,12 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     for (const m of [ma, mb]) expect(askedAbout(shared, "complete", m.ytId), `YouTube was asked to complete ${m.broadcastId} once`).toBe(1);
     expect(shared.fake.inspectBroadcast(ma.ytId)?.life, "and the video really ended at YouTube").toBe("complete");
     expect(shared.fake.inspectBroadcast(mb.ytId)?.life).toBe("complete");
-    // The answer's shape: the session counters beside the step's five.
-    expect(Object.keys(first.body.data).sort()).toEqual(["deferred", "ended", "failed", "ticked", "youtube"]);
+    // The answer's shape: the session counters beside the step's five and (Task 13) the Seazn pass's five.
+    expect(Object.keys(first.body.data).sort()).toEqual(["deferred", "ended", "failed", "seazn", "ticked", "youtube"]);
     expect(Object.keys(first.body.data.youtube).sort()).toEqual(["deferred", "ended", "failed", "neverLive", "orphans"]);
+    expect(first.body.data.seazn, "this file's orgs hold no Seazn input: the real pass ran and found nothing").toEqual({ locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 });
+    expect(pass.seaznOpts.length, "the Seazn pass ran on the firing").toBe(1);
+    expect(Object.keys(pass.seaznOpts[0] as object).sort(), "the route passes a clock reading and a budget, nothing else").toEqual(["budgetMs", "now"]);
     // The replay link, written by the step the route ran.
     expect(await streamUrlOf(a.fixtureId), "the replay link points at the ended broadcast").toBe(`https://www.youtube.com/watch?v=${ma.ytId}`);
 
@@ -305,6 +323,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     expect((await broadcastRow(m.broadcastId)).state).toBe("complete");
     expect(askedAbout(w.yt, "complete", m.ytId)).toBe(1);
     expect(pass.routeOpts, "no session pass ran on a relay-disabled deployment").toEqual([]);
+    expect(pass.seaznOpts, "nor a Seazn pass").toEqual([]);
+    expect(r.body.data.seazn).toEqual({ locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 });
   });
 
   it("POST-T3 (O3): the tick EXPIRES a stuck API-backed session — the warming timeout, reached through the route — and the YouTube step, which ran first, leaves its broadcast to the NEXT firing", async () => {

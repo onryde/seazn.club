@@ -160,8 +160,10 @@ export const JOBS: readonly Job[] = [
   // trigger: every minute on prod, every 5 minutes on stg (owner Q1 = b: a minute trigger would keep stg awake all day,
   // so there a broadcast's end can land up to 5 minutes late). Never retried: its next firing, a minute (stg: 5) later,
   // IS the retry, and a re-send could overlap a pass still running server-side. `failed` counts sessions whose tick
-  // threw; `youtube.failed` counts broadcasts whose end failed this pass (they back off and are retried). `deferred`
-  // (a budget ran out) is not a failure in either, because the next firing reaches them.
+  // threw; `youtube.failed` counts broadcasts whose end failed this pass (they back off and are retried); `seazn.failed`
+  // (Seazn-hosted Task 13) counts recordings whose lock threw, or 1 when the whole Seazn pass did. `deferred` (a budget ran
+  // out) is not a failure in any of them, because the next firing reaches them; nor are the Seazn pass's `locked`,
+  // `relocked` or `refused`.
   {
     id: "stream-tick",
     path: "/api/cron/stream-tick",
@@ -169,7 +171,7 @@ export const JOBS: readonly Job[] = [
     due: { kind: "every" },
     retry: false,
     manual: true,
-    failureCounts: ["data.failed", "data.youtube.failed"],
+    failureCounts: ["data.failed", "data.youtube.failed", "data.seazn.failed"],
   },
   // Chess in-page board design §4: "The 5-minute cron … is NOT optional". One pass of the external-play sweep: the
   // deadline no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence

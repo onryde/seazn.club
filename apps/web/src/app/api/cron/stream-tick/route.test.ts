@@ -7,6 +7,10 @@
 // YouTube Connect T15 (spec §9.2): the route runs the YouTube END STEP first, then the relay-disabled return, then the session
 // pass with what is left of its 45 s. The three order/budget/failure cases below are about THIS file's wiring only.
 //
+// Seazn-hosted video Task 13: a THIRD pass, `seazn` (lockSeaznRecordings), runs after the session pass, inside the same 45 s:
+// min(8 s, what is left). It never throws (a throw is `seazn.failed: 1`), and the Worker reads `data.seazn.failed` as a third
+// counter. The pass itself is seazn-recordings.test.ts; here it is a spy.
+//
 // The seam (R3): the cron Worker reads this route's 200 body through ITS OWN `failureCountsOver0` and the REAL
 // `stream-tick` row, both imported from apps/cron-worker — never a copy, which would be a fixture on both ends. A body
 // whose `data.failed` is missing reads "unreadable" there, i.e. degraded: one Sentry event per hour from every
@@ -31,7 +35,7 @@ vi.mock("next/headers", () => ({ headers: async () => hdrs.store }));
 const m = vi.hoisted(() => {
   const port = { isTheYoutubePort: true };
   return {
-    tick: vi.fn(), deps: vi.fn(), end: vi.fn(), capture: vi.fn(), port,
+    tick: vi.fn(), deps: vi.fn(), end: vi.fn(), capture: vi.fn(), lock: vi.fn(), port,
     sentinel: { drivers: { disabled: false }, now: () => new Date(), youtube: port },
   };
 });
@@ -46,6 +50,11 @@ vi.mock("@/server/youtube/end-step", async (importOriginal) => ({
   endDueBroadcasts: m.end,
 }));
 vi.mock("@/lib/sentry", () => ({ captureError: m.capture }));
+// The real SEAZN_PASS_BUDGET_MS stays real (the budget cases pin its value); the pass is the spy.
+vi.mock("@/server/usecases/seazn-recordings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/seazn-recordings")>()),
+  lockSeaznRecordings: m.lock,
+}));
 
 import { POST } from "./route";
 
@@ -54,12 +63,15 @@ const ROW = JOBS.find((j: Job) => j.id === "stream-tick");
 const ZERO = { ticked: 0, ended: 0, failed: 0, deferred: 0 };
 /** The YouTube end step's answer when it had nothing to do (YoutubeEndResult, end-step.ts). */
 const YZERO = { ended: 0, neverLive: 0, orphans: 0, failed: 0, deferred: 0 };
+/** The Seazn pass's answer when it had nothing to do (SeaznPassResult, seazn-recordings.ts). */
+const SZERO = { locked: 0, relocked: 0, refused: 0, failed: 0, deferred: 0 };
 
 beforeEach(() => {
   // Only `Date` is faked: elapsed time is then exactly what a case scripts (a real clock would make every budget off by a ms).
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-28T10:00:00Z"));
   m.end.mockResolvedValue({ ...YZERO });
+  m.lock.mockResolvedValue({ ...SZERO });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -69,6 +81,7 @@ afterEach(() => {
   m.deps.mockReset();
   m.end.mockReset();
   m.capture.mockReset();
+  m.lock.mockReset();
 });
 
 const authorised = () => {
@@ -79,10 +92,10 @@ const authorised = () => {
 };
 
 describe("POST /api/cron/stream-tick", () => {
-  it("PREMISE: the Worker's row for this route is the one the seam cases read — its path and its two failure counters (the session pass's and the YouTube step's)", () => {
+  it("PREMISE: the Worker's row for this route is the one the seam cases read — its path and its three failure counters (the session pass's, the YouTube step's and the Seazn pass's)", () => {
     expect(ROW, "the stream-tick row exists").toBeDefined();
     expect(ROW!.path).toBe("/api/cron/stream-tick");
-    expect(ROW!.failureCounts).toEqual(["data.failed", "data.youtube.failed"]);
+    expect(ROW!.failureCounts).toEqual(["data.failed", "data.youtube.failed", "data.seazn.failed"]);
   });
 
   it("503 when CRON_SECRET is unset — BEFORE the header is judged: no header, a wrong one and an empty one all read 503, and nothing is ticked or ended", async () => {
@@ -97,6 +110,7 @@ describe("POST /api/cron/stream-tick", () => {
     expect(m.deps).not.toHaveBeenCalled();
     expect(m.tick).not.toHaveBeenCalled();
     expect(m.end, "the YouTube step is behind the same auth").not.toHaveBeenCalled();
+    expect(m.lock, "and the Seazn pass").not.toHaveBeenCalled();
   });
 
   it("401 with a missing or wrong x-cron-secret once the secret IS set — and neither the YouTube step nor the tick is ever called", async () => {
@@ -111,18 +125,25 @@ describe("POST /api/cron/stream-tick", () => {
     expect(m.deps).not.toHaveBeenCalled();
     expect(m.tick, "tickOpenSessions spy").toHaveBeenCalledTimes(0);
     expect(m.end, "endDueBroadcasts spy").toHaveBeenCalledTimes(0);
+    expect(m.lock, "lockSeaznRecordings spy").toHaveBeenCalledTimes(0);
   });
 
-  it("the right secret runs ONE YouTube step and ONE session pass with the production deps alone (no test scope) built from the request's base url, and answers both results", async () => {
+  it("the right secret runs ONE YouTube step, ONE session pass and ONE Seazn pass with the production deps alone (no test scope) built from the request's base url, and answers all three results", async () => {
     authorised();
     m.deps.mockReturnValue(m.sentinel);
     const result = { ticked: 3, ended: 1, failed: 0, deferred: 0 };
     const youtube = { ended: 2, neverLive: 1, orphans: 1, failed: 0, deferred: 0 };
+    const seazn = { locked: 2, relocked: 1, refused: 1, failed: 0, deferred: 0 };
     m.tick.mockResolvedValue(result);
     m.end.mockResolvedValue(youtube);
+    m.lock.mockResolvedValue(seazn);
     const res = await POST(req());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, data: { ...result, youtube } });
+    expect(await res.json()).toEqual({ ok: true, data: { ...result, youtube, seazn } });
+    // The Seazn pass: the deps, the deps' own clock read once, and min(8 s, what is left) — nothing else (no orgIds, no wall clock).
+    expect(m.lock).toHaveBeenCalledTimes(1);
+    expect(m.lock.mock.calls[0]).toEqual([m.sentinel, { now: new Date("2026-10-28T10:00:00Z"), budgetMs: 8_000 }]);
+    expect(Object.keys(m.lock.mock.calls[0]![1]).sort(), "no test seam reaches the production call").toEqual(["budgetMs", "now"]);
     expect(m.deps).toHaveBeenCalledTimes(1);
     expect(m.deps).toHaveBeenCalledWith("https://app.example");
     // The YouTube step: the deps' port and clock, a 15 s slice of the tick, NO orgIds (every org) and no wall clock (T14's forward note).
@@ -152,6 +173,22 @@ describe("POST /api/cron/stream-tick", () => {
     expect(order).toEqual(["youtube:start", "youtube:end", "sessions"]);
   });
 
+  it("ORDER (Task 13): the Seazn pass runs AFTER the session pass has finished, never before or beside it", async () => {
+    authorised();
+    m.deps.mockReturnValue(m.sentinel);
+    const order: string[] = [];
+    m.end.mockImplementation(async () => { order.push("youtube"); return { ...YZERO }; });
+    m.tick.mockImplementation(async () => {
+      order.push("sessions:start");
+      await Promise.resolve();
+      order.push("sessions:end");
+      return { ...ZERO };
+    });
+    m.lock.mockImplementation(async () => { order.push("seazn"); return { ...SZERO }; });
+    expect((await POST(req())).status).toBe(200);
+    expect(order).toEqual(["youtube", "sessions:start", "sessions:end", "seazn"]);
+  });
+
   it("the session pass gets 45 s MINUS what the YouTube step spent (scripted clock): 12 s spent leaves 33 s, nothing spent leaves all 45 s", async () => {
     authorised();
     m.deps.mockReturnValue(m.sentinel);
@@ -165,6 +202,21 @@ describe("POST /api/cron/stream-tick", () => {
     // The pair: a step that spent nothing leaves the pass its whole budget, so the 33 s above is the subtraction and not a constant.
     expect((await POST(req())).status).toBe(200);
     expect(m.tick.mock.calls[1]![1], "nothing spent").toEqual({ budgetMs: 45_000 });
+  });
+
+  it("the Seazn pass gets min(8 s, what is LEFT of the 45 s after both earlier passes) (scripted clock): 40 s spent leaves 5 s, 30 s leaves the full 8 s, 50 s leaves 0 — the pass then defers rather than overrun", async () => {
+    authorised();
+    m.deps.mockReturnValue(m.sentinel);
+    const spend = async (youtubeMs: number, sessionsMs: number) => {
+      m.end.mockImplementationOnce(async () => { vi.setSystemTime(Date.now() + youtubeMs); return { ...YZERO }; });
+      m.tick.mockImplementationOnce(async () => { vi.setSystemTime(Date.now() + sessionsMs); return { ...ZERO }; });
+      expect((await POST(req())).status).toBe(200);
+      return (m.lock.mock.calls.at(-1)![1] as { budgetMs: number }).budgetMs;
+    };
+    expect(await spend(10_000, 30_000), "40 s spent").toBe(5_000);
+    expect(await spend(0, 30_000), "30 s spent").toBe(8_000);
+    expect(await spend(5_000, 45_000), "50 s spent").toBe(0);
+    expect(m.lock).toHaveBeenCalledTimes(3);
   });
 
   it("a step that spent MORE than the tick's whole 45 s leaves the pass a budget of 0 — never a negative one (every session deferred to the next firing)", async () => {
@@ -192,7 +244,7 @@ describe("POST /api/cron/stream-tick", () => {
     logged.mockRestore();
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(JSON.parse(text)).toEqual({ ok: true, data: { ticked: 2, ended: 1, failed: 0, deferred: 0, youtube: { ended: 0, neverLive: 0, orphans: 0, failed: 1, deferred: 0 } } });
+    expect(JSON.parse(text)).toEqual({ ok: true, data: { ticked: 2, ended: 1, failed: 0, deferred: 0, youtube: { ended: 0, neverLive: 0, orphans: 0, failed: 1, deferred: 0 }, seazn: SZERO } });
     expect(m.tick, "the sessions are still ticked").toHaveBeenCalledTimes(1);
     expect(m.tick.mock.calls[0]![1]).toEqual({ budgetMs: 45_000 });
     expect(m.capture, "reported once").toHaveBeenCalledTimes(1);
@@ -200,6 +252,42 @@ describe("POST /api/cron/stream-tick", () => {
     expect(text, "the answer carries counters, never the error text").not.toContain("hunter2");
     // The Worker reads it as degraded on the YouTube counter alone: the session pass was healthy.
     expect(failureCountsOver0(ROW!, text)).toEqual({ "data.youtube.failed": 1 });
+  });
+
+  it("a THROWING Seazn pass answers seazn.failed 1 (zeros elsewhere), logs the class only, is reported once — and the session pass has still run and is answered", async () => {
+    authorised();
+    m.deps.mockReturnValue(m.sentinel);
+    m.tick.mockResolvedValue({ ticked: 2, ended: 1, failed: 0, deferred: 0 });
+    m.lock.mockRejectedValue(new Error("database down: password=hunter2"));
+    const logged = vi.spyOn(log, "error");
+    const res = await POST(req());
+    expect(logged, "logged once").toHaveBeenCalledTimes(1);
+    expect(logged.mock.calls[0]![0]).toEqual({ errClass: "Error" });
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("hunter2");
+    logged.mockRestore();
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({ ok: true, data: { ticked: 2, ended: 1, failed: 0, deferred: 0, youtube: YZERO, seazn: { ...SZERO, failed: 1 } } });
+    expect(text).not.toContain("hunter2");
+    expect(m.tick, "the sessions were ticked").toHaveBeenCalledTimes(1);
+    expect(m.capture, "reported once").toHaveBeenCalledTimes(1);
+    expect(m.capture.mock.calls[0]![1]).toMatchObject({ route: "cron.stream_tick.seazn" });
+    // The Worker reads it as degraded on the Seazn counter alone.
+    expect(failureCountsOver0(ROW!, text)).toEqual({ "data.seazn.failed": 1 });
+  });
+
+  it("the R3 seam for the Seazn counter: failed reads degraded by its count; locked / relocked / refused / deferred are NOT failures", async () => {
+    authorised();
+    m.deps.mockReturnValue(m.sentinel);
+    const read = async (seazn: typeof SZERO) => {
+      m.tick.mockResolvedValueOnce({ ...ZERO });
+      m.lock.mockResolvedValueOnce(seazn);
+      const res = await POST(req());
+      expect(res.status).toBe(200);
+      return failureCountsOver0(ROW!, await res.text());
+    };
+    expect(await read({ locked: 3, relocked: 1, refused: 2, failed: 0, deferred: 4 }), "a busy but healthy pass").toEqual({});
+    expect(await read({ ...SZERO, failed: 2 })).toEqual({ "data.seazn.failed": 2 });
   });
 
   it("a youtube driver that cannot be built (the deps' port getter throws, a misspelt YOUTUBE_DRIVER) is the same: youtube.failed 1, and the sessions are still ticked", async () => {
@@ -255,13 +343,16 @@ describe("POST /api/cron/stream-tick", () => {
     const res = await POST(req());
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(JSON.parse(text)).toEqual({ ok: true, data: { disabled: true, ...ZERO, youtube: { ...YZERO, ended: 1 } } });
+    expect(JSON.parse(text)).toEqual({ ok: true, data: { disabled: true, ...ZERO, youtube: { ...YZERO, ended: 1 }, seazn: SZERO } });
     expect(m.end, "the step ran on a relay-disabled deployment (spec §9.2)").toHaveBeenCalledTimes(1);
     expect(m.tick).not.toHaveBeenCalled();
+    expect(m.lock, "no Seazn pass without a relay: there is no ingest to list").not.toHaveBeenCalled();
     expect(failureCountsOver0(ROW!, text), "the producer's real body through the consumer's real reader").toEqual({});
-    // The pairs: the same envelope without a counter — what copying relay-sweep's `{ disabled: true }` would answer, or forgetting the step's.
-    expect(failureCountsOver0(ROW!, JSON.stringify({ ok: true, data: { disabled: true } }))).toEqual({ "data.failed": "unreadable", "data.youtube.failed": "unreadable" });
-    expect(failureCountsOver0(ROW!, JSON.stringify({ ok: true, data: { disabled: true, ...ZERO } }))).toEqual({ "data.youtube.failed": "unreadable" });
+    // The pairs: the same envelope without a counter — what copying relay-sweep's `{ disabled: true }` would answer, or forgetting the step's
+    // or the Seazn pass's.
+    expect(failureCountsOver0(ROW!, JSON.stringify({ ok: true, data: { disabled: true } }))).toEqual({ "data.failed": "unreadable", "data.youtube.failed": "unreadable", "data.seazn.failed": "unreadable" });
+    expect(failureCountsOver0(ROW!, JSON.stringify({ ok: true, data: { disabled: true, ...ZERO } }))).toEqual({ "data.youtube.failed": "unreadable", "data.seazn.failed": "unreadable" });
+    expect(failureCountsOver0(ROW!, JSON.stringify({ ok: true, data: { disabled: true, ...ZERO, youtube: YZERO } }))).toEqual({ "data.seazn.failed": "unreadable" });
   });
 
   it("R5 relay DISABLED and the step throws: the answer is still complete (failed: 0, youtube.failed 1) — a disabled deployment is not made unreadable by a bad step", async () => {
@@ -271,7 +362,7 @@ describe("POST /api/cron/stream-tick", () => {
     const res = await POST(req());
     expect(res.status).toBe(200);
     const text = await res.text();
-    expect(JSON.parse(text).data).toEqual({ disabled: true, ...ZERO, youtube: { ...YZERO, failed: 1 } });
+    expect(JSON.parse(text).data).toEqual({ disabled: true, ...ZERO, youtube: { ...YZERO, failed: 1 }, seazn: SZERO });
     expect(failureCountsOver0(ROW!, text)).toEqual({ "data.youtube.failed": 1 });
     expect(m.tick).not.toHaveBeenCalled();
   });
@@ -285,5 +376,10 @@ describe("POST /api/cron/stream-tick", () => {
     expect(STREAM_TICK_BUDGET_MS).toBe(45_000);
     expect(YOUTUBE_END_BUDGET_MS).toBe(15_000);
     expect(YOUTUBE_END_BUDGET_MS).toBeLessThan(STREAM_TICK_BUDGET_MS);
+    // Task 13 (plan): the Seazn pass takes at most 8 s of the same 45, and starts no provider call with under 2 s of its slice left.
+    const { SEAZN_PASS_BUDGET_MS, SEAZN_PASS_CALL_FLOOR_MS } = await vi.importActual<typeof import("@/server/usecases/seazn-recordings")>("@/server/usecases/seazn-recordings");
+    expect(SEAZN_PASS_BUDGET_MS).toBe(8_000);
+    expect(SEAZN_PASS_CALL_FLOOR_MS).toBe(2_000);
+    expect(SEAZN_PASS_BUDGET_MS).toBeLessThan(STREAM_TICK_BUDGET_MS);
   });
 });

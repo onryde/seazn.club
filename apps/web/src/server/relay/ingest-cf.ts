@@ -145,11 +145,13 @@ export type ErrorReporter = (err: unknown, context?: { route?: string; extra?: R
  *  recording is never negative and never 0 px, so nothing true is lost. */
 const measured = (n: number | null | undefined): number | null => (typeof n === "number" && n > 0 ? n : null);
 
-/** A Stream video object, as both listings return it (the fields this adapter reads). */
+/** A Stream video object, as both listings return it (the fields this adapter reads). `requireSignedURLs` (Seazn Task 13) is
+ *  in the list item schema (boolean, default false); the schema requires nothing, so it may be absent. */
 type CfVideo = {
   uid: string; created: string; liveInput?: string | null;
   status?: { state?: string; errorReasonCode?: string | null };
   duration?: number; size?: number; input?: { width?: number; height?: number } | null;
+  requireSignedURLs?: boolean | null;
 };
 /** One mapping for both listings, so the per-input listing cannot drift from the account one (Dd). */
 function videoOf(v: CfVideo): IngestVideo {
@@ -165,6 +167,8 @@ function videoOf(v: CfVideo): IngestVideo {
     height: measured(v.input?.height),
     state: v.status?.state ?? "unknown",
     errorReasonCode: v.status?.errorReasonCode ?? null,
+    // Seazn Task 13 (C3, C7): the video's own flag, read as given; an item that does not say is null, never a guess.
+    signed: typeof v.requireSignedURLs === "boolean" ? v.requireSignedURLs : null,
   };
 }
 
@@ -625,5 +629,39 @@ export class CloudflareIngest implements IngestProvider {
     if (r.status === 409 && r.json.errors?.some((e) => e.code === 10046)) return "in_progress";
     if (r.json.success || (r.status >= 200 && r.status < 300)) return "deleted";
     this.fail("delete video", r);
+  }
+
+  /** Seazn Task 13 (C1, C5): "Create signed URL tokens for videos" — `POST /accounts/{account_id}/stream/{identifier}/token`
+   *  (OpenAPI, read 2026-11-21: body `exp` "unix epoch timestamp … maximum … 24 hours from issuing time", `downloadable`
+   *  "enables using signed tokens to access MP4 download links"; result `{ token }`). The identifier may be a live input's uid
+   *  (C1 measured live HLS 401 without, 200 with) or a video's. No signing key of ours (C1: `id`/`pem` are never sent).
+   *  `downloadable` is sent only when asked, so a viewer's token never opens the MP4.
+   *
+   *  The answer is a SECRET: the provider-call record carries no body (ports.ts ProviderCallRecord), and every message this
+   *  throws is redacted against whatever token the answer held, as well as the account token. */
+  async playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string> {
+    const exp = Math.floor(o.expiresAt.getTime() / 1000);
+    const r = await this.call<{ token?: string }>("POST", `/${encodeURIComponent(uid)}/token`, o.downloadable ? { exp, downloadable: true } : { exp },
+      { operation: "playbackToken", ids: [uid], subjectId: uid });
+    const token = r.json.result?.token;
+    const minted = typeof token === "string" ? [token] : [];
+    if (!r.json.success) this.fail("playback token", r, minted);
+    if (typeof token !== "string" || token.length === 0) throw new Error(this.red(`cloudflare playback token: the 200 carried no token (HTTP ${r.status})`));
+    return token;
+  }
+
+  /** Seazn Task 13 (C3): "Edit video details" — `POST /accounts/{account_id}/stream/{identifier}` with `{ requireSignedURLs: true }`
+   *  and nothing else. C3 measured a signed input's FINISHED recording reading unsigned; C7 measured this call answering 200 and
+   *  echoing `true` on an in-progress one, after which the unsigned manifest answered 401. Read back like every setting this
+   *  adapter sends (U1): a 200 whose echo is not `true` did not lock anything, and is an error. A 404 is a video Cloudflare does
+   *  not hold — `absent`. Never a DELETE, never a listing: the uid is the caller's, checked against its own input (C6). */
+  async requireSignedVideo(videoId: string): Promise<"set" | "absent"> {
+    const r = await this.call<{ requireSignedURLs?: boolean | null }>("POST", `/${encodeURIComponent(videoId)}`, { requireSignedURLs: true },
+      { operation: "requireSignedVideo", ids: [videoId], subjectId: videoId });
+    if (r.status === 404) return "absent";
+    if (!r.json.success || !r.json.result) this.fail("require signed video", r);
+    const echoed = r.json.result.requireSignedURLs;
+    if (echoed !== true) throw new Error(this.red(`cloudflare require signed video: not applied — requireSignedURLs sent true, echoed ${String(echoed)}`));
+    return "set";
   }
 }

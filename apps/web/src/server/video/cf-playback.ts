@@ -1,0 +1,87 @@
+import "server-only";
+// server/video/cf-playback.ts — signed Cloudflare playback URLs for Seazn-hosted video (Task 13; spec G5, probes C1, C2, C5).
+//
+// Every Seazn programme input and every recording it makes needs a token to play (Task 12 signs the input, the stream tick's
+// Seazn pass signs each recording). The token comes from Cloudflare's own endpoint through the ingest port (C1: no signing key of
+// ours), and it is the ONLY protection of live playback (C2: `allowedOrigins` blocks nothing), so it lives 1 h.
+//
+// One token per uid is shared by every viewer, so it holds no viewer data, and it is cached here: a cached token is reused while
+// more than SEAZN_TOKEN_REFRESH_BEFORE_SECONDS of its life is left, else a new one is minted. The cache bounds the provider calls
+// by live inputs and recordings, never by viewers — and the entry is the mint IN FLIGHT, so viewers arriving together share it.
+// The cache is passed in (`deps.tokenCache`): production wires `processPlaybackTokenCache()`, and each test makes its own.
+//
+// The URL shapes are Cloudflare's: `https://<customer host>/<token>/manifest/video.m3u8` (C1) and
+// `https://<customer host>/<token>/downloads/default.mp4` (C5). The token is a path segment, never a query string.
+import { SEAZN_LIVE_TOKEN_TTL_SECONDS, SEAZN_TOKEN_REFRESH_BEFORE_SECONDS, streamPlaybackHost } from "@/server/relay/config";
+import type { IngestProvider } from "@/server/relay/ports";
+
+interface CachedToken { token: Promise<string>; expiresAtMs: number }
+/** uid + whether it opens the download → the token minted for it. A download token is never served to a viewer. */
+export type PlaybackTokenCache = Map<string, CachedToken>;
+export const createPlaybackTokenCache = (): PlaybackTokenCache => new Map();
+
+const PROCESS_CACHE: PlaybackTokenCache = createPlaybackTokenCache();
+/** The one cache a server process signs through. */
+export const processPlaybackTokenCache = (): PlaybackTokenCache => PROCESS_CACHE;
+
+export interface PlaybackDeps { ingest: Pick<IngestProvider, "playbackToken">; tokenCache: PlaybackTokenCache }
+export interface SignedPlayback { src: string; expiresAt: string }
+
+/** The customer host the URL is built on. A real-relay deployment without STREAM_PLAYBACK_HOST refuses rather than guess one
+ *  (config.ts `streamPlaybackHost`), and it refuses before a token is minted for nothing. */
+function hostOrThrow(): string {
+  const host = streamPlaybackHost();
+  if (!host) throw new Error("signed playback needs STREAM_PLAYBACK_HOST (the Stream customer host), and this deployment has none");
+  return host;
+}
+
+/** Drops entries whose token has expired, so a long-lived process does not keep every uid it ever signed. */
+function prune(cache: PlaybackTokenCache, nowMs: number): void {
+  for (const [key, entry] of cache) if (entry.expiresAtMs <= nowMs) cache.delete(key);
+}
+
+async function tokenFor(deps: PlaybackDeps, uid: string, downloadable: boolean, now: Date, ttlSeconds: number): Promise<{ token: string; expiresAtMs: number }> {
+  const key = `${downloadable ? "download" : "play"}:${uid}`;
+  const nowMs = now.getTime();
+  const hit = deps.tokenCache.get(key);
+  if (hit && hit.expiresAtMs - nowMs > SEAZN_TOKEN_REFRESH_BEFORE_SECONDS * 1000) return { token: await hit.token, expiresAtMs: hit.expiresAtMs };
+  prune(deps.tokenCache, nowMs);
+  // Whole seconds: the `exp` Cloudflare is sent, so the expiry handed out is the one the token carries.
+  const expiresAtMs = (Math.floor(nowMs / 1000) + ttlSeconds) * 1000;
+  const entry: CachedToken = {
+    token: deps.ingest.playbackToken(uid, { expiresAt: new Date(expiresAtMs), ...(downloadable ? { downloadable: true } : {}) }),
+    expiresAtMs,
+  };
+  deps.tokenCache.set(key, entry);
+  // A failed mint is not kept: the next call mints again. (Every caller awaiting it still sees the failure.)
+  entry.token.catch(() => {
+    if (deps.tokenCache.get(key) === entry) deps.tokenCache.delete(key);
+  });
+  return { token: await entry.token, expiresAtMs };
+}
+
+async function signedManifest(deps: PlaybackDeps, uid: string, now: Date): Promise<SignedPlayback> {
+  const host = hostOrThrow();
+  const { token, expiresAtMs } = await tokenFor(deps, uid, false, now, SEAZN_LIVE_TOKEN_TTL_SECONDS);
+  return { src: `https://${host}/${token}/manifest/video.m3u8`, expiresAt: new Date(expiresAtMs).toISOString() };
+}
+
+/** A live Seazn programme input's signed HLS, for the public match page and the organiser's panel (Task 14). */
+export function signLivePlayback(deps: PlaybackDeps, inputUid: string, now: Date): Promise<SignedPlayback> {
+  return signedManifest(deps, inputUid, now);
+}
+
+/** Recommendation 2026-11-21 (G-B, interim replay): a finished recording's signed HLS, from session end until a verified Bunny
+ *  copy exists. The SAME code and cache as live, keyed by the uid, so a recording and an input are two entries. Its caller passes
+ *  a video uid read from `seazn_locked_videos` — a recording the Seazn pass has already signed — never one from a listing (C6). */
+export function signRecordingPlayback(deps: PlaybackDeps, videoUid: string, now: Date): Promise<SignedPlayback> {
+  return signedManifest(deps, videoUid, now);
+}
+
+/** Phase 2's mover (C5): a recording's MP4 download URL for the replay host to fetch, on a `downloadable` token of `ttlSeconds`.
+ *  Server-to-host only: never handed to a viewer. */
+export async function signDownload(deps: PlaybackDeps, videoUid: string, now: Date, ttlSeconds: number): Promise<string> {
+  const host = hostOrThrow();
+  const { token } = await tokenFor(deps, videoUid, true, now, ttlSeconds);
+  return `https://${host}/${token}/downloads/default.mp4`;
+}

@@ -70,6 +70,33 @@ describe("FakeIngest", () => {
     expect(await fake.listInputVideos(camera.inputId), "the fake's own page holds all three").toHaveLength(3);
   });
 
+  // Seazn Task 13: the fake's token, its per-video lock, and the seeded listing that stands in for C6 (a listing that answers
+  // another input's recording). Each control is read back here so the usecase tests can trust it.
+  it("Seazn Task 13: a token reads fake.<uid>.<exp seconds>[.dl]; requireSignedVideo signs a video it holds and answers absent for one it does not; a seeded listing answers another input's video under ITS OWN inputId", async () => {
+    const fake = new FakeIngest();
+    const exp = new Date("2026-11-21T11:00:00.900Z");
+    const expS = Math.floor(Date.parse("2026-11-21T11:00:00Z") / 1000);
+    expect(await fake.playbackToken("in-1", { expiresAt: exp })).toBe(`fake.in-1.${expS}`);
+    expect(await fake.playbackToken("v-1", { expiresAt: exp, downloadable: true })).toBe(`fake.v-1.${expS}.dl`);
+    const at = "2026-09-01T00:00:00Z";
+    fake.addVideo({ videoId: "v-mine", inputId: "in-1", createdAt: at, inProgress: true });
+    fake.addVideo({ videoId: "v-theirs", inputId: "in-2", createdAt: at, inProgress: false });
+    expect([fake.videoAccess("v-mine"), fake.videoAccess("v-theirs")]).toEqual([false, false]);
+    expect(await fake.requireSignedVideo("v-mine")).toBe("set");
+    expect([fake.videoAccess("v-mine"), fake.videoAccess("v-theirs")], "only the named video").toEqual([true, false]);
+    expect(await fake.requireSignedVideo("v-never")).toBe("absent");
+    expect(fake.signedVideoCalls).toEqual(["v-mine", "v-never"]);
+    expect(() => fake.videoAccess("v-never"), "an unknown video is the test's mistake").toThrow(/unknown video/);
+    // The listing reads the video's own flag, and a recording that finishes can read unsigned again (C3 at ready).
+    expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.signed])).toEqual([["v-mine", true]]);
+    fake.updateVideo("v-mine", { inProgress: false, state: "ready", signed: false });
+    expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.state, v.signed])).toEqual([["v-mine", "ready", false]]);
+    // C6: seeded, in-1's listing also answers in-2's video, which still names in-2.
+    fake.seedInputListing("in-1", ["v-theirs", "v-mine"]);   // naming the input's own recording in the seed does not list it twice
+    expect((await fake.listInputVideos("in-1")).map((v) => [v.videoId, v.inputId])).toEqual([["v-mine", "in-1"], ["v-theirs", "in-2"]]);
+    expect((await fake.listInputVideos("in-2")).map((v) => v.videoId), "the seed changes only the input it names").toEqual(["v-theirs"]);
+  });
+
   it("inputStatus has the per-input GET's shape and flips at connectAfterMs exactly", async () => {
     let now = 1_000_000;
     const fake = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
@@ -297,6 +324,7 @@ describe("FakeIngest", () => {
     expect(live).toEqual({
       videoId: "v-live", inputId: "in-1", createdAt: new Date(0).toISOString(), inProgress: true,
       durationSeconds: null, sizeBytes: null, width: null, height: null, state: "live-inprogress", errorReasonCode: null,
+      signed: false,   // Seazn Task 13: unless a test says otherwise, a recording reads unsigned (C3's measured default)
     });
     expect(done).toMatchObject({ durationSeconds: 61, sizeBytes: 734_003_200, width: 1280, height: 720, state: "ready", errorReasonCode: null });
     // `createdBefore` is STRICT (`<`, not `<=`) — a FAKE CONVENTION, pinned so both

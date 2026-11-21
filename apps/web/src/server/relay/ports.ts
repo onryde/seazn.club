@@ -81,6 +81,10 @@ export interface IngestVideo {
   height: number | null;            // `input.height`
   state: string;                    // `status.state`, verbatim ("live-inprogress" | "ready" | "error" | …)
   errorReasonCode: string | null;   // `status.errorReasonCode`
+  /** Seazn Task 13 (C3, C7): whether the video itself needs a signed token to play (`requireSignedURLs`). Null when the listing
+   *  did not say. C3 measured a FINISHED recording of a signed input reading false (publicly playable), so the lock pass
+   *  re-reads this on every recording it has already locked and locks it again unless it reads true. */
+  signed: boolean | null;
 }
 export type DeleteVideoResult = "deleted" | "in_progress" | "absent";
 export interface IngestCapabilities {
@@ -121,6 +125,14 @@ export interface IngestProvider {
    *  session's camera recordings with it once the session has ended — never the programme's. */
   listInputVideos(inputId: string, meta?: ProviderCallMeta): Promise<IngestVideo[]>;
   deleteVideo(videoId: string): Promise<DeleteVideoResult>;       // 409/10046 → "in_progress"
+  /** Seazn Task 13 (C1, C5): a playback token for one input or video, minted by the provider (no signing key of ours), valid
+   *  until `expiresAt` (whole seconds). `downloadable` asks for one that also opens the MP4 download (Phase 2's mover). The
+   *  token is a SECRET until it is handed to a viewer inside a playback URL: it never reaches a record, a log or an error. */
+  playbackToken(uid: string, o: { expiresAt: Date; downloadable?: boolean }): Promise<string>;
+  /** Seazn Task 13 (C3): make ONE video need a signed token to play, read back from the provider's echo — `set` only when the
+   *  echo says so (a 200 that does not is an error). `absent` is a video the provider does not hold (gone between the listing
+   *  and this call). The uid comes from a listing item checked against its own input (C6), never from a filtered listing alone. */
+  requireSignedVideo(videoId: string): Promise<"set" | "absent">;
 }
 export type RunnerSpec = {
   sessionId: string; attempt: number; jobToken: string; appUrl: string;   // attempt → the Machine NAME (domain/runner.ts machineNameFor)

@@ -39,7 +39,8 @@ describe("R5: relayDrivers() in disabled mode", () => {
     const ingest = methodsOf(d.ingest);
     const runner = methodsOf(d.runner);
     // Completeness is tsc's: the disabled pair is typed as the two ports, so a method missing from it does not compile.
-    // What runs here is that every method it HAS refuses — the floors below are today's port sizes (11 and 5).
+    // What runs here is that every method it HAS refuses — the floors below are today's port sizes (13 and 5; Seazn Task 13 added
+    // playbackToken and requireSignedVideo to the ingest port).
     let refused = 0;
     for (const [port, names] of [[d.ingest, ingest], [d.runner, runner]] as const) {
       for (const name of names) {
@@ -49,7 +50,8 @@ describe("R5: relayDrivers() in disabled mode", () => {
       }
     }
     expect(refused, "no port method was exercised").toBeGreaterThanOrEqual(ingest.length + runner.length);
-    expect(ingest.length, "the ingest port's methods").toBeGreaterThanOrEqual(11);
+    expect(ingest.length, "the ingest port's methods").toBeGreaterThanOrEqual(13);
+    expect(ingest, "Seazn Task 13's two refuse with the rest").toEqual(expect.arrayContaining(["playbackToken", "requireSignedVideo"]));
     expect(runner.length, "the runner port's methods").toBeGreaterThanOrEqual(5);
     // The two data members refuse too: a capability or a settle window read off a disabled provider is a fake number.
     expect(() => d.ingest.capabilities).toThrow(RelayDriversDisabled);
