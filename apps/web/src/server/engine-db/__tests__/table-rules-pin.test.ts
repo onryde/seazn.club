@@ -10,12 +10,13 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { EngineError } from "@seazn/engine/core";
+import { EngineError, shuffle } from "@seazn/engine/core";
 import { PointsRule, crossGroupOrder, defaultCrossGroup, lotSeed, resolveTableRules, type CrossGroupRules, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { buildTemplateStages } from "@/lib/format-templates";
+import { swissDrawSeed } from "@/lib/swiss-draw";
 import type { CreateStages } from "@/server/api-v1/schemas";
 import { ENGINE_HTTP, v1 } from "@/server/api-v1/http";
 import { startDivision } from "@/server/usecases/schedule";
@@ -772,7 +773,7 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     await genericResult(s.auth, groupId, f1.home, f1.away, g1[0], g1[1]);
     await genericResult(s.auth, groupId, f2.home, f2.away, g2[0], g2[1]);
     const done = await completeStage(s.auth, groupId);
-    return { s, groupId, done, W1: f1.home, W2: f2.home };
+    return { s, groupId, koId, done, W1: f1.home, W2: f2.home };
   };
   const crossDraws = (stageId: string) => sql<{ members: string[]; drawn_order: string[] }[]>`
     select members, drawn_order from stage_lots_draws where stage_id = ${stageId} and pool_id is null and superseded_at is null`;
@@ -788,7 +789,7 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     expect(await crossDraws(own.groupId)).toEqual([]);
   }, 300_000);
 
-  it("X-TB-7 crossGroup seedNextStage: a cross-group tie only lots can split is drawn once and STORED under the source's pool null, and the seats follow the stored draw", async () => {
+  it("X-TB-7 crossGroup seedNextStage: a cross-group tie only lots can split is drawn once and STORED under the source's pool null; the knockout seats the level pair by its own stored draw seed (RB5-D3)", async () => {
     // Both winners 2-1: level on points, GD and GF — the derived cross-group order (generic: points, diff, for, lots) ends
     // in lots.
     const tie = await bestOfWinners("on_complete", [2, 1], [2, 1]);
@@ -797,7 +798,17 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     const stored = await crossDraws(tie.groupId);
     expect(stored, "one cross-group draw, stored").toHaveLength(1);
     expect([...stored[0]!.members].sort()).toEqual([tie.W1, tie.W2].sort());
-    expect(tie.done.qualified?.entrants).toEqual(stored[0]!.drawn_order);
+    // Lots decide WHO qualifies and in what order the resolver hands them on; WHERE they sit is the destination's draw
+    // (W5 RB5-D3, OWNER 281; RB5-G9 "applies only where ruling 281 does not decide"): the two winners are level on the
+    // cross-pool comparison, so the knockout's stored draw seed (minted from its id, W4 K5) shuffles the run as the lots
+    // ordered it. The engine's own `shuffle` gives the seats. Before the on_complete knockout crossed the pools (W5 PR B
+    // b37d098fa5) the seats were the lots order itself; asserting that now reads two independent coin flips, ~half the runs.
+    const seed = swissDrawSeed(tie.koId);
+    const seats = shuffle(seed, stored[0]!.drawn_order.map((entrantId) => ({ entrantId }))).map((x) => x.entrantId);
+    expect(tie.done.qualified?.entrants, "the destination seed's shuffle of the lots-ordered pair").toEqual(seats);
+    const [seeded] = await sql<{ payload: { crossPoolDraw?: { seed: number } } }[]>`
+      select payload from division_events where type = 'stage_seeded' and payload->>'stageId' = ${tie.koId}`;
+    expect(seeded?.payload.crossPoolDraw, "the seating records the seed it drew with").toEqual({ seed });
     // The loader hands the stored draw back for the next resolution.
     const rules = await sql.begin(async (tx) => (await loadBestNthSource(tx, tie.groupId)).crossGroup);
     expect(rules.lotsDraws?.get([tie.W1, tie.W2].sort().join(","))?.order).toEqual(stored[0]!.drawn_order);
