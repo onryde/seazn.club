@@ -11,6 +11,7 @@ import { messages, type MessageKey } from "@/lib/messages";
 import type { StreamPhone, StreamTarget } from "@/server/api-v1/schemas";
 import type { StreamSessionView } from "@/lib/stream-session-view";
 import { LOCALES } from "@/lib/i18n-constants";
+import { YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS } from "@/lib/youtube";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PhoneTab, PhoneTabBody, type PhoneScore, type PhoneTabBodyProps } from "@/components/v2/fixture-stream-panel";
@@ -178,6 +179,22 @@ describe("Go live and the channel-safety notice", () => {
     await settle();
     expect(count(CREATE)).toBe(1);
     expect(noticeOf(island)).toBeUndefined();
+  });
+
+  it("m6: a safety read that never answers is given up after the client timeout and the Go live proceeds (fail open), not before", async () => {
+    const island = await mount({ targets: [target("t1", YT)], safety: () => new Promise(() => {}) });
+    pick(island);
+    bodyOf(island).onGoLive();
+    await settle();
+    expect(count(SAFETY), "premise: the read was asked").toBe(1);
+    await vi.advanceTimersByTimeAsync(YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS - 20);
+    expect(count(CREATE), "still waiting just before the timeout").toBe(0);
+    await vi.advanceTimersByTimeAsync(20);
+    await settle();
+    expect(count(CREATE), "the timeout lets the Go live through").toBe(1);
+    expect(noticeOf(island)).toBeUndefined();
+    const signal = (apiV1.mock.calls.find(([url]) => url.endsWith("/safety"))?.[1] as { signal?: AbortSignal } | undefined)?.signal;
+    expect(signal?.aborted, "the request itself is aborted").toBe(true);
   });
 
   it("Cancel dismisses the notice, starts nothing, and the NEXT Go live tap checks again (one read per tap)", async () => {

@@ -6,6 +6,7 @@
 import { TriangleAlert } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { apiV1 } from "@/lib/client-v1";
+import { YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS } from "@/lib/youtube";
 import type { StreamTarget, YoutubeChannelSafety } from "@/server/api-v1/schemas";
 
 /** Does a Go live to this destination owe the channel-safety check? Only a YouTube Connect destination (`youtube` non-null): a pasted key,
@@ -14,12 +15,24 @@ export function needsChannelCheck(target: Pick<StreamTarget, "youtube"> | null |
   return target != null && target.youtube !== null && target.youtube !== undefined;
 }
 
-/** One read of the connection's safety facts. Fail-open on this side too: a request that fails answers null, and the caller goes live. */
+/** One read of the connection's safety facts. Fail-open on this side too: a request that fails, or that has not answered within
+ *  YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS (Phase 0 review m6; it is then aborted), answers null, and the caller goes live. A plain timer, not
+ *  `AbortSignal.timeout`, so the wait is the page's own clock (and a test's fake one). */
 export async function fetchChannelSafety(orgId: string, connectionId: string): Promise<YoutubeChannelSafety | null> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<null>((resolve) => {
+    timer = setTimeout(() => { controller.abort(); resolve(null); }, YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS);
+  });
   try {
-    return await apiV1<YoutubeChannelSafety>(`/api/v1/orgs/${orgId}/youtube-connections/${connectionId}/safety`, { cache: "no-store" });
+    return await Promise.race([
+      apiV1<YoutubeChannelSafety>(`/api/v1/orgs/${orgId}/youtube-connections/${connectionId}/safety`, { cache: "no-store", signal: controller.signal }),
+      timedOut,
+    ]);
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

@@ -90,6 +90,9 @@ export const YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS = 24;
  *  person taps Go live far less often; this stops a loop. A rate-limit config (lib/rate-limit.ts `rateLimit`), kept here with Phase 0's
  *  other numbers. */
 export const YOUTUBE_SAFETY_CHECK_LIMIT = { max: 6, windowSeconds: 60 } as const;
+/** How long the Go live tap waits for that read (Phase 0 review m6) before it gives up and goes live (fail open): the read is a token
+ *  exchange plus up to four YouTube calls, and a slow YouTube must not hold a mid-match restart. */
+export const YOUTUBE_SAFETY_CLIENT_TIMEOUT_MS = 3000;
 
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
  *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
