@@ -60,7 +60,8 @@ describe("sanitise — allowlist", () => {
   it("R2003b: a counted crash's runner_transition payload survives WHOLE — `crashCount` included (the payload is the REAL eventRowsOf's, never a typed copy)", () => {
     const live: Session = { id: "s1", fixtureId: "f1", orgId: "o1", mode: "composed", state: "live", desiredState: "live", failReason: null, endReason: null,
       runner: { ...RUNNER_NONE, state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1" }, runnerRetries: 0, createdAt: new Date(0), startedAt: new Date(0),
-      endedAt: null, heartbeatAt: new Date(0), beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, startCause: "organiser", warmingAt: null };
+      endedAt: null, heartbeatAt: new Date(0), beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, startCause: "organiser", warmingAt: null,
+      destination: "external" };
     const c: Command = { type: "runner", trigger: { type: "callback_crashed" } };
     const [row] = eventRowsOf(live, decide(live, c, new Date(1)), c).filter((r) => r.kind === "runner_transition");
     expect(row!.payload, "premise: the step counted a crash").toHaveProperty("crashCount", 1);
@@ -70,7 +71,8 @@ describe("sanitise — allowlist", () => {
   it("Owed 67: a counted restart's runner_transition payload survives WHOLE — `restartsCounted` included (the payload is the REAL eventRowsOf's, never a typed copy)", () => {
     const live: Session = { id: "s1", fixtureId: "f1", orgId: "o1", mode: "composed", state: "live", desiredState: "live", failReason: null, endReason: null,
       runner: { ...RUNNER_NONE, state: "playing", attempt: 1, name: "relay-s1-r1", machineId: "m1" }, runnerRetries: 0, createdAt: new Date(0), startedAt: new Date(0),
-      endedAt: null, heartbeatAt: new Date(0), beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, startCause: "organiser", warmingAt: null };
+      endedAt: null, heartbeatAt: new Date(0), beatWindowAt: null, endingAt: null, maxDurationMinutes: 300, outputUid: null, startCause: "organiser", warmingAt: null,
+      destination: "external" };
     const c: Command = { type: "runner", trigger: { type: "callback_restarted" } };
     const [row] = eventRowsOf(live, decide(live, c, new Date(1)), c).filter((r) => r.kind === "runner_transition");
     expect(row!.payload, "premise: the step counted a restart").toHaveProperty("restartsCounted", 1);

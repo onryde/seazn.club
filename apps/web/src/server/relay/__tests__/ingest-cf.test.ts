@@ -71,17 +71,32 @@ const CREATE_RESULT_TIMEOUT_NULL = {
 /** N-4: a bad echo whose input then REFUSES to be deleted — the one path that
  *  leaves a live input nothing will ever reclaim. */
 const CREATE_RESULT_ORPHAN = { ...CREATE_RESULT_DROPPED, uid: "in_undeletable" };
+/** Seazn-hosted video (Task 12, G5): the signed settings a Seazn session's programme input is created with — the plan's own
+ *  value, typed here, never read off the adapter. */
+const SIGNED: { signed: true; allowedOrigins: string[] } = { signed: true, allowedOrigins: ["seazn.club"] };
 
 function cfReply(c: Call): Reply {
   if (c.init.method === "POST" && c.url.endsWith("/live_inputs")) {
     // Keyed on the session id the adapter puts in `meta.name`, so one fixture
     // can answer three different creates.
-    const name = String((JSON.parse(String(c.init.body)) as { meta?: { name?: string } }).meta?.name ?? "");
+    const sent = JSON.parse(String(c.init.body)) as { meta?: { name?: string }; recording?: Record<string, unknown> };
+    const name = String(sent.meta?.name ?? "");
     if (name.includes("s_orphan")) return { status: 200, body: { success: true, result: CREATE_RESULT_ORPHAN } };
     if (name.includes("s_dropped")) return { status: 200, body: { success: true, result: CREATE_RESULT_DROPPED } };
     if (name.includes("s_notimeout")) return { status: 200, body: { success: true, result: CREATE_RESULT_TIMEOUT_NULL } };
     if (name.includes("s_noplay")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, srtPlayback: undefined } } };
-    return { status: 200, body: { success: true, result: CREATE_RESULT } };
+    // Task 12 (G5): the silent-acceptance shapes of the signing — a 200 whose echo has NO `requireSignedURLs` key at all, one
+    // that kept the flag but dropped the origins, and an unsigned create that came back signed.
+    if (name.includes("s_unsigned_echo")) {
+      const unsigned: Record<string, unknown> = { ...CREATE_RESULT.recording, ...sent.recording };
+      delete unsigned.requireSignedURLs;
+      return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: unsigned } } };
+    }
+    if (name.includes("s_no_origins_echo")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, ...sent.recording, allowedOrigins: null } } } };
+    if (name.includes("s_signed_camera")) return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, requireSignedURLs: true } } } };
+    // A healthy Cloudflare applies the body and echoes it (C8 measured the signed keys echoed back): what was SENT, over the
+    // measured shape. For an unsigned create that is CREATE_RESULT's own echo exactly.
+    return { status: 200, body: { success: true, result: { ...CREATE_RESULT, recording: { ...CREATE_RESULT.recording, ...sent.recording } } } };
   }
   if (c.init.method === "GET" && /\/live_inputs\/in_abc$/.test(c.url))
     return { status: 200, body: { success: true, result: { uid: "in_abc", status: { current: { ingestProtocol: "srt", state: "connected", reason: "connected_to_live_input", statusEnteredAt: "2026-09-13T10:00:00Z", statusLastSeen: "2026-09-13T10:00:05Z" }, history: [] } } } };
@@ -158,6 +173,10 @@ function cfReply(c: Call): Reply {
     return { status: 200, body: { success: true, result: { uid: "in_mode_off", enabled: false, recording: { mode: "off", timeoutSeconds: 0 }, deleteRecordingAfterDays: null } } };
   if (c.init.method === "PUT" && /\/live_inputs\/in_noecho$/.test(c.url))   // 200 and nothing to read back
     return { status: 200, body: { success: true, result: { uid: "in_noecho" } } };
+  if (c.init.method === "PUT" && /\/live_inputs\/in_unsigned_echo$/.test(c.url)) {   // Task 12: 200, the flag applied, the signing it re-sent dropped
+    const sent = JSON.parse(String(c.init.body)) as { enabled: boolean };
+    return { status: 200, body: { success: true, result: { uid: "in_unsigned_echo", enabled: sent.enabled, recording: { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS }, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS } } };
+  }
   if (c.init.method === "PUT" && /\/live_inputs\/[^/]+$/.test(c.url)) {
     const sent = JSON.parse(String(c.init.body)) as { enabled: boolean; recording: Record<string, unknown>; deleteRecordingAfterDays: number };
     return { status: 200, body: { success: true, result: {
@@ -257,6 +276,36 @@ describe("CloudflareIngest", () => {
     expect(settings(bodies[2]!), "the programme input records as the camera does").toEqual(settings(bodies[0]!));
   });
 
+  // Seazn-hosted video (Task 12, G5): a Seazn session's PROGRAMME input is created signed — `requireSignedURLs` and the Seazn
+  // hosts as `allowedOrigins` (C1; C2: the origins block nothing, the token's short life is the protection), in the create body,
+  // never by a later update (ingest-cf.ts header, F1/C4). The camera stays unsigned: the phone's own playback reads it.
+  it("Task 12 (G5): a Seazn programme create sends recording.requireSignedURLs true and allowedOrigins [\"seazn.club\"] on top of the camera's own recording settings; the camera create sends neither", async () => {
+    await ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: SIGNED });
+    await ingest.createLiveInput({ sessionId: "s1", slot: 0 });
+    const [prog, cam] = rec.calls.filter((c) => c.init.method === "POST").map((c) => JSON.parse(String(c.init.body)) as { recording: Record<string, unknown> });
+    expect(prog!.recording.requireSignedURLs).toBe(true);
+    expect(prog!.recording.allowedOrigins).toEqual(["seazn.club"]);
+    // Signing ADDS the two keys and changes nothing else the create sends (C4: the mode stays automatic, config's timeout).
+    expect({ ...prog!.recording, requireSignedURLs: undefined, allowedOrigins: undefined }).toEqual(cam!.recording);
+    expect(cam!.recording, "the camera: exactly the unsigned settings").toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
+    expect(["requireSignedURLs", "allowedOrigins"].filter((k) => k in cam!.recording), "the camera carries neither key").toEqual([]);
+  });
+
+  it("Task 12 (U1, G5): the signing is READ BACK — a signed create whose echo has no requireSignedURLs, or whose origins are not the ones sent, is refused and its input deleted; an unsigned create echoed signed is refused too; the honest echoes pass", async () => {
+    await expect(ingest.createLiveInput({ sessionId: "s_unsigned_echo", slot: 0, role: "programme", access: SIGNED })).rejects.toThrow(/settings were not applied — requireSignedURLs/);
+    // A signed input that came back unsigned is publicly playable (C3's lesson): it is dropped, never handed on.
+    expect(rec.calls.map((x) => `${String(x.init.method)} ${x.url}`)).toEqual([
+      `POST ${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs`,
+      `DELETE ${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`,
+    ]);
+    await expect(ingest.createLiveInput({ sessionId: "s_no_origins_echo", slot: 0, role: "programme", access: SIGNED })).rejects.toThrow(/settings were not applied — allowedOrigins/);
+    // The camera must stay unsigned for the phone's playback, so a signed echo for it is the same error.
+    await expect(ingest.createLiveInput({ sessionId: "s_signed_camera", slot: 0 })).rejects.toThrow(/settings were not applied — requireSignedURLs/);
+    // Positive twins: the echo a healthy Cloudflare sends (C8 measured both signed keys echoed) passes, signed and unsigned.
+    await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: SIGNED })).resolves.toMatchObject({ inputId: "in_abc" });
+    await expect(ingest.createLiveInput({ sessionId: "s1", slot: 0 })).resolves.toMatchObject({ inputId: "in_abc" });
+  });
+
   it("R2004 (review I2): listInputVideos GETs the DOCUMENTED filtered listing — /stream?live_input_id=<uid>&limit=<the document's max> — maps the recording facts exactly as listVideos does (an ABSENT liveInput reads null, never the id asked about), and records the call under the input and session; a failed envelope throws with the token redacted", async () => {
     const vids = await ingest.listInputVideos("in_abc", { sessionId: "s1" });
     const url = new URL(rec.calls[0]!.url);
@@ -346,23 +395,30 @@ describe("CloudflareIngest", () => {
   // off was off air. So this adapter never sends the flag alone: it re-asserts the recording settings the create sent.
   it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (no preferLowLatency)", async () => {
     let checked = 0;
-    // Every role the create names differently: the camera (the default) and a programme input.
-    for (const role of [undefined, "camera", "programme"] as const) {
-      const spec = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}) };
+    // Every role the create names differently: the camera (the default) and a programme input — Task 12: unsigned (an external
+    // destination's, whose row reads `access` null) and signed (a Seazn session's). The switch is told the access its row holds.
+    const cases = [
+      { role: undefined, access: undefined }, { role: "camera", access: undefined },
+      { role: "programme", access: null }, { role: "programme", access: SIGNED },
+    ] as const;
+    for (const { role, access } of cases) {
+      const spec = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}), ...(access ? { access } : {}) };
+      const meta = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}), ...(access !== undefined ? { access } : {}) };
+      const label = `${role ?? "default"}${access ? " signed" : ""}`;
       rec.calls.length = 0;
       await ingest.createLiveInput(spec);
       const created = JSON.parse(String(rec.calls[0]!.init.body)) as { meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
       for (const enabled of [false, true]) {
         rec.calls.length = 0;
-        await expect(ingest.setInputEnabled("in_abc", enabled, spec)).resolves.toBeUndefined();
-        expect(rec.calls, `${role ?? "default"} enabled ${enabled}: one call`).toHaveLength(1);
+        await expect(ingest.setInputEnabled("in_abc", enabled, meta)).resolves.toBeUndefined();
+        expect(rec.calls, `${label} enabled ${enabled}: one call`).toHaveLength(1);
         const call = rec.calls[0]!;
         expect(call.init.method).toBe("PUT");
         expect(call.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`);
         expect((call.init.headers as Record<string, string>).authorization).toBe("Bearer tok");
         const body = JSON.parse(String(call.init.body)) as { enabled: boolean; meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
         // ONE authority for the settings: what the create sent is what the update re-asserts, so neither can drift from the other.
-        expect(body, `${role ?? "default"} enabled ${enabled}: the create's body plus the flag`).toEqual({ ...created, enabled });
+        expect(body, `${label} enabled ${enabled}: the create's body plus the flag`).toEqual({ ...created, enabled });
         expect(body.enabled, "the flag is the boolean asked for").toBe(enabled);
         // …and each is the rulebook's value, read off config and C4, not off the adapter: mode is the literal "automatic".
         expect(body.recording.mode).toBe("automatic");
@@ -372,13 +428,40 @@ describe("CloudflareIngest", () => {
         checked++;
       }
     }
-    expect(checked, "three roles x both directions were sent").toBe(6);
+    expect(checked, "four role/access cases x both directions were sent").toBe(8);
     // The names differ by role, so the loop above is not three copies of one case.
     rec.calls.length = 0;
-    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme" });
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme", access: null });
     await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "camera" });
     const names = rec.calls.map((c) => (JSON.parse(String(c.init.body)) as { meta: { name: string } }).meta.name);
     expect(new Set(names).size, "a programme input and a camera input are not named alike").toBe(2);
+  });
+
+  // Task 12 (C8, MEASURED 2026-11-21: a PUT that re-sent the create's signed `recording` with `enabled: false` echoed
+  // requireSignedURLs true and the origins). The switch re-sends the signing its row holds and reads it back.
+  it("Task 12 (C8): setInputEnabled on a signed programme input re-sends requireSignedURLs and allowedOrigins with the create's settings and reads them back — an echo that dropped the signing is an error; `access: null` (the row's explicit unsigned answer) sends the unsigned body", async () => {
+    const meta = { sessionId: "s_1", slot: 0, role: "programme" as const, access: SIGNED };
+    await ingest.setInputEnabled("in_abc", false, meta);
+    const signed = JSON.parse(String(rec.calls.at(-1)!.init.body)) as { recording: Record<string, unknown> };
+    expect(signed.recording).toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS, requireSignedURLs: true, allowedOrigins: ["seazn.club"] });
+    const dropped = await ingest.setInputEnabled("in_unsigned_echo", false, meta).then(() => null, (e: Error) => e);
+    expect(dropped?.message, "a 200 whose echo lost the signing is not a switch that worked").toMatch(/^cloudflare set input enabled: settings were not applied — requireSignedURLs/);
+    await ingest.setInputEnabled("in_abc", false, { ...meta, access: null });
+    const unsigned = JSON.parse(String(rec.calls.at(-1)!.init.body)) as { recording: Record<string, unknown> };
+    expect(unsigned.recording).toEqual({ mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS });
+  });
+
+  it("Task 12: a PROGRAMME switch whose meta has no `access` key is refused before any call — a caller cannot send an unsigned body to a signed input by forgetting the field; the camera's switch (port-effects.ts) needs none", async () => {
+    const port = new FakeRecorder();
+    const cf = new CloudflareIngest({ fetchImpl: rec.fetchImpl, accountId: "acct", token: "tok", recorder: port });
+    const err = await cf.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme" }).then(() => null, (e: Error) => e);
+    expect(err?.message).toMatch(/programme input .* without its access/);
+    expect(rec.calls, "no request was sent").toHaveLength(0);
+    await new Promise((r) => setImmediate(r));
+    expect(port.calls, "and none was recorded").toHaveLength(0);
+    // The positive pair: the camera's switch, exactly as port-effects.ts sends it, goes out.
+    await expect(cf.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "camera" })).resolves.toBeUndefined();
+    expect(rec.calls).toHaveLength(1);
   });
 
   it("setInputEnabled with no session or slot to name the input sends no meta at all (never a made-up name) — the recording settings and retention still ride", async () => {
@@ -1141,11 +1224,17 @@ describe("server/relay/** static claims (C4, C8, C11, C12, C13)", () => {
     expect(puts, "the one PUT — the enable/disable call — and no other").toHaveLength(1);
     const body = cf.slice(puts[0]!.index, cf.indexOf("operation:", puts[0]!.index));   // the helper's own request body: everything before its call meta
     expect(body.length, "the slice found the request body, not nothing").toBeGreaterThan(40);
-    expect(body, "the PUT's recording is the create's constant, not a literal").toMatch(/recording:\s*LIVE_INPUT_RECORDING/);
+    expect(body, "the PUT's recording is the create's own builder, not a literal").toMatch(/recording:\s*liveInputRecording\(/);
     expect(body).toMatch(/deleteRecordingAfterDays:\s*DELETE_RECORDING_AFTER_DAYS/);
     expect(body, "never a recording literal of its own").not.toMatch(/mode:/);
-    // The create sends that same constant — so the two cannot drift — and nothing in the adapter spells a mode but `automatic`.
-    expect([...cf.matchAll(/recording:\s*LIVE_INPUT_RECORDING/g)], "create and enable/disable both send it").toHaveLength(2);
+    // Task 12: the create sends that same builder — so the two cannot drift — and the builder spreads the ONE constant, so
+    // signing only ever ADDS to the create's settings. Nothing in the adapter spells a mode but `automatic`.
+    expect([...cf.matchAll(/recording:\s*liveInputRecording\(/g)], "create and enable/disable both send it").toHaveLength(2);
+    const builderAt = cf.indexOf("function liveInputRecording(");
+    expect(builderAt, "the builder exists").toBeGreaterThanOrEqual(0);
+    const builder = cf.slice(builderAt, cf.indexOf("\n}", builderAt));
+    expect(builder.length, "the slice found the builder's body, not nothing").toBeGreaterThan(40);
+    expect(builder, "the builder spreads the create's constant").toMatch(/\.\.\.LIVE_INPUT_RECORDING\b/);
     expect(cf).not.toMatch(/mode:\s*"off"/);
     expect([...cf.matchAll(/mode:\s*"/g)], "one mode literal in the whole adapter").toHaveLength(1);
   });

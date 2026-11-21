@@ -27,7 +27,7 @@ import { runnerCreateErrorFrom } from "./runner-fly";  // …mapped onto the por
 import { NOOP_RECORDER } from "./ports";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecord,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, InputAccess, InputSwitchMeta, OutputState, ProviderCallMeta, ProviderCallRecord,
   ProviderCallRecorder, RunnerHandle, RunnerListing,
   RunnerObservation, RunnerProvider, RunnerSpec, StorageUsage,
 } from "./ports";
@@ -77,7 +77,8 @@ export function connectAfterMsFromEnv(): number {
 /** Dd: a test names the fields it cares about; the fake supplies the rest. */
 export type FakeVideoInput = Pick<IngestVideo, "videoId" | "inputId" | "createdAt" | "inProgress"> & Partial<IngestVideo>;
 
-interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[]; enabled: boolean }
+/** `access` (Task 12): the signing the input holds — what its create sent, then what each switch re-sent; null is unsigned. */
+interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[]; enabled: boolean; access: InputAccess | null }
 
 export class FakeIngest implements IngestProvider {
   readonly capabilities: IngestCapabilities = {
@@ -117,7 +118,8 @@ export class FakeIngest implements IngestProvider {
     const createdAt = this.clock();
     const inputId = `fake-in-${createdAt}-${randomBytes(4).toString("hex")}`;
     this.record("createLiveInput", "POST", "/live_inputs", [], inputId, spec.sessionId);
-    this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [], enabled: true });   // Cloudflare's default: enabled
+    this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [], enabled: true,   // Cloudflare's default: enabled
+      access: spec.access ? { signed: true, allowedOrigins: [...spec.access.allowedOrigins] } : null });
     // R2004: a composed session's programme input shares the camera's session and slot, so its stream id names the role.
     // The camera's is the id it always was (`role` absent is the camera).
     const streamId = spec.role === "programme" ? `${spec.sessionId}-programme-${spec.slot}` : `${spec.sessionId}-${spec.slot}`;
@@ -241,9 +243,23 @@ export class FakeIngest implements IngestProvider {
     return !!row && !row.deleted && row.enabled;
   }
 
+  /** Task 12 (G5): the signing an input holds — the signed settings of a Seazn session's programme input, null for an unsigned
+   *  one. An input this fake never made is a test's mistake, so it throws rather than answer a quiet null. */
+  inputAccess(inputId: string): InputAccess | null {
+    const row = this.inputs.get(inputId);
+    if (!row) throw new Error(`FakeIngest.inputAccess: unknown input ${inputId}`);
+    return row.access ? { signed: true, allowedOrigins: [...row.access.allowedOrigins] } : null;
+  }
+
   /** The port's switch (ingest-cf.ts: `PUT /live_inputs/{uid}`). An input that is GONE — deleted, or never made by this
-   *  fake — is Cloudflare's 404: success to a disable, a refusal to an enable. */
-  async setInputEnabled(inputId: string, enabled: boolean, meta: ProviderCallMeta = {}): Promise<void> {
+   *  fake — is Cloudflare's 404: success to a disable, a refusal to an enable. Task 12: it refuses what the adapter refuses — a
+   *  programme switch with no `access` key, before any call — and, as the adapter re-sends the whole recording, the input then
+   *  holds the access the switch named (C8 measured a signed re-send keeping the signing; an unsigned re-send is unmeasured, and
+   *  the fake reads it pessimistically, as a downgrade). */
+  async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
+    if (meta.role === "programme" && !("access" in meta)) {
+      throw new Error(`FakeIngest.setInputEnabled: refused a programme input ${inputId} switch without its access — nothing was sent`);
+    }
     this.record("setInputEnabled", "PUT", `/live_inputs/${inputId}`, [inputId], inputId, meta.sessionId ?? null);
     this.enabledCalls.push({ inputId, enabled });
     const row = this.inputs.get(inputId);
@@ -252,6 +268,7 @@ export class FakeIngest implements IngestProvider {
       return;
     }
     row.enabled = enabled;
+    row.access = meta.access ? { signed: true, allowedOrigins: [...meta.access.allowedOrigins] } : null;
   }
 
   async deleteInput(inputId: string): Promise<void> {

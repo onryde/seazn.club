@@ -10,7 +10,8 @@
 //  * NO update that changes `recording` on a live input, ever: flipping mode off
 //    took a live input off air in seconds while it stayed `connected` (F1).
 //    The ONE update this adapter sends is `setInputEnabled`, and it re-asserts the
-//    create's own recording settings (LIVE_INPUT_RECORDING) with the flag — the
+//    create's own recording settings (liveInputRecording over LIVE_INPUT_RECORDING,
+//    with the signing the input was created with — Task 12) with the flag — the
 //    docs' page sends the flag alone, but nothing there says a partial body leaves
 //    `recording` as it was, and an input reset to mode off is the F1 outage.
 //  * deleteInput leaks the recording; deleteVideo answers 409 code 10046 while
@@ -66,6 +67,30 @@ export const LIST_VIDEOS_PAGE_LIMIT = 1000;
  *  two cannot drift: the mode is `automatic`, always (C4 — a live input whose recording goes off is off air), and the
  *  timeout is config's. `deleteRecordingAfterDays` is NOT a member: it is a top-level sibling (U1-S1). */
 const LIVE_INPUT_RECORDING = { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS } as const;
+
+/** Seazn-hosted video (Task 12, G5): the `recording` an input is created with, and the one `setInputEnabled` re-sends — ONE
+ *  builder over the ONE constant, so signing only ever ADDS `requireSignedURLs` and `allowedOrigins` (C1) to the camera's own
+ *  settings and the create and the update cannot drift. No access: exactly the unsigned settings, as before. C8 (MEASURED
+ *  2026-11-21): a PUT that re-sent this signed body kept `requireSignedURLs: true`. */
+export function liveInputRecording(access?: IngestCreateSpec["access"]): typeof LIVE_INPUT_RECORDING & { requireSignedURLs?: true; allowedOrigins?: string[] } {
+  if (!access) return { ...LIVE_INPUT_RECORDING };
+  return { ...LIVE_INPUT_RECORDING, requireSignedURLs: true, allowedOrigins: [...access.allowedOrigins] };
+}
+
+/** Task 12 (U1: every setting sent is read back): what an echo says of the input's signing, against what was sent. Signed
+ *  sent ⇒ `requireSignedURLs` must echo `true` and the origins must be the same hosts (order is not compared). Unsigned sent ⇒
+ *  the echo must not say signed: the camera's playback is read by the phone. An empty list is "applied". */
+function accessNotApplied(sent: IngestCreateSpec["access"], echo: { requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null | undefined): string[] {
+  const out: string[] = [];
+  const echoedSigned = echo?.requireSignedURLs === true;
+  if (echoedSigned !== (sent !== undefined)) out.push(`requireSignedURLs sent ${sent ? "true" : "nothing"}, echoed ${String(echo?.requireSignedURLs)}`);
+  if (sent) {
+    const echoed = echo?.allowedOrigins ?? null;
+    const same = echoed !== null && [...echoed].sort().join(",") === [...sent.allowedOrigins].sort().join(",");
+    if (!same) out.push(`allowedOrigins sent ${JSON.stringify(sent.allowedOrigins)}, echoed ${JSON.stringify(echoed)}`);
+  }
+  return out;
+}
 
 /** The dashboard name a live input is created with: session, role (a programme input says so) and slot. ONE builder, so the
  *  create and the update (`setInputEnabled`) cannot name the same input two ways. */
@@ -278,11 +303,12 @@ export class CloudflareIngest implements IngestProvider {
        *  { allowedOrigins, hideLiveViewerCount, mode, requireSignedURLs,
        *  timeoutSeconds } — the retention key is NOT in it (U1-S1), and a
        *  `timeoutSeconds` Cloudflare declined comes back null (U1-S8). */
-      recording?: { timeoutSeconds?: number | null } | null;
+      recording?: { timeoutSeconds?: number | null; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null;
       deleteRecordingAfterDays?: number | null;
     }>("POST", "/live_inputs", {
       // R2004: a programme input (the composed session's Input B) says so in its name; the camera's name is unchanged.
-      // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles.
+      // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles — Task 12: plus the
+      // signing a Seazn session's programme input is created with, in the create body and never by a later update (F1/C4).
       meta: { name: inputName(spec) },
       // U1-S1, MEASURED 2026-09-10: `deleteRecordingAfterDays` is a TOP-LEVEL
       // SIBLING of `recording`, never a member of it. Nested, Cloudflare answers
@@ -291,7 +317,7 @@ export class CloudflareIngest implements IngestProvider {
       // retention is then never configured, the prepaid storage block never
       // recycles, and §6.5's 503 storage_exhausted starts refusing every
       // session, with a green create call at every step.
-      recording: LIVE_INPUT_RECORDING,
+      recording: liveInputRecording(spec.access),
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
     if (!r.json.success || !r.json.result) this.fail("create live input", r);
@@ -306,6 +332,9 @@ export class CloudflareIngest implements IngestProvider {
     const notApplied: string[] = [];
     if (echoedTimeout !== INGEST_TIMEOUT_SECONDS) notApplied.push(`timeoutSeconds sent ${INGEST_TIMEOUT_SECONDS}, echoed ${String(echoedTimeout)}`);
     if (echoedRetention !== DELETE_RECORDING_AFTER_DAYS) notApplied.push(`deleteRecordingAfterDays sent ${DELETE_RECORDING_AFTER_DAYS}, echoed ${String(echoedRetention)}`);
+    // Task 12 (G5): a signed input that came back unsigned is publicly playable (C3 saw exactly that of a recording), so it is
+    // refused and deleted like every other setting that did not apply.
+    notApplied.push(...accessNotApplied(spec.access, r.json.result.recording));
     if (notApplied.length > 0) {
       // The input exists and is misconfigured. Nothing has connected yet, so it
       // holds no recording for `deleteInput` to leak (C2) — dropping it here is
@@ -495,13 +524,22 @@ export class CloudflareIngest implements IngestProvider {
    *  Read back, like every setting the create sends (U1): a 200 whose echoed `enabled` is not the flag, or whose echoed
    *  `recording.mode` is anything but `automatic`, is an ERROR — a disable that did not take leaves a phone connected, and
    *  a flipped mode is C4. A 404 is an input already gone: success to a DISABLE (idempotent — the daily retention sweep and
-   *  the create's cleanup delete inputs, and a second stop must not fail), a refusal to an ENABLE. */
+   *  the create's cleanup delete inputs, and a second stop must not fail), a refusal to an ENABLE.
+   *
+   *  Task 12 (G5, C8): the re-sent recording carries the signing the input was CREATED with — `meta.access`, read from its
+   *  row, never from env — and the echo is read back for it like the mode. */
   async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
+    // Only a programme input can be signed, and only its row knows. A switch that does not say (no `access` key at all) would
+    // re-send the unsigned body over a signed input, so it is refused before anything is sent; `access: null` is the row's
+    // explicit unsigned answer. The camera is never signed (the phone plays it), so its switch needs no key.
+    if (meta.role === "programme" && !("access" in meta)) {
+      throw new Error(this.red(`cloudflare set input enabled: refused a programme input ${inputId} switch without its access (read it from the input's row) — nothing was sent`));
+    }
     // The name is the create's, rebuilt from the same three facts; a caller with no session or slot cannot name the input, and
     // then the body carries none (the usecase always passes them).
     const named = meta.sessionId && meta.slot !== undefined ? { meta: { name: inputName({ sessionId: meta.sessionId, slot: meta.slot, ...(meta.role ? { role: meta.role } : {}) }) } } : {};
-    const r = await this.call<{ enabled?: boolean; recording?: { mode?: string } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
-      ...named, enabled, recording: LIVE_INPUT_RECORDING, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+    const r = await this.call<{ enabled?: boolean; recording?: { mode?: string; requireSignedURLs?: boolean | null; allowedOrigins?: string[] | null } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
+      ...named, enabled, recording: liveInputRecording(meta.access ?? undefined), deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "setInputEnabled", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 && !enabled) return;
     if (!r.json.success || !r.json.result) this.fail("set input enabled", r);
@@ -509,6 +547,7 @@ export class CloudflareIngest implements IngestProvider {
     if (r.json.result.enabled !== enabled) notApplied.push(`enabled sent ${String(enabled)}, echoed ${String(r.json.result.enabled)}`);
     const echoedMode = r.json.result.recording?.mode;
     if (echoedMode !== undefined && echoedMode !== LIVE_INPUT_RECORDING.mode) notApplied.push(`recording.mode sent ${LIVE_INPUT_RECORDING.mode}, echoed ${String(echoedMode)}`);
+    notApplied.push(...accessNotApplied(meta.access ?? undefined, r.json.result.recording));
     if (notApplied.length > 0) throw new Error(this.red(`cloudflare set input enabled: settings were not applied — ${notApplied.join("; ")}`));
   }
 

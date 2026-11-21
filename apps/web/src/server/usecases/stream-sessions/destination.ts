@@ -2,6 +2,9 @@ import "server-only";
 // Where a session streams: destination row, decrypted key, target connection, replay link (see ./index.ts).
 import { sql, type Tx } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { seaznVideoOrigins } from "@/server/relay/config";
+import type { Session } from "@/server/relay/domain/session";
+import type { InputAccess } from "@/server/relay/ports";
 import { readPooledKey, readTargetSecret } from "@/server/relay/secret-columns";
 import { setFixtureStreamUrl } from "../fixtures";
 
@@ -43,6 +46,25 @@ export async function isSeaznTarget(exec: Tx | typeof sql, orgId: string, target
   const [t] = await exec<{ seazn: boolean }[]>`
     select kind = 'seazn' as seazn from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
   return t?.seazn === true;
+}
+
+/** Seazn-hosted video (Task 12, G5): the signing a Seazn session's programme input is CREATED with — signed, for the deployment's
+ *  own hosts (SEAZN_VIDEO_ORIGINS). Read once, at provisioning; the input's row keeps it from then on, and nothing reads env for
+ *  that input again. A LIVE relay never gets here without origins (admission answers 503 seazn_video_unconfigured first, Task 11);
+ *  the fake relay's admission does not ask, so this throws by name and provisioning fails the start closed, before any input. */
+export function seaznAccess(): InputAccess {
+  const allowedOrigins = seaznVideoOrigins();
+  if (allowedOrigins === null) throw new Error("stream session: SEAZN_VIDEO_ORIGINS is not set — a Seazn programme input cannot be created signed");
+  return { signed: true, allowedOrigins };
+}
+
+/** Task 12: the access a session's PROGRAMME input is created with — signed for a Seazn session, none for an external one. A
+ *  Seazn session is composed because start.ts coerces it, and no database rule backs that; a passthrough one would have no
+ *  programme input to sign and viewers would play its unsigned camera, so it is refused by name (provisioning fails closed). */
+export function programmeAccess(s: Pick<Session, "mode" | "destination">): InputAccess | undefined {
+  if (s.destination !== "seazn") return undefined;
+  if (s.mode !== "composed") throw new Error(`stream session: a Seazn session cannot run ${s.mode} — it has no programme input to sign`);
+  return seaznAccess();
 }
 
 /** Ruling F / design §12.6: on completed, when fixtures.stream_url is null and

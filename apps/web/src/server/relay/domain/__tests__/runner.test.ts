@@ -535,7 +535,7 @@ const liveComposed = (over: Partial<Session> = {}): Session => ({
   id: SID, fixtureId: "f1", orgId: "o1", mode: "composed", state: "live", desiredState: "live",
   failReason: null, endReason: null, runner: inState("playing"), runnerRetries: 0, createdAt: T0, startedAt: T0, endedAt: null,
   heartbeatAt: T0, beatWindowAt: null, endingAt: null, maxDurationMinutes: MAX_DURATION_MINUTES, outputUid: null,
-  startCause: "organiser", warmingAt: null, ...over,
+  startCause: "organiser", warmingAt: null, destination: "external", ...over,
 });
 interface Sim { s: Session; creates: { attempt: number; at: number }[]; effects: string[]; stale: number[] }
 const sim = (s: Session = liveComposed()): Sim => ({ s, creates: [], effects: [], stale: [] });

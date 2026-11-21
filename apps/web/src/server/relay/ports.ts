@@ -20,8 +20,13 @@ export interface IngestTarget { url: string; streamKey: string }
  *  A composed session has two: the `camera` (Input A; the compositor reads it over SRT playback) and the `programme`
  *  (Input B; the compositor publishes to it, and the destination output attaches to it). */
 export type InputRole = "camera" | "programme";
-/** `role` absent is the camera, so the passthrough create is the call it always was. */
-export interface IngestCreateSpec { sessionId: string; slot: number; role?: InputRole }
+/** Seazn-hosted video (Task 12, G5): how an input's playback is protected — signed, for these hosts. Only a Seazn session's
+ *  programme input carries it; absent is an unsigned input (the camera, whose playback the phone reads, and every external
+ *  destination's programme input). */
+export interface InputAccess { signed: true; allowedOrigins: string[] }
+/** `role` absent is the camera, so the passthrough create is the call it always was. `access` is sent IN the create (an update
+ *  never changes a live input's recording settings: ingest-cf.ts). */
+export interface IngestCreateSpec { sessionId: string; slot: number; role?: InputRole; access?: InputAccess }
 export interface IngestCredentials {
   inputId: string;
   srt: { url: string; streamId: string; passphrase: string };
@@ -51,8 +56,12 @@ export type OutputState = "ok" | "connecting" | "rejected" | "unknown";
  *  2026-09-30 found removeOutput rows with a NULL session_id). Optional: a caller with no session passes nothing. */
 export interface ProviderCallMeta { sessionId?: string | null }
 /** What `setInputEnabled` is told about the input beside the session: its slot and role, so an adapter that updates the input
- *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot). */
-export interface InputSwitchMeta extends ProviderCallMeta { slot?: number; role?: InputRole }
+ *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot).
+ *  `access` (Task 12) is the signing the input was CREATED with, READ from its row (`fixture_stream_inputs.access`), never from
+ *  env — so a change to SEAZN_VIDEO_ORIGINS can never alter an existing input's recording. `null` is the row's explicit
+ *  unsigned answer. A PROGRAMME input's switch must carry the key (null or not): the adapter refuses one without it, so a caller
+ *  cannot send an unsigned body to a signed input by forgetting the field. The camera's switch needs none (it is unsigned). */
+export interface InputSwitchMeta extends ProviderCallMeta { slot?: number; role?: InputRole; access?: InputAccess | null }
 export interface StorageUsage { totalStorageMinutes: number; totalStorageMinutesLimit: number; videoCount: number }
 /** Dd — a recording, with every fact Cloudflare's video object carries.
  *  While `state` is "live-inprogress" the probe (2026-09-14) reads `duration`

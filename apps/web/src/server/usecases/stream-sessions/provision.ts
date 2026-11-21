@@ -3,11 +3,13 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { machineNameFor } from "@/server/relay/domain/runner";
+import type { InputAccess } from "@/server/relay/ports";
 import { storeInputCredentials, storePlaybackCredentials } from "@/server/relay/secret-columns";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
 import { readRow } from "./session-row";
 import type { SessionDeps } from "./deps";
+import { programmeAccess } from "./destination";
 import { recordEffect } from "./port-effects";
 import { apply } from "./apply";
 
@@ -25,15 +27,21 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
   const composed = provisioning.mode === "composed";
   let creds: Awaited<ReturnType<SessionDeps["drivers"]["ingest"]["createLiveInput"]>> | undefined;
   let programme: typeof creds;
+  let access: InputAccess | undefined;
   try {
+    // Task 12 (G5): a Seazn session's programme input is created SIGNED (the camera never is). Read before any input is made,
+    // so a deployment that cannot sign — the fake relay with no SEAZN_VIDEO_ORIGINS; a live one was refused at admission — or a
+    // Seazn session that is not composed fails the start closed below with nothing at the provider to clean up.
+    access = programmeAccess(provisioning);
     creds = await recordEffect(provisioning, "create_live_input", "ingest", () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0 }), { slot: 0 });
     if (composed) {
       // R2004 (spec §5.3): Input A is the camera, read by the compositor over SRT PLAYBACK; Input B is the programme, which
-      // the compositor publishes to and the destination output attaches to. A first, so a camera the compositor could not
-      // read never costs a second input.
+      // the compositor publishes to and the destination output attaches to (Seazn: no output; viewers play B). A first, so a
+      // camera the compositor could not read never costs a second input.
       if (!creds.srtPlayback) throw new CameraPlaybackMissing(creds.inputId);
+      const signing = access;
       programme = await recordEffect(provisioning, "create_live_input", "ingest",
-        () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0, role: "programme" }), { slot: 0, role: "programme" });
+        () => deps.drivers.ingest.createLiveInput({ sessionId, slot: 0, role: "programme", ...(signing ? { access: signing } : {}) }), { slot: 0, role: "programme" });
     }
   } catch (err) {
     log.error({ sid: sessionId, err }, "stream session: ingest create failed");
@@ -64,7 +72,8 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
     if (programme) {
       await storePlaybackCredentials(tx, inp!.id, camera.srtPlayback!);
       const [prog] = await tx<{ id: string }[]>`select id from fixture_stream_inputs where session_id = ${sessionId} and role = 'programme' and slot = 0`;
-      await storeInputCredentials(tx, prog!.id, programme.inputId, programme);
+      // Task 12: the signing the programme input was created with, in the statement that stores its credentials (never after).
+      await storeInputCredentials(tx, prog!.id, programme.inputId, programme, access ?? null);
     }
     // ruling 13 facts: when, and which input (the uid is not a secret; the keys stayed *_enc). R2004: the session's OUTPUT
     // input — the one its destination output attaches to and whose recording is the session's: the camera for
@@ -87,5 +96,5 @@ export async function provisionSession(sessionId: string, deps: SessionDeps): Pr
   // in flight — and `decide` THROWS InvalidTransition on `provisioned` from any of those, turning a
   // routine race into a 500 on the organiser's own create. Re-read and skip if it moved.
   const afterIngest = await readRow(sessionId);
-  if (afterIngest?.state === "provisioning") await apply(sessionId, { type: "provisioned" }, deps);   // effects: add_output (C9; R2004: composed's on B)
+  if (afterIngest?.state === "provisioning") await apply(sessionId, { type: "provisioned" }, deps);   // effects: add_output (C9; R2004: composed's on B; Seazn: none, G1)
 }

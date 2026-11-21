@@ -251,6 +251,39 @@ describe("FakeIngest", () => {
     ]);
   });
 
+  // Seazn-hosted video (Task 12, G5): the fake keeps each input's signing as the adapter sends it — so a usecase test can read
+  // what the programme input was CREATED with — and refuses what the adapter refuses: a programme switch that does not name its
+  // access. A fake laxer than the adapter would let a DB test pass what production throws.
+  it("Task 12: the fake keeps each input's access (the Seazn programme's signed settings; null for the camera and an external programme) and refuses a programme switch with no `access` key before recording anything; a switch re-sends the access it names", async () => {
+    const port = new FakeRecorder();
+    const fake = new FakeIngest({ recorder: port });
+    const signed: { signed: true; allowedOrigins: string[] } = { signed: true, allowedOrigins: ["seazn.club"] };
+    const cam = await fake.createLiveInput({ sessionId: "s1", slot: 0 });
+    const prog = await fake.createLiveInput({ sessionId: "s1", slot: 0, role: "programme", access: signed });
+    const ext = await fake.createLiveInput({ sessionId: "s2", slot: 0, role: "programme" });
+    expect(fake.inputAccess(prog.inputId)).toEqual({ signed: true, allowedOrigins: ["seazn.club"] });
+    expect(fake.inputAccess(cam.inputId), "the camera stays unsigned").toBeNull();
+    expect(fake.inputAccess(ext.inputId), "an external destination's programme input is unsigned").toBeNull();
+    expect(() => fake.inputAccess("fake-in-unknown"), "an input the fake never made is a test bug, never a quiet null").toThrow(/unknown/);
+
+    await new Promise((r) => setImmediate(r));
+    const recorded = port.calls.length;
+    await expect(fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme" })).rejects.toThrow(/without its access/);
+    await new Promise((r) => setImmediate(r));
+    expect(port.calls.length, "refused before any call is recorded").toBe(recorded);
+    expect(fake.enabledCalls, "…or counted").toEqual([]);
+    expect(fake.isEnabled(prog.inputId), "…or applied").toBe(true);
+
+    await fake.setInputEnabled(prog.inputId, false, { sessionId: "s1", slot: 0, role: "programme", access: signed });
+    expect([fake.isEnabled(prog.inputId), fake.inputAccess(prog.inputId)], "C8: re-sending the signing keeps it").toEqual([false, signed]);
+    // The update re-sends the WHOLE recording (ingest-cf.ts), so what it names is what the input then holds. A re-send without the
+    // signing is not measured; the fake takes the pessimistic reading, so a test that downgrades an input sees it.
+    await fake.setInputEnabled(prog.inputId, true, { sessionId: "s1", slot: 0, role: "programme", access: null });
+    expect(fake.inputAccess(prog.inputId)).toBeNull();
+    await fake.setInputEnabled(cam.inputId, false, { sessionId: "s1", slot: 0, role: "camera" });   // port-effects.ts's own call
+    expect([fake.isEnabled(cam.inputId), fake.inputAccess(cam.inputId)]).toEqual([false, null]);
+  });
+
   it("listVideos carries Cloudflare's recording facts, and a LIVE recording reads unknown — never a finalised-looking zero (Dd)", async () => {
     const fake = new FakeIngest();
     // The live row deliberately PASSES numbers: the fake must drop them. A fake

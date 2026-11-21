@@ -6,7 +6,7 @@ import { HttpError } from "@/lib/errors";
 import { STREAM_PLATFORM_PRESETS, checkDestination, isStreamPlatform, type DestinationRefusal } from "@/lib/stream-destinations";
 import { assertKek, fingerprintDestination, hasValidKek, open, seal } from "./crypto";
 import { log } from "@/server/logger";
-import type { InputRole } from "./ports";
+import type { InputAccess, InputRole } from "./ports";
 
 export interface InputCredentials {
   srt: { url: string; streamId: string; passphrase: string };
@@ -54,12 +54,16 @@ const TARGET_SEALED = ["url", "streamKey"] as const;
 
 /** Persist a provisioned input's two credential shapes. Cloudflare returns the SRT `streamId` as a field of its own
  *  beside a bare url, so it exists nowhere else: `{ passphrase, streamId }` is sealed TOGETHER into
- *  `ingest_srt_key_enc` (as `rtmp_enc` seals `{ url, streamKey }`). The RTMPS pair is bare url + sealed stream key. */
+ *  `ingest_srt_key_enc` (as `rtmp_enc` seals `{ url, streamKey }`). The RTMPS pair is bare url + sealed stream key.
+ *  Seazn-hosted video (Task 12): `access` is the signing the input was CREATED with (null: unsigned), written in THIS statement
+ *  and never updated after — V540's trigger refuses a change, and the scan in stream-sessions.seazn.test.ts holds that no
+ *  other statement writes it. A later switch of the input reads it from here, never from env. Not a secret: hosts only. */
 export async function storeInputCredentials(
   tx: Tx,
   inputRowId: string,
   ingestInputId: string,
   creds: InputCredentials,
+  access: InputAccess | null = null,
 ): Promise<void> {
   const srtSealed = { passphrase: creds.srt.passphrase, streamId: creds.srt.streamId };
   await tx`
@@ -68,7 +72,8 @@ export async function storeInputCredentials(
            ingest_srt_url = ${bareUrl(creds.srt.url)},
            ingest_srt_key_enc = ${seal(JSON.stringify(srtSealed))},
            ingest_rtmps_url = ${bareUrl(creds.rtmps.url)},
-           ingest_rtmps_key_enc = ${seal(creds.rtmps.streamKey)}
+           ingest_rtmps_key_enc = ${seal(creds.rtmps.streamKey)},
+           access = ${access ? tx.json({ signed: true, allowedOrigins: access.allowedOrigins }) : null}
      where id = ${inputRowId}`;
 }
 

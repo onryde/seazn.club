@@ -8,8 +8,13 @@
 // live; a passthrough start makes one camera input and one output; composed adds a programme input and a Machine), never from
 // the code under test.
 //
+// Task 12 adds what a Seazn session IS once admitted: no output (G1), and a programme input created signed (G5), its settings
+// stored on fixture_stream_inputs.access in the statement that stores the input's credentials and never updated after.
+//
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the destination layer never reads a sport rule; every rig rides `generic`.
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
@@ -36,7 +41,9 @@ import { AUTO_START_RETRY_SECONDS } from "@/server/relay/config";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { RelayDrivers } from "@/server/relay/drivers";
+import type { ProviderCallRecorder } from "@/server/relay/ports";
 import { readPooledKey, readTargetSecret } from "@/server/relay/secret-columns";
+import { recordProviderCall } from "@/server/relay/telemetry";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import { log } from "@/server/logger";
 import { autoBackoffRefusalCode } from "@/server/youtube/auto-backoff";
@@ -48,8 +55,9 @@ import { postBeat, postStart } from "../capture-phone";
 import { saveStreamSettings } from "../stream-codes";
 import { grantCredits } from "../stream-credits";
 import {
-  ACTIVE_STATES, type SessionDeps, createSession as organiserStart, currentSession, heartbeat, stopSession,
+  ACTIVE_STATES, type SessionDeps, createSession as organiserStart, currentSession, heartbeat, stopSession, tickSession,
 } from "../stream-sessions";
+import { programmeAccess, seaznAccess } from "../stream-sessions/destination";
 import { createStreamTarget } from "../stream-targets";
 import { captureRig, override, phoneId } from "./_capture-rig";
 import { seedOrg, startedDivisionWithFixture } from "./_rig";
@@ -76,6 +84,9 @@ afterAll(() => {
 });
 beforeEach(() => {
   vi.stubEnv("SEAZN_HOSTED_LIVE", "true");
+  // Task 12: provisioning signs a Seazn programme input for these hosts (seaznAccess). The fake relay's admission does not ask
+  // for them (Task 11), so a test that wants them absent says so itself.
+  vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
   vi.mocked(readTargetSecret).mockClear();
   vi.mocked(readPooledKey).mockClear();
   vi.mocked(checkDestination).mockClear();
@@ -100,7 +111,7 @@ function traced(ingest: FakeIngest, runner: FakeRunner): { drivers: RelayDrivers
 
 /** An org with two started fixtures, the relay and overlay entitlements, `credits` bought credits, a phone paired on each
  *  fixture, a pasted YouTube key, and its Seazn row (made by V540's trigger, read here, never inserted). */
-async function rig(opts: { credits?: number } = {}) {
+async function rig(opts: { credits?: number; recorder?: ProviderCallRecorder } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const { fixtureIds } = await startedDivisionWithFixture(auth, { fixtures: 2 });
@@ -112,7 +123,7 @@ async function rig(opts: { credits?: number } = {}) {
   const [seazn] = await sql<{ id: string }[]>`select id from org_stream_targets where org_id = ${auth.orgId} and kind = 'seazn'`;
   expect(seazn, "PREMISE: V540 gave the org its Seazn destination").toBeDefined();
   let now = Date.now();
-  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
+  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000, ...(opts.recorder ? { recorder: opts.recorder } : {}) });
   ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
   const runner = new FakeRunner();
   const t = traced(ingest, runner);
@@ -371,6 +382,155 @@ describe.skipIf(!HAS_DB)("Seazn destination — admission", () => {
     const ytStart = (await goLive(r, f1, { mode: "passthrough", targetId: yt.targetId }, deps)).sessionId;
     expect(await sessionRow(ytStart)).toMatchObject({ api_backed: true, destination_kind: "youtube" });
     expect(fake.calls.filter((c) => c.method === "insertBroadcast"), "one broadcast prepared at YouTube").toHaveLength(1);
+  });
+});
+
+// ── Task 12: no output, a signed programme input ─────────────────────────────────────────────────────────────────────────────
+/** A provider-call recorder that writes through the REAL telemetry insert and keeps each insert's promise, so a test awaits every
+ *  stream_provider_calls row instead of guessing at a timer (the fake records on a microtask). */
+function dbRecording() {
+  const pending: Promise<void>[] = [];
+  const recorder: ProviderCallRecorder = { record: (c) => { const p = recordProviderCall(sql, c); pending.push(p); return p; } };
+  return { recorder, settle: async () => { await new Promise((res) => setImmediate(res)); await Promise.all(pending); } };
+}
+const inputsOf = (sid: string) => sql<{ role: string; ingest_input_id: string; access: unknown }[]>`
+  select role, ingest_input_id, access from fixture_stream_inputs where session_id = ${sid} order by role`;
+const providerOps = async (sid: string) =>
+  sql<{ operation: string; subject_id: string | null }[]>`select operation, subject_id from stream_provider_calls where session_id = ${sid}`;
+const failReasonOf = async (sid: string) =>
+  (await sql<{ fail_reason: string | null }[]>`select fail_reason from fixture_stream_sessions where id = ${sid}`)[0]!.fail_reason;
+/** G5: the signed settings for the hosts this file's beforeEach configures (SEAZN_VIDEO_ORIGINS=seazn.club). */
+const SIGNED_FOR_SEAZN_CLUB = { signed: true, allowedOrigins: ["seazn.club"] };
+
+describe.skipIf(!HAS_DB)("Seazn destination — no output, a signed programme input (Task 12)", () => {
+  it("a Seazn session reaches live with output_uid null and NO addOutput provider call; its programme input was CREATED signed — fixture_stream_inputs.access set on the programme row, null on the camera — and the provider holds the same", async () => {
+    const rec = dbRecording();
+    const r = await rig({ recorder: rec.recorder });
+    const [f1] = r.fixtureIds;
+    const { sessionId } = await goLive(r, f1, { mode: "composed", targetId: r.seazn });
+    await machinePlays(r, sessionId);
+    expect(await sessionRow(sessionId)).toMatchObject({ state: "live", destination_kind: "seazn", output_uid: null });
+    await rec.settle();
+    const ops = (await providerOps(sessionId)).map((o) => o.operation);
+    expect(ops.filter((o) => o === "createLiveInput"), "PREMISE: the session's provider calls were recorded (camera + programme)").toHaveLength(2);
+    expect(ops.filter((o) => o === "addOutput"), "G1: no output, ever").toEqual([]);
+    const [camera, programme] = await inputsOf(sessionId);
+    expect([camera!.role, camera!.access], "the camera stays unsigned: the phone plays it").toEqual(["camera", null]);
+    expect([programme!.role, programme!.access]).toEqual(["programme", SIGNED_FOR_SEAZN_CLUB]);
+    // The seam through its real producer: what the row says is what the create SENT the provider.
+    expect(r.ingest.inputAccess(programme!.ingest_input_id)).toEqual(SIGNED_FOR_SEAZN_CLUB);
+    expect(r.ingest.inputAccess(camera!.ingest_input_id)).toBeNull();
+    expect([r.ingest.outputsFor(camera!.ingest_input_id), r.ingest.outputsFor(programme!.ingest_input_id)]).toEqual([[], []]);
+  });
+
+  it("ten ticks of a live Seazn session never fail it target_rejected — even with every output read answering `rejected` — while a pasted passthrough session under the same reads fails target_rejected on its first tick (the control)", async () => {
+    const r = await rig();
+    const [f1, f2] = r.fixtureIds;
+    const seazn = (await goLive(r, f1, { mode: "composed", targetId: r.seazn })).sessionId;
+    await machinePlays(r, seazn);
+    const spy = vi.spyOn(r.ingest, "outputState").mockResolvedValue("rejected");
+    try {
+      let ticks = 0;
+      for (let i = 0; i < 10; i++) {
+        r.tick(SEC);   // ten seconds in all: inside the composed beat window, so only the output could end it
+        await tickSession(seazn, r.deps, "sweep");
+        expect((await sessionRow(seazn)).state, `after tick ${i + 1}`).toBe("live");
+        ticks++;
+      }
+      expect(ticks, "anti-vacuity: ten ticks ran").toBe(10);
+      expect(await failReasonOf(seazn)).toBeNull();
+      // The control: the same reads DO end a session that has a destination output.
+      const pasted = (await goLive(r, f2, { mode: "passthrough", targetId: r.pasted })).sessionId;
+      await tickSession(pasted, r.deps, "sweep");
+      expect(await failReasonOf(pasted), "the rejected read has teeth").toBe("target_rejected");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("regression (G1): an EXTERNAL composed session still adds exactly one output — on its programme input, none on the camera — and neither of its inputs is signed", async () => {
+    const rec = dbRecording();
+    const r = await rig({ recorder: rec.recorder });
+    const [f1] = r.fixtureIds;
+    const { sessionId } = await goLive(r, f1, { mode: "composed", targetId: r.pasted });
+    await machinePlays(r, sessionId);
+    const row = await sessionRow(sessionId);
+    expect(row).toMatchObject({ state: "live", destination_kind: "youtube" });
+    expect(row.output_uid, "the output this session added").not.toBeNull();
+    const [camera, programme] = await inputsOf(sessionId);
+    expect([r.ingest.outputsFor(camera!.ingest_input_id).length, r.ingest.outputsFor(programme!.ingest_input_id).length]).toEqual([0, 1]);
+    await rec.settle();
+    const adds = (await providerOps(sessionId)).filter((o) => o.operation === "addOutput");
+    expect(adds.map((a) => a.subject_id), "one addOutput, about the programme input (R2004)").toEqual([programme!.ingest_input_id]);
+    expect([camera!.access, programme!.access]).toEqual([null, null]);
+    expect(r.ingest.inputAccess(programme!.ingest_input_id)).toBeNull();
+  });
+
+  it("seaznAccess()'s guard: on the FAKE relay (whose admission does not ask for SEAZN_VIDEO_ORIGINS, Task 11) a Seazn start with no origins fails CLOSED at provisioning — 503, no input or Machine made, no row; with the origins set the same start goes through", async () => {
+    const r = await rig();
+    const [f1] = r.fixtureIds;
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "");
+    const err = await refusalOf(goLive(r, f1, { mode: "composed", targetId: r.seazn }));
+    expect(err).toBeInstanceOf(HttpError);
+    expect((err as HttpError).status).toBe(503);
+    expect(r.calls.length, "PREMISE: the start reached admission").toBeGreaterThan(0);
+    expect(r.calls.filter((c) => c !== "ingest.storageUsage"), "no input, output or Machine").toEqual([]);
+    expect(await sessionsOn(f1), "no session row").toBe(0);
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+    const { sessionId } = await goLive(r, f1, { mode: "composed", targetId: r.seazn });
+    expect((await inputsOf(sessionId)).map((i) => i.access)).toEqual([null, SIGNED_FOR_SEAZN_CLUB]);
+  });
+});
+
+describe("Task 12: seaznAccess() and the write-once access column", () => {
+  it("seaznAccess() is the signed settings for the configured Seazn hosts, and throws — naming the variable, never a value — when none are configured", () => {
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club, stg.seazn.club");
+    expect(seaznAccess()).toEqual({ signed: true, allowedOrigins: ["seazn.club", "stg.seazn.club"] });
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "");
+    expect(() => seaznAccess()).toThrow(/SEAZN_VIDEO_ORIGINS/);
+  });
+
+  // The assumption "a Seazn session is composed" is start.ts's coercion, and no database rule backs it — so it is a guard, not a
+  // comment: a Seazn PASSTHROUGH session would have no programme input to sign and its camera would be what viewers play.
+  it("programmeAccess(): signed only for a Seazn COMPOSED session, nothing for an external one, and a Seazn passthrough session is refused by name", () => {
+    vi.stubEnv("SEAZN_VIDEO_ORIGINS", "seazn.club");
+    const cases = [
+      { mode: "composed", destination: "seazn", want: { signed: true, allowedOrigins: ["seazn.club"] } },
+      { mode: "composed", destination: "external", want: undefined },
+      { mode: "passthrough", destination: "external", want: undefined },
+    ] as const;
+    let checked = 0;
+    for (const c of cases) {
+      expect(programmeAccess({ mode: c.mode, destination: c.destination }), `${c.mode}/${c.destination}`).toEqual(c.want);
+      checked++;
+    }
+    expect(() => programmeAccess({ mode: "passthrough", destination: "seazn" })).toThrow(/Seazn session .* passthrough/);
+    checked++;
+    expect(checked).toBe(4);
+  });
+
+  // `access` is written once, by the statement that stores the input's credentials, and never updated (V540's trigger refuses a
+  // change at the database; this pins the code). Production code only: tests may seat rows however they like.
+  it("no statement under src/server writes fixture_stream_inputs.access except the one that stores the input's credentials", () => {
+    const SERVER = resolve(import.meta.dirname, "../..");
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) return e.name === "__tests__" ? [] : walk(p);
+      return e.isFile() && e.name.endsWith(".ts") ? [p] : [];
+    });
+    const files = walk(SERVER);
+    let updates = 0;
+    const writers: { file: string; statement: string }[] = [];
+    for (const f of files) {
+      for (const m of readFileSync(f, "utf8").matchAll(/update\s+fixture_stream_inputs\b[^`]*/g)) {
+        updates++;
+        if (/\baccess\s*=/.test(m[0])) writers.push({ file: relative(SERVER, f), statement: m[0] });
+      }
+    }
+    expect(files.length, "anti-vacuity: the walk read the server tree").toBeGreaterThan(100);
+    expect(updates, "anti-vacuity: the scan found fixture_stream_inputs updates to judge").toBeGreaterThan(1);
+    expect(writers.map((w) => w.file)).toEqual(["relay/secret-columns.ts"]);
+    expect(writers[0]!.statement, "the same statement stores the input's credentials").toMatch(/ingest_input_id\s*=/);
   });
 });
 
