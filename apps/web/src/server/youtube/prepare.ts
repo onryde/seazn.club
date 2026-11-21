@@ -315,7 +315,12 @@ async function textsFor(ctx: Ctx): Promise<{ title: string; description: string;
      where f.id = ${ctx.fixtureId} and c.org_id = ${ctx.orgId}`;
   if (!f) throw new HttpError(404, "fixture not found");
   const locale = toLocale(f.default_locale);
-  const facts = await readDescriptionFacts({ fixtureId: ctx.fixtureId, orgId: ctx.orgId, competition: f.competition, linkable: f.linkable }, locale);
+  // Best effort (Phase 0 review m3): the facts are a nice-to-have line, so a failed read leaves them out and the Go live goes on.
+  const facts = await readDescriptionFacts({ fixtureId: ctx.fixtureId, orgId: ctx.orgId, competition: f.competition, linkable: f.linkable }, locale)
+    .catch((err: unknown) => {
+      captureError(err, { orgId: ctx.orgId, route: "youtube.prepare.description_facts", extra: { fixtureId: ctx.fixtureId } });
+      return [];
+    });
   return {
     locale,
     title: broadcastTitle({
