@@ -11,10 +11,6 @@
 // Expected values: the rulebook's table read by hand off the results typed below (a win is 3 points, the better row wins every
 // match unless a case says otherwise), and the owner-approved words of the R24 pick (typed from the mock, never read back from the
 // dictionary the builder resolves). Every result is the REAL builder over the REAL engine; nothing is mocked.
-//
-// single-sport (generic): the frozen markers read only who went through and the final order, which no sport field reaches; the
-// wins-first sports (badminton, tennis, volleyball) differ only in the live race the freeze switches off, swept in
-// qualification-view.test.ts.
 import { describe, expect, it } from "vitest";
 import { foldResults, rankStandings, type FixtureResult, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -25,6 +21,7 @@ import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import { QualRowView, QualTable } from "../competition-hub-schema";
 import { buildQualificationView, divisionAwardAddsToLedger, divisionPointsBounds, type QualFixture, type QualificationViewInput, type StageQualMeta } from "../qualification-view";
 
+// single-sport: the frozen markers read only who went through and the final order, which no sport field reaches; the wins-first sports (badminton, tennis, volleyball) differ only in the live race the freeze switches off, swept in qualification-view.test.ts, and the cut-line tie below is swept over every builtin sport.
 const GENERIC = builtinModules.find((m) => m.key === "generic")!;
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 const BOUNDS = divisionPointsBounds(GENERIC, CFG)!;
