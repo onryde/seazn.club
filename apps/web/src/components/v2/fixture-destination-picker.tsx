@@ -43,6 +43,8 @@ export interface DestinationRow {
 
 /** The row's second line: a connected channel names the platform and who can watch; a pasted key names the platform's key. */
 function kindLine(msg: Msg, t: StreamTarget): string {
+  // The Seazn row is no pasted key (Task 16): its second line says where it plays, never "Seazn stream key".
+  if (t.kind === "seazn") return msg("stream.dest.seazn.sub");
   if (t.youtube) return `${msg("stream.dest.kind.channel", { platform: STREAM_KIND_BRAND.youtube })} · ${msg(PRIVACY_KEY[t.youtube.privacy])}`;
   if (t.kind === "custom_rtmp") return msg("stream.dest.kind.keyOther");
   return msg("stream.dest.kind.key", { platform: platformName(msg, t.kind) });
@@ -52,7 +54,8 @@ export function destinationRow(msg: Msg, t: StreamTarget): DestinationRow {
   const status = t.youtube ? channelStatus(t.youtube) : null;
   return {
     id: t.id,
-    name: youtubeTargetLabel(msg, t.label),
+    // The Seazn row's name is copy in the viewer's language, not the stored label.
+    name: t.kind === "seazn" ? msg("stream.dest.kind.seazn") : youtubeTargetLabel(msg, t.label),
     kind: kindLine(msg, t),
     health: status && status.tone !== "ok" ? { tone: status.tone, text: msg(status.pill) } : null,
   };

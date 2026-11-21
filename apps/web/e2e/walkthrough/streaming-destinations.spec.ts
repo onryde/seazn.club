@@ -1041,3 +1041,58 @@ for (const width of [320, 1280] as const) {
     await dir.close();
   });
 }
+
+// ===========================================================================
+// 11 — Seazn-hosted video (Task 16): the Seazn destination is listed first, picked for a new match, and fixed
+// ===========================================================================
+// Needs a server with SEAZN_HOSTED_LIVE=true AND this process started with the same variable (the flag gates the row's listing, so with
+// it off there is nothing to look at). e2e.yml sets neither today, so the case SKIPS by name on a default run — it never passes vacuously.
+for (const width of [320, 768, 1280] as const) {
+  test(`11 @${width}: Seazn is first and selected for a new org's match, the Streaming page's Seazn row has no Rename / Replace key / Remove, and Go live starts a seazn session`, async ({ page }) => {
+    test.skip(process.env.SEAZN_HOSTED_LIVE !== "true", "needs a server and runner with SEAZN_HOSTED_LIVE=true (not set in the default e2e job)");
+    const NAVS = 2;
+    test.setTimeout(Math.max(120_000, SEED_MS + SLOT_WAIT_MS + CYCLE_MS) + NAVS * NAV_MS);
+    await page.setViewportSize({ width, height: 900 });
+    const rig = await seedRig(page, { entrants: 2 });
+    const f = rig.fixtures[0]!;
+    const body = await openPhoneTab(page, rig, f.no);
+
+    // The picker: Seazn first, and checked with no pick of the organiser's own.
+    const ids = await offeredTargetIds(body);
+    const seazn = (await listApi(page, rig.orgId)).find((t) => t.kind === "seazn");
+    expect(seazn, "premise: the API lists the org's Seazn row").toBeTruthy();
+    expect(ids[0], "Seazn is listed first").toBe(seazn!.id);
+    await expect(body.locator(`[data-testid="stream-target-option"][data-target-id="${seazn!.id}"]`)).toHaveAttribute("aria-selected", "true");
+    await body.getByTestId("stream-target").press("Escape");
+    await expect(targetPicker(body)).toHaveAttribute("data-value", seazn!.id);
+    await expect(targetPicker(body).getByTestId("stream-target-name")).toHaveText(en("stream.dest.kind.seazn"));
+    await expect(targetPicker(body).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.seazn.sub"));
+    await expect(body.getByTestId("stream-safety-notice"), "no YouTube safety notice for Seazn").toHaveCount(0);
+    await expectNoHorizontalScroll(page);
+    await shot(page.locator('[data-role="fixture-stream-body"]'), `16-${width}-picker-seazn.png`);
+
+    // The Streaming page: the row is there and fixed.
+    await openStreaming(page);
+    const row = rowOf(page, seazn!.id);
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("stream-dest-subline")).toHaveText(en("stream.dest.seazn.sub"));
+    for (const id of ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu"]) {
+      await expect(row.getByTestId(id), id).toHaveCount(0);
+    }
+    await expectNoHorizontalScroll(page);
+    await shot(page.locator('[data-testid="stream-destinations"]'), `16-${width}-streaming-seazn-row.png`);
+
+    // Go live starts a session whose destination is Seazn (width 1280 only: one stream slot per run).
+    if (width !== 1280) return;
+    await streamSlot();
+    await pairPhoneOnFixture(page, `${rig.divPath}/f/${f.no}`);
+    const again = await openPhoneTab(page, rig, f.no);
+    await again.getByTestId("stream-go-live").click();
+    await expect
+      .poll(async () => withDb((sql) => sql<{ destination_kind: string | null }[]>`select destination_kind from fixture_stream_sessions where org_id = ${rig.orgId}`).then((r) => r.map((x) => x.destination_kind)), {
+        message: "a session started for the Seazn destination", timeout: SAVE_MS, intervals: [1_000],
+      })
+      .toEqual(["seazn"]);
+    await stopApi(page, rig.orgId, f.id);
+  });
+}

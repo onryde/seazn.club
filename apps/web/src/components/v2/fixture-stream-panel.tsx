@@ -66,6 +66,7 @@ import {
   readClearsW5,
   type PresenceWatch,
   createErrorCode,
+  seaznRefinedCode,
   createErrorHolder,
   createErrorIsNotFound,
   createErrorText,
@@ -1205,7 +1206,7 @@ export function PhoneTab({
       // n-6: the start saved its destination — a pick that did not save is no longer news, at Ready after it either.
       setPickFailed(false);
     } catch (err) {
-      const code = createErrorCode(err);
+      const code = seaznRefinedCode(createErrorCode(err), targets.status === "ok" ? targets.list.find((t) => t.id === chosen)?.kind : undefined);
       // D12: "your plan, not your credits" is the upgrade surface, never a retry sentence.
       if (code === "plan_lacks_relay") {
         setPlanGate(true);

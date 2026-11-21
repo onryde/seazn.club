@@ -19,7 +19,7 @@ import { UTC, fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import {
   ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isStreamPlatform,
-  type StreamPlatform,
+  type StreamPlatform, SEAZN_TARGET_FIXED,
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
@@ -92,6 +92,8 @@ export function destinationErrorText(msg: Msg, err: unknown, kind: StreamTargetK
       const watch = Array.isArray(issues) && issues.some((i) => Array.isArray((i as { path?: unknown })?.path) && (i as { path: unknown[] }).path[0] === "watchUrl");
       return watch ? msg("streamDest.error.watch") : retry;
     }
+    case SEAZN_TARGET_FIXED:
+      return msg("streamDest.error.seaznFixed");
     case "FORBIDDEN":
       return msg("streamDest.error.forbidden");
     case "UNAUTHENTICATED":
@@ -273,9 +275,7 @@ export function StreamDestinationsPanel({
               {channels.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.keys.heading")}</h2>}
               <div className="card overflow-visible">
                 <ul className="divide-y divide-slate-100" aria-label={msg("streamDest.listLabel")}>
-                  {keys.map((t) => (
-                    <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />
-                  ))}
+                  {keys.map((t) => (t.kind === "seazn" ? <SeaznRow key={t.id} t={t} /> : <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />))}
                 </ul>
               </div>
             </section>
@@ -486,6 +486,23 @@ function badgeOf(t: StreamTarget, msg: Msg): ReactNode {
 }
 
 const ACTION = "btn min-h-11 px-2.5";
+
+/** Task 16: the Seazn row is fixed — always available, nothing to rename, re-key or remove (the server refuses all three, `seazn_destination_fixed`),
+ *  so the list draws it with this and never mounts the editable row. */
+export function SeaznRow({ t }: { t: StreamTarget }) {
+  const msg = useMsg();
+  return (
+    <li data-testid="stream-dest-row" data-target-id={t.id} data-fixed="seazn" className="px-4 py-3">
+      <div className="flex items-start gap-3 md:items-center">
+        <PlatformMark kind="seazn" size="md" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold text-slate-900">{msg("stream.dest.kind.seazn")}</p>
+          <p data-testid="stream-dest-subline" className="truncate text-xs text-slate-500">{msg("stream.dest.seazn.sub")}</p>
+        </div>
+      </div>
+    </li>
+  );
+}
 
 export function DestinationRow({
   t, canEdit, locale, orgId, run,
