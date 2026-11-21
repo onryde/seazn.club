@@ -43,19 +43,26 @@ beforeEach(() => {
  *  (two side reads and a camera-policy read each, 8 boards at 32); `getMatchDay` now hands both ONE `sharedQueueReads`, which took 37
  *  statements off the 32-board poll and 19 off the 4-board one.)
  *
- *  - `POLL_CEILING_32` 190 = 180 + 10 (about 6%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
- *    job, below); the pre-share poll, 217, is 27 over it, the pre-M2 313 is 123 over and the pre-fix 409 is 219 over.
- *  - `SLOPE_CEILING` 3.1 = 2.64 + 0.46: one more statement for every second board fits; the pre-share 3.29, the pre-M2 6.5 and the pre-fix
- *    9.7 are all over it.
- *  - `BOARD_READ_CEILING` 12 = 8 + 4: a board read is ONE board's own rows.
+ *  Then 106 / 180 / 2.64 / board read 8 until the seats' batch (gaps wave A, fix round 1, A10): the round's composition and the flagged lister
+ *  each read a board's two seats by two statements of their own (`loadSides`: 64 for the round's 32 boards and 16 for the 8 flagged boards the
+ *  lister builds again, 80 of the 180); `loadSidesOfBoards` reads them for a whole list in one. MEASURED at A10:
  *
- *  What the 180 still holds (read from the statement texts, 32 boards): 80 are the sides' names, two per board (`loadSides`, one per
- *  board and side: 64 for the round's 32 boards and 16 for the 8 flagged boards the lister builds again), 9 the camera policy (one for the
- *  round, one per flagged board), and the rest fixed reads. The flagged lister's second build of a board the round already composed is
- *  not a read two consumers share (the lister's `FlaggedBoard` is built without seats or a clock, the round's with both), so it stays. */
-const POLL_CEILING_32 = 190;
-const SLOPE_CEILING = 3.1;
-const BOARD_READ_CEILING = 12;
+ *    poll, 4 boards: 96     poll, 32 boards: 102     slope: 0.21 per extra board     board read: 7 at 4 and 7 at 32
+ *
+ *  - `POLL_CEILING_32` 108 = 102 + 6 (about 6%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
+ *    job, below); a revert of the batch reads 180, which is 72 over it, and the pre-share poll, 217, 109 over.
+ *  - `SLOPE_CEILING` 0.5 = 0.21 + 0.29: what is left per board is the camera policy of each FLAGGED board (one read each), so a quarter of
+ *    the boards at most may cost a statement; the pre-batch 2.64, the pre-share 3.29 and the pre-M2 6.5 are all over it.
+ *  - `BOARD_READ_CEILING` 7: a board read is ONE board's own rows, and every one of its seven statements is accounted for; the pre-batch read
+ *    was 8 (its two seat reads, now one), so a revert reds it.
+ *
+ *  What the 102 still holds (read from the statement texts, 32 boards): 9 the camera policy (one for the round, one per flagged board), 2 the
+ *  batched seat reads (the round's and the flagged lister's), and the rest fixed reads. The flagged lister's second build of a board the round
+ *  already composed is not a read two consumers share (the lister's `FlaggedBoard` is built without seats or a clock, the round's with both),
+ *  so it stays; only its seat read is now one statement. */
+const POLL_CEILING_32 = 108;
+const SLOPE_CEILING = 0.5;
+const BOARD_READ_CEILING = 7;
 /** A round that is PAIRED BUT NOT OPENED (the round between two Swiss rounds, or tomorrow's): its boards have no game, so no bridge row says who
  *  has White and the colour is the pairing card's, read from the board's fold. Read board by board (`whiteSideOf`: an owner-session mint plus a
  *  fold-read transaction, about six statements a board) it added a fixed price per board that no opened round ever shows - the busy-night seed

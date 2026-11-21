@@ -62,7 +62,7 @@ import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { checkedInAtOfBoards, countedCheckIns } from "./check-ins";
-import { loadOnlinePlayFixture, loadSides, onlinePlayDivisionWhere, type Side, type SidePlayer } from "./guard";
+import { loadOnlinePlayFixture, loadSides, loadSidesOfBoards, onlinePlayDivisionWhere, type Side, type SidePlayer } from "./guard";
 import { whiteSideOfFold } from "@/server/external-play/colours";
 import { noResultOffer } from "./no-result";
 import { readNeedsReason } from "./queue";
@@ -238,11 +238,12 @@ async function composeBoards(
 ): Promise<ArbiterBoard[]> {
   // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
   // The facts every side's presence, camera and `joinable` read: ONE statement each over the boards in hand (never one per board).
-  const facts = await readBoardFacts(listed, ctx.now, { seats: true });
+  // The two seats of every board are ONE read for the round, beside the facts (gaps wave A fix round 1, A10: two statements per board before).
+  const [facts, seats] = await Promise.all([readBoardFacts(listed, ctx.now, { seats: true }), loadSidesOfBoards(listed)]);
   const built = await Promise.all(
-    listed.map(async (r) => ({
+    listed.map(async (r, i) => ({
       row: r,
-      ...(await boardWithSides(auth, r, { limitMs: ctx.limitMs, policy: await ctx.policyOf(r), flagRows: ctx.flagRows, now: ctx.now, facts, flags: ctx.flags })),
+      ...(await boardWithSides(auth, r, { limitMs: ctx.limitMs, policy: await ctx.policyOf(r), flagRows: ctx.flagRows, now: ctx.now, facts, flags: ctx.flags, sides: seats[i]! })),
     })),
   );
   // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins (the one the facts above hold) and ONE of its invite mail.
@@ -423,11 +424,11 @@ export async function listFlaggedExternalPlay(
   const flagRows = await openFlagRows(auth, listed.map((r) => r.fixtureId));
   const limitMs = (division.config?.clock?.base ?? 0) * 1_000;
   // The flagged list has no clock of its own (`now: null`): one reading serves the camera judgement of every board in it.
-  const facts = await readBoardFacts(listed, new Date(), { seats: false });
+  const [facts, seats] = await Promise.all([readBoardFacts(listed, new Date(), { seats: false }), loadSidesOfBoards(listed)]);
   const boards = await Promise.all(
-    listed.map(async (r): Promise<FlaggedBoard> => {
+    listed.map(async (r, i): Promise<FlaggedBoard> => {
       const policy = await fixtureCameraPolicy(r.fixtureId);
-      const board = await boardOf(auth, r, { limitMs, policy, flagRows, now: null, facts });
+      const board = await boardOf(auth, r, { limitMs, policy, flagRows, now: null, facts, sides: seats[i]! });
       return { ...board, roundNo: r.roundNo, stageName: r.stageName };
     }),
   );
@@ -715,7 +716,7 @@ function cameraReportOf(fixtureId: string, sides: { home: ArbiterSideMeeting; aw
 async function boardOf(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts; sides: { home: SidePlayer; away: SidePlayer } },
 ): Promise<ArbiterBoard> {
   return (await boardWithSides(auth, r, ctx)).board;
 }
@@ -725,12 +726,13 @@ async function boardOf(
 async function boardWithSides(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts; flags?: FlagMode },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts; flags?: FlagMode; sides: { home: SidePlayer; away: SidePlayer } },
 ): Promise<{ board: ArbiterBoard; white: SidePlayer; black: SidePlayer }> {
   const { limitMs, policy, flagRows } = ctx;
   // The colours: the game's own record when there is one, else the pairing card's (the one rule, `whiteSideOfFold`, the creation and the public page read).
   const whiteSide = r.whiteSide ?? whiteSideOfFold({ colorOfHome: r.colorOfHome });
-  const sides = await loadSides(r);
+  // The two seats, read for the whole list by the caller (`loadSidesOfBoards`), never one board at a time.
+  const { sides } = ctx;
   const white = whiteSide === "home" ? sides.home : sides.away;
   const black = whiteSide === "home" ? sides.away : sides.home;
   const over = r.bridgeStatus === "finished" || r.gameOverAt !== null;

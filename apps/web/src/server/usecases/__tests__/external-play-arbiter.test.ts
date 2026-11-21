@@ -45,7 +45,6 @@ import {
   resyncExternalPlay,
   type ArbiterVideo,
 } from "../external-play/arbiter";
-import { listNeedsOrganiserExternalPlay } from "../external-play/queue";
 import { CAMERA_REPORT_STALE_MS } from "@/components/public-site/match-room/room-snapshot";
 import { reportedCameras } from "../external-play/camera-reported";
 import { configureRealtimeKit } from "./_external-play-rtk-fake";
@@ -54,26 +53,21 @@ import { clearBucket, putStay, setBucket, stubBucket } from "./_external-play-li
 import { linePool } from "@/server/external-play/seat-line";
 import { putVideoMeeting, putVideoParticipant, seedOnlineChessRound, seedOwner, seedPlayer, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 
-// M4: the loader's per-board reads, observed at the guard's door — the REAL
-// functions, wrapped to count how many boards are being read AT ONCE. Only
-// the test that sets `slow` changes anything.
-const guardSpy = vi.hoisted(() => ({ slow: false, inFlight: 0, maxInFlight: 0, calls: 0 }));
+// M4 (reshaped by gaps wave A10): the loader's seat reads, observed at the guard's door - the REAL function, wrapped to count how many reads the
+// composition makes and how many boards each carries. It was one `loadSides` per board, all in flight at once; it is ONE `loadSidesOfBoards` for the
+// round now. Only the test that sets `slow` changes anything (a delay, so a read made one board after another would show).
+const guardSpy = vi.hoisted(() => ({ slow: false, calls: 0, boards: [] as number[] }));
 vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 vi.mock("../external-play/guard", async (importOriginal) => {
   const real = await importOriginal<typeof import("../external-play/guard")>();
   return {
     ...real,
-    loadSides: async (...args: Parameters<typeof real.loadSides>) => {
-      if (!guardSpy.slow) return real.loadSides(...args);
+    loadSidesOfBoards: async (...args: Parameters<typeof real.loadSidesOfBoards>) => {
+      if (!guardSpy.slow) return real.loadSidesOfBoards(...args);
       guardSpy.calls++;
-      guardSpy.inFlight++;
-      guardSpy.maxInFlight = Math.max(guardSpy.maxInFlight, guardSpy.inFlight);
-      try {
-        await new Promise((res) => setTimeout(res, 25));
-        return await real.loadSides(...args);
-      } finally {
-        guardSpy.inFlight--;
-      }
+      guardSpy.boards.push(args[0].length);
+      await new Promise((res) => setTimeout(res, 25));
+      return real.loadSidesOfBoards(...args);
     },
   };
 });
@@ -236,7 +230,7 @@ describe.runIf(HAS_DB)("loadArbiterRound — the empty case first", () => {
 });
 
 describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", () => {
-  it("M4: the boards are read together, not one after another — and the answer is the same as one at a time", async () => {
+  it("M4: the boards' seats are read together, in ONE read for the round, not one board after another — and the answer is the same as an undelayed read", async () => {
     const r = await seedOnlineChessRound({ fixtures: 4 });
     await openRound(r);
     const [, b, c] = r.boards;
@@ -246,11 +240,14 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
     guardSpy.slow = true;
     try {
       const slow = await loadArbiterRound(r.owner, r.divisionId);
-      expect(guardSpy.calls, "anti-vacuity: one side read per board").toBe(4);
-      expect(guardSpy.maxInFlight, "every board's read in flight at once").toBe(4);
+      expect(guardSpy.calls, "the round's seats are one read").toBe(1);
+      expect(guardSpy.boards, "which carries every board of the round").toEqual([4]);
+      expect(slow?.boards, "anti-vacuity: the round has its four boards").toHaveLength(4);
       expect(slow).toEqual(quick);
     } finally {
       guardSpy.slow = false;
+      guardSpy.calls = 0;
+      guardSpy.boards = [];
     }
   });
 
@@ -2808,19 +2805,21 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - what one read costs (a per-call stat
   }
   const keyOf = (r: SeedOnlineChessRoundResult) => ({ orgId: r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] }) as AuthCtx;
 
-  it("a live board nobody has joined: 8 statements for a session, 7 for a key - and the move list rides the one board statement, never a statement of its own", async () => {
+  // 8 / 7 until gaps wave A10: the board's two seats were two statements (`loadSides`), one each; they are ONE (`loadSidesOfBoards`) now.
+  it("a live board nobody has joined: 7 statements for a session, 6 for a key - and the move list rides the one board statement, never a statement of its own", async () => {
     const { r, b } = await playedBoard(RUY_12);
     const session = await census(r.owner, b.fixtureId);
     // The division and its clock; the board; its open flags; whom the viewer plays for; the camera policy; the players' presence; the two sides.
-    expect(session.n, session.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(8);
+    expect(session.n, session.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(7);
     expect(session.naming("moves_uci"), "the moves are read by the board's own statement").toBe(1);
     expect(session.naming("fixture_video_presence"), "ONE presence statement").toBe(1);
-    expect((await census(keyOf(r), b.fixtureId)).n, "a key is never asked whom it plays for").toBe(7);
+    expect(session.naming("user_external_accounts"), "ONE seat statement for both sides").toBe(1);
+    expect((await census(keyOf(r), b.fixtureId)).n, "a key is never asked whom it plays for").toBe(6);
   });
 
   // 17 until MD-R23 (Match Day online Task 10): a board with no game yet had its colours read through an owner session and a fold read of
-  // its own (six statements); they now ride the board's own row, so the census is 11.
-  it("a board in check-in with both players arrived and a connection flag: 11 statements, each fact read ONCE - presence, cameras, check-ins, the invite mail", async () => {
+  // its own (six statements); they now ride the board's own row, so the census was 11, and 10 since the seats are one statement (A10).
+  it("a board in check-in with both players arrived and a connection flag: 10 statements, each fact read ONCE - presence, cameras, check-ins, the invite mail, the seats", async () => {
     const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
     await openRound(r);
     const b = r.boards[0]!;
@@ -2830,8 +2829,9 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - what one read costs (a per-call stat
     }
     await openFlag(r.orgId, b.fixtureId, { kind: "camera_connection_problems", personId: b.home.personId });
     const c = await census(r.owner, b.fixtureId);
-    expect(c.n, c.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(11);
+    expect(c.n, c.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(10);
     expect(c.naming("fixture_video_presence"), "ONE presence statement").toBe(1);
+    expect(c.naming("user_external_accounts"), "ONE seat statement for both sides").toBe(1);
     expect(c.naming("camera_reported"), "ONE camera statement").toBe(1);
     expect(c.naming("checked_in_at"), "ONE check-in statement, shared with the seats").toBe(1);
   });

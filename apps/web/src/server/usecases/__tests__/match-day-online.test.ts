@@ -934,8 +934,12 @@ describe.runIf(HAS_DB)("readOnlineRounds - what a poll costs (I2): statements pe
     await readOnlineRounds(r.owner, r.competitionId, NOW);
     const before = statementTexts().length;
     const rows = await readOnlineRounds(r.owner, r.competitionId, NOW);
-    const issued = statementTexts().length - before;
+    // Not counted: the driver's own type-cache fill (`pg_catalog.pg_type`), which a connection makes once, the first time it meets an array
+    // parameter - a pooled read that lands on a fresh connection pays it, a read that does not, does not. It is no read of Match Day's, and
+    // counting it made the per-board slope read 1.33 on a run that opened one more connection (measured at gaps A10).
+    const issued = (statementTexts().slice(before) as string[]).filter((t) => !/pg_catalog\.pg_type/.test(String(t))).length;
     expect(rows, "premise: the round was read (a read of nothing costs nothing)").toHaveLength(1);
+    expect(rows[0]!.round?.boards, "premise: every board the round holds was read").toHaveLength(r.boards.length);
     expect(issued, "premise: the counter is live").toBeGreaterThan(0);
     return issued;
   }
@@ -961,33 +965,40 @@ describe.runIf(HAS_DB)("readOnlineRounds - what a poll costs (I2): statements pe
     return r;
   };
 
-  // MEASURED at 00f2bf740e (statements per extra board, from a round of 1 and a round of 4; the numbers are the pin, a change to them is a
-  // deliberate edit to this file):
-  //   boards checking in 8 (was 14, T10 review M4: a board with no game read its colours by an owner-session lookup plus a fold-read transaction,
-  //     six statements a board, until 00f2bf740e put `colorOfHome` on the board rows query - 14 - 6 = 8). What is left is the arbiter loader's own
-  //     composition + `listOpenRounds`' view of the same round: two readers of one round, each reading its boards (MD-R1 forbids a second
-  //     composition of the BOARDS; the open-round view is the press and the pairings and needs its own);
-  //   boards playing 2;  boards playing and flagged 5.
-  //   fixed cost of a read (the INTERCEPT, 1-board cost minus the slope; gaps wave A3, MEASURED at gaps A3 on the real DB, a read alone): 38 checking in,
-  //     36 playing, 40 playing and flagged. Those are the statements a read pays before it reads one board: the divisions' day windows, the
-  //     stages and rounds, the held and flagged listers' fixed reads, the club's offered answer.
-  // Taking the double read out means changing `listOpenRounds` and the loader to share one read of the round: not this task's change (each
-  // is measured alone: the loader 17 -> 41 statements for 1 -> 4 boards, `listOpenRounds` 12 -> 30). This test keeps it from growing meanwhile.
-  it("a read costs at most what it costs today: 8 statements a board checking in, 2 playing, 5 playing and flagged, over a fixed 38 / 36 / 40", async () => {
+  // MEASURED at gaps A10 on the real DB, a read alone (statements per extra board, from a round of 1 and a round of 4; the numbers are the pin, a
+  // change to them is a deliberate edit to this file):
+  //   boards checking in 0, boards playing 0, boards playing and flagged 1 (the camera policy, read once for each flagged board).
+  //   Before A10: 2 / 2 / 5. A board's two seats were read by two statements of their own, once in the round's composition and, for a flagged
+  //   board, once more in the flagged lister's build (`loadSides`: 2 + 2 + the camera policy = 5); `loadSidesOfBoards` reads them for the whole
+  //   list in one. (An earlier note here said 8 for a board checking in: that was the figure before 00f2bf740e put `colorOfHome` on the board
+  //   rows, and the ceiling had stayed at it, six statements above what a read cost.)
+  //   fixed cost of a read (the INTERCEPT, 1-board cost minus the slope): 39 checking in, 37 playing, 42 playing and flagged (38 / 36 / 40 before
+  //   A10: the one batch read of the round's seats, and one more of the flagged boards'). Those are the statements a read pays before it reads
+  //   one board: the divisions' day windows, the stages and rounds, the held and flagged listers' fixed reads, the club's offered answer.
+  // The loader and `listOpenRounds` still read the round twice (each measured alone: the loader 17 -> 41 statements for 1 -> 4 boards before A10,
+  // `listOpenRounds` 12 -> 30); sharing one read of the round is not this task's change. This test keeps it from growing meanwhile.
+  it("a read costs at most what it costs today: no statement a board checking in or playing, 1 a board playing and flagged, over a fixed 39 / 37 / 42", async () => {
     const checking = await slopeOf((n) => openedRound(n, -5));
     const playingSlope = await slopeOf(playing);
     const flaggedSlope = await slopeOf(flagged);
-    expect(checking.slope, "per board checking in").toBeLessThanOrEqual(8);
-    expect(playingSlope.slope, "per board playing").toBeLessThanOrEqual(2);
-    expect(flaggedSlope.slope, "per board playing and flagged").toBeLessThanOrEqual(5);
+    // The numbers the report quotes (a test's output is the only place they are measured, never recalled).
+    console.log(
+      `[I2] statements per extra board / fixed cost: checking in ${checking.slope} / ${checking.one - checking.slope}, ` +
+        `playing ${playingSlope.slope} / ${playingSlope.one - playingSlope.slope}, playing and flagged ${flaggedSlope.slope} / ${flaggedSlope.one - flaggedSlope.slope}`,
+    );
+    expect(checking.slope, "per board checking in").toBeLessThanOrEqual(0);
+    expect(playingSlope.slope, "per board playing").toBeLessThanOrEqual(0);
+    expect(flaggedSlope.slope, "per board playing and flagged").toBeLessThanOrEqual(1);
     // The INTERCEPT too (gaps wave A3): what a read costs before it reads one board. A slope alone lets a fixed cost grow without a word - an
     // extra query per read, per division or per round - because a round of 4 and a round of 1 both pay it and it cancels in the difference.
     // intercept = (cost of 1 board) - slope, so a fixed cost is its own number and cannot hide in the per-board one.
-    expect(checking.one - checking.slope, "fixed cost of a read, checking in").toBeLessThanOrEqual(38);
-    expect(playingSlope.one - playingSlope.slope, "fixed cost of a read, playing").toBeLessThanOrEqual(36);
-    expect(flaggedSlope.one - flaggedSlope.slope, "fixed cost of a read, playing and flagged").toBeLessThanOrEqual(40);
-    // Anti-vacuity: a round of 4 costs more than a round of 1 in every state (the slope is measured, not a flat line of zeros).
-    for (const m of [checking, playingSlope, flaggedSlope]) expect(m.four, "4 boards cost more than 1").toBeGreaterThan(m.one);
+    expect(checking.one - checking.slope, "fixed cost of a read, checking in").toBeLessThanOrEqual(39);
+    expect(playingSlope.one - playingSlope.slope, "fixed cost of a read, playing").toBeLessThanOrEqual(37);
+    expect(flaggedSlope.one - flaggedSlope.slope, "fixed cost of a read, playing and flagged").toBeLessThanOrEqual(42);
+    // Anti-vacuity: the counter can SEE a per-board cost. The flagged state still pays its camera-policy read for each flagged board, so a
+    // round of 4 costs more than a round of 1 there; and the other two states read the same boards for the same statements, 1 or 4.
+    expect(flaggedSlope.four, "4 flagged boards cost more than 1: the counter sees a per-board read").toBeGreaterThan(flaggedSlope.one);
+    for (const m of [checking, playingSlope, flaggedSlope]) expect(m.one, "a read costs something").toBeGreaterThan(0);
   });
 });
 
