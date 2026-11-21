@@ -3694,6 +3694,8 @@
   "entrants.lichess.reconnectRequired.one": "{players} linked Lichess, but Seazn can't submit their moves with it yet. Ask them to reconnect it, then add them again.",
   "entrants.lichess.reconnectRequired.other": "{players} each linked Lichess, but Seazn can't submit their moves with it yet. Ask them to reconnect it, then add them again.",
   "entrants.lichess.reconnectRequired.unnamed": "Some players linked Lichess, but Seazn can't submit their moves with it yet. Ask them to reconnect it, then add them again.",
+  "onlineChess.entrantCap": "Online chess divisions hold up to {limit} entrants.",
+  "onlineChess.turnOnTooMany": "This division has {entrants} entrants, and online chess divisions hold up to {limit}. Remove entrants before turning online play on.",
   "entrants.row.delete": "Delete",
   "entrants.row.deleteHint": "Only available before the division has started",
   "entrants.row.withdraw": "Withdraw",

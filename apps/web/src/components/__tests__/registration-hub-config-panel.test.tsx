@@ -82,6 +82,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { ApiV1Error } from "@/lib/client-v1";
+import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
+import { onlineDivisionFullError } from "@/server/external-play/online-entrant-cap";
 import { plural, t } from "@/lib/i18n-runtime";
 import { SECTION_IDS, type SectionId } from "@/components/registration-hub-config-panel-sections";
 import { configDirty, type ConfigDirty } from "@/components/use-config-dirty";
@@ -1589,6 +1591,20 @@ describe("RegistrationHubConfigPanel — individual-only (chess)", () => {
     const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "entrant_kind");
     expect(shown).toBeTruthy();
     expect(expandedText([shown!])).toBe(t(uiEn, "divset.err.chessIndividualOnly"));
+  });
+
+  it("a capacity the online chess cap refuses lands on the capacity field, in the dictionary's words with the limit (owner ruling 2026-11-21: no plan to raise)", async () => {
+    const refusal = onlineDivisionFullError();
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    // Only the wording is replaced: the English dictionary sentence is the server's own, so showing `err.message` would pass a text check.
+    net.putRejection = new ApiV1Error("server wording (English only)", refusal.status, refusal.code!, refusal.extra as Record<string, unknown>);
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "capacity");
+    expect(shown, "the refusal is shown against the capacity field").toBeTruthy();
+    expect(expandedText([shown!])).toBe(t(uiEn, "onlineChess.entrantCap", { limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION }));
+    expect(expandedText([shown!]), "never the server's wording").not.toContain("server wording");
   });
 
   it("EligibilitySection hides the solo sign-up checkbox for individual-only even when handed a team state", () => {

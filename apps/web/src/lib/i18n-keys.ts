@@ -4863,6 +4863,8 @@ export type DictionaryKey =
   | "onboarding.subtitle"
   | "onboarding.welcome"
   | "onlineChess.camera.playerNotice"
+  | "onlineChess.entrantCap"
+  | "onlineChess.turnOnTooMany"
   | "org.competitionsBy"
   | "org.home.allFinished"
   | "org.home.empty.viewer"

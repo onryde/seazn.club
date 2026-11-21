@@ -9,6 +9,7 @@ import type { PutRegistrationSettings, RegistrationFormField } from "@/server/ap
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { requiresDob, requiresGender } from "../registration-eligibility";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { effectiveEntrantCap, onlineCapBinds, onlineDivisionFullError } from "@/server/external-play/online-entrant-cap";
 import { chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
 import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import { onlineChessOffered } from "../external-play/online-chess-flag";
@@ -184,7 +185,13 @@ export async function putRegistrationSettings(
   // confirm would hit the wall after money changed hands.
   if (input.capacity != null) {
     const limit = await getLimit(auth.orgId, "entrants.per_division.max", regDiv?.competition_id);
-    if (limit !== null && input.capacity > limit) {
+    // A division that plays online holds at most min(plan limit, 128) (owner ruling 2026-11-21): a capacity above it promises places
+    // the division cannot hold. Where the PLAN is what binds the old sentence stands; where the online cap is, it says so instead
+    // (a capacity limit - no plan lifts it, so no "raise the plan").
+    const online = regDiv ? divisionPlaysOnline(regDiv) : false;
+    const cap = effectiveEntrantCap(online, limit);
+    if (cap !== null && input.capacity > cap) {
+      if (onlineCapBinds(online, limit)) throw onlineDivisionFullError();
       throw new HttpError(
         422,
         `Capacity exceeds your plan's entrant limit (${limit}) — raise the plan or lower the capacity`,
@@ -411,7 +418,8 @@ export async function publicRegistrationInfo(
 
   const now = new Date();
   const divisions: PublicDivisionInfo[] = rows.map((r) => {
-    const remaining = placesLeft({ capacity: r.capacity, planLimit, formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
+    // Counted against the cap submit enforces, which for a division that plays online is min(plan limit, 128) (online-entrant-cap.ts).
+    const remaining = placesLeft({ capacity: r.capacity, planLimit: effectiveEntrantCap(divisionPlaysOnline(r), planLimit), formatMax: formatMaxes.get(r.division_id) ?? null, active: r.active });
     // A card division can't take submissions when Connect is broken OR the
     // paid entitlement is gone — closing it with an honest reason beats
     // accepting money we can't keep (spec #9, P2-10).

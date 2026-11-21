@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { assertWithinLimit, getLimit } from "@/lib/entitlements";
+import { getLimit } from "@/lib/entitlements";
 import { resolveModule } from "@/server/engine-db/registry";
 import { reviveVacantFinal } from "@/server/engine-db/fed-seats";
 import { entrantKindCap, type EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -37,6 +37,7 @@ import { recomputeStandings } from "@/server/engine-db";
 import { dropPinsOfEntrant } from "./rank-override";
 import { afterScheduleWrite } from "./schedule/after-write";
 import { readOnlinePlay } from "@/server/external-play/online-play";
+import { assertEntrantRoom } from "@/server/external-play/online-entrant-cap";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
@@ -452,10 +453,12 @@ export async function createEntrants(
     }
 
     // Doc 10 §1: `entrants.per_division.max` (V311: 32/64/256/∞) — the whole batch
-    // must fit; count in the same tx as the inserts (doc 10 §2 rule 1).
+    // must fit; count in the same tx as the inserts (doc 10 §2 rule 1). A division that plays
+    // online holds at most min(that cap, 128) (owner ruling 2026-11-21): `assertEntrantRoom`
+    // answers with the plan's 402 where the plan binds, the online cap's own 422 where it does.
     const [{ n }] = await tx<{ n: number }[]>`
       select count(*)::int as n from entrants where division_id = ${divisionId}`;
-    assertWithinLimit(entrantCap, "entrants.per_division.max", n + inputs.length);
+    assertEntrantRoom(division, entrantCap, n + inputs.length);
 
     // Entrant-shape gate (spec 2026-07-18): every input in the batch must match
     // the division's effective model BEFORE any insert — the whole batch fails

@@ -62,6 +62,7 @@ import {
   type EligibilityIssue,
 } from "./registration-eligibility";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
+import { effectiveEntrantCap } from "@/server/external-play/online-entrant-cap";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
@@ -548,7 +549,7 @@ export async function submitRegistrationGroup(
 
   // Everything before the transaction - the reads that resolve the cart and the checks that refuse it - is one `pre_tx` stage
   // when the register route passes its timer (registration redesign B0), each read inside it a sub-stage. No timer: no timing.
-  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor } = await timed(timer, "pre_tx", async () => {
+  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, onlineDivisionIds, seatGates, leadCtx, guardianFor } = await timed(timer, "pre_tx", async () => {
     // Resolve every distinct division touched by the cart, sorted — the SAME
     // order is used below for both settings validation and lock acquisition,
     // so two concurrent carts touching an overlapping division set can never
@@ -780,7 +781,7 @@ export async function submitRegistrationGroup(
             ),
           );
     const leadCtx = divisionCtxById.get(input.entries[0]!.division_id)!;
-    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor };
+    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, onlineDivisionIds: new Set(onlineIds), seatGates, leadCtx, guardianFor };
   });
 
   const secret = mintRegistrationToken();
@@ -875,9 +876,11 @@ export async function submitRegistrationGroup(
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
       const live = liveSettingsById.get(p.input.division_id)!;
+      // A division that plays online holds at most min(plan limit, 128) (owner ruling 2026-11-21; online-entrant-cap.ts): past
+      // it an entry waits, exactly as it does past the plan's limit.
       const hardCap = Math.min(
         live.capacity ?? Number.POSITIVE_INFINITY,
-        planLimit ?? Number.POSITIVE_INFINITY,
+        effectiveEntrantCap(onlineDivisionIds.has(p.input.division_id), planLimit) ?? Number.POSITIVE_INFINITY,
         formatMaxes.get(p.input.division_id) ?? Number.POSITIVE_INFINITY,
       );
       // A free-agent entry never competes for a TEAM slot at all — it draws

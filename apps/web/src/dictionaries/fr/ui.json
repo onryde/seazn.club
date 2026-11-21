@@ -3694,6 +3694,8 @@
   "entrants.lichess.reconnectRequired.one": "{players} a lié Lichess, mais Seazn ne peut pas encore jouer ses coups avec ce compte. Demandez-lui de le reconnecter, puis ajoutez-le à nouveau.",
   "entrants.lichess.reconnectRequired.other": "{players} ont chacun lié Lichess, mais Seazn ne peut pas encore jouer leurs coups avec ces comptes. Demandez-leur de les reconnecter, puis ajoutez-les à nouveau.",
   "entrants.lichess.reconnectRequired.unnamed": "Certains joueurs ont lié Lichess, mais Seazn ne peut pas encore jouer leurs coups avec ce compte. Demandez-leur de le reconnecter, puis ajoutez-les à nouveau.",
+  "onlineChess.entrantCap": "Les divisions d'échecs en ligne accueillent jusqu'à {limit} participants.",
+  "onlineChess.turnOnTooMany": "Cette division compte {entrants} participants, et les divisions d'échecs en ligne en accueillent jusqu'à {limit}. Retirez des participants avant d'activer le jeu en ligne.",
   "entrants.row.delete": "Supprimer",
   "entrants.row.deleteHint": "Proposé uniquement avant que la division n'ait commencé",
   "entrants.row.withdraw": "Retirer",

@@ -20,6 +20,7 @@ import {
   lineRecheckCost,
   lineReservation,
 } from "../seat-line";
+import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
 import { RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S } from "../video/budget";
 import {
   CHECKIN_BATCH_GAP_MS,
@@ -487,9 +488,9 @@ describe("which pass bars a capacity scenario owes, by the shape of its run (har
 });
 
 describe("B-dry's arrival spread is derived: demand exceeds the bucket's supply by a margin made of the product's own constants", () => {
-  // A big run: 128 players, 64 boards. The old 60 (30 boards, as B) no longer exceed the bucket's burst, so there is nothing for
-  // B-dry to run dry at that size.
-  const PLAYERS = 128;
+  // A FULL online division: 128 players, 64 boards - the largest run the platform takes (ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION). The
+  // old 60 (30 boards, as B) no longer exceed the bucket's burst, so there is nothing for B-dry to run dry at that size.
+  const PLAYERS = ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION;
   const c = LINE_LOAD.instantCallsPerPlayer;
   const supply = (spreadS: number) => RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * spreadS;
   const input = { players: PLAYERS, perPlayerCalls: c, burst: RTK_BUDGET_BURST, refillPerS: RTK_BUDGET_REFILL_PER_S, marginCalls: DRY_MARGIN_CALLS };

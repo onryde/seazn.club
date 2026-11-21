@@ -79,6 +79,7 @@ import {
 import { anyRoundOpened } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
+import { assertOnlinePlayFits } from "@/server/external-play/online-entrant-cap";
 import { assertOnlineChessOffered, onlineChessDisabled, onlineChessOffered } from "./external-play/online-chess-flag";
 import { audit } from "./audit";
 
@@ -1263,6 +1264,13 @@ export async function patchDivision(
           onlineOffered !== true
         ) {
           throw onlineChessDisabled();
+        }
+        // Owner ruling 2026-11-21: an online chess division holds at most 128 entrants, so a division already holding more cannot be turned
+        // online. Only the same off -> lichess transition (a re-send of a stored 'lichess' or turning it off is never gated, for a division
+        // saved before the cap must still save), counted as the entrant door counts: every row of the division.
+        if (readOnlinePlay(nextConfig) === "lichess" && readOnlinePlay(currentConfig) !== "lichess") {
+          const [{ n: held }] = await tx<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${id}`;
+          assertOnlinePlayFits(held);
         }
         const clockOrOnlineChanged =
           canonicalJson(nextConfig.clock ?? null) !== canonicalJson(currentConfig.clock ?? null) ||
