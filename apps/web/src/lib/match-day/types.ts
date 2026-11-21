@@ -300,8 +300,10 @@ export interface MatchDayView {
    *  has none. Read by `readOnlineRounds` (server/usecases/match-day-online.ts). */
   online_rounds: MatchDayOnlineRound[];
   /** True when THIS poll's online read failed (ruling MD-R9 answers the day without it, so the courts never go down with chess): then
-   *  `online_rounds` is `[]` because nothing was read, NOT because the competition has no online round. A page that already holds an
-   *  answer keeps it (`viewAfterPoll`), so the board panel open on a game does not close and its cameras do not leave for a database
+   *  `online_rounds` is `[]` because nothing was read, NOT because the competition has no online round. It is also true when the held or
+   *  flagged lister failed for the desk's own read of its per-board Needs-you rows, whatever the online rounds did (they come from the
+   *  same two listers), so `needs_you` and `results_owed` may lack those rows. A page that already holds an answer keeps its rounds, its
+   *  rows and its count (`viewAfterPoll`), so the board panel open on a game does not close and its cameras do not leave for a database
    *  hiccup. False on every poll whose online read answered, an empty answer included. */
   online_failed: boolean;
 }
