@@ -166,6 +166,9 @@ describe("a signed Cloudflare playback URL never reaches Sentry or PostHog with 
     const recording = (calls[0]![1] as Options).session_recording as Options | undefined;
     expect(recording, "session_recording is configured").toBeDefined();
     const mask = recording!.maskCapturedNetworkRequestFn;
+    // A custom mask turns off posthog-js's own body redaction (`scrubPayloads` runs only when no mask is given), and the client
+    // setting beats the project's remote one: with bodies off there is nothing for the lost redaction to miss.
+    expect(recording!.recordBody, "no request or response body is ever recorded").toBe(false);
 
     const p = await produced();
     const own = "https://seazn.club/api/v1/public/fixtures/3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b/video";

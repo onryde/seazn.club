@@ -136,10 +136,19 @@ describe.skipIf(!HAS_DB)("seaznWatchUrls: the phone's Watch live link", () => {
     const r = await rig();
     const [f] = r.fixtureIds;
     await live(r, f, r.seazn);
-    for (const origin of ["http://localhost:3000", "http://seazn.club", "seazn.club", ""]) {
-      expect([...(await seaznWatchUrls(r.auth.orgId, [f], origin))], `origin ${JSON.stringify(origin)}`).toEqual([]);
+    // The https guard answers BEFORE any link is built: a local dev server logs nothing (the contract regex would drop the same
+    // links, with a warning on every poll), so "no warning" is what keeps this guard itself testable.
+    const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      for (const origin of ["http://localhost:3000", "http://seazn.club", "seazn.club", ""]) {
+        expect([...(await seaznWatchUrls(r.auth.orgId, [f], origin))], `origin ${JSON.stringify(origin)}`).toEqual([]);
+      }
+      expect(warn, "a non-https origin is no malformed link: nothing is logged").not.toHaveBeenCalled();
+      expect([...(await seaznWatchUrls(r.auth.orgId, [f], "https://stg.seazn.club")).keys()], "the positive pair: staging's own host").toEqual([f]);
+      expect(warn, "and an admitted link logs nothing either").not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
     }
-    expect([...(await seaznWatchUrls(r.auth.orgId, [f], "https://stg.seazn.club")).keys()], "the positive pair: staging's own host").toEqual([f]);
   });
 
   it("a link the phone's contract would refuse is left out and logged by match id: an upper-case host, a path in the origin and userinfo give none; a lower-case host with a port still does", async () => {
