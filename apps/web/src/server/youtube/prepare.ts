@@ -12,7 +12,8 @@ import "server-only";
 //      a minute ago, and a person is owed YouTube's current answer, not a replayed one. An access token from the sealed refresh token (in
 //      memory only). A `youtube_reconnect_needed` from ANY port call (a dead grant) moves the connection to reconnect_needed first (F5).
 //      Also for an AUTOMATIC start alone (Phase 0, V538): inside the backoff window a rate / availability refusal opened
-//      (YOUTUBE_AUTO_BACKOFF_CODES, recorded by `failRow`) → that stored refusal, before any port call. A successful prepare clears it.
+//      (YOUTUBE_AUTO_BACKOFF_CODES, recorded by `failRow`) → that stored refusal, before any port call. A person's successful
+//      prepare clears it; an automatic start's clears once its session has started (`clearAutoBackoffAfterStart`).
 //   2. A short transaction: the fixture's OPEN broadcast (`created|bound|live|reserved`; `ending` is never selected, so a claimed
 //      row is never reused), locked `for update` (no skip). A reservation not yet lapsed is another Go live mid-admission →
 //      the existing `active_session` 409. Otherwise its end rule decides (end-rule.ts, read through THIS transaction under the
@@ -192,7 +193,7 @@ export async function clearAutoBackoffAfterStart(p: Prepared, now: Date): Promis
 }
 
 /** The automatic start's backoff (Phase 0, V538): a refusal that opens it (auto-backoff.ts `opensAutoBackoff`; null — a fault of
- *  Seazn's own — never does) opens or extends the window, a successful prepare clears it. Best effort, like `noteLiveState`. */
+ *  Seazn's own — never does) opens or extends the window, a successful one ("success") clears it. Best effort, like `noteLiveState`. */
 async function noteAutoBackoff(
   ctx: { orgId: string; connectionId: string; now: Date }, outcome: YoutubeRefusalCode | null | "success",
 ): Promise<void> {

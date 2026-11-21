@@ -1,7 +1,8 @@
 // Phase 0, YouTube channel safety, Task 1: the AUTOMATIC start backs off a channel after a rate / availability refusal.
 // A refusal of youtube_limit_reached, youtube_channel_busy or youtube_unavailable on a new broadcast records a window on the
 // connection (60 s, doubling, capped at 1800 s); inside it an automatic start is refused with the stored code and NO call to
-// YouTube. A person's tap never reads the window, and any successful prepare clears it.
+// YouTube. A person's tap never reads the window, and a person's successful prepare clears it (an automatic start's clears
+// once its session has started: stream-auto.test.ts, Phase 0 review I1).
 //
 // Expected numbers are the plan's literals, typed here: 60 s base, 1800 s cap, doubling. The sequence runs through the REAL
 // prepareYoutubeBroadcast against the fake port, on an injected clock.

@@ -301,7 +301,7 @@ export async function recordAutoBackoff(
      where id = ${connectionId} and org_id = ${orgId}`;
 }
 
-/** A successful prepare: the channel answered, so the automatic start's window, its count and its code go. */
+/** A person's successful prepare, or an automatic start whose session has started (prepare.ts): the channel answered, so the automatic start's window, its count and its code go. */
 export async function clearAutoBackoff(exec: Tx | typeof sql, orgId: string, connectionId: string): Promise<void> {
   await exec`
     update org_youtube_connections set auto_backoff_count = 0, auto_retry_after = null, auto_backoff_code = null
