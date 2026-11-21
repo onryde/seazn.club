@@ -219,8 +219,9 @@ export async function reconcileSwissRoundShells(
     kept.push({ ...byeRow, seq_in_round: boards + 1 });
   }
 
-  // `org_id` and `fixture_no` are assigned by BEFORE INSERT triggers, exactly
-  // as they are for the shell mint in generateStageFixturesTx.
+  // `org_id` comes from its BEFORE INSERT trigger; `fixture_no` is handed out
+  // by `insertFixtureRows`, once per call under the trigger's own advisory key
+  // (W5 B4, stress F8), exactly as for the shell mint in generateStageFixturesTx.
   const shell = (extKey: string, seqInRound: number) => ({
     id: randomUUID(),
     stage_id: stageId,

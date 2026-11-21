@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { generate } from "@/server/usecases/stages/generators";
 import type { ActiveEntrant } from "@/server/usecases/stages/types";
-import { formatMaxEntrants, formatMaxGate, START_LINE_BUDGET, type FormatStage } from "@/lib/format-max-entrants";
+import { __formatMaxMemoSizeForTests, formatMaxEntrants, formatMaxGate, START_LINE_BUDGET, type FormatStage } from "@/lib/format-max-entrants";
 import { swissRoundsDefault } from "@/lib/swiss-rounds";
 import { buildTemplateStages, STAGE_TEMPLATES } from "@/lib/format-templates";
 import { openingKnobs } from "@/lib/division-builder/model";
@@ -143,5 +143,54 @@ describe("formatMaxGate: a division's field against its FIRST stage's max", () =
 
   it("a first stage with no field max refuses no field", () => {
     expect(formatMaxGate([{ kind: "ladder", config: {} }], 100_000)).toBeNull();
+  });
+});
+
+// B4 review m-3: the memo was keyed on the WHOLE stored config, and a first stage's config also carries what changes in play
+// (`round_byes`, `rank_overrides`, `rules`, `points`, `qualified`): every change added a module-level entry that was never evicted,
+// on the server, on every generate, create and public registration read. The key is now what the count reads, so a config that
+// differs only in play state is the same entry - and two configs that differ in what IS read are still two answers.
+describe("formatMaxEntrants' memo: one entry per shape the count reads (m-3)", () => {
+  const PLAY_STATE = [
+    { round_byes: [{ pool: null, round: 3 }] },
+    { rank_overrides: { e1: 1 } },
+    { rules: { tiebreakers: ["h2h"] } },
+    { points: { w: 3, d: 1, l: 0 } },
+    { qualified: ["e1", "e2"] },
+  ];
+
+  it("play state on a config adds no entry and changes no answer, for every growing format", () => {
+    let checked = 0;
+    for (const [name, stage] of GROWING) {
+      const base = formatMaxEntrants(stage);
+      const size = __formatMaxMemoSizeForTests();
+      for (const extra of PLAY_STATE) {
+        const withPlay = { kind: stage.kind, config: { ...(stage.config as object), ...extra } };
+        expect(formatMaxEntrants(withPlay), `${name} + ${Object.keys(extra)[0]}: the same max`).toBe(base);
+        checked++;
+      }
+      expect(__formatMaxMemoSizeForTests(), `${name}: no entry for play state`).toBe(size);
+    }
+    expect(checked, "anti-vacuity: every growing format x every kind of play state").toBe(GROWING.length * PLAY_STATE.length);
+  });
+
+  it("what the count reads is still told apart: legs, pools, rounds, a third-place match, a bracket reset", () => {
+    const pairs: [FormatStage, FormatStage][] = [
+      [{ kind: "league", config: { legs: 1 } }, { kind: "league", config: { legs: 2 } }],
+      [{ kind: "group", config: { pools: { count: 2 } } }, { kind: "group", config: { pools: { count: 8 } } }],
+      [{ kind: "swiss", config: { rounds: 7 } }, { kind: "swiss", config: { rounds: 15 } }],
+      [{ kind: "knockout", config: {} }, { kind: "knockout", config: { thirdPlace: true } }],
+      [{ kind: "double_elim", config: {} }, { kind: "double_elim", config: { bracketReset: true } }],
+    ];
+    for (const [a, b] of pairs) {
+      // Each answer is the real generator's (the sweep above pins it); here only that the two are two entries with two answers
+      // wherever the draws differ at the max.
+      const ma = formatMaxEntrants(a)!;
+      const mb = formatMaxEntrants(b)!;
+      expect(drawn(a, ma), `${a.kind}: the first's max fits its own draw`).toBeLessThanOrEqual(START_LINE_BUDGET);
+      expect(drawn(b, mb), `${b.kind}: the second's max fits its own draw`).toBeLessThanOrEqual(START_LINE_BUDGET);
+      expect(drawn(b, mb + 1), `${b.kind}: one past the second's max does not (not the first's answer reused)`).toBeGreaterThan(START_LINE_BUDGET);
+    }
+    expect(pairs.length, "anti-vacuity").toBe(5);
   });
 });

@@ -17,7 +17,8 @@ import { engineEntrantChoice } from "@/lib/__tests__/_engine-entrant-kinds";
 import { formatPickerView } from "@/lib/division-builder/format-choice";
 import { OPENING_PLAN, openingKnobs, type PlanInput } from "@/lib/division-builder/model";
 import { formatMaxEntrants } from "@/lib/format-max-entrants";
-import { buildTemplateStages, STAGE_TEMPLATES, templatesForSport } from "@/lib/format-templates";
+import { buildTemplateStages, STAGE_TEMPLATES, templatesForSport, type TemplateKnobs } from "@/lib/format-templates";
+import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -67,15 +68,26 @@ describe("the builder's view carries the picked format's max entrants (W5 B4, F8
     expect(box, "the plan box renders, with a max").not.toBeNull();
     const ceiling = Number(box![1]);
     expect(ceiling, "the plan box renders a max").toBeGreaterThan(2);
+    // B4 review m-7: the opening knobs alone left this green with `FORMAT_BOUNDS.legs.max` raised to 3 (a 64-entrant league of
+    // three legs is 6,048 lines, max 58). The builder's knobs reach every value inside FORMAT_BOUNDS, so the sweep takes every
+    // CORNER of them too (each knob at its min and its max, read from the bounds, never a literal), beside the opening knobs.
+    const corners: TemplateKnobs[] = [];
+    for (const legs of [FORMAT_BOUNDS.legs.min, FORMAT_BOUNDS.legs.max])
+      for (const swissRounds of [FORMAT_BOUNDS.swissRounds.min, FORMAT_BOUNDS.swissRounds.max])
+        for (const poolCount of [FORMAT_BOUNDS.pools.min, FORMAT_BOUNDS.pools.max])
+          for (const qualified of [FORMAT_BOUNDS.qualify.min, FORMAT_BOUNDS.qualify.max]) corners.push({ legs, swissRounds, poolCount, qualified });
     let checked = 0;
     for (const key of OFFER) {
       for (let entrants = 2; entrants <= ceiling; entrants++) {
-        const max = formatMaxEntrants(buildTemplateStages(key, openingKnobs(entrants))[0]!);
-        if (max !== null) expect(entrants, `${key}: a plan of ${entrants} against its max ${max}`).toBeLessThanOrEqual(max);
-        checked++;
+        for (const knobs of [openingKnobs(entrants), ...corners]) {
+          const max = formatMaxEntrants(buildTemplateStages(key, knobs)[0]!);
+          if (max !== null) expect(entrants, `${key} at ${JSON.stringify(knobs)}: a plan of ${entrants} against its max ${max}`).toBeLessThanOrEqual(max);
+          checked++;
+        }
       }
     }
-    expect(checked, "anti-vacuity").toBe(OFFER.length * (ceiling - 1));
+    expect(corners.length, "every corner of the four knobs").toBe(16);
+    expect(checked, "anti-vacuity").toBe(OFFER.length * (ceiling - 1) * (1 + corners.length));
   });
 });
 

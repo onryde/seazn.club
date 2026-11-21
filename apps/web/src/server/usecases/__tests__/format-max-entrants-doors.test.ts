@@ -20,6 +20,7 @@ import { createEntrants, deleteEntrant } from "../entrants";
 import { createPerson } from "../persons";
 import { startDivision } from "../schedule";
 import { createStages, generateStageFixtures } from "../stages";
+import { patchSwissStage } from "../swiss-rounds-admin";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -252,5 +253,73 @@ describe.skipIf(!HAS_DB)("F8: only a STARTED division's passes are exempt (B4 re
     expect((await routed(() => startDivision(r.auth, r.divisionId))).status).toBe(200);
     expect(await statusOf(r.divisionId)).toBe("active");
     expect(await linesOf(r.divisionId)).toBe(drawn);
+  });
+});
+
+// B4 review m-9: the DRAW_TOO_LARGE backstop lived in `generateStageFixturesTx` alone, and two other doors mint a stage's lines in
+// one request: a `timing: "setup"` later stage's placeholder draw (setup-fixtures.ts) and a Swiss's rounds edit after Start (every
+// added round's shells, swiss-rounds-admin.ts). Both are bounded in the builder and Settings (Top N <= 32, rounds <= 15) and
+// reachable past the budget over the API. Each case is refused one past the budget and drawn one under it, with the line count
+// from the engine (`roundRobinFixtureCount`) or the rulebook (W3 §4: ceil(n/2) shells a round), never from the code under test.
+// (A late entrant's catch-up lines are at most legs x field per request - 8 x 35 at the eight-leg max - and an Add a round is one
+// round's ceil(n/2): neither can reach the budget from a field Start admitted, so they carry no backstop.)
+describe.skipIf(!HAS_DB)("F8: every door that draws a stage in one request holds the budget (B4 review m-9)", () => {
+  const groupsThenLeague = (perPool: number) => [
+    { seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 8 } }, progression: null },
+    {
+      seq: 2, kind: "league", name: "Final league", config: { legs: 2 },
+      progression: { sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: perPool }] }], placement: "rank_order", timing: "setup" },
+    },
+  ];
+
+  it("a setup league's placeholder draw past the budget is DRAW_TOO_LARGE, nothing written; one under it draws every line", { timeout: 240_000 }, async () => {
+    // 72 into 8 pools of 9: the top 9 of each is 72 seats (72 x 71 = 5,112 lines over two legs); the top 8 is 64 (4,032).
+    const over = roundRobinFixtureCount(72, 2);
+    const under = roundRobinFixtureCount(64, 2);
+    expect(over, "premise: 72 seats over two legs pass the budget").toBeGreaterThan(START_LINE_BUDGET);
+    expect(under, "premise: 64 seats over two legs fit it").toBeLessThanOrEqual(START_LINE_BUDGET);
+    let checked = 0;
+    for (const [perPool, lines] of [[9, over], [8, under]] as const) {
+      const r = await rig(72);
+      const ids = (await createStages(r.auth, r.divisionId, groupsThenLeague(perPool) as never)).sort((a, b) => a.seq - b.seq).map((x) => x.id);
+      const out = await routed(() => generateStageFixtures(r.auth, ids[1]!));
+      const written = Number((await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${ids[1]!}`)[0]!.n);
+      if (lines > START_LINE_BUDGET) {
+        expect(out.status, `top ${perPool}: refused`).toBe(422);
+        expect(out.error).toMatchObject({ code: "DRAW_TOO_LARGE", lines, budget: START_LINE_BUDGET });
+        expect(written, `top ${perPool}: nothing written`).toBe(0);
+      } else {
+        expect(out.status, `top ${perPool}: drawn`).toBe(200);
+        expect(written, `top ${perPool}: every placeholder line`).toBe(lines);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: one past the budget, one under").toBe(2);
+  });
+
+  it("a Swiss's rounds edit after Start whose new shells pass the budget is DRAW_TOO_LARGE, nothing written; one round fewer goes through", { timeout: 240_000 }, async () => {
+    // 101 entrants: 51 shells a round (50 boards and the bye). Rounds 1 -> 100 adds 99 rounds (5,049 shells); 1 -> 99 adds 98 (4,998).
+    const n = 101;
+    const perRound = Math.ceil(n / 2);
+    expect(99 * perRound, "premise: 99 added rounds pass the budget").toBeGreaterThan(START_LINE_BUDGET);
+    expect(98 * perRound, "premise: 98 fit it").toBeLessThanOrEqual(START_LINE_BUDGET);
+    let checked = 0;
+    for (const to of [100, 99]) {
+      const r = await rig(n, { kind: "swiss", config: { rounds: 1 } });
+      expect((await routed(() => startDivision(r.auth, r.divisionId))).status).toBe(200);
+      expect(await linesOf(r.divisionId), "Start mints round 1's shells").toBe(perRound);
+      const out = await routed(() => patchSwissStage(r.auth, r.stageId!, { rounds: to }));
+      const added = (to - 1) * perRound;
+      if (added > START_LINE_BUDGET) {
+        expect(out.status, `1 -> ${to}: refused`).toBe(422);
+        expect(out.error).toMatchObject({ code: "DRAW_TOO_LARGE", lines: added, budget: START_LINE_BUDGET });
+        expect(await linesOf(r.divisionId), `1 -> ${to}: nothing written`).toBe(perRound);
+      } else {
+        expect(out.status, `1 -> ${to}: ${JSON.stringify(out.error)}`).toBe(200);
+        expect(await linesOf(r.divisionId), `1 -> ${to}: every round's shells`).toBe(to * perRound);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: one past the budget, one under").toBe(2);
   });
 });

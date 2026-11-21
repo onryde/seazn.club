@@ -46,25 +46,58 @@ function poolSizes(n: number, pools: number): number[] {
   return Array.from({ length: p }, (_, i) => Math.floor(n / p) + (i < n % p ? 1 : 0));
 }
 
-/** The lines Start draws for `stage` over a field of `n`, by the real generator; null for a kind whose draw does not grow with
- *  its field. Config read as each generator reads it: legs truncated into 1..8 and pools (absent 1) as `roundRobinStagePlan`;
- *  a Swiss's stored rounds, or the field's default where none is stored (a template's draft); a knockout's play-off. */
-export function startLines(stage: FormatStage, n: number): number | null {
-  const field = Number.isInteger(n) && n > 0 ? n : 0;
+/** What a stage's Start count reads from its config, read as each generator reads it: legs truncated into 1..8 and pools (absent
+ *  1) as `roundRobinStagePlan`; a Swiss's stored rounds (null: the field's default, a template's draft); a knockout's play-off; a
+ *  double elimination's reset. Nothing else in a config moves the count - in particular nothing that changes in play
+ *  (`round_byes`, `rank_overrides`, `rules`, `points`, `qualified`) - so this is also the memo's key (B4 review m-3). */
+interface StartShape {
+  kind: string;
+  legs?: number;
+  pools?: number;
+  rounds?: number | null;
+  thirdPlace?: boolean;
+  bracketReset?: boolean;
+}
+
+function startShape(stage: FormatStage): StartShape {
   const cfg = (stage.config ?? {}) as Record<string, unknown>;
   switch (stage.kind) {
     case "league":
-    case "group": {
-      const legs = Math.min(Math.max(typeof cfg.legs === "number" ? Math.trunc(cfg.legs) : 1, 1), 8);
-      const pools = stage.kind === "group" ? (wholeAtLeastOne((cfg.pools as { count?: unknown } | undefined)?.count) ?? 1) : 1;
-      return poolSizes(field, pools).reduce((sum, size) => sum + roundRobinFixtureCount(size, legs), 0);
-    }
+    case "group":
+      return {
+        kind: stage.kind,
+        legs: Math.min(Math.max(typeof cfg.legs === "number" ? Math.trunc(cfg.legs) : 1, 1), 8),
+        pools: stage.kind === "group" ? (wholeAtLeastOne((cfg.pools as { count?: unknown } | undefined)?.count) ?? 1) : 1,
+      };
     case "swiss":
-      return planSwissShells(wholeAtLeastOne(cfg.rounds) ?? swissRoundsDefault(field), field).length;
+      return { kind: stage.kind, rounds: wholeAtLeastOne(cfg.rounds) };
     case "knockout":
-      return generateSingleElim({ entrants: entrantIds(field), thirdPlace: cfg.thirdPlace === true }).fixtures.length;
+      return { kind: stage.kind, thirdPlace: cfg.thirdPlace === true };
     case "double_elim":
-      return generateDoubleElim({ entrants: entrantIds(field), bracketReset: cfg.bracketReset === true }).fixtures.length;
+      return { kind: stage.kind, bracketReset: cfg.bracketReset === true };
+    default:
+      return { kind: stage.kind };
+  }
+}
+
+/** The lines Start draws for `stage` over a field of `n`, by the real generator; null for a kind whose draw does not grow with
+ *  its field. The config is read through `startShape`, and only through it. */
+export function startLines(stage: FormatStage, n: number): number | null {
+  return linesOfShape(startShape(stage), n);
+}
+
+function linesOfShape(shape: StartShape, n: number): number | null {
+  const field = Number.isInteger(n) && n > 0 ? n : 0;
+  switch (shape.kind) {
+    case "league":
+    case "group":
+      return poolSizes(field, shape.pools!).reduce((sum, size) => sum + roundRobinFixtureCount(size, shape.legs!), 0);
+    case "swiss":
+      return planSwissShells(shape.rounds ?? swissRoundsDefault(field), field).length;
+    case "knockout":
+      return generateSingleElim({ entrants: entrantIds(field), thirdPlace: shape.thirdPlace === true }).fixtures.length;
+    case "double_elim":
+      return generateDoubleElim({ entrants: entrantIds(field), bracketReset: shape.bracketReset === true }).fixtures.length;
     case "stepladder":
       return generateStepladder({ entrants: entrantIds(field) }).fixtures.length;
     default:
@@ -74,14 +107,20 @@ export function startLines(stage: FormatStage, n: number): number | null {
 
 const maxMemo = new Map<string, number | null>();
 
+/** How many entries the memo holds (tests only: the memo must not grow with play state, m-3). */
+export function __formatMaxMemoSizeForTests(): number {
+  return maxMemo.size;
+}
+
 /** The largest field `stage` can start within the budget, or null when its draw does not grow with the field. The search
  *  doubles from PROBE_FLOOR until the draw passes the budget, then halves the gap: it reads a draw that never shrinks as its
  *  field grows (lib/__tests__/format-max-entrants.test.ts walks every field up to each max, and the one past it). */
 export function formatMaxEntrants(stage: FormatStage): number | null {
-  const memoKey = `${stage.kind}|${JSON.stringify(stage.config ?? null)}`;
+  const shape = startShape(stage);
+  const memoKey = JSON.stringify(shape);
   const memo = maxMemo.get(memoKey);
   if (memo !== undefined) return memo;
-  const lines = (n: number) => startLines(stage, n);
+  const lines = (n: number) => linesOfShape(shape, n);
   const floor = lines(PROBE_FLOOR);
   let max: number | null = null;
   if (floor !== null) {

@@ -12,6 +12,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { courtNamesById } from "../schedule";
 import { stageHasStarted } from "../fixture-started-sql";
 import { insertFixtureRows } from "../fixture-insert";
+import { roundRobinRefusal } from "../roundrobin-refusal";
+import { START_LINE_BUDGET } from "@/lib/format-max-entrants";
 import { descriptorLabel, expandSources, placeDescriptors, resolveProgressionSource, sourceShapeOf, type SlotDescriptor, type SlotLabel } from "../stage-seeding";
 import {
   STAGE_COLS,
@@ -300,6 +302,9 @@ export async function writeProgressionSetupFixtures(
       third_place: g.thirdPlace === true,
       conditional: g.conditional === true,
     }));
+  // W5 B4 review m-9: the same backstop as every other draw (generate-tx.ts): a placeholder draw is drawn in this one request too,
+  // and its seats are the cut's - bounded in the builder (Top N <= 32), not over the API. Refused by its exact count, before a write.
+  if (newRows.length > START_LINE_BUDGET) throw roundRobinRefusal("DRAW_TOO_LARGE", { lines: newRows.length, budget: START_LINE_BUDGET });
   await insertFixtureRows(tx, newRows);
   for (const r of newRows) byKey.set(r.ext_key, r.id);
   const created = newRows.length;

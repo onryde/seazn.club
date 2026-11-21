@@ -64,6 +64,10 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
     ...actual, // ApiV1Error stays the REAL class
     apiV1: vi.fn(async (url: string) => {
       net.calls.push(url);
+      // The board's advisory conflict check (useBoardActions' runValidate) runs on its own after a write: it answers its own shape
+      // and never takes the queued answer, which belongs to the write under test. (An empty `{}` here became `[undefined]` in the
+      // hook's conflicts and threw an unhandled rejection after the test had passed.)
+      if (url.endsWith("/schedule/validate")) return { conflicts: [] };
       const answer = net.next.shift();
       if (answer instanceof Error) throw await overTheWire(answer);
       return answer ?? {};
