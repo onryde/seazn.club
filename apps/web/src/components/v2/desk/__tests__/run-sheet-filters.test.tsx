@@ -268,6 +268,52 @@ const BRACKET_FIXTURES: RunSheetFixture[] = [
   fx(14, { stage_id: "k1", scheduled_at: "2026-09-05T08:00:00.000Z" }),
 ];
 
+// Gaps wave A fix round 1 (m4/A12): the chip on a HELD online board. The held board's slot has passed: `result_missing` counts it (spec
+// 2026-11-05 5.4, "the results-owed count is unchanged"; division-phase.test.ts pins the attention) and "Needs result" keeps it, so the
+// chip and the attention agree on it. Both expected values come from the authority (`resolveAttention` over the same rows), not typed in.
+describe("Needs result on a HELD online board agrees with the result_missing attention (gaps A fix round 1, m4)", () => {
+  const held = (reason: "no_show_white" | "provider_error") => ({
+    cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: reason, live: false, unopened: false,
+  }) as const;
+  const ctx = (onlinePlay: Record<string, ReturnType<typeof held>>): RunSheetKeepContext => ({
+    stageId: null, tz: TZ, today: "2026-09-05", nowMs: NOW_MS, matchMinutes: MATCH_MINUTES, onlinePlay,
+  });
+  const phase = (f: RunSheetFixture) => ({
+    id: f.id, status: f.status, scheduledAt: f.scheduled_at, startedAt: null, eventCount: 0, matchMinutes: MATCH_MINUTES,
+    hasScorer: true, stageId: f.stage_id, awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false,
+  });
+  const attentionIds = (rows: RunSheetFixture[]): string[] => {
+    const out = resolveAttention({
+      divisionStatus: "active", stages: [], fixtures: rows.map(phase),
+      now: new Date(NOW_MS).toISOString(), tz: TZ, awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
+    }).find((a) => a.kind === "result_missing");
+    return out?.kind === "result_missing" ? out.fixtureIds : [];
+  };
+
+  it("a held board whose slot has passed: the chip keeps it and the attention counts it - the same set as the same board unheld", () => {
+    const heldLate = fx(1, { scheduled_at: "2026-09-05T10:00:00.000Z" });
+    const plainLate = fx(2, { scheduled_at: "2026-09-05T09:00:00.000Z" });
+    const rows = [heldLate, plainLate];
+    const fromAttention = attentionIds(rows);
+    expect(fromAttention, "premise: the attention names both (the held board is not special to it)").toEqual(["f1", "f2"]);
+    const onlinePlay = { f1: held("no_show_white") };
+    const fromChip = rows.filter((f) => runSheetKeeps(f, "needs_result", ctx(onlinePlay))).map((f) => f.id);
+    expect(fromChip, "the chip keeps exactly the attention's boards").toEqual(fromAttention);
+    // The same board unheld is kept by the same predicate: the hold does not change a late board's answer.
+    expect(runSheetKeeps(heldLate, "needs_result", ctx({}))).toBe(true);
+  });
+
+  it("T16, the one place they differ on purpose: a held board that has NO slot passed (untimed, or still in its window) is kept by the chip - it owes its decision - and is not yet a missing result", () => {
+    const untimedHeld = fx(3);
+    const inWindowHeld = fx(4, { scheduled_at: "2026-09-05T17:45:00.000Z" });
+    const onlinePlay = { f3: held("provider_error"), f4: held("no_show_white") };
+    expect(attentionIds([untimedHeld, inWindowHeld]), "premise: neither is a missing result").toEqual([]);
+    expect(runSheetKeeps(untimedHeld, "needs_result", ctx(onlinePlay)), "an untimed held board").toBe(true);
+    expect(runSheetKeeps(inWindowHeld, "needs_result", ctx(onlinePlay)), "a held board inside its window").toBe(true);
+    expect(runSheetKeeps(untimedHeld, "needs_result", ctx({})), "the positive pair: unheld, the same untimed board is not kept").toBe(false);
+  });
+});
+
 describe("byes are structural context, not work (R7a)", () => {
   // Guards the guard: if these rows ever stopped being byes, every assertion
   // below would pass against the unfixed code.

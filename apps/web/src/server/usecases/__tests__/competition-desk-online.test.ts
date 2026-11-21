@@ -51,7 +51,7 @@ import type { Attention } from "@/lib/division-phase";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n";
 import { HELD_TITLE_KEYS } from "@/components/v2/external-play-held-copy";
-import { needsYouHome, needsYouItems } from "@/components/v2/desk/needs-you";
+import { needsYouHome, needsYouItems, resultsOwedOf } from "@/components/v2/desk/needs-you";
 import { MatchDayView } from "@/server/api-v1/schemas";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { log } from "@/server/logger";
@@ -780,76 +780,127 @@ describe.runIf(HAS_DB)("the wire: the per-board Needs-you rows survive Match Day
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// Gaps wave A6, two carried findings of the B6 batch review, each decided by the spec's own words (2026-11-05, sections 5.4 and 5.5 / the
-// day rule at "What makes an online round part of today").
-describe.runIf(HAS_DB)("a hold is raised ONCE (spec 5.4: 'a hold is never counted twice') - a held board whose slot has passed is board_held, not also result_missing", () => {
+// Gaps wave A6 (two carried findings of the B6 batch review, each decided by the spec's own words, 2026-11-05, sections 5.4 and 5.5 / the
+// day rule at "What makes an online round part of today"), CORRECTED in fix round 1 (m3). Section 5.4 says two things about a held board:
+// "a hold is never counted twice" (the Needs-you LIST carries it once, as its `board_held` row) and, in its last sentence, "The
+// results-owed count is unchanged" (a held board whose slot has passed is still a match that owes a result, and `results_owed` says so).
+// A6 first took the board out of the `result_missing` attention, which lowered `results_owed`; the dedupe belongs to the ROW only.
+describe.runIf(HAS_DB)("a hold is ONE ROW but the results-owed count is unchanged (spec 5.4) - a held board whose slot has passed is board_held in Needs you, not also a result_missing row, and still owes its result", () => {
   const ago = (minutes: number): Date => new Date(NOW.getTime() - minutes * MIN);
   const resultMissing = (list: Attention[]): string[] => list.filter((a) => a.kind === "result_missing").flatMap((a) => a.fixtureIds).sort();
+  const missingRows = (desk: CompetitionDesk, r: Pick<SeedOnlineChessRoundResult, "divisionId">) => rowsOf(desk, r).filter((i) => i.kind === "result_missing");
+  const heldRows = (desk: CompetitionDesk, r: Pick<SeedOnlineChessRoundResult, "divisionId">) => rowsOf(desk, r).filter((i) => i.kind === "board_held");
+  /** The title a `result_missing` row of ONE match carries: the dictionary's own sentence over the desk's names for it. */
+  const singleTitle = (desk: CompetitionDesk, r: Pick<SeedOnlineChessRoundResult, "divisionId">, fixtureId: string): string => {
+    const names = desk.divisions.get(r.divisionId)!.fixture_names[fixtureId]!;
+    return t(en as unknown as Dict, "desk.needsYou.result_missing", { division: "Open", home: names.home ?? "—", away: names.away ?? "—" });
+  };
 
-  it("EMPTY CASE FIRST: two dated boards of an opened round whose slot has passed, nothing held - both owe a result, and neither is a held board", async () => {
+  it("EMPTY CASE FIRST: two dated boards of an opened round whose slot has passed, nothing held - both owe a result, one row says so, and no board is held", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
     const [a, b] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    const desk = await deskOf(r.owner, r.competitionId);
 
-    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
-
-    expect(resultMissing(list), "premise: the slot-passed boards owe results").toEqual([a.fixtureId, b.fixtureId].sort());
-    expect(heldIds(list)).toEqual([]);
+    expect(resultMissing(attentionsOf(desk, r.divisionId)), "premise: the slot-passed boards owe results").toEqual([a.fixtureId, b.fixtureId].sort());
+    expect(heldIds(attentionsOf(desk, r.divisionId))).toEqual([]);
+    expect(missingRows(desk, r), "one aggregated row").toHaveLength(1);
+    expect(resultsOwedOf(desk), "and two matches owe").toBe(2);
   });
 
-  it("the same round with one board held: that board is board_held ONLY; the other still owes its result", async () => {
+  it("one board held: it is ONE row (board_held) in the list and the other still has its result_missing row - and results_owed still counts BOTH matches", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
     const [held, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, held, "no_show_white");
+    const desk = await deskOf(r.owner, r.competitionId);
+    const list = attentionsOf(desk, r.divisionId);
 
-    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
-
-    expect(heldIds(list), "the hold is one board_held row").toEqual([held.fixtureId]);
-    expect(resultMissing(list), "...and the held board is not ALSO a missing result; the board beside it still is").toEqual([other.fixtureId]);
-    // The count a person reads is the sum of the rows: one thing for the held board, one for the board that owes a result.
-    const rows = rowsOf(await deskOf(r.owner, r.competitionId), r).filter((i) => i.kind === "board_held" || i.kind === "result_missing");
-    expect(rows.map((i) => i.kind).sort(), "the held board is counted once").toEqual(["board_held", "result_missing"]);
+    expect(heldIds(list), "the hold is one board_held attention").toEqual([held.fixtureId]);
+    expect(resultMissing(list), "the data still says both matches owe a result (spec 5.4: the count is unchanged)").toEqual([held.fixtureId, other.fixtureId].sort());
+    expect(resultsOwedOf(desk), "results_owed counts the held, late board").toBe(2);
+    // The LIST: the held board is one row, and the result_missing row is now about the board beside it alone (a single match: it names it).
+    expect(heldRows(desk, r), "the held board's one row").toHaveLength(1);
+    const missing = missingRows(desk, r);
+    expect(missing.map((i) => i.title), "the result_missing row is the other board's alone").toEqual([singleTitle(desk, r, other.fixtureId)]);
   });
 
-  it("EVERY held board of the division is left out of result_missing, not only the first; a flagged board that is not held keeps its own row set", async () => {
+  it("EVERY held board of the division is left out of the result_missing ROW, not only the first - and every one is still counted in results_owed; a flagged board that is not held keeps its own row set", async () => {
     const r = await seedOnlineChessRound({ fixtures: 3, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
     const [h1, h2, plain] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
     await hold(r, h1, "no_show_white");
     await hold(r, h2, "provider_error");
+    const desk = await deskOf(r.owner, r.competitionId);
 
-    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
-
-    expect(heldIds(list)).toEqual([h1.fixtureId, h2.fixtureId].sort());
-    expect(resultMissing(list)).toEqual([plain.fixtureId]);
+    expect(heldIds(attentionsOf(desk, r.divisionId))).toEqual([h1.fixtureId, h2.fixtureId].sort());
+    expect(missingRows(desk, r).map((i) => i.title), "the row is the plain board's alone").toEqual([singleTitle(desk, r, plain.fixtureId)]);
+    expect(resultsOwedOf(desk), "three matches owe").toBe(3);
   });
 
-  it("only a HELD board is left out: a board with an open flag (a report to review, not the decision) keeps its missing result beside its board_flagged row", async () => {
+  it("several boards still owe a result beside the held ones: the aggregated row's count is the ones NOT held, while results_owed counts them all", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 4, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [h1, h2] = r.boards as [SeedRoundBoard, SeedRoundBoard, SeedRoundBoard, SeedRoundBoard];
+    await hold(r, h1, "no_show_white");
+    await hold(r, h2, "provider_error");
+    const desk = await deskOf(r.owner, r.competitionId);
+
+    expect(resultMissing(attentionsOf(desk, r.divisionId)), "premise: the attention names all four").toHaveLength(4);
+    expect(missingRows(desk, r).map((i) => i.title), "the row says two (the plain boards), not four").toEqual([
+      t(en as unknown as Dict, "desk.needsYou.result_missing.count.other", { division: "Open", count: 2 }),
+    ]);
+    expect(resultsOwedOf(desk), "and four matches owe").toBe(4);
+  });
+
+  it("when EVERY board that owes a result is held, there is no result_missing row at all - and results_owed still counts them (the empty case after the dedupe)", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
+    await openStamp(r, 1, ago(310));
+    const [h1, h2] = r.boards as [SeedRoundBoard, SeedRoundBoard];
+    await hold(r, h1, "no_show_white");
+    await hold(r, h2, "provider_error");
+    const desk = await deskOf(r.owner, r.competitionId);
+
+    expect(heldRows(desk, r), "premise: both holds are rows").toHaveLength(2);
+    expect(missingRows(desk, r), "no second row for the same two boards").toEqual([]);
+    expect(resultsOwedOf(desk), "the count is unchanged by the dedupe").toBe(2);
+    // Through the page's own poll: the held boards are rows, and the count beside them is the matches that owe a result.
+    const view = await getMatchDay(r.owner, r.competitionId, NOW);
+    expect(view.fixtures_today, "premise: a match day (the round opened today)").toBeGreaterThan(0);
+    expect(view.needs_you.filter((i) => i.kind === "result_missing"), "no result_missing row on the wire either").toEqual([]);
+    expect(view.results_owed).toBe(2);
+  });
+
+  it("only a HELD board is left out of the row: a board with an open flag (a report to review, not the decision) keeps its missing result beside its board_flagged row", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
     const [flagged, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await bridgeRow(flagged.fixtureId, r.orgId, { status: "live", moves: 10 });
     await openFlag(r.orgId, flagged.fixtureId, { kind: "multiple_devices" });
-
-    const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
+    const desk = await deskOf(r.owner, r.competitionId);
+    const list = attentionsOf(desk, r.divisionId);
 
     expect(flaggedIds(list), "premise: the flag is its own row").toEqual([flagged.fixtureId]);
     expect(heldIds(list)).toEqual([]);
     expect(resultMissing(list), "the flagged board still owes its result, as does the plain one").toEqual([flagged.fixtureId, other.fixtureId].sort());
+    expect(missingRows(desk, r), "one aggregated row for the two").toHaveLength(1);
+    expect(resultsOwedOf(desk)).toBe(2);
   });
 
-  it("a division whose held read FAILED falls back to the older row: result_missing is raised for the held board rather than nothing (the safe direction)", async () => {
+  it("a division whose held read FAILED does not move results_owed: it is the healthy desk's count, whatever the lister did (m2)", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: ago(300) });
     await openStamp(r, 1, ago(310));
     const [held, other] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await hold(r, held, "no_show_white");
+    const healthy = await deskOf(r.owner, r.competitionId);
+    expect(resultsOwedOf(healthy), "premise: the healthy desk counts the held, late board too").toBe(2);
     const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
       vi.mocked(listNeedsOrganiserExternalPlay).mockRejectedValueOnce(new Error("boom: the held read is down"));
-      const list = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
-      expect(heldIds(list), "premise: the read failed, so no board_held row").toEqual([]);
-      expect(resultMissing(list), "with no hold raised, the board's missing result is still told").toEqual([held.fixtureId, other.fixtureId].sort());
+      const down = await deskOf(r.owner, r.competitionId);
+      expect(heldIds(attentionsOf(down, r.divisionId)), "premise: the read failed, so no board_held row").toEqual([]);
+      expect(resultMissing(attentionsOf(down, r.divisionId))).toEqual([held.fixtureId, other.fixtureId].sort());
+      expect(resultsOwedOf(down), "the count a failed lister read leaves is the one a healthy read gives").toBe(resultsOwedOf(healthy));
     } finally {
       logged.mockRestore();
     }

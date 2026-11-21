@@ -736,22 +736,6 @@ describe("resolveAttention", () => {
       missing([fx({ id: "u", ...past, awaitsRoundOpen: true }), fx({ id: "o", ...past }), fx({ id: "o2", ...past })]),
     ).toEqual({ kind: "result_missing", count: 2, fixtureIds: ["o", "o2"] });
   });
-  // Gaps wave A6 (spec 2026-11-05 5.4, "a hold is never counted twice"): an online board the desk raises `board_held` for is that one row.
-  it("A6: result_missing skips a board the desk holds (heldOnline); a board with the flag false or absent, and the rest of the division, are owed as before", () => {
-    const past = { scheduledAt: "2026-09-05T07:00:00Z", matchMinutes: 90 };
-    const missing = (fixtures: PhaseFixture[]) => resolveAttention(input({ fixtures })).find((a) => a.kind === "result_missing");
-    expect(missing([fx({ id: "h", ...past, heldOnline: true })]), "the empty case: only a held board").toBeUndefined();
-    expect(missing([fx({ id: "h", ...past, heldOnline: false })]), "the positive pair: the flag false").toEqual({ kind: "result_missing", count: 1, fixtureIds: ["h"] });
-    expect(missing([fx({ id: "h", ...past })]), "absent reads as not held").toEqual({ kind: "result_missing", count: 1, fixtureIds: ["h"] });
-    expect(
-      missing([fx({ id: "h", ...past, heldOnline: true }), fx({ id: "o", ...past }), fx({ id: "h2", ...past, heldOnline: true }), fx({ id: "o2", ...past })]),
-      "mixed: the held boards are neither counted nor named",
-    ).toEqual({ kind: "result_missing", count: 2, fixtureIds: ["o", "o2"] });
-    // The two guards are independent: a board that is held AND awaits its round's open owes nothing either way; neither flag alone is covered by the other.
-    expect(missing([fx({ id: "x", ...past, heldOnline: true, awaitsRoundOpen: true })])).toBeUndefined();
-    expect(missing([fx({ id: "y", ...past, heldOnline: false, awaitsRoundOpen: true })]), "awaitsRoundOpen alone still skips").toBeUndefined();
-    expect(missing([fx({ id: "z", ...past, heldOnline: true, awaitsRoundOpen: false })]), "heldOnline alone still skips").toBeUndefined();
-  });
   it("result_missing is not raised while the match window is still open", () => {
     const fixtures = [fx({ id: "r", scheduledAt: "2026-09-05T09:00:00Z", matchMinutes: 90 })];
     expect(resolveAttention(input({ fixtures })).some((a) => a.kind === "result_missing")).toBe(false);
@@ -1213,6 +1197,33 @@ describe("isResultMissing", () => {
     }).find((a) => a.kind === "result_missing");
     expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
       fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
+    );
+  });
+
+  // Gaps wave A fix round 1 (m3, m4/A12): the HELD board. An online board held for the organiser is, to this module, a `scheduled` fixture
+  // whose slot has passed - the hold is the bridge row's, which `PhaseFixture` does not carry (the desk raises its `board_held` row from the
+  // listers, `onlineBoardAttentions`). Spec 2026-11-05 5.4 says "the results-owed count is unchanged", so such a board is counted here, exactly
+  // as the predicate says and exactly as the run sheet's "Needs result" chip does for the same board (run-sheet-filters.test.tsx pins the chip).
+  // A6 first gave `PhaseFixture` a flag that took held boards out of this attention and so lowered the count; the dedupe is the row's
+  // (`needsYouItems`), not the attention's, and there is no such flag any more.
+  it("agrees with the `result_missing` attention for a HELD board: a late online board the desk holds is counted, never skipped (spec 5.4: the count is unchanged)", () => {
+    const base = { status: "scheduled", startedAt: null, eventCount: 0, matchMinutes: 60, hasScorer: true, stageId: "s", awaitsSeedDraw: false, awaitsSettle: false, awaitsRoundOpen: false };
+    const fixtures: PhaseFixture[] = [
+      { ...base, id: "held-late", scheduledAt: "2026-09-05T10:00:00Z" },
+      { ...base, id: "plain-late", scheduledAt: "2026-09-05T09:00:00Z" },
+      { ...base, id: "held-in-window", scheduledAt: "2026-09-05T17:45:00Z" },
+      { ...base, id: "unopened-late", scheduledAt: "2026-09-05T08:00:00Z", awaitsRoundOpen: true },
+    ];
+    const nowIso = "2026-09-05T18:00:00Z";
+    const row = resolveAttention({
+      divisionStatus: "active", stages: [], fixtures,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0, lateWaiting: [],
+    }).find((a) => a.kind === "result_missing");
+    const ids = row?.kind === "result_missing" ? row.fixtureIds : [];
+    expect(ids, "the late held board is counted beside the plain late one, named; the one still in its window and the unopened one are not").toEqual(["held-late", "plain-late"]);
+    expect(row?.kind === "result_missing" ? row.count : 0).toBe(2);
+    expect(ids, "the attention is the predicate's own answer over the open rounds' boards").toEqual(
+      fixtures.filter((f) => !f.awaitsRoundOpen && isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),
     );
   });
 });

@@ -183,12 +183,18 @@ export function needsYouItems(
           break;
         }
         case "result_missing": {
-          const single = a.fixtureIds.length === 1 ? dd.fixture_names[a.fixtureIds[0]!] : null;
+          // A held board is one row already (`board_held`, spec 2026-11-05 section 5.4: "a hold is never counted twice"), so this row
+          // is about the matches that owe a result and are NOT held. The attention keeps them all: `resultsOwedOf` counts a held,
+          // late board, since the same section says "the results-owed count is unchanged". Only the ROW is deduped.
+          const held = new Set(dd.attention.flatMap((b) => (b.kind === "board_held" ? [b.fixtureId] : [])));
+          const ids = a.fixtureIds.filter((id) => !held.has(id));
+          if (ids.length === 0) break;
+          const single = ids.length === 1 ? dd.fixture_names[ids[0]!] : null;
           items.push({
             key: `${d.id}:result_missing`, severity: sev, kind: a.kind,
             title: single
               ? t(dict, "desk.needsYou.result_missing", { division: d.name, home: single.home ?? "—", away: single.away ?? "—" })
-              : plural(dict, "desk.needsYou.result_missing.count", a.count, locale, { division: d.name }),
+              : plural(dict, "desk.needsYou.result_missing.count", ids.length, locale, { division: d.name }),
             sub: t(dict, "desk.needsYou.result_missing.sub"),
             action: {
               label: t(dict, "desk.needsYou.result_missing.action"),
