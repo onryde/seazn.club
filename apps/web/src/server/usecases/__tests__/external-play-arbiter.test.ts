@@ -2441,6 +2441,24 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - the empty case first", () => {
 });
 
 describe.runIf(HAS_DB)("loadMatchDayBoard - a board of a round nobody has opened is not a board yet", () => {
+  // Fix round 1 (m5): the early 404 comes BEFORE the seat check, so who plays on a board of a round nobody opened is told "not found", the same
+  // as everyone, not "you play on this board" (which would confirm a board the round view does not list). The two refusals swap at the open.
+  it("a viewer who plays on a board of an unopened round is told NOT FOUND, not ARBITER_PLAYS_THIS_BOARD; once the round opens, the same viewer is refused 403 for the same board", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2 });
+    const [b, other] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
+    const home = await seatedAdmin(r, b.home.userId);
+    const away = await seatedAdmin(r, b.away.userId);
+    let checked = 0;
+    for (const [why, who] of [["home", home], ["away", away]] as const) {
+      expect(await codeOf(loadMatchDayBoard(who, b.fixtureId)), `${why}, before the open`).toEqual([404, "NOT_FOUND"]);
+      checked++;
+    }
+    expect(checked, "both seats").toBe(2);
+    await openRound(r);
+    expect(await codeOf(loadMatchDayBoard(home, b.fixtureId)), "after the open the seat is asked").toEqual([403, "ARBITER_PLAYS_THIS_BOARD"]);
+    expect(await loadMatchDayBoard(home, other.fixtureId), "the positive pair: the refusal is the board, not the viewer").toMatchObject({ fixtureId: other.fixtureId });
+  });
+
   it("NOT FOUND while its round is unopened (the round view lists none, and no list links one); the same board reads, in check-in, once the round opens", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2 });
     const [one, two] = r.boards as [(typeof r.boards)[0], (typeof r.boards)[0]];
