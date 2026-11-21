@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import type { MessageKey } from "@/lib/messages";
 import { intlLocaleFor } from "@/lib/public-date-locale";
 import { adjustmentAmountText, adjustmentShownCount, type AdjustmentUnit, type PointsDisplayUnit } from "@/lib/points-adjustment-note";
+import { ADJUST_DELTA_MAX, adjustDeltaInRange } from "@/lib/points-adjustment-offer";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -76,9 +77,10 @@ export function shownDelta(delta: number, unit: AdjustmentUnit, pointsUnit: Poin
   return String(unit === "points" && pointsUnit === "half" ? delta / 2 : delta);
 }
 
-/** Apply is pressable once a member is chosen, the amount moves something and a reason is given (the server's own three checks). */
+/** Apply is pressable once a member is chosen, the amount moves something within the bound and a reason is given (the server's own
+ *  checks: B3 ruling 4 added the bound). */
 export function applyBlocked(s: { entrant: string; delta: number; reason: string; sending: boolean }): boolean {
-  return s.sending || s.entrant === "" || s.delta === 0 || s.reason.trim() === "";
+  return s.sending || s.entrant === "" || s.delta === 0 || !adjustDeltaInRange(s.delta) || s.reason.trim() === "";
 }
 
 export function PointsAdjustmentDialog(props: PointsAdjustmentDialogProps) {
@@ -296,6 +298,11 @@ export function PointsAdjustmentDialog(props: PointsAdjustmentDialogProps) {
                 </span>
               )}
             </div>
+            {!adjustDeltaInRange(delta) && (
+              <p data-testid="adjust-points-range" role="alert" className="text-xs font-medium text-amber-800">
+                {msg("roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE", { max: shownDelta(ADJUST_DELTA_MAX, unit, pointsUnit) })}
+              </p>
+            )}
             {unit === "wins" && <p className="text-xs text-slate-500">{msg("adjustPoints.winsHint")}</p>}
             {unit === "points" && pointsUnit === "half" && <p className="text-xs text-slate-500">{msg("adjustPoints.halfHint")}</p>}
           </div>

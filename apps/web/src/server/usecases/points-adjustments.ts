@@ -1,7 +1,7 @@
 import "server-only";
 // W5 app PR B, Task 7 (C5; X-ADJ-1..5; RB5-T5..T9, RB5-T15, RB5-E8; ruling 284; owner R24 pick 15 A): "Adjust points" on a
 // league, group or Swiss table. One ledger row per adjustment (`points_adjustment {stage_id, entrant_id, delta, reason, unit,
-// points_unit}`) under the division lock, then the stage's table re-folds (`recomputeStandings`), which hands every active row to
+// points_unit}`) under the division lock, then the stage's table re-folds (`refoldStageTable`), which hands every active row to
 // the engine as `TableStage.adjustments` (engine-db/competition.ts `foldedAdjustments`). Undo appends a
 // `points_adjustment_voided {voids_seq}` row - the ledger's append-only reversal, as a Reinstate voids a `table_withdrawal` row.
 // Neither row is a division Undo step nor a barrier (the engine's `isReversible` is false for both).
@@ -25,13 +25,14 @@ import {
   type AdjustmentLedgerRow,
   type PointsAdjustmentRecord,
 } from "@/lib/points-adjustment-note";
-import { adjustRefusalCode } from "@/lib/points-adjustment-offer";
+import { adjustDeltaInRange, adjustRefusalCode, ADJUST_DELTA_MAX } from "@/lib/points-adjustment-offer";
 import type { RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { AdjustPointsInput, PointsAdjustmentList, PointsAdjustmentWire } from "@/server/api-v1/schemas";
-import { adjustmentTarget, recomputeStandings } from "@/server/engine-db";
+import { adjustmentTarget } from "@/server/engine-db";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { roundRobinRefusal } from "./roundrobin-refusal";
+import { refoldStageTable } from "./stages/helpers";
 import type { Tx } from "./stages/types";
 
 /** The engine's `validatePointsAdjustments` reasons (RB5-E8, X-ADJ-3), each refused by its own name. */
@@ -116,6 +117,9 @@ export async function adjustPoints(auth: AuthCtx, stageId: string, input: Adjust
       if (code !== undefined) throw roundRobinRefusal(code, { entrant_id: input.entrant_id });
       throw err;
     }
+    // B3 ruling 4 (m-6): a whole number of the stored unit, at most ADJUST_DELTA_MAX either way - after the engine's own reasons, so
+    // an Infinity is still "not a number" by its name. The route's schema says the same; this is the refusal a direct caller meets.
+    if (!adjustDeltaInRange(input.delta)) throw roundRobinRefusal("RR_ADJUST_OUT_OF_RANGE", { max: ADJUST_DELTA_MAX });
     const seq = await appendRow(
       tx,
       stage.division_id,
@@ -129,7 +133,11 @@ export async function adjustPoints(auth: AuthCtx, stageId: string, input: Adjust
     if (written === undefined) throw new Error(`points_adjustment ${seq} did not read back as active`);
     return { stage, adjustment: toWire(written, target.members) };
   });
-  await recomputeStandings(auth.orgId, stageId);
+  // B3 m-5: the refold after the commit is the siblings' (`refoldStageTable`: a generate's, a seed confirm's) - best effort, logged,
+  // never thrown. Thrown, a refold that failed AFTER the row committed answered the request with a 500 over a written −3, and a retry
+  // wrote a second one. It cannot run inside the write's transaction: it opens its own and takes the division lock. A failed refold
+  // leaves the stored table one step behind the ledger until the next refold (any score write); the row is never lost or doubled.
+  await refoldStageTable(auth.orgId, out.stage, "skip");
   fireDivisionRevalidate(out.stage.division_id, out.stage.competition_id);
   return { adjustment: out.adjustment };
 }
@@ -149,7 +157,7 @@ export async function undoPointsAdjustment(auth: AuthCtx, stageId: string, seq: 
     if (typeof payload.entrant_id === "string") await clearLotsDrawsNaming(tx, stageId, payload.entrant_id);
     return { stage, voidedBy };
   });
-  await recomputeStandings(auth.orgId, stageId);
+  await refoldStageTable(auth.orgId, out.stage, "skip");
   fireDivisionRevalidate(out.stage.division_id, out.stage.competition_id);
   return { undone: seq, voided_by: out.voidedBy };
 }

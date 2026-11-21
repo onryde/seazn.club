@@ -60,6 +60,7 @@ export type RoundRobinRefusalCode =
   | "RR_ADJUST_ZERO"
   | "RR_ADJUST_REASON_MISSING"
   | "RR_ADJUST_NOT_FINITE"
+  | "RR_ADJUST_OUT_OF_RANGE"
   | "RR_ADJUST_UNKNOWN_ENTRANT"
   | "RR_ADJUST_ALREADY_UNDONE";
 
@@ -186,6 +187,11 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 422,
     en: "Enter a number of points to add or remove.",
     key: "roundrobin.refusal.RR_ADJUST_NOT_FINITE",
+  },
+  RR_ADJUST_OUT_OF_RANGE: {
+    status: 422,
+    en: "An adjustment moves at most {max} either way, in whole steps.",
+    key: "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE",
   },
   RR_ADJUST_UNKNOWN_ENTRANT: {
     status: 422,

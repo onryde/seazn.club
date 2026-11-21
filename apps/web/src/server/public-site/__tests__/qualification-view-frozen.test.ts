@@ -198,6 +198,9 @@ describe("X-QS-1 / X-QS-2 a finished table keeps its cut, frozen (W5 app PR B Ta
     const bn = (over: Partial<StageQualMeta>) => meta({ qualifyCount: 1, qualifyPerGroup: true, qualifyBestNth: true, ...over });
     const live = roundRobin(FOUR, { open: 1, pool: "P" });
     expect(buildQualificationView(input({ kind: "group", poolId: "P", ids: FOUR, fixtures: live, order: FOUR, meta: bn({ qualified: null }) })), "live: no statuses").toBeNull();
+    // B3 m-3: live with a seating already confirmed (a corrected result reopened the table after the confirm) - still the live
+    // table, so still no statuses: the seats were made over results that are moving
+    expect(buildQualificationView(input({ kind: "group", poolId: "P", ids: FOUR, fixtures: live, order: FOUR, meta: bn({ qualified: ["A", "B", "X9"] }) })), "live, seated: no statuses").toBeNull();
     const done = roundRobin(FOUR, { pool: "P" });
     expect(buildQualificationView(input({ kind: "group", poolId: "P", ids: FOUR, fixtures: done, order: FOUR, meta: bn({ qualified: null }) })), "finished, nobody seated yet: no markers (never the per-group order)").toBeNull();
     // seated: B was the best runner-up - she reads Qualified below the per-group line

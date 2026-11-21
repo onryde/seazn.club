@@ -2945,6 +2945,7 @@
   "roundrobin.refusal.RR_ADJUST_ZERO": "Un ajustement de 0 ne change rien. Indiquez les points à ajouter ou à retirer.",
   "roundrobin.refusal.RR_ADJUST_REASON_MISSING": "Indiquez un motif. Il s'affiche sous le classement pour tout le monde.",
   "roundrobin.refusal.RR_ADJUST_NOT_FINITE": "Indiquez un nombre de points à ajouter ou à retirer.",
+  "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE": "Un ajustement déplace au maximum {max} dans un sens ou dans l'autre, par pas entiers.",
   "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT": "Ce participant ne figure pas dans ce classement.",
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "Cet ajustement a déjà été annulé.",
   "knockout.addToBracket": "Ajouter au tableau",

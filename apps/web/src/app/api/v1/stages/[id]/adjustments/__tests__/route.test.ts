@@ -49,8 +49,16 @@ describe("POST /api/v1/stages/{id}/adjustments", () => {
     expect(await res.json()).toMatchObject({ ok: false, error: { code: "RR_ADJUST_REASON_MISSING" } });
   });
 
-  it("a body the contract refuses (no delta, a reason past 200 characters) never reaches the usecase", async () => {
-    for (const body of [{ entrant_id: ENTRANT, reason: "r" }, { entrant_id: ENTRANT, delta: -3, reason: "x".repeat(201) }]) {
+  it("a body the contract refuses (no delta, a reason past 200 characters, a part or past 999 - B3 ruling 4) never reaches the usecase", async () => {
+    const bodies = [
+      { entrant_id: ENTRANT, reason: "r" },
+      { entrant_id: ENTRANT, delta: -3, reason: "x".repeat(201) },
+      { entrant_id: ENTRANT, delta: 1.5, reason: "r" },
+      { entrant_id: ENTRANT, delta: 1000, reason: "r" },
+      { entrant_id: ENTRANT, delta: -1000, reason: "r" },
+    ];
+    expect(bodies).toHaveLength(5);
+    for (const body of bodies) {
       const res = await POST(post(body), ctx);
       expect(res.status).toBe(400);
     }

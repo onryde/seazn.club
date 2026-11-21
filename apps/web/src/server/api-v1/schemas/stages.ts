@@ -18,6 +18,7 @@ import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../lib/knockout-re
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS, POOL_COUNT_MAX } from "../../../lib/format-bounds.ts";
 import { TOO_MANY_POOLS_ISSUE } from "../../../lib/roundrobin-refusals.ts";
+import { ADJUST_DELTA_MAX } from "../../../lib/points-adjustment-offer.ts";
 import { DEPARTED_STATUS_KEYS } from "../../../lib/departed-status-keys.ts";
 // W2c Task 13b finish-up (R-13b-1) — the deciders a stage config refuses at its top level, the engine's own set (shared
 // with the create door). RELATIVE with `.ts`; the module's only imports are the bare engine packages, which load under
@@ -744,7 +745,8 @@ export type FromTemplateResult = z.infer<typeof FromTemplateResult>;
 // an entrant the table does not hold are refused by the engine's own reasons, mapped by name (RR_ADJUST_*).
 export const AdjustPointsInput = z.object({
   entrant_id: z.string().uuid(),
-  delta: z.number(),
+  // B3 ruling 4 (m-6): whole steps of the stored unit, at most ADJUST_DELTA_MAX either way (the usecase refuses the same by name).
+  delta: z.number().int().min(-ADJUST_DELTA_MAX).max(ADJUST_DELTA_MAX),
   reason: z.string().max(200),
 });
 export type AdjustPointsInput = z.infer<typeof AdjustPointsInput>;

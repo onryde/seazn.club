@@ -20,3 +20,12 @@ export function adjustRefusalCode(stage: { kind: string; status: string }, divis
 export function pointsAdjustmentOffered(stage: { kind: string; status: string }, divisionStatus: string | undefined): boolean {
   return divisionStatus !== undefined && adjustRefusalCode(stage, divisionStatus) === null;
 }
+
+/** B3 ruling 4 (m-6): the largest amount one adjustment moves, either way, in the STORED unit (half-points on a "half" rule). A
+ *  table adjustment is a deduction or a restoration of a few points; a typo of 3000 is refused rather than written. */
+export const ADJUST_DELTA_MAX = 999;
+
+/** A whole number of the stored unit, at most `ADJUST_DELTA_MAX` either way (zero is the engine's own `adjustment_zero`). */
+export function adjustDeltaInRange(delta: number): boolean {
+  return Number.isInteger(delta) && Math.abs(delta) <= ADJUST_DELTA_MAX;
+}

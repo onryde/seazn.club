@@ -220,6 +220,9 @@ describe.skipIf(!HAS_DB)("X-QS-1 a finished league keeps its cut on every surfac
     expect(Object.keys(m)).toHaveLength(4);
     expect(m.Ben, "the departed has no marker").toBe("none");
     expect(m.Ann).toBe(QUALIFIED);
+    // B3 m-4: the seats were made before she left - her seat is not handed down the table after the fact (only the confirmed
+    // seating says who went through), so Cat and Dan still read Out
+    expect([m.Cat, m.Dan], "no backfill after the seats were made").toEqual(["Out", "Out"]);
   });
 });
 
@@ -348,5 +351,47 @@ describe.skipIf(!HAS_DB)("I-1 a cut-line tie waiting on the organiser's pick sho
     expect(s.page).toEqual(all);
     expect(s.org).toEqual(all);
     expect(s.hub).toEqual(all);
+  });
+});
+
+// W5 B3 fix (review m-8; controller ruling 6): two confirmed seatings of one destination (a re-seed after a stale one) - V538 reads
+// the newest CONFIRMED, by the key every app reader of "the confirmed proposal" uses (`confirmed_at desc nulls last`: seed-stale.ts,
+// table-cut-drift.ts), never the newest CREATED. The two orders are made to disagree so the read can tell them apart.
+describe.skipIf(!HAS_DB)("m-8 the newest confirmed seating is the one confirmed last (W5 B3 fix; ruling 6)", () => {
+  it("a seating created later but confirmed earlier does not win; one confirmed later does", async () => {
+    const r = await league("setup");
+    expect(await playAll(r)).toBe(6);
+    await completeStage(r.auth, r.stageId);
+    const draft = (await getSeedProposal(r.auth, r.finalsId))!;
+    expect([draft.status, draft.computed.ties.length], "premise: a draft with no tie").toEqual(["draft", 0]);
+    await confirmSeedProposal(r.auth, r.finalsId, { proposalId: draft.id });
+    const first = { Ann: QUALIFIED, Ben: QUALIFIED, Cat: "Out", Dan: "Out" };
+    expect(byName(r, (await pageTable(r)).view!.rows), "premise: the confirm seated Ann and Ben").toEqual(first);
+
+    // a second confirmed row seating Ann and Cat: CREATED after the first, CONFIRMED before it
+    const other = [
+      { entrantId: r.id.Ann!, rank: 1, source: { stageId: r.stageId } },
+      { entrantId: r.id.Cat!, rank: 2, source: { stageId: r.stageId } },
+    ];
+    const copy = async (createdBy: string, confirmedBy: string) => {
+      const [row] = await sql<{ id: string }[]>`
+        insert into stage_seed_proposals
+        select (jsonb_populate_record(null::stage_seed_proposals, to_jsonb(p) || jsonb_build_object(
+          'id', gen_random_uuid(),
+          'created_at', p.created_at + ${createdBy}::interval,
+          'confirmed_at', p.confirmed_at + ${confirmedBy}::interval,
+          'computed', p.computed || jsonb_build_object('seated', ${sql.json(other as never)}::jsonb)))).*
+          from stage_seed_proposals p where p.id = ${draft.id}
+        returning id`;
+      return row!.id;
+    };
+    const older = await copy("1 hour", "-1 hour");
+    const rows = await sql<{ n: number }[]>`select count(*)::int as n from stage_seed_proposals where stage_id = ${r.finalsId} and status = 'confirmed'`;
+    expect(rows[0]!.n, "premise: two confirmed seatings").toBe(2);
+    expect(byName(r, (await pageTable(r)).view!.rows), "confirmed earlier: the first stands").toEqual(first);
+
+    // the positive pair: confirmed AFTER the first - now it is the seating
+    await sql`update stage_seed_proposals set confirmed_at = confirmed_at + interval '2 hours' where id = ${older}`;
+    expect(byName(r, (await pageTable(r)).view!.rows), "confirmed later: it wins").toEqual({ Ann: QUALIFIED, Ben: "Out", Cat: QUALIFIED, Dan: "Out" });
   });
 });

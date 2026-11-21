@@ -8149,6 +8149,7 @@ export type DictionaryKey =
   | "roundrobin.refusal.RR_ADJUST_NOT_FINITE"
   | "roundrobin.refusal.RR_ADJUST_NOT_STARTED"
   | "roundrobin.refusal.RR_ADJUST_NOT_TABLE"
+  | "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE"
   | "roundrobin.refusal.RR_ADJUST_REASON_MISSING"
   | "roundrobin.refusal.RR_ADJUST_STAGE_COMPLETE"
   | "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT"

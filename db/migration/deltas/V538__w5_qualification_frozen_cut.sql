@@ -119,12 +119,14 @@ begin
           and xf.value -> 'to_stage_seq' = to_jsonb(c.dest_seq))
   ),
   -- V538: who went through - the destination's newest confirmed proposal (its qualifiers drawn from THIS stage), else its stored
-  -- `config.qualified`. Read only for a stage that has a cut (`forecast`), into the cut's own destination.
+  -- `config.qualified`. Read only for a stage that has a cut (`forecast`), into the cut's own destination. "Newest" is the one
+  -- CONFIRMED last - the key every app reader of the confirmed proposal sorts by (seed-stale.ts, table-cut-drift.ts:
+  -- `confirmed_at desc nulls last`), then created_at and id for a stable pick (B3 m-8).
   confirmed as (
     select p.computed
     from forecast f
     join stage_seed_proposals p on p.stage_id = f.dest_id and p.status = 'confirmed'
-    order by p.created_at desc, p.id desc
+    order by p.confirmed_at desc nulls last, p.created_at desc, p.id desc
     limit 1
   ),
   went as (

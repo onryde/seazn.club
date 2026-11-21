@@ -13,6 +13,23 @@ vi.mock("next/cache", () => ({
   revalidatePath: vi.fn(),
 }));
 
+// B3 fix round (m-5): the stage's refold, passed through to the real one unless a test arms one throw - the refold that fails AFTER
+// the ledger row committed (a lock timeout, a fold the engine refuses).
+const refold = vi.hoisted(() => ({ failNext: false }));
+vi.mock("@/server/engine-db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/engine-db")>();
+  return {
+    ...real,
+    recomputeStandings: async (...args: Parameters<typeof real.recomputeStandings>) => {
+      if (refold.failNext) {
+        refold.failNext = false;
+        throw new Error("refold down");
+      }
+      return real.recomputeStandings(...args);
+    },
+  };
+});
+
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { adjustmentUnitOf, type StandingsRow } from "@seazn/engine/competition";
@@ -166,9 +183,18 @@ describe.skipIf(!HAS_DB)("Adjust points (W5 app PR B Task 7, C5)", () => {
     await startDivision(r.auth, r.divisionId);
     const lines = await rowsOf(r.stageId);
     for (const l of lines) await win(r, l.id, l.home_entrant_id, l.home_entrant_id!);
+    // B3 m-1: an adjustment made while the table was live, then the table finishes
+    const { adjustment: live } = await adjustPoints(r.auth, r.stageId, { entrant_id: r.ids[0]!, delta: -3, reason: REASON });
     await completeStage(r.auth, r.stageId);
     const done = await refusal(adjustPoints(r.auth, r.stageId, { entrant_id: r.ids[0]!, delta: -3, reason: REASON }));
     expect([done.status, done.code]).toEqual([422, "RR_ADJUST_STAGE_COMPLETE"]);
+    // ...and its Undo is refused by the same name: a finished table is not re-ranked by an Undo either; the ledger does not move
+    const ledger = async () => sql<{ seq: number }[]>`select seq::int as seq from division_events where division_id = ${r.divisionId} order by seq`;
+    const was = await ledger();
+    const undone = await refusal(undoPointsAdjustment(r.auth, r.stageId, live.seq));
+    expect([undone.status, undone.code], "Undo on a complete table").toEqual([422, "RR_ADJUST_STAGE_COMPLETE"]);
+    expect(await ledger(), "nothing written").toEqual(was);
+    expect((await loadPointsAdjustments(r.divisionId)).map((a) => a.seq), "the adjustment stands").toEqual([live.seq]);
 
     // a knockout stage: refused by name whatever its state
     const { auth } = await seedOrg("pro");
@@ -201,6 +227,52 @@ describe.skipIf(!HAS_DB)("Adjust points (W5 app PR B Task 7, C5)", () => {
     // neither row is a division Undo step: the history lists both, neither undoable
     const rows = await sql<{ type: string }[]>`select type from division_events where division_id = ${r.divisionId} and type like 'points_adjustment%' order by seq`;
     expect(rows.map((x) => x.type)).toEqual(["points_adjustment", "points_adjustment_voided"]);
+  });
+
+  it("B3 m-2 an Undo names its own stage: another stage's adjustment is not found there, and nothing is written", async () => {
+    const r = await levelPair(FOOTBALL);
+    const [second] = await createStages(r.auth, r.divisionId, { seq: 2, kind: "league", name: "Second", config: {}, progression: null });
+    const { adjustment } = await adjustPoints(r.auth, r.stageId, { entrant_id: r.ids[0]!, delta: -3, reason: REASON });
+    const ledger = async () => sql<{ seq: number }[]>`select seq::int as seq from division_events where division_id = ${r.divisionId} order by seq`;
+    const was = await ledger();
+    const err = await refusal(undoPointsAdjustment(r.auth, second!.id, adjustment.seq));
+    expect(err.status, "the seq is not an adjustment of THIS stage").toBe(404);
+    expect(await ledger(), "nothing written").toEqual(was);
+    expect((await loadPointsAdjustments(r.divisionId)).map((a) => [a.seq, a.stage_id]), "it still stands on its own stage").toEqual([[adjustment.seq, r.stageId]]);
+  });
+
+  it("B3 m-5 a refold that fails after the row is written does not fail the request: one row, so no retry doubles it", async () => {
+    const r = await levelPair(FOOTBALL);
+    const before = await table(r.stageId);
+    const p2 = r.ids[1]!;
+    refold.failNext = true;
+    const { adjustment } = await adjustPoints(r.auth, r.stageId, { entrant_id: p2, delta: -3, reason: REASON });
+    expect(refold.failNext, "premise: the refold was reached and threw").toBe(false);
+    expect((await loadPointsAdjustments(r.divisionId)).map((a) => a.seq), "exactly one row").toEqual([adjustment.seq]);
+    // the next refold (any score write) takes the −3, once
+    await recomputeStandings(r.auth.orgId, r.stageId);
+    expect(rowOf(await table(r.stageId), p2).points).toBe(rowOf(before, p2).points - 3);
+    // the Undo the same way: its void row stands and the next refold returns the table
+    refold.failNext = true;
+    await undoPointsAdjustment(r.auth, r.stageId, adjustment.seq);
+    expect(refold.failNext, "premise: the Undo's refold threw").toBe(false);
+    expect(await loadPointsAdjustments(r.divisionId), "voided").toEqual([]);
+    await recomputeStandings(r.auth.orgId, r.stageId);
+    expect(rowOf(await table(r.stageId), p2).points).toBe(rowOf(before, p2).points);
+  });
+
+  it("B3 m-6 an amount is whole and at most 999 either way (ruling 4), refused by name; 999 itself is taken", async () => {
+    const r = await levelPair(FOOTBALL);
+    const p1 = r.ids[0]!;
+    const cases = [1.5, -0.5, 1000, -1000, 1e9];
+    for (const delta of cases) {
+      const err = await refusal(adjustPoints(r.auth, r.stageId, { entrant_id: p1, delta, reason: REASON }));
+      expect([err.status, err.code], String(delta)).toEqual([422, "RR_ADJUST_OUT_OF_RANGE"]);
+    }
+    expect(cases).toHaveLength(5);
+    expect(await loadPointsAdjustments(r.divisionId), "nothing written").toEqual([]);
+    for (const delta of [999, -999]) await adjustPoints(r.auth, r.stageId, { entrant_id: p1, delta, reason: REASON });
+    expect((await loadPointsAdjustments(r.divisionId)).map((a) => a.delta), "the bounds themselves").toEqual([999, -999]);
   });
 
   it("X-ADJ-4 an adjustment that breaks a lots-split tie re-ranks without the stale draw (Review Focus 2)", async () => {

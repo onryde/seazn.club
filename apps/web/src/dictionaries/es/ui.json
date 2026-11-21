@@ -2945,6 +2945,7 @@
   "roundrobin.refusal.RR_ADJUST_ZERO": "Un ajuste de 0 no cambia nada. Indica los puntos que quieres sumar o restar.",
   "roundrobin.refusal.RR_ADJUST_REASON_MISSING": "Indica un motivo. Se muestra bajo la tabla para todos.",
   "roundrobin.refusal.RR_ADJUST_NOT_FINITE": "Indica un número de puntos para sumar o restar.",
+  "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE": "Un ajuste mueve como máximo {max} en cualquier sentido, en pasos enteros.",
   "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT": "Ese participante no está en esta tabla.",
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "Este ajuste ya se ha deshecho.",
   "knockout.addToBracket": "Añadir al cuadro",

@@ -2945,6 +2945,7 @@
   "roundrobin.refusal.RR_ADJUST_ZERO": "Een aanpassing van 0 verandert niets. Vul de punten in die erbij of eraf moeten.",
   "roundrobin.refusal.RR_ADJUST_REASON_MISSING": "Geef een reden op. Die staat voor iedereen onder de stand.",
   "roundrobin.refusal.RR_ADJUST_NOT_FINITE": "Vul een aantal punten in om erbij te doen of eraf te halen.",
+  "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE": "Een aanpassing verschuift hoogstens {max} in beide richtingen, in hele stappen.",
   "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT": "Die deelnemer staat niet in deze stand.",
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "Deze aanpassing is al ongedaan gemaakt.",
   "knockout.addToBracket": "Toevoegen aan schema",

@@ -50,6 +50,11 @@ describe("Apply waits for the server's three checks", () => {
     expect(applyBlocked({ ...ok, delta: 0 })).toBe(true);
     expect(applyBlocked({ ...ok, reason: "   " })).toBe(true);
     expect(applyBlocked({ ...ok, sending: true })).toBe(true);
+    // B3 ruling 4: whole steps, at most 999 either way (stored unit) - the server's fourth check, so Apply never sends a refusal
+    expect(applyBlocked({ ...ok, delta: 999 })).toBe(false);
+    expect(applyBlocked({ ...ok, delta: -999 })).toBe(false);
+    expect(applyBlocked({ ...ok, delta: 1000 })).toBe(true);
+    expect(applyBlocked({ ...ok, delta: -1000 })).toBe(true);
   });
   it("first paint, before the read lands: every field and Apply disabled, the title names the stage", () => {
     const html = renderToStaticMarkup(

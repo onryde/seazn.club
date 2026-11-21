@@ -2945,6 +2945,7 @@
   "roundrobin.refusal.RR_ADJUST_ZERO": "An adjustment of 0 changes nothing. Enter the points to add or remove.",
   "roundrobin.refusal.RR_ADJUST_REASON_MISSING": "Give a reason. It's shown under the table for everyone.",
   "roundrobin.refusal.RR_ADJUST_NOT_FINITE": "Enter a number of points to add or remove.",
+  "roundrobin.refusal.RR_ADJUST_OUT_OF_RANGE": "An adjustment moves at most {max} either way, in whole steps.",
   "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT": "That entrant isn't on this table.",
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "This adjustment has already been undone.",
   "knockout.addToBracket": "Add to bracket",
