@@ -18,7 +18,10 @@
 //     the create response. The video uid comes from the input's OWN path-scoped videos read
 //     (`/live_inputs/{uid}/videos`, no query filter), and every item there is checked: its `liveInput` must equal the
 //     input this run created, else it is skipped and counted. `GET /stream?…` is never called.
-//   * Before each delete the uid is re-checked against the one captured; a mismatch skips the delete and reports it.
+//   * Before each delete Cloudflare is re-read by path: the video must name this run's input as its `liveInput`, the
+//     input must carry this run's uid and meta name. A mismatch skips the delete and reports it. If the run failed
+//     before the video uid was captured, the input's own videos are read once; exactly one own item is deleted (same
+//     re-check), anything else is left and reported with its uids.
 //   * Cleanup lives in `afterAll`, so it runs when an assertion fails.
 //   * No update other than the probe's one PUT is sent, and only to this run's throwaway input (ingest-cf.ts:10-15).
 //   * Secrets (API token, stream key, playback tokens) are never logged or asserted on; a token is shown, if ever, as
@@ -56,6 +59,7 @@ if (!GATE.enabled) console.log(`SKIP  cf-signed-live probe — ${GATE.reason} (n
 
 /** The create's recording settings, verbatim from the Task 7 brief. The PUT re-sends exactly these. */
 const RECORDING = { mode: "automatic", requireSignedURLs: true, allowedOrigins: ["seazn.club"], timeoutSeconds: 180 } as const;
+const PROBE_NAME = "seazn-task7-probe";   // the input's meta name; the cleanup re-check requires it
 const FEED_MAX_SECONDS = 300;   // ffmpeg's own cap; the run stops it earlier, after the expiry probe
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -120,25 +124,44 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     await sleep(2_000);
     if (ffmpeg && ffmpeg.exitCode === null && ffmpeg.signalCode === null) ffmpeg.kill("SIGKILL");
 
-    // The video first: a deleted input leaks its recording. 409 code 10046 = still in progress; retry until it ends.
-    const capturedVideo = videoUid;
-    if (capturedVideo) {
+    // The video first: a deleted input leaks its recording. If the run failed after the feed started but before the
+    // video uid was captured, look once at the input's OWN videos (path-scoped, each item checked) so a live, unsigned
+    // recording is not leaked; act only on exactly one own item, else hand the uids to a human.
+    if (!videoUid && inputUid) {
+      try {
+        const mine = await ownVideos();
+        if (mine.length === 1) videoUid = mine[0].uid;
+        else if (mine.length > 1) ledger.skipped.push(`leak sweep: ${mine.length} own videos of input ${inputUid} (${mine.map((v) => v.uid).join(", ")}); none deleted`);
+      } catch (e) {
+        ledger.skipped.push(`leak sweep: input ${inputUid} videos read failed (${(e as Error).message})`);
+      }
+    }
+    if (videoUid) {
       const deadline = Date.now() + 6 * 60_000;
       for (;;) {
-        if (videoUid !== capturedVideo) { ledger.skipped.push(`video ${videoUid} != captured ${capturedVideo}`); break; }
-        const r = await cf("DELETE", `/${capturedVideo}`);
-        if (r.ok || r.status === 404) { ledger.deleted.push(`video ${capturedVideo} (${r.status})`); break; }
-        if (Date.now() > deadline) { ledger.skipped.push(`video ${capturedVideo} delete still ${r.status} at deadline`); break; }
+        // Re-check against Cloudflare, by path: the video must belong to the input this run created.
+        const check: { status: number; ok: boolean; result: Video | undefined } = await cf<Video>("GET", `/${videoUid}`);
+        if (check.status === 404) { ledger.deleted.push(`video ${videoUid} (already gone, 404)`); break; }
+        if (!check.ok || !inputUid || check.result?.uid !== videoUid || check.result?.liveInput !== inputUid) {
+          ledger.skipped.push(`video ${videoUid} re-check failed (status ${check.status}, liveInput ${check.result?.liveInput ?? "absent"}, expected ${inputUid}); not deleted`);
+          break;
+        }
+        const r = await cf("DELETE", `/${videoUid}`);
+        if (r.ok || r.status === 404) { ledger.deleted.push(`video ${videoUid} (${r.status})`); break; }
+        if (Date.now() > deadline) { ledger.skipped.push(`video ${videoUid} delete still ${r.status} at deadline`); break; }
         await sleep(15_000);
       }
     }
-    const capturedInput = inputUid;
-    if (capturedInput) {
-      if (inputUid !== capturedInput) ledger.skipped.push(`input ${inputUid} != captured ${capturedInput}`);
-      else {
-        const r = await cf("DELETE", `/live_inputs/${capturedInput}`);
-        if (r.ok || r.status === 404) ledger.deleted.push(`input ${capturedInput} (${r.status})`);
-        else ledger.skipped.push(`input ${capturedInput} delete answered ${r.status}`);
+    if (inputUid) {
+      // Re-check against Cloudflare, by path: same uid and this probe's own meta name.
+      const check = await cf<{ uid?: string; meta?: { name?: string } }>("GET", `/live_inputs/${inputUid}`);
+      if (check.status === 404) ledger.deleted.push(`input ${inputUid} (already gone, 404)`);
+      else if (!check.ok || check.result?.uid !== inputUid || check.result?.meta?.name !== PROBE_NAME) {
+        ledger.skipped.push(`input ${inputUid} re-check failed (status ${check.status}, name ${check.result?.meta?.name ?? "absent"}); not deleted`);
+      } else {
+        const r = await cf("DELETE", `/live_inputs/${inputUid}`);
+        if (r.ok || r.status === 404) ledger.deleted.push(`input ${inputUid} (${r.status})`);
+        else ledger.skipped.push(`input ${inputUid} delete answered ${r.status}`);
       }
     }
     note(`OBSERVED ${JSON.stringify(obs)}`);
@@ -149,9 +172,11 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
   it("observes the lock in progress, the expiry, the lock after the end, and the PUT", async () => {
     // 1. Create the throwaway input. deleteRecordingAfterDays (30, the floor) is a leak backstop only.
     const created = await cf<{ uid: string; rtmps: { url: string; streamKey: string }; recording?: Record<string, unknown> }>(
-      "POST", "/live_inputs", { meta: { name: "seazn-task7-probe" }, recording: RECORDING, deleteRecordingAfterDays: 30 });
+      "POST", "/live_inputs", { meta: { name: PROBE_NAME }, recording: RECORDING, deleteRecordingAfterDays: 30 });
     expect(created.ok, `create answered ${created.status}`).toBe(true);
-    inputUid = created.result!.uid;
+    const uid = created.result?.uid;
+    if (typeof uid !== "string" || uid.length === 0) throw new Error("create answered no input uid");
+    inputUid = uid;
     ledger.created.push(`input ${inputUid}`);
     note(`created input ${inputUid}`);
     obs.createEcho = created.result!.recording;
@@ -166,14 +191,19 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
       "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "60", "-b:v", "2500k",
       "-c:a", "aac", "-b:a", "128k", "-f", "flv", target,
     ], { stdio: ["ignore", "ignore", "pipe"] });
+    // The key is redacted from each chunk BEFORE the tail is kept, so a slice can never cut it into an unredacted piece.
+    const streamKey = created.result!.rtmps.streamKey;
     let ffErr = "";
-    ffmpeg.stderr!.on("data", (d: Buffer) => { ffErr = (ffErr + d.toString()).slice(-2000); });
+    let ffSpawnError: string | null = null;
+    ffmpeg.stderr!.on("data", (d: Buffer) => { ffErr = (ffErr + d.toString().replaceAll(streamKey, "<key>")).slice(-2000); });
+    ffmpeg.on("error", (e: NodeJS.ErrnoException) => { ffSpawnError = e.code === "ENOENT" ? "ffmpeg is not installed (ENOENT)" : `ffmpeg failed to start: ${e.code ?? e.message}`; });
     note(`ffmpeg pid ${ffmpeg.pid}`);
 
     // 3. Capture the in-progress recording's uid from the input's own videos, each item checked (C6).
     let deadline = Date.now() + 120_000;
     while (!videoUid) {
-      if (ffmpeg.exitCode !== null) throw new Error(`ffmpeg exited ${ffmpeg.exitCode}: ${ffErr.replaceAll(created.result!.rtmps.streamKey, "<key>")}`);
+      if (ffSpawnError) throw new Error(ffSpawnError);
+      if (ffmpeg.exitCode !== null) throw new Error(`ffmpeg exited ${ffmpeg.exitCode}: ${ffErr}`);
       const mine = (await ownVideos()).filter((v) => v.status?.state === "live-inprogress");
       if (mine.length > 1) throw new Error(`expected one in-progress recording, saw ${mine.length}`);
       if (mine.length === 1) videoUid = mine[0].uid;

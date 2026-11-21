@@ -1,7 +1,7 @@
 # Seazn-hosted video: Cloudflare and Bunny probes
 
 Plan: `docs/superpowers/plans/2026-11-20-seazn-hosted-video.md`. Spec: `docs/superpowers/specs/2026-11-20-seazn-hosted-video-design.md`.
-Cite results by ID (C1–C6, B1–B6, C7–C9 for Task 7, Task 20's own IDs below).
+Cite results by ID: C1–C6 and B1–B6 from the POC, C7–C9 for Task 7. Task 20 adds its own IDs when it records its results.
 
 ## POC results (2026-11-20), copied from the plan
 
@@ -37,6 +37,8 @@ It creates one input with `recording: { mode: "automatic", requireSignedURLs: tr
 publishes an ffmpeg test feed (lavfi testsrc + sine, at most 300 s) to its RTMPS URL, and deletes only the input and the
 one recording it created, each by the uid it captured (C6). It prints an `OBSERVED` line with every value below and a
 `LEDGER` line with the uids created and deleted.
+The stream key is passed to ffmpeg as argv, so it is visible to local `ps` on the machine running the probe for the
+feed's duration (it never reaches a log, the report or a commit).
 
 **Status (2026-11-21): NOT RUN.** The run was held before any Cloudflare write: the only Cloudflare account the local
 credentials can reach is the one account staging AND production share (`seazn-club-stg` and `seazn-club-prod` carry
