@@ -40,6 +40,9 @@ vi.mock("@/server/public-site/table-withdrawals", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/table-withdrawals")>()),
   loadTableWithdrawals: async () => [],
 }));
+// W5 app PR B Task 4 (710563897a) added the best-Nth basis read (`loadBestNthBases`, SQL over `stage_seed_proposals`) to the page,
+// and this file reached the database with its fixture division id ("d1": not a uuid) - red since then. No proposal here: none.
+vi.mock("@/server/public-site/bestnth-basis", () => ({ loadBestNthBases: async () => new Map() }));
 vi.mock("@/server/public-site/data", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/public-site/data")>()),
   getPublicDivision: (...a: unknown[]) => getPublicDivision(...a),

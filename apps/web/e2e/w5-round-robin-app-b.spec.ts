@@ -98,6 +98,54 @@ test.describe("X-UP-1 the runner-up compared on three matches", () => {
   });
 });
 
+// W5 app PR B Task 6 (X-QS-1, X-QS-2; RB5-T14, ST-G17; R24 pick 17 A). A finished group keeps its cut, frozen: who went through
+// reads Qualified, the rest Out, the cut line says the places WENT through, and the legend drops "Still open". Three pools of four,
+// top two of each into the knockout (`seedThreePools`, the real routes to the groups' Complete). Completed and not yet seated, the
+// markers freeze from each pool's final order; once the organiser confirms the knockout's proposal they read who it seated.
+// Before Task 6 a finished table drew no marker, no line and no legend at all. (The best-Nth shape - K25 - is pinned in the
+// unit and DB suites: its smallest e2e field, 9 into 2 pools top 3, is a 3-team bracket the confirm refuses, RB5-D10.)
+test.describe("X-QS-1 the finished group still says who went through", () => {
+  test("Qualified / Out on every pool's table, before and after the knockout is seated, at 1280, 768 and 320", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const { divisionId, koId, poolOf, seedOf, nameOf } = await seedThreePools(request, "setup");
+    const fill = (key: string, vars: Record<string, string | number> = {}) => dictString("en", key, vars);
+    // the rulebook read by hand: the higher seed wins every meeting, so each pool's two best seeds went through
+    const want = new Map<string, string>();
+    for (const pool of ["A", "B", "C"]) {
+      const members = [...poolOf].filter(([, p]) => p === pool).map(([id]) => id).sort((a, b) => seedOf.get(a)! - seedOf.get(b)!);
+      members.forEach((id, i) => want.set(nameOf.get(id)!, i < 2 ? "qualified" : "out"));
+    }
+    expect(want.size, "every seat of the three pools is checked").toBe(12);
+    const qualOf = (name: string) =>
+      page.locator("tr[data-qual]").filter({ hasText: name }).filter({ visible: true }).first().getAttribute("data-qual", { timeout: 2_000 }).catch(() => null);
+    const expectFrozen = async (when: string) => {
+      for (const [name, kind] of want) await expect.poll(() => qualOf(name), `${when}: ${name}`).toBe(kind);
+      const legend = page.getByTestId("qual-legend").filter({ visible: true }).first();
+      await expect(legend).toContainText(fill("table.qual.legend.qualified"));
+      await expect(legend).not.toContainText(fill("table.qual.legend.open"));
+      await expect(page.getByText(fill("table.qual.cutFrozen.other", { n: 2, next: "Knockout" }), { exact: false }).filter({ visible: true })).toHaveCount(3);
+    };
+    await page.goto(await divisionPath(request, divisionId, "?tab=standings"));
+    await dismissCookieBanner(page);
+    await expectFrozen("completed, nobody seated");
+
+    const proposal = await apiJson<{ id: string }>(request, `/api/v1/stages/${koId}/seed-proposal`, "POST");
+    expect(proposal.status, JSON.stringify(proposal.error)).toBe(201);
+    const confirmed = await apiJson(request, `/api/v1/stages/${koId}/seed-proposal/confirm`, "POST", { proposalId: proposal.data!.id });
+    expect(confirmed.status, JSON.stringify(confirmed.error)).toBe(200);
+    await page.reload();
+    let widths = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expectFrozen(`seated, ${width}`);
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/xqs1-frozen-${width}.png`, fullPage: true });
+      widths++;
+    }
+    expect(widths).toBe(3);
+  });
+});
+
 // W5 app PR B Task 1 (X-PO-1 <- RB5-P1; B1 review m-3): pools are seating, so a Started group nobody has played is no longer "No
 // standings yet" - its public division page shows each pool's table, every seat level. Two tables per stage is a new composition
 // on screen: read at 1280, 768 and 320, no horizontal scroll.

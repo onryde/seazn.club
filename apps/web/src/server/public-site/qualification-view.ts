@@ -62,6 +62,18 @@ export interface StageQualMeta {
    *  read this one (`boundsInForce`; null gives none, never the sport's), and so does a rule-scored forfeit
    *  (`ruleScoreReaches`, T7 carry: never the own rule). */
   tablePointsRule: unknown;
+  /** V538 (W5 Task 6, K25): the cut's destination also takes best-Nth seats beside this per-group cut, so who goes through
+   *  cannot be placed per pool while the table runs: no live statuses, and the frozen markers only from `qualified`. Absent:
+   *  false. */
+  qualifyBestNth?: boolean;
+  /** V538 (X-QS-2, RB5-T14): who actually went through from this stage (the destination's confirmed proposal, else its stored
+   *  `config.qualified`), or null - then a complete table's markers follow its own final order. Absent: null. */
+  qualified?: readonly string[] | null;
+}
+
+/** V538's `qualified` column as the view reads it: a list of entrant ids, or null for anything else (absent, malformed). */
+function qualifiedIds(raw: unknown): readonly string[] | null {
+  return Array.isArray(raw) && raw.every((x) => typeof x === "string") ? (raw as string[]) : null;
 }
 
 /** snake→camel for `stage_qualification_meta`'s columns — the public view row
@@ -75,6 +87,9 @@ export function stageQualMeta(row: {
   swiss_rounds: number | null;
   points_rule: unknown;
   has_rank_overrides: boolean | null;
+  /** V538; optional - a row read before the column existed (a cached document) reads as no best-Nth seat and no verdict. */
+  qualify_best_nth?: boolean | null;
+  qualified?: unknown;
 }): StageQualMeta {
   return {
     qualifyCount: row.qualify_count,
@@ -85,6 +100,8 @@ export function stageQualMeta(row: {
     hasRankOverrides: reportsRankOverrides(row.kind, row.has_rank_overrides),
     // the loader's, set by `divisionQualification` — never a column of the row (T9 review m3)
     tablePointsRule: null,
+    qualifyBestNth: row.qualify_best_nth === true,
+    qualified: qualifiedIds(row.qualified),
   };
 }
 
@@ -317,9 +334,10 @@ function statusLabel(s: QualStatus, i: QualificationViewInput): string {
       return i.msg("table.qual.status.needsHelp");
     case "out":
       return i.msg("table.qual.status.out");
-    // Engine 10.0.0 adds `{ kind: "qualified" }` (the frozen "Qualified" marker on a
-    // complete stage). It reads as `through` until the frozen variant is built; any
-    // kind this build does not know does too, so a newer engine never prints a key.
+    // W5 app PR B Task 6 (X-QS-1, R24 pick 17 A): the frozen marker of a complete stage's row that went through.
+    case "qualified":
+      return i.msg("table.qual.status.qualified");
+    // Any kind this build does not know reads as `through`, so a newer engine never prints a key.
     default:
       return i.msg("table.qual.status.through");
   }
@@ -354,12 +372,12 @@ export function ifYouLoseSentence(
       return i.msg("table.qual.ifYouLose.needsHelp");
     case "out":
       return i.msg("table.qual.ifYouLose.out");
-    default: // "qualified" (engine 10.0.0) and any later kind: as `through`.
+    default: // "qualified" (frozen: the engine gives it no loss case) and any later kind: as `through`.
       return i.msg("table.qual.ifYouLose.through");
   }
 }
 
-function headline(s: QualStatus, i: QualificationViewInput, next: string, n: number): string {
+function headline(s: QualStatus, i: QualificationViewInput, next: string, n: number, frozen: boolean): string {
   switch (s.kind) {
     case "through":
       return i.msg("table.qual.headline.through", { next });
@@ -368,20 +386,25 @@ function headline(s: QualStatus, i: QualificationViewInput, next: string, n: num
     case "needs_help":
       return i.msg("table.qual.headline.needsHelp");
     case "out":
+      // W5 Task 6: on a finished table "Out" is a verdict, not a forecast.
+      if (frozen) return i.msg("table.qual.headline.outFrozen", { next });
       // Pluralised on N (final review COPY): "…in the top 1" read badly.
       return i.plural("table.qual.headline.out", n, { n });
-    default: // "qualified" (engine 10.0.0) and any later kind: as `through`.
+    case "qualified":
+      return i.msg("table.qual.headline.qualified", { next });
+    default: // any later kind: as `through`.
       return i.msg("table.qual.headline.through", { next });
   }
 }
 
-/** The hub document's status vocabulary for an engine status: the three kinds it
- *  renders itself, and `through` for every other (engine 10.0.0's `qualified`). */
-function statusKindOf(s: QualStatus): "through" | "win_k" | "needs_help" | "out" {
+/** The hub document's status vocabulary for an engine status: the kinds it renders itself (the frozen `qualified` since W5
+ *  Task 6), and `through` for any later kind. */
+function statusKindOf(s: QualStatus): "through" | "win_k" | "needs_help" | "out" | "qualified" {
   switch (s.kind) {
     case "win_k":
     case "needs_help":
     case "out":
+    case "qualified":
       return s.kind;
     default:
       return "through";
@@ -597,6 +620,18 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // and the line falls under the cut-th of them. Her row stays in the table,
   // with no status.
   const contenders = CUT_SKIPS_DEPARTED_KINDS.has(i.stage.kind) ? ordered.filter((r) => active.get(r.entrantId) === true) : ordered;
+  const complete = isTableStageComplete(
+    // W2d T8: the predicate reads the stage's kind and Swiss rounds alone (`isTableStageComplete`'s parameter).
+    {
+      kind: i.stage.kind as "league" | "group" | "swiss",
+      ...(isSwiss ? { rounds: meta.swissRounds! } : {}),
+    },
+    engineFx,
+  );
+  // W5 Task 6 (K25): a cut whose destination also takes best-Nth seats cannot be placed per pool while the table runs - a
+  // runner-up below the per-group line may still go through as one of the best - so no live status (an "Out" could be false,
+  // R3). Finished, the per-group order is still not who went through: only the destination's seats say (`qualified`).
+  if (meta.qualifyBestNth === true && (!complete || !meta.qualified)) return null;
   const engine: QualificationInput = {
     rows: contenders.map((r) => ({ entrantId: r.entrantId, points: byWins ? r.won : r.points, active: active.get(r.entrantId) === true })),
     remaining: new Map(contenders.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
@@ -605,14 +640,13 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     anyPlayed: tableFx.some(
       (f) => statusIn(i.stage.kind, f) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
     ),
-    complete: isTableStageComplete(
-      // W2d T8: the predicate reads the stage's kind and Swiss rounds alone (`isTableStageComplete`'s parameter).
-      {
-        kind: i.stage.kind as "league" | "group" | "swiss",
-        ...(isSwiss ? { rounds: meta.swissRounds! } : {}),
-      },
-      engineFx,
-    ),
+    complete,
+    // W5 Task 6 (X-QS-1, X-QS-2; RB5-T14): a finished table's markers freeze - from who went through (the confirmed proposal,
+    // else the destination's stored `config.qualified`), which wins; else the final table's own order of the rows still in the
+    // field (the engine takes its first `cut` active ids). A best-Nth cut never reaches the order: it returned above without
+    // `qualified`, and the engine reads `order` only when `qualified` is absent.
+    ...(complete && meta.qualified ? { qualified: new Set(meta.qualified) } : {}),
+    ...(complete ? { order: contenders.map((r) => r.entrantId) } : {}),
   };
   const result = qualificationStatus(engine);
   if (result === null) return null;
@@ -706,7 +740,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       status: statusKindOf(res.status),
       label,
       ariaLabel: i.msg("table.qual.rankLabel", { rank: r.rank ?? position + 1, status: label }),
-      headline: headline(res.status, i, next, cut),
+      headline: headline(res.status, i, next, cut, complete),
       ifYouLose:
         res.ifYouLose && !nextIsBye(r.entrantId)
           ? ifYouLoseSentence(res.ifYouLose, (engine.remaining.get(r.entrantId) ?? 0) - 1, i)
@@ -723,7 +757,8 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // Two plurals, two keys (final review COPY): the cut sentence agrees with N
   // ("First place goes…" / "Top 2 go…"), the rounds left with the rounds.
   // One key pluralised on the rounds printed "Top 1 go through".
-  const cutLine = i.plural("table.qual.cut", cut, { n: cut, next });
+  // W5 Task 6 (R24 pick 17 A): a finished table's line says the places WENT through.
+  const cutLine = i.plural(complete ? "table.qual.cutFrozen" : "table.qual.cut", cut, { n: cut, next });
   // The line renders after a row of the WHOLE table (departed rows included): under the cut-th contender. F3 above
   // guarantees one exists (the cut is below the field still playing).
   const cutIndex = ordered.indexOf(contenders[cut - 1]!) + 1;
@@ -731,9 +766,10 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     table: {
       cutIndex,
       label: roundsLeft > 0 ? `${cutLine} · ${i.plural("table.qual.roundsLeft", roundsLeft)}` : cutLine,
+      // W5 Task 6 (R24 pick 17 A): finished, the tick reads "Qualified" and nothing is still open.
       legend: {
-        through: i.msg("table.qual.legend.through"),
-        open: i.msg("table.qual.legend.open"),
+        through: i.msg(complete ? "table.qual.legend.qualified" : "table.qual.legend.through"),
+        open: complete ? null : i.msg("table.qual.legend.open"),
         out: i.msg("table.qual.legend.out"),
         hint: i.msg("table.qual.legend.hint"),
       },

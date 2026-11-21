@@ -435,6 +435,13 @@ export interface PublicStage {
    *  (`config.rank_overrides`). NOT the same as a row's `rankLocked`, which
    *  the engine also sets on every tie it settles by lots. */
   has_rank_overrides: boolean;
+  /** V538 (W5 Task 6, K25): the cut's destination also takes best-Nth seats beside its per-group cut - the live race cannot be
+   *  placed per pool, so the table shows only its frozen markers, read from `qualified`. Optional: a stage row cached before
+   *  the column existed reads as false. */
+  qualify_best_nth?: boolean;
+  /** V538 (X-QS-2, RB5-T14): who went through from this stage - the destination's confirmed proposal, else its stored
+   *  `config.qualified` - as entrant ids; null when nobody is seated yet (or there is no cut). */
+  qualified?: unknown;
   /** Per-stage match rules (design 2026-09-17 §D3/T7): the stage's own
    *  `config.rules` FRAGMENT — `{bestOf: 1, setTo: 15}`, never a materialised
    *  config; null/absent means the stage plays the division's format. Read off
@@ -1005,7 +1012,7 @@ export async function readPublicDivisionDetail(
     const stages = await sql<(PublicStage & StageProgressionRow)[]>`
       select id, division_id, seq, kind, name, status,
              qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
-             has_rank_overrides,
+             has_rank_overrides, qualify_best_nth, qualified,
              -- Per-stage match rules (design 2026-09-17 T7): the rules
              -- FRAGMENT only, read off stages by the VIEW row's own id so the
              -- view still decides which rows exist and the rest of config

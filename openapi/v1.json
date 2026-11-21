@@ -102028,7 +102028,14 @@
                                             "type": "string"
                                           },
                                           "open": {
-                                            "type": "string"
+                                            "anyOf": [
+                                              {
+                                                "type": "string"
+                                              },
+                                              {
+                                                "type": "null"
+                                              }
+                                            ]
                                           },
                                           "out": {
                                             "type": "string"
@@ -102883,7 +102890,7 @@
                           "label": "example",
                           "legend": {
                             "through": "example",
-                            "open": "example",
+                            "open": null,
                             "out": "example",
                             "hint": "example"
                           }
