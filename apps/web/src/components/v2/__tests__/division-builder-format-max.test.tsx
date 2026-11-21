@@ -121,6 +121,7 @@ describe("the picked card says the max (W5 B4, F8)", () => {
     expect(shown, "one max line, on the picked card").toHaveLength(1);
     const max = formatMaxEntrants(buildTemplateStages(key, openingKnobs(OPENING_PLAN.entrants))[0]!);
     expect(max, `${key} has a max`).not.toBeNull();
-    expect(shown[0]).toBe(en["divBuilder.card.maxEntrants"]!.replace("{max}", String(max)));
+    // The number in the reader's own grouping (en: 4,096), as every other count the builder shows.
+    expect(shown[0]).toBe(en["divBuilder.card.maxEntrants"]!.replace("{max}", new Intl.NumberFormat("en").format(max!)));
   });
 });

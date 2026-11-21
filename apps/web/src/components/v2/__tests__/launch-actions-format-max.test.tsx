@@ -87,6 +87,17 @@ describe("Start is disabled, with the server's reason, when the field is past it
     expect(propsOf(render({ stages: [{ kind: "ladder", progression: null, config: {} }], activeEntrants: 100_000 }).start!).disabled).toBe(false);
   });
 
+  it("a four-digit max reads in the reader's grouping (en: 1,428), as the builder's card says it", () => {
+    const SWISS = { kind: "swiss", progression: null, config: {} };
+    const swissMax = formatMaxEntrants(SWISS)!;
+    expect(swissMax, "premise: a Swiss max past 999").toBeGreaterThan(999);
+    const over = render({ stages: [SWISS], activeEntrants: swissMax + 1 });
+    const fmt = new Intl.NumberFormat("en");
+    expect(textOf(over.reason!)).toBe(
+      (en as Record<string, string>)["roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS"]!.replace("{max}", fmt.format(swissMax)).replace("{entrants}", fmt.format(swissMax + 1)),
+    );
+  });
+
   it("a viewer who cannot edit sees neither Start nor the reason", () => {
     const viewer = render({ canEdit: false, activeEntrants: max + 1 });
     expect(viewer.start).toBeUndefined();

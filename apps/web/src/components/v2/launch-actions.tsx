@@ -13,7 +13,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { routes } from "@/lib/routes";
 import { PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
@@ -83,6 +83,7 @@ export function LaunchActions({
   activeEntrants,
 }: Props) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   // W5 B4 (stress F8; owner 2026-11-21): a field past its format's max entrants cannot start - Start is disabled and says why,
   // in the server's own sentence (the create and Start doors refuse the same field by the same name).
   const tooMany = useMemo(
@@ -193,7 +194,10 @@ export function LaunchActions({
       )}
       {canEdit && divisionScoringClosed(status) && tooMany !== null && (
         <span id="launch-start-too-many" data-testid="launch-start-too-many" className="text-xs text-amber-800">
-          {msg("roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", { max: tooMany.max, entrants: tooMany.entrants })}
+          {msg("roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", {
+            max: new Intl.NumberFormat(locale).format(tooMany.max),
+            entrants: new Intl.NumberFormat(locale).format(tooMany.entrants),
+          })}
         </span>
       )}
       <Link href={routes.divisionSchedule(orgSlug, compSlug, divSlug)} className="btn btn-ghost px-3 py-1.5 text-xs">
