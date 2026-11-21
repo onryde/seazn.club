@@ -1,5 +1,5 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
-import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, showAllFormats } from "./helpers";
+import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, showAllFormats, stageCardOf } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { buildTemplateStages } from "../src/lib/format-templates";
 import { crossPoolDraw } from "@seazn/engine/scheduling";
@@ -518,5 +518,111 @@ test.describe("I-1 a tie pick with another change on a drawn draft", () => {
     for (const f of pairs) expect(s.poolOf.get(f.home_entrant_id!), `${s.nameOf.get(f.home_entrant_id!)} v ${s.nameOf.get(f.away_entrant_id!)}`).not.toBe(s.poolOf.get(f.away_entrant_id!));
     const seated = new Set(r1.flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((id): id is string => id !== null));
     expect([seated.has(picked), seated.has(s.a2), seated.has(s.b2)], "the pick and A2 seated, B2 (replaced) not").toEqual([true, true, false]);
+  });
+});
+
+// W5 app PR B Task 7 (C5; X-ADJ-4; R24 pick 15 A). The organiser deducts three points from a started league through the desk - the stage
+// card's More, "Adjust points…", the dialog - and the public table re-ranks and says why under it. Driven through the real routes (the
+// division, Start, the scorer's result door) and the real screens, the desk at 1280, 768 and 320 (the dialog opened at each, the write
+// made once), the public Standings tab at 1280, 768 and 320. Copy is the shipped dictionaries' (`uiString`, `dictString`), never typed.
+// Expected values are the rule's: generic pays 3 for a win, so the two winners are level on 3 and −3 leaves the adjusted one on 0.
+test.describe("X-ADJ-4 Adjust points", () => {
+  test("X-ADJ-4 the organiser deducts three points and the table says why", async ({ page, request }) => {
+    test.setTimeout(180_000);
+    const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `XADJ4 ${TAG}`, visibility: "public" });
+    expect(comp.status).toBe(201);
+    const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
+    expect(div.status).toBe(201);
+    const names = ["Marsh Lane Wanderers Community Football Club", "Harbour Vale", "Dunmore Park", "Kilbride Rovers"].map((n) => `${n} ${TAG}`);
+    const ents = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div.data!.id}/entrants`, "POST", names.map((display_name, i) => ({ kind: "individual", display_name, seed: i + 1 })));
+    expect(ents.status).toBe(201);
+    const ids = ents.data!.map((e) => e.id);
+    const stages = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", [{ seq: 1, kind: "league", name: "League", config: { legs: 1 } }]);
+    expect(stages.status).toBe(201);
+    const stageId = stages.data![0]!.id;
+    expect((await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST")).status).toBe(200);
+    const lines = (await apiJson<Fx[]>(request, `/api/v1/divisions/${div.data!.id}/fixtures`)).data!;
+    const between = (x: string, y: string) => lines.find((f) => [f.home_entrant_id, f.away_entrant_id].sort().join() === [x, y].sort().join())!;
+    for (const [w, l] of [[ids[0]!, ids[1]!], [ids[2]!, ids[3]!]]) {
+      const f = between(w, l);
+      const res = await apiJson(request, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: 0, type: "generic.result", payload: f.home_entrant_id === w ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 } });
+      expect(res.status).toBe(201);
+    }
+    type Row = { entrantId: string; rank: number | null; points: number };
+    const table = async () => [...(await apiJson<{ rows: Row[] }>(request, `/api/v1/stages/${stageId}/standings`)).data!.rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+    const before = await table();
+    expect(before.slice(0, 2).map((r) => r.points), "premise: the two winners are level on 3").toEqual([3, 3]);
+    const top = before[0]!.entrantId;
+    const rival = before[1]!.entrantId;
+    const topName = names[ids.indexOf(top)]!;
+    const REASON = "fielded an ineligible player";
+
+    // The desk: the dialog opens from More at every width; the write is made once, at the first.
+    let desk = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(await divisionPath(request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+      await dismissCookieBanner(page);
+      const card = stageCardOf(page, stageId);
+      await expect(card, `${width}: the stage card`).toBeVisible({ timeout: 20_000 });
+      const trigger = card.getByTestId("stage-rail-trigger");
+      if (await trigger.isVisible()) await trigger.click();
+      await card.getByTestId("stage-more").click();
+      const item = card.getByTestId("stage-adjust-points");
+      await expect(item, `${width}: the item, in the dictionary's words`).toContainText(uiString("en", "stage.more.adjustPoints"));
+      await item.click();
+      const dialog = page.getByTestId("adjust-points-dialog");
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(uiString("en", "adjustPoints.title", { stage: "League" }));
+      const select = dialog.getByTestId("adjust-points-entrant");
+      await expect(select).toBeEnabled();
+      await expect(select.locator("option"), `${width}: Choose plus the four members`).toHaveCount(5);
+      if (desk === 0) {
+        await select.selectOption(top);
+        for (let i = 0; i < 3; i++) await dialog.getByTestId("adjust-points-decrease").click();
+        await expect(dialog.getByTestId("adjust-points-amount")).toHaveText(uiString("en", "adjustPoints.amount.points.other", { amount: "\u22123" }));
+        await expect(dialog.getByTestId("adjust-points-apply"), "no reason: Apply waits").toBeDisabled();
+        await dialog.getByTestId("adjust-points-reason").fill(REASON);
+        await dialog.getByTestId("adjust-points-apply").click();
+        await expect(dialog.getByTestId("adjust-points-notice")).toHaveText(uiString("en", "adjustPoints.applied"));
+      }
+      // The adjustment in force, with its Undo, at every width.
+      const row = dialog.locator('[data-testid^="adjust-points-row-"]');
+      await expect(row).toHaveCount(1);
+      await expect(row).toContainText(topName);
+      await expect(row).toContainText(REASON);
+      await expect(row.locator('[data-testid^="adjust-points-undo-"]')).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/xadj4-dialog-${width}.png`, fullPage: false });
+      await dialog.getByTestId("adjust-points-close").click();
+      await expect(dialog).toBeHidden();
+      desk++;
+    }
+    expect(desk).toBe(3);
+
+    // The fold: the adjusted winner on 0, below the rival she was level with.
+    const after = await table();
+    expect(after[0]!.entrantId).toBe(rival);
+    expect(after.find((r) => r.entrantId === top)!.points).toBe(0);
+
+    // The public table says why, under it, at every width.
+    const orgs = await apiJson<{ slug: string }[]>(request, "/api/orgs");
+    const orgSlug = (orgs.data ?? (orgs as unknown as { slug: string }[]))[0]!.slug;
+    await page.goto(`/live/${orgSlug}/${comp.data!.slug}/${div.data!.slug}?tab=standings`);
+    await dismissCookieBanner(page);
+    const body = dictString("en", "table.adjustmentNote.points.other", { amount: "\u22123", reason: REASON, date: "" }).replace(/[,.]?\s*\.?$/, "");
+    let pub = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      const note = page.getByTestId(`standings-adjustment-note-${top}`).filter({ visible: true }).first();
+      await expect(note, `${width}: the footnote`).toBeVisible();
+      await expect(note).toContainText(dictString("en", "table.adjustmentNote.lead", { name: topName }));
+      await expect(note).toContainText(body);
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/xadj4-public-${width}.png`, fullPage: true });
+      pub++;
+    }
+    expect(pub).toBe(3);
   });
 });

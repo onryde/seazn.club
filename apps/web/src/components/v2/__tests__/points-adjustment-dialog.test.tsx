@@ -9,7 +9,7 @@ import en from "@/dictionaries/en/ui.json";
 import type { MessageKey } from "@/lib/messages";
 import { t, type TKey } from "@/lib/i18n-runtime";
 import type { Dict } from "@/lib/i18n-constants";
-import { PointsAdjustmentDialog, adjustmentAmountPhrase, applyBlocked, shownDelta, storedDelta } from "../points-adjustment-dialog";
+import { PointsAdjustmentDialog, type AdjustmentsRead, type DialogAnswer, adjustmentAmountPhrase, applyBlocked, shownDelta, storedDelta } from "../points-adjustment-dialog";
 
 const msg = (key: MessageKey, vars?: Record<string, string | number>) => t(en as Dict, key as TKey, vars);
 
@@ -58,9 +58,9 @@ describe("Apply waits for the server's three checks", () => {
         locale: "en",
         stageName: "Group stage",
         names: {},
-        load: () => new Promise(() => {}),
-        apply: async () => ({ ok: true }),
-        undo: async () => ({ ok: true }),
+        load: () => new Promise<AdjustmentsRead>(() => {}),
+        apply: async (): Promise<DialogAnswer> => ({ ok: true }),
+        undo: async (): Promise<DialogAnswer> => ({ ok: true }),
         onClose: () => {},
       }),
     );

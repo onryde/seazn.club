@@ -13,6 +13,7 @@
 // one specific action, focus trapped, Escape closes unless sending.
 import { useEffect, useRef, useState } from "react";
 import type { MessageKey } from "@/lib/messages";
+import { intlLocaleFor } from "@/lib/public-date-locale";
 import { adjustmentAmountText, adjustmentShownCount, type AdjustmentUnit, type PointsDisplayUnit } from "@/lib/points-adjustment-note";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -151,7 +152,8 @@ export function PointsAdjustmentDialog(props: PointsAdjustmentDialogProps) {
   const nameOf = (id: string) => props.names[id] ?? id;
   const dateOf = (iso: string) => {
     try {
-      return new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", year: "numeric" }).format(new Date(iso));
+      // The footnote's own rule (owner ruling 2026-09-16): English is day-month, "21 Nov 2026", never bare en's "Nov 21, 2026".
+      return new Intl.DateTimeFormat(intlLocaleFor(locale), { dateStyle: "medium" }).format(new Date(iso));
     } catch {
       return iso.slice(0, 10);
     }

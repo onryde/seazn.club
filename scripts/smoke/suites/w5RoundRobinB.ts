@@ -37,7 +37,9 @@ export async function w5RoundRobinBSuite(): Promise<void> {
   // Task 3: 1 (two late players in a started league of four: rounds 4-7 in seed order, then 8-11 and the first late player at 12).
   // Task 4: 2 (Check 1's proposal stores the engine's basis on the best-Nth slots; the Standings tab prints it under the tables).
   // Task 5: 1 (three pools' top two into the quarter-finals: the stored draw seed, A1 and B1 on byes, C2 v A2 and C1 v B2).
-  const EXPECTED_CHECKS = 8;
+  // Task 7: 2 (a −3 with a reason re-ranks a started league and the anonymous hub's footnote says why; the refusals by name, the Undo
+  //   returns the table and the footnote goes, a second Undo is refused).
+  const EXPECTED_CHECKS = 10;
   let checked = 0;
   const w5Check = (label: string, cond: boolean) => {
     checked++;
@@ -230,9 +232,12 @@ export async function w5RoundRobinBSuite(): Promise<void> {
   }
 
   // Check 4 - Task 2 (X-WDT-4): one count, the engine's, on both sides of the write. A PUBLIC competition (the hub is read anonymously).
+  // Task 7's checks add their division to the same competition: the owner's plan caps how many competitions it holds.
+  let notePub: { id: string; slug: string } | undefined;
   {
     const pubRes = await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W5 RR B note ${tag}`, visibility: "public" });
     const pub = v1data<{ id: string; slug: string } | undefined>(pubRes);
+    notePub = pub;
     const dRes = await v1(owner, `/api/v1/competitions/${pub?.id ?? "no-competition"}/divisions`, "POST", {
       name: "Leaver",
       sport_key: "generic",
@@ -392,6 +397,83 @@ export async function w5RoundRobinBSuite(): Promise<void> {
       "w5b X-PD-1: three pools' top two into the quarter-finals - drawn with a stored seed, A1 and B1 on byes, C2 v A2 and C1 v B2, no pool-mates" +
         (ok ? "" : ` - comp ${xRes.status}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, generate ${gens.join(",")}, start ${started.status}, scored ${scored.length} ${[...new Set(scored)].join(",")}, complete ${done.status}, proposal ${pRes.status} ${JSON.stringify(proposal?.computed?.crossPoolDraw ?? null)}, confirm ${conf.status}, round one pairs [${pairs.join(",")}] byes [${byes.join(",")}]`),
       ok,
+    );
+  }
+
+  // Checks 9-10 - Task 7 (C5; X-ADJ-4): Adjust points, over HTTP. A PUBLIC competition (the hub is read anonymously), a generic league of four,
+  // Started; Ad1 beats Ad2 2-0 and Ad3 beats Ad4 2-0, so the two winners are level on everything generic counts (points 3, diff +2, for 2) and the
+  // cascade's last step (lots) splits them. Expected values are the rule's: 3 for a win, and −3 leaves the adjusted winner on 0, below the other.
+  // Its division joins Check 4's public competition (the owner's plan caps competitions; a fifth answers 402).
+  {
+    const pub = notePub;
+    const dRes = await v1(owner, `/api/v1/competitions/${pub?.id ?? "no-competition"}/divisions`, "POST", {
+      name: "Adjusted",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    const divId = v1data<{ id: string } | undefined>(dRes)?.id;
+    const field = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        Array.from({ length: 4 }, (_, i) => ({ kind: "individual", display_name: `Ad${i + 1} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const stages = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", [{ seq: 1, kind: "league", name: "League", config: { legs: 1 } }]),
+    ) ?? [];
+    const stageId = stages[0]?.id;
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+    const [a1, a2, a3, a4] = field.map((e) => e.id);
+    const lines = v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [];
+    const between = (x?: string, y?: string) => lines.find((f) => [f.home_entrant_id, f.away_entrant_id].sort().join() === [x, y].sort().join());
+    const scored: number[] = [];
+    for (const [w, l] of [[a1, a2], [a3, a4]] as const) {
+      const f = between(w, l);
+      scored.push((await v1(owner, `/api/v1/fixtures/${f?.id}/events`, "POST", {
+        expected_seq: 0, type: "generic.result", payload: f?.home_entrant_id === w ? { p1Score: 2, p2Score: 0 } : { p1Score: 0, p2Score: 2 } })).status);
+    }
+    type Row = { entrantId: string; rank: number | null; points: number };
+    const table = async () => {
+      const rows = v1data<{ rows: Row[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/standings`))?.rows ?? [];
+      return [...rows].sort((x, y) => (x.rank ?? 99) - (y.rank ?? 99));
+    };
+    const orgSlug = ((await call(owner, "/api/orgs")) as { slug: string }[])[0]?.slug ?? "";
+    type HubTable = { divisionId: string; adjustmentNotes?: { entrantId: string; lead: string; body: string }[] };
+    const hubNotes = async () =>
+      (v1data<{ tables?: HubTable[] } | undefined>(await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${pub?.slug}/hub`))?.tables ?? [])
+        .find((t) => t.divisionId === divId)?.adjustmentNotes ?? [];
+    const before = await table();
+    const top = before[0]?.entrantId;
+    const rival = top === a1 ? a3 : a1;
+    const REASON = "fielded an ineligible player";
+    const adj = await v1(owner, `/api/v1/stages/${stageId}/adjustments`, "POST", { entrant_id: top, delta: -3, reason: REASON });
+    const written = v1data<{ adjustment?: { seq: number; unit: string; held: boolean } } | undefined>(adj)?.adjustment;
+    const after = await table();
+    const notes = await hubNotes();
+    const ok9 =
+      pub !== undefined && dRes.status === 201 && field.length === 4 && stages.length === 1 && started.status === 200 && scored.join(",") === "201,201" &&
+      [a1, a3].includes(top) && before[0]?.points === 3 && before[1]?.points === 3 && adj.status === 201 && written?.unit === "points" && written.held === false &&
+      after[0]?.entrantId === rival && after.find((r) => r.entrantId === top)?.points === 0 &&
+      notes.length === 1 && notes[0]?.entrantId === top && notes[0]?.body.startsWith(`\u22123 points, ${REASON}, `) === true;
+    w5Check(
+      "w5b X-ADJ-4: −3 with a reason re-ranks a started league below the rival it was level with, and the anonymous hub's footnote says why" +
+        (ok9 ? "" : ` - comp ${pub?.id ?? "none"}, div ${dRes.status}, field ${field.length}, stages ${stages.length}, start ${started.status}, scored ${scored.join(",")}, before ${JSON.stringify(before.map((r) => r.points))}, adjust ${adj.status} ${JSON.stringify(written ?? adj.json.error ?? null)}, after top ${after[0]?.entrantId === rival} ${JSON.stringify(after.map((r) => r.points))}, notes ${JSON.stringify(notes)}`),
+      ok9,
+    );
+
+    const noReason = await v1(owner, `/api/v1/stages/${stageId}/adjustments`, "POST", { entrant_id: top, delta: -3, reason: "  " });
+    const zero = await v1(owner, `/api/v1/stages/${stageId}/adjustments`, "POST", { entrant_id: top, delta: 0, reason: REASON });
+    const undo = await v1(owner, `/api/v1/stages/${stageId}/adjustments/${written?.seq ?? 0}`, "DELETE");
+    const again = await v1(owner, `/api/v1/stages/${stageId}/adjustments/${written?.seq ?? 0}`, "DELETE");
+    const back = await table();
+    const gone = await hubNotes();
+    const ok10 =
+      noReason.status === 422 && noReason.json.error?.code === "RR_ADJUST_REASON_MISSING" && zero.status === 422 && zero.json.error?.code === "RR_ADJUST_ZERO" &&
+      undo.status === 200 && again.status === 409 && again.json.error?.code === "RR_ADJUST_ALREADY_UNDONE" &&
+      back.map((r) => r.points).join(",") === before.map((r) => r.points).join(",") && back.find((r) => r.entrantId === top)?.points === 3 && gone.length === 0;
+    w5Check(
+      "w5b X-ADJ-3/4: no reason and zero refused by name, Undo returns the table and takes the footnote, a second Undo is refused" +
+        (ok10 ? "" : ` - no reason ${noReason.status} ${noReason.json.error?.code}, zero ${zero.status} ${zero.json.error?.code}, undo ${undo.status}, again ${again.status} ${again.json.error?.code}, back ${JSON.stringify(back.map((r) => r.points))}, notes ${gone.length}`),
+      ok10,
     );
   }
 
