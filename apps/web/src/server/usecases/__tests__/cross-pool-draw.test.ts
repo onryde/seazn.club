@@ -419,6 +419,26 @@ describe.skipIf(!HAS_DB)("FX-G5 on_complete: the knockout seeded at the source's
     expect(await listCrossPoolDraws(one.auth, one.divId), "one pool: nothing drawn, nothing shown").toEqual({});
   });
 
+  it("m-3 (B2 re-review N-2) a live proposal speaks for its stage over an older seeding ledger row: a refused draft keeps its red band", async () => {
+    // The X-PD-4 scene: the draft's draw is refused by name. Its stage is also given a `stage_seeded` row with a seed, in the shape
+    // the on_complete writer (`seedNextStage`, stages/carry-over.ts) records - forged, because no door today makes both for one
+    // stage. The ledger is the fallback for a stage no live proposal speaks for, so the refusal must survive it.
+    const b = await build({ entrants: 9, pools: 3, kind: "page_playoff", take: [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }], score: decisive });
+    expect((await completeStage(b.auth, b.srcId)).completed).toBe(true);
+    const draft = (await getSeedProposal(b.auth, b.koId))!;
+    const refused = draft.computed.crossPoolDraw?.refused;
+    expect(refused?.code, "the premise: the live draft's draw is refused").toBe("SEEDING_POOL_SEPARATION_IMPOSSIBLE");
+    const seed = draft.computed.crossPoolDraw!.seed;
+    await sql`
+      insert into division_events (division_id, seq, type, payload)
+      select ${b.divId}, coalesce(max(seq), 0) + 1, 'stage_seeded', ${sql.json({ stageId: b.koId, from: b.srcId, entrants: [], crossPoolDraw: { seed } } as never)}
+        from division_events where division_id = ${b.divId}`;
+    const [ledger] = await sql<{ n: number }[]>`
+      select count(*)::int as n from division_events where division_id = ${b.divId} and type = 'stage_seeded' and payload->>'stageId' = ${b.koId}`;
+    expect(ledger!.n, "the premise: the stage has a seeding ledger row too").toBe(1);
+    expect(await listCrossPoolDraws(b.auth, b.divId), "the proposal's read, refusal and all").toEqual({ [b.koId]: { seed, refused } });
+  });
+
   it("K23 a one-pool group seeded on_complete keeps today's order (no draw, no seed recorded)", async () => {
     const b = await build({ entrants: 6, pools: 1, kind: "knockout", take: [{ kind: "rankRange", from: 1, to: 4 }], score: decisive, timing: "on_complete" });
     await completeStage(b.auth, b.srcId);
@@ -678,6 +698,14 @@ describe.skipIf(!HAS_DB)("D-B2-1 a tie pick re-draws round one: pool-mates still
     const bases = (p: typeof fresh) => p.computed.qualifiers.map((q) => JSON.stringify(q.basis ?? null)).sort();
     expect(bases(fresh)).toEqual(bases(s.draft));
     expect(s.draft.computed.qualifiers.some((q) => (q.basis?.levelWith.length ?? 0) > 0), "the premise: a seat names who was level").toBe(true);
+    // B2 re-review N-1: each re-drawn seat keeps the engine's pool too - the Standings footnote and `preBumpBestNthDraft` read it. The
+    // expected pool is the one her source lines were drawn in (the fixtures' own pool key), never the draft's copy alone.
+    // (The pick swaps who holds the tied seat, so each slate is read against its own entrants.)
+    const poolBy = (p: typeof fresh) => Object.fromEntries(p.computed.qualifiers.map((q) => [q.entrantId, q.pool ?? null]));
+    const truth = (p: typeof fresh) => Object.fromEntries(p.computed.qualifiers.map((q) => [q.entrantId, s.b.poolOf.get(q.entrantId) ?? null]));
+    expect(Object.values(truth(fresh)).filter((k) => k !== null && k !== ""), "anti-vacuity: every one of the 6 seats has a pool").toHaveLength(6);
+    expect(poolBy(s.draft), "the premise: the draft carries each seat's pool").toEqual(truth(s.draft));
+    expect(poolBy(fresh), "the re-proposal keeps each seat's pool").toEqual(truth(fresh));
     return fresh;
   };
   const noPoolMates = (b: Built, r: { pairs: string[] }) => {

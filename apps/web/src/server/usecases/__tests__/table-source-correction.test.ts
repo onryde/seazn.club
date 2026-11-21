@@ -30,7 +30,7 @@ import { createDivision } from "../divisions";
 import { createEntrants, patchEntrant } from "../entrants";
 import { startDivision } from "../schedule";
 import { scoreEvent } from "../scoring";
-import { completeStage, createStages, generateStageFixtures, getSeedProposal, overrideStandings, refoldStageTable } from "../stages";
+import { completeStage, computeSeedProposal, createStages, generateStageFixtures, getSeedProposal, overrideStandings, refoldStageTable } from "../stages";
 import { getTableCutDrift } from "../table-cut-drift";
 import { cascadeAuthFor, withdrawEntrantCascade } from "../withdrawal";
 import { confirmResolvingTies } from "./_confirm-with-ties";
@@ -476,6 +476,42 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     await correct(started, 4, 5, 5);
     expect(await statusOf(started.confirmedId), "after the start the confirmed proposal stands").toBe("confirmed");
     expect(names(await getTableCutDrift(started.auth, started.srcId), started)).toEqual({ out: ["E4"], in: ["E5"] });
+  });
+
+  it("m-7 (B2 re-review N-3) the stored seed decides the level winners' order every run: two seeds the engine orders apart, each seated as drawn", async () => {
+    // The m-7 pin above reads the seed the stage id mints, and the two level winners have two orders, so a draw that used another
+    // seed went red about half the time. Here the seed is CHOSEN, off the engine: the first s whose order differs from s + 1's.
+    // Each is stored on the live draft and the stage re-proposed (`storedCrossPoolSeed` reads the newest proposal's seed), so a
+    // draw that ignores the stored seed, or is off by one, reads a different seat order on one of the two, every run.
+    const r = await rig(GROUPS4, GENERIC, { confirm: false });
+    const poolOf = async (seed: number) => (await rowsOf(r.srcId)).find((f) => [f.home_entrant_id, f.away_entrant_id].includes(r.idOf.get(seed)!))!.pool_id!;
+    const [poolA, poolB] = [await poolOf(1), await poolOf(2)];
+    expect([await poolOf(4), await poolOf(3)], "premise: A's and B's runners-up").toEqual([poolA, poolB]);
+    const order = (seed: number) =>
+      crossPoolDraw(
+        [
+          { entrantId: "1", pool: poolA, tier: 1 },
+          { entrantId: "2", pool: poolB, tier: 1, tied: true },
+          { entrantId: "4", pool: poolA, tier: 2 },
+          { entrantId: "3", pool: poolB, tier: 2, tied: true },
+        ],
+        "single_elim",
+        seed,
+      ).order.map(Number);
+    let s = 1;
+    while (s < 1000 && order(s).join() === order(s + 1).join()) s += 1;
+    expect(s, "the engine orders some neighbouring seeds apart").toBeLessThan(1000);
+    const chosen = [s, s + 1];
+    expect(new Set(chosen.map((x) => order(x).join())).size, "anti-vacuity: the 2 chosen seeds give 2 orders").toBe(2);
+    for (const seed of chosen) {
+      const live = (await getSeedProposal(r.auth, r.koId))!;
+      expect(live.status, "premise: a live draft").toBe("draft");
+      await sql`update stage_seed_proposals set computed = jsonb_set(computed, '{crossPoolDraw,seed}', ${seed}::text::jsonb) where id = ${live.id}`;
+      await computeSeedProposal(r.auth, r.koId);
+      const fresh = (await getSeedProposal(r.auth, r.koId))!;
+      expect(fresh.computed.crossPoolDraw?.seed, `the re-proposal drew with the stored seed ${seed}`).toBe(seed);
+      expect(await newestSlate(r), `seed ${seed}: the engine's order, seat for seat`).toEqual({ status: "draft", seeds: order(seed) });
+    }
   });
 
   it("X-CUT-4 groups_ko best-Nth: the pool winner leaves a confirmed cut - the recompute is over the eligible thirds, and a stale proposal re-proposes", async () => {
