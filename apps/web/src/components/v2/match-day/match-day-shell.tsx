@@ -183,10 +183,18 @@ export function MatchDayShell({
   // that division's board rows (`viewAfterPoll`): the board panel open on a game stays open, and nothing else of the list is held.
   // B5: `freezeSeen` (below) is lifted by a poll asked after the 402 that says the competition is no longer frozen; the poll's own `startedAt` orders it.
   const [freezeSeen, setFreezeSeen] = useState<number | null>(null);
+  /** B5 fix round 1: the freeze the LOAD painted (the `frozen` prop) is lifted by the latest poll that answered for the competition: `false` lifts it, `true`
+   *  says it again, and `null` (that poll's freeze read failed) or no flag at all (an older server) is no evidence, so the last answer stands. Before this the
+   *  prop was for good, so a page opened during a freeze kept every press inert after the room came back, until a reload. */
+  const [pollFrozen, setPollFrozen] = useState<boolean | null>(null);
   const takeView = useCallback((next: MatchDayView, startedAt: number) => {
     setView((prev) => viewAfterPoll(prev, next));
     setFreezeSeen((seenAt) => freezeSeenAfterPoll(seenAt, next.frozen, startedAt));
+    setPollFrozen((last) => (typeof next.frozen === "boolean" ? next.frozen : last));
   }, []);
+  /** The competition's billing freeze as the page knows it NOW: what the load painted, unless a poll has since said it is not frozen. A 402 (`freezeSeen`) is
+   *  folded in separately, by the panels' reader. */
+  const frozenNow = frozen && pollFrozen !== false;
   const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, takeView);
   const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
   /** A press in the round panel changed the day: the quiet read, with a stable identity (the panel's runners are built over it). */
@@ -267,7 +275,7 @@ export function MatchDayShell({
   /** A phone shows one court (a match, a round, a board) full-screen only while what it opened is still there. */
   const phoneCourt = phoneOpen && (focused !== null || focusedMatch !== null || focusedRound !== null || focusedBoard !== null);
   const noun = sharedNoun(courts.length > 0 ? courts : allCourts);
-  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen, orgId, viewNow: view.now, onTailEnd: refreshOnTailEnd };
+  const ctx: MatchDayCtx = { competitionId, orgSlug, compSlug, locale, tz: view.tz, dict, scoreDict, viewerPlan, readOnly, frozen: frozenNow, orgId, viewNow: view.now, onTailEnd: refreshOnTailEnd };
   const words = levelWords(scoreDict);
   /** The round or board in focus, for the list's highlight (`aria-current`). */
   const selectedOnline: OnlineOpened | null =
@@ -278,7 +286,7 @@ export function MatchDayShell({
         : null;
   /** What the online panels read for who may press what (`mayPress`): the viewer's role, the club's flag (the round's own) and the
    *  competition's billing freeze (the `frozen` prop, the flag that hides Call and Undo). */
-  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozen || freezeSeen !== null });
+  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozenNow || freezeSeen !== null });
   /** The board in focus's cameras (Task 9): the joins live HERE, keyed on the focused board's watchable sides and the day's own poll, so a poll
    *  that hands the panel a new board object keeps the same keys and re-joins nothing, and leaving the board leaves both meetings. */
   // B7 (T9 m5): the keys follow the board the TILES are drawn from - the panel's own read of the focused board when it has one (`BoardFocus` hands it up),
@@ -401,7 +409,7 @@ export function MatchDayShell({
               </p>
             )}
             {/* A viewer is told the page is view-only already; the freeze is the editor's news (task F1). */}
-            {frozen && !readOnly && (
+            {frozenNow && !readOnly && (
               <p data-testid="md-frozen" className="mt-2 text-xs text-amber-800">
                 {t(dict, "matchDay.frozen")}
               </p>
@@ -410,7 +418,7 @@ export function MatchDayShell({
                 one wrapping row of 44px targets (Match Day is the phone-at-the-venue page; a 16px inline link two words from the next one is a
                 mis-tap). The competition on screen is first and plain (a link to this page would be a link to itself); the rest link to their
                 own pages; "+N more" closes the row. PB3 review m1. */}
-            {frozen && !readOnly && frozenNames.shown.length > 0 && (
+            {frozenNow && !readOnly && frozenNames.shown.length > 0 && (
               <div data-testid="md-frozen-names" className="mt-1 min-w-0 text-xs text-amber-800">
                 <p>{t(dict, "matchDay.frozenNames")}</p>
                 <ul className="m-0 flex list-none flex-wrap items-center gap-x-4 p-0">

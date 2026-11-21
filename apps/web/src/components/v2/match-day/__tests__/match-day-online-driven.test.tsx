@@ -536,8 +536,8 @@ describe("MD-R30 + B5: a 402 seen by the round panel lifts every press that star
     clock.now = 1_000;
     return renderIsland(MatchDayShell, props(v(), { focusRoundKey: "stage-1:3" }));
   };
-  const roundReader = (island: ReturnType<typeof renderIsland>) => parts(island.tree()).round!.reader as Reader;
-  const freeze = (island: ReturnType<typeof renderIsland>) => (parts(island.tree()).round!.onFrozen as () => void)();
+  const roundReader = (island: ReturnType<typeof renderIsland<MatchDayShellProps>>) => parts(island.tree()).round!.reader as Reader;
+  const freeze = (island: ReturnType<typeof renderIsland<MatchDayShellProps>>) => (parts(island.tree()).round!.onFrozen as () => void)();
   afterEach(() => {
     dateSpy?.mockRestore();
     dateSpy = null;
@@ -617,6 +617,64 @@ describe("MD-R30 + B5: a 402 seen by the round panel lifts every press that star
     await settle();
     expect(net.calls.length).toBe(2);
     expect(mayPress(roundReader(island), "start"), "the poll asked after the 402 lifts it").toBe(true);
+  });
+});
+
+describe("B5 fix round 1: a page that LOADS frozen takes the freeze back from a poll that says 'not frozen' (a null or an absent flag keeps it)", () => {
+  // The `frozen` prop is what the server painted. It used to be for good: `readerOf` read the prop and only a 402's `freezeSeen` could be lifted, so a page
+  // opened during a freeze kept every press inert after the room came back, until a reload. A poll answers for the competition NOW: `false` lifts what the
+  // load said, `true` says it again, and `null` (the poll's freeze read failed) or no flag at all (an older server) is no evidence.
+  const v = () => ({ ...night(), frozen: true as boolean | null, online_rounds: [round("stage-1:3", "playing", arbiterRound([live(5, { fixtureId: "b-9" })]))] });
+  const loaded = () => renderIsland(MatchDayShell, props(v() as MatchDayView, { frozen: true, focusRoundKey: "stage-1:3" }));
+  const roundReader = (island: ReturnType<typeof renderIsland<MatchDayShellProps>>) => parts(island.tree()).round!.reader as Reader;
+  /** Everything the page SAYS about the freeze, beside the readers: the banner under the header and the `frozen` of the ctx every panel is handed. */
+  const saysFrozen = (island: ReturnType<typeof renderIsland<MatchDayShellProps>>) => ({
+    banner: island.tree().some((e) => propsOf(e)["data-testid"] === "md-frozen"),
+    ctx: (parts(island.tree()).round?.ctx ?? parts(island.tree()).board?.ctx) as { frozen: boolean },
+  });
+  const pollWith = async (frozen: boolean | null | "absent", n: number) => {
+    const next: Partial<MatchDayView> = { ...v(), now: at(n) };
+    if (frozen === "absent") delete next.frozen;
+    else next.frozen = frozen;
+    net.next = next;
+    poll.tick!();
+    await settle();
+  };
+
+  it("loads frozen (start gone); null, an absent flag and 'true' keep it; 'false' lifts it for the round panel AND the board panel; a later 'true' freezes it again", async () => {
+    const island = loaded();
+    expect(roundReader(island), "before: the page loaded frozen").toEqual({ editor: true, offered: true, frozen: true });
+    expect(mayPress(roundReader(island), "start"), "premise: the loaded freeze takes start away").toBe(false);
+    expect(saysFrozen(island).banner, "premise: the banner says so").toBe(true);
+    expect(saysFrozen(island).ctx.frozen, "premise: and the ctx every panel is handed").toBe(true);
+    let polls = 0;
+    for (const [what, flag] of [["a failed freeze read (null)", null], ["an older server (no flag)", "absent"], ["a poll that still says frozen", true]] as const) {
+      await pollWith(flag, polls + 1);
+      polls += 1;
+      expect(net.calls.length, `anti-vacuity: the poll was taken (${what})`).toBe(polls);
+      expect(roundReader(island), `${what} is no lift`).toEqual({ editor: true, offered: true, frozen: true });
+      expect(saysFrozen(island), `${what} leaves the banner and the ctx`).toEqual({ banner: true, ctx: expect.objectContaining({ frozen: true }) });
+    }
+    await pollWith(false, 4);
+    expect(net.calls.length, "anti-vacuity: the lifting poll was taken").toBe(4);
+    expect(roundReader(island), "a poll that says 'not frozen' takes the loaded freeze back").toEqual({ editor: true, offered: true, frozen: false });
+    expect(mayPress(roundReader(island), "start"), "and the press is offered again, with no reload").toBe(true);
+    expect(saysFrozen(island), "and the page stops saying it: the banner is gone, the ctx is not frozen").toEqual({ banner: false, ctx: expect.objectContaining({ frozen: false }) });
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-9");
+    expect(parts(island.tree()).board!.reader, "the board panel reads the lifted freeze too").toEqual({ editor: true, offered: true, frozen: false });
+    await pollWith(true, 5);
+    expect(parts(island.tree()).board!.reader, "a poll that says it is frozen again (the page still loaded frozen) freezes it again: the poll is the latest word").toEqual({ editor: true, offered: true, frozen: true });
+    expect(saysFrozen(island), "banner and ctx say it again too").toEqual({ banner: true, ctx: expect.objectContaining({ frozen: true }) });
+  });
+
+  it("a page that loaded NOT frozen is not frozen by a poll that says true alone (a freeze it never learned from a 402 is the next load's to show), and a lifted load plus a 402 is frozen until a later poll lifts the 402", async () => {
+    const island = renderIsland(MatchDayShell, props({ ...v(), frozen: false } as MatchDayView, { focusRoundKey: "stage-1:3" }));
+    expect(roundReader(island)).toEqual({ editor: true, offered: true, frozen: false });
+    await pollWith(true, 1);
+    expect(net.calls.length, "anti-vacuity: the poll was taken").toBe(1);
+    expect(roundReader(island), "the prop says not frozen; a bare 'true' poll does not draw a banner or hide a press by itself").toEqual({ editor: true, offered: true, frozen: false });
+    (parts(island.tree()).round!.onFrozen as () => void)();
+    expect(roundReader(island), "a 402 is what freezes it").toEqual({ editor: true, offered: true, frozen: true });
   });
 });
 
