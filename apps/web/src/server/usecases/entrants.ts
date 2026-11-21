@@ -36,8 +36,13 @@ import { log } from "@/server/logger";
 import { recomputeStandings } from "@/server/engine-db";
 import { dropPinsOfEntrant } from "./rank-override";
 import { afterScheduleWrite } from "./schedule/after-write";
-import { readOnlinePlay } from "@/server/external-play/online-play";
-import { assertEntrantRoom } from "@/server/external-play/online-entrant-cap";
+import { divisionPlaysOnline, readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import {
+  assertEntrantRoomIn,
+  assertOnlineRoom,
+  countOnlineHeld,
+  lockDivisionForCap,
+} from "@/server/external-play/online-entrant-cap";
 import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
@@ -411,6 +416,12 @@ export async function createEntrants(
     }
   };
   const { rows, competitionId, tableAdmissions } = await withTenant(auth.orgId, async (tx) => {
+    // The online cap's count and the inserts below must not interleave with another add, a sign-up, a Reinstate or the online switch:
+    // the division's advisory lock, first, before any row of the division is read or locked (the global order `division:` -> rows).
+    // Only a division of a sport that CAN play online takes it (`sport_key` is fixed at creation, so this read needs no lock): an arrival
+    // into any other division has nothing to count and never queues on the division lock (W3 T9 review m7, swiss-late-entry.test.ts).
+    const [sportOf] = await tx<{ sport_key: string }[]>`select sport_key from divisions where id = ${divisionId}`;
+    if (sportOf && supportsOnlinePlay(sportOf.sport_key)) await lockDivisionForCap(tx, divisionId);
     const [division] = await tx<
       {
         status: string;
@@ -456,9 +467,9 @@ export async function createEntrants(
     // must fit; count in the same tx as the inserts (doc 10 §2 rule 1). A division that plays
     // online holds at most min(that cap, 128) (owner ruling 2026-11-21): `assertEntrantRoom`
     // answers with the plan's 402 where the plan binds, the online cap's own 422 where it does.
-    const [{ n }] = await tx<{ n: number }[]>`
-      select count(*)::int as n from entrants where division_id = ${divisionId}`;
-    assertEntrantRoom(division, entrantCap, n + inputs.length);
+    // The online cap counts what the division HOLDS (live entrants + sign-ups let in, `countOnlineHeld`), the plan's cap every row,
+    // as ever; the `division:` lock is taken first so two adds cannot both pass on the last place (review C1 / I2).
+    await assertEntrantRoomIn(tx, divisionId, division, entrantCap, inputs.length);
 
     // Entrant-shape gate (spec 2026-07-18): every input in the batch must match
     // the division's effective model BEFORE any insert — the whole batch fails
@@ -1168,7 +1179,16 @@ export async function writeEntrantPatch(
     // row's update for the same order (`division:` -> rows).
     const departing =
       prior !== undefined && !DEPARTED_STATUSES.has(prior.status) && fields.status !== undefined && DEPARTED_STATUSES.has(fields.status);
-    if (reinstating || departing) await tx`select pg_advisory_xact_lock(hashtext(${"division:" + prior!.division_id}))`;
+    if (reinstating || departing) await lockDivisionForCap(tx, prior!.division_id);
+    // Owner ruling 2026-11-21 (review I1): bringing a withdrawn / disqualified entrant back is a door that grows an online chess
+    // division - it holds a place again - judged by the same count as every other door, under the lock just taken. A division that
+    // filled while they were away (a waitlisted sign-up was promoted into their place) refuses them, ONLINE_DIVISION_FULL. A plan
+    // lower than the cap has no say here: no plan door guards a Reinstate (the rows do not change), and 128 bounds every plan.
+    if (reinstating) {
+      const [division] = await tx<{ sport_key: string; config: unknown }[]>`
+        select sport_key, config from divisions where id = ${prior!.division_id}`;
+      if (division && divisionPlaysOnline(division)) assertOnlineRoom((await countOnlineHeld(tx, prior!.division_id)) + 1);
+    }
     let row: EntrantRow | undefined;
     if (Object.keys(fields).length > 0) {
       const cols = Object.keys(fields);

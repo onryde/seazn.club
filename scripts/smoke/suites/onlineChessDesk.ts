@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 // Shared state and helpers (pass/fail counters, check, sessions, the HTTP/DB helpers, tag): see the header of that file.
 import {
-  BASE, type Session, newSession, cookieHeader, call, check, signIn, tag, type V1Res, v1, v1data,
+  BASE, type Session, newSession, cookieHeader, call, check, signIn, tag, insertEntitlementOverride, type V1Res, v1, v1data,
 } from "../harness.ts";
 
 /**
@@ -117,6 +117,53 @@ export async function onlineChessDeskSuite(): Promise<void> {
   check(`online chess desk: no refusal wrote a result (status ${fx?.status})`, fx?.status === "scheduled");
 
   await onlineChessDivisionPages(owner, stranger);
+  await onlineEntrantCap(owner);
+}
+
+/**
+ * The 128-entrant cap of an online chess division (review of the cap, 2026-11-21), through the REAL v1 route. The organiser's plan
+ * is lifted to 1,000 entrants a division so the PLAN is not what refuses: an online division takes 128, the 129th is a 422
+ * ONLINE_DIVISION_FULL carrying the limit, and an over-the-board division of the same size on the same plan takes all 129 - so the
+ * refusal is the online cap's own. (The sign-up, promote, Reinstate and online-switch doors, the lock and the race are
+ * usecases/__tests__/online-entrant-cap-doors.test.ts.)
+ */
+async function onlineEntrantCap(owner: Session): Promise<void> {
+  const orgs = (await call(owner, "/api/orgs")) as { id: string }[] | { orgs?: { id: string }[] };
+  const orgId = (Array.isArray(orgs) ? orgs[0]?.id : orgs.orgs?.[0]?.id) ?? "";
+  check("online entrant cap: the organiser's org", orgId !== "");
+  if (orgId === "") return;
+  await insertEntitlementOverride(owner, orgId, "entrants.per_division.max", 1000);
+  const comp = v1data<{ id: string }>(
+    await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `OCD cap ${tag}`, visibility: "private" }),
+  );
+  check("online entrant cap: a competition to build in", !!comp?.id);
+  if (!comp?.id) return;
+  const divisionIn = (name: string, online: boolean) =>
+    v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name,
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", clock: { base: 600, increment: 5 }, ...(online ? { onlinePlay: "lichess" } : {}) },
+    });
+  const entrants = (from: number, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ kind: "individual", display_name: `Cap ${from + i} ${tag}` }));
+  const made = { online: await divisionIn(`Cap online ${tag}`, true), otb: await divisionIn(`Cap otb ${tag}`, false) };
+  const online = v1data<{ id: string }>(made.online);
+  const otb = v1data<{ id: string }>(made.otb);
+  check(`online entrant cap: both divisions made (got ${made.online.status} and ${made.otb.status})`, made.online.status === 201 && made.otb.status === 201 && !!online?.id && !!otb?.id);
+  if (!online?.id || !otb?.id) return;
+
+  const full = await v1(owner, `/api/v1/divisions/${online.id}/entrants`, "POST", entrants(1, 128));
+  check(`online entrant cap: 128 entrants fit an online division, 201 (got ${full.status} ${full.json.error?.code ?? ""})`, full.status === 201);
+  const over = await v1(owner, `/api/v1/divisions/${online.id}/entrants`, "POST", entrants(129, 1));
+  check(
+    `online entrant cap: the 129th is a 422 ONLINE_DIVISION_FULL (got ${over.status} ${over.json.error?.code ?? ""})`,
+    over.status === 422 && over.json.error?.code === "ONLINE_DIVISION_FULL",
+  );
+  const listed = v1data<unknown[]>(await v1(owner, `/api/v1/divisions/${online.id}/entrants`));
+  check(`online entrant cap: the refusal wrote nothing, 128 entrants stand (got ${Array.isArray(listed) ? listed.length : "?"})`, Array.isArray(listed) && listed.length === 128);
+  const sameSizeOtb = await v1(owner, `/api/v1/divisions/${otb.id}/entrants`, "POST", entrants(1, 129));
+  check(`online entrant cap: 129 fit an over-the-board division on the same plan, 201 (got ${sameSizeOtb.status} ${sameSizeOtb.json.error?.code ?? ""})`, sameSizeOtb.status === 201);
 }
 
 /**

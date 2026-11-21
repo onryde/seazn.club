@@ -3642,7 +3642,7 @@
   "entrants.lichess.reconnectRequired.other": "{players} vincularon Lichess cada uno, pero Seazn aún no puede enviar sus movimientos con esas cuentas. Pídeles que las reconecten y vuelve a añadirlos.",
   "entrants.lichess.reconnectRequired.unnamed": "Algunos jugadores vincularon Lichess, pero Seazn aún no puede enviar sus movimientos con esa cuenta. Pídeles que la reconecten y vuelve a añadirlos.",
   "onlineChess.entrantCap": "Las divisiones de ajedrez en línea admiten hasta {limit} participantes.",
-  "onlineChess.turnOnTooMany": "Esta división tiene {entrants} participantes y las divisiones de ajedrez en línea admiten hasta {limit}. Quita participantes antes de activar el juego en línea.",
+  "onlineChess.turnOnTooMany": "Esta división tiene {entrants} participantes e inscripciones, y las divisiones de ajedrez en línea admiten hasta {limit}. Quita algunos antes de activar el juego en línea.",
   "entrants.row.delete": "Eliminar",
   "entrants.row.deleteHint": "Solo disponible antes de que empiece la división",
   "entrants.row.withdraw": "Retirar",

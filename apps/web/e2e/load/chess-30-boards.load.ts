@@ -21,7 +21,7 @@
  * leave through the budget).
  *
  * TWO MODES. METERED (LOAD_METERED=1, the default): the server runs with REALTIMEKIT_METER_ANY_BASE=1, so the call
- * budget (video/budget.ts, burst 300 + 2/s) acts on the fixture host as it does on Cloudflare's, and the run shows what a
+ * budget (video/budget.ts, burst 525 + 7/s) acts on the fixture host as it does on Cloudflare's, and the run shows what a
  * deferral costs a player: the seat answers `camera_starting`, the screen re-asks on its back-off, and past its bounds a
  * player presses Check in again. UNMETERED (LOAD_METERED=0, a server without the flag): nothing is deferred and the run
  * measures DEMAND - the RealtimeKit calls a round would make if the budget were not there - and replays the recorded
@@ -85,7 +85,7 @@
  * Every strict leg owes 0 never created / 0 late / 0 beyond the stranded bound. Each is run once, on a fresh database.
  *
  * The recipes below, and the measurements quoted beside them, were drawn against the 900-call ceiling (a bucket of 300 + 2 a second). The
- * ceiling is now 2,625 (825 + 6 a second, video/budget.ts): thirty boards (60 players) no longer exceed it, so a leg that depends on the
+ * ceiling is now 2,625 (525 + 7 a second, video/budget.ts): thirty boards (60 players) no longer exceed it, so a leg that depends on the
  * bucket running dry or a line forming - `B`, `B-honest`, `B-dry`, `B-slow-*` - needs a bigger run (LOAD_BOARDS=64, a full 128-player online
  * division) and its own fresh measurement before its figures are quoted. `B-dry` says so itself: it refuses a run too small to run dry.
  *
@@ -1422,7 +1422,7 @@ test("30 boards, 60 players: check in, create, ~20 plies, resign - the vendors' 
         perPlayerCheckIn: Math.round((perPhase["check-in"].realtimekit / players.length) * 10) / 10,
       },
       perPhase,
-      // What the call budget (burst 300, 2/s) would have pushed back on, had the fixture host been metered. OPEN LOOP:
+      // What the call budget (burst 525, 7/s) would have pushed back on, had the fixture host been metered. OPEN LOOP:
       // a refused call is not retried here, in the product it comes back after the back-off, so this is the demand the
       // bucket would have deferred - not a count of what the product deferred. `byPhase` splits it where the demand is.
       budgetReplay: {

@@ -2497,7 +2497,7 @@ test("T17B fix 2: the seat's camera verdicts in the browser — a camera still s
 
 test("T17B fix 2, D21: a camera still starting is re-asked on the BACK-OFF — 1, 2, 4, then 8 seconds apart in a real browser, never once a second", async ({ page, browser }) => {
   // The ruling's table (controller, 2026-10-15), typed here, never read back from the room's constants. Every re-ask is
-  // four RealtimeKit calls against an account-wide limit of 1,200 per five minutes, so the wait between them grows.
+  // four RealtimeKit calls against an account-wide limit (documented at 3,500 per five minutes; costed at 1,200 when this ruling was made), so the wait between them grows.
   const RULING_S = [1, 2, 4, 8];
   const reAsks = RULING_S.length;
   test.setTimeout(Math.max(120_000, (RULING_S.reduce((a, b) => a + b, 0) + 40) * 1_000));

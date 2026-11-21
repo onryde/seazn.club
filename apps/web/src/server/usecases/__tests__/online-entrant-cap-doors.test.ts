@@ -8,14 +8,20 @@
 // promise, and the one door that makes a division online (patchDivision). The expected answers are the ruling's table typed by hand
 // below, with the plan caps read back from the entitlement resolver as premises - never taken from the cap module under test.
 //
+// ONE count answers the cap at every door (fix round 1, review C1): live entrants (not withdrawn / disqualified) + sign-ups let in
+// (pending / paid, no entrant yet). The fix-round blocks at the end drive the doors against each other (direct adds + sign-ups, pending
+// sign-ups + the online switch, Reinstate), the lock each door takes (a held `division:` lock blocks it), and two adds racing for
+// the last place on two connections.
+//
 // Real Postgres required (skipped without DATABASE_URL). Another sport: badminton and generic stand for "every other sport" at the
 // doors; the registry-wide sweep over every sport is in external-play/__tests__/online-entrant-cap.test.ts.
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
+import { log } from "@/server/logger";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
   ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION,
@@ -27,7 +33,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateEntrant } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { createDivision, patchDivision } from "../divisions";
-import { createEntrants } from "../entrants";
+import { createEntrants, patchEntrant } from "../entrants";
 import { publicRegistrationInfo } from "../registrations/settings";
 import { confirmRegistration, confirmRegistrationWaived, putRegistrationSettings } from "../registrations";
 import { promoteFromWaitlist } from "../registration-approval";
@@ -231,12 +237,20 @@ describe.skipIf(!HAS_DB)("door: createEntrants (the organiser adds an entrant)",
     expect(await entrantCount(small.division.id)).toBe(63);
   });
 
-  it("a division already past the cap (it held more before the cap existed) takes no more, and a withdrawal does not make the count lie", async () => {
+  it("a division already past the cap (it held more before the cap existed) takes no more; a withdrawn entrant holds no place, so a withdrawal frees exactly one and the next add refills it", async () => {
     const { auth } = await orgOn("pro");
     const { division } = await divisionOf(auth, "online");
     await fillEntrants(division.id, MAX + 2); // 130, stored before the ruling
     expect(await verdictOf(() => addOne(auth, "online", division.id)), "130 held: the 131st").toBe("online");
     expect(await entrantCount(division.id)).toBe(MAX + 2);
+    // Withdraw three: 127 live of 130 rows. The count the door reads is the LIVE one (the withdrawn rows stay in the table).
+    await sql`update entrants set status = 'withdrawn' where id in (select id from entrants where division_id = ${division.id} order by id limit 3)`;
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "127 live: the 128th is admitted").toBe("ok");
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "128 live: the 129th is refused again").toBe("online");
+    expect(await entrantCount(division.id), "rows: 130 + the one admitted; the withdrawn three are still rows").toBe(MAX + 3);
+    // ...and a disqualified entrant holds no place either (the other departed status).
+    await sql`update entrants set status = 'disqualified' where id = (select id from entrants where division_id = ${division.id} and status = 'confirmed' limit 1)`;
+    expect(await verdictOf(() => addOne(auth, "online", division.id)), "127 live after a disqualification").toBe("ok");
   });
 });
 
@@ -259,9 +273,28 @@ async function regRig(plan: PlanName, kind: Exclude<Kind, "badminton">, approval
     const ids: string[] = [];
     for (let i = 0; i < n; i++) {
       const { registration } = await seedRegistration(competition.id, division.id, FEES, { status: "confirmed", displayName: `Holder ${i + 1}` });
+      // A confirmed registration IS an entrant (materialise sets entrant_id): the online cap's count reads the entrant, so the seed has one.
+      const [entrant] = await sql<{ id: string }[]>`
+        insert into entrants (division_id, kind, display_name, status)
+        values (${division.id}, 'individual', ${`Holder ${i + 1}`}, 'confirmed') returning id`;
+      await sql`update registrations set entrant_id = ${entrant!.id} where id = ${registration.id}`;
       ids.push(registration.id);
     }
     return ids;
+  };
+  /** `n` sign-ups let in and not yet entrants (pending, no entrant): on a manual-approval division they wait there for the organiser. */
+  const pendingSignUps = async (n: number): Promise<string[]> => {
+    const ids: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const { registration } = await seedRegistration(competition.id, division.id, FEES, { status: "pending", displayName: `Pending ${i + 1}` });
+      ids.push(registration.id);
+    }
+    return ids;
+  };
+  /** A registration leaves the division the way the product does it before Start: the sign-up is withdrawn and so is its entrant. */
+  const withdrawHolder = async (registrationId: string): Promise<void> => {
+    await sql`update entrants set status = 'withdrawn' where id = (select entrant_id from registrations where id = ${registrationId})`;
+    await sql`update registrations set status = 'withdrawn' where id = ${registrationId}`;
   };
   /** A waitlisted entry. On an online division it names a player who can play: the seat gate (a Lichess link that plays) is asked of any
    *  seat, and it answers BEFORE the room check - an entry with nobody linked would never reach the cap this file is about. */
@@ -279,32 +312,32 @@ async function regRig(plan: PlanName, kind: Exclude<Kind, "badminton">, approval
     return registration.id;
   };
   const statusOf = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from registrations where id = ${id}`)[0]!.status;
-  return { auth, competition, division, orgSlug: org!.slug, holders, waiting, statusOf };
+  return { auth, competition, division, orgSlug: org!.slug, holders, pendingSignUps, withdrawHolder, waiting, statusOf };
+}
+
+async function signUp(r: Awaited<ReturnType<typeof regRig>>, kind: "online" | "otb"): Promise<string> {
+  const person = kind === "online" ? await linkedPlayer(r.auth) : null;
+  const res = await submitRegistrationGroup(
+    { orgSlug: r.orgSlug, compSlug: r.competition.slug, ...(person ? { sessionUserId: person.userId } : {}) },
+    {
+      contact: { name: "Alex Rep", email: `rep-${randomUUID().slice(0, 8)}@test.local` },
+      privacy_consent: true,
+      entries: [{ division_id: r.division.id, entrant_kind: "individual", registering_self: true, players: [{ full_name: "Solo Player" }], answers: {} }],
+    } as never,
+  );
+  return res.entries[0]!.status;
 }
 
 // ─── Door 2: the public sign-up waitlists at the cap ─────────────────────────────────────────────────────────
 
 describe.skipIf(!HAS_DB)("door: the public sign-up (submit) waitlists at the cap, as it does at the plan's", () => {
-  async function signUp(r: Awaited<ReturnType<typeof regRig>>, kind: "online" | "otb"): Promise<string> {
-    const person = kind === "online" ? await linkedPlayer(r.auth) : null;
-    const res = await submitRegistrationGroup(
-      { orgSlug: r.orgSlug, compSlug: r.competition.slug, ...(person ? { sessionUserId: person.userId } : {}) },
-      {
-        contact: { name: "Alex Rep", email: `rep-${randomUUID().slice(0, 8)}@test.local` },
-        privacy_consent: true,
-        entries: [{ division_id: r.division.id, entrant_kind: "individual", registering_self: true, players: [{ full_name: "Solo Player" }], answers: {} }],
-      } as never,
-    );
-    return res.entries[0]!.status;
-  }
-
   it("Pro, online: 127 held, the 128th is confirmed and the 129th is waitlisted; after a place frees, the next is confirmed again", async () => {
     const r = await regRig("pro", "online", "auto");
     const held = await r.holders(MAX - 1);
     expect(await signUp(r, "online"), "the 128th").toBe("confirmed");
     expect(await signUp(r, "online"), "the 129th").toBe("waitlisted");
     // The sequence: a held place is withdrawn, so the division is no longer full.
-    await sql`update registrations set status = 'withdrawn' where id = ${held[0]!}`;
+    await r.withdrawHolder(held[0]!);
     expect(await signUp(r, "online"), "after a withdrawal frees a place").toBe("confirmed");
     expect(await signUp(r, "online"), "and it is full again").toBe("waitlisted");
   });
@@ -502,5 +535,384 @@ describe.skipIf(!HAS_DB)("door: turning online play on (patchDivision)", () => {
     const { auth } = await orgOn("pro");
     const { division } = await divisionOf(auth, "online");
     expect(await entrantCount(division.id)).toBe(0);
+  });
+});
+
+// ─── Fix round 1 (review C1, I1, I2, I3, I5): one count, every door, under one lock ─────────────────────────────
+
+const idsOf = async (divisionId: string): Promise<string[]> =>
+  (await sql<{ id: string }[]>`select id from entrants where division_id = ${divisionId} and status not in ('withdrawn', 'disqualified') order by id`).map((r) => r.id);
+const heldOf = async (divisionId: string): Promise<number> => {
+  // The count a person would make by hand from the tables: live entrants + sign-ups let in that are not entrants yet.
+  const [{ n }] = await sql<{ n: number }[]>`
+    select ((select count(*) from entrants where division_id = ${divisionId} and status not in ('withdrawn', 'disqualified'))
+          + (select count(*) from registrations where division_id = ${divisionId} and status in ('pending', 'paid') and entrant_id is null and free_agent = false))::int as n`;
+  return n;
+};
+
+describe.skipIf(!HAS_DB)("one count at every door: direct adds and sign-ups are the same places (review C1)", () => {
+  it("the empty division first: the first add and the first sign-up are both admitted, and the count reads 2", async () => {
+    const r = await regRig("pro", "online", "auto");
+    expect(await heldOf(r.division.id), "premise: empty").toBe(0);
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the first add").toBe("ok");
+    expect(await signUp(r, "online"), "the first sign-up").toBe("confirmed");
+    expect(await heldOf(r.division.id)).toBe(2);
+  });
+
+  it("direct adds THEN sign-ups: 100 added + 27 signed up = 127; the 128th sign-up is confirmed, the 129th waitlisted, and one more add is refused", async () => {
+    const r = await regRig("pro", "online", "auto");
+    await fillEntrants(r.division.id, 100);
+    await r.holders(MAX - 100 - 1);
+    expect(await heldOf(r.division.id), "premise: 127").toBe(MAX - 1);
+    expect(await signUp(r, "online"), "the 128th").toBe("confirmed");
+    expect(await signUp(r, "online"), "the 129th: the sign-up door sees the direct adds too").toBe("waitlisted");
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "and the add door sees the sign-ups").toBe("online");
+    expect(await heldOf(r.division.id), "never past the cap").toBe(MAX);
+  });
+
+  it("sign-ups let in THEN direct adds: 100 pending (no entrant yet) + 27 added = 127; one more add is admitted, the next refused, and a sign-up waits", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await r.pendingSignUps(100);
+    await fillEntrants(r.division.id, MAX - 100 - 1);
+    expect(await heldOf(r.division.id), "premise: 127, of which 100 are not entrants").toBe(MAX - 1);
+    expect(await entrantCount(r.division.id), "premise: only 27 entrants - the old count would have said 27").toBe(MAX - 100 - 1);
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 128th").toBe("ok");
+    expect(await verdictOf(() => addOne(r.auth, "online", r.division.id)), "the 129th add: refused though only 28 rows exist").toBe("online");
+    expect(await signUp(r, "online"), "a sign-up now waits").toBe("waitlisted");
+    expect(await heldOf(r.division.id)).toBe(MAX);
+  });
+
+  it("over the board the same mix is the plan's: 128 pending + 100 added is not refused on Pro's 256", async () => {
+    const r = await regRig("pro", "otb", "manual");
+    await r.pendingSignUps(MAX);
+    await fillEntrants(r.division.id, 100);
+    expect(await verdictOf(() => addOne(r.auth, "otb", r.division.id)), "228 of 256, over the board").toBe("ok");
+  });
+
+  it("a free agent waiting for a team holds no place, and a paid sign-up that already has its entrant is counted once", async () => {
+    const r = await regRig("pro", "online", "manual");
+    const placesOf = async () =>
+      (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!.remaining;
+    expect(await placesOf(), "the empty division first").toBe(MAX);
+    const pending = await r.pendingSignUps(6);
+    await sql`update registrations set free_agent = true where id in ${sql(pending.slice(0, 4))}`;
+    expect(await placesOf(), "6 pending, 4 of them free agents: 2 places held").toBe(MAX - 2);
+    const held = await r.holders(3);
+    await sql`update registrations set status = 'paid' where id in ${sql(held)}`; // paid AND already entrants: one place each, not two
+    expect(await placesOf(), "2 sign-ups + 3 entrants (their paid registrations are the same places)").toBe(MAX - 5);
+  });
+
+  it("places left counts the same: 100 added + 10 pending sign-ups leaves 18, not the 28 or 246 either half alone would say", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, 100);
+    await r.pendingSignUps(10);
+    const placesOf = async () =>
+      (await publicRegistrationInfo(r.orgSlug, r.competition.slug)).divisions.find((d) => d.division_id === r.division.id)!.remaining;
+    expect(await placesOf(), "128 - 110").toBe(MAX - 110);
+    await r.pendingSignUps(MAX - 110);
+    expect(await placesOf(), "full").toBe(0);
+  });
+});
+
+describe.skipIf(!HAS_DB)("a withdrawn entrant holds no place, and Reinstate is a door (review I1)", () => {
+  const reinstate = (auth: AuthCtx, entrantId: string) => patchEntrant(auth, entrantId, { status: "confirmed" });
+  const statusOfEntrant = async (id: string): Promise<string> => (await sql<{ status: string }[]>`select status from entrants where id = ${id}`)[0]!.status;
+
+  it("with room (the empty case): a withdrawn entrant is reinstated into a division holding 100; at 127 held it still fits the 128th", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, 100);
+    const [gone] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${gone!}`;
+    await expect(reinstate(r.auth, gone!)).resolves.toBeTruthy();
+    expect(await statusOfEntrant(gone!)).toBe("confirmed");
+    await fillEntrants(r.division.id, MAX - 101); // 127 live
+    const [second] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${second!}`; // 126 live
+    await r.pendingSignUps(1); // 127 held
+    await expect(reinstate(r.auth, second!), "the 128th place").resolves.toBeTruthy();
+  });
+
+  it("withdraw, the waitlist promotes into the freed place, then Reinstate: refused ONLINE_DIVISION_FULL, still withdrawn, nothing written", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, MAX);
+    const [leaver] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${leaver!}`;
+    const w = await r.waiting();
+    expect((await promoteFromWaitlist(r.auth, r.division.id, { registrationId: w }))!.status, "the freed place goes to the waitlist").toBe("pending");
+    expect(await heldOf(r.division.id), "premise: full again").toBe(MAX);
+    await expect(reinstate(r.auth, leaver!)).rejects.toMatchObject({ status: 422, code: ONLINE_DIVISION_FULL, extra: { limit: MAX } });
+    expect(await statusOfEntrant(leaver!), "still withdrawn").toBe("withdrawn");
+  });
+
+  it("a disqualified entrant is a departed one too: reinstated with room, refused at the cap; over the board a Reinstate is never capped", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, MAX);
+    const [dq] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'disqualified' where id = ${dq!}`;
+    await fillEntrants(r.division.id, 1); // the freed place is taken
+    await expect(reinstate(r.auth, dq!)).rejects.toMatchObject({ code: ONLINE_DIVISION_FULL });
+    const otb = await regRig("pro", "otb", "manual");
+    await fillEntrants(otb.division.id, MAX + 1);
+    const [gone] = await idsOf(otb.division.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${gone!}`;
+    await expect(reinstate(otb.auth, gone!), "129 over the board, on Pro's 256").resolves.toBeTruthy();
+  });
+
+  it("a status patch that is not a Reinstate (a rename, a re-send of the same status) is never gated at the cap", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, MAX);
+    const [one] = await idsOf(r.division.id);
+    await expect(patchEntrant(r.auth, one!, { display_name: "Renamed" } as never)).resolves.toBeTruthy();
+    await expect(patchEntrant(r.auth, one!, { status: "confirmed" })).resolves.toBeTruthy();
+  });
+});
+
+describe.skipIf(!HAS_DB)("the online switch counts the sign-ups already let in (review C1)", () => {
+  const turnOn = (auth: AuthCtx, division: { id: string; config: unknown }) =>
+    patchDivision(auth, division.id, { config: { ...(division.config as Record<string, unknown>), onlinePlay: "lichess" } });
+
+  it("an empty division goes online; 128 pending sign-ups and no entrant go online; 129 do not - and the refusal names both numbers", async () => {
+    let checked = 0;
+    for (const [pending, want] of [[0, "ok"], [MAX, "ok"], [MAX + 1, "too_many"]] as const) {
+      const r = await regRig("pro", "otb", "manual");
+      await r.pendingSignUps(pending);
+      expect(await entrantCount(r.division.id), "premise: no entrant exists - the old count read 0").toBe(0);
+      expect(await verdictOf(() => turnOn(r.auth, r.division)), `${pending} pending sign-ups`).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+    const r = await regRig("pro", "otb", "manual");
+    await r.pendingSignUps(60);
+    await fillEntrants(r.division.id, 69);
+    await expect(turnOn(r.auth, r.division), "60 pending + 69 entrants").rejects.toMatchObject({
+      status: 422,
+      code: ONLINE_PLAY_TOO_MANY_ENTRANTS,
+      extra: { limit: MAX, entrants: 129 },
+    });
+  });
+
+  it("withdrawn entrants and waitlisted sign-ups do not count: 128 live + 30 withdrawn + 30 waitlisted still goes online", async () => {
+    const r = await regRig("pro", "otb", "manual");
+    await fillEntrants(r.division.id, MAX + 30);
+    await sql`update entrants set status = 'withdrawn' where id in (select id from entrants where division_id = ${r.division.id} order by id limit 30)`;
+    for (let i = 0; i < 3; i++) await r.waiting();
+    await expect(turnOn(r.auth, r.division)).resolves.toBeTruthy();
+  });
+});
+
+/** Hold the division's advisory lock from another connection, run `door`, and report whether it WAITED on that very lock (an ungranted
+ *  advisory lock on the same key appears in pg_locks) and had not finished while it was held. The holder is then released and the door's
+ *  own outcome returned. A door that never takes the lock finishes straight away, and `waited` is false. */
+async function holdingDivisionLock<T>(
+  divisionId: string,
+  door: () => Promise<T>,
+  whileWaiting?: () => Promise<void>,
+): Promise<{ waited: boolean; outcome: PromiseSettledResult<T> }> {
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  let held!: () => void;
+  const holding = new Promise<void>((r) => (held = r));
+  let key: { classid: string; objid: string } | undefined;
+  const holder = sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+    const [k] = await tx<{ classid: string; objid: string }[]>`
+      select classid::bigint::text as classid, objid::bigint::text as objid from pg_locks
+      where locktype = 'advisory' and pid = pg_backend_pid() and granted limit 1`;
+    key = k;
+    held();
+    await released;
+  });
+  await holding;
+  expect(key, "premise: the holder's own advisory lock was read back").toBeDefined();
+  let settled = false;
+  const run = door().then(
+    (value): PromiseSettledResult<T> => ((settled = true), { status: "fulfilled", value }),
+    (reason): PromiseSettledResult<T> => ((settled = true), { status: "rejected", reason }),
+  );
+  let waited = false;
+  for (let i = 0; i < 120 && !waited && !settled; i++) {
+    const [w] = await sql<{ x: number }[]>`
+      select 1 as x from pg_locks
+      where locktype = 'advisory' and not granted and classid::bigint = ${key!.classid}::bigint and objid::bigint = ${key!.objid}::bigint limit 1`;
+    waited = w !== undefined;
+    if (!waited) await new Promise((r) => setTimeout(r, 50));
+  }
+  const finishedWhileHeld = settled;
+  if (waited && !settled && whileWaiting) await whileWaiting(); // the world changes while the door is queued
+  release();
+  await holder;
+  return { waited: waited && !finishedWhileHeld, outcome: await run };
+}
+
+describe.skipIf(!HAS_DB)("every door takes the division's lock before it counts (review I2)", () => {
+  it("createEntrants waits for a held `division:` lock, then runs", async () => {
+    const r = await regRig("pro", "online", "manual");
+    const { waited, outcome } = await holdingDivisionLock(r.division.id, () => addOne(r.auth, "online", r.division.id));
+    expect(waited, "createEntrants queued behind the lock").toBe(true);
+    expect(outcome.status).toBe("fulfilled");
+    expect(await entrantCount(r.division.id)).toBe(1);
+  });
+
+  it("the public sign-up waits for it", async () => {
+    const r = await regRig("pro", "online", "auto");
+    const { waited, outcome } = await holdingDivisionLock(r.division.id, () => signUp(r, "online"));
+    expect(waited, "submit queued behind the lock").toBe(true);
+    expect(outcome).toMatchObject({ status: "fulfilled", value: "confirmed" });
+  });
+
+  it("an organiser's Promote waits for it", async () => {
+    const r = await regRig("pro", "online", "manual");
+    const w = await r.waiting();
+    const { waited, outcome } = await holdingDivisionLock(r.division.id, () => promoteFromWaitlist(r.auth, r.division.id, { registrationId: w }));
+    expect(waited, "promote queued behind the lock").toBe(true);
+    expect(outcome.status).toBe("fulfilled");
+  });
+
+  it("a Reinstate waits for it", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await fillEntrants(r.division.id, 3);
+    const [gone] = await idsOf(r.division.id);
+    await sql`update entrants set status = 'withdrawn' where id = ${gone!}`;
+    const { waited, outcome } = await holdingDivisionLock(r.division.id, () => patchEntrant(r.auth, gone!, { status: "confirmed" }));
+    expect(waited, "the Reinstate queued behind the lock").toBe(true);
+    expect(outcome.status).toBe("fulfilled");
+  });
+
+  it("a Reinstate COUNTS under the lock (review I2): the division fills while it queues, and it is refused; with no fill it is admitted", async () => {
+    const attempt = async (fillWhileQueued: boolean) => {
+      const r = await regRig("pro", "online", "manual");
+      await fillEntrants(r.division.id, 3);
+      const [gone] = await idsOf(r.division.id);
+      await sql`update entrants set status = 'withdrawn' where id = ${gone!}`; // 2 live
+      return holdingDivisionLock(
+        r.division.id,
+        () => patchEntrant(r.auth, gone!, { status: "confirmed" }),
+        fillWhileQueued ? () => fillEntrants(r.division.id, MAX - 2) : undefined, // 128 live while it waits: it would be the 129th
+      );
+    };
+    const control = await attempt(false);
+    expect(control.waited, "premise: it queued").toBe(true);
+    expect(control.outcome.status, "control: with room it is admitted").toBe("fulfilled");
+    const filled = await attempt(true);
+    expect(filled.waited, "premise: it queued").toBe(true);
+    expect(filled.outcome).toMatchObject({ status: "rejected", reason: { status: 422, code: ONLINE_DIVISION_FULL } });
+  });
+
+  it("the online switch waits for it", async () => {
+    const r = await regRig("pro", "otb", "manual");
+    const { waited, outcome } = await holdingDivisionLock(r.division.id, () =>
+      patchDivision(r.auth, r.division.id, { config: { ...(r.division.config as Record<string, unknown>), onlinePlay: "lichess" } }),
+    );
+    expect(waited, "patchDivision queued behind the lock").toBe(true);
+    expect(outcome.status).toBe("fulfilled");
+  });
+
+  it("the public sign-up reads whether the division plays online UNDER the lock (review M2): switched online while it queues, a full division waitlists it", async () => {
+    // Control first: the same sequence with no switch confirms - the division is over the board, 128 held of Pro's 256.
+    const control = await regRig("pro", "otb", "auto");
+    await control.holders(MAX);
+    const plain = await holdingDivisionLock(control.division.id, () => signUp(control, "otb"));
+    expect(plain.waited, "premise: the sign-up queued").toBe(true);
+    expect(plain.outcome, "control: an over-the-board division at 128 still admits").toMatchObject({ status: "fulfilled", value: "confirmed" });
+    // The switch lands while the sign-up waits for the lock; a read taken before the lock would still see over-the-board.
+    const r = await regRig("pro", "otb", "auto");
+    await r.holders(MAX);
+    const { waited, outcome } = await holdingDivisionLock(
+      r.division.id,
+      () => signUp(r, "otb"),
+      async () => {
+        await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb where id = ${r.division.id}`;
+      },
+    );
+    expect(waited, "premise: it queued behind the lock").toBe(true);
+    expect(outcome, "it saw the division online once it had the lock").toMatchObject({ status: "fulfilled", value: "waitlisted" });
+  });
+
+  it("the check itself: a lock held on ANOTHER division blocks nothing (the helper does not report a wait that is not there)", async () => {
+    const r = await regRig("pro", "online", "manual");
+    const other = await regRig("pro", "online", "manual");
+    const { waited, outcome } = await holdingDivisionLock(other.division.id, () => addOne(r.auth, "online", r.division.id));
+    expect(waited, "no wait on a different key").toBe(false);
+    expect(outcome.status).toBe("fulfilled");
+  });
+});
+
+describe.skipIf(!HAS_DB)("two doors racing for the last place: exactly one wins (review I2, I5)", () => {
+  const entry = async (auth: AuthCtx, name: string): Promise<CreateEntrant> => ({
+    display_name: name,
+    kind: "individual",
+    members: [{ person_id: (await linkedPlayer(auth)).personId, is_captain: false, roles: [] }],
+  });
+
+  it("two adds at 127 held, on two connections: one is admitted, one refused ONLINE_DIVISION_FULL, and the division ends at 128 (five rounds)", async () => {
+    let rounds = 0;
+    for (let i = 0; i < 5; i++) {
+      const { auth } = await orgOn("pro");
+      const { division } = await divisionOf(auth, "online");
+      await fillEntrants(division.id, MAX - 1);
+      const [a, b] = [await entry(auth, `Race A${i}`), await entry(auth, `Race B${i}`)];
+      const settled = await Promise.allSettled([createEntrants(auth, division.id, [a]), createEntrants(auth, division.id, [b])]);
+      const ok = settled.filter((x) => x.status === "fulfilled").length;
+      const full = settled.filter((x) => x.status === "rejected" && (x.reason as { code?: string }).code === ONLINE_DIVISION_FULL).length;
+      expect([ok, full], `round ${i}: one wins, one is refused (and nothing else went wrong)`).toEqual([1, 1]);
+      expect(await heldOf(division.id), `round ${i}`).toBe(MAX);
+      rounds += 1;
+    }
+    expect(rounds, "anti-vacuity: five rounds ran").toBe(5);
+  });
+
+  it("an add, a public sign-up and an organiser's Promote at 127 held: exactly one gets the place, none deadlocks, the count ends at 128 (three rounds)", async () => {
+    let rounds = 0;
+    for (let i = 0; i < 3; i++) {
+      const r = await regRig("pro", "online", "auto");
+      await fillEntrants(r.division.id, MAX - 1);
+      const waiting = await r.waiting();
+      const added = await entry(r.auth, `Race add ${i}`);
+      const settled = await Promise.allSettled([
+        createEntrants(r.auth, r.division.id, [added]),
+        signUp(r, "online"),
+        promoteFromWaitlist(r.auth, r.division.id, { registrationId: waiting }),
+      ]);
+      for (const x of settled) {
+        if (x.status === "rejected") {
+          const code = (x.reason as { code?: string }).code;
+          expect(code, `round ${i}: a refusal is the cap's own, never a deadlock (${String((x.reason as Error).message).slice(0, 80)})`).toBe(ONLINE_DIVISION_FULL);
+        }
+      }
+      const won = settled.filter((x) => x.status === "fulfilled" && x.value !== "waitlisted").length;
+      expect(won, `round ${i}: exactly one of the three took the last place`).toBe(1);
+      expect(await heldOf(r.division.id), `round ${i}: the division never passed its cap`).toBe(MAX);
+      rounds += 1;
+    }
+    expect(rounds).toBe(3);
+  });
+});
+
+describe.skipIf(!HAS_DB)("materialise never throws on the cap; a breach is a log line (review I3)", () => {
+  it("a confirmation into a division that is NOT over the cap logs nothing; one that is (a state no door produces) still confirms, and says so in the log", async () => {
+    const r = await regRig("pro", "online", "manual");
+    await r.holders(MAX - 1);
+    const paid = async (): Promise<string> => {
+      const id = await r.waiting();
+      await sql`update registrations set status = 'paid' where id = ${id}`;
+      return id;
+    };
+    const error = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const first = await paid(); // 127 + 1 paid, no entrant yet = 128 held
+      expect(await heldOf(r.division.id), "premise: exactly at the cap").toBe(MAX);
+      await expect(confirmRegistration(r.auth, first), "a paid sign-up holds its place already: confirming it grows nothing").resolves.toBeTruthy();
+      expect(await heldOf(r.division.id), "its place moved from the sign-up term to the entrant term").toBe(MAX);
+      expect(error.mock.calls.filter(([, msg]) => /over its entrant cap/.test(String(msg))), "at the cap exactly: no breach line").toHaveLength(0);
+      // Breach: a paid sign-up that no door admitted (the seed bypasses them) pushes the division to 129 before it is confirmed.
+      const stray = await paid();
+      expect(await heldOf(r.division.id), "premise: 129 held - past the cap").toBe(MAX + 1);
+      await expect(confirmRegistration(r.auth, stray), "confirming never throws on the cap").resolves.toBeTruthy();
+      const lines = error.mock.calls.filter(([, msg]) => /over its entrant cap/.test(String(msg)));
+      expect(lines, "one breach line").toHaveLength(1);
+      expect(lines[0]![0], "it names the division and the numbers").toMatchObject({ divisionId: r.division.id, held: MAX + 1, limit: MAX });
+    } finally {
+      error.mockRestore();
+    }
   });
 });

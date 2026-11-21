@@ -62,7 +62,8 @@ import {
   type EligibilityIssue,
 } from "./registration-eligibility";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
-import { effectiveEntrantCap } from "@/server/external-play/online-entrant-cap";
+import { countOnlineHeld, lockDivisionForCap, onlineCapBinds } from "@/server/external-play/online-entrant-cap";
+import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION } from "@/lib/online-chess";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
@@ -549,7 +550,7 @@ export async function submitRegistrationGroup(
 
   // Everything before the transaction - the reads that resolve the cart and the checks that refuse it - is one `pre_tx` stage
   // when the register route passes its timer (registration redesign B0), each read inside it a sub-stage. No timer: no timing.
-  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, onlineDivisionIds, seatGates, leadCtx, guardianFor } = await timed(timer, "pre_tx", async () => {
+  const { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor } = await timed(timer, "pre_tx", async () => {
     // Resolve every distinct division touched by the cart, sorted — the SAME
     // order is used below for both settings validation and lock acquisition,
     // so two concurrent carts touching an overlapping division set can never
@@ -781,7 +782,7 @@ export async function submitRegistrationGroup(
             ),
           );
     const leadCtx = divisionCtxById.get(input.entries[0]!.division_id)!;
-    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, onlineDivisionIds: new Set(onlineIds), seatGates, leadCtx, guardianFor };
+    return { distinctDivisionIds, first, orgId, competitionId, prepared, planLimit, seatGates, leadCtx, guardianFor };
   });
 
   const secret = mintRegistrationToken();
@@ -802,6 +803,18 @@ export async function submitRegistrationGroup(
     // all read from `liveSettingsById`, never from the pre-lock `settingsById`
     // snapshot (which stays in scope only for the pre-tx structural checks
     // above, which do not need transactional freshness).
+    //
+    // The online chess cap (owner ruling 2026-11-21; review C1 / I2 / M2): the `division:` advisory lock of every cart division, sorted,
+    // BEFORE the settings rows below (the global order is advisory -> row; materialise's late entry already took `division:` after the
+    // settings lock, which this order makes a no-wait re-take), so the count under it cannot move; and whether a division plays online
+    // is read HERE, under that lock, never from the pre-transaction snapshot - an organiser switching a division online between the
+    // two would otherwise be admitted past the cap on a stale answer.
+    for (const id of distinctDivisionIds) await lockDivisionForCap(tx, id);
+    const onlineDivisionIds = new Set<string>();
+    for (const row of await tx<{ id: string; sport_key: string; config: unknown }[]>`
+      select id, sport_key, config from divisions where id in ${tx(distinctDivisionIds)}`) {
+      if (divisionPlaysOnline(row)) onlineDivisionIds.add(row.id);
+    }
     const liveSettingsById = new Map<string, SubmitSettingsRow>();
     for (const id of distinctDivisionIds) {
       const [live] = await tx<SubmitSettingsRow[]>`
@@ -876,11 +889,11 @@ export async function submitRegistrationGroup(
       // LIVE settings (fetched under the lock above), never the pre-lock
       // `p.settings` snapshot — review MAJOR 3.
       const live = liveSettingsById.get(p.input.division_id)!;
-      // A division that plays online holds at most min(plan limit, 128) (owner ruling 2026-11-21; online-entrant-cap.ts): past
-      // it an entry waits, exactly as it does past the plan's limit.
+      // The plan's per-division limit, the division's own capacity and the format's max entrants: the count and the semantics are the
+      // plan's, untouched (the online cap is judged separately, by the online count).
       const hardCap = Math.min(
         live.capacity ?? Number.POSITIVE_INFINITY,
-        effectiveEntrantCap(onlineDivisionIds.has(p.input.division_id), planLimit) ?? Number.POSITIVE_INFINITY,
+        planLimit ?? Number.POSITIVE_INFINITY,
         formatMaxes.get(p.input.division_id) ?? Number.POSITIVE_INFINITY,
       );
       // A free-agent entry never competes for a TEAM slot at all — it draws
@@ -914,6 +927,13 @@ export async function submitRegistrationGroup(
           where division_id = ${p.input.division_id} and status in ${tx([...SPOT_HOLDERS])}
             and free_agent = false`;
         waitlisted = taken >= hardCap;
+        // A division that plays online holds at most min(plan limit, 128) places (owner ruling 2026-11-21; online-entrant-cap.ts), counted
+        // as every online-cap door counts - live entrants plus sign-ups let in, `countOnlineHeld` - under the `division:` lock taken
+        // above, with this cart's own earlier entries already in. Past it the entry waits, exactly as it does past the plan's limit.
+        // Asked only where the online cap binds (a plan below it is the hardCap above).
+        if (!waitlisted && onlineDivisionIds.has(p.input.division_id) && onlineCapBinds(true, planLimit)) {
+          waitlisted = (await countOnlineHeld(tx, p.input.division_id)) >= ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION;
+        }
       }
       // On a TEAM division `fee_cents` is the price of a team. Someone
       // entering that division alone is buying one place, not a team, so they

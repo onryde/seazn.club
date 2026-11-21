@@ -17,9 +17,11 @@ import { ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION as FROM_ONLINE_PLAY } from "../o
 import {
   assertEntrantRoom,
   assertOnlinePlayFits,
+  assertOnlineRoom,
   effectiveEntrantCap,
   onlineCapBinds,
   onlineDivisionFullError,
+  onlineRoomLeft,
 } from "../online-entrant-cap";
 import { supportsOnlinePlay } from "../online-play";
 
@@ -28,9 +30,15 @@ const ONLINE = { sport_key: "boardgame", config: { onlinePlay: "lichess" } };
 const OVER_THE_BOARD = { sport_key: "boardgame", config: { variant: "classical" } };
 
 type Verdict = "ok" | "plan" | "online";
-const verdictOf = (division: { sport_key: string; config: unknown }, planCap: number | null, wouldBe: number): Verdict => {
+/** What `assertEntrantRoom` answers for `adding` entrants to a division holding `rows` rows (the plan's count) and `held` places (the online count). */
+const verdictForCounts = (
+  division: { sport_key: string; config: unknown },
+  planCap: number | null,
+  counts: { rows: number; held: number },
+  adding: number,
+): Verdict => {
   try {
-    assertEntrantRoom(division, planCap, wouldBe);
+    assertEntrantRoom(division, planCap, counts, adding);
     return "ok";
   } catch (err) {
     if (err instanceof PaymentRequiredError) return "plan";
@@ -38,6 +46,9 @@ const verdictOf = (division: { sport_key: string; config: unknown }, planCap: nu
     throw err;
   }
 };
+/** One entrant added to a division whose two counts agree (`wouldBe - 1` of each): the cap's own table, before the counts diverge. */
+const verdictOf = (division: { sport_key: string; config: unknown }, planCap: number | null, wouldBe: number): Verdict =>
+  verdictForCounts(division, planCap, { rows: wouldBe - 1, held: wouldBe - 1 }, 1);
 
 describe("the constant", () => {
   it("is the owner's 128, and is the one number the predicate's module re-exports", () => {
@@ -120,6 +131,37 @@ describe("assertEntrantRoom: which refusal answers, and where the line falls", (
       checked += 1;
     }
     expect(checked).toBe(table.length);
+  });
+
+  it("the two counts are separate (review C1): the online cap reads `held`, the plan's cap reads `rows` - each refuses on its own count only", () => {
+    // [plan cap, rows (every entrants row), held (places held), adding, verdict]
+    const table: [number | null, number, number, number, Verdict][] = [
+      [256, 300, 100, 1, "plan"], // 300 rows, 200 of them withdrawn: the plan's count refuses; the online count (100) would not
+      [null, 300, 100, 1, "ok"], // unlimited: no plan cap, and 100 held is under the online cap - withdrawn rows are not places
+      [256, 130, 127, 1, "ok"], // the 128th place, whatever the rows say
+      [256, 130, 128, 1, "online"], // the 129th place: held says full though only 130 rows exist
+      [256, 10, 128, 1, "online"], // sign-ups let in fill places that are not rows at all: 10 rows, 128 held
+      [256, 10, 127, 2, "online"], // a batch of two on 127 held
+      [128, 128, 128, 1, "online"], // the tie: both full, the online cap answers (no upgrade changes anything)
+      [64, 64, 10, 1, "plan"], // Community: its own 64 rows bind, online or not
+      [64, 10, 64, 1, "ok"], // ...the online cap does not bind under a lower plan cap: the plan's rows (10) decide
+    ];
+    let checked = 0;
+    for (const [plan, rows, held, adding, want] of table) {
+      expect(verdictForCounts(ONLINE, plan, { rows, held }, adding), `online, plan ${plan}, rows ${rows}, held ${held}, adding ${adding}`).toBe(want);
+      checked += 1;
+    }
+    expect(checked).toBe(table.length);
+    // Over the board `held` is not looked at at all.
+    expect(verdictForCounts(OVER_THE_BOARD, 256, { rows: 10, held: 5_000 }, 1), "over the board: held is ignored").toBe("ok");
+    expect(verdictForCounts(OVER_THE_BOARD, 256, { rows: 256, held: 0 }, 1), "over the board: the plan's rows still refuse").toBe("plan");
+  });
+
+  it("onlineRoomLeft and assertOnlineRoom: 128 minus what is held, never below 0, and the line falls between 128 and 129", () => {
+    expect([onlineRoomLeft(0), onlineRoomLeft(100), onlineRoomLeft(MAX), onlineRoomLeft(MAX + 2)], "the empty case first").toEqual([MAX, MAX - 100, 0, 0]);
+    expect(() => assertOnlineRoom(0)).not.toThrow();
+    expect(() => assertOnlineRoom(MAX)).not.toThrow();
+    expect(() => assertOnlineRoom(MAX + 1)).toThrow(expect.objectContaining({ status: 422, code: ONLINE_DIVISION_FULL }));
   });
 
   it("a stored `onlinePlay: lichess` on a sport that cannot play online caps nothing extra - every sport in the registry (the predicate's own sweep)", () => {

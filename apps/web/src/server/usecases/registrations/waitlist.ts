@@ -25,7 +25,7 @@ import { promotionVerdict } from "./places-left";
 import { divisionFormatMaxes } from "./format-max";
 import { formatMaxPromotionRefusal } from "../roundrobin-refusal";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
-import { effectiveEntrantCap, onlineCapBinds, onlineDivisionFullError } from "@/server/external-play/online-entrant-cap";
+import { assertOnlineRoom, countOnlineHeld, lockDivisionForCap, onlineCapBinds } from "@/server/external-play/online-entrant-cap";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
  *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
@@ -92,31 +92,40 @@ export function freesTeamSlot(row: { status: string; free_agent: boolean }): boo
  *    always refused, 422 `PROMOTE_PLAN_LIMIT`;
  *  - past the cap of a division that plays ONLINE, min(`planLimit`, 128) (owner ruling 2026-11-21): always refused too, but where the
  *    online cap is what binds (the plan's limit is absent or no lower) it is 422 `ONLINE_DIVISION_FULL` - a capacity limit, with no
- *    plan to raise;
+ *    plan to raise. That one is judged by the places the division HOLDS (`countOnlineHeld`: live entrants plus sign-ups let in), the
+ *    count every online-cap door shares, not by the plan's count below;
  *  - at or past the division's OWN capacity: refused 409 `PROMOTE_OVER_CAPACITY` unless `confirmOverCapacity`.
- *  The count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same `registration_settings`
- *  row lock submit takes, so two promotions - or a promotion and a sign-up - cannot both pass on the last place. */
+ *  The plan's and the capacity's count is submit's own (team entries holding a place, a solo sign-up never one), taken under the same
+ *  `division:` advisory lock and `registration_settings` row lock submit takes (in that order), so two promotions - or a promotion and
+ *  a sign-up, an add, a Reinstate - cannot both pass on the last place. */
 export async function assertOrganiserPromotionHasRoom(
   tx: Tx,
   divisionId: string,
   opts: { planLimit: number | null; confirmOverCapacity: boolean },
 ): Promise<void> {
+  // The `division:` lock first, then the settings row (the global order advisory -> row; the order is argued at the top of
+  // online-entrant-cap.ts): a sign-up, an add or a Reinstate counts under the same lock, so none of them can pass on the place this
+  // one takes. The caller has locked its registration row already, the edge materialise's late entry makes anyway.
+  await lockDivisionForCap(tx, divisionId);
   const [settings] = await tx<{ capacity: number | null }[]>`
     select capacity from registration_settings where division_id = ${divisionId} for update`;
   const [{ n: active }] = await tx<{ n: number }[]>`
     select count(*)::int as n from registrations
     where division_id = ${divisionId} and status in ${tx([...SPOT_HOLDERS])} and free_agent = false`;
-  // Read under the same tenant transaction: whether the division plays online decides which cap the count is held to.
+  // Read under the same tenant transaction: whether the division plays online decides whether the online cap judges the promotion.
   const [division] = await tx<{ sport_key: string; config: unknown }[]>`
     select sport_key, config from divisions where id = ${divisionId}`;
   const online = division ? divisionPlaysOnline(division) : false;
+  // Owner ruling 2026-11-21: past min(plan limit, 128) places an online chess division is full, and no confirmation lifts it. Judged by
+  // the one online count (live entrants + sign-ups let in), the promoted entry being the +1; where a LOWER plan limit is what binds, the
+  // plan's own verdict below answers, as it always did.
+  if (onlineCapBinds(online, opts.planLimit)) assertOnlineRoom((await countOnlineHeld(tx, divisionId)) + 1);
   const formatMax = (await divisionFormatMaxes(tx, [divisionId])).get(divisionId) ?? null;
-  const verdict = promotionVerdict({ capacity: settings?.capacity ?? null, planLimit: effectiveEntrantCap(online, opts.planLimit), formatMax, active });
+  const verdict = promotionVerdict({ capacity: settings?.capacity ?? null, planLimit: opts.planLimit, formatMax, active });
   // W5 B4 (F8): the format's max entrants - no plan and no confirmation lifts it, so it is refused by the name the draw doors use.
   // B4 review m-8: in the promotion's own sentence ("already has {entrants}"), never the draw's "has 100" beside "up to 100".
   if (verdict.kind === "format_max") throw formatMaxPromotionRefusal(verdict.max, verdict.active);
   if (verdict.kind === "plan_limit") {
-    if (onlineCapBinds(online, opts.planLimit)) throw onlineDivisionFullError();
     throw new HttpError(
       422,
       `Your plan allows ${verdict.limit} entrants per division and this division already has ${verdict.active}. Raise the plan to promote more.`,

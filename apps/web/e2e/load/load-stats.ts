@@ -11,8 +11,8 @@ export const LOAD_LIMITS = {
   rtkVendor: 3_500,
   rtkCeiling: 2_625,
   /** The call budget's bucket (video/budget.ts RTK_BUDGET_BURST / RTK_BUDGET_REFILL_PER_S): capacity and tokens per second. */
-  rtkBurst: 825,
-  rtkRefillPerS: 6,
+  rtkBurst: 525,
+  rtkRefillPerS: 7,
   lichessCreateWindowMs: 10 * 60_000,
   lichessCreatesPer10Min: 500,
   dbConnectionBudget: 60,

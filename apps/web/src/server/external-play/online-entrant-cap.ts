@@ -10,10 +10,29 @@ import "server-only";
 //     online cap: ONLINE_DIVISION_FULL answers - a 422 with its own code, never the plan-limit 402, never upgrade wording.
 // The tie goes to the online cap (a plan of exactly 128, an Event Pass's 128): there an upgrade would change nothing.
 //
-// Every door that grows an online division's entrant count asks through here, by the same arithmetic: createEntrants
-// (usecases/entrants.ts), the public sign-up's waitlist threshold and the places-left count (registration-submit.ts,
-// registrations/settings.ts), the organiser's promote / confirm / waive room check (registrations/waitlist.ts), the registration
-// capacity a save may promise (registrations/settings.ts), and the one door that makes a division online (usecases/divisions.ts).
+// ONE count answers the online cap at every door (fix round 1, review C1): an entrant that is not withdrawn or disqualified, plus a
+// sign-up that has been let in (pending or paid) and has not become an entrant yet (entrant_id null, never a solo free agent) -
+// `onlineHeldSql`. The first two doors used to count entrants rows (withdrawn included, sign-ups ignored) and the other three counted
+// registrations only, so a division fed by both could pass either door at 127 and end at 200. A withdrawn entrant no longer holds a
+// place; a sign-up holds one from the moment it is let in; a registration that becomes an entrant is the SAME place (it leaves the
+// second term and enters the first), so confirming never grows the count. The plan's own cap keeps its own count, untouched.
+//
+// The doors that ask, each after taking the `division:` advisory lock (so two of them cannot both pass on the last place):
+// createEntrants (usecases/entrants.ts; it takes the lock only for a sport that can play online - an arrival into any other division
+// never queues on the division lock, W3 T9 review m7), Reinstate (the same file), the public sign-up (registration-submit.ts), the organiser's
+// Promote / Confirm / Waive (registrations/waitlist.ts), the one door that makes a division online (usecases/divisions.ts), and - a
+// read, no lock - the public places-left count (registrations/settings.ts). The registration capacity a save may promise
+// (registrations/settings.ts) compares a number, not a count.
+//
+// LOCK ORDER (review I2). Global: `division:` advisory -> row locks (patchDivision's N1 comment). Taken here:
+//   createEntrants / Reinstate: `division:` -> entrants/registrations rows;
+//   submit:   `division:` for every cart division (sorted ids) -> `registration_settings ... for update` (sorted ids) -> inserts;
+//   promote / confirm / waive: the registration's own row (the caller locks it first) -> `division:` -> `registration_settings ... for
+//     update`. A registration row before `division:` is the edge materialise's late entry already makes (confirm -> `division:`), so no
+//     new edge appears, and no path takes `registration_settings` and THEN waits for `division:` (submit used to, via materialise ->
+//     late entry; it now holds `division:` first). The online switch holds `division:` already (a config save takes it first).
+import type postgres from "postgres";
+import type { Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { assertWithinLimit } from "@/lib/entitlements";
 import {
@@ -21,6 +40,7 @@ import {
   ONLINE_DIVISION_FULL,
   ONLINE_PLAY_TOO_MANY_ENTRANTS,
 } from "@/lib/online-chess";
+import { log } from "@/server/logger";
 import { divisionPlaysOnline } from "./online-play";
 
 /** Does the ONLINE cap, rather than the plan, decide how many entrants this division holds? True for a division that plays online
@@ -46,28 +66,91 @@ export function onlineDivisionFullError(): HttpError {
   );
 }
 
-/** The entrant door: the division would hold `wouldBe` entrants after this write. Refuses past the effective cap - by the plan's 402 when
- *  the plan binds (a lower cap than the online one, or the division is not online), by ONLINE_DIVISION_FULL when the online cap binds. */
+type Db = postgres.Sql | Tx;
+
+/** The ONE online-cap count, as a SQL scalar: places held in `divisionId` (a SQL fragment - a column reference in a list query, or a
+ *  bound id). Live entrants (not withdrawn / disqualified) + sign-ups let in and not yet entrants (pending or paid, entrant_id null,
+ *  never a solo free agent). Waitlisted / expired / rejected / withdrawn sign-ups hold nothing; a confirmed one is its entrant. */
+export function onlineHeldSql(db: Db, divisionId: postgres.PendingQuery<postgres.Row[]>): postgres.PendingQuery<postgres.Row[]> {
+  return db`(
+    (select count(*)::int from entrants e where e.division_id = ${divisionId} and e.status not in ('withdrawn', 'disqualified'))
+    + (select count(*)::int from registrations r where r.division_id = ${divisionId}
+         and r.status in ('pending', 'paid') and r.entrant_id is null and r.free_agent = false)
+  )`;
+}
+
+/** Places held in one division, by the count above. Read inside the door's transaction, after `lockDivisionForCap`. */
+export async function countOnlineHeld(db: Db, divisionId: string): Promise<number> {
+  const [row] = await db<{ n: number }[]>`select ${onlineHeldSql(db, db`${divisionId}::uuid`)} as n`;
+  return row!.n;
+}
+
+/** The `division:` advisory lock every format writer takes (same key spelling), for a door that is about to count and then write. */
+export async function lockDivisionForCap(tx: Tx, divisionId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+}
+
+/** Places an online division can still take: never below 0 (a division over the cap, stored before the ruling, reads as full). */
+export function onlineRoomLeft(held: number): number {
+  return Math.max(0, ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION - held);
+}
+
+/** The division would hold `wouldBe` places after this write: refuse past the online cap, 422 ONLINE_DIVISION_FULL. */
+export function assertOnlineRoom(wouldBe: number): void {
+  if (wouldBe > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) throw onlineDivisionFullError();
+}
+
+/** The entrant door's two judgements, from counts the caller read: the online cap on `held` (where it binds: a plan cap at or above it,
+ *  or none) and the plan's own cap on `rows` (every entrants row, withdrawn included - the plan's count, untouched). The online
+ *  refusal comes first: at the tie (a plan of exactly 128) no upgrade changes anything. */
 export function assertEntrantRoom(
   division: { sport_key: string; config: unknown },
   planCap: number | null,
-  wouldBe: number,
+  counts: { rows: number; held: number },
+  adding: number,
 ): void {
-  if (onlineCapBinds(divisionPlaysOnline(division), planCap)) {
-    if (wouldBe > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) throw onlineDivisionFullError();
-    return;
-  }
-  assertWithinLimit(planCap, "entrants.per_division.max", wouldBe);
+  if (onlineCapBinds(divisionPlaysOnline(division), planCap)) assertOnlineRoom(counts.held + adding);
+  assertWithinLimit(planCap, "entrants.per_division.max", counts.rows + adding);
 }
 
-/** The door that turns online play ON: a division already holding more than an online chess division may is refused, 422
+/** `assertEntrantRoom` for createEntrants: reads both counts in the caller's transaction (held only where the online cap binds). */
+export async function assertEntrantRoomIn(
+  tx: Tx,
+  divisionId: string,
+  division: { sport_key: string; config: unknown },
+  planCap: number | null,
+  adding: number,
+): Promise<void> {
+  const binds = onlineCapBinds(divisionPlaysOnline(division), planCap);
+  const held = binds ? await countOnlineHeld(tx, divisionId) : 0;
+  const [{ n: rows }] = await tx<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${divisionId}`;
+  assertEntrantRoom(division, planCap, { rows, held }, adding);
+}
+
+/** What a division that plays online and is full says in the log when a registration is confirmed into it past the cap. Never throws:
+ *  a confirmation is often a card payment that has already moved (review I3). The cap holds upstream - a sign-up is counted from the
+ *  moment it is let in (pending / paid), so confirming it moves its place from one term of the count to the other and never grows it,
+ *  and every door that seats a waitlisted one asks first - so a line here means a door was missed. */
+export async function logOnlineCapBreach(tx: Tx, divisionId: string): Promise<void> {
+  const [division] = await tx<{ sport_key: string; config: unknown }[]>`select sport_key, config from divisions where id = ${divisionId}`;
+  if (!division || !divisionPlaysOnline(division)) return;
+  const held = await countOnlineHeld(tx, divisionId);
+  if (held > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) {
+    log.error(
+      { divisionId, held, limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION },
+      "online chess division is over its entrant cap after a registration was confirmed into it",
+    );
+  }
+}
+
+/** The door that turns online play ON: a division already holding more places (`held`: the count above) than an online chess division may is refused, 422
  *  ONLINE_PLAY_TOO_MANY_ENTRANTS (`limit`, `entrants`). Its own code and sentence: the organiser's way out is removing entrants,
  *  which "full" would not say. */
 export function assertOnlinePlayFits(entrants: number): void {
   if (entrants > ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION) {
     throw new HttpError(
       422,
-      `This division has ${entrants} entrants, and online chess divisions hold up to ${ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION}. Remove entrants before turning online play on.`,
+      `This division has ${entrants} entrants and sign-ups, and online chess divisions hold up to ${ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION}. Remove some before turning online play on.`,
       ONLINE_PLAY_TOO_MANY_ENTRANTS,
       { limit: ONLINE_CHESS_MAX_ENTRANTS_PER_DIVISION, entrants },
     );

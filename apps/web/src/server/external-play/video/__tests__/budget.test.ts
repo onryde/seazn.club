@@ -49,6 +49,10 @@ describe("the constants (the ruling, not the algebra of the implementation)", ()
     // window's refill. Sizing the capacity at the whole ceiling would pass twice it.
     expect(RTK_BUDGET_BURST + RTK_BUDGET_REFILL_PER_S * (RTK_BUDGET_WINDOW_MS / 1_000)).toBe(RTK_CALLS_PER_WINDOW);
     expect(RTK_BUDGET_BURST).toBeLessThan(RTK_CALLS_PER_WINDOW);
+    // The split, as ruled (review I4, 2026-11-21): writes are unmeasured, so the burst is the small share - 525 of the 2,625, a fifth -
+    // and the rest refills at 7 a second. Typed here from the ruling, never read back from the constants; a retune changes both.
+    expect([RTK_BUDGET_BURST, RTK_BUDGET_REFILL_PER_S], "525 burst + 7 a second").toEqual([525, 7]);
+    expect(RTK_BUDGET_BURST * 5, "the burst is a fifth of the ceiling").toBe(RTK_CALLS_PER_WINDOW);
     // A whole number of tokens a second: the exact-sum assertion above and the hand-counted tables that read the rate
     // (seat-line-wire.test.ts) are then not at the mercy of a non-terminating fraction.
     expect(Number.isInteger(RTK_BUDGET_REFILL_PER_S), "the refill is a whole number of tokens a second").toBe(true);
