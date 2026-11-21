@@ -333,6 +333,61 @@ test.describe("the check-in extension", () => {
     await expect(panel(page).getByTestId("arbiter-checkin-hero"), "and the hero is gone with the check-in").toHaveCount(0);
   });
 
+  test("the round: +5 min on the round panel's bar moves an open board's room five minutes later - and leaves the room of a board the press skipped (at its cap) where it was", async ({
+    page,
+    browser,
+    request,
+  }) => {
+    // B12 (owner, 2026-11-21: "when increase check-in time, check it is increasing"): the test above proves the DB rows, the audit and the notice
+    // of the round press; this one proves what a PLAYER sees. Board 1 is taken to its cap through the API (the door a script uses), so the
+    // round's press skips it for its cap while its window is still open - its room still counts down, which a board with a game on it would not.
+    test.setTimeout(240_000);
+    const r = await seedOnlineRound(request, NAMES());
+    const [b1, b2] = r.boards as [SeededRound["boards"][number], SeededRound["boards"][number]];
+    for (let n = 1; n <= CHECKIN_EXTEND_MAX; n++) {
+      const pressed = await apiJson(request, `/api/v1/fixtures/${b1.fixtureId}/external-play/extend-checkin`, "POST");
+      expect(pressed.status, `board 1's press ${n} of ${CHECKIN_EXTEND_MAX}`).toBe(200);
+    }
+    expect(await extensionOf(b1.fixtureId), "premise: board 1 is at its cap").toEqual({ ms: CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS, n: CHECKIN_EXTEND_MAX });
+    expect(await extensionOf(b2.fixtureId), "premise: board 2 has none").toEqual({ ms: 0, n: 0 });
+
+    const room1 = await openPlayerRoom(browser, r, 0);
+    const room2 = await openPlayerRoom(browser, r, 1);
+    const before1 = await countdownSeconds(room1);
+    const before2 = await countdownSeconds(room2);
+    expect(before1 - before2, "premise: the capped board's room already counts to a later deadline (its three extensions), so a room that did not move is told from one that did").toBeGreaterThan(
+      (CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS) / 1000 - 90,
+    );
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await openRound(page, r, "checkin");
+    const bar = hero(page).getByTestId("arbiter-extend-round");
+    const answered = page.waitForResponse((q) => q.request().method() === "POST" && q.url().endsWith(`/stages/${r.stageId}/extend-checkin`));
+    await bar.getByTestId("arbiter-extend-round-cta").click();
+    expect((await answered).status(), "the round press answered").toBe(200);
+    await expect(bar.getByTestId("arbiter-extend-round-notice")).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
+    expect(await extensionOf(b2.fixtureId), "board 2 holds the five minutes").toEqual({ ms: CHECKIN_EXTEND_STEP_MS, n: 1 });
+    expect(await extensionOf(b1.fixtureId), "board 1 was skipped for its cap: its extension is where it was").toEqual({
+      ms: CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS,
+      n: CHECKIN_EXTEND_MAX,
+    });
+
+    // THE LIVE SEAM, as the board test pins it: the room is never reloaded; its idle poll (the budget is the poll's reach, not a guess) re-reads the
+    // snapshot, and board 2's room counts down from five minutes later.
+    await expect
+      .poll(async () => countdownSeconds(room2), { timeout: 60_000, message: "board 2's room counts down from the extended deadline" })
+      .toBeGreaterThan(before2 + CHECKIN_EXTEND_STEP_MS / 1000 - 90);
+    const after2 = await countdownSeconds(room2);
+    expect(after2, "the room never shows MORE than the five minutes added").toBeLessThanOrEqual(before2 + CHECKIN_EXTEND_STEP_MS / 1000 + 2);
+    // ... and the skipped board's room, which the same poll has now reached, is where it was: it only counts DOWN.
+    expect(await countdownSeconds(room1), "board 1's room did not move: the press skipped it").toBeLessThanOrEqual(before1);
+    // A reload is the same truth for both: the snapshot a fresh read carries.
+    await room2.reload();
+    expect(await countdownSeconds(room2), "reloaded, board 2's room is still five minutes later").toBeGreaterThan(before2 + CHECKIN_EXTEND_STEP_MS / 1000 - 90);
+    await room1.reload();
+    expect(await countdownSeconds(room1), "reloaded, board 1's room is still where it was").toBeLessThanOrEqual(before1);
+  });
+
   test("the bar at 320, 768 and 1280: the panel's board press and the hero's round bar, buttons and answers painted - no sideways scroll, whole labels, 44px targets", async ({
     page,
     request,

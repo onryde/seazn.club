@@ -1852,7 +1852,7 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
   /** The dictionary's one/other pair for a count, picked the way `plural()` picks it. */
   const pluralKey = (stem: string, count: number) => `${stem}.${count === 1 ? "one" : "other"}`;
 
-  test("walkthrough: one round from Match Day's round and board panels", async ({ page, request }) => {
+  test("walkthrough: one round from Match Day's round and board panels", async ({ page, browser, request }) => {
     const names = ["Ada", "Bo", "Cy", "Di", "Eve", "Fay", "Gus", "Hal"].map((n) => `${n} Walk ${TAG}`);
     // The seat and board counts come from what was ASKED for, not read back out of the seeded boards (that would make the premise
     // below a tautology).
@@ -2060,6 +2060,32 @@ test.describe("online chess on our page — the venue, end to end (Task 17)", ()
       await expect(page.getByTestId("arbiter-waiting-extend-notice"), "only the pressed row answers").toHaveCount(1);
     });
     const answerTime = hm(await rowNotice.innerText());
+    // B12: what the PLAYER sees. Board 3's player opens the room (cold, on the personal link) and its check-in countdown runs to the EXTENDED closing time
+    // - the open's DB stamp plus the window plus five minutes, all read from the DB and the engine's constants, never from the page - while board 2's
+    // player, whose board holds no extension, counts to the plain window. The two differ by the five minutes, so one face cannot pass for the other.
+    const roomCtx = await playerContext(browser);
+    const room3 = await openRoom(roomCtx, b3, b3.home);
+    const room2 = await openRoom(roomCtx, b2, b2.home);
+    const roomFace = async (p: Page): Promise<number> => {
+      await expect(p.getByTestId("room-checkin-countdown")).toContainText(/\d+:\d\d/);
+      const m = /(\d+):(\d\d)/.exec(await p.getByTestId("room-checkin-countdown").innerText());
+      if (!m) throw new Error("no m:ss in the room's countdown");
+      return Number(m[1]) * 60 + Number(m[2]);
+    };
+    await seen("the player's room of board 3 counts to the extended closing time; board 2's room to the plain window", async () => {
+      const left = (extra: number) => (stamp1!.getTime() + DEADLINE_AFTER_MS + extra - Date.now()) / 1000;
+      const face3 = await roomFace(room3);
+      const face2 = await roomFace(room2);
+      expect(face3, "board 3's room: the window and the five minutes, less rounding").toBeGreaterThanOrEqual(left(CHECKIN_EXTEND_STEP_MS) - 5);
+      // A face is the room's last tick, so it can be a tick or two LATER than the clock (first run: 900 against a bound of 899.8); the upper bounds are
+      // therefore the full windows themselves, the same shape as faceIsTheFirstToClose's, and the lower bound is the one that says the five minutes arrived.
+      expect(face3, "and never more than the window and the five minutes").toBeLessThanOrEqual((DEADLINE_AFTER_MS + CHECKIN_EXTEND_STEP_MS) / 1000);
+      expect(face2, "board 2's room: never more than the plain window").toBeLessThanOrEqual(DEADLINE_AFTER_MS / 1000);
+      expect(face2, "board 2's room: the plain window, less rounding").toBeGreaterThanOrEqual(left(0) - 5);
+      expect(face3 - face2, "five minutes later than its neighbour's").toBeGreaterThan(CHECKIN_EXTEND_STEP_MS / 1000 - 10);
+    });
+    await room3.close();
+    await room2.close();
     // The board link opens board 3's own panel: its decision area shows the same closing time, from the DB's stamp and the engine's constants.
     await row(b3).getByTestId("arbiter-waiting-board").click();
     await expect(col, "the row's board link opened board 3's panel").toHaveAttribute("data-fixture-id", b3.fixtureId, { timeout: 30_000 });
