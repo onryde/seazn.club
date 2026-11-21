@@ -958,6 +958,7 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
       online_rounds: [],
       online_failed: false,
       boards_unread: [],
+      frozen: false, // B5: the empty case says "not frozen" outright (a free org with a competition and nothing over its cap), never leaves the field off
     });
   });
 
