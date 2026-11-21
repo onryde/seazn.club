@@ -64,7 +64,7 @@ export interface SeedProposalOut {
     /** W5 B3 fix (review I-1): written by the confirm, on the row it confirms - who was actually SEATED, seat by seat, once the
      *  organiser's tie picks and edits were applied (or the re-draw over them). `qualifiers` stays the slate as proposed: the cut
      *  drift reads (`table-cut-drift.ts` and its siblings) compare it with today's cut, and a pick against the lot is no drift.
-     *  V538's `qualified` reads this (a row confirmed before it existed falls back to `qualifiers`). Absent on drafts. */
+     *  V540's `qualified` reads this (a row confirmed before it existed falls back to `qualifiers`). Absent on drafts. */
     seated?: { entrantId: string; rank: number; source: { stageId: string } }[];
   };
 }
@@ -726,7 +726,7 @@ export async function confirmSeedProposal(
         throw new HttpError(409, `slot ${slot} is already filled`, "SEEDING_FIXTURES_ALREADY_FILLED");
       }
     }
-    // W5 B4 (B3 re-review N-1): every seat filled is one the slate offers - what `seated` below records (V538 publishes it and
+    // W5 B4 (B3 re-review N-1): every seat filled is one the slate offers - what `seated` below records (V540 publishes it and
     // every table freezes on it). An edit is held to the proposal's slots above; a tie pick is not (its slots are applied as
     // named), so a pick naming a REAL empty seat of this stage that no proposal slot owns - the bye line's free side - passed every
     // check above and seated someone `seated` could not name. Refused by the edit's code, before anything is filled.
@@ -851,7 +851,7 @@ export async function confirmSeedProposal(
     const [division] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${stage.division_id}`;
     // W5 B3 fix (review I-1): the row records who it SEATED (`seated`), not only the slate it proposed - a tie pick or an edit
-    // may seat someone the slate ranked below the cut, and who went through is what V538 publishes and every table freezes on.
+    // may seat someone the slate ranked below the cut, and who went through is what V540 publishes and every table freezes on.
     const seatOf = new Map(slate.map((q) => [q.destinationSlot, q] as const));
     const seated = finalSlots.map(([slot, entrantId]) => {
       const seat = seatOf.get(slot);

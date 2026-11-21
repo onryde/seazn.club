@@ -91,7 +91,7 @@ const view = async (divisionId: string) =>
            has_rank_overrides
     from public_stages_v where division_id = ${divisionId} order by seq`;
 
-/** V538 (W5 Task 6): every stage of the division, in seq order, as [name, qualify_best_nth, qualified]. */
+/** V540 (W5 Task 6): every stage of the division, in seq order, as [name, qualify_best_nth, qualified]. */
 const frozen = async (divisionId: string) =>
   (await sql<{ name: string; qualify_best_nth: boolean; qualified: unknown }[]>`
     select name, qualify_best_nth, qualified from public_stages_v where division_id = ${divisionId} order by seq`).map((r) => [r.name, r.qualify_best_nth, r.qualified]);
@@ -183,7 +183,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     ]);
   });
 
-  // W5 app PR B Task 6 (K25, V538): re-pinned. This shape - "the winners and the best runner-up" - was "no cut (unforecastable)",
+  // W5 app PR B Task 6 (K25, V540): re-pinned. This shape - "the winners and the best runner-up" - was "no cut (unforecastable)",
   // so the commonest unequal-pool format had no cut line and, once finished, no frozen markers. Now its cut is the per-group quota
   // with `qualify_best_nth` set: the app shows no live race on it and freezes its markers from who went through.
   it("K25 a bestNth beside a per-group cut in the same take → the per-group cut, flagged best-Nth", async () => {
@@ -233,7 +233,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     expect(checked).toBe(3);
   });
 
-  it("V538 `qualified`: the destination's newest CONFIRMED proposal's seats from THIS stage, else its stored config.qualified; never a draft or a stale one", async () => {
+  it("V540 `qualified`: the destination's newest CONFIRMED proposal's seats from THIS stage, else its stored config.qualified; never a draft or a stale one", async () => {
     const d = await division();
     const [groups, ko] = await createStages(d.auth, d.divisionId, [
       { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },

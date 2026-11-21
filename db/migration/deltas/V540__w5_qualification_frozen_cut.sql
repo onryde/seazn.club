@@ -1,4 +1,4 @@
--- V538 — W5 (format matrix: round robin) app PR B Task 6 (rules X-QS-1, X-QS-2; rulebook RB5-T1..T4, RB5-T14; owner ruling 283;
+-- V540 — W5 (format matrix: round robin) app PR B Task 6 (rules X-QS-1, X-QS-2; rulebook RB5-T1..T4, RB5-T14; owner ruling 283;
 -- ST-G17; preflight K25): a finished league, group or Swiss table keeps its cut line, frozen as "Qualified" / "Out" from who
 -- actually went through. VIEW-ONLY: no table, no column, no data moves.
 --
@@ -63,7 +63,7 @@ begin
                 then (r.value ->> 'to')::int end as to_n,
            case when jsonb_typeof(r.value -> 'n') = 'number' and (r.value ->> 'n') ~ '^[0-9]{1,6}$'
                 then (r.value ->> 'n')::int end as n_n,
-           -- V538: a best-Nth take's place and seat count (`{ kind: "bestNth", nth, count }`)
+           -- V540: a best-Nth take's place and seat count (`{ kind: "bestNth", nth, count }`)
            case when jsonb_typeof(r.value -> 'nth') = 'number' and (r.value ->> 'nth') ~ '^[0-9]{1,6}$'
                 then (r.value ->> 'nth')::int end as nth_n,
            case when jsonb_typeof(r.value -> 'count') = 'number' and (r.value ->> 'count') ~ '^[0-9]{1,6}$'
@@ -97,14 +97,14 @@ begin
            c.dest_id
     from cut c
     where (select count(*) from cut) = 1
-      -- the cut is its destination's only rule - or (V538, K25) a per-group cut whose other rules are all best-Nth takes
+      -- the cut is its destination's only rule - or (V540, K25) a per-group cut whose other rules are all best-Nth takes
       and (c.dest_rules = 1 or (c.kind = 'topNPerGroup' and c.dest_rules = 1 + c.dest_best_nth))
       and not exists (
         select 1 from rules w
         where not coalesce(
           (w.kind = 'rankRange' and w.from_n >= 1 and w.to_n >= w.from_n)
           or (w.kind = 'topNPerGroup' and w.n_n >= 1)
-          -- V538 (K25): a best-Nth take, only into the cut's own destination, beside its per-group cut, below its quota
+          -- V540 (K25): a best-Nth take, only into the cut's own destination, beside its per-group cut, below its quota
           or (w.kind = 'bestNth' and w.dest_id = c.dest_id and c.kind = 'topNPerGroup'
               and w.nth_n > c.n_n and w.count_n >= 1),
           false))
@@ -118,7 +118,7 @@ begin
         where o.division_id = (select s.division_id from src s)
           and xf.value -> 'to_stage_seq' = to_jsonb(c.dest_seq))
   ),
-  -- V538: who went through - the destination's newest confirmed proposal (its qualifiers drawn from THIS stage), else its stored
+  -- V540: who went through - the destination's newest confirmed proposal (its qualifiers drawn from THIS stage), else its stored
   -- `config.qualified`. Read only for a stage that has a cut (`forecast`), into the cut's own destination. "Newest" is the one
   -- CONFIRMED last - the key every app reader of the confirmed proposal sorts by (seed-stale.ts, table-cut-drift.ts:
   -- `confirmed_at desc nulls last`), then created_at and id for a stable pick (B3 m-8).
@@ -173,7 +173,7 @@ $$;
 revoke all on function stage_qualification_meta(uuid) from public;
 grant execute on function stage_qualification_meta(uuid) to app_user;
 
--- V475's columns in V475's order, then V538's two. The visibility gate is copied verbatim from V233; the grant is V239's.
+-- V475's columns in V475's order, then V540's two. The visibility gate is copied verbatim from V233; the grant is V239's.
 create view public_stages_v as
   select st.id, st.division_id, st.seq, st.kind, st.name, st.status,
          q.qualify_count, q.qualify_per_group, q.next_stage_name, q.swiss_rounds, q.points_rule,

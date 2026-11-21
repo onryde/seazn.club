@@ -444,7 +444,7 @@ describe.skipIf(!HAS_DB)("D4a/P5 — confirm validation (double-assignment, fore
   it("W5 B4 (B3 re-review N-1): a tie pick naming a real empty seat of THIS stage that no proposal slot owns is refused by name, nothing written", async () => {
     // tiePicks used to apply with no `bySlot.has` guard (edits had one): a pick naming the bye line's empty side - a real seat of
     // this stage, not one the proposal offers - passed every later check, seated a pool loser against seed 1, and the confirmed
-    // row's `seated` (V538) silently dropped her. Now refused like an unknown edit, before anything is filled.
+    // row's `seated` (V540) silently dropped her. Now refused like an unknown edit, before anything is filled.
     const { auth, groupStageId, koStageId, entrantBySeed } = await setupGroupsToKnockoutWithBye();
     await generateStageFixtures(auth, koStageId);
     await generateStageFixtures(auth, groupStageId);

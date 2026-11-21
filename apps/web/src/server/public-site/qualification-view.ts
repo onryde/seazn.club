@@ -62,16 +62,16 @@ export interface StageQualMeta {
    *  read this one (`boundsInForce`; null gives none, never the sport's), and so does a rule-scored forfeit
    *  (`ruleScoreReaches`, T7 carry: never the own rule). */
   tablePointsRule: unknown;
-  /** V538 (W5 Task 6, K25): the cut's destination also takes best-Nth seats beside this per-group cut, so who goes through
+  /** V540 (W5 Task 6, K25): the cut's destination also takes best-Nth seats beside this per-group cut, so who goes through
    *  cannot be placed per pool while the table runs: no live statuses, and the frozen markers only from `qualified`. Absent:
    *  false. */
   qualifyBestNth?: boolean;
-  /** V538 (X-QS-2, RB5-T14): who actually went through from this stage (the destination's confirmed proposal, else its stored
+  /** V540 (X-QS-2, RB5-T14): who actually went through from this stage (the destination's confirmed proposal, else its stored
    *  `config.qualified`), or null - then a complete table's markers follow its own final order. Absent: null. */
   qualified?: readonly string[] | null;
 }
 
-/** V538's `qualified` column as the view reads it: a list of entrant ids, or null for anything else (absent, malformed). */
+/** V540's `qualified` column as the view reads it: a list of entrant ids, or null for anything else (absent, malformed). */
 function qualifiedIds(raw: unknown): readonly string[] | null {
   return Array.isArray(raw) && raw.every((x) => typeof x === "string") ? (raw as string[]) : null;
 }
@@ -87,7 +87,7 @@ export function stageQualMeta(row: {
   swiss_rounds: number | null;
   points_rule: unknown;
   has_rank_overrides: boolean | null;
-  /** V538; optional - a row read before the column existed (a cached document) reads as no best-Nth seat and no verdict. */
+  /** V540; optional - a row read before the column existed (a cached document) reads as no best-Nth seat and no verdict. */
   qualify_best_nth?: boolean | null;
   qualified?: unknown;
 }): StageQualMeta {

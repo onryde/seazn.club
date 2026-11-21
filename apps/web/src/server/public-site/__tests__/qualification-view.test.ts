@@ -378,7 +378,7 @@ describe("stageQualMeta / divisionPointsBounds", () => {
         has_rank_overrides: true,
       }),
     ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true, tablePointsRule: null, qualifyBestNth: false, qualified: null });
-    // V538 (W5 Task 6): the best-Nth flag and who went through map across; a malformed `qualified` reads as none (never a guess)
+    // V540 (W5 Task 6): the best-Nth flag and who went through map across; a malformed `qualified` reads as none (never a guess)
     const v538 = { kind: "group", qualify_count: 2, qualify_per_group: true, next_stage_name: "KO", swiss_rounds: null, points_rule: null, has_rank_overrides: false };
     expect(stageQualMeta({ ...v538, qualify_best_nth: true, qualified: ["e1", "e2"] })).toMatchObject({ qualifyBestNth: true, qualified: ["e1", "e2"] });
     expect(stageQualMeta({ ...v538, qualify_best_nth: null, qualified: ["e1", 7] })).toMatchObject({ qualifyBestNth: false, qualified: null });

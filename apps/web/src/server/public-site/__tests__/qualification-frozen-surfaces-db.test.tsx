@@ -1,7 +1,7 @@
 // W5 app PR B Task 6 (X-QS-1, X-QS-2; ST-G17): a finished league keeps its cut, frozen, on EVERY surface that draws a cut - driven
 // through the real producer and the real readers, nothing forged:
 //   real league, real scores (scoreEvent) to the last line -> the organiser's Complete (`completeStage`; auto-progress is off by
-//   default) runs the on_complete progression, which seeds Finals (`seedNextStage` writes its `config.qualified`) -> V538's
+//   default) runs the on_complete progression, which seeds Finals (`seedNextStage` writes its `config.qualified`) -> V540's
 //   `stage_qualification_meta` publishes who went through -> each reader:
 //     * the division page / org page (getPublicDivision -> divisionQualification -> StandingsTable),
 //     * the embed's standings widget (embed-data.ts, its own select of public_stages_v),
@@ -161,7 +161,7 @@ describe.skipIf(!HAS_DB)("X-QS-1 a finished league keeps its cut on every surfac
     expect(before.stage.qualified, "nobody seated yet").toBeNull();
     expect(byName(r, before.view!.rows)).toEqual({ Ann: QUALIFIED, Ben: QUALIFIED, Cat: "Out", Dan: "Out" });
 
-    // the producer: Complete seeds Finals on_complete; V538 publishes who went through, in its stored order
+    // the producer: Complete seeds Finals on_complete; V540 publishes who went through, in its stored order
     await completeStage(r.auth, r.stageId);
     const { stage, view } = await pageTable(r);
     expect(stage.qualified, "the public read carries who went through").toEqual([r.id.Ann, r.id.Ben]);
@@ -354,7 +354,7 @@ describe.skipIf(!HAS_DB)("I-1 a cut-line tie waiting on the organiser's pick sho
   });
 });
 
-// W5 B3 fix (review m-8; controller ruling 6): two confirmed seatings of one destination (a re-seed after a stale one) - V538 reads
+// W5 B3 fix (review m-8; controller ruling 6): two confirmed seatings of one destination (a re-seed after a stale one) - V540 reads
 // the newest CONFIRMED, by the key every app reader of "the confirmed proposal" uses (`confirmed_at desc nulls last`: seed-stale.ts,
 // table-cut-drift.ts), never the newest CREATED. The two orders are made to disagree so the read can tell them apart.
 describe.skipIf(!HAS_DB)("m-8 the newest confirmed seating is the one confirmed last (W5 B3 fix; ruling 6)", () => {
