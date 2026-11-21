@@ -8299,6 +8299,7 @@
   "matchDay.focus.left": "{court} staat niet meer in deze lijst.",
   "matchDay.focus.leftUnnamed": "Wat je hebt geopend staat niet meer in deze lijst.",
   "matchDay.focus.pick": "Kies er een uit de lijst.",
+  "matchDay.focus.reading": "De online schaakrondes konden zojuist niet worden gelezen. Wat je hebt geopend, opent zodra ze weer te lezen zijn.",
   "matchDay.notice.dismiss": "Sluiten",
   "matchDay.needsYou.count.one": "{count} vraagt om jou",
   "matchDay.needsYou.count.other": "{count} vragen om jou",

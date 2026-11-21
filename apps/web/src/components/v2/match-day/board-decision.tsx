@@ -112,21 +112,28 @@ export function BoardDecision({
           </p>
         </>
       )}
-      {canResync && (
-        <button type="button" onClick={on.resync} disabled={busy} aria-busy={decision.busy?.kind === "resync" || undefined} className={BUTTON_QUIET}>
-          {f.t("arbiter.decide.resync")}
-        </button>
-      )}
-      {canGoOn && (
-        <button
-          type="button"
-          onClick={() => on.goOn(board.flags.map((x) => x.id))}
-          disabled={busy}
-          aria-busy={decision.busy?.kind === "goOn" || undefined}
-          className={BUTTON_QUIET}
-        >
-          {over ? f.t("externalPlay.queue.markReviewed") : f.t("arbiter.decide.goOn")}
-        </button>
+      {/* B7 (MD-R36 headroom): the two quiet decisions share ONE row from lg - 44px instead of 96 on the column the fold is measured in. The wrapper
+          is out of the box tree below lg (`contents`: the phone's stack is unchanged), a lone button still takes the whole row, and a label that wraps
+          to two lines makes the row two lines, never three buttons tall: the saving does not depend on the font. */}
+      {(canResync || canGoOn) && (
+        <div data-testid="arbiter-quiet-decisions" className="contents lg:grid lg:grid-cols-2 lg:gap-2 lg:[&>:only-child]:col-span-2">
+          {canResync && (
+            <button type="button" onClick={on.resync} disabled={busy} aria-busy={decision.busy?.kind === "resync" || undefined} className={BUTTON_QUIET}>
+              {f.t("arbiter.decide.resync")}
+            </button>
+          )}
+          {canGoOn && (
+            <button
+              type="button"
+              onClick={() => on.goOn(board.flags.map((x) => x.id))}
+              disabled={busy}
+              aria-busy={decision.busy?.kind === "goOn" || undefined}
+              className={BUTTON_QUIET}
+            >
+              {over ? f.t("externalPlay.queue.markReviewed") : f.t("arbiter.decide.goOn")}
+            </button>
+          )}
+        </div>
       )}
       {canSettle && (
         <>

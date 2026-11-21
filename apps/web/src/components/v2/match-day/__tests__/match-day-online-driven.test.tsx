@@ -125,6 +125,7 @@ function parts(tree: ReactElement[]) {
   // Absent when the page lists nothing at all (an empty day shows its own empty state instead of the list).
   const listBox = tree.find((e) => propsOf(e)["data-testid"] === "md-list");
   const lost = tree.find((e) => propsOf(e)["data-testid"] === "md-lost");
+  const reading = tree.find((e) => propsOf(e)["data-testid"] === "md-reading");
   const rounds = list === undefined ? [] : (propsOf(list).rounds as MatchDayOnlineRound[]);
   return {
     list: list === undefined ? null : propsOf(list),
@@ -136,6 +137,8 @@ function parts(tree: ReactElement[]) {
     court: tree.find((e) => e.type === CourtFocus) === undefined ? null : propsOf(tree.find((e) => e.type === CourtFocus)!),
     listHiddenOnPhone: listBox === undefined ? false : String(propsOf(listBox).className).split(/\s+/).includes("max-md:hidden"),
     lost: lost === undefined ? null : JSON.stringify(propsOf(lost).children),
+    /** B13: the notice for what was opened while the online rounds could not be read (not "left the list"). */
+    reading: reading === undefined ? null : JSON.stringify(propsOf(reading).children),
     selected: list === undefined ? null : propsOf(list).selected,
   };
 }
@@ -153,11 +156,11 @@ beforeEach(() => {
 });
 
 /** A night: one round in check-in with three boards, the middle one a live game; ids are stable across polls. */
-function night(over: { liveMove?: number; dropLive?: boolean; now?: string; flagged?: boolean } = {}): MatchDayView {
+function night(over: { liveMove?: number; dropLive?: boolean; now?: string; flagged?: boolean; extra?: ArbiterBoard } = {}): MatchDayView {
   const b1 = withState({ kind: "checking_in" }, { fixtureId: "b-1", boardNo: 1, white: { name: "Chen", personId: null }, black: { name: "Silva", personId: null } });
   const b2 = live(over.liveMove ?? 12, { fixtureId: "b-2", boardNo: 2, white: { name: "Okafor", personId: null }, black: { name: "Haas", personId: null } });
   const b3 = held(1, { fixtureId: "b-3", boardNo: 3, white: { name: "Rossi", personId: null }, black: { name: "Ng", personId: null } });
-  const boards = over.dropLive === true ? [b1, b3] : [b1, b2, b3];
+  const boards = [...(over.dropLive === true ? [b1, b3] : [b1, b2, b3]), ...(over.extra === undefined ? [] : [over.extra])];
   const flagged = earlier(2, {
     ...withState({ kind: "cancelled" }, { flagCount: 1 }),
     fixtureId: "old-1",
@@ -313,6 +316,85 @@ describe("a poll whose ONLINE read failed (online_failed) keeps the last online 
 
     expect(listOf(island), "the held chess row is the poll's to drop: no division was unread").toEqual(["2 matches have no slot"]);
     expect(parts(island.tree()).board, "while the open board stays: the rounds are held").toMatchObject({ hiddenOnPhone: false });
+  });
+
+  // B13 (wave A re-review): the rounds read failed and nothing was unread, so the poll's FRESH Needs-you rows sit beside the HELD rounds. A row for a board
+  // that is in none of the held rounds (it was held a moment ago; the page has never listed it) opened as "no longer on this list" - a claim the page cannot
+  // make, because it did not read the rounds. It says it could not read them, keeps what was opened, and opens it when a poll answers with the board.
+  describe("B13 - a board opened from a fresh Needs-you row while the rounds could not be read", () => {
+    const seven = () => held(1, { fixtureId: "b-7", boardNo: 7, white: { name: "Ibsen", personId: null }, black: { name: "Jahn", personId: null } });
+    const failedPoll = () => ({ ...night({ now: at(1) }), online_rounds: [], online_failed: true, boards_unread: [] as string[] });
+
+    it("the rounds failed: the press says so and holds it - no 'left the list', no panel; the poll that answers WITH the board opens it; one that answers WITHOUT it says it left", async () => {
+      const island = renderIsland(MatchDayShell, props(night({ now: at(0) })));
+      net.next = failedPoll();
+      poll.tick!();
+      await settle();
+      expect(parts(island.tree()).boardRows, "premise: the held rounds are still on the page").toBe(3);
+      (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-7");
+      const held7 = parts(island.tree());
+      expect(held7.lost, "no claim that it left the list: the page did not read the rounds").toBeNull();
+      expect(held7.reading, "it says the rounds could not be read").toContain(en["matchDay.focus.reading"]!);
+      expect(held7.board, "no panel for a board the page cannot find").toBeNull();
+      // the poll that ANSWERS and lists the board: the held press resolves, no second click
+      net.next = night({ now: at(2), extra: seven() });
+      poll.tick!();
+      await settle();
+      const opened = parts(island.tree());
+      expect((opened.board!.row as { fixtureId: string }).fixtureId, "the board opened by itself").toBe("b-7");
+      expect(opened.reading, "and the notice is gone").toBeNull();
+      expect(opened.lost).toBeNull();
+      expect(opened.listHiddenOnPhone, "a phone that pressed the row goes full-screen into the board it was waiting for (the press was kept, not dropped)").toBe(true);
+    });
+
+    it("the rounds answer WITHOUT the board: now it is 'left the list' (the notice is for a failed read only); a board never opened while failing says nothing", async () => {
+      const island = renderIsland(MatchDayShell, props(night({ now: at(0) })));
+      net.next = failedPoll();
+      poll.tick!();
+      await settle();
+      (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-7");
+      expect(parts(island.tree()).reading, "premise: waiting on the rounds").not.toBeNull();
+      net.next = night({ now: at(2) }); // answered, and the board is on no round
+      poll.tick!();
+      await settle();
+      const gone = parts(island.tree());
+      expect(gone.reading).toBeNull();
+      expect(gone.lost, "the rounds answered and the board is not on them: it is no longer on the list").not.toBeNull();
+      expect(gone.board).toBeNull();
+      // A board that really left sends the phone back to the list: when it comes back the desktop focuses it, a phone is not jumped into it.
+      net.next = night({ now: at(3), extra: seven() });
+      poll.tick!();
+      await settle();
+      const back = parts(island.tree());
+      expect((back.board!.row as { fixtureId: string }).fixtureId, "the desktop focuses it again").toBe("b-7");
+      expect(back.listHiddenOnPhone, "a phone sent back to the list is not jumped into it").toBe(false);
+    });
+
+    it("a ROUND opened from a fresh row while the rounds could not be read is held the same way (not 'left the list'); the rounds answering without it say it left", async () => {
+      const island = renderIsland(MatchDayShell, props(night({ now: at(0) })));
+      net.next = failedPoll();
+      poll.tick!();
+      await settle();
+      (parts(island.tree()).list!.onOpenRound as (key: string) => void)("stage-never-listed:9");
+      const waiting = parts(island.tree());
+      expect(waiting.reading, "waiting on the rounds").not.toBeNull();
+      expect(waiting.lost, "no claim that the round left").toBeNull();
+      expect(waiting.round, "no round panel for a round the page cannot find").toBeNull();
+      net.next = night({ now: at(2) });
+      poll.tick!();
+      await settle();
+      const gone = parts(island.tree());
+      expect(gone.reading).toBeNull();
+      expect(gone.lost, "the rounds answered without it: it left the list").not.toBeNull();
+    });
+
+    it("the same press with the rounds READ (no failure) is the plain 'left the list' - the negative needs its positive pair", () => {
+      const island = renderIsland(MatchDayShell, props(night({ now: at(0) })));
+      (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-7");
+      const p = parts(island.tree());
+      expect(p.lost, "answered rounds, board on none: left the list").not.toBeNull();
+      expect(p.reading).toBeNull();
+    });
   });
 
   it("an ANSWERED poll that really lists no round is taken as the answer - the keep is for failures only", async () => {
@@ -494,7 +576,8 @@ describe("MD-R30 + B5: a 402 seen by the round panel lifts every press that star
     expect(mayPress(roundReader(island), "start")).toBe(false);
     // an older server's poll carries no flag: no evidence either way
     clock.now = 3_000;
-    const { frozen: _f, ...legacy } = { ...v(), now: at(1) };
+    const legacy: Partial<MatchDayView> = { ...v(), now: at(1) };
+    delete legacy.frozen;
     net.next = legacy;
     poll.tick!();
     await settle();
@@ -722,6 +805,43 @@ describe("the board in focus's cameras: only a watchable side is joined, only fo
     expect(net.joins.map((j) => j.side)).toEqual(["home"]);
     await drive(island, [camBoard("cam-late", both())], 1);
     expect(net.joins.map((j) => j.side), "the home side was not asked again").toEqual(["home", "away"]);
+    island.unmount();
+  });
+
+  it("B7 (T9 m5): the keys follow the board the TILES are drawn from - the panel's own read when it has one: a side its answer calls watchable is joined, a side it calls gone is let go, another board's answer is read for none, and the panel leaving puts the day's row back", async () => {
+    const row = camBoard("cam-m5", { home: joinable(), away: preMinted() });
+    const island = renderIsland(MatchDayShell, props(nightOf([row]), { focusBoardId: "cam-m5" }));
+    await settle();
+    expect(net.joins.map((j) => j.side), "premise: the day's row has only the home side watchable").toEqual(["home"]);
+    const handUp = (id: string, b: ArbiterBoard | null) =>
+      (parts(island.tree()).board!.onAnswer as (id: string, a: unknown) => void)(id, b === null ? null : { ...b, position: null, stage_id: "stage-1", round_no: 3, hold_reason: null });
+    // The panel read the board a moment after the poll: the away player has arrived.
+    handUp("cam-m5", camBoard("cam-m5", both()));
+    await settle();
+    expect(net.joins.map((j) => j.side), "the side the panel's answer calls watchable is joined, the home side is not asked again").toEqual(["home", "away"]);
+    // ... and a later answer says the away side is gone: its meeting is let go.
+    const leavesBefore = sdk.leaves.length;
+    handUp("cam-m5", camBoard("cam-m5", { home: joinable(), away: preMinted() }));
+    await settle();
+    expect(sdk.leaves.length - leavesBefore, "the away meeting was left").toBe(1);
+    expect(sdk.leaves.at(-1)!, "and it was the away one").toContain("away");
+    // An answer for ANOTHER board is read for none: the keys stay.
+    const joinsBefore = net.joins.length;
+    handUp("some-other-board", camBoard("some-other-board", both()));
+    await settle();
+    expect(net.joins.length, "a stray answer joins nothing").toBe(joinsBefore);
+    // The panel's answer says both sides again: the away meeting is opened once more (on the token the serial kept - no second POST).
+    const connectsBefore = sdk.connects.length;
+    handUp("cam-m5", camBoard("cam-m5", both()));
+    await settle();
+    expect(sdk.connects.length - connectsBefore, "the away meeting is opened again").toBe(1);
+    expect(net.joins.length, "on the kept token: no new POST").toBe(joinsBefore);
+    // The panel leaves (null): the day's row is the board again - only its home side is watchable, so the away meeting is let go.
+    const leavesAt = sdk.leaves.length;
+    handUp("cam-m5", null);
+    await settle();
+    expect(sdk.leaves.length - leavesAt, "the answer taken back: one meeting let go").toBe(1);
+    expect(sdk.leaves.at(-1)!, "the away one - the row's own side stays").toContain("away");
     island.unmount();
   });
 

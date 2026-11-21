@@ -8299,6 +8299,7 @@
   "matchDay.focus.left": "{court} is no longer on this list.",
   "matchDay.focus.leftUnnamed": "What you opened is no longer on this list.",
   "matchDay.focus.pick": "Pick one from the list.",
+  "matchDay.focus.reading": "The online chess rounds could not be read just now. What you opened will open as soon as they can be.",
   "matchDay.notice.dismiss": "Dismiss",
   "matchDay.needsYou.count.one": "{count} needs you",
   "matchDay.needsYou.count.other": "{count} need you",

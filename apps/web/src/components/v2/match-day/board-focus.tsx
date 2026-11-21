@@ -137,6 +137,10 @@ export type BoardFocusProps = {
   onChanged: () => void;
   /** MD-R30: an answer said the competition is billing-frozen. */
   onFrozen: () => void;
+  /** B7 (T9 m5): the panel's own read of THIS board, handed up the moment it changes (null: none yet, or the panel is leaving). The tiles are drawn
+   *  from it (`read.answer ?? row`), so the shell's join keys must follow the same board or a tile is drawn for a meeting nobody joined - and one
+   *  joined that no tile shows. It must keep its identity across renders (a `useCallback`): the effect that hands the answer up is keyed on it. */
+  onAnswer: (fixtureId: string, answer: MatchDayBoard | null) => void;
   /** The shell's joins for this board (`useArbiterJoins`): what each of its two meetings answered, and the tile's "Try again". Absent: no
    *  cameras (the flag is off, or the shell keeps none). Whether this reader sees tiles at all is `camerasOffered`'s, asked here. */
   joins?: { views: JoinViews; retry(key: MeetingKey): void };
@@ -146,11 +150,16 @@ export type BoardFocusProps = {
 export type CameraMode = "cameras" | "board";
 
 export function BoardFocus(p: BoardFocusProps) {
-  const { row, reader, refreshKey, onChanged, onFrozen } = p;
+  const { row, reader, refreshKey, onChanged, onFrozen, onAnswer } = p;
   const id = row.fixtureId;
   const [reloadKey, setReloadKey] = useState(0);
   const read = useBoardRead(id, refreshKey, reloadKey);
   const board = read.answer ?? row;
+  // The board the tiles are drawn from is the board the shell joins for: hand the answer up, and take it back when this panel goes (or the answer is replaced).
+  useEffect(() => {
+    onAnswer(id, read.answer);
+    return () => onAnswer(id, null);
+  }, [id, read.answer, onAnswer]);
 
   const [decision, dispatch] = useReducer(arbiterDecision, id, initialArbiterDecision);
   // Below lg the cameras and the chess board share the screen: the organiser's pick, else the default (cameras while there is something to

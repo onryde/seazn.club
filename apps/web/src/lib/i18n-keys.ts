@@ -4309,6 +4309,7 @@ export type DictionaryKey =
   | "matchDay.focus.openMatch"
   | "matchDay.focus.openPad"
   | "matchDay.focus.pick"
+  | "matchDay.focus.reading"
   | "matchDay.focus.scoreboard"
   | "matchDay.focus.started"
   | "matchDay.free.allBlocked.one"

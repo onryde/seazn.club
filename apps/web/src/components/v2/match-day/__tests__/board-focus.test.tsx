@@ -488,6 +488,28 @@ describe("BoardPanelView: who is offered which decision", () => {
     expect(count(h, "arbiter-extend-board")).toBe(1);
   });
 
+  it("B7 (MD-R36 headroom): the two quiet decisions share ONE row from lg - the wrapper is out of the box tree below lg, two columns from lg, a lone button spans it, Settle is not in it, and with neither there is no wrapper", () => {
+    const group = (h: string) => /<div data-testid="arbiter-quiet-decisions" class="([^"]*)">([\s\S]*?)<\/div>/.exec(h);
+    const both = group(decide(EDITOR));
+    expect(both, "the pair is grouped").not.toBeNull();
+    expect(both![1], "out of the box tree below lg").toMatch(/(^|\s)contents(\s|$)/);
+    expect(both![1], "two columns from lg").toMatch(/(^|\s)lg:grid-cols-2(\s|$)/);
+    expect(both![1], "a lone button takes the row").toContain("lg:[&amp;&gt;:only-child]:col-span-2"); // the markup's own escaping of lg:[&>:only-child]:col-span-2
+    expect(has(both![2]!, resync) && has(both![2]!, goOn), "both quiet buttons are in it").toBe(true);
+    expect(has(both![2]!, settle), "Settle is the primary press, on a row of its own").toBe(false);
+    // One alone (no flag to close): the group holds just the resync.
+    const noFlags = { ...deciding, flags: [], flagCount: 0 };
+    const lone = group(html(noFlags, { answer: answerOf(noFlags, { hold_reason: "clock_flag_unsettled" }), reader: EDITOR }));
+    expect(lone, "a lone button is still grouped (it spans the row)").not.toBeNull();
+    expect(has(lone![2]!, resync) && !has(lone![2]!, goOn)).toBe(true);
+    // Neither (no game to resync, no flag): no empty wrapper; the decision is still there for Settle.
+    const neither = { ...deciding, flags: [], flagCount: 0, canResync: false };
+    const none = html(neither, { answer: answerOf(neither, { hold_reason: "clock_flag_unsettled" }), reader: EDITOR });
+    expect(group(none), "no empty wrapper").toBeNull();
+    expect(count(none, "arbiter-decision"), "premise: the decision section is still drawn").toBe(1);
+    expect(has(none, settle)).toBe(true);
+  });
+
   it("a viewer sees no decision section and no outage card - and no press of any kind", () => {
     const h = decide(VIEWER, { joins: down });
     expect(count(h, "arbiter-decision")).toBe(0);
@@ -908,6 +930,7 @@ describe("BoardFocus: the read rides the poll, the decisions are the runner's", 
     onBack: noop,
     onChanged: noop,
     onFrozen: noop,
+    onAnswer: noop,
     ...o,
   });
   const viewOf = (ui: ReturnType<typeof renderIsland<BoardFocusProps>>) => propsOf(ui.tree().find((e) => e.type === BoardPanelView)!) as unknown as BoardPanelViewProps;
@@ -975,6 +998,25 @@ describe("BoardFocus: the read rides the poll, the decisions are the runner's", 
     ui.rerender(focusProps(held, { joins: joinsOf(held), refreshKey: 3 }));
     await flush();
     expect(viewOf(ui).camerasFolded, "nor opens it again when a board goes back on hold").toBe(true);
+  });
+
+  it("B7 (T9 m5): the panel's own answer is handed UP to the shell as soon as it is read, replaced by the next one, and taken back (null) when the panel goes - the shell's join keys follow the board the tiles are drawn from", async () => {
+    const onAnswer = vi.fn();
+    const ui = renderIsland(BoardFocus, focusProps(LIVE, { onAnswer, refreshKey: 1 }));
+    expect(onAnswer, "nothing read yet: nothing handed up").toHaveBeenLastCalledWith(LIVE.fixtureId, null);
+    net.calls[0]!.resolve(full(LIVE));
+    await flush();
+    const [id, answer] = onAnswer.mock.calls.at(-1)!;
+    expect(id).toBe(LIVE.fixtureId);
+    expect(answer, "the very answer the view draws from").toBe(viewOf(ui).answer);
+    expect((answer as MatchDayBoard).position).toEqual(POSITION);
+    // The next read replaces it: the shell is handed the NEW answer, not the first one kept.
+    ui.rerender(focusProps(LIVE, { onAnswer, refreshKey: 2 }));
+    net.calls[1]!.resolve(full(LIVE, { hold_reason: "mismatch" }));
+    await flush();
+    expect((onAnswer.mock.calls.at(-1)![1] as MatchDayBoard).hold_reason).toBe("mismatch");
+    ui.unmount();
+    expect(onAnswer, "the panel going away takes its answer back").toHaveBeenLastCalledWith(LIVE.fixtureId, null);
   });
 
   it("the answer reaches the view, whole", async () => {

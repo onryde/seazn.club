@@ -39,7 +39,7 @@ import { t } from "@/lib/i18n-runtime";
 import { routes } from "@/lib/routes";
 import type { Severity } from "@/lib/division-phase";
 import type { FrozenNames } from "@/lib/match-day/frozen-names";
-import type { MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
+import type { MatchDayBoard, MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
 import { nextRoundOf, orderOnlineRounds, resolveOnlineFocus, type OnlineOpened, type Reader } from "@/lib/match-day/online";
 import { boardName, onlineRoundTitle } from "@/lib/match-day/online-copy";
 import type { ViewerPlan } from "@/lib/viewer-plan";
@@ -254,7 +254,12 @@ export function MatchDayShell({
   const focusedBoard = focus.kind === "board" ? focus : null;
   // A phone whose court left the list is back on the list (review M6b): it stays there when the court returns, rather than
   // jumping back into a court the organiser was told had gone. React's render-phase adjustment, not an effect.
-  if (phoneOpen && focus.kind === "lost") setPhoneOpen(false);
+  // B13: a board or round that is NOT on the page's rounds while the poll's rounds read FAILED is not "no longer on this list" - the page did not read the
+  // rounds (it holds the last answer, `viewAfterPoll`), so a fresh Needs-you row can name a board the held rounds never listed. The press is kept
+  // (`opened` stands), the page says the rounds could not be read, and the panel opens by itself when a poll that ANSWERS lists the board; one that
+  // answers without it is the plain notice. A phone stays where it is: it is dropped to the list only by a board that really left.
+  const reading = focus.kind === "lost" && view.online_failed === true && (opened?.kind === "board" || opened?.kind === "round");
+  if (phoneOpen && focus.kind === "lost" && !reading) setPhoneOpen(false);
   // Same adjustment for the Needs-you list (fix round 1, m5): once a poll empties it, the button goes and the list is CLOSED,
   // so rows arriving later bring the button back closed rather than reopening the list unasked. A view-only reader never has it.
   const needsYou = readOnly ? [] : view.needs_you;
@@ -276,7 +281,12 @@ export function MatchDayShell({
   const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozen || freezeSeen !== null });
   /** The board in focus's cameras (Task 9): the joins live HERE, keyed on the focused board's watchable sides and the day's own poll, so a poll
    *  that hands the panel a new board object keeps the same keys and re-joins nothing, and leaving the board leaves both meetings. */
-  const cameraKeys = focusedBoard === null ? [] : meetingKeysOf(focusedBoard.board, readerOf(focusedBoard.round));
+  // B7 (T9 m5): the keys follow the board the TILES are drawn from - the panel's own read of the focused board when it has one (`BoardFocus` hands it up),
+  // the day's row until then. Keyed on the board's id: an answer left over from another board is never read for this one.
+  const [boardAnswer, setBoardAnswer] = useState<{ id: string; answer: MatchDayBoard } | null>(null);
+  const onBoardAnswer = useCallback((id: string, answer: MatchDayBoard | null) => setBoardAnswer(answer === null ? null : { id, answer }), []);
+  const keyedBoard = focusedBoard === null ? null : boardAnswer !== null && boardAnswer.id === focusedBoard.board.fixtureId ? boardAnswer.answer : focusedBoard.board;
+  const cameraKeys = focusedBoard === null || keyedBoard === null ? [] : meetingKeysOf(keyedBoard, readerOf(focusedBoard.round));
   const joins = useArbiterJoins(cameraKeys, lastOkAt);
   /** The phone's way back from a round or a board (ruling MD-R27): the list, on every day. A board is not a court, so the courts' noun
    *  ("All courts") stays with the courts' own panels. */
@@ -537,7 +547,12 @@ export function MatchDayShell({
         </div>
       ) : (
         <div className="min-w-0 md:grid md:grid-cols-[minmax(0,17rem)_minmax(0,1fr)] md:items-start md:gap-6 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
-          {focus.kind === "lost" && (
+          {reading && (
+            <div data-testid="md-reading" role="status" className="card mb-4 min-w-0 p-5 md:col-start-2 md:row-start-1 md:mb-0">
+              <p className="font-semibold text-slate-900 [overflow-wrap:anywhere]">{t(dict, "matchDay.focus.reading")}</p>
+            </div>
+          )}
+          {focus.kind === "lost" && !reading && (
             <div data-testid="md-lost" role="status" className="card mb-4 min-w-0 p-5 md:col-start-2 md:row-start-1 md:mb-0">
               <p className="font-semibold text-slate-900 [overflow-wrap:anywhere]">
                 {focus.name === "" ? t(dict, "matchDay.focus.leftUnnamed") : t(dict, "matchDay.focus.left", { court: focus.name })}
@@ -624,6 +639,7 @@ export function MatchDayShell({
               onBack={leaveBoard}
               onChanged={refreshQuiet}
               onFrozen={onFrozen}
+              onAnswer={onBoardAnswer}
               hiddenOnPhone={!phoneCourt}
             />
           )}

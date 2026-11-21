@@ -8299,6 +8299,7 @@
   "matchDay.focus.left": "{court} n'est plus dans cette liste.",
   "matchDay.focus.leftUnnamed": "Ce que vous avez ouvert n'est plus dans cette liste.",
   "matchDay.focus.pick": "Choisissez-en un dans la liste.",
+  "matchDay.focus.reading": "Les rondes d'échecs en ligne n'ont pas pu être lues à l'instant. Ce que vous avez ouvert s'ouvrira dès qu'elles pourront l'être.",
   "matchDay.notice.dismiss": "Fermer",
   "matchDay.needsYou.count.one": "{count} à traiter",
   "matchDay.needsYou.count.other": "{count} à traiter",

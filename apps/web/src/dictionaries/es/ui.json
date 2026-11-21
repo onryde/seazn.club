@@ -8299,6 +8299,7 @@
   "matchDay.focus.left": "{court} ya no está en esta lista.",
   "matchDay.focus.leftUnnamed": "Lo que abriste ya no está en esta lista.",
   "matchDay.focus.pick": "Elige uno de la lista.",
+  "matchDay.focus.reading": "No se han podido leer ahora las rondas de ajedrez en línea. Lo que has abierto se abrirá en cuanto se puedan leer.",
   "matchDay.notice.dismiss": "Cerrar",
   "matchDay.needsYou.count.one": "{count} requiere tu atención",
   "matchDay.needsYou.count.other": "{count} requieren tu atención",
