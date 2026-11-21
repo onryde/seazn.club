@@ -1,7 +1,7 @@
 // The check-in extension (spec 2026-10-09 §3.2.2; owner-approved 2026-10-19): the arbiter adds time to a board's check-in while
 // it is still open - per board, and for a whole round. Client-safe on purpose (nothing server-only): the server rule
 // (`server/external-play/window.ts` `extendRefusal`, `usecases/external-play/checkin-extend.ts`) and the two screens that
-// offer it (the arbiter panel, the organiser's Open round control) read ONE vocabulary here.
+// offer it (Match Day's board and round panels, the organiser's Open round control) read ONE vocabulary here.
 // Relative with `.ts`, not "@/…": api-v1/schemas/ imports this file, so it is also compiled under tsconfig.scripts.json
 // (nodenext), which refuses an extensionless specifier - the convention of every file in that chain.
 import type { DictionaryKey } from "./i18n-keys.ts";
@@ -145,7 +145,7 @@ export const emptyExtendTally = (): ExtendTally => ({ not_playable: 0, game_star
 
 /** Every board of an Open round view as one refusal at `nowMs`: the boards outside `windows` as the server's tally counted them (no tick
  *  of a clock changes why a game is on file, a board is over, or a window has closed), and each window board as the clock judges it
- *  (`liveExtendRefusal`, the arbiter panel's own function: ahead of its opening `not_open`, inside it `null` - it would accept a
+ *  (`liveExtendRefusal`, the board panel's own function: ahead of its opening `not_open`, inside it `null` - it would accept a
  *  press - or `cap_reached` when it has none left, and past its deadline `closed`). `nowMs` null (the viewer's clock is not known yet):
  *  the windows read as the snapshot saw them, and a window with presses left that the snapshot saw OPEN would have made the server's
  *  own count non-zero, which is a round that has its button and is never asked for a reason. */

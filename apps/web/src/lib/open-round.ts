@@ -148,7 +148,7 @@ export const BILLING_FROZEN_CODE = "PAYMENT_REQUIRED";
 /** A re-pair (Swiss unpair, Rebuild, or the delete-entrant that unpairs) is
  *  refused while a game stands — or may stand — behind any board it would
  *  clear (controller ruling, 2026-10-10). There is no "void" that unblocks it:
- *  the organiser's way out is settling the board in the arbiter panel (T16),
+ *  the organiser's way out is settling the board in Match Day's board panel (T16),
  *  which decides it, and a round with a decided board stays paired. */
 export const ONLINE_GAME_EXISTS_CODE = "ONLINE_GAME_EXISTS";
 export const ONLINE_GAME_EXISTS_KEY: DictionaryKey = "externalPlay.onlineGameExists";

@@ -1,4 +1,4 @@
-// T15 — the arbiter panel's view of one opened round (chess design §5.3:
+// T15 — the arbiter's view of one opened round, as Match Day's round and board panels read it (chess design §5.3:
 // "An arbiter, when assigned, joins receive-only and sees both players' tiles
 // for a chosen fixture, plus that fixture's flags" - amended by D16, §5.6.4: one
 // player's tile at a time, a switch between the two, plus that fixture's flags).
@@ -126,7 +126,7 @@ export type ArbiterFlag =
 
 /** A flag as a reader WITHOUT an editor's role may have it (Match Day online, ruling MD-R13): which kind of flag it is, when it was opened
  *  and its id, and nothing of what it found or whom it names - an accusation about a named player (out-of-band play, one player on two
- *  devices) is the organiser's, as the arbiter page always kept it. Every other field is null: the same shape the card has, so a card
+ *  devices) is the organiser's, as it was when the arbiter page showed it. Every other field is null: the same shape the card has, so a card
  *  reads a null where an editor's reads the evidence. A null here is therefore NOT "the note could not be read" - the viewer's page
  *  knows it is a viewer's and says a flag was raised, no more. A kind added to `ArbiterFlag` fails this switch at compile time. */
 function flagSummary(f: ArbiterFlag): ArbiterFlag {

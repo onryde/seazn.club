@@ -1,4 +1,5 @@
-// The Arbiter Panel round column's model (spec 2026-10-24-arbiter-round-column-design.md §5.2, §5.3, §5.5, §5.6, §8): which
+// The round column's model, first written for the Arbiter Panel and read today by Match Day's round rules (lib/match-day/online.ts) and the
+// Fixtures tab's entry card (spec 2026-10-24-arbiter-round-column-design.md §5.2, §5.3, §5.5, §5.6, §8): which
 // phase the column is in, the check-in clock, the tallies, the queue's attention count, where a "Review board" goes, the
 // Fixtures-tab entry line and the next-round views. Pure on purpose - no DB, no React, nothing server-only (the two server
 // types below are type-only and erased) - so the column, the waiting list and the entry card all read ONE answer, and a
@@ -151,8 +152,8 @@ export function attentionCount(held: readonly NeedsOrganiserExternalPlayRow[], f
   return ids.size;
 }
 
-/** Where a card's "Review board" goes: `select` the board in place (it is in the round on screen), `link` to the arbiter page
- *  pinned to its round (any other board), or `none` (a board the organiser sits on, or a cancelled one, which can never be
+/** Where a card's "Review board" goes: `select` the board in place (it is in the round on screen), `link` to the board's own page
+ *  (any other board; no production caller is left since the Arbiter page was retired - Match Day opens a board by `?board=`), or `none` (a board the organiser sits on, or a cancelled one, which can never be
  *  selected). `none` outranks the other two. */
 export type ReviewTarget = { kind: "select" } | { kind: "link" } | { kind: "none" };
 

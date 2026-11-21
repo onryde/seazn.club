@@ -3,9 +3,9 @@ import "server-only";
 // check-in while it is still OPEN - one board (`extendCheckin`), or every board of an opened round whose check-in is open right
 // now (`extendRoundCheckin`, each board its own atomic step).
 //
-// WHO. Exactly the people who may use the arbiter panel: a signed-in owner or admin of the club (`requireWatcher`, the panel's
-// own gate - the route's `requireResourceAuth(..., "write")` is the first half), who does not PLAY on the board (C1, D7: the
-// arbiter panel never lists a board its viewer plays on, and an organiser must not give their own board more time).
+// WHO. Exactly the people who may watch a board in Match Day's panels: a signed-in owner or admin of the club (`requireWatcher`, the
+// arbiter's own gate - the route's `requireResourceAuth(..., "write")` is the first half), who does not PLAY on the board (C1, D7: the
+// arbiter loader never lists a board its viewer plays on, and an organiser must not give their own board more time).
 //
 // WHAT MOVES. Only the board's bridge row: `checkin_extra_ms` += one step, `checkin_extensions` += 1. The board's deadline is
 // `T_batch + DEADLINE_AFTER_MS + checkin_extra_ms` in window.ts's `windowFor` and nowhere else, so every reader of the window -

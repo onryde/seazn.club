@@ -1,6 +1,6 @@
 import "server-only";
 // T16 — the organiser settles an online board (chess design §3.6, §7): the
-// queue's "Settle the result" for a held board, and the arbiter panel's
+// queue's "Settle the result" for a held board, and Match Day's board panel's
 // "Settle the result now…" for any board still being played.
 //
 // The result is written through the normal scoring path under the CALLER's

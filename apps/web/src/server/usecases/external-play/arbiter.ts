@@ -1,9 +1,9 @@
 import "server-only";
-// T15 — the arbiter panel's server halves (chess design §5.3, D8).
+// T15 — the arbiter's server halves, read by Match Day's round and board panels (chess design §5.3, D8).
 //
 // There is no arbiter role and no assignment store (spec §12: the existing
 // organiser/admin role; D8: deterrent only, no mandatory observer). The
-// organiser who opens the panel IS the arbiter, the round in view is the
+// organiser who opens a Match Day panel IS the arbiter, the round in view is the
 // division's most recently opened one, and nothing anywhere waits for an
 // arbiter to be present.
 //
@@ -152,9 +152,9 @@ type FlagRow = {
   note: string | null;
 };
 
-/** What `?fixture=` asked for (I3): that board's round, or a plain "not
- *  here" — never a different board. T16's "Review in arbiter panel" link
- *  depends on it.
+/** What the Arbiter page's `?fixture=` asked for (I3): that board's round, or a plain "not
+ *  here" — never a different board. The page is gone and no production caller is left (Match Day resolves `?board=` through
+ *  `resolveOnlineFocus`); the rule stays pinned by its tests.
  *  - `round`: the board is this club's, in THIS division, paired, not
  *    cancelled, in a round that was opened — an earlier round included;
  *  - `own`: all of that, but the viewer plays on it (C1, D7);
