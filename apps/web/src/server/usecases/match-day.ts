@@ -908,11 +908,15 @@ export async function getMatchDay(
     // Match Day's online chess rounds (the Arbiter page's replacement; always read since Task 10 retired the flag that kept this off). Sealed
     // tables, so it reads on its own connections, here and never inside the tenant transaction above. ISOLATED (ruling MD-R9): the day
     // screen is the organiser's lifeline, so chess failing must not take the courts down with it - the throw is logged loud and this poll
-    // answers without the online rounds (`null`: told apart from an EMPTY answer by `playingNoCourtAfterOnline`).
-    readOnlineRounds(auth, competitionId, now, divisionsRead, queue).catch((err: unknown): MatchDayOnlineRound[] | null => {
-      log.error({ err, competitionId }, "match-day: the online rounds could not be read; this poll answers without them");
-      return null;
-    }),
+    // answers without the online rounds (`null`: told apart from an EMPTY answer by `playingNoCourtAfterOnline`). Started once the divisions are
+    // listed, and the isolation wraps only the read: a divisions list that failed is the poll's own failure (the `Promise.all` throws it), not
+    // an online read to log and swallow as well - that logged one failure twice, the first time as "this poll answers without them".
+    divisionsRead.then((): Promise<MatchDayOnlineRound[] | null> =>
+      readOnlineRounds(auth, competitionId, now, divisionsRead, queue).catch((err: unknown): MatchDayOnlineRound[] | null => {
+        log.error({ err, competitionId }, "match-day: the online rounds could not be read; this poll answers without them");
+        return null;
+      }),
+    ),
   ]);
   // A board is listed once, under its round (design 5.2): an online board in play on no court is no no-court row. Dropped here, after
   // `readBoard` and never inside it (the code read and the call preview read the same board and keep their own lists).

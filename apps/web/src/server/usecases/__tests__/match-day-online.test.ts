@@ -721,6 +721,30 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
     }
   });
 
+  it("MD-R9: a rejected divisions list is the poll's own failure - it throws ONCE, and is not also logged as an online-read failure that never ran", async () => {
+    const { day } = await mixedDay();
+    const now = new Date(T0);
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      vi.mocked(readOnlineRounds).mockClear();
+      vi.mocked(listDivisions).mockRejectedValueOnce(new Error("boom: the divisions list is down"));
+
+      await expect(getMatchDay(day.auth, day.comp.id, now), "the poll cannot answer without the divisions: it throws that error").rejects.toThrow(
+        "boom: the divisions list is down",
+      );
+
+      // Nothing about the ONLINE read failed: it never got its divisions. Logging it as "the online rounds could not be read; this poll
+      // answers without them" says the opposite of what happens (the poll does not answer) and logs the one failure twice.
+      expect(logged, "no error log naming the online read").not.toHaveBeenCalled();
+      expect(vi.mocked(readOnlineRounds), "the online read is not started on a divisions list that failed").not.toHaveBeenCalled();
+
+      const up = await getMatchDay(day.auth, day.comp.id, now);
+      expect(up.online_rounds, "premise: the next poll answers, and reads the rounds").toHaveLength(1);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it("I2: a poll lists the competition's divisions once - with the online read, as often as without it - and a read called alone lists them itself", async () => {
     const { day } = await mixedDay();
     const now = new Date(T0);
@@ -873,15 +897,24 @@ describe.runIf(HAS_DB)("readOnlineRounds - what a poll costs (I2): statements pe
   //     composition + `listOpenRounds`' view of the same round: two readers of one round, each reading its boards (MD-R1 forbids a second
   //     composition of the BOARDS; the open-round view is the press and the pairings and needs its own);
   //   boards playing 2;  boards playing and flagged 5.
+  //   fixed cost of a read (the INTERCEPT, 1-board cost minus the slope; gaps wave A3, MEASURED at gaps A3 on the real DB, a read alone): 38 checking in,
+  //     36 playing, 40 playing and flagged. Those are the statements a read pays before it reads one board: the divisions' day windows, the
+  //     stages and rounds, the held and flagged listers' fixed reads, the club's offered answer.
   // Taking the double read out means changing `listOpenRounds` and the loader to share one read of the round: not this task's change (each
   // is measured alone: the loader 17 -> 41 statements for 1 -> 4 boards, `listOpenRounds` 12 -> 30). This test keeps it from growing meanwhile.
-  it("a board costs at most what it costs today: 8 statements checking in, 2 playing, 5 playing and flagged", async () => {
+  it("a read costs at most what it costs today: 8 statements a board checking in, 2 playing, 5 playing and flagged, over a fixed 38 / 36 / 40", async () => {
     const checking = await slopeOf((n) => openedRound(n, -5));
     const playingSlope = await slopeOf(playing);
     const flaggedSlope = await slopeOf(flagged);
     expect(checking.slope, "per board checking in").toBeLessThanOrEqual(8);
     expect(playingSlope.slope, "per board playing").toBeLessThanOrEqual(2);
     expect(flaggedSlope.slope, "per board playing and flagged").toBeLessThanOrEqual(5);
+    // The INTERCEPT too (gaps wave A3): what a read costs before it reads one board. A slope alone lets a fixed cost grow without a word - an
+    // extra query per read, per division or per round - because a round of 4 and a round of 1 both pay it and it cancels in the difference.
+    // intercept = (cost of 1 board) - slope, so a fixed cost is its own number and cannot hide in the per-board one.
+    expect(checking.one - checking.slope, "fixed cost of a read, checking in").toBeLessThanOrEqual(38);
+    expect(playingSlope.one - playingSlope.slope, "fixed cost of a read, playing").toBeLessThanOrEqual(36);
+    expect(flaggedSlope.one - flaggedSlope.slope, "fixed cost of a read, playing and flagged").toBeLessThanOrEqual(40);
     // Anti-vacuity: a round of 4 costs more than a round of 1 in every state (the slope is measured, not a flat line of zeros).
     for (const m of [checking, playingSlope, flaggedSlope]) expect(m.four, "4 boards cost more than 1").toBeGreaterThan(m.one);
   });
