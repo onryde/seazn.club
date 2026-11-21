@@ -1,4 +1,4 @@
-// T17B fix 2 (D7, owner-reported 2026-10-14): the match room's and the arbiter panel's buttons showed the arrow, not
+// T17B fix 2 (D7, owner-reported 2026-10-14): the match room's and the arbiter's (now Match Day's board panel's) buttons showed the arrow, not
 // the hand. Tailwind v4's preflight gives <button> `cursor: default`; the repo's convention is a per-component
 // `cursor-pointer` (no site-wide rule: blast radius), and these files had none.
 //
@@ -11,10 +11,13 @@ import { describe, expect, it } from "vitest";
 
 const COMPONENTS = join(__dirname, "..", "..", "..");
 const ROOM_DIR = join(COMPONENTS, "public-site", "match-room");
-/** Every component file of the room (each one with a button is scanned), and the arbiter panel's two. */
+/** Every component file of the room (each one with a button is scanned), and the buttons of Match Day's board panel (the decision card,
+ *  the cameras strip, the panel) and the flag cards they draw: the Arbiter panel's own buttons moved there when it was retired. */
 const FILES = [
   ...readdirSync(ROOM_DIR).filter((f) => f.endsWith(".tsx")).map((f) => join(ROOM_DIR, f)),
-  join(COMPONENTS, "v2", "arbiter-panel.tsx"),
+  join(COMPONENTS, "v2", "match-day", "board-focus.tsx"),
+  join(COMPONENTS, "v2", "match-day", "board-decision.tsx"),
+  join(COMPONENTS, "v2", "match-day", "board-cameras.tsx"),
   join(COMPONENTS, "v2", "arbiter-flag-cards.tsx"),
 ];
 
@@ -98,8 +101,8 @@ describe("buttons show the hand (T17B fix 2, D7)", () => {
     }
     expect(buttons, `anti-vacuity: buttons scanned ${JSON.stringify(perFile)}`).toBeGreaterThanOrEqual(20);
     expect(disableable, "anti-vacuity: disableable buttons scanned").toBeGreaterThan(0);
-    // The scan reached every file the owner named: the room's check-in, controls and cards, and the panel.
-    for (const f of ["public-site/match-room/checkin.tsx", "public-site/match-room/controls.tsx", "public-site/match-room/room-cards.tsx", "v2/arbiter-panel.tsx"]) {
+    // The scan reached every file the owner named: the room's check-in, controls and cards, and the board panel's decision card.
+    for (const f of ["public-site/match-room/checkin.tsx", "public-site/match-room/controls.tsx", "public-site/match-room/room-cards.tsx", "v2/match-day/board-decision.tsx"]) {
       expect(perFile[f] ?? 0, f).toBeGreaterThan(0);
     }
   });

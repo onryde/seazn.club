@@ -2,7 +2,7 @@
 // `getCompetition(…).frozen` — so a frozen competition's Match Day offers no Call and no Undo call and says why. The shell's half
 // (the fact reaching every panel) is match-day-ssr.test.tsx's "F1"; the server's refusal is match-day-call.test.ts's. This is the
 // seam between them: the page itself is rendered (an async server component, called directly), its reads mocked.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { MatchDayView } from "@/lib/match-day/types";
 
@@ -236,11 +236,11 @@ describe("G5 — a viewer's Match Day payload has no Needs-you rows", () => {
   });
 });
 
-// Match Day online, Task 6: the page hands the shell the three things only the page knows - the `?board=` and `?round=` the address
-// carries and the MATCH_DAY_ONLINE flag. The shell's half (a value opening what it names) is match-day-online-shell.test.tsx; this is the
-// seam between them, where a literal `false` or a dropped param would compile, render and quietly leave the online block off.
-describe("Match Day online - the page hands the shell the address's board and round, and the flag", () => {
-  type Online = { onlineEnabled?: boolean; focusBoardId?: string | null; focusRoundKey?: string | null; focusCourtId?: string | null };
+// Match Day online, Task 6 (the flag it once handed over is retired, Task 10): the page hands the shell the two things only the page knows -
+// the `?board=` and `?round=` the address carries. The shell's half (a value opening what it names) is match-day-online-shell.test.tsx;
+// this is the seam between them, where a dropped param would compile, render and quietly leave a deep link opening nothing.
+describe("Match Day online - the page hands the shell the address's board and round", () => {
+  type Online = { focusBoardId?: string | null; focusRoundKey?: string | null; focusCourtId?: string | null };
   const shellProps = async (search: Record<string, string | string[] | undefined> = {}) => {
     const tree = (await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve(search) })) as {
       props: { children: { type: unknown; props: Online } };
@@ -248,23 +248,17 @@ describe("Match Day online - the page hands the shell the address's board and ro
     expect(tree.props.children.type).toBe(MatchDayShell);
     return tree.props.children.props;
   };
-  const was = process.env.MATCH_DAY_ONLINE;
   beforeEach(() => {
     h.frozen = false;
     h.canEdit = true;
     h.needs = [];
-    delete process.env.MATCH_DAY_ONLINE;
-  });
-  afterEach(() => {
-    if (was === undefined) delete process.env.MATCH_DAY_ONLINE;
-    else process.env.MATCH_DAY_ONLINE = was;
   });
 
-  it("EMPTY CASE FIRST: no ?board= and no ?round= is none for both, and the flag unset is off", async () => {
+  it("EMPTY CASE FIRST: no ?board= and no ?round= is none for both, and the shell is handed no online switch at all", async () => {
     const p = await shellProps();
     expect(p.focusBoardId).toBeNull();
     expect(p.focusRoundKey).toBeNull();
-    expect(p.onlineEnabled).toBe(false);
+    expect("onlineEnabled" in p, "the flag is gone: nothing here can leave the online block off").toBe(false);
   });
 
   it("?board= and ?round= reach the shell as written, each in its own prop, beside ?court=", async () => {
@@ -300,24 +294,5 @@ describe("Match Day online - the page hands the shell the address's board and ro
     );
     expect(html).toContain('data-testid="md-round-row"');
     expect(html).not.toMatch(/matchDay\.[a-z]/);
-  });
-
-  it("the flag is on only for exactly MATCH_DAY_ONLINE=1 (the value getMatchDay reads), a sweep of what else it could be", async () => {
-    const cells: [string | undefined, boolean][] = [
-      ["1", true],
-      [undefined, false],
-      ["", false],
-      ["0", false],
-      ["true", false],
-      ["on", false],
-    ];
-    let checked = 0;
-    for (const [value, expected] of cells) {
-      if (value === undefined) delete process.env.MATCH_DAY_ONLINE;
-      else process.env.MATCH_DAY_ONLINE = value;
-      expect((await shellProps()).onlineEnabled, JSON.stringify(value)).toBe(expected);
-      checked++;
-    }
-    expect(checked, "anti-vacuity: six values").toBe(6);
   });
 });

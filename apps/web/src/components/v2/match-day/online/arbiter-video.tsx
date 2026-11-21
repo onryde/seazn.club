@@ -1,7 +1,7 @@
 "use client";
 // The video rules a watched board runs on - the pure answers (what a pane shows, what a join's refusal means, which side is watchable) and the one
-// element that draws a received camera. MOVED here from the Arbiter Panel (arbiter-panel.tsx, which re-exports them until Task 10 deletes it) so
-// Match Day's two tiles (board-cameras.tsx) and the panel read ONE spelling of each rule, never a copy.
+// element that draws a received camera. MOVED here from the Arbiter Panel (deleted with the page in Task 10) so
+// Match Day's two tiles (board-cameras.tsx) and the join engine read ONE spelling of each rule, never a copy.
 //
 // Chess only: every rule below is about a board's camera meeting (D16: a meeting PER PLAYER, the arbiter in each one receive-only).
 import { useEffect, useRef } from "react";

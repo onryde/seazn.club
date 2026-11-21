@@ -2093,36 +2093,34 @@ describe("the online-chess fixture servers' wiring", () => {
     for (const k of FLAGS) expect(spec, `the walkthrough names ${k} where a disabled pass is reported`).toContain(k);
   });
 
-  // Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6): Match Day's online block, the per-board Needs-you rows and the board and
-  // round panels are drawn only with the server's MATCH_DAY_ONLINE exactly "1" (Task 10 removes the flag with the arbiter page). The two specs
-  // that walk them - competition-desk-actions.spec.ts (e2e-parallel) and mobile/match-surfaces.spec.ts (e2e-mobile) - need a server that
-  // carries it, so a job without it reads as "the row was never raised" rather than as a missing flag.
-  it("e2e-parallel and e2e-mobile switch MATCH_DAY_ONLINE on (exactly \"1\"), the runbook's recipe and ci-local.sh carry it, and e2e-serial leaves it off", () => {
-    const K = "MATCH_DAY_ONLINE";
-    const runbook = readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8");
-    const sh = readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8");
-    const body = strip(/\ne2e_env\(\) \{\n([\s\S]*?)\n\}/.exec(sh)?.[1] ?? "");
-    expect(runbook, "docs/runbooks/e2e-local.md's server recipe").toMatch(new RegExp(`^${K}=1 \\\\$`, "m"));
-    expect(runbook, "docs/runbooks/e2e-local.md's var table names it").toContain(`\`${K}=1\``);
-    // The recipe also carries what the online specs' seeds need beside it (a server started from the recipe alone must run them): the online
-    // chess override, and the court-stream build floor match-day.spec.ts links on (the same value e2e.yml's Start server sets).
+  // Match Day all-in-one, Task 10: the Match Day online flag (Task 6) is GONE - Match Day draws its online rounds, the per-board Needs-you rows and
+  // the board and round panels whenever a division plays online, so no server recipe switches anything on. Two halves: the flag is named nowhere
+  // that used to carry it (a leftover export would read as a dead switch somebody must keep in step), and the recipe still carries what the
+  // online specs' seeds need beside it (a server started from the recipe alone must run match-day-online.spec.ts and match-day.spec.ts).
+  it("the retired Match Day online flag is named in no workflow, runbook or local-gate script, and the server recipe still carries the online chess override and the court-stream build floor", () => {
+    // Built, not typed: the repo-wide "the flag is gone" grep then finds this file clean, and a leftover anywhere else still reds the test below.
+    const K = ["MATCH_DAY", "ONLINE"].join("_");
+    const files: [string, string][] = [
+      [".github/workflows/e2e.yml", readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")],
+      ["docs/runbooks/e2e-local.md", readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8")],
+      ["scripts/ci-local.sh", readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8")],
+    ];
+    for (const [name, body] of files) expect(body, `${name} no longer names the flag`).not.toContain(K);
+    expect(files.length, "files checked").toBe(3);
+    const runbook = files[1]![1];
+    // Positive pairs, so an absent flag is not an absent recipe: the recipe's own vars are still there.
     expect(runbook, "the recipe's ONLINE_CHESS_ALWAYS").toMatch(/^ONLINE_CHESS_ALWAYS=1 \\$/m);
     expect(runbook, "the recipe's COURT_MIN_APP_VERSION").toMatch(/^COURT_MIN_APP_VERSION=\d+\.\d+\.\d+-\d+ \\$/m);
     expect(runbook, "the var table names ONLINE_CHESS_ALWAYS").toContain("| `ONLINE_CHESS_ALWAYS=1` |");
     expect(runbook, "the var table names COURT_MIN_APP_VERSION").toContain("| `COURT_MIN_APP_VERSION=");
-    expect(body, "ci-local.sh's e2e_env").toMatch(new RegExp(`^\\s*export ${K}=1\\s*$`, "m"));
+    // e2e.yml: the three legs that start a server for the online specs all set the override (e2e-parallel also the build floor).
     let on = 0;
-    for (const [name, next] of [["e2e-parallel", "e2e-serial"], ["e2e-mobile", null]] as const) {
-      expect(jobEnv(job(name, next)).get(K), `${name}'s job-level env`).toBe("1");
+    for (const [name, next] of [["e2e-parallel", "e2e-serial"], ["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
+      expect(job(name, next), `${name} starts its server with ONLINE_CHESS_ALWAYS`).toMatch(/ONLINE_CHESS_ALWAYS: "1"/);
       on++;
     }
-    expect(on, "jobs that carry it").toBe(2);
-    expect(jobEnv(job("e2e-serial", "e2e-mobile")).has(K), "e2e-serial leaves it off").toBe(false);
-    // The specs' own premise: each names the variable where its rows would otherwise read as never raised.
-    const desk = readFileSync(join(E2E_DIR, "competition-desk-actions.spec.ts"), "utf8");
-    expect(desk, "the desk spec's per-board rows name the flag").toContain(K);
-    const mobile = readFileSync(join(E2E_DIR, "mobile/match-surfaces.spec.ts"), "utf8");
-    expect(mobile, "the mobile spec's online test names the flag").toContain(K);
+    expect(on, "jobs that carry it").toBe(3);
+    expect(job("e2e-parallel", "e2e-serial"), "e2e-parallel carries the court-stream build floor").toMatch(/COURT_MIN_APP_VERSION: "\d+\.\d+\.\d+-\d+"/);
   });
 
   // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray

@@ -26,7 +26,7 @@ import type { ArbiterSide } from "./online/arbiter-watch";
 import { SeatVideo, sideWatchable, type ArbiterVideoView } from "./online/arbiter-video";
 
 /** What one tile shows: the board's own facts first (policy, override, over, the side not watchable, the meeting ended), then what the join
- *  answered, and "connecting" while it has not. The order is `ArbiterPanel`'s (arbiter-panel.tsx `video`), so the two never disagree. */
+ *  answered, and "connecting" while it has not. The order was the Arbiter Panel's `video` (deleted with the page), kept verbatim. */
 export function tileView(board: Pick<ArbiterBoard, "fixtureId" | "cameraPolicy" | "videoOverridden" | "state" | "sides">, side: ArbiterSide, views: JoinViews): ArbiterVideoView {
   if (board.cameraPolicy === "off") return { kind: "none" };
   if (board.videoOverridden) return { kind: "overridden" };
@@ -100,7 +100,7 @@ export function CamerasToggle({ folded, onToggle, controlsId, f, className = "" 
       aria-expanded={!folded}
       aria-controls={controlsId}
       onClick={onToggle}
-      className={`shrink-0 rounded-md px-1 text-xs font-semibold text-[#5b21b6] underline underline-offset-2 max-lg:min-h-11 max-lg:py-2.5 lg:py-0.5${className === "" ? "" : ` ${className}`}`}
+      className={`shrink-0 cursor-pointer rounded-md px-1 text-xs font-semibold text-[#5b21b6] underline underline-offset-2 max-lg:min-h-11 max-lg:py-2.5 lg:py-0.5${className === "" ? "" : ` ${className}`}`}
     >
       {f.t(folded ? "matchDay.cameras.show" : "matchDay.cameras.hide")}
     </button>

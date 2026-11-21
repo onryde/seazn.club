@@ -47,12 +47,12 @@ describe("Permissions-Policy (T17B fix 1): the camera is the match room's, and o
     expect(headers["X-Content-Type-Options"]).toBe("nosniff");
   });
 
-  it("every other path keeps the camera off: the site, the board's own public page, the arbiter panel (it only receives), an embed, the room's API, and paths that merely look like the room — counted", async () => {
+  it("every other path keeps the camera off: the site, the board's own public page, Match Day (its board panel only receives), an embed, the room's API, and paths that merely look like the room — counted", async () => {
     const others = [
       "/",
       "/live/club/spring-open/open/fixtures/0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e",
       routes.publicFixturePlay("club", "spring-open", "open", "f1").replace("/play", "/players"),
-      "/o/club/c/spring-open/d/open/arbiter",
+      routes.competitionMatchDay("club", "spring-open"),
       "/embed/club/spring-open",
       "/api/v1/fixtures/0b9a4c1e-5d2f-4c1a-9e1e-1f2a3b4c5d6e/external-play/room",
       `${ROOM_PATH}/extra`,

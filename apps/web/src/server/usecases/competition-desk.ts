@@ -368,10 +368,9 @@ async function onlineBoardAttentions(
   latestRound: ReadonlyMap<string, number>,
 ): Promise<Map<string, Attention[]>> {
   const out = new Map<string, Attention[]>();
-  // Ruling MD-R18: behind the flag that gates Match Day's own online rows (match-day.ts reads the same one). A row whose button lands on a
-  // Match Day with no online block - the board and round panels read `?board=` / `?round=` from it - is a red row that does nothing;
-  // the division page's Held | Flagged queue still carries these boards until Task 10 removes the flag with the arbiter page.
-  if (process.env.MATCH_DAY_ONLINE !== "1") return out;
+  // Ruling MD-R18 (flag retired, Task 10): Match Day always draws its online rows now, so a row's button always lands on a Match Day with an
+  // online block - the board and round panels read `?board=` / `?round=` from it. The division page's Held | Flagged queue carries the same
+  // boards too, each with its own "Open in Match Day" (owner O2).
   if (divisionIds.length === 0) return out;
   // A dynamic import: the arbiter loader pulls the video stack, which every other read of the desk has no use for.
   const [{ listNeedsOrganiserExternalPlay }, { listFlaggedExternalPlay }] = await Promise.all([

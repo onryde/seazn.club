@@ -83,7 +83,6 @@ const shell = (v: MatchDayView, o: Partial<MatchDayShellProps> = {}) =>
       />
     </DictProvider>,
   );
-const on = { onlineEnabled: true };
 const tagWith = (html: string, testId: string) => html.match(new RegExp(`<[^>]*data-testid="${testId}"[^>]*>`))?.[0] ?? "";
 const attr = (tag: string, name: string): string | null => new RegExp(`${name}="([^"]*)"`).exec(tag)?.[1] ?? null;
 const countOf = (html: string, testId: string) => (html.match(new RegExp(`data-testid="${testId}"`, "g")) ?? []).length;
@@ -100,30 +99,22 @@ const countParts = (html: string): string[] => {
 const countsLine = (html: string): string => countParts(html).join(" · ");
 
 describe("EMPTY CASE FIRST - a day of courts is exactly the page it was", () => {
-  it("online_rounds: [] with the flag on: the same bytes as with the flag off, and no online block, heading or list", () => {
+  it("online_rounds: []: no online block, heading or list - the courts' page and nothing more", () => {
     const v = onlineView([], { courts: [court("c-1", "Court 1"), court("c-2", "Court 2")] });
-    const flagOn = shell(v, on);
-    expect(flagOn).toBe(shell(v));
-    expect(flagOn).not.toContain('data-testid="md-online"');
-    expect(flagOn).not.toContain(t(dict, "matchDay.online.title"));
+    const html = shell(v);
+    expect(html).not.toContain('data-testid="md-online"');
+    expect(html).not.toContain(t(dict, "matchDay.online.title"));
     // The positive pair: the page is the courts' page.
-    expect(countOf(flagOn, "md-list")).toBe(1);
-    expect(flagOn).toContain("Court 1");
-    expect(flagOn).toContain("Court 2");
-  });
-
-  it("the flag off: rounds the view carries are not drawn, nor counted, nor opened - the bytes of a view with none", () => {
-    const withRounds = onlineView([checkinRound("s:3"), pairedRound("t:1")], { courts: [court("c-1", "Court 1")] });
-    const without = onlineView([], { courts: [court("c-1", "Court 1")] });
-    expect(shell(withRounds)).toBe(shell(without));
-    // `?board=` and `?round=` open nothing with the flag off.
-    const b = withRounds.online_rounds[0]!.round!.boards[0]!.fixtureId;
-    expect(shell(withRounds, { focusBoardId: b, focusRoundKey: "s:3" })).toBe(shell(without));
+    expect(countOf(html, "md-list")).toBe(1);
+    expect(html).toContain("Court 1");
+    expect(html).toContain("Court 2");
+    // And the pair the other way: the same courts with a round on the day DO draw the block, so the absence above is the data's, not the page's.
+    expect(shell(onlineView([pairedRound("s:3")], { courts: [court("c-1", "Court 1")] }))).toContain('data-testid="md-online"');
   });
 
   it("a day with nothing at all is the empty page; one online round and no court is not", () => {
-    expect(shell(onlineView([]), on)).toContain('data-testid="md-empty"');
-    const html = shell(onlineView([pairedRound("s:3")]), on);
+    expect(shell(onlineView([]))).toContain('data-testid="md-empty"');
+    const html = shell(onlineView([pairedRound("s:3")]));
     expect(html).not.toContain('data-testid="md-empty"');
     expect(html).toContain('data-testid="md-online"');
   });
@@ -137,7 +128,7 @@ describe("the online block of the list", () => {
     ]);
 
   it("two rounds and five boards: two round rows and five board rows, in the list column, after the courts", () => {
-    const html = shell({ ...night(), courts: [court("c-1", "Court 1")] }, on);
+    const html = shell({ ...night(), courts: [court("c-1", "Court 1")] });
     expect(countOf(html, "md-round-row")).toBe(2);
     expect(countOf(html, "md-board-row")).toBe(5);
     expect(html.indexOf('data-testid="md-online"')).toBeGreaterThan(html.indexOf("Court 1"));
@@ -147,30 +138,30 @@ describe("the online block of the list", () => {
   });
 
   it("the rounds are listed check-in or in progress, then paired, then over (spec §5.2), whatever order the view has them", () => {
-    const html = shell(onlineView([overRound("stage-c:1"), pairedRound("stage-b:2"), checkinRound("stage-1:3")]), on);
+    const html = shell(onlineView([overRound("stage-c:1"), pairedRound("stage-b:2"), checkinRound("stage-1:3")]));
     const keys = [...html.matchAll(/data-testid="md-round-row"[^>]*?data-key="([^"]*)"/g)].map((m) => m[1]);
     expect(keys).toEqual(["stage-1:3", "stage-b:2", "stage-c:1"]);
     // Two rounds in the SAME group keep the view's (competition's) order.
-    const same = shell(onlineView([...night().online_rounds].reverse()), on);
+    const same = shell(onlineView([...night().online_rounds].reverse()));
     expect([...same.matchAll(/data-testid="md-round-row"[^>]*?data-key="([^"]*)"/g)].map((m) => m[1])).toEqual(["stage-2:1", "stage-1:3"]);
   });
 
   it("the counts line adds the boards: '... · 5 boards playing' (check-in and live boards; the held one is not playing)", () => {
-    const html = shell(night(), on);
+    const html = shell(night());
     // 2 checking in + 2 live = 4; the held board is the queue's.
     expect(countsLine(html)).toBe(plural(dict, "matchDay.header.boards", 4, "en"));
     expect(countsLine(html)).toBe("4 boards playing");
-    const withCourts = shell({ ...night(), courts: [court("c-1", "Court 1")] }, on);
+    const withCourts = shell({ ...night(), courts: [court("c-1", "Court 1")] });
     expect(countsLine(withCourts)).toBe("1 court · 0 playing · 1 free · 4 boards playing");
   });
 
   it("a match on no court, then the boards: the no-court count first, the boards after", () => {
-    const html = shell({ ...night(), playing_no_court: [match("m-1")] }, on);
+    const html = shell({ ...night(), playing_no_court: [match("m-1")] });
     expect(countsLine(html)).toBe(`${plural(dict, "matchDay.header.noCourt.court", 1, "en")} · 4 boards playing`);
   });
 
   it("a round of one's own boards (none listed) is a row with no board rows under it, and the line says '0 boards playing' not '0 courts'", () => {
-    const html = shell(onlineView([round("s:3", "playing", arbiterRound([], { ownBoards: 1 }), { own_boards: 1 })]), on);
+    const html = shell(onlineView([round("s:3", "playing", arbiterRound([], { ownBoards: 1 }), { own_boards: 1 })]));
     expect(countOf(html, "md-round-row")).toBe(1);
     expect(countOf(html, "md-board-row")).toBe(0);
     expect(countsLine(html)).toBe("0 boards playing");
@@ -178,7 +169,7 @@ describe("the online block of the list", () => {
 
   it("a board held from an earlier round is listed under its round with the round's chip, and is not counted as playing", () => {
     const v = onlineView([checkinRound("stage-1:3", { needs_decision: [earlier(2, { fixtureId: "old-1" })] })]);
-    const html = shell(v, on);
+    const html = shell(v);
     expect(countOf(html, "md-board-subgroup")).toBe(1);
     expect(countOf(html, "md-board-row")).toBe(3);
     expect(countsLine(html)).toBe("2 boards playing");
@@ -189,16 +180,16 @@ describe("what the page opens first (default focus, the plan's own order)", () =
   const r = checkinRound("stage-1:3");
 
   it("a court on the page: the first court. A match on no court and no court: the match. Online rounds alone: the first round - never nothing", () => {
-    const withCourt = shell(onlineView([r], { courts: [court("c-1", "Court 1")] }), on);
+    const withCourt = shell(onlineView([r], { courts: [court("c-1", "Court 1")] }));
     expect(attr(tagWith(withCourt, "md-focus"), "data-online")).toBeNull();
     expect(countOf(withCourt, "md-focus")).toBe(1);
     expect(withCourt).toContain('aria-label="Court 1"');
 
-    const withMatch = shell(onlineView([r], { playing_no_court: [match("m-1")] }), on);
+    const withMatch = shell(onlineView([r], { playing_no_court: [match("m-1")] }));
     expect(attr(tagWith(withMatch, "md-focus"), "data-fixture-id")).toBe("m-1");
     expect(attr(tagWith(withMatch, "md-focus"), "data-online")).toBeNull();
 
-    const roundsOnly = shell(onlineView([pairedRound("stage-b:2"), r]), on);
+    const roundsOnly = shell(onlineView([pairedRound("stage-b:2"), r]));
     const focus = tagWith(roundsOnly, "md-focus");
     expect(attr(focus, "data-online")).toBe("round");
     // `orderOnlineRounds`' first row, not the view's first: the round in check-in.
@@ -207,7 +198,7 @@ describe("what the page opens first (default focus, the plan's own order)", () =
   });
 
   it("a default focus is not an opened one: a phone shows the LIST (the focus is hidden on a phone), the desktop shows both", () => {
-    const html = shell(onlineView([r]), on);
+    const html = shell(onlineView([r]));
     expect(tagWith(html, "md-focus")).toContain("max-md:hidden");
     expect(tagWith(html, "md-list")).not.toContain("max-md:hidden");
     expect(html).not.toContain('data-testid="md-lost"');
@@ -220,7 +211,7 @@ describe("?board= and ?round= (read as ?court= is: a value naming a listed row o
   const firstBoard = r.round!.boards[1]!.fixtureId;
 
   it("a listed board: its panel, full-screen on a phone (the list hidden), named 'Board N · White v Black', the row highlighted", () => {
-    const html = shell(v(), { ...on, focusBoardId: firstBoard });
+    const html = shell(v(), { focusBoardId: firstBoard });
     const focus = tagWith(html, "md-focus");
     expect(attr(focus, "data-online")).toBe("board");
     expect(attr(focus, "data-fixture-id")).toBe(firstBoard);
@@ -236,14 +227,14 @@ describe("?board= and ?round= (read as ?court= is: a value naming a listed row o
   });
 
   it("a held board of an earlier round opens too, naming its round in the panel", () => {
-    const html = shell(v(), { ...on, focusBoardId: "old-1" });
+    const html = shell(v(), { focusBoardId: "old-1" });
     const focus = tagWith(html, "md-focus");
     expect(attr(focus, "data-fixture-id")).toBe("old-1");
     expect(html).toContain('data-round-code="R2"');
   });
 
   it("a listed round: its panel, full-screen on a phone, its row highlighted", () => {
-    const html = shell(v(), { ...on, focusRoundKey: "stage-1:3" });
+    const html = shell(v(), { focusRoundKey: "stage-1:3" });
     const focus = tagWith(html, "md-focus");
     expect(attr(focus, "data-online")).toBe("round");
     expect(attr(focus, "data-key")).toBe("stage-1:3");
@@ -264,7 +255,7 @@ describe("?board= and ?round= (read as ?court= is: a value naming a listed row o
     ];
     let checked = 0;
     for (const o of values) {
-      const html = shell(v(), { ...on, ...o });
+      const html = shell(v(), { ...o });
       const label = JSON.stringify(o);
       expect(html, label).not.toContain('data-testid="md-lost"');
       expect(attr(tagWith(html, "md-focus"), "data-online"), label).toBeNull();
@@ -276,7 +267,7 @@ describe("?board= and ?round= (read as ?court= is: a value naming a listed row o
   });
 
   it("with no court the default focus is the first round, and an unknown ?board= leaves it so (no panel for a board that is not there)", () => {
-    const html = shell(onlineView([r]), { ...on, focusBoardId: "ghost" });
+    const html = shell(onlineView([r]), { focusBoardId: "ghost" });
     const focus = tagWith(html, "md-focus");
     expect(attr(focus, "data-online")).toBe("round");
     expect(attr(focus, "data-key")).toBe("stage-1:3");
@@ -285,7 +276,7 @@ describe("?board= and ?round= (read as ?court= is: a value naming a listed row o
   });
 
   it("a court asked for wins over a board and a round (the three params read in one order)", () => {
-    const html = shell(v(), { ...on, focusCourtId: "c-1", focusBoardId: firstBoard, focusRoundKey: "stage-1:3" });
+    const html = shell(v(), { focusCourtId: "c-1", focusBoardId: firstBoard, focusRoundKey: "stage-1:3" });
     expect(attr(tagWith(html, "md-focus"), "data-online")).toBeNull();
     expect(html).toContain('aria-label="Court 1"');
     expect(tagWith(html, "md-list")).toContain("max-md:hidden");
@@ -293,7 +284,7 @@ describe("?board= and ?round= (read as ?court= is: a value naming a listed row o
 });
 
 describe("the phone's way back says where it goes", () => {
-  const open = (v: MatchDayView) => shell(v, { ...on, focusRoundKey: "stage-1:3" });
+  const open = (v: MatchDayView) => shell(v, { focusRoundKey: "stage-1:3" });
   const backOf = (html: string) => {
     const at = html.lastIndexOf("<", html.indexOf('data-testid="md-back"'));
     // The button draws a chevron in front of the label.
@@ -312,19 +303,19 @@ describe("the phone's way back says where it goes", () => {
       expect(backOf(open(v)), `${kind}: the round's back`).toBe(t(dict, "matchDay.back.list"));
       // A board in focus reads the same (`?board=` of a listed board).
       const board = v.online_rounds[0]!.round!.boards[0]!;
-      expect(backOf(shell(v, { ...on, focusBoardId: board.fixtureId })), `${kind}: the board's back`).toBe(t(dict, "matchDay.back.list"));
+      expect(backOf(shell(v, { focusBoardId: board.fixtureId })), `${kind}: the board's back`).toBe(t(dict, "matchDay.back.list"));
     }
     expect(t(dict, "matchDay.back.list")).toBe("Back to the list");
     // The positive pair: the court's own panel, on the same day, still says the courts' word.
     const withCourt = onlineView([r], { courts: [court("c-1", "Court 1")] });
-    expect(backOf(shell(withCourt, on))).toBe(t(dict, "matchDay.back.court"));
+    expect(backOf(shell(withCourt))).toBe(t(dict, "matchDay.back.court"));
     expect(t(dict, "matchDay.back.court")).toBe("All courts");
   });
 });
 
 describe("another sport: a division that is not online has no round on the page, so the page is the courts' page", () => {
-  it("a day of badminton courts and a match on no court, with the flag on: no online block, the court focused, nothing of the online page", () => {
-    const html = shell(onlineView([], { courts: [court("c-1", "Court 1")], playing_no_court: [match("m-1")] }), on);
+  it("a day of badminton courts and a match on no court, no online block, the court focused, nothing of the online page", () => {
+    const html = shell(onlineView([], { courts: [court("c-1", "Court 1")], playing_no_court: [match("m-1")] }));
     expect(html).not.toContain('data-testid="md-online"');
     expect(html).not.toContain("data-online=");
     expect(html).toContain('data-testid="md-no-court"');

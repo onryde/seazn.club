@@ -6,8 +6,8 @@
 // -> reducer -> runner -> the notice the state holds -> the helper that words it, with the network doubled at `apiV1`:
 // Open round asks first and sends nothing; the answer - the server's own count of PLAYERS invited, the boards it skipped, or a
 // refusal by its code - reads in words; a Resend sends for its own pairing and answers there.
-// What the control drew around them (its card, its dialog title, its "+5 min to the round") went with it; the round's "+5" is the
-// panel's own `RoundExtend` (arbiter-panel.test.tsx), and the column's block is arbiter/__tests__/round-column.test.tsx.
+// What the control drew around them (its card, its dialog title, its "+5 min to the round") went with it; the round's "+5" is Match Day's
+// round panel's `RoundExtendBar` (match-day/__tests__/round-focus.test.tsx), and the check-in block is that panel's too.
 // No DOM in this workspace: the hook harness renders a probe that hands the handle out as a prop.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";

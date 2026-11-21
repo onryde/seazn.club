@@ -110,7 +110,6 @@ const props = (initial: MatchDayView, o: Partial<MatchDayShellProps> = {}): Matc
   scoreDict: publicEn as Dict,
   viewerPlan: "pro",
   frozenNames: NO_FROZEN_NAMES,
-  onlineEnabled: true,
   ...o,
 });
 
@@ -391,15 +390,7 @@ describe("Needs you opens boards and rounds in place (the desk's own rows, §9)"
   const toggleOf = (tree: ReactElement[]) => tree.find((e) => propsOf(e)["data-testid"] === "md-needs-you-toggle")!;
   const needsOf = (tree: ReactElement[]) => tree.find((e) => e.type === NeedsYou);
 
-  it("the flag off: the list hands Needs you no board or round opener (its rows keep their links)", () => {
-    const island = renderIsland(MatchDayShell, props(withNeeds(), { onlineEnabled: false }));
-    (propsOf(toggleOf(island.tree())).onClick as () => void)();
-    const needs = propsOf(needsOf(island.tree())!);
-    expect(needs.onOpenBoard).toBeUndefined();
-    expect(needs.onOpenRound).toBeUndefined();
-  });
-
-  it("the flag on: onOpenBoard opens the board and CLOSES the list; onOpenRound opens the round and closes it", () => {
+  it("onOpenBoard opens the board and CLOSES the list; onOpenRound opens the round and closes it", () => {
     const island = renderIsland(MatchDayShell, props(withNeeds()));
     (propsOf(toggleOf(island.tree())).onClick as () => void)();
     expect(propsOf(toggleOf(island.tree()))["aria-expanded"]).toBe(true);
@@ -456,15 +447,15 @@ describe("the division chips narrow the online block", () => {
 });
 
 describe("the poll cadence: an online night polls as a live one", () => {
-  it("a round in check-in with no court on the page polls at the live cadence; a round only paired does not; the flag off ignores the rounds", () => {
+  it("a round in check-in with no court on the page polls at the live cadence; a round only paired does not", () => {
     renderIsland(MatchDayShell, props(onlineView([checkinRound("s:3")])));
     expect(poll.live).toBe(true);
     poll.live = null;
     renderIsland(MatchDayShell, props(onlineView([pairedRound("s:3")])));
     expect(poll.live).toBe(false);
     poll.live = null;
-    renderIsland(MatchDayShell, props(onlineView([checkinRound("s:3")]), { onlineEnabled: false }));
-    expect(poll.live, "the flag off: a day of nothing is quiet").toBe(false);
+    renderIsland(MatchDayShell, props(onlineView([]), {}));
+    expect(poll.live, "a day of nothing is quiet").toBe(false);
   });
 
   it("a board that starts on the next poll moves the cadence from quiet to live", async () => {

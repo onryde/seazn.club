@@ -1,7 +1,7 @@
-// The Arbiter Panel's round column (phase 2, spec 2026-10-24-arbiter-round-column-design.md): what more than one spec needs to
-// drive and read it. Playwright refuses a spec file that imports another spec file, so the helpers online-chess-desk.spec.ts grew in
-// Task 12 live here, with the ones Task 13 adds (arbiter-panel.spec.ts at 1280, mobile.spec.ts at the seven phone and tablet
-// widths). Nothing in this file is a test.
+// Match Day's online round and board panels (the Arbiter page's column, retired in Match Day all-in-one Task 10; spec
+// 2026-10-24-arbiter-round-column-design.md for the column's copy): what more than one spec needs to drive and read them. Playwright
+// refuses a spec file that imports another spec file, so the helpers shared by match-day-online.spec.ts, the round and board panel specs,
+// online-chess-desk.spec.ts, e2e/mobile/match-surfaces.spec.ts and the chess walkthrough live here. Nothing in this file is a test.
 import { expect, type Locator, type Page, type Response } from "@playwright/test";
 import { LIVE_POLL_MS } from "../src/components/v2/desk/band-poll";
 import { INVITE_WORD_KEYS, type SeatInviteWord } from "../src/lib/invite-status";
@@ -10,10 +10,11 @@ import { fill, uiEn, type RoundBoard } from "./match-room-kit";
 
 // ─── locators and readers (moved from online-chess-desk.spec.ts, Task 12) ──────────────────────────────────────────────────────
 
-/** The column: one `aside`, its phase on `data-phase` (none | before | checkin | playing). */
-export const column = (page: Page) => page.getByTestId("arbiter-round-column");
+/** Match Day's focus column (`md-focus`): the open round's or board's panel, one at a time on every width. The round panel's blocks keep the
+ *  column's test ids (`arbiter-column-open`, `arbiter-checkin-hero`, `arbiter-waiting`, ...). */
+export const focus = (page: Page) => page.getByTestId("md-focus");
 
-/** One seat of a board on the column's waiting list, found by the board's fixture and the seat's colour. */
+/** One seat of a board on the round panel's waiting list, found by the board's fixture and the seat's colour. */
 export const waitingSeat = (page: Page, board: RoundBoard, colour: "white" | "black") =>
   page.locator(`[data-testid="arbiter-waiting-row"][data-fixture-id="${board.fixtureId}"] [data-testid="arbiter-seat"][data-colour="${colour}"]`);
 
@@ -95,7 +96,7 @@ export const recordedOpenNotices = (page: Page) =>
 // ─── what Task 13 adds ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** How long to wait for the panel's own poll to bring a change in. The panel polls at `LIVE_POLL_MS` while any board of the round is
- *  not over (arbiter-panel.tsx: `startBandPolling(live, router.refresh, ...)`), so a change made now is on screen within one period
+ *  not over (match-day-shell.tsx: `startBandPolling(live, refresh, ...)`), so a change made now is on screen within one period
  *  plus the round trip. Derived from the constant (AGENTS class 20), so moving the period moves every wait that depends on it. */
 export const POLL_BUDGET_MS = LIVE_POLL_MS + 20_000;
 
@@ -104,7 +105,7 @@ export const POLL_BUDGET_MS = LIVE_POLL_MS + 20_000;
 export const budgetFor = (polls: number, baseMs: number): number => baseMs + polls * POLL_BUDGET_MS;
 
 /** The panel's refresh, now: the tab coming back (a hidden -> visible event is what `startBandPolling` answers with an immediate
- *  `router.refresh()`), the same path arbiter-panel.spec.ts already uses to bring a change in without waiting out a period. */
+ *  `router.refresh()`), the same path the Match Day specs use to bring a change in without waiting out a period. */
 export const refreshNow = (page: Page) => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
 
 /** The invite rows the outbox holds for these boards' seats: one per player's address, queued by an open. */
@@ -168,4 +169,27 @@ export function watchOpenRoundPosts(page: Page, stageId: string): { roundNos: ()
     seen.push(typeof body?.roundNo === "number" ? body.roundNo : null);
   });
   return { roundNos: () => seen.slice() };
+}
+
+// ─── where Match Day opens a round's panel and a board's panel ─────────────────────────────────────────────────────────────────────
+
+/** A round's panel: `?round=<stage id>:<round no>`. `r` is a seeded round (`SeededRound`): its Match Day path and its stage. */
+export const roundPanelUrl = (r: { matchDayPath: string; stageId: string }, roundNo = 1): string => `${r.matchDayPath}?round=${r.stageId}:${roundNo}`;
+/** A board's panel: `?board=<fixture id>`. */
+export const boardPanelUrl = (r: { matchDayPath: string }, fixtureId: string): string => `${r.matchDayPath}?board=${fixtureId}`;
+
+/** Open a round's panel and wait for it; `phase` is the panel's own `data-state` (not_started | before | checkin | playing). */
+export async function openRoundPanel(page: Page, r: { matchDayPath: string; stageId: string }, phase?: string, roundNo = 1): Promise<void> {
+  await page.goto(roundPanelUrl(r, roundNo));
+  await expect(focus(page), "the round panel is on screen").toHaveAttribute("data-online", "round", { timeout: 30_000 });
+  // THIS round's panel, not the default focus: an address naming a round that is not a row is ignored (the shell falls back to the first
+  // round), and a panel in the asked-for phase on the WRONG round would pass every check below.
+  await expect(focus(page), `it is round ${roundNo}'s panel`).toHaveAttribute("data-key", `${r.stageId}:${roundNo}`, { timeout: 30_000 });
+  if (phase) await expect(focus(page), `the round is ${phase}`).toHaveAttribute("data-state", phase, { timeout: 30_000 });
+}
+
+/** Open a board's panel and wait for it. */
+export async function openBoardPanel(page: Page, r: { matchDayPath: string }, fixtureId: string): Promise<void> {
+  await page.goto(boardPanelUrl(r, fixtureId));
+  await expect(focus(page), "the board panel is on screen").toHaveAttribute("data-fixture-id", fixtureId, { timeout: 30_000 });
 }

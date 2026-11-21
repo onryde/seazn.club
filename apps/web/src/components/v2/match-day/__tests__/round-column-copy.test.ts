@@ -1,12 +1,17 @@
-// The Arbiter Panel round column's COPY (spec 2026-10-24-arbiter-round-column-design.md §9, pre-flight C19, plan Task 11): every key the
+// The round column's COPY (spec 2026-10-24-arbiter-round-column-design.md §9, pre-flight C19, plan Task 11): every key the
 // column can render exists in all four locales, none of them carries a dash or an arrow, and the list of keys cannot fall behind
 // the column. Pure: no DB, no render, the sources are read as text.
+//
+// MOVED to Match Day (Match Day all-in-one, Task 10): the Arbiter page and its `components/v2/arbiter/` column were retired into Match
+// Day's round and board panels (`match-day/round-focus.tsx`, `match-day/board-focus.tsx`), which render the column's words now. The sweep
+// is kept whole, re-pointed at those files; deleting the old directory did not delete it.
 //
 // What this file guarantees, and what it does not. Three sources feed the sweep, and each is checked against a declaration rather than
 // against itself:
 //   1. the literals the column's own files pass to msg( / plural( / t( / f.t( - read from the source (a literal that is not in
-//      `ROUND_COLUMN_KEYS` fails; a listed key the column stopped asking for only widens the sweep). The files are the directory's own
-//      listing, so a new file in components/v2/arbiter/ is scanned without anyone adding it here;
+//      `ROUND_COLUMN_KEYS` fails; a listed key the column stopped asking for only widens the sweep). The files are the two Match Day
+//      panels (`COLUMN_FILES`), and a third Match Day file that passes one of the column's own words (`arbiter.column.*`,
+//      `runsheet.round.*`) fails until it is added, so the list cannot fall behind the directory;
 //   2. the calls whose first argument is NOT a literal (a key read out of a map, a variable): a scan cannot know which keys they
 //      reach, so every such site is PINNED by its text and tied to the map that supplies it. A new site, a changed one or a lost one
 //      fails until the pin is moved on purpose, and the map it names must be inside the two lists;
@@ -111,21 +116,28 @@ function nonLiteralFirstArguments(src: string): string[] {
     .sort();
 }
 
-/** The column's own files: every component file in components/v2/arbiter/, from the directory listing and not from a list typed here. */
-const COLUMN_DIR = "components/v2/arbiter";
-const COLUMN_FILES = readdirSync(join(SRC, COLUMN_DIR), { withFileTypes: true })
-  .filter((e) => e.isFile() && /\.tsx?$/.test(e.name))
-  .map((e) => `${COLUMN_DIR}/${e.name}`)
-  .sort();
-// `match-day/round-focus.tsx` (Match Day's round panel, Task 7) carries the bodies MOVED out of round-column.tsx - the check-in hero, the
-// waiting list, the playing status, the open-round block, the round's own press - which the column imports; it is scanned both ways
-// like the other helpers, so a literal the moved bodies (or the panel) pass is listed, and a variable key stays pinned.
+/** The column's own files, now Match Day's two online panels: the round panel (the check-in hero, the waiting list, the playing status,
+ *  the open-round block, the round's own press - the bodies that were `round-column.tsx`) and the board panel (the held reason, the seat
+ *  words, the decision). Both are scanned both ways: a literal they pass is listed, a variable key stays pinned. */
+const COLUMN_DIR = "components/v2/match-day";
+const COLUMN_FILES = [`${COLUMN_DIR}/round-focus.tsx`, `${COLUMN_DIR}/board-focus.tsx`];
 const HELPER_FILES = [
   "components/v2/desk/open-round-control.tsx",
   "components/v2/checkin-extend-ui.ts",
   "components/v2/venue-clock.ts",
-  "components/v2/match-day/round-focus.tsx",
 ];
+
+/** Every source file under Match Day's component directory (top level and `online/`), from the directory listing: the drift guard's
+ *  universe, so a new file is looked at without anyone adding it to a list typed here. */
+function matchDayFiles(): string[] {
+  const out: string[] = [];
+  for (const dir of [COLUMN_DIR, `${COLUMN_DIR}/online`]) {
+    for (const e of readdirSync(join(SRC, dir), { withFileTypes: true })) {
+      if (e.isFile() && /\.tsx?$/.test(e.name)) out.push(`${dir}/${e.name}`);
+    }
+  }
+  return out.sort();
+}
 
 /** One function out of a file that holds dozens of keys the column never renders: from its opening to the first line that is a bare `}`. */
 function functionBody(rel: string, opening: string): string {
@@ -135,15 +147,6 @@ function functionBody(rel: string, opening: string): string {
   const to = src.indexOf("\n}\n", from);
   expect(to, `premise: ${opening} ends`).toBeGreaterThan(from);
   return src.slice(from, to);
-}
-/** `RoundExtend` lives in the panel's file beside dozens of keys the column never renders: only its own function body is read. */
-function roundExtendBody(): string {
-  const panel = read("components/v2/arbiter-panel.tsx");
-  const from = panel.indexOf("function RoundExtend(");
-  const to = panel.indexOf("function RequestedNotice(");
-  expect(from, "premise: RoundExtend is in arbiter-panel.tsx").toBeGreaterThan(-1);
-  expect(to, "premise: RequestedNotice follows RoundExtend").toBeGreaterThan(from);
-  return panel.slice(from, to);
 }
 /** The venue's name after a time of day (Task 16 D1): `arbiter.venueTime` is asked for by `useVenueClock` (venue-clock.ts, scanned whole) and by
  *  `useFmt` in arbiter-flag-cards.tsx, whose other keys (durations, flag words) the column never renders: only its `named` helper is read,
@@ -175,8 +178,18 @@ function heldBodyKeys(): string[] {
 
 const NON_NULL = <T>(xs: readonly (T | null)[]): T[] => xs.filter((x): x is T => x !== null);
 
+/** The values of `SUMMARY_CHIP` (board-focus.tsx), read from its declaration: the chip a flag wears for a reader who is not an editor. */
+function summaryChipKeys(): string[] {
+  const src = read("components/v2/match-day/board-focus.tsx");
+  const from = src.indexOf("const SUMMARY_CHIP");
+  expect(from, "premise: board-focus.tsx declares SUMMARY_CHIP").toBeGreaterThan(-1);
+  const body = src.slice(src.indexOf("= {", from), src.indexOf("\n};", from));
+  return [...body.matchAll(/:\s*"([A-Za-z][A-Za-z0-9.]+)"/g)].map((m) => m[1]!);
+}
+
 /** Each map or table the column reads, with its keys read from the declaration and not typed here. */
 const MAPS: Record<string, readonly string[]> = {
+  "SUMMARY_CHIP (board-focus.tsx, a viewer's flag chips)": summaryChipKeys(),
   "INVITE_WORD_KEYS": Object.values(INVITE_WORD_KEYS),
   "SEAT_WORD_KEYS": Object.values(SEAT_WORD_KEYS),
   "HELD_TITLE_KEYS": Object.values(HELD_TITLE_KEYS),
@@ -200,29 +213,38 @@ const EXTEND_MAPS = [
 ] as const;
 
 /** Every call in the column's files and its helpers whose first argument is not a plain literal, PINNED by its text. `maps` names the
- *  entries of `MAPS` that supply the key (so the keys it can reach are swept); `arms` marks a ternary whose two arms are literals the
+ *  entries of `MAPS` that supply the key (so the keys it can reach are swept); `arms` marks a ternary whose arms (that many) are literals the
  *  literal scan reads whole. A site that is not here, or is here and gone, fails the pin test below. */
-type Site = { expr: string; maps?: readonly (keyof typeof MAPS)[]; arms?: true };
+type Site = { expr: string; maps?: readonly (keyof typeof MAPS)[]; arms?: number };
 const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
-  // The column's bodies moved to match-day/round-focus.tsx (Task 7): the column itself asks for literals only.
-  "components/v2/arbiter/round-column.tsx": [],
   "components/v2/match-day/round-focus.tsx": [
     // WaitingList's `copy.t` shim and the panel's `extendCopyOf`: both forward the keys checkin-extend-ui.ts asks for.
     { expr: "key as MessageKey", maps: EXTEND_MAPS },
     { expr: "key as MessageKey", maps: EXTEND_MAPS },
-    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: true },
+    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: 2 },
     { expr: "INVITE_WORD_KEYS[word] as MessageKey", maps: ["INVITE_WORD_KEYS"] },
     // The link-hold block: each held board's reason, and the window's own word when it has run out (MD-R2/R22) - the open's skip words.
     { expr: "OPEN_ROUND_SKIP_KEYS[reason] as MessageKey", maps: ["OPEN_ROUND_SKIP_KEYS"] },
     { expr: "OPEN_ROUND_SKIP_KEYS.window_closed as MessageKey", maps: ["OPEN_ROUND_SKIP_KEYS"] },
   ],
-  "components/v2/arbiter/round-queue-cards.tsx": [
-    { expr: "HELD_TITLE_KEYS[row.reason]", maps: ["HELD_TITLE_KEYS"] },
-    { expr: "body.key", maps: ["heldBody (each reason, each revoked seat)"] },
+  // The board panel: the held reason's chip and sentence (a link hold or a held board), the seat words, the viewer's flag chips and the
+  // ternaries that pick between listed words (the colour, the state line, the flags lede, the camera switch).
+  "components/v2/match-day/board-focus.tsx": [
+    { expr: "HELD_TITLE_KEYS[holdReason]", maps: ["HELD_TITLE_KEYS"] },
+    { expr: "holdBody.key", maps: ["heldBody (each reason, each revoked seat)"] },
+    { expr: "SEAT_WORD_KEYS[w]", maps: ["SEAT_WORD_KEYS"] },
+    { expr: "SUMMARY_CHIP[flag.kind]", maps: ["SUMMARY_CHIP (board-focus.tsx, a viewer's flag chips)"] },
+    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: 2 },
+    { expr: 'editor ? "arbiter.flags.lede" : "matchDay.board.flagsViewer"', arms: 2 },
+    {
+      expr: 'boardIsOver(board.state) ? "externalPlay.room.board.final" : position.turn === "white" ? "externalPlay.room.board.whiteToMove" : "externalPlay.room.board.blackToMove"',
+      arms: 3,
+    },
+    { expr: 'mode === "cameras" ? "matchDay.cameras.viewCameras" : "matchDay.cameras.viewBoard"', arms: 2 },
   ],
   "components/v2/desk/open-round-control.tsx": [
     // The reopen/reinvite confirmation's per-seat words (Task 16 D2): the waiting list's words, through the one `seatWords` helper.
-    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: true },
+    { expr: 'colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black"', arms: 2 },
     { expr: "SEAT_WORD_KEYS[w] as MessageKey", maps: ["SEAT_WORD_KEYS"] },
     { expr: "OPEN_ROUND_REFUSAL_KEYS[r.reason] as MessageKey", maps: ["OPEN_ROUND_REFUSAL_KEYS"] },
     { expr: "OPEN_ROUND_INVITED_KEY", maps: ["OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)"] },
@@ -237,7 +259,6 @@ const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
     { expr: "EXTEND_REFUSAL_KEYS[refusal]", maps: ["EXTEND_REFUSAL_KEYS"] },
   ],
   // The two single functions the column reaches inside bigger files: neither passes a variable.
-  "RoundExtend (arbiter-panel.tsx)": [],
   "boardStateWord (arbiter-flag-cards.tsx)": [],
   // Task 16 D1: the venue's name after a time, asked for by a literal in both places.
   "components/v2/venue-clock.ts": [],
@@ -259,14 +280,34 @@ describe("the column's copy: premises", () => {
     expect(NON_NULL(Object.values(EXTEND_WHY_KEYS)).length, "the four reasons a board has, a board that is over says nothing").toBe(4);
   });
 
-  it("the column's files come from the directory: both known components are in it, and nothing but components", () => {
-    expect(COLUMN_FILES, "the listing finds the two components the column is made of").toEqual(
-      expect.arrayContaining([`${COLUMN_DIR}/round-column.tsx`, `${COLUMN_DIR}/round-queue-cards.tsx`]),
-    );
-    for (const file of COLUMN_FILES) expect(file, "a component file, not a test or a directory").toMatch(/^components\/v2\/arbiter\/[\w-]+\.tsx?$/);
+  it("the column's files are the two Match Day panels, each exists, and each has its non-literal calls pinned", () => {
+    const listing = matchDayFiles();
+    expect(listing.length, "anti-vacuity: the directory listing found Match Day's files").toBeGreaterThan(10);
+    for (const file of COLUMN_FILES) {
+      expect(listing, `${file} is in Match Day's directory`).toContain(file);
+      expect(read(file).length, `${file} is not empty`).toBeGreaterThan(0);
+    }
     expect(Object.keys(NON_LITERAL_SITES), "every file the column is made of has its non-literal calls pinned").toEqual(
       expect.arrayContaining(COLUMN_FILES),
     );
+  });
+
+  it("no Match Day file outside the column's files passes one of the column's own words (the list cannot fall behind the directory)", () => {
+    // The column's own vocabulary: the round column's keys (`arbiter.column.*`) and the open-round block's (`runsheet.round.*`).
+    const OWN = /^(?:arbiter\.column\.|runsheet\.round\.)/;
+    const known = new Set<string>([...COLUMN_FILES, ...HELPER_FILES]);
+    let scanned = 0;
+    let rendering = 0;
+    for (const file of matchDayFiles()) {
+      const own = literalsPassed(read(file)).filter((k) => OWN.test(k));
+      scanned += 1;
+      if (own.length > 0) rendering += 1;
+      if (own.length > 0) expect(known.has(file), `${file} passes the column's words (${[...new Set(own)].slice(0, 3).join(", ")}) but is not scanned: add it to COLUMN_FILES`).toBe(true);
+    }
+    expect(scanned, "anti-vacuity: Match Day files scanned").toBeGreaterThan(10);
+    expect(rendering, "anti-vacuity: the two panels render the column's words, so the guard saw them").toBeGreaterThanOrEqual(2);
+    // The guard is not blind: a scratch file that asks for a column key outside the known set trips it.
+    expect(literalsPassed('const x = msg("arbiter.column.here");').some((k) => OWN.test(k))).toBe(true);
   });
 
   it("no key is listed twice, and no list holds a key the other list holds", () => {
@@ -320,19 +361,19 @@ describe("no dash and no arrow in any locale", () => {
 });
 
 describe("the list cannot fall behind the column", () => {
-  it("every literal the column's files (the directory's own listing) pass to msg( / plural( / t( / f.t( is in ROUND_COLUMN_KEYS", () => {
+  it("every literal the column's files (the round panel and the board panel) pass to msg( / plural( / t( / f.t( is in one of the two lists", () => {
     let checked = 0;
+    const missing: string[] = [];
     for (const file of COLUMN_FILES) {
       const literals = literalsPassed(read(file));
       expect(literals.length, `${file}: the scan found literals`).toBeGreaterThan(0);
       for (const key of literals) {
-        expect((ROUND_COLUMN_KEYS as readonly string[]).includes(key), `${file}: ${key} is listed in ROUND_COLUMN_KEYS`).toBe(true);
+        if (!LISTED.has(key)) missing.push(`${file}: ${key}`);
         checked += 1;
       }
     }
-    // The column's bodies moved to match-day/round-focus.tsx (the helper sweep below reads them); what stays is the queue and the shell of
-    // the column, so the floor is what these files hold now.
-    expect(checked, "anti-vacuity: literals checked (14 measured at the T7 fix round)").toBeGreaterThanOrEqual(14);
+    expect([...new Set(missing)].sort().join("\n"), "literals the panels ask for that no list names (add each to ROUND_COLUMN_KEYS)").toBe("");
+    expect(checked, "anti-vacuity: literals checked (85 measured when the sweep moved to Match Day's panels: 65 + 20)").toBeGreaterThanOrEqual(85);
   });
 
   it("the scan itself catches a key added to the column (a scratch copy with one more literal fails the check)", () => {
@@ -346,11 +387,10 @@ describe("the list cannot fall behind the column", () => {
     expect(literalsPassed(`msg("a.b", { x: "(" }); msg("c.d")`)).toEqual(["a.b", "c.d"]);
   });
 
-  it("every literal the helpers pass is in one of the two lists (open-round-control.tsx, checkin-extend-ui.ts, venue-clock.ts, RoundExtend, boardStateWord, useFmt's venue label)", () => {
+  it("every literal the helpers pass is in one of the two lists (open-round-control.tsx, checkin-extend-ui.ts, venue-clock.ts, boardStateWord, useFmt's venue label)", () => {
     let checked = 0;
     const sources: [string, string][] = [
       ...HELPER_FILES.map((f): [string, string] => [f, read(f)]),
-      ["RoundExtend (arbiter-panel.tsx)", roundExtendBody()],
       ["boardStateWord (arbiter-flag-cards.tsx)", boardStateWordBody()],
       ["useFmt's venue label (arbiter-flag-cards.tsx)", venueLabelBody()],
     ];
@@ -362,7 +402,7 @@ describe("the list cannot fall behind the column", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: helper literals checked (120 measured at the T7 fix round)").toBeGreaterThanOrEqual(120);
+    expect(checked, "anti-vacuity: helper literals checked (53 measured once the panels left the helper list)").toBeGreaterThanOrEqual(53);
   });
 
   it("every state word boardStateWord can return is listed (the seven arbiter.state.* keys come from the function, not from a typed list)", () => {
@@ -389,13 +429,7 @@ describe("the list cannot fall behind the column", () => {
 
 describe("a call whose key is not a literal is pinned, and tied to the map that supplies it", () => {
   const sourceOf = (name: string): string =>
-    name.startsWith("RoundExtend")
-      ? roundExtendBody()
-      : name.startsWith("boardStateWord")
-        ? boardStateWordBody()
-        : name.startsWith("useFmt")
-          ? venueLabelBody()
-          : read(name);
+    name.startsWith("boardStateWord") ? boardStateWordBody() : name.startsWith("useFmt") ? venueLabelBody() : read(name);
   const pinned = (name: string): string[] => NON_LITERAL_SITES[name]!.map((site) => site.expr).sort();
 
   it("the scanner reads first arguments: a variable, a map read and a ternary are reported; plain literals are not", () => {
@@ -415,12 +449,12 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
       files += 1;
       sites += NON_LITERAL_SITES[name]!.length;
     }
-    expect(files, "anti-vacuity: the column's files, the helper files and the three functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 3);
-    expect(sites, "anti-vacuity: nineteen sites are pinned").toBe(19);
+    expect(files, "anti-vacuity: the column's files, the helper files and the two functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 2);
+    expect(sites, "anti-vacuity: twenty-five sites are pinned (17 + the board panel's 8)").toBe(25);
   });
 
   it("a variable key added to the column's file is caught by the pin (a scratch copy with msg(someNewVar) differs from the list)", () => {
-    const file = `${COLUMN_DIR}/round-column.tsx`;
+    const file = `${COLUMN_DIR}/board-focus.tsx`;
     const scratch = `${read(file)}\nconst added = msg(someNewVar);\n`;
     expect(nonLiteralFirstArguments(scratch)).toContain("someNewVar");
     expect(nonLiteralFirstArguments(scratch), "the scratch copy no longer equals the pin").not.toEqual(pinned(file));
@@ -432,7 +466,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
       for (const site of sites) {
         if (site.arms) {
           const arms = literalsPassed(`msg(${site.expr})`);
-          expect(arms.length, `${name}: ${site.expr} has literal arms`).toBe(2);
+          expect(arms.length, `${name}: ${site.expr} has literal arms`).toBe(site.arms);
           for (const arm of arms) expect((ROUND_COLUMN_KEYS as readonly string[]).includes(arm), `${name}: ${arm} is listed`).toBe(true);
         } else {
           expect(site.maps?.length ?? 0, `${name}: ${site.expr} names the map that supplies it`).toBeGreaterThan(0);
@@ -448,7 +482,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
         accounted += 1;
       }
     }
-    expect(accounted, "anti-vacuity: all nineteen sites accounted for").toBe(19);
+    expect(accounted, "anti-vacuity: all twenty-five sites accounted for").toBe(25);
   });
 });
 

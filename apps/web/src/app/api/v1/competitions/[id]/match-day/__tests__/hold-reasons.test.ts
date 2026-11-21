@@ -11,7 +11,7 @@
 //
 // ONE SPORT on purpose: online play is `boardgame`'s door (guard.ts); the registry sweep of the other sports is the usecase suite's.
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const authState = vi.hoisted(() => ({ userId: "" }));
 
@@ -49,9 +49,6 @@ afterAll(async () => {
   g._sql = undefined;
   await client?.end();
 });
-// `online_rounds` waits for the flag (match-day.ts reads it per poll), so it is on for every test; `afterEach` restores the process env.
-beforeEach(() => vi.stubEnv("MATCH_DAY_ONLINE", "1"));
-afterEach(() => vi.unstubAllEnvs());
 
 type Envelope = { ok: boolean; data?: unknown; error?: { code?: string; message?: string } };
 type Wire = { online_rounds: { key: string; round: { boards: { fixtureId: string; hold_reason: string | null; state: { kind: string } }[] } | null; needs_decision: { fixtureId: string; hold_reason: string | null; state: { kind: string } }[] }[] };

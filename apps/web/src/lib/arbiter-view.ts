@@ -4,7 +4,7 @@
 // player's tile at a time, a switch between the two, plus that fixture's flags).
 //
 // Shared by the server loader (usecases/external-play/arbiter.ts) and the
-// client panel (components/v2/arbiter-panel.tsx), so it imports nothing that
+// client panels (components/v2/match-day/), so it imports nothing that
 // is server-only. The two note readers below read the evidence notes the
 // flags' PRODUCERS write — reconcile (out_of_band_play) and the sweep's job 5
 // (camera_lost, and multiple_devices — T17B fix 2, D9). They are strict: a note they cannot read is null and the

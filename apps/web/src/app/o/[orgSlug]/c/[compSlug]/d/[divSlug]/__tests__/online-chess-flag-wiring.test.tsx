@@ -5,11 +5,12 @@
 // for a division that is not chess. T16: the needs-a-result queue lost its Resend (the server refuses it for every held
 // board, 409 BOARD_HELD) - what is left on it FINISHES play, so it never asks the flag.
 //
-// Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §7, §8): the round is opened in the Arbiter Panel now. Where the panel
-// would answer (a chess division that plays online, has fixtures, and whose club is offered online chess) the fixtures tab
-// carries ONE entry card and neither the queue nor an Open round on any stage card; where it would not (online play off, or the
-// flag off), the queue stays on the tab (T20: a board held before online play was switched off is still owed its decision),
-// without its link into the panel, and the flag is asked only where it can decide something.
+// Match Day all-in-one, Task 10: the round is opened and watched on Match Day (the Arbiter page is gone). Where Match Day has online
+// boards to offer (a chess division that plays online, has fixtures, and whose club is offered online chess) the fixtures tab carries
+// ONE entry card ("Open Match Day") and no Open round on any stage card, AND the Held | Flagged queue (owner O2: it hid only because the
+// panel's column carried the same lists, and that column is gone), each row linking "Open in Match Day"; where Match Day has nothing to
+// offer (online play off, or the flag off), the queue stays on the tab alone (T20: a board held before online play was switched off is
+// still owed its decision), and the flag is asked only where it can decide something.
 //
 // Same scaffold as public-hub-link.test.tsx beside it: no jsdom, the async server component called directly, its
 // returned tree walked. The flag is asked through the REAL helper, PostHog doubled at its boundary.
@@ -128,7 +129,13 @@ import { DivisionSettings } from "@/components/v2/division-settings";
 import { ExternalPlayNeedsResultQueue } from "@/components/v2/external-play-needs-result-queue";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { forgetOnlineChessFlagCache } from "@/server/usecases/external-play/online-chess-flag";
+import { routes } from "@/lib/routes";
 import { log } from "@/server/logger";
+
+/** The names of the props whose value is a function: the ones a Server Component cannot hand to a client island. */
+function functionProps(props: Record<string, unknown>): string[] {
+  return Object.entries(props).filter(([, v]) => typeof v === "function").map(([k]) => k);
+}
 
 function findAll(node: ReactNode, type: unknown, out: ReactElement[] = []): ReactElement[] {
   if (Array.isArray(node)) {
@@ -223,7 +230,7 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("not offered: the queue stays, with no panel link - online play off now, a board held AND one flagged: the queue gets both lists and the run sheet the chips, whatever the flag says; the flag is asked once, for the Division rules strip's Online play select only", async () => {
+  it("not offered: the queue stays, the chips lead nowhere - online play off now, a board held AND one flagged: the queue gets both lists and the run sheet the chips, whatever the flag says; the flag is asked once, for the Division rules strip's Online play select only", async () => {
     queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
     const FLAGGED = { boards: [{ fixtureId: "f2" }], ownBoards: 1 };
     const SHEET = { f1: { cameraPolicy: "off", cameraFlagCount: 0, connectionProblemCount: 0, offSeaznFlagCount: 0, held: "aborted", live: false } };
@@ -239,6 +246,11 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
       const props = queues[0]!.props as Record<string, unknown>;
       expect([props.held, props.flagged, props.ownFlagged], s.label).toEqual([[ROW], FLAGGED.boards, 1]);
       expect("slugs" in props, `${s.label}: nothing to build a panel link from`).toBe(false);
+      // Each row's "Open in Match Day": the competition's Match Day on that board (O2), built by the island from the page's own slugs. The
+      // island is a CLIENT component, so what the page hands it is data: a function prop is refused by Next at render ("Functions cannot be
+      // passed directly to Client Components") - a 500 on the Fixtures tab of every chess desk, which no unit test of the island can see.
+      expect([props.orgSlug, props.compSlug], `${s.label}: the slugs the island builds its Match Day links from`).toEqual(["org", "comp"]);
+      expect(functionProps(props), `${s.label}: the queue island is handed no function (a Server Component cannot pass one)`).toEqual([]);
       expect("resendOffered" in props, `${s.label}: no start control on the queue`).toBe(false);
       const panels = findAll(tree, StagesPanel);
       expect((panels[0]!.props as { onlinePlay: unknown }).onlinePlay, `${s.label}: the run sheet's chips`).toBe(SHEET);
@@ -259,7 +271,7 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("offered: no Open round on any stage card, no queue, one entry card - and the queue's reads are made once, for the card", async () => {
+  it("offered: no Open round on any stage card, one entry card AND the queue (owner O2) - the lists are read once, for both", async () => {
     division.onlinePlay = "lichess";
     fx.rows = [FIXTURE];
     queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
@@ -271,15 +283,40 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     const panels = findAll(tree, StagesPanel);
     expect(panels).toHaveLength(1);
     expect("openRounds" in (panels[0]!.props as object), "no rounds map is handed down, not even an empty one").toBe(false);
-    expect(findAll(tree, ExternalPlayNeedsResultQueue), "the queue lives in the panel").toHaveLength(0);
+    // The queue mounts where the club IS offered online chess: it used to hide here because the arbiter column carried the same lists.
+    const queues = findAll(tree, ExternalPlayNeedsResultQueue);
+    expect(queues, "the queue is mounted once beside the card").toHaveLength(1);
+    const props = queues[0]!.props as Record<string, unknown>;
+    expect([props.held, props.flagged, props.ownFlagged], "both lists, as the sheet reads them").toEqual([[ROW], FLAGGED.boards, 1]);
+    expect([props.orgSlug, props.compSlug], "its rows lead to Match Day on a board, from these slugs").toEqual(["org", "comp"]);
+    expect(functionProps(props), "the queue island is handed no function (a Server Component cannot pass one)").toEqual([]);
     const entry = findAll(tree, ArbiterEntryCard);
     expect(entry, "one entry card").toHaveLength(1);
     // Two boards need a decision (f1 held, f2 flagged): the card says so; the count is the column title's.
     expect((entry[0]!.props as { line: unknown }).line).toEqual({ kind: "attention", count: 2 });
+    expect((entry[0]!.props as { href: unknown }).href, "the card leads to the competition's Match Day").toBe(routes.competitionMatchDay("org", "comp"));
+    // One read each for the queue AND the card: the page reads the lists once and hands them to both.
     for (const read of [queue.listNeedsOrganiserExternalPlay, queue.listFlaggedExternalPlay, queue.listOpenRounds]) {
       expect(read).toHaveBeenCalledTimes(1);
       expect(read).toHaveBeenLastCalledWith(PAGE.auth, "div-1");
     }
+  });
+
+  it("offered, the negative pair: a viewer of the same offered division gets no queue and no card, and none of the reads", async () => {
+    division.onlinePlay = "lichess";
+    fx.rows = [FIXTURE];
+    queue.listNeedsOrganiserExternalPlay.mockResolvedValue([ROW]);
+    flagIs(FLAG_STATES[0]!);
+    // Positive first, so an absent queue below is not an absent page: the organiser sees both.
+    const organiser = await renderPage("fixtures");
+    expect(findAll(organiser, ExternalPlayNeedsResultQueue)).toHaveLength(1);
+    expect(findAll(organiser, ArbiterEntryCard)).toHaveLength(1);
+    for (const read of Object.values(queue)) read.mockClear();
+    pageAuth.requireDivisionPage.mockResolvedValue({ ...PAGE, canEdit: false });
+    const viewer = await renderPage("fixtures");
+    expect(findAll(viewer, ExternalPlayNeedsResultQueue), "a viewer: no queue").toHaveLength(0);
+    expect(findAll(viewer, ArbiterEntryCard), "a viewer: no card").toHaveLength(0);
+    for (const read of [queue.listNeedsOrganiserExternalPlay, queue.listFlaggedExternalPlay, queue.listOpenRounds]) expect(read).not.toHaveBeenCalled();
   });
 
   it("flag off on a division playing online: no entry card, chip links are spans, the queue stays", async () => {
@@ -303,7 +340,7 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     expect(checked).toBe(2);
   });
 
-  it("the empty case: a chess Fixtures tab with nothing held, nothing to open and the panel offered: the entry card with the default body, and no queue", async () => {
+  it("the empty case: a chess Fixtures tab with nothing held, nothing to open and Match Day offered: the entry card with the default body, and the queue mounted empty (it renders nothing)", async () => {
     division.onlinePlay = "lichess";
     fx.rows = [FIXTURE];
     flagIs(FLAG_STATES[0]!);
@@ -311,7 +348,10 @@ describe("division page: the online-chess flag's answer reaches the islands", ()
     const entry = findAll(tree, ArbiterEntryCard);
     expect(entry).toHaveLength(1);
     expect((entry[0]!.props as { line: unknown }).line).toEqual({ kind: "default" });
-    expect(findAll(tree, ExternalPlayNeedsResultQueue)).toHaveLength(0);
+    const queues = findAll(tree, ExternalPlayNeedsResultQueue);
+    expect(queues, "mounted so the answer to a decision stays on screen after the refresh that takes its row away").toHaveLength(1);
+    expect((queues[0]!.props as { held: unknown; flagged: unknown }).held).toEqual([]);
+    expect((queues[0]!.props as { flagged: unknown }).flagged).toEqual([]);
   });
 
   it("T16 — the empty case: a chess fixtures tab with nothing held or flagged (online play off) still mounts the queue (it renders nothing), and asks the flag only for the strip", async () => {

@@ -131,7 +131,7 @@ function flaggedBoard(): FlaggedBoard {
 }
 
 function props(venueTz: string): ExternalPlayQueueProps {
-  return { held: [], flagged: [flaggedBoard()], ownFlagged: 0, venueTz };
+  return { held: [], flagged: [flaggedBoard()], ownFlagged: 0, venueTz, orgSlug: "o", compSlug: "c" };
 }
 
 /** Every host element of the tree, with the components that take no hooks (`Names`, `FlagCard`, the camera and devices cards)

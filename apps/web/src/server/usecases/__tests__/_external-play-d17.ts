@@ -1,5 +1,5 @@
 // The D17 state, built through the real usecases (T17B fix 2; the organiser's re-open of a board our side closed with no game).
-// Shared by the reader's tests (open-round-view.test.ts) and the Arbiter Panel's (arbiter-panel-d17.test.tsx), so the state they
+// Shared by the reader's tests (open-round-view.test.ts) and Match Day's round panel's (match-day/__tests__/round-focus-d17.test.tsx, if present), so the state they
 // read is one state: neither builds a hand fixture of "a re-armed board".
 import { expect } from "vitest";
 import { sql } from "@/lib/db";

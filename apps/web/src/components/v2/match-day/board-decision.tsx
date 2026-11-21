@@ -1,7 +1,7 @@
 "use client";
-// A board's decisions and the video-outage card (spec 2026-11-05 §6.1 "Decide"): MOVED here from the Arbiter Panel (arbiter-panel.tsx
-// `Decision` and the inline outage section), test ids and copy unchanged, so the panel and Match Day's board panel draw one set of
-// buttons until Task 10 deletes the panel. What Match Day adds is WHO may press (`may`, from `mayPress`, lib/match-day/online.ts):
+// A board's decisions and the video-outage card (spec 2026-11-05 §6.1 "Decide"): MOVED here from the Arbiter Panel (its
+// `Decision` and the inline outage section, deleted with the page in Task 10), test ids and copy unchanged, so Match Day's board panel
+// draws the one set of buttons. What Match Day adds is WHO may press (`may`, from `mayPress`, lib/match-day/online.ts):
 //   - `finish`: resync, let the game go on, settle - the decisions that FINISH play write or unblock a RESULT, the scoring the billing
 //     freeze exempts (owner O4), so they are every editor's, flag or freeze or neither;
 //   - `start`: "+5 min" on the board's check-in - a START press, refused 402 by the server on a frozen competition and not offered there.

@@ -69,14 +69,18 @@ function flaggedBoard(over: Partial<FlaggedBoard> & Pick<FlaggedBoard, "fixtureI
 function render(props: Partial<ExternalPlayQueueProps>, locale: Locale = "en"): string {
   return renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
-      <ExternalPlayNeedsResultQueue held={[]} flagged={[]} ownFlagged={0} venueTz="UTC" {...props} />
+      <ExternalPlayNeedsResultQueue held={[]} flagged={[]} ownFlagged={0} venueTz="UTC" orgSlug="o" compSlug="c" {...props} />
     </DictProvider>,
   );
 }
 
-/** One `<li id="external-play-queue-row-…">` card's markup. */
+/** Where a row's "Open in Match Day" leads: the competition's Match Day on that board (the page builds the same with its own slugs). */
+const HREF = (fixtureId: string) => routes.competitionMatchDayBoard("o", "c", fixtureId);
+
+/** One card's markup: a held board's `<li id="external-play-queue-row-…">` or a flagged board's `<li id="external-play-flagged-…">`. */
 function card(h: string, fixtureId: string): string {
-  const start = h.indexOf(`id="external-play-queue-row-${fixtureId}"`);
+  const held = h.indexOf(`id="external-play-queue-row-${fixtureId}"`);
+  const start = held > -1 ? held : h.indexOf(`id="external-play-flagged-${fixtureId}"`);
   expect(start, `card ${fixtureId} rendered`).toBeGreaterThan(-1);
   const from = h.lastIndexOf("<li", start);
   return h.slice(from, h.indexOf("</li>", start) + 5);
@@ -272,37 +276,47 @@ describe("the flagged list", () => {
     expect(t).toContain("Let the game go on");
   });
 
-  // Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8): the queue is on the Fixtures tab only when the panel is NOT
-  // offered (online play off now, or the flag off), and there the panel 404s. Its old "Review in arbiter panel" link was a live
-  // 404 in exactly the one place it rendered, so no card links into the panel in any state. Task 11 deleted the link's words
-  // (`externalPlay.queue.review`) from every dictionary, so a check on those words would test an undefined key; the checks that
-  // can still fail are the testid, the href and the anchor itself, each beside a card that IS on screen with its other control.
-  it("no flagged board links into the arbiter panel, in any state or any locale (the panel would 404 where this queue shows)", () => {
-    const ANCHOR = /<a[\s>]/;
-    // The probes are not blind: the markup of a link into the panel trips all three.
-    const link = `<a data-testid="external-play-review" href="${routes.divisionArbiter("o", "c", "d", "fx-1")}">x</a>`;
-    expect(testIds(link, "external-play-review"), "the testid probe sees a review link").toBe(1);
-    expect(link, "the href probe sees a link into the panel").toContain("/arbiter");
-    expect(link, "the anchor probe sees an anchor").toMatch(ANCHOR);
-
+  // Owner O2 (Match Day all-in-one, Task 10): the Arbiter page is gone and the Held | Flagged queue stays on the division page. Each held
+  // and each flagged board's row says "Open in Match Day" and leads to that board there. The OLD review link (`externalPlay.queue.review`,
+  // "Review in arbiter panel", a live 404 where the panel was not offered) stays deleted: its testid never returns, and nothing in this
+  // markup points at the retired /arbiter route.
+  it("every held and every flagged board's row links to Match Day on THAT board, in every locale, and nothing links into the retired /arbiter route", () => {
     const states: [string, FlaggedBoard][] = [
       ["live", flaggedBoard({ fixtureId: "fx-1" })],
       ["finished", flaggedBoard({ fixtureId: "fx-2", state: { kind: "result", score: "1–0", noResult: false } })],
       ["cancelled", flaggedBoard({ fixtureId: "fx-3", state: { kind: "cancelled" }, canSettle: false, canResync: false, playable: false })],
     ];
+    // The probe is not blind: markup of a link into the retired route trips it.
+    expect(`<a href="/o/o/c/c/d/d/arbiter?board=fx-1">x</a>`).toContain("/arbiter");
     let checked = 0;
     for (const locale of Object.keys(LOCALES) as Locale[]) {
+      const word = (LOCALES[locale] as Record<string, string>)["externalPlay.queue.openInMatchDay"]!;
+      expect(word, `${locale}: the link's words exist`).toBeTruthy();
       for (const [label, board] of states) {
         const h = render({ flagged: [board], held: [held({ fixtureId: "h1", reason: "aborted" })] }, locale);
-        // Positive pair: the board's card IS on screen with its other control, so an absent link is not an absent card.
-        expect(testIds(h, "external-play-go-on"), `${locale} ${label}: the card renders`).toBe(1);
-        expect(testIds(h, "external-play-review"), `${locale} ${label}: no review link`).toBe(0);
-        expect(h, `${locale} ${label}: no href into the panel`).not.toContain("/arbiter");
-        expect(h, `${locale} ${label}: no anchor of any kind`).not.toMatch(ANCHOR);
+        // Positive pair: the board's card IS on screen with its other control, so a missing link is not a missing card.
+        expect(testIds(h, "external-play-go-on"), `${locale} ${label}: the flagged card renders`).toBe(1);
+        // One link on the flagged card, one on the held card, each to ITS board, with the words of the locale.
+        expect(testIds(h, "external-play-open-match-day"), `${locale} ${label}: one link per row`).toBe(2);
+        expect(h, `${locale} ${label}: the flagged board's link`).toContain(`href="${HREF(board.fixtureId)}"`);
+        expect(h, `${locale} ${label}: the held board's link`).toContain(`href="${HREF("h1")}"`);
+        expect(card(h, board.fixtureId), `${locale} ${label}: the link sits inside the flagged card`).toContain(`href="${HREF(board.fixtureId)}"`);
+        expect(card(h, "h1"), `${locale} ${label}: the link sits inside the held card`).toContain(`href="${HREF("h1")}"`);
+        expect(h, `${locale} ${label}: the words`).toContain(`>${word.replaceAll("&", "&amp;").replaceAll("'", "&#x27;")}<`);
+        expect(testIds(h, "external-play-review"), `${locale} ${label}: the old review link stays gone`).toBe(0);
+        expect(h, `${locale} ${label}: nothing into the retired route`).not.toContain("/arbiter");
         checked++;
       }
     }
     expect(checked, "anti-vacuity: three states in four locales").toBe(12);
+  });
+
+  it("the link follows its board: two rows get two different hrefs, and an empty queue draws no link at all", () => {
+    const h = render({ held: [held({ fixtureId: "a", reason: "aborted" }), held({ fixtureId: "b", reason: "aborted" })], flagged: [flaggedBoard({ fixtureId: "c" })], ownFlagged: 1 });
+    for (const id of ["a", "b", "c"]) expect(card(h, id), id).toContain(`href="${HREF(id)}"`);
+    expect(testIds(h, "external-play-open-match-day")).toBe(3);
+    expect(new Set([...h.matchAll(/href="([^"]*match-day[^"]*)"/g)].map((m) => m[1])).size, "three distinct hrefs").toBe(3);
+    expect(testIds(render({}), "external-play-open-match-day"), "the empty case draws nothing").toBe(0);
   });
 
   it("a finished game's flags are reviewed, not let go on: the button says 'Mark as reviewed' and the state is the score", () => {

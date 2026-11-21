@@ -1,7 +1,6 @@
-// `arbiterPanelOffered` - the ONE statement of when the Arbiter Panel answers (server/arbiter-panel-offered.ts). The arbiter page
-// 404s on it and the division page's Fixtures tab offers the panel on it, so the two can never disagree about a division. This
-// suite is the function's own; each page's wiring is `arbiter/__tests__/page.test.tsx` and
-// `d/[divSlug]/__tests__/arbiter-entry-link.test.tsx`.
+// `onlineBoardsOffered` - the ONE statement of when a division's online boards are offered (server/online-boards-offered.ts): the
+// division page's Fixtures tab draws its "Open Match Day" card and the run sheet's links into Match Day only where it holds. This
+// suite is the function's own; the page's wiring is `d/[divSlug]/__tests__/arbiter-entry-link.test.tsx`.
 //
 // Expected values come from the rule as the spec states it (canEdit AND the division plays online AND the caller's own cheap
 // condition AND the club is offered online chess; online play exists only for the `boardgame` sport), never from the function.
@@ -12,7 +11,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 const flag = vi.hoisted(() => ({ offered: vi.fn() }));
 vi.mock("@/server/usecases/external-play", () => ({ onlineChessOffered: flag.offered }));
 
-import { arbiterPanelOffered } from "../arbiter-panel-offered";
+import { onlineBoardsOffered } from "../online-boards-offered";
 
 const AUTH = { orgId: "org-1", userId: "user-1" } as unknown as AuthCtx;
 const LICHESS = { onlinePlay: "lichess" };
@@ -21,12 +20,12 @@ beforeEach(() => {
   flag.offered.mockReset().mockResolvedValue(true);
 });
 
-describe("arbiterPanelOffered", () => {
+describe("onlineBoardsOffered", () => {
   it("the empty case first: a viewer on a chess division playing online is not offered the panel, and the flag is never asked", async () => {
-    expect(await arbiterPanelOffered(AUTH, { canEdit: false, sport_key: "boardgame", config: LICHESS })).toBe(false);
+    expect(await onlineBoardsOffered(AUTH, { canEdit: false, sport_key: "boardgame", config: LICHESS })).toBe(false);
     expect(flag.offered).not.toHaveBeenCalled();
     // The positive pair: the same division for an editor.
-    expect(await arbiterPanelOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: LICHESS })).toBe(true);
+    expect(await onlineBoardsOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: LICHESS })).toBe(true);
     expect(flag.offered).toHaveBeenCalledTimes(1);
   });
 
@@ -39,7 +38,7 @@ describe("arbiterPanelOffered", () => {
     const offered: string[] = [];
     for (const key of keys) {
       flag.offered.mockClear();
-      const answer = await arbiterPanelOffered(AUTH, { canEdit: true, sport_key: key, config: LICHESS });
+      const answer = await onlineBoardsOffered(AUTH, { canEdit: true, sport_key: key, config: LICHESS });
       // Online play exists only for `boardgame` (the spec's rule); a stored onlinePlay on any other sport is not a reason to offer it.
       expect(answer, key).toBe(key === "boardgame");
       expect(flag.offered.mock.calls.length, `${key}: the flag is asked only where every part before it said yes`).toBe(key === "boardgame" ? 1 : 0);
@@ -64,7 +63,7 @@ describe("arbiterPanelOffered", () => {
         for (const before of [true, false]) {
           for (const flagAnswer of [true, false]) {
             flag.offered.mockReset().mockResolvedValue(flagAnswer);
-            const answer = await arbiterPanelOffered(AUTH, { canEdit, sport_key: "boardgame", config }, () => before);
+            const answer = await onlineBoardsOffered(AUTH, { canEdit, sport_key: "boardgame", config }, () => before);
             const cheap = canEdit && plays && before;
             const name = `canEdit=${canEdit} onlinePlay=${label} before=${before} flag=${flagAnswer}`;
             expect(answer, name).toBe(cheap && flagAnswer);
@@ -81,19 +80,19 @@ describe("arbiterPanelOffered", () => {
 
   it("cheapest first: the caller's condition is not even evaluated when a static part already said no, and it runs BEFORE the flag", async () => {
     const before = vi.fn(() => true);
-    await arbiterPanelOffered(AUTH, { canEdit: false, sport_key: "boardgame", config: LICHESS }, before);
-    await arbiterPanelOffered(AUTH, { canEdit: true, sport_key: "generic", config: LICHESS }, before);
-    await arbiterPanelOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: { onlinePlay: "off" } }, before);
+    await onlineBoardsOffered(AUTH, { canEdit: false, sport_key: "boardgame", config: LICHESS }, before);
+    await onlineBoardsOffered(AUTH, { canEdit: true, sport_key: "generic", config: LICHESS }, before);
+    await onlineBoardsOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: { onlinePlay: "off" } }, before);
     expect(before, "no static part passed, so the caller's condition was not asked").not.toHaveBeenCalled();
 
-    expect(await arbiterPanelOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: LICHESS }, before)).toBe(true);
+    expect(await onlineBoardsOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: LICHESS }, before)).toBe(true);
     expect(before).toHaveBeenCalledTimes(1);
     expect(before.mock.invocationCallOrder[0]!, "the caller's cheap condition before the remote flag").toBeLessThan(flag.offered.mock.invocationCallOrder[0]!);
   });
 
   it("the flag is asked once, for the page's own auth, and its answer is the answer", async () => {
     flag.offered.mockResolvedValue(false);
-    expect(await arbiterPanelOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: LICHESS })).toBe(false);
+    expect(await onlineBoardsOffered(AUTH, { canEdit: true, sport_key: "boardgame", config: LICHESS })).toBe(false);
     expect(flag.offered).toHaveBeenCalledTimes(1);
     expect(flag.offered).toHaveBeenCalledWith(AUTH);
   });

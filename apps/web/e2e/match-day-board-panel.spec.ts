@@ -39,7 +39,7 @@ import { test, expect, type Browser, type Page } from "@playwright/test";
 import { formatClock } from "../src/components/public-site/match-room/clock-math";
 import { TAG, apiJson, expectNoHorizontalScroll, invalidateOrgEntitlements, loginUi, setEntitlementOverrideSql, setOrgPlanBySql, withDb } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
-import { cancelFlaggedSql } from "./arbiter-column-kit";
+import { cancelFlaggedSql } from "./match-day-online-kit";
 import { putArrival } from "./match-day-kit";
 import { CLOCK, fill, roundGameSql, seedOnlineRound, uiEn, type RoundBoard, type SeededRound } from "./match-room-kit";
 
@@ -65,7 +65,7 @@ async function seedDay(page: Page, label: string, opts: { stage: "swiss" | "leag
   return { orgId, round, matchDay: `/o/${round.slugs.org}/c/${round.slugs.comp}/match-day` };
 }
 
-/** A board's two flags, in their producers' note formats (arbiter-panel.spec.ts says the same): out-of-band play and a camera gap. */
+/** A board's two flags, in their producers' note formats (match-day-online.spec.ts says the same): out-of-band play and a camera gap. */
 async function flagBoard(orgId: string, board: RoundBoard): Promise<void> {
   const from = new Date(Date.now() - 20 * 60_000);
   from.setUTCMilliseconds(0);

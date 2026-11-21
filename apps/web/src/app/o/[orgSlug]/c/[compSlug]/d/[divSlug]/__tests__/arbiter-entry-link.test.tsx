@@ -1,11 +1,12 @@
-// T15 + phase 2 (spec 2026-10-24-arbiter-round-column-design.md §7, §8) - the division page's way into the arbiter panel: ONE
-// card on the fixtures tab, for the organiser, only where the panel would answer - a chess division that plays online, has
-// fixtures, and whose club is offered online chess. The card carries one status line (controller ruling 1, option C), chosen
-// from the same reads and the same functions the panel's column uses. Every other cell renders no card (and the panel itself
-// 404s there; the arbiter page's own suite). Same scaffold as online-chess-flag-wiring.test.tsx.
+// T15 + phase 2 (spec 2026-10-24-arbiter-round-column-design.md §7, §8), re-pointed when the Arbiter page was retired into Match Day
+// (Match Day all-in-one, Task 10) - the division page's way into Match Day's online boards: ONE card ("Open Match Day") on the
+// fixtures tab, for the organiser, only where Match Day has online boards to offer - a chess division that plays online, has
+// fixtures, and whose club is offered online chess (`onlineBoardsOffered`). The card carries one status line (controller ruling 1,
+// option C), chosen from the same reads and the same functions the old column used. Every other cell renders no card. Same
+// scaffold as online-chess-flag-wiring.test.tsx.
 //
-// Two predicates (pre-flight C18): `canEdit` decides the card and the run sheet's chip links (the panel's own 404 predicate), so
-// a billing-frozen organiser keeps both; `editable` decides the controls and the queue, so that organiser gets neither.
+// Two predicates (pre-flight C18): `canEdit` decides the card and the run sheet's chip links, so a billing-frozen organiser keeps
+// both; `editable` decides the controls and the queue, so that organiser gets neither.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -164,7 +165,8 @@ const FIXTURE = {
   round_no: 1,
   seq_in_round: 1,
 };
-const ARBITER = routes.divisionArbiter("org", "comp", "div");
+/** Where the card and the chips lead now: the competition's Match Day (the Arbiter page, which was per division, is gone). */
+const ARBITER = routes.competitionMatchDay("org", "comp");
 const renderPage = (tab: string) =>
   DivisionPage({
     params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
@@ -221,8 +223,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("division page: the arbiter panel entry card", () => {
-  it("fixtures tab, organiser, online chess division with fixtures, club offered: ONE card, aimed at the panel, with the VIEWER's locale and `ui` dictionary (identity, not a lookalike)", async () => {
+describe("division page: the Match Day entry card", () => {
+  it("fixtures tab, organiser, online chess division with fixtures, club offered: ONE card, aimed at Match Day, with the VIEWER's locale and `ui` dictionary (identity, not a lookalike)", async () => {
     // A non-default locale and a dictionary object the test owns: a card hard-wired to "en" or to `{}` could not pass this.
     const sentinel = { "arbiter.entry.link": "sentinel link copy" };
     viewer.locale = "fr";
@@ -289,13 +291,13 @@ describe("division page: the arbiter panel entry card", () => {
     expect(checked).toBe(FLAG_STATES.length);
   });
 
-  it("flag off on a division playing online: no card, the stage cards get no panel link (chip links are spans), and nothing of the column's reads is made", async () => {
+  it("flag off on a division playing online: no card, the stage cards get no Match Day link (chip links are spans), and no round is read for the card", async () => {
     flagIs(FLAG_STATES[1]!);
     const tree = await renderPage("fixtures");
     expect(findAll(tree, ArbiterEntryCard)).toHaveLength(0);
     const panels = findAll(tree, StagesPanel);
     expect(panels).toHaveLength(1);
-    expect((panels[0]!.props as { arbiterHref: unknown }).arbiterHref, "no panel link for the cards or the run sheet's chips").toBeNull();
+    expect((panels[0]!.props as { arbiterHref: unknown }).arbiterHref, "no Match Day link for the cards or the run sheet's chips").toBeNull();
     expect(queue.listOpenRounds, "the panel would not answer: no rounds read for its card").not.toHaveBeenCalled();
   });
 
@@ -382,7 +384,7 @@ describe("division page: the entry card's one line follows the ladder", () => {
 
 // T16 (T19 carry) - the same link reaches the stage cards and the run sheet's chips: a refused Unpair / Rebuild over a board an
 // online game stands behind sends the organiser there (OnlineGameExistsNotice), and each camera / flag chip leads there.
-describe("division page: the stage cards know where the arbiter panel is", () => {
+describe("division page: the stage cards know where Match Day is", () => {
   const panelHref = async () => {
     const panels = findAll(await renderPage("fixtures"), StagesPanel);
     expect(panels, "premise: the stages panel is mounted").toHaveLength(1);
@@ -397,7 +399,7 @@ describe("division page: the stage cards know where the arbiter panel is", () =>
     expect(await panelHref()).toBeNull();
   });
 
-  it("an online chess division with fixtures, club offered ⇒ the arbiter panel's own route, the card's href", async () => {
+  it("an online chess division with fixtures, club offered ⇒ the competition's Match Day route, the card's href", async () => {
     expect(await panelHref()).toBe(ARBITER);
     expect(((await cards())[0]!.props as { href: string }).href).toBe(ARBITER);
   });

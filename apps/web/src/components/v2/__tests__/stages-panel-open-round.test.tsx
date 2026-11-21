@@ -1,8 +1,9 @@
 // T16 (D12) put the organiser's Open round control on each stage card, fed by a `openRounds` map the division page built.
-// Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8, pre-flight C16) moved that control into the Arbiter Panel's round
-// column: the stage cards take no rounds, render no control, and the run sheet's online chips lead to the panel only when the
-// page says the panel would answer (`arbiterHref`; null = it would not, so each chip is plain text, never a link into a 404).
-// The control's own copy and presses are the column's tests (arbiter/__tests__/round-column.test.tsx).
+// Phase 2 (spec 2026-10-24-arbiter-round-column-design.md §8, pre-flight C16) moved that control into the round column, and the Arbiter
+// page's column became Match Day's round panel (Task 10): the stage cards take no rounds, render no control, and the run sheet's online
+// chips lead to Match Day only when the page says it has online boards to offer (`arbiterHref`, the prop's old name; null = it has
+// not, so each chip is plain text, never a link to a page with nothing to show). The control's own copy and presses are Match Day's
+// round panel tests (match-day/__tests__/round-focus.test.tsx).
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
@@ -46,17 +47,17 @@ describe("the stage cards after the round moved to the Arbiter Panel", () => {
   });
 });
 
-describe("the run sheet's online chips lead to the panel only when the page says it would answer", () => {
+describe("the run sheet's online chips lead to Match Day only when the page says it has online boards to offer", () => {
   const onlinePlay = { f1: ONLINE };
 
-  it("offered (`arbiterHref` set): each chip is a link to the panel pinned to ITS board", () => {
-    const h = renderToStaticMarkup(<StagesPanel {...PROPS} onlinePlay={onlinePlay} arbiterHref={routes.divisionArbiter("org", "comp", "div")} />);
+  it("offered (`arbiterHref` set): each chip is a link to Match Day pinned to ITS board", () => {
+    const h = renderToStaticMarkup(<StagesPanel {...PROPS} onlinePlay={onlinePlay} arbiterHref={routes.competitionMatchDay("org", "comp")} />);
     let checked = 0;
     for (const id of CHIPS) {
       const tag = tagOf(h, id);
       expect(tag, `${id} renders`).not.toBeNull();
       expect(tag, `${id} is a link`).toMatch(/^<a /);
-      expect(tag, `${id} leads to its own board in the panel`).toContain(`href="${routes.divisionArbiter("org", "comp", "div", "f1")}"`);
+      expect(tag, `${id} leads to its own board in Match Day`).toContain(`href="${routes.competitionMatchDayBoard("org", "comp", "f1")}"`);
       checked++;
     }
     expect(checked, "anti-vacuity: both chips checked").toBe(CHIPS.length);

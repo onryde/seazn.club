@@ -1,7 +1,7 @@
 // Owner staging test 2026-10-19, in a real browser: an online (Lichess) chess division's PAGE.
 //   - the header chip names the sport as the word "Chess" (not the stored key "Boardgame");
 //   - until the division is started the fixtures tab says so, once ("Start the division to open rounds for online play.");
-//   - after Start the line is gone, and the tab hands the round over to the Arbiter Panel: no Open round control on the tab
+//   - after Start the line is gone, and the tab hands the round over to Match Day: no Open round control on the tab
 //     any more (phase 2 moved it into the panel's round column), and the one entry card reads "Round 1 is ready to open".
 // The cards' markup is stages-panel-start-hint.test.tsx's and the page's gates are online-start-hint-wiring.test.tsx's;
 // this is the sequence, driven through the real page and the real Start.
