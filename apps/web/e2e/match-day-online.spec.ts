@@ -664,7 +664,7 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
   });
 
   // ── N3: a board the organiser plays on (old L912) ─────────────────────────────────────────────────────────────────────────────
-  test("N3: a board the organiser plays on is left out of their list and cannot be opened by address; an organiser who plays nowhere sees both", async ({ browser, page, request }) => {
+  test("N3: a board the organiser plays on is left out of their list, ONE line says so, and it cannot be opened by address; an organiser who plays nowhere sees both and no line", async ({ browser, page, request }) => {
     test.setTimeout(180_000);
     const r = await seedRound(request, ["Ana Petrova", "Bo Lindqvist", "Chen Wei", "Dara Okafor"]);
     const [b1, b2] = r.boards as [RoundBoard, RoundBoard];
@@ -679,11 +679,19 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
       await expect(p.getByTestId("md-board-row"), "only the board they do not play on").toHaveCount(1, { timeout: 30_000 });
       await expect(rowOf(p, b2)).toHaveCount(1);
       await expect(rowOf(p, b1), "never the board they play on: not watchable, not offered").toHaveCount(0);
+      // Design 6.4: the board is unlisted AND one line says so - in the list where the board would be, and on the round's own panel (the default focus).
+      const ownLine = uiEn["matchDay.online.ownHidden"]!;
+      const listLine = p.getByTestId("md-online").getByTestId("md-own-hidden");
+      await expect(listLine, "one line in the list").toHaveCount(1);
+      await expect(listLine).toHaveText(ownLine);
+      await expect(listLine, "and it is on screen, not folded away").toBeVisible();
+      await expect(focus(p).getByTestId("md-own-hidden"), "and one on the round's panel").toHaveText(ownLine);
       // By address too: a board the viewer plays on is never opened (not as another board either).
       await p.goto(boardPanelUrl(r, b1.fixtureId));
       await expect(p.getByTestId("md-board-row")).toHaveCount(1, { timeout: 30_000 });
       await expect(boardFocus(p), "the address of their own board opens nothing").toHaveCount(0);
       await expect(focus(p), "the default focus answers instead").toHaveAttribute("data-online", "round");
+      await expect(p.getByTestId("md-own-hidden"), "the line is still there by address (list + panel)").toHaveCount(2);
       expect(await noSidewaysScroll(p, [320, 768, 1280])).toBe(3);
     } finally {
       await own.close();
@@ -692,6 +700,7 @@ test.describe("Match Day online - the Arbiter Panel's sequences", () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto(r.matchDayPath);
     await expect(page.getByTestId("md-board-row")).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.getByTestId("md-own-hidden"), "and no line: nothing is left out of their list").toHaveCount(0);
     await page.goto(boardPanelUrl(r, b1.fixtureId));
     await expect(focus(page)).toHaveAttribute("data-fixture-id", b1.fixtureId, { timeout: 30_000 });
   });

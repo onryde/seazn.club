@@ -29,8 +29,20 @@ beforeEach(() => {
   forgetOnlineChessFlagCache();
 });
 
-/** The estimate MD-R23 carries and the ceiling the poll is held to: the upper end of "~460-500". */
-const ESTIMATE_CEILING = 500;
+/** What the gate holds the poll to. The plan's estimate was "~460-500" statements; the first measurement said 409 at 32 boards (9.7 per extra
+ *  board), because a board with no game yet read its colours by an owner-session lookup plus a fold-read transaction of its own (six
+ *  statements a board); 00f2bf740e made them ride the board rows query. A ceiling at the old estimate could not have noticed that fix
+ *  being undone (409 < 500), so the ceilings now sit just over what this run MEASURES after it:
+ *
+ *    poll, 4 boards: 131     poll, 32 boards: 313     slope: 6.5 per extra board     board read: 8 at 4 and 8 at 32
+ *
+ *  - `POLL_CEILING_32` 330 = 313 + 17 (about 5%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
+ *    job, below); the pre-fix poll, 409, is 79 over it.
+ *  - `SLOPE_CEILING` 7 = 6.5 + 0.5: one more statement for every second board fits; the pre-fix 9.7 is 2.7 over it.
+ *  - `BOARD_READ_CEILING` 12 = 8 + 4: a board read is ONE board's own rows. */
+const POLL_CEILING_32 = 330;
+const SLOPE_CEILING = 7;
+const BOARD_READ_CEILING = 12;
 
 /** One round of `n` boards in the mix a busy club night shows: a quarter live with both players on camera, an eighth held for the
  *  organiser, an eighth live and flagged, the rest still checking in (half of them with one player in). The states are derived from `n`,
@@ -74,7 +86,7 @@ async function statementsOf<T>(run: () => Promise<T>): Promise<{ result: T; coun
 }
 
 describe.runIf(HAS_DB)("MD-R23: statements per Match Day poll and per board read, measured", () => {
-  it("32 boards: one poll and one board read are counted, held under the estimate, and the per-board slope is known", async () => {
+  it("32 boards: one poll and one board read are counted, held under their measured ceilings, and the per-board slope is held too", async () => {
     const small = await busyRound(4);
     const big = await busyRound(32);
     expect(big.boards.length, "premise: 32 boards seeded").toBe(32);
@@ -112,10 +124,11 @@ describe.runIf(HAS_DB)("MD-R23: statements per Match Day poll and per board read
     // The numbers the report quotes (a test's output is the only place they are measured, never recalled).
     console.log(
       `[MD-R23] poll: ${p4.count} statements at 4 boards, ${p32.count} at 32 (${perBoardPoll.toFixed(2)} per extra board); ` +
-        `board read: ${b4.count} at 4, ${b32.count} at 32 (${perBoardRead.toFixed(2)} per extra board); estimate ${ESTIMATE_CEILING}`,
+        `board read: ${b4.count} at 4, ${b32.count} at 32 (${perBoardRead.toFixed(2)} per extra board); ceilings ${POLL_CEILING_32} / ${SLOPE_CEILING} / ${BOARD_READ_CEILING}`,
     );
-    expect(p32.count, "a 32-board poll stays at or under the plan's estimate").toBeLessThanOrEqual(ESTIMATE_CEILING);
-    expect(b32.count, "a board read stays at or under the plan's estimate").toBeLessThanOrEqual(ESTIMATE_CEILING);
+    expect(p32.count, "a 32-board poll stays at or under its measured ceiling").toBeLessThanOrEqual(POLL_CEILING_32);
+    expect(perBoardPoll, "and a board added to the round adds no more than its measured statements").toBeLessThanOrEqual(SLOPE_CEILING);
+    expect(b32.count, "a board read stays at or under its measured ceiling").toBeLessThanOrEqual(BOARD_READ_CEILING);
     // Shape: a board read is ONE board, so it must not grow with the round (the loader reads the board's own rows, not the round's).
     expect(b32.count - b4.count, "a board read is the same size whatever the round").toBeLessThanOrEqual(2);
   }, 600_000);

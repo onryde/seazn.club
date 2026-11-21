@@ -842,3 +842,35 @@ describe("RoundFocus: M5 - one card after Pair next round, a full-width press, a
     expect(count(html(checkinFixture().r), "arbiter-extend-round-cta"), "positive pair: an open round still has its +5").toBe(1);
   });
 });
+
+// Spec §6.4: an organiser who plays on a board does not see that board, and one line says so. The round's panel is where the counts are, so
+// the line is there too (review T10 I-1).
+describe("RoundFocus: the organiser's own boards (spec §6.4)", () => {
+  const WORDS = en["matchDay.online.ownHidden"];
+  it("EMPTY CASE FIRST: no own board, no line, in every phase", () => {
+    const phases: Array<[string, MatchDayOnlineRound]> = [
+      ["checkin", round("stage-1:3", "checkin", arbiterRound([board()]))],
+      ["playing", round("stage-1:3", "playing", arbiterRound([live()]))],
+      ["before", paired("stage-1:3", null)],
+      ["not_started", round("stage-1:1", "not_started", null)],
+    ];
+    for (const [name, r] of phases) expect(count(html(r), "md-own-hidden"), `${name}: nothing to say`).toBe(0);
+    expect(phases.length, "anti-vacuity: four phases looked at").toBe(4);
+  });
+
+  it("an own board puts one line in the panel, the dictionary's words, in the check-in, playing and paired phases", () => {
+    expect(WORDS, "premise: the key is in the English dictionary").toBeTypeOf("string");
+    const phases: Array<[string, MatchDayOnlineRound]> = [
+      ["checkin", round("stage-1:3", "checkin", arbiterRound([board()]), { own_boards: 1 })],
+      ["playing", round("stage-1:3", "playing", arbiterRound([live()], { ownBoards: 1 }), { own_boards: 1 })],
+      ["playing, nothing else on screen", round("stage-1:3", "playing", arbiterRound([], { ownBoards: 2 }), { own_boards: 2 })],
+      ["before", paired("stage-1:3", null, { own_boards: 1 })],
+    ];
+    for (const [name, r] of phases) {
+      const h = html(r);
+      expect(count(h, "md-own-hidden"), `${name}: exactly one line`).toBe(1);
+      expect(textIn(h, "md-own-hidden"), `${name}: the words`).toBe(WORDS);
+    }
+    expect(phases.length, "anti-vacuity: four phases looked at").toBe(4);
+  });
+});

@@ -19,6 +19,10 @@ const FILES = [
   join(COMPONENTS, "v2", "match-day", "board-decision.tsx"),
   join(COMPONENTS, "v2", "match-day", "board-cameras.tsx"),
   join(COMPONENTS, "v2", "arbiter-flag-cards.tsx"),
+  // The list's own rows (review T10 M2): a board row, a round row and the court rows beside them are buttons too, and showed the arrow.
+  join(COMPONENTS, "v2", "match-day", "board-row.tsx"),
+  join(COMPONENTS, "v2", "match-day", "round-row.tsx"),
+  join(COMPONENTS, "v2", "match-day", "court-list.tsx"),
 ];
 
 /** `const NAME = "…"` / `export const NAME =\n  "…"` class constants, from every scanned file (the panel imports the
@@ -102,7 +106,15 @@ describe("buttons show the hand (T17B fix 2, D7)", () => {
     expect(buttons, `anti-vacuity: buttons scanned ${JSON.stringify(perFile)}`).toBeGreaterThanOrEqual(20);
     expect(disableable, "anti-vacuity: disableable buttons scanned").toBeGreaterThan(0);
     // The scan reached every file the owner named: the room's check-in, controls and cards, and the board panel's decision card.
-    for (const f of ["public-site/match-room/checkin.tsx", "public-site/match-room/controls.tsx", "public-site/match-room/room-cards.tsx", "v2/match-day/board-decision.tsx"]) {
+    for (const f of [
+      "public-site/match-room/checkin.tsx",
+      "public-site/match-room/controls.tsx",
+      "public-site/match-room/room-cards.tsx",
+      "v2/match-day/board-decision.tsx",
+      "v2/match-day/board-row.tsx",
+      "v2/match-day/round-row.tsx",
+      "v2/match-day/court-list.tsx",
+    ]) {
       expect(perFile[f] ?? 0, f).toBeGreaterThan(0);
     }
   });

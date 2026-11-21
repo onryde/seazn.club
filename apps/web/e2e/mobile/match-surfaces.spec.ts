@@ -1020,8 +1020,14 @@ test("match day board panel, cameras: the switch, the folded held cameras and 43
     for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
   };
   /** The test ids in document order: the order a phone reads them in. */
-  const domOrder = (ids: string[]) =>
+  const domOrderNow = (ids: string[]) =>
     page.evaluate((list) => list.map((id) => ({ id, el: document.querySelector(`[data-testid="${id}"]`) })).map((o, i, all) => ({ id: o.id, present: o.el !== null, before: all.slice(0, i).every((p) => p.el === null || o.el === null || (p.el.compareDocumentPosition(o.el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) })), ids);
+  /** T10 review M13: the blocks are read from the DOM the moment they exist, not the moment the page said `load` - a decision card or a hold
+   *  reason that mounts a poll later read as "not present" under load. Each is waited for (attached; visibility is what the fold denies) first. */
+  const domOrder = async (ids: string[]) => {
+    for (const id of ids) await expect(page.getByTestId(id).first(), `${id} is in the DOM`).toBeAttached({ timeout: 30_000 });
+    return domOrderNow(ids);
+  };
 
   // ── the live board: cameras first, the board one press away ───────────────────────────────────────────────────────────────────
   const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;

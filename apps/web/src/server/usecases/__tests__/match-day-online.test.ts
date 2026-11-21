@@ -132,6 +132,43 @@ describe.runIf(HAS_DB)("readOnlineRounds - the empty case first", () => {
     expect(issued.filter((t) => t.includes("stage_round_opens")).length, "no statement names the sealed table").toBe(0);
   });
 
+  // T10 review, gap hunt: the online read is no longer behind a flag (Task 10), so EVERY poll of EVERY competition runs it. For a competition
+  // with no online division it must cost nothing: given the divisions the poll already read (`getMatchDay` passes them), it issues no statement
+  // of its own and never makes the club's flag call (a remote read kept 60 s) - the empty case first, then the same call on a competition that
+  // HAS an online division, so "no statement" is not a counter that never counted.
+  it("a competition with no online division: given the divisions already listed, the online read issues no statement and never asks the club's flag; one WITH an online division does both", async () => {
+    const day = await seedDay();
+    const listed = await listDivisions(day.auth, day.comp.id);
+    expect(listed.length, "premise: the competition has divisions (the filter, not an empty list, is what answers [])").toBeGreaterThan(0);
+    vi.mocked(onlineChessOffered).mockClear();
+    const before = statementTexts().length;
+    expect(await readOnlineRounds(day.auth, day.comp.id, NOW, listed)).toEqual([]);
+    expect(statementTexts().length - before, "no statement: the divisions were handed in, none is online").toBe(0);
+    expect(vi.mocked(onlineChessOffered), "and the club's flag is never asked").not.toHaveBeenCalled();
+
+    // The same call where there is an online division: statements are issued and the flag is asked once.
+    const r = await openedRound(1, -5);
+    const onlineListed = await listDivisions(r.owner, r.competitionId);
+    vi.mocked(onlineChessOffered).mockClear();
+    const before2 = statementTexts().length;
+    expect(await readOnlineRounds(r.owner, r.competitionId, NOW, onlineListed), "premise: the online round is read").toHaveLength(1);
+    expect(statementTexts().length - before2, "the read of a competition that plays online does issue statements").toBeGreaterThan(0);
+    expect(vi.mocked(onlineChessOffered), "and asks the club's flag once").toHaveBeenCalledTimes(1);
+  });
+
+  it("a whole poll of a competition with no online division never asks the club's flag either (the production path, `getMatchDay`)", async () => {
+    const day = await seedDay();
+    vi.mocked(onlineChessOffered).mockClear();
+    const view = await getMatchDay(day.auth, day.comp.id, NOW);
+    expect(view.online_rounds, "premise: nothing online to carry").toEqual([]);
+    expect(vi.mocked(onlineChessOffered), "no online division, no flag call").not.toHaveBeenCalled();
+    // The positive pair: the same poll of a competition that plays online asks it (so the spy above is live).
+    const r = await openedRound(1, -5);
+    vi.mocked(onlineChessOffered).mockClear();
+    await getMatchDay(r.owner, r.competitionId, NOW);
+    expect(vi.mocked(onlineChessOffered), "the poll of an online competition asks the flag").toHaveBeenCalled();
+  });
+
   it("getMatchDay of an in-hall competition carries online_rounds [] and no board row of any kind - the same view twice, nothing online moves", async () => {
     const day = await seedDay();
     const now = new Date(T0);
@@ -728,18 +765,20 @@ describe.runIf(HAS_DB)("readOnlineRounds - what a poll costs (I2): statements pe
     return r;
   };
 
-  // MEASURED at this commit (statements per extra board; the numbers are the pin, a change to them is a deliberate edit to this file):
-  //   boards checking in 14 = the arbiter loader's own composition 8 (an own transaction of 4 statements, the owner lookup, the board's
-  //     result read, its side names) + `listOpenRounds`' view of the same round 6 - two readers of one round, each reading its boards
-  //     (MD-R1 forbids a second composition of the BOARDS; the open-round view is the press and the pairings and needs its own);
+  // MEASURED at 00f2bf740e (statements per extra board, from a round of 1 and a round of 4; the numbers are the pin, a change to them is a
+  // deliberate edit to this file):
+  //   boards checking in 8 (was 14, T10 review M4: a board with no game read its colours by an owner-session lookup plus a fold-read transaction,
+  //     six statements a board, until 00f2bf740e put `colorOfHome` on the board rows query - 14 - 6 = 8). What is left is the arbiter loader's own
+  //     composition + `listOpenRounds`' view of the same round: two readers of one round, each reading its boards (MD-R1 forbids a second
+  //     composition of the BOARDS; the open-round view is the press and the pairings and needs its own);
   //   boards playing 2;  boards playing and flagged 5.
   // Taking the double read out means changing `listOpenRounds` and the loader to share one read of the round: not this task's change (each
   // is measured alone: the loader 17 -> 41 statements for 1 -> 4 boards, `listOpenRounds` 12 -> 30). This test keeps it from growing meanwhile.
-  it("a board costs at most what it costs today: 14 statements checking in, 2 playing, 5 playing and flagged", async () => {
+  it("a board costs at most what it costs today: 8 statements checking in, 2 playing, 5 playing and flagged", async () => {
     const checking = await slopeOf((n) => openedRound(n, -5));
     const playingSlope = await slopeOf(playing);
     const flaggedSlope = await slopeOf(flagged);
-    expect(checking.slope, "per board checking in").toBeLessThanOrEqual(14);
+    expect(checking.slope, "per board checking in").toBeLessThanOrEqual(8);
     expect(playingSlope.slope, "per board playing").toBeLessThanOrEqual(2);
     expect(flaggedSlope.slope, "per board playing and flagged").toBeLessThanOrEqual(5);
     // Anti-vacuity: a round of 4 costs more than a round of 1 in every state (the slope is measured, not a flat line of zeros).
