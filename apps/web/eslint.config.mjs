@@ -131,6 +131,27 @@ const eslintConfig = defineConfig([
   },
 
   {
+    // `server/relay/config.ts` is the one authority for every relay number, and the match page's player reaches TWO of them from a
+    // client chunk (`seazn-video-schedule.ts`: the token refresh window and the poll floor) while `proxy.ts` reads the playback host
+    // from it. It is safe in both only because it imports NOTHING: a `server-only`, a logger or any other module here would break the
+    // client build (or fatten the proxy) and surface only as a broken production build. So the constraint is enforced at the file.
+    files: ["src/server/relay/config.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: ".",
+              message:
+                "server/relay/config.ts must stay import-free: a client chunk and the proxy read it, and any import here (server-only, a logger) breaks the build or grows the proxy.",
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     // `lib/round-column.ts` (the round model Match Day's round panel reads) and `lib/invite-status.ts` (its invite words) are pure
     // and client-imported: a client component reaches them. Each names a few SERVER types for its arguments (`FlaggedBoard`,
     // `NeedsOrganiserExternalPlayRow`, `OutboxStatus`), which is safe because a type-only import is erased. A VALUE import of

@@ -4,18 +4,22 @@
 // the DOM facts (one element across a refresh, a real swap in a real browser) are the e2e's (public-fixture.spec.ts).
 //
 // What must hold (the plan's Interfaces, and the lifecycle the owner set 2026-11-21: a token lapses, so the source is swapped):
-//   - one Hls instance and one `attachMedia` per element, ever: a new address is `loadSource(B)` on the SAME instance, never a
-//     `destroy()` (that would tear the picture down on every token refresh), and it resumes at the current time;
+//   - one Hls instance, one `attachMedia` and ONE `loadSource` per element, ever: a refreshed address is only a new token, swapped
+//     into every later request by `xhrSetup`. The real library's `loadSource` of a different address detaches the media and leaves
+//     the element paused (hls.ts 551-560, buffer-controller.ts 604-609), and the fake below does the same, so a controller that
+//     reloaded on a refresh stops the picture here as it would in a browser;
 //   - hls.js is a worker-less instance (`enableWorker: false`) that fetches no media until the viewer presses play;
 //   - a browser that plays HLS itself (`canPlayType`) never loads hls.js at all and swaps through `video.src`;
 //   - a fatal error, an unsupported browser, or a bundle that will not load reaches `onFatal`, once, and nothing throws.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+type XhrSetup = (xhr: { open: (method: string, url: string, async: boolean) => void }, url: string) => void;
 interface FakeHlsInstance {
-  config: { enableWorker?: boolean; autoStartLoad?: boolean; startPosition: number };
+  config: { enableWorker?: boolean; autoStartLoad?: boolean; startPosition: number; xhrSetup?: XhrSetup };
   calls: string[];
-  loadedAt: { src: string; startPosition: number; autoStartLoad: boolean | undefined }[];
+  loadedAt: { src: string; autoStartLoad: boolean | undefined }[];
   handlers: Map<string, (event: string, data: unknown) => void>;
+  loadSource: (src: string) => void;
 }
 const hls = vi.hoisted(() => ({ instances: [] as FakeHlsInstance[], supported: true, isSupportedCalls: 0 }));
 vi.mock("hls.js", () => {
@@ -29,7 +33,8 @@ vi.mock("hls.js", () => {
     calls: string[] = [];
     loadedAt: FakeHlsInstance["loadedAt"] = [];
     handlers = new Map<string, (event: string, data: unknown) => void>();
-    constructor(config: { enableWorker?: boolean; autoStartLoad?: boolean }) {
+    loadedSrc: string | null = null;
+    constructor(config: { enableWorker?: boolean; autoStartLoad?: boolean; xhrSetup?: XhrSetup }) {
       this.config = { startPosition: -1, ...config };
       hls.instances.push(this);
     }
@@ -38,7 +43,14 @@ vi.mock("hls.js", () => {
     }
     loadSource(src: string) {
       this.calls.push(`loadSource:${src}`);
-      this.loadedAt.push({ src, startPosition: this.config.startPosition, autoStartLoad: this.config.autoStartLoad });
+      this.loadedAt.push({ src, autoStartLoad: this.config.autoStartLoad });
+      // hls.ts 551-560: a DIFFERENT address detaches and re-attaches the media; buffer-controller.ts 604-609 removes the element's src
+      // and calls load(), which by the HTML load algorithm resets the time and pauses the element. Nothing plays it again.
+      if (this.loadedSrc !== null && this.loadedSrc !== src) {
+        currentVideo.paused = true;
+        currentVideo.currentTime = 0;
+      }
+      this.loadedSrc = src;
     }
     startLoad(position?: number) {
       this.calls.push(`startLoad:${position ?? ""}`);
@@ -58,11 +70,20 @@ import { createPlayback } from "../seazn-playback";
 const HLS_MIME = "application/vnd.apple.mpegurl";
 const A = "https://playback.fake.invalid/tokenA/manifest/video.m3u8";
 const B = "https://playback.fake.invalid/tokenB/manifest/video.m3u8";
+const C = "https://playback.fake.invalid/tokenC/manifest/video.m3u8";
+/** What hls.js asks for under the loaded manifest's token: a rendition's playlist and a segment (resolved against the manifest). */
+const underToken = (token: string, path: string) => `https://playback.fake.invalid/${token}/${path}`;
+/** The element hls.js opens a request on, as far as the hook touches it. */
+const xhr = () => {
+  const opened: [string, string, boolean][] = [];
+  return { opened, open: (method: string, url: string, async: boolean) => void opened.push([method, url, async]) };
+};
 
 /** The element, as far as the controller touches it. */
 class FakeVideo {
   native = false;
   currentTime = 0;
+  duration = Number.NaN;
   paused = true;
   ended = false;
   src = "";
@@ -125,35 +146,118 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
     playback.dispose();
   });
 
-  it("a refreshed address is loadSource(B) on the SAME instance: one attach, no destroy, and it resumes at the current time", async () => {
+  it("PREMISE: the fake is as strict as the library: loading a DIFFERENT address pauses and rewinds the element, the same one does not", async () => {
     const { playback, video } = make();
     playback.setSource(A);
     await flush();
+    const h = hls.instances[0]!;
+    video.paused = false;
+    video.currentTime = 42.5;
+    h.loadSource(A);
+    expect(video.paused, "the same address leaves the element alone").toBe(false);
+    h.loadSource(B);
+    expect(video.paused, "a different address pauses it").toBe(true);
+    expect(video.currentTime, "and rewinds it").toBe(0);
+    playback.dispose();
+  });
+
+  it("a refreshed address is NOT a load: one instance, one attach, ONE loadSource, no destroy, and a playing element keeps playing where it was", async () => {
+    const { playback, video } = make();
+    playback.setSource(A);
+    await flush();
+    video.fire("play");
+    video.paused = false;
     video.currentTime = 42.5;
     playback.setSource(B);
     await flush();
     expect(hls.instances, "still one instance").toHaveLength(1);
     const h = hls.instances[0]!;
-    expect(h.calls.filter((c) => c === "destroy"), "never destroyed by a swap").toEqual([]);
+    expect(h.calls.filter((c) => c === "destroy"), "never destroyed by a refresh").toEqual([]);
     expect(h.calls.filter((c) => c.startsWith("attachMedia")), "attached once").toHaveLength(1);
-    expect(h.calls.filter((c) => c.startsWith("loadSource"))).toEqual([`loadSource:${A}`, `loadSource:${B}`]);
-    // The position is set BEFORE the load, because the load starts from it.
-    expect(h.loadedAt[1]).toMatchObject({ src: B, startPosition: 42.5 });
+    expect(h.calls.filter((c) => c.startsWith("loadSource")), "the manifest is loaded once, under the first token").toEqual([`loadSource:${A}`]);
+    expect(video.paused, "still playing").toBe(false);
+    expect(video.currentTime, "at the same place").toBe(42.5);
     playback.dispose();
   });
 
-  it("a swap before anything has played does not pin a start position (a live source starts at the live edge)", async () => {
-    const { playback, video } = make();
+  it("every request after a refresh goes out under the NEWEST token: manifest, rendition playlist and segment shapes, and each refresh replaces the last", async () => {
+    const { playback } = make();
     playback.setSource(A);
     await flush();
-    video.currentTime = 0;
+    const setup = hls.instances[0]!.config.xhrSetup;
+    expect(setup, "premise: the instance is given a request hook").toBeTypeOf("function");
+    const shapes = ["manifest/video.m3u8", "manifest/stream_1/video.m3u8?_HLS_msn=12", "video/stream_1/seg_12.ts", "audio/init.mp4#t=0"];
+    const open = (token: string, path: string) => {
+      const x = xhr();
+      setup!(x, underToken(token, path));
+      expect(x.opened, `${path}: opened once`).toHaveLength(1);
+      return x.opened[0]!;
+    };
+    let checked = 0;
+    for (const path of shapes) {
+      // Before any refresh the first token is the token: nothing is rewritten.
+      expect(open("tokenA", path), path).toEqual(["GET", underToken("tokenA", path), true]);
+      checked++;
+    }
+    playback.setSource(B);
+    for (const path of shapes) {
+      expect(open("tokenA", path), `${path} after the first refresh`).toEqual(["GET", underToken("tokenB", path), true]);
+      checked++;
+    }
+    playback.setSource(C);
+    for (const path of shapes) {
+      // A URL still built from the FIRST token and one built from the second both go out under the third.
+      expect(open("tokenA", path), `${path} (first-token URL)`).toEqual(["GET", underToken("tokenC", path), true]);
+      expect(open("tokenB", path), `${path} (second-token URL)`).toEqual(["GET", underToken("tokenC", path), true]);
+      checked += 2;
+    }
+    expect(checked, "anti-vacuity: every shape checked at every stage").toBe(shapes.length * 4);
+    expect(hls.instances[0]!.calls.filter((c) => c.startsWith("loadSource"))).toEqual([`loadSource:${A}`]);
+    playback.dispose();
+  });
+
+  it("a request to any other host is passed through untouched, whatever token is held", async () => {
+    const { playback } = make();
+    playback.setSource(A);
+    await flush();
+    playback.setSource(B);
+    const x = xhr();
+    hls.instances[0]!.config.xhrSetup!(x, "https://elsewhere.example/tokenA/manifest/video.m3u8");
+    expect(x.opened).toEqual([["GET", "https://elsewhere.example/tokenA/manifest/video.m3u8", true]]);
+    playback.dispose();
+  });
+
+  it("a refresh before the bundle arrives: one load, of the newest address, and its requests go out under it", async () => {
+    const { playback } = make();
+    playback.setSource(A);
     playback.setSource(B);
     await flush();
-    expect(hls.instances[0]!.loadedAt[1]).toMatchObject({ src: B, startPosition: -1 });
-    video.currentTime = Number.NaN;
+    const h = hls.instances[0]!;
+    expect(h.calls.filter((c) => c.startsWith("loadSource"))).toEqual([`loadSource:${B}`]);
+    const x = xhr();
+    h.config.xhrSetup!(x, underToken("tokenA", "video/seg_1.ts"));
+    expect(x.opened[0]![1]).toBe(underToken("tokenB", "video/seg_1.ts"));
+    playback.dispose();
+  });
+
+  it("an address with no token to read (the signer changed shape) is onFatal at once, with no instance and no load", async () => {
+    const { playback, onFatal } = make();
+    playback.setSource("https://playback.fake.invalid");
+    await flush();
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    expect(hls.instances, "nothing built for an address that cannot be refreshed").toHaveLength(0);
+    playback.dispose();
+  });
+
+  it("a refresh to an address with no token to read is onFatal too, and the one load stays the one load", async () => {
+    const { playback, onFatal } = make();
     playback.setSource(A);
     await flush();
-    expect(hls.instances[0]!.loadedAt[2], "a time that is not a number is no position").toMatchObject({ src: A, startPosition: -1 });
+    expect(onFatal).not.toHaveBeenCalled();
+    playback.setSource("not an address");
+    await flush();
+    expect(onFatal).toHaveBeenCalledTimes(1);
+    expect(hls.instances[0]!.calls.filter((c) => c.startsWith("loadSource"))).toEqual([`loadSource:${A}`]);
     playback.dispose();
   });
 
@@ -167,7 +271,7 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
     playback.dispose();
   });
 
-  it("two addresses before the bundle has loaded: only the newest is loaded", async () => {
+  it("two addresses before the bundle has loaded: only the newest is loaded, on one instance", async () => {
     const { playback } = make();
     playback.setSource(A);
     playback.setSource(B);
@@ -188,10 +292,10 @@ describe("createPlayback: hls.js (a browser that does not play HLS itself)", () 
     expect(h.config.autoStartLoad).toBe(true);
     video.fire("play");
     expect(h.calls.filter((c) => c.startsWith("startLoad")), "a second play (resume after a pause) is not a second start").toHaveLength(1);
-    video.currentTime = 12;
     playback.setSource(B);
     await flush();
-    expect(h.loadedAt[1], "a swap after play loads on its own, from where the viewer is").toMatchObject({ src: B, startPosition: 12, autoStartLoad: true });
+    expect(h.calls.filter((c) => c.startsWith("startLoad")), "a refresh after play starts nothing either").toHaveLength(1);
+    expect(h.loadedAt, "and loads nothing: the one load was the first").toHaveLength(1);
     playback.dispose();
   });
 
@@ -300,6 +404,31 @@ describe("createPlayback: a browser that plays HLS itself", () => {
     playback.dispose();
   });
 
+  it("a swap of a LIVE source (duration Infinity) keeps playing at the live edge: the old time is not a place in the new load, so nothing seeks", async () => {
+    const { playback, video } = make({ native: true });
+    playback.setSource(A);
+    video.duration = Infinity;
+    video.currentTime = 3300; // 55 minutes into the old live timeline
+    video.paused = false;
+    playback.setSource(B);
+    video.currentTime = 0; // the element restarts at the new source
+    video.fire("loadedmetadata");
+    expect(video.currentTime, "no seek: the new load's own live edge").toBe(0);
+    expect(video.plays, "but it keeps playing").toBe(1);
+    // The positive pair: a finite recording at the same time DOES go back to it.
+    const vod = make({ native: true });
+    vod.playback.setSource(A);
+    vod.video.duration = 5400;
+    vod.video.currentTime = 3300;
+    vod.video.paused = false;
+    vod.playback.setSource(B);
+    vod.video.currentTime = 0;
+    vod.video.fire("loadedmetadata");
+    expect(vod.video.currentTime, "a recording resumes at the viewer's place").toBe(3300);
+    playback.dispose();
+    vod.playback.dispose();
+  });
+
   it("a swap while paused (or before anything played) resumes nowhere and starts nothing", async () => {
     const { playback, video } = make({ native: true });
     playback.setSource(A);
@@ -341,6 +470,9 @@ describe("createPlayback: the hls.js bundle will not load", () => {
     playback.setSource(A);
     await flush();
     expect(onFatal).toHaveBeenCalledTimes(1);
+    playback.setSource(B);
+    await flush();
+    expect(onFatal, "the failed bundle is not retried by a later address: no second report").toHaveBeenCalledTimes(1);
     expect(() => playback.dispose()).not.toThrow();
     vi.doUnmock("hls.js");
   });

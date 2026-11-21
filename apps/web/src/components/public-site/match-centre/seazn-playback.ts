@@ -6,18 +6,28 @@
 //     and never loads hls.js. Everything else gets hls.js, loaded on demand (the bundle is not paid by the pages that play none),
 //     as a worker-less instance (`enableWorker: false`).
 //   - The address carries its token in the path and the token lapses (a Cloudflare HLS is not assumed to outlive it), so the island
-//     hands over a fresh address before then. That is `loadSource(B)` on the same instance and the same element, resuming at the
-//     current time: a refreshed token must not restart the picture, and `destroy()` is only for the element going away.
-//   - Nothing is fetched until the viewer presses play: a page that is only visited streams no video (Cloudflare bills what it
-//     delivers). hls.js is built with `autoStartLoad: false` and started by the first `play`; a native element has `preload="none"`.
+//     hands over a fresh address before then. On hls.js that is NOT a reload: a `loadSource` of a different address detaches and
+//     re-attaches the media (hls.ts 551-560, buffer-controller.ts 604-609), which empties the buffer, resets the time and leaves the
+//     element PAUSED. So one instance loads one manifest, once, and a refresh only changes the token held here: `xhrSetup` swaps the
+//     token segment of every later request (playlist reloads, renditions, segments) for the newest one (seazn-signed-address.ts).
+//     The picture, the buffer and the play state are untouched, and `destroy()` is only for the element going away. One controller
+//     is one video: a different video (live, a part) is a different player, which the island keys, so it is a fresh element.
+//   - A browser that plays HLS itself has no request hook, so there a refresh is a re-point of `video.src` that resumes where the
+//     viewer was and keeps playing; a LIVE source (`duration` Infinity) resumes at its live edge, because the old time is a position
+//     in a timeline the new load does not have.
+//   - No MEDIA is fetched until the viewer presses play: a page that is only visited streams no video (Cloudflare bills what it
+//     delivers). hls.js is built with `autoStartLoad: false` and started by the first `play`, but it DOES ask for the manifest at
+//     `loadSource` (a small text file; it also lets a refused address show its note early); a native element has `preload="none"`.
 //   - A failure the player cannot recover from (a fatal hls.js error, a browser hls.js cannot run in, a bundle that will not load,
 //     an element error) is `onFatal`: the player says so and the island reads the route again for a fresh address.
 import type Hls from "hls.js";
+import { parseSignedAddress, withToken, type SignedAddress } from "./seazn-signed-address";
 
 export const HLS_MIME = "application/vnd.apple.mpegurl";
 
 export interface Playback {
-  /** The newest address the island holds. The same address again is a no-op. */
+  /** The newest address the island holds. The first one is loaded; every later one is the same video under a fresh token. The same
+   *  address again is a no-op. */
   setSource: (src: string) => void;
   dispose: () => void;
 }
@@ -34,7 +44,10 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
   /** The viewer has pressed play at least once: from then on a load starts by itself. */
   let started = false;
   let wanted: string | null = null;
-  let loaded: string | null = null;
+  /** `loadSource` has been called: the one load this instance makes. */
+  let loaded = false;
+  /** The newest token, and the host it is for: what `xhrSetup` puts on every request. */
+  let held: SignedAddress | null = null;
   let hls: Hls | null = null;
   let hlsReady: Promise<Hls | null> | null = null;
   let resume: { at: number | null; playing: boolean; listener: () => void } | null = null;
@@ -59,7 +72,12 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
           onFatal();
           return null;
         }
-        const h = new HlsCtor({ enableWorker: false, autoStartLoad: started });
+        const h = new HlsCtor({
+          enableWorker: false,
+          autoStartLoad: started,
+          // The request is opened here (hls.js skips its own `open` once the element is open), under the token held NOW.
+          xhrSetup: (xhr, url) => xhr.open("GET", held === null ? url : withToken(url, held), true),
+        });
         h.attachMedia(video);
         h.on(HlsCtor.Events.ERROR, (_event, data) => {
           if (data.fatal) onFatal();
@@ -78,17 +96,17 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
     const h = await ensureHls();
     if (h === null || disposed) return;
     const src = wanted;
-    // A newer address may have been asked for while the bundle loaded: it is the one in `wanted`, and one load serves them all.
-    if (src === null || src === loaded) return;
-    // The position is set BEFORE the load, because the load starts from it; -1 is hls.js's own "no position" (the live edge).
-    h.config.startPosition = positionOf(video) ?? -1;
-    loaded = src;
+    // A newer address may have been asked for while the bundle loaded: it is the one in `wanted`, and one load serves them all. After
+    // that load a newer address is only a token (`held`), never a second load.
+    if (src === null || loaded) return;
+    loaded = true;
     h.loadSource(src);
   }
 
   function loadNative(src: string): void {
     // A swap asked for twice before the first one's metadata arrived keeps the position the viewer actually had.
-    const keep = resume ?? { at: positionOf(video), playing: !video.paused && !video.ended };
+    // A live source has no time to go back to: the new load's timeline is its own, so it resumes at the live edge (no seek).
+    const keep = resume ?? { at: video.duration === Infinity ? null : positionOf(video), playing: !video.paused && !video.ended };
     if (resume) video.removeEventListener("loadedmetadata", resume.listener);
     const pending = {
       ...keep,
@@ -99,7 +117,6 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
         if (pending.playing) void video.play().catch(() => {});
       },
     };
-    loaded = src;
     video.src = src;
     if (pending.at !== null || pending.playing) {
       resume = pending;
@@ -113,8 +130,19 @@ export function createPlayback(video: HTMLVideoElement, { onFatal }: { onFatal: 
     setSource(src) {
       if (disposed || src === wanted) return;
       wanted = src;
-      if (native) loadNative(src);
-      else void loadHls();
+      if (native) {
+        loadNative(src);
+        return;
+      }
+      // The token is read from the address, so an address that has none is a signer that changed shape: say so now, not at the first
+      // refresh (when the old token lapses and the picture dies an hour in).
+      const signed = parseSignedAddress(src);
+      if (signed === null) {
+        onFatal();
+        return;
+      }
+      held = signed;
+      void loadHls();
     },
     dispose() {
       if (disposed) return;

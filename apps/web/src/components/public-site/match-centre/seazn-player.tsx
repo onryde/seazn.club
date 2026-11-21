@@ -1,7 +1,7 @@
 "use client";
 // Seazn-hosted video (Phase 1 Task 15; spec §5.1): the match page's player for a signed HLS address (the live, or the interim Cloudflare
 // recording of a part). ONE `<video>` for the life of the component: a refreshed token arrives as a new `src` for the SAME session and
-// is swapped in at the current time by the controller (seazn-playback.ts), so the picture does not restart. A different part is a
+// is handed to the controller (seazn-playback.ts), which takes it without reloading, so the picture does not restart. A different part is a
 // different recording and mounts its own player (the caller keys it).
 //
 // A signed address is a credential: it goes in `data-src` and nowhere else (hls.js owns the element's own `src`, and the controller

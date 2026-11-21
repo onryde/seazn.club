@@ -243,7 +243,7 @@ for (const width of [320, 768, 1280] as const) {
 test.describe("the Seazn player over time (1280)", () => {
   test.use({ viewport: { width: 1280, height: 900 } });
 
-  test("warming turns live with NO reload, and a refreshed address keeps the same element", async ({ page }) => {
+  test("warming turns live with NO reload, and a refreshed address keeps the same element and does not reload the player", async ({ page }) => {
     // Seed + load, then two re-reads: warming -> live, and the live's refresh (its expiry is made to fall due at the floor below).
     test.setTimeout(SEAZN_SEED_MS + SEAZN_NAV_MS + 2 * ONE_RE_READ_MS);
     const m = await seedSeaznMatch(page, { name: `Seazn Over Time ${TAG}` });
@@ -283,11 +283,26 @@ test.describe("the Seazn player over time (1280)", () => {
       await expect(video, "the next re-read hands over the refreshed address").toHaveAttribute("data-src", /\/refreshed-2\//, { timeout: ONE_RE_READ_MS });
       expect(await sameElement!.evaluate((el) => el.isConnected), "the same <video> is still the one on the page").toBe(true);
       expect(await video.elementHandle().then((h) => h!.evaluate((el, old) => el === old, sameElement)), "and it is that very node").toBe(true);
-      if (!(await playsHlsNatively(page))) {
-        const refreshed = (await video.getAttribute("data-src"))!;
-        await expect.poll(() => stub.requests, { message: "hls.js loaded the refreshed address on the same instance" }).toContain(refreshed);
+      const hlsPath = !(await playsHlsNatively(page));
+      if (hlsPath) {
+        // A refresh is NOT a load on hls.js: handing it another address would detach the media and leave the element paused, so the
+        // controller keeps the one loaded manifest and only swaps the token into later requests. No request names a refreshed token yet.
+        expect(stub.requests.filter((u) => /\/refreshed-\d+\//.test(u)), "hls.js was not reloaded under the refreshed address").toEqual([]);
       }
       expect(await page.evaluate(() => (window as unknown as { __seaznSameDocument?: boolean }).__seaznSameDocument), "no reload happened between warming and live").toBe(true);
+      if (hlsPath) {
+        // The first play starts the media fetch. The manifest was loaded under the FIRST token and the segment is resolved against it,
+        // yet it is asked for under the newest one: the token swap is in the request, not in a reload. (The stand-in answers the segment
+        // with a playlist, which hls.js will not accept: that failure comes after the request this asserts, and nothing here follows it.)
+        await video.evaluate((el: HTMLVideoElement) => {
+          el.muted = true;
+          void el.play().catch(() => undefined);
+        });
+        await expect
+          .poll(() => stub.requests.some((u) => /\/refreshed-\d+\/manifest\/seg0\.ts$/.test(u)), { message: "the segment went out under the refreshed token", timeout: 15_000 })
+          .toBe(true);
+        expect(stub.requests.filter((u) => /\/seg0\.ts$/.test(u) && !/\/refreshed-\d+\//.test(u)), "and none under the first token").toEqual([]);
+      }
     } finally {
       await finishSeaznMatch(m);
     }

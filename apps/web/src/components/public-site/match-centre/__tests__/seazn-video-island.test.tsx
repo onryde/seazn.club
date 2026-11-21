@@ -137,7 +137,7 @@ describe("the island: a signed address never reaches a recording", () => {
     expect(out).toContain(`data-src="${shown}"`);
   });
 
-  it("the player is a native control surface a phone can use: controls, inline playback, nothing fetched until play", () => {
+  it("the player is a native control surface a phone can use: controls, inline playback, no media fetched until play", () => {
     const videoTag = /<video\b[^>]*>/.exec(html(answer({ live: signed("live") })))![0];
     expect(videoTag).toContain("controls");
     expect(videoTag).toMatch(/playsinline/i);
@@ -196,9 +196,11 @@ describe("the route: URL, the read, and a guard on what comes back", () => {
 
   describe("asPublicFixtureVideo", () => {
     const valid = answer({ live: signed("live"), replay: [part(2), part(5, "embed")] });
-    it("accepts exactly what the route's schema accepts", () => {
-      expect(asPublicFixtureVideo(valid)).toEqual(valid);
-      expect(asPublicFixtureVideo({ live: null, replay: [] })).toEqual({ live: null, replay: [] });
+    it("accepts the answers the route's schema accepts (a live with parts, and the empty answer) and hands them back as they came", () => {
+      for (const ok of [valid, { live: null, replay: [] }]) {
+        expect(PublicFixtureVideo.safeParse(ok).success, "premise: the route's schema accepts it").toBe(true);
+        expect(asPublicFixtureVideo(ok)).toEqual(ok);
+      }
     });
 
     const bad: [string, unknown][] = [
