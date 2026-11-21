@@ -46,7 +46,11 @@ export function RoundRow({
         <span className="min-w-0">
           <span className="block min-w-0 text-sm font-semibold [overflow-wrap:anywhere]">
             {title.lead}
-            {title.tail !== "" && <span className="whitespace-nowrap">{title.tail}</span>}
+            {title.tail !== "" && (
+              <span data-md-round-tail className="whitespace-nowrap">
+                {title.tail}
+              </span>
+            )}
           </span>
           {meta !== "" && <span className="block truncate text-xs text-slate-600">{meta}</span>}
         </span>

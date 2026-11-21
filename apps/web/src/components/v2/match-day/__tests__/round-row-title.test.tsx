@@ -46,7 +46,20 @@ describe("onlineRoundTitleParts - the round label is one unbreakable tail", () =
 describe("RoundRow - 'Round N' never wraps inside the title", () => {
   it("draws the tail in a no-wrap span, after the lead, inside the title's own block", () => {
     const h = renderToStaticMarkup(<RoundRow round={checkinRound("stage-1:1")} selected={false} dict={DICTS.en} locale="en" nowMs={null} onOpen={() => {}} />);
-    const m = /<span class="[^"]*">Online Rapid · ?<span class="whitespace-nowrap">Round 1<\/span><\/span>/.exec(h);
+    const m = /<span class="[^"]*">Online Rapid · ?<span data-md-round-tail="true" class="whitespace-nowrap">Round 1<\/span><\/span>/.exec(h);
     expect(m, h).not.toBeNull();
+  });
+
+  it("the tail carries the hook the browser witness reads (e2e/mobile/match-surfaces.spec.ts: the tail is ONE client rect at every width), in every locale", () => {
+    let checked = 0;
+    for (const locale of Object.keys(DICTS) as Locale[]) {
+      const h = renderToStaticMarkup(<RoundRow round={checkinRound("stage-1:1")} selected={false} dict={DICTS[locale]} locale={locale} nowMs={null} onOpen={() => {}} />);
+      const tail = /<span data-md-round-tail="true" class="([^"]*)">([^<]*)<\/span>/.exec(h);
+      expect(tail, `${locale}: ${h}`).not.toBeNull();
+      expect(tail![1], `${locale}: the tail does not wrap`).toContain("whitespace-nowrap");
+      expect(tail![2], `${locale}: the tail is the label and the number`).toBe(`${WORDS[locale]} 1`);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: 4 locales").toBe(4);
   });
 });
