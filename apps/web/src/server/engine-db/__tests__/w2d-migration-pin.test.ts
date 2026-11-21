@@ -90,7 +90,11 @@ async function install(tx: Tx): Promise<void> {
       `the W2d delta (${files.join(", ") || "none found"}) does not define ${[...missing, ...(STEPS === undefined ? ["its data-step block"] : [])].join(", ")}`,
     );
   }
-  for (const f of FUNCTIONS) await tx.unsafe(f.sql.replace(PLACEHOLDER, SCHEMA));
+  // V538 (W5 Task 6) dropped and rebuilt `stage_qualification_meta` with a wider return (the frozen cut), and `create or replace`
+  // cannot change a function's return type - replayed over the live schema this delta's older definition refused every test. The
+  // replay exists for the w2d_* helpers; the read function the view calls is the LIVE one, which keeps `points_rule` the stage's
+  // own rule (PF-3 below reads it).
+  for (const f of FUNCTIONS.filter((x) => x.name !== "stage_qualification_meta")) await tx.unsafe(f.sql.replace(PLACEHOLDER, SCHEMA));
   for (const f of FUNCTIONS.filter((f) => f.name.startsWith("w2d_"))) {
     await tx.unsafe(`grant execute on function ${f.name} to app_user`);
   }
