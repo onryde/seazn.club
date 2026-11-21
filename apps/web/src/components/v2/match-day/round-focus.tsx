@@ -4,9 +4,9 @@
 // it - not started, paired and waiting to open, checking in, playing - for the ROW it is handed and no other: every press is that row's
 // own `view` (its stage and round number), never the day's "current round", so an older stage's round row is as live as a newer one.
 //
-// The bodies it draws are the Arbiter Panel round column's, MOVED here with their test ids unchanged (the arbiter column imports them
-// until Task 10 deletes it): the check-in hero, the "Not here yet" waiting list, the playing status, the open-round block with its
-// pairings, and the round's own reinvite / reopen press (`roundPress`). What the panel adds is Match Day's:
+// The bodies it draws (they began as the retired Arbiter page's round column and were MOVED here, test ids unchanged): the check-in
+// hero, the "Not here yet" waiting list, the playing status, the open-round block with its pairings, and the round's own reinvite /
+// reopen press (`roundPress`). What the panel adds is Match Day's:
 //   - presses render only while `mayPress(reader, "start")` - an editor of an offered club on a competition that is not billing-frozen
 //     (O4: a frozen competition keeps its read and its phase lines, and loses every press that STARTS play). A frozen flag comes from a
 //     polled view, so a panel drawn a moment before the freeze can still send one: the server answers 402 and the answer is worded as the
@@ -79,7 +79,7 @@ export const BUTTON_PRIMARY =
 type Msg = ReturnType<typeof useMsg>;
 type Plural = ReturnType<typeof useMsgPlural>;
 
-// ---- the bodies the Arbiter Panel's round column draws, moved here (Task 7) ---------------------------------------------------
+// ---- the round panel's bodies: the playing status, the open-round block, the round's own press -------------------------------
 
 /** The playing phase's status (spec §5.5): "14 of 20 boards playing" and the finished clause over the boards on screen, then the
  *  round bar the panel hands over (its why line and last answer: C13). A round with no board on screen (every board is the
@@ -169,7 +169,7 @@ export function OpenRoundBlockView({
   showStage,
   on,
   playing,
-  mayPress = true,
+  mayPress,
   panel,
 }: {
   view: OpenRoundView;
@@ -179,15 +179,15 @@ export function OpenRoundBlockView({
   on: { ask(): void; cancel(): void; open(): void };
   /** Set in the playing phase (the next round beside a round on screen); absent in the before phase. */
   playing?: PlayingEmphasis;
-  /** Whether the reader may START play from here (Match Day: `mayPress(reader, "start")`, the billing freeze and the club's flag). The
-   *  Arbiter Panel's column leaves it on. No press and no confirmation without it; the pairings still list. */
-  mayPress?: boolean;
-  /** Match Day's round panel; absent in the Arbiter Panel's column. */
+  /** Whether the reader may START play from here (Match Day: `mayPress(reader, "start")`, the billing freeze and the club's flag). REQUIRED:
+   *  a default of "may" would hand a press to any caller that forgot to say. No press and no confirmation without it; the pairings still list. */
+  mayPress: boolean;
+  /** Match Day's round panel. */
   panel?: PanelBlock;
 }) {
   const msg = useMsg();
   const plural = useMsgPlural();
-  // A named refusal, not an assumption: the column hands this only views whose press is "open", but a view the reader says
+  // A named refusal, not an assumption: the round panel hands this only views whose press is "open", but a view the reader says
   // cannot be opened gets no press and no confirmation here.
   const canOpen = view.press === "open" && mayPress;
   const headingId = `arbiter-column-open-${view.stageId}-${view.roundNo}`;
@@ -238,7 +238,7 @@ export function OpenRoundBlockView({
         <button
           type="button"
           // The before phase's press and the playing phase's are the same press (same hook, same confirmation); the playing one
-          // wears its own test id and says whether it is the primary action of the column right now.
+          // wears its own test id and says whether it is the primary action of the round panel right now.
           data-testid={panel ? panel.ctaTestId : playing ? "arbiter-column-next" : "arbiter-column-open-cta"}
           data-primary={panel ? String(view.earlierInPlay.length === 0) : playing ? String(playing.primary) : undefined}
           disabled={state.busy !== null}
@@ -351,8 +351,8 @@ export function roundPress(a: {
   /** The button's class: the hero's quiet press and the playing status's primary one differ only in this. */
   buttonClass: string;
   /** Whether the reader may START play from here (Match Day's `mayPress(reader, "start")`). Without it there is no button and the
-   *  confirmation cannot be open; the answer is still drawn, and `owedView` still says what the boards are owed. The column leaves it on. */
-  mayPress?: boolean;
+   *  confirmation cannot be open; the answer is still drawn, and `owedView` still says what the boards are owed. Required, never defaulted. */
+  mayPress: boolean;
   /** Match Day (MD-R2/R22): a board of the round is held for a Lichess link, so the press is named for what it does here -
    *  "Open round N again" - and carries its own test id. */
   linkHeld?: boolean;
@@ -368,7 +368,7 @@ export function roundPress(a: {
   return {
     owedView,
     button:
-      owedView === null || a.mayPress === false ? null : (
+      owedView === null || !a.mayPress ? null : (
         <button
           type="button"
           data-testid={a.linkHeld === true ? "md-round-reopen-cta" : "arbiter-column-reinvite"}
@@ -396,7 +396,7 @@ export function roundPress(a: {
       ),
     dialog: (
       <ConfirmDialog
-        open={owedView !== null && a.mayPress !== false && state.confirming}
+        open={owedView !== null && a.mayPress && state.confirming}
         testId="arbiter-column-reinvite-dialog"
         title={
           a.linkHeld === true
@@ -447,14 +447,14 @@ export type CheckinHeroProps = {
   openRound: OpenRoundHandle;
   /** C13: the panel's one RoundExtend, placed here in this phase. */
   roundExtend: ReactNode;
-  /** Match Day (Task 7): whether the reader may START play from here (`roundPress`'s). The column leaves it on. */
-  mayPress?: boolean;
+  /** Match Day (Task 7): whether the reader may START play from here (`roundPress`'s). Required, never defaulted. */
+  mayPress: boolean;
   /** Match Day (MD-R2/R22): a board is held for a Lichess link, so the round's press is "Open round N again" (`roundPress`'s). */
   linkHeld?: boolean;
   /** Match Day: the focus frame already names the round, so the card carries no heading of its own. */
   bare?: boolean;
   /** Match Day (M3): the round's press, built by the caller so its button can stand beside the reason it exists (the link-hold block). Absent, the
-   *  hero builds and draws its own, as the Arbiter Panel's column does. */
+   *  hero builds and draws its own. */
   press?: RoundPress;
   /** Whether the hero draws the press's button and answer (default true). The confirmation is always the hero's. */
   pressInHero?: boolean;
@@ -462,7 +462,7 @@ export type CheckinHeroProps = {
 
 /** The check-in hero (spec §5.3): the countdown to the NEXT board closing, who has checked in, what is already playing, the round's
  *  +5 (the node the panel hands over), the round's own reinvite or reopen press, and the staggered groups. */
-export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, mayPress = true, linkHeld = false, bare = false, press: given, pressInHero = true }: CheckinHeroProps) {
+export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, mayPress, linkHeld = false, bare = false, press: given, pressInHero = true }: CheckinHeroProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const venueAt = useVenueClock(tz);
@@ -501,7 +501,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, ma
         </h2>
       )}
 
-      {/* The one large element of the column. Three states of one clock, each with its own words; before mount (nowMs null) the
+      {/* The one large element of the hero. Three states of one clock, each with its own words; before mount (nowMs null) the
           label stands alone and the digits wait for the viewer's clock. A running face is a timer a screen reader is not made to
           read every second (role=timer is aria-live off). */}
       <div data-testid="arbiter-checkin-clock" data-kind={clock.kind} className="flex min-w-0 flex-col gap-1">
@@ -601,7 +601,7 @@ export function CheckinHero({ round, view, tz, nowMs, openRound, roundExtend, ma
 
 // ---- check-in: the waiting list -------------------------------------------------------------------------------------------------
 
-/** C9: the panel puts it in the board group, under the camera from md. Shares the column's handle. */
+/** C9: the waiting list, in the round panel's check-in phase. Shares the round panel's open-round handle. */
 export type WaitingListProps = {
   /** `round.boards`; the list filters with `openWindowBoards`, the SAME set the hero's tally counts. */
   boards: readonly ArbiterBoard[];
@@ -615,12 +615,12 @@ export type WaitingListProps = {
   requestBusy: boolean;
   on: { select(fixtureId: string): void; extendBoard(fixtureId: string): void };
   /** Match Day (Task 7): whether the reader may START play from here - Resend and a board's "+5 min" are START writes. The seats and
-   *  their invite words list either way. The column leaves it on. */
-  mayPress?: boolean;
-  /** Match Day: where the section sits. The column's own classes place it in the Arbiter Panel's flex tracks (`order-*`); a grid that is
-   *  not that panel passes "" so the list stays in source order. */
+   *  their invite words list either way. Required, never defaulted. */
+  mayPress: boolean;
+  /** Match Day: where the section sits. The default classes (`COLUMN_WAITING_PLACEMENT`) are `order-*` for a parent that is a flex track
+   *  of ordered groups; Match Day's round panel is a plain column and passes "" so the list stays in source order. */
   placement?: string;
-  /** Match Day: the answer to the last "+5 min", under the board it was pressed for (the Arbiter Panel says it in its decision area). */
+  /** Match Day: the answer to the last "+5 min", under the board it was pressed for (the board panel says it in its own decision area). */
   extendNotice?: { fixtureId: string; text: string } | null;
 };
 
@@ -645,7 +645,7 @@ const COLUMN_WAITING_PLACEMENT = "max-md:order-[-1] md:max-lg:order-8 lg:order-3
  *  in board order - the same boards the tally counts, so its denominator and this list never disagree. A board whose `seats` is null
  *  is listed with both seats "Not here yet" and no chip (the tally counts it as two seats, none here). Empty: no list at all, and
  *  no help line (with no row there is nothing to explain). */
-export function WaitingList({ boards, view, openRound, nowMs, requestBusy, on, mayPress = true, placement = COLUMN_WAITING_PLACEMENT, extendNotice = null }: WaitingListProps) {
+export function WaitingList({ boards, view, openRound, nowMs, requestBusy, on, mayPress, placement = COLUMN_WAITING_PLACEMENT, extendNotice = null }: WaitingListProps) {
   const msg = useMsg();
   const plural = useMsgPlural();
   const { state } = openRound;
@@ -893,7 +893,7 @@ export function RoundFocus(p: RoundFocusProps) {
     );
   const extendBoard = (fixtureId: string) => {
     const target = rr?.boards.find((b) => b.fixtureId === fixtureId);
-    // An id not in this round, or any request in flight, does nothing at all (the same rule as the Arbiter Panel's row).
+    // An id not in this round, or any request in flight, does nothing at all.
     if (target === undefined || requestBusy) return;
     void boardRunner.extend(fixtureId, target.boardNo);
   };
@@ -991,7 +991,7 @@ export function RoundFocus(p: RoundFocusProps) {
     );
   } else if (rr !== null && own !== null) {
     // Playing: no board is checking in. The round's own press, when the reader names one (a re-armed board after the D17 void, or a board
-    // held for a link whose window still runs), is drawn inside the status, as the column draws it - or, with a link hold, in the hold's block.
+    // held for a link whose window still runs), is drawn inside the status - or, with a link hold, in the hold's block.
     body = (
       <>
         <PlayingStatus round={rr} roundExtend={roundExtend} owed={boardsOwedAnInvite(own.owedView)} bare>
@@ -1026,7 +1026,7 @@ export function RoundFocus(p: RoundFocusProps) {
   );
 }
 
-/** The answer to a board's "+5 min", as the waiting list prints it under that board: the sentence the Arbiter Panel's decision area says
+/** The answer to a board's "+5 min", as the waiting list prints it under that board: the sentence the board panel's decision area says
  *  ("Added 5 minutes to board 3. Check-in now closes 19:14.") or the door's refusal, in the venue's clock. */
 function boardExtendNotice(state: BoardExtendState, round: ArbiterRound | null, f: ExtendCopy): { fixtureId: string; text: string } | null {
   const n = state.notice;
@@ -1039,8 +1039,7 @@ function boardExtendNotice(state: BoardExtendState, round: ArbiterRound | null, 
 /** Spec §3.2.2: "+5 min to the round" - one press gives every board of the round whose check-in is open five more minutes, and the answer
  *  says how many and why the rest were left alone. Offered while at least one board would accept it (the server's own reading of each board,
  *  re-asked of the TICKING clock) and, once pressed, for as long as its answer is on screen. The press is `canPress`'s; the reason and the
- *  answer say what they say to a reader who may not press. (The Arbiter Panel's own bar, `RoundExtend`, went with that page in Task 10; the
- *  test ids are its, unchanged.) */
+ *  answer say what they say to a reader who may not press. (The test ids are the retired Arbiter page's bar's, unchanged.) */
 function RoundExtendBar({
   round,
   state,

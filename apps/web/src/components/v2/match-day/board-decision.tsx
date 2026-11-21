@@ -1,6 +1,6 @@
 "use client";
-// A board's decisions and the video-outage card (spec 2026-11-05 §6.1 "Decide"): MOVED here from the Arbiter Panel (its
-// `Decision` and the inline outage section, deleted with the page in Task 10), test ids and copy unchanged, so Match Day's board panel
+// A board's decisions and the video-outage card (spec 2026-11-05 §6.1 "Decide"): MOVED here from the retired Arbiter page (its
+// `Decision` and the inline outage section, deleted with the page in Task 10), test ids and copy unchanged. Match Day's board panel
 // draws the one set of buttons. What Match Day adds is WHO may press (`may`, from `mayPress`, lib/match-day/online.ts):
 //   - `finish`: resync, let the game go on, settle - the decisions that FINISH play write or unblock a RESULT, the scoring the billing
 //     freeze exempts (owner O4), so they are every editor's, flag or freeze or neither;
@@ -25,7 +25,7 @@ import {
 } from "../arbiter-flag-cards";
 import { boardExtendOffer, extendBoardLabel, extendClosesLine, extendHelperLine, extendWhyLine } from "../checkin-extend-ui";
 
-/** What the section calls: the decisions' handlers (the arbiter panel and Match Day's panel each bind them to their own runner). */
+/** What the section calls: the decisions' handlers (Match Day's board panel binds them to its own runner). */
 export type DecisionOn = {
   extend(): void;
   resync(): void;
@@ -60,12 +60,13 @@ export function BoardDecision({
   /** The board's match page, where a board with no game on file is settled; null when it has none. */
   settleHref: string | null;
   may: DecisionMay;
-  /** Say why "+5 min" is missing (the Arbiter Panel does; Match Day's panel prints no unprompted reason - Task 7's M5). */
+  /** Say why "+5 min" is missing. Match Day's board panel passes false (it prints no unprompted reason - Task 7's M5, owner sign-off): the
+   *  retired Arbiter page was the one screen that said it, so today nothing draws `extendWhyLine`. */
   showWhy: boolean;
   on: DecisionOn;
   f: Fmt;
   headingId: string;
-  /** The section's own placement classes: the Arbiter Panel's grid orders them, Match Day's panel is a plain column. */
+  /** The section's own placement classes (Match Day's board panel sets its own `order-*`). */
   className: string;
 }) {
   const settlePanel = useId();
@@ -209,8 +210,8 @@ export function BoardDecision({
 }
 
 /** The canvas's outage card ("Only during a video outage"): video required, the board still to be played, not already let go, and the
- *  join answered that the vendor is down (`unavailable`). One predicate for the Arbiter Panel (`showsOutageCard`, which derives
- *  `unavailable` from its join state) and Match Day's panel (whose cameras, Task 9, say it). */
+ *  join answered that the vendor is down (`unavailable`). One predicate: Match Day's board panel derives `unavailable` from its cameras
+ *  (`anyUnavailable`, board-cameras.tsx, Task 9); `showsOutageCard` (online/arbiter-video.tsx) derives it from one join's state. */
 export function outageOffered(b: Pick<ArbiterBoard, "cameraPolicy" | "playable" | "videoOverridden">, unavailable: boolean): boolean {
   return b.cameraPolicy === "required" && b.playable && !b.videoOverridden && unavailable;
 }

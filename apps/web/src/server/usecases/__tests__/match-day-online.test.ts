@@ -689,8 +689,16 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
       const down = await getMatchDay(day.auth, day.comp.id, now);
 
       expect(vi.mocked(readOnlineRounds), "premise: the forced throw was reached").toHaveBeenCalledTimes(1);
-      expect(down, "a failed online read leaves the day exactly as a day with no online rounds reads: courts, no-court list, needs-you, all of it").toEqual(withoutOnline);
-      expect(down.playing_no_court.map((m) => m.id).sort(), "nothing was listed under a round, so the online boards stay no-court rows").toEqual([inHall, ...idsOf(online.boards)].sort());
+      // The two days differ in exactly one list, and on purpose. An EMPTY answer lists no round, so a board in play stays a no-court row (it is
+      // nowhere else). A FAILED read lists no round either, but it says nothing about the boards: they are online boards a round row would hold, and
+      // drawing every one of them under "Playing, no court" for a poll (and closing the open board panel as "no longer on this list") is a wrong
+      // screen, not a degraded one - so the failed day drops the online division's boards and keeps every other row (final review, M5).
+      const { playing_no_court: downNoCourt, ...downRest } = down;
+      const { playing_no_court: baseNoCourt, ...baseRest } = withoutOnline;
+      expect(downRest, "a failed online read leaves the day as a day with no online rounds reads, but for the no-court list: courts, needs-you, all of it").toEqual(baseRest);
+      expect(baseNoCourt.map((m) => m.id).sort(), "premise: an EMPTY answer keeps the online boards as no-court rows (nothing else lists them)").toEqual([inHall, ...idsOf(online.boards)].sort());
+      expect(idsOf(online.boards).length, "premise: the day has online boards in play").toBeGreaterThan(0);
+      expect(downNoCourt.map((m) => m.id), "a FAILED read: no online board is a no-court row; the in-hall match, in a division that does not play online, stays").toEqual([inHall]);
       expect(logged, "logged once, loud").toHaveBeenCalledTimes(1);
       const [fields] = logged.mock.calls[0]! as [{ err: Error; competitionId: string }, string];
       expect(fields.competitionId).toBe(day.comp.id);

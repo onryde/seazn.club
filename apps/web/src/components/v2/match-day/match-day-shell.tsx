@@ -304,7 +304,8 @@ export function MatchDayShell({
   /** An online round opened from the list, Needs you or the address, by its key. */
   const openRound = (key: string) => {
     const round = online.find((r) => r.key === key);
-    setOpened({ kind: "round", id: key, name: round === undefined ? key : onlineRoundTitle(dict, round) });
+    // A round the list does not hold has no title to say if it is lost: "" (the notice then says it without a name), never its `stage:round` key.
+    setOpened({ kind: "round", id: key, name: round === undefined ? "" : onlineRoundTitle(dict, round) });
     if (round !== undefined) showDivision(round.division_id);
     setNotice(null);
     setPhoneOpen(true);
@@ -313,7 +314,8 @@ export function MatchDayShell({
   /** An online board opened from the list or Needs you, by its fixture id (never by the row object: a poll hands a new one each time). */
   const openBoard = (fixtureId: string) => {
     const found = resolveOnlineFocus(online, { kind: "board", id: fixtureId, name: "" });
-    setOpened({ kind: "board", id: fixtureId, name: found.kind === "board" ? boardName(dict, found.board) : fixtureId });
+    // Likewise a board the list does not hold: "" and not its fixture id (a UUID is no word to put in front of an organiser).
+    setOpened({ kind: "board", id: fixtureId, name: found.kind === "board" ? boardName(dict, found.board) : "" });
     if (found.kind === "board") showDivision(found.round.division_id);
     setNotice(null);
     setPhoneOpen(true);
@@ -527,7 +529,9 @@ export function MatchDayShell({
         <div className="min-w-0 md:grid md:grid-cols-[minmax(0,17rem)_minmax(0,1fr)] md:items-start md:gap-6 lg:grid-cols-[minmax(0,21rem)_minmax(0,1fr)]">
           {focus.kind === "lost" && (
             <div data-testid="md-lost" role="status" className="card mb-4 min-w-0 p-5 md:col-start-2 md:row-start-1 md:mb-0">
-              <p className="font-semibold text-slate-900 [overflow-wrap:anywhere]">{t(dict, "matchDay.focus.left", { court: focus.name })}</p>
+              <p className="font-semibold text-slate-900 [overflow-wrap:anywhere]">
+                {focus.name === "" ? t(dict, "matchDay.focus.leftUnnamed") : t(dict, "matchDay.focus.left", { court: focus.name })}
+              </p>
               <p className="mt-1 text-sm text-slate-600">{t(dict, "matchDay.focus.pick")}</p>
             </div>
           )}

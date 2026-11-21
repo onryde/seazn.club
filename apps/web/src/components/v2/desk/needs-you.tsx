@@ -275,7 +275,7 @@ export function needsYouItems(
             sub: a.reason === null ? t(dict, "desk.needsYou.board_held.sub") : t(dict, HELD_TITLE_KEYS[a.reason]),
             action: reopenRound !== null && roundKey !== null
               ? { label: t(dict, "desk.needsYou.board.openRound", { round: reopenRound }), href: `${matchDay}?round=${encodeURIComponent(roundKey)}` }
-              : { label: t(dict, "desk.needsYou.board.action", { board: a.boardNo }), href: `${matchDay}?board=${encodeURIComponent(a.fixtureId)}` },
+              : { label: t(dict, "desk.needsYou.board.action", { board: a.boardNo }), href: routes.competitionMatchDayBoard(org, comp, a.fixtureId) },
           });
           break;
         }
@@ -286,7 +286,7 @@ export function needsYouItems(
             sub: plural(dict, "desk.needsYou.board_flagged.sub", a.flags, locale),
             action: {
               label: t(dict, "desk.needsYou.board.action", { board: a.boardNo }),
-              href: `${routes.competitionMatchDay(org, comp)}?board=${encodeURIComponent(a.fixtureId)}`,
+              href: routes.competitionMatchDayBoard(org, comp, a.fixtureId),
             },
           });
           break;

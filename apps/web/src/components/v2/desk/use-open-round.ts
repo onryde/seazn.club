@@ -1,7 +1,7 @@
 "use client";
 
-// The Open / Resend press of ONE round, lifted out of the Open round control (since deleted: the Arbiter Panel's round column is
-// its only home) so the column and the panel's round bar press the very same thing. It owns the reducer (open-round-state.ts,
+// The Open / Resend press of ONE round, lifted out of the Open round control (since deleted; Match Day's round panel, round-focus.tsx,
+// is its only home). It owns the reducer (open-round-state.ts,
 // rules R1-R5: one request at a time, the open only from its confirmation), the router, and the runner that puts each request on
 // the network with an `apiV1` POST and a `router.refresh()` after the answer. The round's "+5 min" is not here: it is the panel's
 // own `RoundExtend` (checkin-extend-ui.ts), one control for the round on screen.
@@ -40,8 +40,9 @@ type Presses = Omit<OpenRoundHandle, "state">;
 /** The presses of a handle with no round: every call does nothing. */
 const NO_PRESSES: Presses = { ask: () => {}, cancel: () => {}, open: () => {}, resend: () => {} };
 
-/** A null view gives a no-op handle (initial state; every call does nothing). ArbiterPanel calls it for the round on screen (C9). The
- *  runner's refresh is the Next router's: the Arbiter Panel's round is read by its server component. */
+/** A null view gives a no-op handle (initial state; every call does nothing). The runner's refresh is the Next router's, which re-reads a
+ *  server component's data; Match Day's round panel reads its day through the shell's own state and so calls `useOpenRoundWith` with the
+ *  shell's refresh instead (this router-bound form has no caller in the app now). */
 export function useOpenRound(view: OpenRoundView | null): OpenRoundHandle {
   const router = useRouter();
   const refresh = useCallback(() => router.refresh(), [router]);
