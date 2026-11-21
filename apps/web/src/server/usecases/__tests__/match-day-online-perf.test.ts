@@ -49,14 +49,18 @@ beforeEach(() => {
  *
  *    poll, 4 boards: 96     poll, 32 boards: 102     slope: 0.21 per extra board     board read: 7 at 4 and 7 at 32
  *
- *  - `POLL_CEILING_32` 108 = 102 + 6 (about 6%): a new fixed read or two in the poll fits, a per-board one does not (that is the slope's
- *    job, below); a revert of the batch reads 180, which is 72 over it, and the pre-share poll, 217, 109 over.
+ *  Then 106 at 32 boards (gaps wave B, measured again at its fix round 2 with a throwaway copy of this test whose ceiling was 0: "expected 106
+ *  to be less than or equal to 0"): wave B's fixed reads (B5's freeze read of the competition among them) are four statements, none per board.
+ *
+ *  - `POLL_CEILING_32` 108 = 106 + 2 (about 2%): one more fixed read fits, a second does not, and a per-board one never does (that is the
+ *    slope's job, below); a revert of the batch reads 180 (72 over it) and the pre-share poll, 217 (109 over). The margin is deliberately
+ *    thin: the next fixed read to the poll raises this number on purpose, in the commit that adds it.
  *  - `SLOPE_CEILING` 0.5 = 0.21 + 0.29: what is left per board is the camera policy of each FLAGGED board (one read each), so a quarter of
  *    the boards at most may cost a statement; the pre-batch 2.64, the pre-share 3.29 and the pre-M2 6.5 are all over it.
  *  - `BOARD_READ_CEILING` 7: a board read is ONE board's own rows, and every one of its seven statements is accounted for; the pre-batch read
  *    was 8 (its two seat reads, now one), so a revert reds it.
  *
- *  What the 102 still holds (read from the statement texts, 32 boards): 9 the camera policy (one for the round, one per flagged board), 2 the
+ *  What the 102 (before wave B's four) holds (read from the statement texts, 32 boards): 9 the camera policy (one for the round, one per flagged board), 2 the
  *  batched seat reads (the round's and the flagged lister's), and the rest fixed reads. The flagged lister's second build of a board the round
  *  already composed is not a read two consumers share (the lister's `FlaggedBoard` is built without seats or a clock, the round's with both),
  *  so it stays; only its seat read is now one statement. */
