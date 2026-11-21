@@ -586,9 +586,9 @@ export function viewAfterPoll(prev: MatchDayView, next: MatchDayView): MatchDayV
 
 /** What a poll does to the freeze a press's 402 taught the page (MD-R30, B5). `seenAt` is the browser's clock at the last 402 (null: none seen); a
  *  poll lifts it only when it says `frozen: false` AND was ASKED after the 402 - a read already in flight when the 402 landed describes the
- *  competition as it was a moment before and says nothing about now. An older server sends no flag (`undefined`): no evidence, so it keeps it.
+ *  competition as it was a moment before and says nothing about now. An older server sends no flag (`undefined`), and a poll whose freeze read failed sends `null`: no evidence, so it keeps it.
  *  The same millisecond keeps it too: the two cannot be ordered, and the cost of being wrong is one press that answers 402 again. */
-export function freezeSeenAfterPoll(seenAt: number | null, frozen: boolean | undefined, startedAt: number): number | null {
+export function freezeSeenAfterPoll(seenAt: number | null, frozen: boolean | null | undefined, startedAt: number): number | null {
   if (seenAt === null) return null;
   return frozen === false && startedAt > seenAt ? null : seenAt;
 }

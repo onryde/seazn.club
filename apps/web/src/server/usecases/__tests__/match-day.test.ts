@@ -79,6 +79,22 @@ vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
     },
   };
 });
+// B5 fix round 1 (I1): the poll's freeze read is a lifeline read (MD-R9). The fault replaces its answer with a throw while `freezeFault.fail` is set; every
+// other call is the real read (the premise reads of the B5 test below go through it too).
+const freezeFault = vi.hoisted(() => ({ fail: false, hits: 0 }));
+vi.mock("../entitlement-freeze", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../entitlement-freeze")>();
+  return {
+    ...real,
+    frozenCompetitionIds: async (...args: Parameters<typeof real.frozenCompetitionIds>) => {
+      if (freezeFault.fail) {
+        freezeFault.hits++;
+        throw new Error("boom: the freeze read is down");
+      }
+      return real.frozenCompetitionIds(...args);
+    },
+  };
+});
 import { log } from "@/server/logger";
 import type { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayView } from "@/lib/match-day/types";
 import { MatchDayView as MatchDayViewSchema } from "@/server/api-v1/schemas";
@@ -304,6 +320,36 @@ describe.skipIf(!HAS_DB)("getMatchDay", () => {
     await limit(50);
     expect([...(await frozenCompetitionIds(day.orgId))], "premise: room again").toEqual([]);
     expect((await getMatchDay(day.auth, day.comp.id, at(0))).frozen, "thawed").toBe(false);
+  });
+
+  it("B5 fix round 1 (I1) - the freeze read is a lifeline: when it throws the poll still answers whole, says `frozen: null` (no evidence: the page keeps what it holds), logs once, and the next poll reads it again", async () => {
+    const day = await seedDay();
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const base = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(base.frozen, "premise: the answered poll says false").toBe(false);
+      freezeFault.fail = true;
+      freezeFault.hits = 0;
+      const down = await getMatchDay(day.auth, day.comp.id, at(0)); // a rejection here is the defect: the day screen is the organiser's lifeline
+      expect(freezeFault.hits, "premise: the forced throw was reached").toBe(1);
+      const { frozen: downFrozen, ...downRest } = down;
+      const { frozen: baseFrozen, ...baseRest } = base;
+      expect(downFrozen, "an unread freeze is not 'not frozen': it is null").toBeNull();
+      expect(baseFrozen).toBe(false);
+      expect(downRest, "everything else the poll answers is the poll's own: the day is whole").toEqual(baseRest);
+      expect(MatchDayViewSchema.parse(JSON.parse(JSON.stringify(down))).frozen, "and the wire carries the null (a boolean-only schema would refuse the whole poll)").toBeNull();
+      expect(logged, "logged once, loud").toHaveBeenCalledTimes(1);
+      const [fields] = logged.mock.calls[0]! as [{ err: Error; competitionId: string }, string];
+      expect(fields.competitionId).toBe(day.comp.id);
+      expect(fields.err.message).toBe("boom: the freeze read is down");
+      freezeFault.fail = false;
+      const up = await getMatchDay(day.auth, day.comp.id, at(0));
+      expect(up.frozen, "the next poll reads it again").toBe(false);
+      expect(logged, "and logs nothing more").toHaveBeenCalledTimes(1);
+    } finally {
+      freezeFault.fail = false;
+      logged.mockRestore();
+    }
   });
 
   it("the court list: every division's candidate courts, and every court holding one of this competition's matches today — not tomorrow's, not another competition's", async () => {

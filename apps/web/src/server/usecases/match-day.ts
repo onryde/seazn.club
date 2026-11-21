@@ -920,7 +920,12 @@ export async function getMatchDay(
     ),
     // B5: whether this competition is billing-frozen NOW, read OUTSIDE the tenant transaction above (`frozenCompetitionIds` queries the pool: nesting
     // it in `withTenant` is the self-deadlock its header names). One read of the org per poll, the one the page's own load and every START write make.
-    frozenCompetitionIds(auth.orgId),
+    // ISOLATED too (ruling MD-R9, fix round 1 I1): the day screen is the organiser's lifeline and this field only lets a page take a freeze BACK, so a
+    // failed read answers `null` ("no evidence": the page keeps what it holds) and is logged loud; it must never reject the poll.
+    frozenCompetitionIds(auth.orgId).catch((err: unknown): Set<string> | null => {
+      log.error({ err, competitionId }, "match-day: the competition's freeze could not be read; this poll answers without it");
+      return null;
+    }),
   ]);
   // A board is listed once, under its round (design 5.2): an online board in play on no court is no no-court row. Dropped here, after
   // `readBoard` and never inside it (the code read and the call preview read the same board and keep their own lists).
@@ -996,8 +1001,9 @@ export async function getMatchDay(
     // read never asks about (not started) can fail in the desk alone: its rounds answered (`online_failed` false), its board rows did not.
     // The page holds its last board rows of exactly these divisions, never the whole list and never the count.
     boards_unread: queue.unreadDivisions(),
-    // B5: the freeze as of THIS poll. A page that was told "frozen" by a 402 (MD-R30) takes it back only from a poll that says otherwise.
-    frozen: frozenIds.has(competitionId),
+    // B5: the freeze as of THIS poll. A page that was told "frozen" (by a 402, MD-R30, or by its own load) takes it back only from a poll that says
+    // `false`. `null` is a FAILED read (the catch above), told apart from an answer: no evidence either way.
+    frozen: frozenIds === null ? null : frozenIds.has(competitionId),
   };
 }
 

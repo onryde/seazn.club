@@ -312,6 +312,7 @@ export interface MatchDayView {
   boards_unread: string[];
   /** The competition is billing-frozen as of this poll (`frozenCompetitionIds`, the set every START write is refused by). The page's own `frozen` flag is
    *  read when it loads and a 402 only ever adds to it (MD-R30, `freezeSeen`); this is what lets a press come back without a reload - a poll that was
-   *  asked AFTER the 402 and answers `false` lifts it (`freezeSeenAfterPoll`). */
-  frozen: boolean;
+   *  asked AFTER the 402 and answers `false` lifts it (`freezeSeenAfterPoll`), and so does a poll that answers `false` to a page that LOADED frozen.
+   *  `null` is a poll whose freeze read failed (the day is answered whole anyway, MD-R9): no evidence either way, the page keeps what it holds. */
+  frozen: boolean | null;
 }
