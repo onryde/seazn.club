@@ -275,9 +275,13 @@ export const MatchDayView = z.object({
   venues_today: z.array(Uuid),
   // Match Day online: the competition's online chess rounds, after the courts; empty when it has none (or the feature is off).
   online_rounds: z.array(MatchDayOnlineRound),
-  // True when this poll's online read failed (the rest of the day is answered whole): `online_rounds` is then [] because nothing was read, not
-  // because there is no online round - a page that holds a last answer keeps it. False when the read answered, an empty answer included.
+  // True when this poll's online ROUNDS read failed (the rest of the day is answered whole): `online_rounds` is then [] because nothing was read,
+  // not because there is no online round - a page that holds a last answer keeps it. False when the read answered, an empty answer included.
   online_failed: z.boolean(),
+  // The divisions whose held or flagged board read failed in this poll (sorted ids): their per-board Needs-you rows (`board_held`,
+  // `board_flagged`) are missing from `needs_you` because they were not read, not because nothing is held. A page that holds a last answer
+  // keeps its last per-board rows of exactly these divisions. Empty when every read answered.
+  boards_unread: z.array(Uuid),
 });
 
 /** The focused board's position (lib/match-day/types.ts `BoardPosition`): the replayed ledger as FEN, the last REPLAYED ply as its two

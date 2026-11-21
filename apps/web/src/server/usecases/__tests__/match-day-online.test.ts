@@ -62,6 +62,7 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
 
 import { GET as matchDayRoute } from "@/app/api/v1/competitions/[id]/match-day/route";
 import { isMatchDayView, viewAfterPoll } from "@/lib/match-day/view";
+import { needsYouKey } from "@/components/v2/desk/needs-you";
 import { MatchDayView } from "@/server/api-v1/schemas";
 import { createApiKey } from "../api-keys";
 import { forgetOnlineChessFlagCache, onlineChessOffered } from "../external-play/online-chess-flag";
@@ -851,75 +852,172 @@ describe.runIf(HAS_DB)("getMatchDay - each queue lister is read ONCE per online 
     expect(asked().flagged).toHaveBeenCalledTimes(4);
   });
 
-  // Fix round 1 (m1, m2): the share carries FAILURES too, and a failure is one failure for both readers. These drive a REAL rejection of the
-  // lister (the spy wraps the real one and is told to reject once) through the real `getMatchDay`, desk and online read both - never a
-  // mocked `readOnlineRounds`, which would prove the catch and nothing about what the listers' failure does to the readers.
+  // Fix rounds 1 and 2 (m1, m2): the share carries FAILURES too, and a failure is one failure for both readers. These drive a REAL rejection of
+  // the lister (the spy wraps the real one and is told to reject for ONE division, calling through for the others) through the real
+  // `getMatchDay`, desk and online read both - never a mocked `readOnlineRounds`, which would prove the catch and nothing about what the listers'
+  // failure does to the readers. Round 2: the page holds ONLY what failed - the failed division's board rows, and the rounds only when the rounds
+  // read itself failed - so each case names the division that failed and checks the others moved.
   const isBoardRow = (i: { kind: string }): boolean => i.kind === "board_held" || i.kind === "board_flagged";
+  /** Make `which` lister reject for `divisionId` only and answer for every other division as it always does; returns the undo. */
+  async function failLister(which: "held" | "flagged", divisionId: string): Promise<() => void> {
+    const boom = new Error(`boom: the ${which} lister is down for ${divisionId}`);
+    if (which === "held") {
+      const real = (await vi.importActual<typeof import("../external-play/queue")>("../external-play/queue")).listNeedsOrganiserExternalPlay;
+      asked().held.mockImplementation((auth, id) => (id === divisionId ? Promise.reject(boom) : real(auth, id)));
+      return () => void asked().held.mockImplementation(real);
+    }
+    const real = (await vi.importActual<typeof import("../external-play/arbiter")>("../external-play/arbiter")).listFlaggedExternalPlay;
+    asked().flagged.mockImplementation((auth, id) => (id === divisionId ? Promise.reject(boom) : real(auth, id)));
+    return () => void asked().flagged.mockImplementation(real);
+  }
+  /** A badminton division's own Needs-you row: one of the seed's matches loses its slot (a ready match with no time is `unscheduled`). */
+  async function unscheduleOne(day: Awaited<ReturnType<typeof seedDay>>): Promise<string> {
+    const id = day.comp.fixtures[3]!.id;
+    await sql`update fixtures set scheduled_at = null, court_id = null, venue_id = null where id = ${id}`;
+    return id;
+  }
+
   it.each([["held"], ["flagged"]] as const)(
-    "a %s lister that REJECTS is one failure for both readers: the poll says online_failed, each reader keeps its own answer, and the page holds the last good one",
+    "a %s lister that REJECTS for ONE division holds only that division's board rows: the other division's settle and the badminton row move at once, the count and courts are the poll's, the rounds hold, and the next answer recovers fully",
     async (which) => {
       const { day, divisions } = await twoDivisionsWithABoardEach();
+      const [a, b] = divisions as [(typeof divisions)[number], (typeof divisions)[number]];
+      const unscheduledId = await unscheduleOne(day);
       const now = new Date(T0);
       const good = await getMatchDay(day.auth, day.comp.id, now);
       expect(good.online_failed, "premise: the good poll is answered").toBe(false);
+      expect(good.boards_unread, "premise: nothing unread (the EMPTY case: no marker, no hold)").toEqual([]);
+      expect(viewAfterPoll(good, good), "premise: an unmarked poll is taken whole").toBe(good);
       expect(good.needs_you.filter(isBoardRow), "premise: a held and a flagged board in each of the two divisions").toHaveLength(4);
+      const badminton = needsYouKey(day.comp.divisionId, "unscheduled");
+      expect(good.needs_you.map((i) => i.key), "premise: the badminton division has its own row").toContain(badminton);
       expect(good.online_rounds, "premise: both divisions have a round").toHaveLength(2);
+      const aKeys = good.needs_you.filter((i) => isBoardRow(i) && i.key.startsWith(`${a.divisionId}:`)).map((i) => i.key);
+      expect(aKeys, "premise: two rows are the failing division's").toHaveLength(2);
+
+      // Between the two polls: B's flagged board is settled (its row leaves), and the badminton match is given its slot back (its row leaves).
+      const [flag] = await sql<{ id: string }[]>`select id from fixture_play_flags where fixture_id = ${b.flagged.fixtureId} and closed_at is null`;
+      await closeExternalPlayFlags(day.auth, b.flagged.fixtureId, [flag!.id]);
+      await sql`update fixtures set scheduled_at = ${t0at(60)}, court_id = ${day.courts.c1}, venue_id = ${day.venueOf[day.courts.c1]!} where id = ${unscheduledId}`;
       asked().held.mockClear();
       asked().flagged.mockClear();
-      asked()[which].mockRejectedValueOnce(new Error(`boom: the ${which} lister is down`));
+      const undo = await failLister(which, a.divisionId);
       const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
       try {
         const down = await getMatchDay(day.auth, day.comp.id, now);
 
         // ONE failure: each division asked once, and the rejection went to both readers (a third or fourth ask would be a re-read).
         expect(asked()[which], "the failing lister was asked once per division: the second reader got the first one's rejection").toHaveBeenCalledTimes(divisions.length);
-        expect(down.online_failed, "marked: the online half of this poll was not read").toBe(true);
-        expect(down.online_rounds, "the online read fails closed (MD-R9)").toEqual([]);
-        // Each reader keeps its own answer. The desk leaves out the ONE division whose read failed and keeps the other's two rows.
-        expect(down.needs_you.filter(isBoardRow), "the desk answers without the failed division's boards, the other division's kept").toHaveLength(2);
-        expect(down.courts, "the courts are answered whole").toEqual(good.courts);
+        expect(down.boards_unread, "the poll names the ONE division whose read failed").toEqual([a.divisionId]);
+        expect(down.online_failed, "A is a started division: the online read asked the same lister, so it failed closed (MD-R9)").toBe(true);
+        expect(down.online_rounds).toEqual([]);
+        // Each reader keeps its own answer. The desk leaves out the failed division's rows and keeps the other division's.
+        expect(down.needs_you.filter(isBoardRow).map((i) => i.key).sort(), "B's remaining board rows (its flagged one was settled), none of A's").toEqual(
+          good.needs_you.filter((i) => i.kind === "board_held" && i.key.startsWith(`${b.divisionId}:`)).map((i) => i.key),
+        );
+        expect(down.courts, "the courts are answered whole").toHaveLength(good.courts.length);
         const events = logged.mock.calls.map((c) => (c[0] as { event?: string }).event ?? "online-read");
         expect(events.sort(), "one log line per reader that kept its own answer").toEqual(["competition_desk_boards_failed", "online-read"]);
 
-        // The PAGE holds the last good answer: its Needs-you rows, its results-owed count and its rounds, the very ones it had.
+        // The PAGE holds the failed division's rows, and only those.
         const page = viewAfterPoll(good, down);
-        expect(page.needs_you, "the desk's rows are the last answer's").toBe(good.needs_you);
-        expect(page.results_owed).toBe(good.results_owed);
-        expect(page.online_rounds).toBe(good.online_rounds);
-        expect(page.online_failed, "and still marked").toBe(true);
+        expect(page.needs_you.filter((i) => isBoardRow(i) && i.key.startsWith(`${a.divisionId}:`)), "A's two rows are the very ones the page held").toEqual(
+          good.needs_you.filter((i) => aKeys.includes(i.key)),
+        );
+        expect(page.needs_you.filter((i) => aKeys.includes(i.key)).every((i) => good.needs_you.includes(i)), "the same objects").toBe(true);
+        expect(page.needs_you.filter((i) => isBoardRow(i) && i.key.startsWith(`${b.divisionId}:`)).map((i) => i.kind), "B's settle is shown on the poll that settled it: only its held row is left").toEqual(["board_held"]);
+        const badmintonNow = down.needs_you.find((i) => i.key === badminton);
+        expect(badmintonNow, "premise: the poll still has the badminton row (other matches of the seed are unscheduled), with one match fewer").toBeDefined();
+        expect(badmintonNow!.title, "premise: the row's own words moved with the poll").not.toBe(good.needs_you.find((i) => i.key === badminton)!.title);
+        expect(page.needs_you.find((i) => i.key === badminton), "the badminton row is the POLL's updated one, not the page's old one").toBe(badmintonNow);
+        expect(page.needs_you.filter(isBoardRow), "three board rows: A's two held, B's one").toHaveLength(3);
+        expect(page.results_owed, "the count is the poll's, never held").toBe(down.results_owed);
+        expect(page.online_rounds, "the rounds read failed: the page keeps its rounds").toBe(good.online_rounds);
 
-        // The sequence: the next poll answers, and the marker and the hold are gone with the failure.
+        // The sequence: the next poll answers, and the marker and every hold are gone with the failure.
+        undo();
         const up = await getMatchDay(day.auth, day.comp.id, now);
+        expect(up.boards_unread).toEqual([]);
         expect(up.online_failed).toBe(false);
         expect(viewAfterPoll(page, up), "an answered poll is taken whole").toBe(up);
-        expect(up.needs_you.filter(isBoardRow)).toHaveLength(4);
+        expect(up.needs_you.filter(isBoardRow), "A's rows are read again; B's settled one is gone").toHaveLength(3);
       } finally {
+        undo();
         logged.mockRestore();
       }
     },
   );
 
-  it("a lister that rejects for a division the online read never asks about (not started: nothing paired) still marks the poll online_failed - the marker is the share's, not the online read's", async () => {
+  it("a Settle while a division's read is failing, then a good poll: the held row is gone (a held row never outlives the next read that answers)", async () => {
+    const { day, divisions } = await twoDivisionsWithABoardEach();
+    const a = divisions[0]!;
+    const now = new Date(T0);
+    const good = await getMatchDay(day.auth, day.comp.id, now);
+    const heldKey = needsYouKey(a.divisionId, "board_held", a.held.fixtureId);
+    expect(good.needs_you.map((i) => i.key), "premise: A's held board is a row").toContain(heldKey);
+    const undo = await failLister("held", a.divisionId);
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      const down = await getMatchDay(day.auth, day.comp.id, now);
+      const page = viewAfterPoll(good, down);
+      expect(page.needs_you.map((i) => i.key), "while the read fails the row is held").toContain(heldKey);
+      // The organiser settles the board (a result is written) while the lister is still down ...
+      await setFixtureStatus(a.held.fixtureId, "decided");
+      await sql`update fixture_external_play set status = 'finished', needs_reason = null where fixture_id = ${a.held.fixtureId}`;
+      const stillDown = viewAfterPoll(page, await getMatchDay(day.auth, day.comp.id, now));
+      expect(stillDown.needs_you.map((i) => i.key), "premise: unread, so nothing can say it was settled: the row is still held").toContain(heldKey);
+      // ... and the next poll that READS says so: the row is gone.
+      undo();
+      const up = await getMatchDay(day.auth, day.comp.id, now);
+      expect(up.boards_unread).toEqual([]);
+      const after = viewAfterPoll(stillDown, up);
+      expect(after.needs_you.map((i) => i.key), "the settled board's row is gone").not.toContain(heldKey);
+      expect(after.needs_you.filter(isBoardRow), "the other three boards' rows are the poll's").toHaveLength(3);
+    } finally {
+      undo();
+      logged.mockRestore();
+    }
+  });
+
+  it("a lister that rejects for a division the online read never asks about (not started: nothing paired) is a DESK-ONLY failure: the division is named in boards_unread, online_failed is false, and the page takes the good rounds", async () => {
     const day = await seedDay();
     const d = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid C", fixtures: 2 });
     await sql`update divisions set status = 'scheduled' where id = ${d.divisionId}`;
+    // A started division beside it, with a flagged board whose settle the rounds will show.
+    const live = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid D", fixtures: 2 });
+    await openStamp({ stageId: live.stageId, orgId: day.orgId, ownerUserId: day.auth.userId! }, 1, t0at(-5));
+    const flagged = live.boards[0]!;
+    await bridgeRow(flagged.fixtureId, day.orgId, { status: "live", moves: 8 });
+    await setFixtureStatus(flagged.fixtureId, "in_play");
+    await openFlag(day.orgId, flagged.fixtureId);
     const now = new Date(T0);
-    asked().held.mockClear();
-    asked().held.mockRejectedValueOnce(new Error("boom: the held lister is down"));
+    const good = await getMatchDay(day.auth, day.comp.id, now);
+    expect(good.boards_unread, "premise: nothing unread").toEqual([]);
+    const flaggedBefore = good.online_rounds.find((r) => r.division_id === live.divisionId)!;
+    expect(boardOf(flaggedBefore, flagged.fixtureId).flagCount, "premise: the live division's board carries its flag").toBe(1);
+    const [flag] = await sql<{ id: string }[]>`select id from fixture_play_flags where fixture_id = ${flagged.fixtureId} and closed_at is null`;
+    await closeExternalPlayFlags(day.auth, flagged.fixtureId, [flag!.id]);
+    const undo = await failLister("held", d.divisionId);
     const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
-      const view = await getMatchDay(day.auth, day.comp.id, now);
+      const down = await getMatchDay(day.auth, day.comp.id, now);
 
-      expect(asked().held, "premise: the desk asked the lister for this division").toHaveBeenCalledTimes(1);
-      expect(view.online_rounds.map((r) => [r.division_id, r.phase]), "premise: the online read ANSWERED - a not-started row, no lister asked").toEqual([[d.divisionId, "not_started"]]);
       expect(logged.mock.calls.map((c) => (c[0] as { event?: string }).event), "premise: only the desk's read failed").toEqual(["competition_desk_boards_failed"]);
-      expect(view.online_failed, "yet the poll is marked: the desk's board rows were not read, and the page must hold the last ones").toBe(true);
+      expect(down.online_rounds.map((r) => r.division_id).sort(), "premise: the online read ANSWERED both divisions' rows").toEqual([d.divisionId, live.divisionId].sort());
+      expect(down.online_rounds.find((r) => r.division_id === d.divisionId)!.phase, "premise: the failed division is not started: no lister is asked for its round").toBe("not_started");
+      expect(down.boards_unread, "the desk's failed division is named").toEqual([d.divisionId]);
+      expect(down.online_failed, "the rounds read answered: it is not a rounds failure").toBe(false);
+      const page = viewAfterPoll(good, down);
+      expect(page.online_rounds, "the page takes the FRESH rounds, not the ones it held").toBe(down.online_rounds);
+      expect(boardOf(page.online_rounds.find((r) => r.division_id === live.divisionId)!, flagged.fixtureId).flagCount, "and they show the settle").toBe(0);
+      expect(flaggedBefore, "premise: the held rounds were stale").not.toBe(page.online_rounds.find((r) => r.division_id === live.divisionId));
     } finally {
+      undo();
       logged.mockRestore();
     }
-    asked().held.mockClear();
     const later = await getMatchDay(day.auth, day.comp.id, now);
-    expect(later.online_failed, "the next poll, read whole, is not marked").toBe(false);
+    expect(later.boards_unread, "the next poll, read whole, names nobody").toEqual([]);
+    expect(later.online_failed).toBe(false);
   });
 });
 
@@ -1134,7 +1232,7 @@ describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's sche
         { params: Promise.resolve({ id: r.competitionId }) },
       );
       expect(res.status).toBe(200);
-      return ((await res.json()) as { data: unknown }).data as { online_failed?: unknown; online_rounds: unknown[] };
+      return ((await res.json()) as { data: unknown }).data as { online_failed?: unknown; boards_unread?: unknown; online_rounds: unknown[] };
     };
     const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
@@ -1144,11 +1242,20 @@ describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's sche
       expect(down.online_rounds, "and carries no rounds").toEqual([]);
       expect(isMatchDayView(down), "still a view the client accepts").toBe(true);
       expect(MatchDayView.parse(down).online_failed, "the schema keeps the marker (a plain z.object strips an undeclared key)").toBe(true);
+      expect(down.boards_unread, "a rounds failure that no lister caused names no division, and the key is there (never missing)").toEqual([]);
 
       const up = await poll();
       expect(up.online_failed, "an answered read is false, never a missing key").toBe(false);
       expect(up.online_rounds, "premise: the round is read").toHaveLength(1);
       expect(MatchDayView.parse(up).online_failed).toBe(false);
+      expect(up.boards_unread, "an answered poll names nobody, as an empty list").toEqual([]);
+
+      // A division's held lister failing reaches the wire as that division's id (the schema declares the field, so the parse keeps it).
+      vi.mocked(listNeedsOrganiserExternalPlay).mockRejectedValueOnce(new Error("boom: the held lister is down"));
+      const lister = await poll();
+      expect(lister.boards_unread, "the failed division's id is on the wire").toEqual([r.divisionId]);
+      expect(MatchDayView.parse(lister).boards_unread, "and survives the parse").toEqual([r.divisionId]);
+      expect(isMatchDayView(lister), "still a view the client accepts").toBe(true);
     } finally {
       logged.mockRestore();
     }

@@ -198,6 +198,7 @@ const view = (courts: MatchDayCourt[], playing_no_court: MatchDayFixture[] = [])
   venues_today: [],
   online_rounds: [],
   online_failed: false,
+  boards_unread: [],
 });
 
 const focus = (c: MatchDayCourt, notice: string | null = null) =>

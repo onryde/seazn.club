@@ -75,7 +75,7 @@ import type { ArbiterBoard } from "@/lib/arbiter-view";
 import type { MatchDayCourt, MatchDayOnlineRound, MatchDayView } from "@/lib/match-day/types";
 import { mayPress, type Reader } from "@/lib/match-day/online";
 import { NO_FROZEN_NAMES } from "@/lib/match-day/frozen-names";
-import { NeedsYou, type NeedsYouItem } from "@/components/v2/desk/needs-you";
+import { NeedsYou, needsYouKey, type NeedsYouItem } from "@/components/v2/desk/needs-you";
 import { CourtFocus } from "../court-focus";
 import { MatchDayShell, type MatchDayShellProps } from "../match-day-shell";
 import { OnlineList } from "../online-list";
@@ -276,6 +276,43 @@ describe("a poll whose ONLINE read failed (online_failed) keeps the last online 
     expect((up.board!.row as { state: unknown }).state).toEqual({ kind: "live", moveNo: 31 });
     expect(up.lost).toBeNull();
     expect(propsOf(island.tree().find((e) => e.type === RefreshLine)!).failed).toBe(false);
+  });
+
+  // Fix round 2: a hold is only of what the poll FAILED to read. The page's own Needs-you list is read here, through the props the shell hands
+  // `NeedsYou` - the seam from the poll's `boards_unread` to the rows a person sees, not the pure rule alone.
+  const needsRow = (key: string, kind: NeedsYouItem["kind"], title: string, over: Partial<NeedsYouItem> = {}): NeedsYouItem => ({ key, kind, severity: "amber", title, sub: "", action: { label: "Open", href: "/x" }, ...over });
+  const heldA = needsRow(needsYouKey("div-chess", "board_held", "b-3"), "board_held", "Board 3 is held", { severity: "red", fixture_id: "b-3" });
+  const badminton = (title: string) => needsRow(needsYouKey("div-badminton", "unscheduled"), "unscheduled", title);
+  const listOf = (island: { tree: () => ReactElement[] }): string[] => {
+    const toggle = island.tree().find((e) => propsOf(e)["data-testid"] === "md-needs-you-toggle")!;
+    if (island.tree().find((e) => e.type === NeedsYou) === undefined) (propsOf(toggle).onClick as () => void)();
+    return (propsOf(island.tree().find((e) => e.type === NeedsYou)!).items as NeedsYouItem[]).map((i) => i.title).sort();
+  };
+
+  it("a poll that could not read ONE division's boards (boards_unread) holds only that division's Needs-you rows: the badminton row is the poll's, the rounds are the poll's, and the list is not frozen", async () => {
+    const island = renderIsland(MatchDayShell, props({ ...night(), needs_you: [heldA, badminton("3 matches have no slot")], results_owed: 2 }));
+    expect(listOf(island), "premise: the page lists the held board and the badminton row").toEqual(["3 matches have no slot", "Board 3 is held"]);
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-2");
+
+    net.next = { ...night({ liveMove: 31, now: at(1) }), needs_you: [badminton("2 matches have no slot")], boards_unread: ["div-chess"], results_owed: 1 };
+    poll.tick!();
+    await settle();
+
+    expect(listOf(island), "chess A's held row holds; the badminton row moved with the poll").toEqual(["2 matches have no slot", "Board 3 is held"]);
+    expect((parts(island.tree()).board!.row as { state: unknown }).state, "the rounds answered, so the open board shows the poll's move, not a held one").toEqual({ kind: "live", moveNo: 31 });
+  });
+
+  it("a poll whose ROUNDS read failed with no division unread holds the rounds and freezes NO row: the list and the count are the poll's (one chess failure never degrades the courts' list)", async () => {
+    const island = renderIsland(MatchDayShell, props({ ...night(), needs_you: [heldA, badminton("3 matches have no slot")] }));
+    expect(listOf(island)).toHaveLength(2);
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-2");
+
+    net.next = { ...night({ now: at(1) }), online_rounds: [], online_failed: true, boards_unread: [], needs_you: [badminton("2 matches have no slot")] };
+    poll.tick!();
+    await settle();
+
+    expect(listOf(island), "the held chess row is the poll's to drop: no division was unread").toEqual(["2 matches have no slot"]);
+    expect(parts(island.tree()).board, "while the open board stays: the rounds are held").toMatchObject({ hiddenOnPhone: false });
   });
 
   it("an ANSWERED poll that really lists no round is taken as the answer - the keep is for failures only", async () => {

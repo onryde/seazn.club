@@ -986,10 +986,12 @@ export async function getMatchDay(
     fixtures_today: fixturesToday,
     venues_today: board.venuesToday,
     online_rounds: onlineRounds ?? [],
-    // `null` is a FAILED read (the catch above); `[]` is an answer. The page keeps its last rounds only on the first. A lister that failed for
-    // either reader marks the poll too (`queue.failed()`): the desk's board rows came from the same two listers, and a division the online
-    // read never asks about (not started) can fail there alone. The page then holds its last rounds AND its last Needs-you rows and count.
-    online_failed: onlineRounds === null || queue.failed(),
+    // `null` is a FAILED read (the catch above); `[]` is an answer. The page keeps its last rounds only on the first.
+    online_failed: onlineRounds === null,
+    // The divisions whose held or flagged read failed for EITHER reader (the share keeps the rejection, so both saw it). A division the online
+    // read never asks about (not started) can fail in the desk alone: its rounds answered (`online_failed` false), its board rows did not.
+    // The page holds its last board rows of exactly these divisions, never the whole list and never the count.
+    boards_unread: queue.unreadDivisions(),
   };
 }
 

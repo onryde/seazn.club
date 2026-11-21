@@ -15,9 +15,9 @@ import "server-only";
 //
 // An answer is shared as the lister gave it - the same arrays and rows - so a consumer never writes to what it is handed. A failed read
 // is shared too: both readers see the same rejection and each keeps its own way of answering it (the desk leaves that division's
-// attentions out; the online read fails closed, `getMatchDay`'s MD-R9 isolation). The shared object also says WHETHER any read of it
-// failed (`failed()`): the poll marks itself `online_failed` on it, because the desk's rows are as unread as the online rounds are, and
-// the page holds its last answer of both (gaps wave A fix round 1, m2).
+// attentions out; the online read fails closed, `getMatchDay`'s MD-R9 isolation). The shared object also says WHICH divisions had a read
+// fail (`unreadDivisions()`): the poll carries them as `boards_unread`, because the desk's per-board rows of such a division are as unread
+// as its online round is, and the page holds its last rows of exactly those divisions (gaps wave A fix round 2).
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { listFlaggedExternalPlay } from "./arbiter";
 import { listNeedsOrganiserExternalPlay } from "./queue";
@@ -35,10 +35,11 @@ export function directQueueReads(auth: AuthCtx): QueueReads {
   };
 }
 
-/** A `QueueReads` that keeps its answers for its own life and remembers whether any of them was a failure. */
+/** A `QueueReads` that keeps its answers for its own life and remembers which divisions had a read fail. */
 export type SharedQueueReads = QueueReads & {
-  /** True once any read made through this object has rejected. Ask it AFTER the readers have settled: a read still in flight is not yet a failure. */
-  failed(): boolean;
+  /** The divisions any read made through this object has rejected for, sorted, each once. Ask it AFTER the readers have settled: a read
+   *  still in flight is not yet a failure. */
+  unreadDivisions(): string[];
 };
 
 /** One read of each lister per division, kept for as long as the object lives - make ONE per poll, never longer: a held board settled a
@@ -48,21 +49,21 @@ export function sharedQueueReads(auth: AuthCtx): SharedQueueReads {
   const direct = directQueueReads(auth);
   const held = new Map<string, ReturnType<typeof listNeedsOrganiserExternalPlay>>();
   const flagged = new Map<string, ReturnType<typeof listFlaggedExternalPlay>>();
-  let failure = false;
+  const unread = new Set<string>();
   const once = <T>(kept: Map<string, Promise<T>>, divisionId: string, read: () => Promise<T>): Promise<T> => {
     let answer = kept.get(divisionId);
     if (answer === undefined) {
       answer = read();
       // A side branch that only notes the rejection (so it is never an unhandled one); the readers get `answer` itself and keep their own way of failing.
       answer.catch(() => {
-        failure = true;
+        unread.add(divisionId);
       });
       kept.set(divisionId, answer);
     }
     return answer;
   };
   return {
-    failed: () => failure,
+    unreadDivisions: () => [...unread].sort(),
     listNeedsOrganiserExternalPlay: (divisionId) => once(held, divisionId, () => direct.listNeedsOrganiserExternalPlay(divisionId)),
     listFlaggedExternalPlay: (divisionId) => once(flagged, divisionId, () => direct.listFlaggedExternalPlay(divisionId)),
   };

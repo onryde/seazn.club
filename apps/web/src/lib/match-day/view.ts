@@ -9,7 +9,7 @@ import { liveLabel, scoreLineOf, type LevelWords, type ScoreLine } from "@/lib/s
 import type { Attention, Severity } from "@/lib/division-phase";
 import { holdReasonForReader } from "@/lib/arbiter-view";
 import { mayEmbedReplay, youtubeVideoId, type PublicReplayPart } from "@/lib/youtube";
-import { needsYouKey } from "@/components/v2/desk/needs-you";
+import { needsYouKey, SEV_ORDER } from "@/components/v2/desk/needs-you";
 import { onlineRoundPhase, resolveOnlineFocus, type OnlineFocus, type OnlineOpened } from "./online";
 import { boardName, boardsPlaying, onlineRoundTitle } from "./online-copy";
 import { CALL_REFUSAL, TBD_ENTRANT, type CallPreview, type CallWarning } from "./call";
@@ -554,17 +554,34 @@ export function isMatchDayView(v: unknown): v is MatchDayView {
   );
 }
 
-/** What the page holds after a poll (gaps wave A2, fix round 1 m2). A poll whose ONLINE half failed (`online_failed`, ruling MD-R9: the
- *  courts are answered whole) carries `online_rounds: []` because nothing was read, not because no round exists - so taking it whole
- *  would close the board panel open on a game as "left the list", drop a phone to the list and make the cameras leave and join again, for
- *  a database hiccup. The same two listers feed the desk's per-board Needs-you rows, so the same poll has no board rows for the same
- *  reason, and its results-owed count was counted beside them: the page keeps the rounds, the Needs-you rows and the count it had, and
- *  takes everything else from the poll; the marker stays on, so the page can say the read failed. An ANSWERED poll is taken whole, an
- *  empty answer included: a round that ended leaves. */
+/** What the page holds after a poll (gaps wave A2, fix rounds 1 and 2): each part of the online half that a poll FAILED to read is held
+ *  from the page's last answer, and nothing else is.
+ *  - `online_failed` (the rounds read failed, ruling MD-R9: the courts are answered whole): the poll carries `online_rounds: []` because
+ *    nothing was read, so taking it would close the board panel open on a game as "left the list", drop a phone to the list and make the
+ *    cameras leave and join again, for a database hiccup. The page keeps its last rounds. A poll whose rounds ANSWERED is never held, a
+ *    desk-only failure included: its rounds are the fresh ones.
+ *  - `boards_unread` (the held or flagged lister of these divisions failed): the desk's per-board Needs-you rows (`board_held`,
+ *    `board_flagged`) of THOSE divisions are missing because they were not read. The page keeps its last such rows of exactly those
+ *    divisions and takes every other row from the poll - another division's, a badminton division's, a settle that has just happened -
+ *    so one chess division failing on every poll never freezes the rest of the list (MD-R9: chess failing must not degrade the courts).
+ *  The results-owed count is the poll's always: it comes from the matches' own state (`resultsOwedOf`), never from a lister.
+ *  An ANSWERED poll - nothing unread, rounds read - is taken whole, an empty answer included: a round that ended leaves, a board that was
+ *  settled leaves its row on the next read that answers. */
 export function viewAfterPoll(prev: MatchDayView, next: MatchDayView): MatchDayView {
-  return next.online_failed
-    ? { ...next, online_rounds: prev.online_rounds, needs_you: prev.needs_you, results_owed: prev.results_owed }
-    : next;
+  const unread = next.boards_unread ?? [];
+  if (!next.online_failed && unread.length === 0) return next;
+  // A row is found by the one function that named it (`needsYouKey`), never by parsing its key.
+  const held = prev.needs_you.filter((it) => {
+    const fixture = it.fixture_id;
+    if (fixture === undefined || (it.kind !== "board_held" && it.kind !== "board_flagged")) return false;
+    return unread.some((division) => needsYouKey(division, it.kind, fixture) === it.key);
+  });
+  return {
+    ...next,
+    online_rounds: next.online_failed ? prev.online_rounds : next.online_rounds,
+    // A held row joins the END of its severity: the poll's own rows keep their place, and the list stays in the desk's order.
+    needs_you: held.length === 0 ? next.needs_you : [...next.needs_you, ...held].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity)),
+  };
 }
 
 /** The same guard for a candidates answer. */

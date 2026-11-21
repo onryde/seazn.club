@@ -299,11 +299,15 @@ export interface MatchDayView {
   /** The competition's online chess rounds (one per division, stage and round to show), after the courts in the list; empty when it
    *  has none. Read by `readOnlineRounds` (server/usecases/match-day-online.ts). */
   online_rounds: MatchDayOnlineRound[];
-  /** True when THIS poll's online read failed (ruling MD-R9 answers the day without it, so the courts never go down with chess): then
-   *  `online_rounds` is `[]` because nothing was read, NOT because the competition has no online round. It is also true when the held or
-   *  flagged lister failed for the desk's own read of its per-board Needs-you rows, whatever the online rounds did (they come from the
-   *  same two listers), so `needs_you` and `results_owed` may lack those rows. A page that already holds an answer keeps its rounds, its
-   *  rows and its count (`viewAfterPoll`), so the board panel open on a game does not close and its cameras do not leave for a database
-   *  hiccup. False on every poll whose online read answered, an empty answer included. */
+  /** True when THIS poll's online ROUNDS read failed (ruling MD-R9 answers the day without it, so the courts never go down with chess): then
+   *  `online_rounds` is `[]` because nothing was read, NOT because the competition has no online round. A page that already holds an
+   *  answer keeps its rounds (`viewAfterPoll`), so the board panel open on a game does not close and its cameras do not leave for a
+   *  database hiccup. False on every poll whose rounds read answered, an empty answer included, and whatever the desk's own board reads
+   *  did (`boards_unread`). */
   online_failed: boolean;
+  /** The divisions whose held or flagged board read FAILED in this poll (gaps wave A2, fix round 2), by division id, sorted; empty when
+   *  every read answered. The desk's per-board Needs-you rows (`board_held`, `board_flagged`) of such a division are missing from
+   *  `needs_you` because they were not read, NOT because nothing is held there. A page that holds an answer keeps its last per-board rows
+   *  of exactly these divisions and takes every other row, the count and the rounds from the poll (`viewAfterPoll`). */
+  boards_unread: string[];
 }

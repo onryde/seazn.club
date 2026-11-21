@@ -117,6 +117,7 @@ const view = (courts: MatchDayCourt[], venues_today: string[], now = "2026-10-31
   venues_today,
   online_rounds: [],
   online_failed: false,
+  boards_unread: [],
 });
 
 const props = (initial: MatchDayView, o: Partial<MatchDayShellProps> = {}): MatchDayShellProps => ({

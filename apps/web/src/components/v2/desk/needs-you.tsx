@@ -64,7 +64,9 @@ export const DRAW_DOOR_KEY: Record<DrawDoor, DictionaryKey> = {
   recompute: "progression.recompute",
 };
 
-const SEV_ORDER: Severity[] = ["red", "amber", "slate"];
+/** The order the list is read in: a red row before an amber one before a slate one. The ONE order - Match Day's hold of a failed read's rows
+ *  (`viewAfterPoll`) merges them back into a poll's list by it. */
+export const SEV_ORDER: Severity[] = ["red", "amber", "slate"];
 const DOT: Record<Severity, string> = { red: "bg-red-600", amber: "bg-amber-600", slate: "bg-slate-500" };
 
 export function needsYouItems(
