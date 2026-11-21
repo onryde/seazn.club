@@ -58962,7 +58962,8 @@
                                     "facebook",
                                     "twitch",
                                     "kick",
-                                    "custom_rtmp"
+                                    "custom_rtmp",
+                                    "seazn"
                                   ]
                                 },
                                 "label": {
@@ -59791,7 +59792,8 @@
                                 "facebook",
                                 "twitch",
                                 "kick",
-                                "custom_rtmp"
+                                "custom_rtmp",
+                                "seazn"
                               ]
                             },
                             "label": {
@@ -69399,7 +69401,7 @@
     },
     "/api/v1/fixtures/{id}/stream-settings": {
       "put": {
-        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it), the automatic-streaming switch (`autoStream`), and the stream's score preferences — `streamMode` (`passthrough` streams the camera only; null or `composed` streams the score whenever the deployment can run it, and every start reads it), `overlayTemplate` (null is the sport's default; an id the fixture's sport is not offered is a 400 and writes nothing) and `overlayDelayMs` (0–30000 whole ms; null is the server's default, 0 a real override). Send any of them; a field left out is left as it is. The answer's `targetId` is the saved choice, and its `revision` orders it against any other answer or read of these settings (higher is newer). 404 when the target is not this org's, is archived, or does not exist",
+        "summary": "The fixture's stream settings: the destination pre-pick the phone's start uses (`targetId`, null clears it), the automatic-streaming switch (`autoStream`), and the stream's score preferences — `streamMode` (`passthrough` streams the camera only; null or `composed` streams the score whenever the deployment can run it, and every start reads it), `overlayTemplate` (null is the sport's default; an id the fixture's sport is not offered is a 400 and writes nothing) and `overlayDelayMs` (0–30000 whole ms; null is the server's default, 0 a real override). Send any of them; a field left out is left as it is. The answer's `targetId` is the saved choice, and its `revision` orders it against any other answer or read of these settings (higher is newer). 404 when the target is not this org's, is archived, or does not exist; 422 seazn_unavailable when it is the Seazn destination and Seazn hosted video is not available yet",
         "tags": [
           "fixtures"
         ],
@@ -69757,6 +69759,51 @@
                       "properties": {
                         "code": {
                           "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "description": "This route's 422 codes — seazn_unavailable: the destination is Seazn hosted video, which is not available to this deployment yet"
                         },
                         "message": {
                           "type": "string"
@@ -98663,7 +98710,8 @@
                               "facebook",
                               "twitch",
                               "kick",
-                              "custom_rtmp"
+                              "custom_rtmp",
+                              "seazn"
                             ]
                           },
                           "label": {
@@ -99128,7 +99176,8 @@
                             "facebook",
                             "twitch",
                             "kick",
-                            "custom_rtmp"
+                            "custom_rtmp",
+                            "seazn"
                           ]
                         },
                         "label": {
@@ -99731,7 +99780,8 @@
                             "facebook",
                             "twitch",
                             "kick",
-                            "custom_rtmp"
+                            "custom_rtmp",
+                            "seazn"
                           ]
                         },
                         "label": {
@@ -100225,7 +100275,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added); YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)"
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added); YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead); seazn_destination_fixed: the destination is the organisation's Seazn destination, which has no key or name of its own and is never removed"
                         },
                         "message": {
                           "type": "string"
@@ -100269,7 +100319,7 @@
         ]
       },
       "delete": {
-        "summary": "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed; 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (disconnect the channel instead)",
+        "summary": "Remove a streaming destination (never the Seazn destination: 422 seazn_destination_fixed) — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed; 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (disconnect the channel instead)",
         "tags": [
           "fixtures"
         ],
@@ -100593,7 +100643,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)"
+                          "description": "This route's 422 codes — YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead); seazn_destination_fixed: the destination is the organisation's Seazn destination, which has no key or name of its own and is never removed"
                         },
                         "message": {
                           "type": "string"

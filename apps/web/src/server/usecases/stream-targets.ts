@@ -10,7 +10,7 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
-  YOUTUBE_USE_DISCONNECT, checkDestination, isStreamPlatform, type DestinationRefusal,
+  SEAZN_TARGET_FIXED, YOUTUBE_USE_DISCONNECT, checkDestination, isStreamPlatform, type DestinationRefusal,
 } from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -18,6 +18,7 @@ import type { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetS
 import {
   archiveStreamTarget, insertStreamTarget, lockStreamTarget, readKeyHints, replaceTargetKey, type StoredStreamTarget,
 } from "@/server/relay/secret-columns";
+import { seaznHostedLive } from "@/server/relay/config";
 import { connectionViews } from "@/server/youtube/connections";
 import { holderRows, listHolder, wireHolder, type TargetHolder } from "./stream-target-holders";
 
@@ -59,6 +60,13 @@ export class TargetUnreadableError extends HttpError {
   }
 }
 
+/** Seazn-hosted video (V540): the ONE place the Seazn row's visibility and order are decided, for the Streaming list and the
+ *  fixture's default pick alike. LIVE on: Seazn first, then the rest oldest-first. LIVE off: the row is left out and the
+ *  order is the old one, so an org's default stays its oldest pasted destination. Columns are unqualified on purpose: both
+ *  callers read `org_stream_targets` alone in that scope. */
+export const seaznWhere = (on: boolean) => (on ? sql`` : sql`and kind <> 'seazn'`);
+export const seaznOrder = (on: boolean) => (on ? sql`order by (kind = 'seazn') desc, created_at asc, id asc` : sql`order by created_at asc, id asc`);
+
 const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREAM_KEY_EMPTY);
 
 /** `channelsOnly`: the restricted Streaming page of an org that can no longer go live (T18) - only the connected YouTube channels, with
@@ -66,10 +74,11 @@ const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREA
 export async function listStreamTargets(auth: AuthCtx, orgId: string, opts: { channelsOnly?: boolean } = {}): Promise<StreamTarget[]> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   const channelsOnly = opts.channelsOnly === true;
+  const seazn = seaznHostedLive();
   const [rows, hints, holders, connections] = await Promise.all([
     sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string; youtube_connection_id: string | null }[]>`
       select id, kind, label, watch_url, created_at, youtube_connection_id from org_stream_targets
-       where org_id = ${orgId} and archived_at is null order by created_at asc, id asc`,
+       where org_id = ${orgId} and archived_at is null ${seaznWhere(seazn)} ${seaznOrder(seazn)}`,
     channelsOnly ? Promise.resolve(new Map<string, string | null>()) : (sql.begin((tx) => readKeyHints(tx, orgId)) as Promise<Map<string, string | null>>),
     channelsOnly ? Promise.resolve([]) : holderRows(sql, { orgId }),
     connectionViews(orgId),
@@ -136,6 +145,17 @@ export function targetHeld(h: TargetHolder): HttpError {
   );
 }
 
+/** 422 SEAZN_TARGET_FIXED: the Seazn destination is made by the database, one per org; it is never renamed, re-keyed or removed. */
+const seaznFixedRefusal = () => new HttpError(422, "The Seazn destination cannot be renamed, re-keyed or removed", SEAZN_TARGET_FIXED);
+
+/** True when this ACTIVE row of this org is the Seazn destination. False for an absent, archived or another org's row, so the
+ *  caller's 404 still answers those. */
+async function isSeazn(exec: Tx | typeof sql, orgId: string, targetId: string): Promise<boolean> {
+  const [row] = await exec<{ seazn: boolean }[]>`
+    select kind = 'seazn' as seazn from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
+  return row?.seazn === true;
+}
+
 const targetNotFound = () => new HttpError(404, "stream target not found");
 
 /** YouTube Connect (plan P9): 422 YOUTUBE_USE_DISCONNECT — Rename, Replace key and Remove are for pasted-key rows. An
@@ -164,6 +184,7 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   if (body.label !== undefined) {
     const label = labelOf(body.label);
+    if (await isSeazn(sql, orgId, targetId)) throw seaznFixedRefusal();
     // `youtube_connection_id is null`: an API-backed row is never renamed from here (plan P9) — the write itself carries
     // the guard, and a miss is told apart below (an API row is 422, an absent/archived/foreign one is the plain 404).
     const renamed = await sql<{ id: string }[]>`
@@ -176,6 +197,7 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
     if (streamKey === "") throw streamKeyEmpty();
     await sql.begin(async (tx) => {
       if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+      if (await isSeazn(tx, orgId, targetId)) throw seaznFixedRefusal();
       if (await isApiBacked(tx, orgId, targetId)) throw disconnectRefusal();
       const [holder] = await holderRows(tx, { orgId, targetId });
       if (holder) throw targetHeld(holder);
@@ -199,6 +221,7 @@ export async function removeStreamTarget(auth: AuthCtx, orgId: string, targetId:
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   await sql.begin(async (tx) => {
     if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+    if (await isSeazn(tx, orgId, targetId)) throw seaznFixedRefusal();
     if (await isApiBacked(tx, orgId, targetId)) throw disconnectRefusal();
     const [holder] = await holderRows(tx, { orgId, targetId });
     if (holder) throw targetHeld(holder);

@@ -67,7 +67,7 @@ export const StreamFailReason = z.enum([
 export const StreamEndReason = z.enum(["stopped", "operator_stopped", "auto_stopped", "phone_lost", "max_duration", "relay_ended"]);
 export type StreamEndReason = z.infer<typeof StreamEndReason>;
 export type StreamFailReason = z.infer<typeof StreamFailReason>;
-export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp"]);
+export const StreamTargetKind = z.enum(["youtube", "facebook", "twitch", "kick", "custom_rtmp", "seazn"]);
 export type StreamTargetKind = z.infer<typeof StreamTargetKind>;
 
 /** A fixture's score timing override, whole ms 0–30000 (V462's `overlay_delay_ms` check; lib/stream-settings.ts

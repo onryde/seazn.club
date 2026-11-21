@@ -43,6 +43,12 @@ export const DESTINATION_LABEL_EMPTY = "DESTINATION_LABEL_EMPTY";
  *  connected channel). It has no key of its own to replace and is not a row the organiser removes — Disconnect is the one
  *  way out. The Directory never offers those controls on such a row; this is what a caller that bypasses it is told. */
 export const YOUTUBE_USE_DISCONNECT = "YOUTUBE_USE_DISCONNECT";
+/** Seazn-hosted video (V540): every org holds exactly one `seazn` destination row, made by the database. It has no key and
+ *  no name of its own, so Rename, Replace key and Remove are refused 422 on it. */
+export const SEAZN_TARGET_FIXED = "seazn_destination_fixed";
+/** 422 when a pick or a start names the Seazn destination while SEAZN_HOSTED_LIVE is off: the row is hidden from every list
+ *  then, and a saved pick of it resolves to no destination, never to another one. */
+export const SEAZN_UNAVAILABLE = "seazn_unavailable";
 
 /**
  * The fixture's saved destination CHOICE (`fixture_stream_settings.target_chosen`, V431 / plan R-1), as the ONE server reader
