@@ -29,6 +29,7 @@ import type { BoardPosition as PositionData, MatchDayBoard, MatchDayBoardRow, Ma
 import { NEEDS_REASONS } from "@/server/external-play/types";
 import { MatchDayBoard as MatchDayBoardSchema } from "@/server/api-v1/schemas/fixtures";
 import { initialArbiterDecision } from "../../arbiter-decision";
+import { RETIRED_EXTEND_WORDS } from "@/lib/__tests__/_retired-extend-reasons";
 import type { MatchDayCtx } from "../court-focus";
 import { BoardFocus, BoardPanelView, isMatchDayBoard, type BoardFocusProps, type BoardPanelViewProps } from "../board-focus";
 import { BoardPosition } from "../board-position";
@@ -502,6 +503,8 @@ describe("BoardPanelView: who is offered which decision", () => {
     expect(has(h, extendLabel)).toBe(false);
     expect(count(h, "arbiter-extend-board")).toBe(0);
     expect(count(h, "arbiter-extend-why"), "Match Day prints no unprompted reason").toBe(0);
+    for (const words of RETIRED_EXTEND_WORDS) expect(has(h, words), `and none of the retired reasons' words: "${words}"`).toBe(false);
+    expect(RETIRED_EXTEND_WORDS.length, "anti-vacuity: seven probes").toBe(7);
   });
 
   it("(O4) a FROZEN competition: the finishing decisions still render (scoring is exempt), the +5 min does not; unfrozen it does (the pair)", () => {

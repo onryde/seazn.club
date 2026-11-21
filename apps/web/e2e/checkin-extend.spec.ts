@@ -37,6 +37,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MINUTES, CHECKIN_EXTEND_STEP_MS } from "../src/lib/checkin-extend";
 import { DEADLINE_AFTER_MS, WINDOW_OPEN_LEAD_MS } from "../src/server/external-play/window";
+import { RETIRED_EXTEND_REASONS, RETIRED_EXTEND_WORDS } from "../src/lib/__tests__/_retired-extend-reasons";
 import { apiJson, withDb } from "./helpers";
 import { fill, longName, PANEL_TIME_SLOT, roundGameSql, seedOnlineRound, uiEn, type SeededRound } from "./match-room-kit";
 import { mintMatchRoomLink } from "./match-room-link";
@@ -188,10 +189,12 @@ async function openBoard(page: Page, r: SeededRound, fixtureId: string): Promise
 }
 
 test.describe("the check-in extension", () => {
-  test("the reason copy the absences below are read by exists (a missing key would let every one of them pass)", () => {
-    const keys = ["gameStarted", "capReached", "notOpen", "closed", "roundNoneOpen"] as const;
-    for (const k of keys) expect(typeof uiEn[`externalPlay.checkinExtend.why.${k}`], k).toBe("string");
-    expect(keys.length, "anti-vacuity: five reasons read").toBe(5);
+  test("the retired reasons the absences below look for are typed words, and no dictionary entry says them (B1: the keys went; a key that came back would be a screen that could draw one)", () => {
+    const said = Object.values(uiEn).filter((v) => RETIRED_EXTEND_WORDS.some((w) => v.includes(w)));
+    expect(said, "no entry in the English dictionary carries a retired reason or its lead-in").toEqual([]);
+    expect(Object.keys(uiEn).filter((k) => k.startsWith("externalPlay.checkinExtend.why.")), "nor does a key of the old family").toEqual([]);
+    expect(Object.keys(RETIRED_EXTEND_REASONS).length, "anti-vacuity: five reasons looked for").toBe(5);
+    expect(Object.keys(uiEn).filter((k) => k.startsWith("externalPlay.checkinExtend.")).length, "premise: the family's other keys are read").toBeGreaterThan(20);
   });
 
   test("one board: +5 min on the panel moves the board's closing time, is audited, and the player's open room counts down from five minutes later", async ({
@@ -292,7 +295,7 @@ test.describe("the check-in extension", () => {
     await expect(page.getByTestId("arbiter-extend-board"), "board 1 has a game on it: no per-board press").toHaveCount(0);
     // Match Day prints no unprompted "can't extend" reason (Task 7 fix M5, owner sign-off): the missing press is the whole answer on a board panel.
     // (The Arbiter Panel's board panel said why; it went with the page. The absence is read by the copy, so it cannot pass on a renamed test id.)
-    await expect(panel(page), "no reason stands in its place on Match Day").not.toContainText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
+    await expect(panel(page), "no reason stands in its place on Match Day").not.toContainText(RETIRED_EXTEND_REASONS.gameStarted);
     await openBoard(page, r, b2.fixtureId);
     await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 1));
     await openRound(page, r, "checkin");
@@ -310,12 +313,12 @@ test.describe("the check-in extension", () => {
     // The round bar's button went too, and the bar says why: a game on board 1 and no press left on board 2 are two causes, so the round's
     // own sentence - not either board's - and the last answer stays beside it.
     // Match Day's round bar prints no unprompted reason either (Task 7 fix M5): the button went, the last answer stays.
-    await expect(hero(page), "no reason in place of the round bar's button").not.toContainText(uiEn["externalPlay.checkinExtend.why.roundNoneOpen"]!);
+    await expect(hero(page), "no reason in place of the round bar's button").not.toContainText(RETIRED_EXTEND_REASONS.roundNoneOpen);
     await shoot(page, "arbiter-panel-round-reason");
     // ... and the board's own press goes too, on ITS panel, with its reason.
     await openBoard(page, r, b2.fixtureId);
     await expect(page.getByTestId("arbiter-extend-board")).toHaveCount(0);
-    await expect(panel(page), "the press went, and Match Day does not say why (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
+    await expect(panel(page), "the press went, and Match Day does not say why (Task 7 M5)").not.toContainText(RETIRED_EXTEND_REASONS.capReached);
 
     // And the cap holds at the door, not only on the screen.
     const over = await apiJson(request, `/api/v1/fixtures/${b2.fixtureId}/external-play/extend-checkin`, "POST");
@@ -326,7 +329,7 @@ test.describe("the check-in extension", () => {
     // playing status (the other place the column hosts it), with the ONE cause both boards give - a game started - instead of the mix.
     await roundGameSql(b2, { moves: LINE });
     await openRound(page, r, "playing");
-    await expect(panel(page), "the playing status carries no reason line (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
+    await expect(panel(page), "the playing status carries no reason line (Task 7 M5)").not.toContainText(RETIRED_EXTEND_REASONS.gameStarted);
     await expect(panel(page).getByTestId("arbiter-checkin-hero"), "and the hero is gone with the check-in").toHaveCount(0);
   });
 
@@ -387,7 +390,7 @@ test.describe("the check-in extension", () => {
     await expect(boardNotice).toHaveText(lineRe("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: 1 }));
     expect(plain(hm(await boardNotice.innerText())), "the answer names the board's closing time, five minutes past the line it read").toBe(plain(plusMinutes(closesBefore, CHECKIN_EXTEND_STEP_MINUTES)));
     await expect(page.getByTestId("arbiter-extend-board"), "at the cap the press is gone").toHaveCount(0);
-    await expect(panel(page), "and Match Day does not say why (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
+    await expect(panel(page), "and Match Day does not say why (Task 7 M5)").not.toContainText(RETIRED_EXTEND_REASONS.capReached);
     expect(await extensionOf(b1.fixtureId)).toEqual({ ms: 3 * CHECKIN_EXTEND_STEP_MS, n: 3 });
 
     // The round bar once more, with board 1 at the cap: the press reaches board 2 only (its second) and says why board 1 was left alone;
@@ -443,8 +446,8 @@ test.describe("the check-in extension", () => {
     // Before the opening there is no press, and Match Day (Task 7 M5) says nothing in its place: the clock below says when it opens.
     await expect(press).toHaveCount(0);
     await expect(roundPress).toHaveCount(0);
-    await expect(boardPanel, "no unprompted reason on the board panel").not.toContainText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
-    await expect(page.getByTestId("md-focus"), "nor on the round panel").not.toContainText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
+    await expect(boardPanel, "no unprompted reason on the board panel").not.toContainText(RETIRED_EXTEND_REASONS.notOpen);
+    await expect(page.getByTestId("md-focus"), "nor on the round panel").not.toContainText(RETIRED_EXTEND_REASONS.notOpen);
     await expect(clock, "before the opening the clock counts down to it").toHaveAttribute("data-kind", "opens");
     await expect(rowPress, "and no waiting row has a +5 yet: the window is not open").toHaveCount(0);
     expect(Date.now(), "premise: the pages loaded before the opening").toBeLessThan(opensAt);
@@ -471,9 +474,9 @@ test.describe("the check-in extension", () => {
     const left = Date.now();
     expect(left, "not before the deadline").toBeGreaterThanOrEqual(closesAt - 50);
     expect(left - closesAt, "at the deadline, not at the next 20 s poll").toBeLessThan(3_000);
-    await expect(boardPanel, "the board panel says nothing in the button's place (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.closed"]!);
+    await expect(boardPanel, "the board panel says nothing in the button's place (Task 7 M5)").not.toContainText(RETIRED_EXTEND_REASONS.closed);
     await expect(roundPress, "the round's button leaves with the last board's deadline").toHaveCount(0);
-    await expect(page.getByTestId("md-focus"), "and the round panel says nothing in its place").not.toContainText(uiEn["externalPlay.checkinExtend.why.closed"]!);
+    await expect(page.getByTestId("md-focus"), "and the round panel says nothing in its place").not.toContainText(RETIRED_EXTEND_REASONS.closed);
     await expect(clock, "the clock reads closed at the deadline, with no reload").toHaveAttribute("data-kind", "closed");
     await expect(rowPress, "and the waiting rows' +5 left with it").toHaveCount(0);
     await boardContext.close();

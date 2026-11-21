@@ -501,7 +501,6 @@ export function BoardPanelView(p: BoardPanelViewProps) {
             nowMs={nowMs}
             settleHref={matchHref}
             may={may}
-            showWhy={false}
             on={p.on}
             f={f}
             headingId={decideId}

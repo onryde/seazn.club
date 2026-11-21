@@ -290,7 +290,7 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
  *  own file (or function) for literals and for variable keys, so a literal added to a helper, or a value added to a map, fails until it
  *  is listed. A path the test does not scan (a new helper file, a key built by string concatenation) is not covered:
  *   - `openNoticeText`, `resendNoticeText` and `OpenRoundConfirmBody` (desk/open-round-control.tsx), and the maps they read;
- *   - `RoundExtend` and the extend copy it asks for (checkin-extend-ui.ts; the reasons are `EXTEND_WHY_KEYS`);
+ *   - `RoundExtend` and the extend copy it asks for (checkin-extend-ui.ts; the round bar and the board panel print no reason where a +5 is not offered, owner 2026-10-19 / Task 7 M5);
  *   - the invite word of a seat (`INVITE_WORD_KEYS`) and the chip of a held card (`HELD_TITLE_KEYS`);
  *   - the venue's name after a time of day (`useVenueClock` in venue-clock.ts, and `useFmt`'s `named` in arbiter-flag-cards.tsx);
  *   - what the queue's cards say through `where()`, `boardStateWord()` and `noticeSentence()` (only a Mark as reviewed answer reaches
@@ -365,12 +365,6 @@ export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   "externalPlay.checkinExtend.skip.gameStarted",
   "externalPlay.checkinExtend.skip.notOpenYet",
   "externalPlay.checkinExtend.skip.ownBoards",
-  // the reasons a round or a board has no +5 (the "why" family)
-  "externalPlay.checkinExtend.why.capReached",
-  "externalPlay.checkinExtend.why.closed",
-  "externalPlay.checkinExtend.why.gameStarted",
-  "externalPlay.checkinExtend.why.notOpen",
-  "externalPlay.checkinExtend.why.roundNoneOpen",
   // INVITE_WORD_KEYS
   "arbiter.invite.bounced",
   "arbiter.invite.delayed",

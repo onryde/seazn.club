@@ -23,7 +23,7 @@ import {
   SOFT,
   type Fmt,
 } from "../arbiter-flag-cards";
-import { boardExtendOffer, extendBoardLabel, extendClosesLine, extendHelperLine, extendWhyLine } from "../checkin-extend-ui";
+import { boardExtendOffer, extendBoardLabel, extendClosesLine, extendHelperLine } from "../checkin-extend-ui";
 
 /** What the section calls: the decisions' handlers (Match Day's board panel binds them to its own runner). */
 export type DecisionOn = {
@@ -45,7 +45,6 @@ export function BoardDecision({
   nowMs,
   settleHref,
   may,
-  showWhy,
   on,
   f,
   headingId,
@@ -60,9 +59,6 @@ export function BoardDecision({
   /** The board's match page, where a board with no game on file is settled; null when it has none. */
   settleHref: string | null;
   may: DecisionMay;
-  /** Say why "+5 min" is missing. Match Day's board panel passes false (it prints no unprompted reason - Task 7's M5, owner sign-off): the
-   *  retired Arbiter page was the one screen that said it, so today nothing draws `extendWhyLine`. */
-  showWhy: boolean;
   on: DecisionOn;
   f: Fmt;
   headingId: string;
@@ -84,11 +80,10 @@ export function BoardDecision({
   const notice = decision.notice !== null && !noticeLapsed(decision.notice, board.checkin?.deadlineAt ?? null, nowMs) ? decision.notice : null;
   // Spec §3.2.2: offered only on what the server's own reading of the board said it would accept, re-asked of the ticking clock: the
   // snapshot is up to a poll old, and "+5 min" exists only between the board's opening and its deadline (owner, 2026-10-19). Where it
-  // is not offered, a short reason stands in its place (never a button that silently vanishes) - where the screen says so (`showWhy`).
+  // is not offered the panel says nothing in its place (Task 7 M5, owner sign-off: Match Day prints no unprompted reason).
   const offer = boardExtendOffer(board.checkin, nowMs);
   const extend = may.start && offer !== null && offer.offered ? board.checkin : null;
-  const why = showWhy && may.start && offer !== null && offer.refusal !== null ? extendWhyLine(offer.refusal, f) : null;
-  if (!canResync && !canGoOn && !canSettle && extend === null && why === null && notice === null) return null;
+  if (!canResync && !canGoOn && !canSettle && extend === null && notice === null) return null;
   const busy = decision.busy !== null || roundBusy;
   const guidance = settleGuidance(board);
   return (
@@ -116,11 +111,6 @@ export function BoardDecision({
             {extendHelperLine(f)}
           </p>
         </>
-      )}
-      {why !== null && offer !== null && (
-        <p data-testid="arbiter-extend-why" data-why={offer.refusal} className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
-          {why}
-        </p>
       )}
       {canResync && (
         <button type="button" onClick={on.resync} disabled={busy} aria-busy={decision.busy?.kind === "resync" || undefined} className={BUTTON_QUIET}>

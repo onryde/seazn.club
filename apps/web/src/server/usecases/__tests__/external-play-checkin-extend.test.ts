@@ -20,11 +20,12 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { DeliverMessage } from "@/server/email-outbox/transport";
 import { stubOutboxEnv, type SentInvite } from "@/server/usecases/__tests__/_invite-mail";
 import { randomUUID } from "node:crypto";
+import { roundVerdict } from "@/lib/__tests__/_round-verdict";
 import { readFileSync } from "node:fs";
 import { connectionOptions, sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES, LOCKED_FIXTURE_STATUSES } from "@/lib/fixture-status";
-import { CHECKIN_EXTEND_STEP_MINUTES, liveExtendRefusal, liveExtendableCount, liveRoundRefusals, roundWhy } from "@/lib/checkin-extend";
+import { CHECKIN_EXTEND_STEP_MINUTES, liveExtendRefusal, liveExtendableCount, liveRoundRefusals } from "@/lib/checkin-extend";
 import {
   CHECKIN_BATCH_GAP_MS,
   CHECKIN_BATCH_SIZE,
@@ -571,10 +572,10 @@ describe.skipIf(!HAS_DB)("extendRoundCheckin - one action, the same rule on ever
     const seen = new Set<string>();
     for (const t of [...grid].sort((a, b) => a - b)) {
       const served = (await loadArbiterRound(auth, r.divisionId, { now: new Date(t) }))!;
-      const want = roundWhy(served.boards.flatMap((b) => (b.checkin === null ? [] : [b.checkin.refusal])));
-      expect(roundWhy(arbiter.boards.flatMap((b) => (b.checkin === null ? [] : [liveExtendRefusal(b.checkin, t)]))), `the arbiter panel at +${t - NOW.getTime()} ms`).toEqual(want);
-      expect(roundWhy(liveRoundRefusals(view.extendRefusals, view.extendWindows, t)), `the Open round control at +${t - NOW.getTime()} ms`).toEqual(want);
-      seen.add(want === null ? "none" : want.code);
+      const want = roundVerdict(served.boards.flatMap((b) => (b.checkin === null ? [] : [b.checkin.refusal])));
+      expect(roundVerdict(arbiter.boards.flatMap((b) => (b.checkin === null ? [] : [liveExtendRefusal(b.checkin, t)]))), `the arbiter panel at +${t - NOW.getTime()} ms`).toEqual(want);
+      expect(roundVerdict(liveRoundRefusals(view.extendRefusals, view.extendWindows, t)), `the Open round control at +${t - NOW.getTime()} ms`).toEqual(want);
+      seen.add(want);
     }
     expect(grid.size, "anti-vacuity: instants walked").toBeGreaterThan(8);
     expect([...seen].sort(), "both a round with a button and a round with a reason were met").toEqual(["mixed", "none"]);

@@ -28,7 +28,7 @@ import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
-import { EXTEND_REFUSAL_KEYS, EXTEND_ROUND_MIXED_WHY_KEY, EXTEND_ROUND_SKIP_COPY, EXTEND_WHY_KEYS } from "@/lib/checkin-extend";
+import { EXTEND_REFUSAL_KEYS, EXTEND_ROUND_SKIP_COPY } from "@/lib/checkin-extend";
 import { LOCALES, type Locale } from "@/lib/i18n-constants";
 import { INVITE_WORD_KEYS, SEAT_WORD_KEYS } from "@/lib/invite-status";
 import {
@@ -176,8 +176,6 @@ function heldBodyKeys(): string[] {
   return out;
 }
 
-const NON_NULL = <T>(xs: readonly (T | null)[]): T[] => xs.filter((x): x is T => x !== null);
-
 /** The values of `SUMMARY_CHIP` (board-focus.tsx), read from its declaration: the chip a flag wears for a reader who is not an editor. */
 function summaryChipKeys(): string[] {
   const src = read("components/v2/match-day/board-focus.tsx");
@@ -198,16 +196,12 @@ const MAPS: Record<string, readonly string[]> = {
   "OPEN_ROUND_SKIP_KEYS": Object.values(OPEN_ROUND_SKIP_KEYS),
   "OPEN_ROUND_ALREADY_OPEN_KEY and OPEN_ROUND_INVITED_KEY (the open's answers)": [OPEN_ROUND_ALREADY_OPEN_KEY, OPEN_ROUND_INVITED_KEY],
   "RESEND_REFUSAL_KEYS": Object.values(RESEND_REFUSAL_KEYS),
-  "EXTEND_WHY_KEYS (the reasons a +5 is not offered)": NON_NULL(Object.values(EXTEND_WHY_KEYS)),
-  "EXTEND_ROUND_MIXED_WHY_KEY": [EXTEND_ROUND_MIXED_WHY_KEY],
   "EXTEND_ROUND_SKIP_COPY": Object.values(EXTEND_ROUND_SKIP_COPY),
   "EXTEND_REFUSAL_KEYS": Object.values(EXTEND_REFUSAL_KEYS),
 };
 
 /** The extension's copy: what a pass-through `t(key)` in checkin-extend-ui.ts, or the column's shim over it, can be asked for. */
 const EXTEND_MAPS = [
-  "EXTEND_WHY_KEYS (the reasons a +5 is not offered)",
-  "EXTEND_ROUND_MIXED_WHY_KEY",
   "EXTEND_ROUND_SKIP_COPY",
   "EXTEND_REFUSAL_KEYS",
 ] as const;
@@ -253,8 +247,6 @@ const NON_LITERAL_SITES: Record<string, readonly Site[]> = {
     { expr: "RESEND_REFUSAL_KEYS[n.code] as MessageKey", maps: ["RESEND_REFUSAL_KEYS"] },
   ],
   "components/v2/checkin-extend-ui.ts": [
-    { expr: "key", maps: ["EXTEND_WHY_KEYS (the reasons a +5 is not offered)"] }, // extendWhyLine
-    { expr: "why.key", maps: ["EXTEND_WHY_KEYS (the reasons a +5 is not offered)", "EXTEND_ROUND_MIXED_WHY_KEY"] }, // roundWhyLine
     { expr: "key", maps: ["EXTEND_ROUND_SKIP_COPY"] }, // extendRoundLines
     { expr: "EXTEND_REFUSAL_KEYS[refusal]", maps: ["EXTEND_REFUSAL_KEYS"] },
   ],
@@ -277,7 +269,6 @@ describe("the column's copy: premises", () => {
     for (const [name, keys] of Object.entries(MAPS)) expect(keys.length, name).toBeGreaterThan(0);
     expect(SWEPT.length).toBeGreaterThanOrEqual(LISTED.size);
     expect(Object.keys(INVITE_WORD_KEYS).length, "the six invite words").toBe(6);
-    expect(NON_NULL(Object.values(EXTEND_WHY_KEYS)).length, "the four reasons a board has, a board that is over says nothing").toBe(4);
   });
 
   it("the column's files are the two Match Day panels, each exists, and each has its non-literal calls pinned", () => {
@@ -420,7 +411,7 @@ describe("the list cannot fall behind the column", () => {
         checked += 1;
       }
     }
-    expect(checked, "anti-vacuity: map values checked (79 measured at the T7 fix round)").toBeGreaterThanOrEqual(79);
+    expect(checked, "anti-vacuity: map values checked (78 measured at B1: the five reasons' keys left the maps)").toBeGreaterThanOrEqual(78);
     // The two maps the plan names, by name: their values are listed in full.
     expect(Object.values(INVITE_WORD_KEYS).every((k) => LISTED.has(k))).toBe(true);
     expect(Object.values(HELD_TITLE_KEYS).every((k) => LISTED.has(k))).toBe(true);
@@ -450,7 +441,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
       sites += NON_LITERAL_SITES[name]!.length;
     }
     expect(files, "anti-vacuity: the column's files, the helper files and the two functions").toBe(COLUMN_FILES.length + HELPER_FILES.length + 2);
-    expect(sites, "anti-vacuity: twenty-five sites are pinned (17 + the board panel's 8)").toBe(25);
+    expect(sites, "anti-vacuity: twenty-three sites are pinned (15 + the board panel's 8; B1 deleted the two reason helpers' calls)").toBe(23);
   });
 
   it("a variable key added to the column's file is caught by the pin (a scratch copy with msg(someNewVar) differs from the list)", () => {
@@ -482,7 +473,7 @@ describe("a call whose key is not a literal is pinned, and tied to the map that 
         accounted += 1;
       }
     }
-    expect(accounted, "anti-vacuity: all twenty-five sites accounted for").toBe(25);
+    expect(accounted, "anti-vacuity: all twenty-three sites accounted for").toBe(23);
   });
 });
 
@@ -508,49 +499,6 @@ describe("the invite words never read as opened (A3)", () => {
       }
     }
     expect(checked, "anti-vacuity: 4 locales x (6 words + the help line)").toBe(LOCALES.length * 7);
-  });
-});
-
-describe("the reasons a +5 is not offered say what is off, and not what the clock above them says", () => {
-  // The same lines stand where the +5 button would be, on the round bar (the hero, the playing block, the top of the panel) and on a
-  // board's decision area. Read cold they must be a sentence about the extension, not a fragment ("Game started").
-  const ABOUT_EXTENDING: Record<Locale, RegExp> = { en: /extend/i, es: /ampli/i, fr: /prolong/i, nl: /verleng/i };
-  const CAUSES = NON_NULL(Object.values(EXTEND_WHY_KEYS));
-
-  it("every reason, and the mixed one, names the extension in every locale (5 reasons x 4 locales, counted)", () => {
-    let checked = 0;
-    for (const locale of LOCALES) {
-      for (const key of [...CAUSES, EXTEND_ROUND_MIXED_WHY_KEY]) {
-        expect(DICTS[locale][key], `${locale}: ${key}`).toMatch(ABOUT_EXTENDING[locale]);
-        checked += 1;
-      }
-    }
-    expect(checked).toBe(5 * LOCALES.length);
-  });
-
-  it("the four reasons share one lead-in in every locale: the text before the colon is the same, only the cause after it differs", () => {
-    let checked = 0;
-    for (const locale of LOCALES) {
-      const parts = CAUSES.map((key) => DICTS[locale][key]!.split(":").map((p) => p.trim()));
-      for (const [i, p] of parts.entries()) expect(p.length, `${locale}: ${CAUSES[i]} has one colon (a lead-in and a cause)`).toBe(2);
-      const leads = new Set(parts.map((p) => p[0]));
-      expect([...leads], `${locale}: one lead-in for ${CAUSES.length} reasons`).toHaveLength(1);
-      expect(new Set(parts.map((p) => p[1])).size, `${locale}: the causes differ`).toBe(CAUSES.length);
-      checked += parts.length;
-    }
-    expect(checked).toBe(4 * LOCALES.length);
-  });
-
-  it("a reason is never the clock's own label: 'Check-in has closed' stood twice, one line under the other", () => {
-    let checked = 0;
-    for (const locale of LOCALES) {
-      const labels = ["arbiter.column.checkin.closed", "arbiter.column.checkin.closesIn", "arbiter.column.checkin.opensIn"].map((k) => DICTS[locale][k]);
-      for (const key of CAUSES) {
-        expect(labels, `${locale}: ${key} repeats a clock label`).not.toContain(DICTS[locale][key]);
-        checked += 1;
-      }
-    }
-    expect(checked).toBe(4 * LOCALES.length);
   });
 });
 

@@ -24,6 +24,7 @@ import type { OpenRoundPairing, OpenRoundResult, OpenRoundView } from "@/lib/ope
 import { OPEN_ROUND_SKIP_KEYS } from "@/lib/open-round";
 import { NEEDS_REASONS } from "@/server/external-play/types";
 import { DEADLINE_AFTER_MS } from "@/server/external-play/window";
+import { RETIRED_EXTEND_REASONS, RETIRED_EXTEND_REASON_LEADS } from "@/lib/__tests__/_retired-extend-reasons";
 import type { MatchDayCtx } from "../court-focus";
 import { OpenRoundBlockView, RoundFocus, WaitingList, type RoundFocusProps } from "../round-focus";
 import { arbiterRound, board, done, held, iso, live, NOW, openWindow, overRound, playingRound, round, withState } from "./_online-fixtures";
@@ -837,7 +838,8 @@ describe("RoundFocus: M5 - one card after Pair next round, a full-width press, a
     });
     const h = html(closed);
     expect(count(h, "arbiter-extend-round-why"), "no unprompted reason").toBe(0);
-    expect(h, "and none of the reasons' words anywhere").not.toContain(esc(en["externalPlay.checkinExtend.why.closed"]!));
+    expect(Object.keys(RETIRED_EXTEND_REASONS).length + RETIRED_EXTEND_REASON_LEADS.length, "anti-vacuity: seven probes").toBe(7);
+    for (const words of [...Object.values(RETIRED_EXTEND_REASONS), ...RETIRED_EXTEND_REASON_LEADS]) expect(h, `and none of the reasons' words anywhere ("${words}")`).not.toContain(esc(words));
     expect(count(h, "arbiter-extend-round-cta"), "nothing to press on a closed round").toBe(0);
     expect(count(html(checkinFixture().r), "arbiter-extend-round-cta"), "positive pair: an open round still has its +5").toBe(1);
   });

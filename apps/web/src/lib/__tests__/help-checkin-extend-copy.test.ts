@@ -8,9 +8,9 @@
 //
 // Why render, and not check that a dictionary key EXISTS (what this file did before, and what the first Match Day build slipped past):
 // the section once promised four "Can't extend check-in: ..." reasons and a round "short reason" - keys that exist, are translated,
-// and that no Match Day screen renders (board-focus.tsx passes showWhy={false}; the round bar prints no reason). A key's existence
-// says nothing about whether anything draws it. The reasons' keys are still in the dictionary and still read by checkin-extend-ui.ts
-// (a separate task retires them); the render is what says they are not on a screen.
+// and that no Match Day screen renders (the board panel and the round bar print no reason). A key's existence says nothing about
+// whether anything draws it. The reasons' keys, their translations and the helpers that read them are deleted now (B1); their words are
+// typed in _retired-extend-reasons.ts, and the render is what says no screen says them.
 //
 // The numbers are SPELLED in the prose, so the expected words come from a number-word table keyed by the constants - never typed beside
 // the claim. A value the table lacks fails the test and says so (it must be extended on purpose), so a step of 7 cannot slip past as
@@ -31,7 +31,6 @@ import {
   CHECKIN_EXTEND_MAX,
   CHECKIN_EXTEND_STEP_MINUTES,
   EXTEND_ROUND_SKIP_COPY,
-  EXTEND_WHY_KEYS,
   emptyExtendTally,
   type CheckinExtendRoundResult,
   type CheckinExtendState,
@@ -42,6 +41,7 @@ import type { MatchDayBoard, MatchDayOnlineRound } from "@/lib/match-day/types";
 import type { OpenRoundPairing, OpenRoundView } from "@/lib/open-round";
 import type { ArbiterBoard } from "@/lib/arbiter-view";
 import { helpArticleBySlug } from "./_help-copy";
+import { RETIRED_EXTEND_REASONS, RETIRED_EXTEND_REASON_LEADS } from "./_retired-extend-reasons";
 
 // The two seams the panels need outside a browser: the chessground board (a client-only dynamic import) and the network, answered by hand.
 vi.mock("next/dynamic", async () => {
@@ -256,9 +256,10 @@ describe("help: extending a board's check-in", () => {
   it("where the section says there is no button, the screens draw none and say nothing in its place - and the same board with an open window has it", () => {
     const s = section();
     expect(s).toContain("there is no button");
-    // Every reason the old page promised, as the dictionary words it (the keys are what a screen COULD draw; the render says whether one does).
-    const reasons = Object.values(EXTEND_WHY_KEYS).flatMap((k) => (k === null ? [] : [EN[k]!]));
-    expect(reasons.length, "anti-vacuity: the four reasons").toBe(4);
+    // Every reason the old page promised, as the words it said them in (typed: the dictionary keys are gone, B1, so a screen that drew one
+    // again would do it under a new key - and the lead-in catches the same reason reworded).
+    const reasons = [...Object.values(RETIRED_EXTEND_REASONS), ...RETIRED_EXTEND_REASON_LEADS];
+    expect(reasons.length, "anti-vacuity: the five sentences and the two lead-ins").toBe(7);
     const open = openWindow();
     const refused: Record<string, CheckinExtendState> = {
       "not opened yet": { ...open, canExtend: false, refusal: "not_open", opensAt: iso(NOW + 5 * MIN), deadlineAt: iso(NOW + 25 * MIN) },

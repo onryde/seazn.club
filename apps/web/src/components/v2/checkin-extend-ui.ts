@@ -13,14 +13,11 @@ import {
   EXTEND_REFUSAL_CODES,
   EXTEND_REFUSAL_KEYS,
   EXTEND_ROUND_SKIP_COPY,
-  EXTEND_WHY_KEYS,
   liveExtendRefusal,
-  roundWhy,
   type CheckinExtendBoardResult,
   type CheckinExtendRoundResult,
   type CheckinExtendState,
   type ExtendRefusal,
-  type RoundWhy,
 } from "@/lib/checkin-extend";
 
 type Vars = Record<string, string | number>;
@@ -73,12 +70,6 @@ export function extendBoardSentence(r: CheckinExtendBoardResult, boardNo: number
 export const extendHelperLine = (c: ExtendCopy) =>
   c.t("externalPlay.checkinExtend.helper", { minutes: CHECKIN_EXTEND_STEP_MINUTES, max: CHECKIN_EXTEND_MAX });
 
-/** The short reason shown where a board's "+5 min" is not offered, or null when it says nothing (a board that is over). */
-export function extendWhyLine(refusal: ExtendRefusal, c: ExtendCopy): string | null {
-  const key = EXTEND_WHY_KEYS[refusal];
-  return key === null ? null : c.t(key);
-}
-
 /** What the board's "+5 min" is, on the screen's ticking clock: the refusal now (null: offered), its words, and the snapshot's
  *  numbers. `nowMs` null (before the viewer's clock is known): the server's own reading of the snapshot stands. */
 export function boardExtendOffer(
@@ -95,16 +86,6 @@ export function liveExtendableBoards(boards: readonly { checkin: CheckinExtendSt
   if (nowMs === null) return snapshotCount;
   return boards.filter((b) => b.checkin !== null && liveExtendRefusal(b.checkin, nowMs) === null).length;
 }
-
-/** Why the round has no "+5 min to the round" on Match Day's round panel at `nowMs`: the panel lists every board with its check-in, so each
- *  is asked in turn (the snapshot's own word before the viewer's clock is known, the clock's after). Null while any board would accept
- *  a press, and when no board has a reason to give (`roundWhy`). */
-export function roundExtendWhy(boards: readonly { checkin: CheckinExtendState | null }[], nowMs: number | null): RoundWhy | null {
-  return roundWhy(boards.flatMap((b) => (b.checkin === null ? [] : [nowMs === null ? b.checkin.refusal : liveExtendRefusal(b.checkin, nowMs)])));
-}
-
-/** The words of a round's reason. */
-export const roundWhyLine = (why: RoundWhy, c: ExtendCopy): string => c.t(why.key);
 
 /** The answer to a ROUND press, one line for what was done and one for each reason a board was left alone, only the reasons that
  *  happened: ["Added 5 minutes to 6 boards.", "2 boards skipped: game started"]. */
