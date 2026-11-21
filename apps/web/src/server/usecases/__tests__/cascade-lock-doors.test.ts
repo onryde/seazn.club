@@ -34,7 +34,9 @@ import { seedOrg } from "./_seed";
 
 // `pauseAfter`: once a cascade write of that type with `expunge: true` has gone through, the cascade waits on `gate` (a cascade
 // LIVE between two settles, holding its lock). `failVoids`: after `passVoids` cascade-writer `core.void`s have gone through, the
-// next `failVoids` of them throw (set only around a Reinstate, so they are its reverse's writes).
+// next `failVoids` of them throw (set only around a Reinstate, so they are its reverse's writes). W5 stress fix F3: the reverse
+// writes its voids in ONE transaction through `appendEventInTx` (void-lines.ts), no longer one `scoreEvent` each, so the throw
+// sits on that export; `scoreEvent`'s own append calls it from inside its module and never meets this mock.
 const control = vi.hoisted(() => ({
   pauseAfter: null as string | null,
   gate: null as Promise<void> | null,
@@ -43,14 +45,13 @@ const control = vi.hoisted(() => ({
   passVoids: 0,
   cutAfterExpunge: false,
 }));
-vi.mock("../scoring", async (io) => {
-  const real = await io<typeof import("../scoring")>();
+vi.mock("@/server/engine-db/append-event", async (io) => {
+  const real = await io<typeof import("@/server/engine-db/append-event")>();
   return {
     ...real,
-    scoreEvent: async (...args: Parameters<typeof real.scoreEvent>) => {
-      const [, , input, opts] = args;
-      const type = (input as { type: string }).type;
-      if (opts?.writer === "withdrawal_cascade" && type === "core.void" && control.failVoids > 0) {
+    appendEventInTx: async (...args: Parameters<typeof real.appendEventInTx>) => {
+      const input = args[4];
+      if (input.writer === "withdrawal_cascade" && input.type === "core.void" && control.failVoids > 0) {
         if (control.passVoids > 0) {
           control.passVoids--;
         } else {
@@ -58,6 +59,17 @@ vi.mock("../scoring", async (io) => {
           throw new Error("simulated: a write of the Reinstate's reverse failed");
         }
       }
+      return real.appendEventInTx(...args);
+    },
+  };
+});
+vi.mock("../scoring", async (io) => {
+  const real = await io<typeof import("../scoring")>();
+  return {
+    ...real,
+    scoreEvent: async (...args: Parameters<typeof real.scoreEvent>) => {
+      const [, , input, opts] = args;
+      const type = (input as { type: string }).type;
       const out = await real.scoreEvent(...args);
       const expunge = (input as { payload?: { expunge?: unknown } }).payload?.expunge === true;
       if (opts?.writer === "withdrawal_cascade" && type === "core.abandon" && expunge && control.cutAfterExpunge) {
@@ -243,7 +255,8 @@ describe.runIf(HAS_DB)("B3 m-3/m-1: a Reinstate's reverse that throws", () => {
     await post(r.auth, mine[0]!.id, "core.forfeit", { by: other(mine[0]!, r.leaver), reason: "walkover" });
     const before = await herStatuses(r.stageId, r.leaver);
     await withdrawEntrantCascade(r.auth, r.leaver);
-    // Let the reverse write one void, then fail the next: a reverse cut off part-way, mid-line.
+    // Let the reverse write one void, then fail the next: a reverse cut off part-way. F3: its voids are ONE transaction, so the
+    // one written rolls back with the failure and the in-request retry writes them all.
     control.passVoids = 1;
     control.failVoids = 1;
     const back = await patchEntrant(r.auth, r.leaver, { status: "registered" });
@@ -266,6 +279,9 @@ describe.runIf(HAS_DB)("B3 m-3/m-1: a Reinstate's reverse that throws", () => {
     await expect(patchEntrant(r.auth, r.leaver, { status: "registered" })).rejects.toThrow(/simulated/);
     control.failVoids = 0;
     expect(await statusOf(r.leaver)).toBe("withdrawn"); // the PATCH changed nothing a client can see
+    // F3: nor did the reverse - its voids are one transaction, so the void that went through rolled back with the failure and
+    // every expunge abandon of hers still stands (5 lines, RB5-W2).
+    expect(await activeExpunges(r.stageId, r.leaver)).toBe(5);
     expect(await activeTableRows(r.divisionId)).toHaveLength(1);
     const back = await patchEntrant(r.auth, r.leaver, { status: "registered" });
     expect(back.status).toBe("registered");

@@ -77,6 +77,7 @@ import { divisionHasStarted, listStages, refoldStageTable, reproposeStaleDepende
 import { BRACKET_WALKOVER_KINDS } from "./stages/generators";
 import { listDivisionFixtures, listEvents, getFixtureState, type EventOut } from "./fixtures";
 import { advanceAfterSettle, invalidatePublicCache, maybeAutoAdvance, scoreEvent } from "./scoring";
+import { voidLineEvents, type LineVoid } from "./void-lines";
 import { replaceDepartedQualifier } from "./lucky-loser";
 import { dropPinsOfEntrant } from "./rank-override";
 import { afterScheduleWrite } from "./schedule";
@@ -1200,36 +1201,74 @@ async function takeBackLines(
 ): Promise<Set<string>> {
   const rows = withdrawalLineRows(ledger);
   const changed = new Set<string>();
-  const voidEvent = async (fixtureId: string, eventId: string) => {
-    const state = await getFixtureState(auth, fixtureId);
-    await scoreEvent(auth, fixtureId, { expected_seq: state.last_seq, type: "core.void", payload: { event_id: eventId } }, REVERSE);
-    out.voided++;
-  };
+  if (lines.length === 0) return changed;
+  const stageOf = new Map(lines.map((f) => [f.id, f.stage_id]));
+  // W5 stress fix F3: ONE read of every line's ledger, every void in ONE write (`voidLineEvents`: each line still gets its own
+  // `core.void` row, through the one append path, and the after-commit work runs once), where each void was a full `scoreEvent`
+  // of its own. The reading is unchanged: the same targets, chosen from the same ledger.
+  const eventsOf = await lineEvents(auth, lines.map((f) => f.id));
+  const voids: LineVoid[] = [];
+  const retireNow: number[] = [];
+  const rerecords: { row: WithdrawalLineRow; fixtureId: string; removed: string[] }[] = [];
   for (const f of lines) {
-    const before = out.voided + out.rerecorded;
+    const events = eventsOf.get(f.id) ?? [];
+    const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
     const onLine = rows.filter((r) => r.fixture_id === f.id);
     for (const row of onLine) {
       if (row.retired || (row.entrant_id !== entrantId && !finishedAndReinstated(ledger, row))) continue;
-      const events = await listEvents(auth, f.id, 0);
-      const voided = new Set(events.filter((e) => e.voids_event_id !== null).map((e) => e.voids_event_id as string));
       for (const e of activeAbandons(events).filter((a) => a.seq > row.from_seq && isExpunge(a)).sort((a, b) => b.seq - a.seq)) {
-        await voidEvent(f.id, e.id);
+        voids.push({ fixtureId: f.id, eventId: e.id });
       }
       const removed = row.planned_void_ids.filter((id) => voided.has(id));
-      if (removed.length > 0 && !(await rerecordRemoved(auth, f.id, removed, out))) out.not_restored.push(f.id);
-      await withTenant(auth.orgId, async (tx) => {
-        await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-        await appendTableLedgerRow(tx, divisionId, TABLE_WITHDRAWAL_LINE_VOIDED_ROW, { voids_seq: row.seq }, auth.userId);
-      });
+      // A row with nothing to put back is retired in the voids' own transaction; one with results to re-record is retired
+      // after them (below), so a failure between leaves it live for the retry to finish.
+      if (removed.length > 0) rerecords.push({ row, fixtureId: f.id, removed });
+      else retireNow.push(row.seq);
     }
-    const events = await listEvents(auth, f.id, 0);
     for (const e of activeAbandons(events).filter((a) => isExpunge(a) && !onLine.some((r) => r.from_seq < a.seq))) {
-      await voidEvent(f.id, e.id);
+      voids.push({ fixtureId: f.id, eventId: e.id });
     }
-    for (const e of walkoversOf(events, entrantId)) await voidEvent(f.id, e.id);
-    if (out.voided + out.rerecorded > before) changed.add(f.stage_id);
+    for (const e of walkoversOf(events, entrantId)) voids.push({ fixtureId: f.id, eventId: e.id });
+  }
+  const written = await voidLineEvents(auth, divisionId, voids, {
+    writer: REVERSE.writer,
+    ...(retireNow.length === 0
+      ? {}
+      : {
+          alsoInTx: async (tx: Tx) => {
+            for (const seq of retireNow) await appendTableLedgerRow(tx, divisionId, TABLE_WITHDRAWAL_LINE_VOIDED_ROW, { voids_seq: seq }, auth.userId);
+          },
+        }),
+  });
+  out.voided += written.length;
+  for (const id of written) changed.add(stageOf.get(id)!);
+  // A removed result is re-recorded AFTER every void: its line's expunge abandon (and any walkover of hers) is gone by now.
+  for (const { row, fixtureId, removed } of rerecords) {
+    const before = out.rerecorded;
+    if (!(await rerecordRemoved(auth, fixtureId, removed, out))) out.not_restored.push(fixtureId);
+    if (out.rerecorded > before) changed.add(stageOf.get(fixtureId)!);
+    await withTenant(auth.orgId, async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
+      await appendTableLedgerRow(tx, divisionId, TABLE_WITHDRAWAL_LINE_VOIDED_ROW, { voids_seq: row.seq }, auth.userId);
+    });
   }
   return changed;
+}
+
+/** Every line's ledger in ONE read (the fields `listEvents` returns), by line. */
+async function lineEvents(auth: AuthCtx, ids: readonly string[]): Promise<Map<string, EventOut[]>> {
+  const rows = await withTenant(auth.orgId, (tx) =>
+    tx<(EventOut & { fixture_id: string })[]>`
+      select fixture_id, id, seq, type, payload, recorded_at, recorded_by, voids_event_id, device_link_id
+        from score_events where fixture_id in ${tx(ids)} order by fixture_id, seq`,
+  );
+  const out = new Map<string, EventOut[]>();
+  for (const { fixture_id, ...e } of rows) {
+    const list = out.get(fixture_id) ?? [];
+    list.push(e);
+    out.set(fixture_id, list);
+  }
+  return out;
 }
 
 const isExpunge = (e: EventOut) => (e.payload as { expunge?: unknown } | null)?.expunge === true;
