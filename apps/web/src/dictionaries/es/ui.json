@@ -2951,6 +2951,7 @@
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "Este ajuste ya se ha deshecho.",
   "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS": "Este formato admite como máximo {max} participantes. Esta división tiene {entrants}.",
   "roundrobin.refusal.DRAW_TOO_LARGE": "Este cuadro tiene {lines} partidos. Un inicio puede generar como máximo {budget}.",
+  "roundrobin.lateEntry.formatMax": "Este formato admite como máximo {max} participantes. Con esta incorporación a la tabla en curso serían {entrants}.",
   "knockout.addToBracket": "Añadir al cuadro",
   "knockout.lateEntry.tookBye": "{name} juega contra {holder}, que tenía un descanso.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} ocupa el puesto de {withdrawn} contra {opponent}.",

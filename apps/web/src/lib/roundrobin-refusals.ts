@@ -262,3 +262,24 @@ export const FORMAT_MAX_PROMOTION: { en: string; key: MessageKey } = {
   en: "This format allows up to {max} entrants and this division already has {entrants}, so no one else can be promoted.",
   key: "reg.promote.formatMax",
 };
+
+/** B4 re-review N-3: a late add into a running table refused at the format's max (`FORMAT_TOO_MANY_ENTRANTS`) says it in its own
+ *  sentence. The add is refused and rolled back, so the draw sentence's "This division has {entrants}" would be false; `entrants` is
+ *  the field the add WOULD make. Same code, status and fields as the draw doors; the server's English is this row's `en`, the
+ *  screen's is `key` (`lateEntryRefusalText`). */
+export const FORMAT_MAX_LATE_ENTRY: { en: string; key: MessageKey } = {
+  en: "This format allows up to {max} entrants. Adding to the running table would make {entrants}.",
+  key: "roundrobin.lateEntry.formatMax",
+};
+
+/** What a late-add door (the entrants panel's add, the waiting strip's place) shows for a round-robin refusal: the late-entry sentence
+ *  for the format's max (`FORMAT_MAX_LATE_ENTRY`), else the table's own (`roundRobinRefusalText`), numbers grouped the reader's way. */
+export function lateEntryRefusalText(
+  code: RoundRobinRefusalCode,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  locale: string | undefined,
+): string {
+  if (code !== "FORMAT_TOO_MANY_ENTRANTS") return roundRobinRefusalText(code, extra, msg, locale);
+  return roundRobinRefusalText(code, extra, (_key, vars) => msg(FORMAT_MAX_LATE_ENTRY.key, vars), locale);
+}

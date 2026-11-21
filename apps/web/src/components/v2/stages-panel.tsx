@@ -921,7 +921,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       setUndoable(false);
       router.refresh();
     } catch (err) {
-      setError(undoRefusalMessage(err, msg));
+      setError(undoRefusalMessage(err, msg, locale));
     }
   }
 
@@ -2476,7 +2476,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               router.refresh();
               return { ok: true };
             } catch (err) {
-              return { ok: false, message: adjustRefusalText(err, msg) };
+              return { ok: false, message: adjustRefusalText(err, msg, locale) };
             }
           }}
           undo={async (seq) => {
@@ -2485,7 +2485,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
               router.refresh();
               return { ok: true };
             } catch (err) {
-              return { ok: false, message: adjustRefusalText(err, msg) };
+              return { ok: false, message: adjustRefusalText(err, msg, locale) };
             }
           }}
           onClose={() => setAdjusting(null)}
@@ -2496,8 +2496,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
 }
 
 /** W5 app PR B Task 7: an Adjust points refusal in the reader's language (the round-robin refusal table), else the server's words. */
-function adjustRefusalText(err: unknown, msg: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
-  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg);
+function adjustRefusalText(err: unknown, msg: (key: MessageKey, vars?: Record<string, string | number>) => string, locale: Locale): string {
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -3026,11 +3026,12 @@ export function classifyActError(
  *  locally, off the CODE — the server's sentence is English, and
  *  history-panel.tsx gives the same refusal the same sentence. Anything else
  *  keeps its own message, which is the one an organiser can quote. */
-export function undoRefusalMessage(err: unknown, msg: Msg): string {
+export function undoRefusalMessage(err: unknown, msg: Msg, locale: Locale): string {
   if (err instanceof ApiV1Error && err.code === PLAYED_REFUSAL_CODE) return msg("history.error.played");
   // W3 T5 (X-SW-28): Undo of Pair next over a started round, or across an undo barrier — a Swiss one, or since W4 T5
   // (K1) a confirmed draw (SEED_CONFIRM_NOT_UNDOABLE), each through its own family's key.
-  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg);
+  // B4 re-review N-1: the reader's locale, so a round-robin sentence's numbers group their way (`roundRobinRefusalText`).
+  if (err instanceof ApiV1Error && isUndoRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.undoFailed"));
 }
 

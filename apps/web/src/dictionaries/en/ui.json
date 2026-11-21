@@ -2951,6 +2951,7 @@
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "This adjustment has already been undone.",
   "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS": "This format allows up to {max} entrants. This division has {entrants}.",
   "roundrobin.refusal.DRAW_TOO_LARGE": "This draw has {lines} matches. One Start can draw at most {budget}.",
+  "roundrobin.lateEntry.formatMax": "This format allows up to {max} entrants. Adding to the running table would make {entrants}.",
   "knockout.addToBracket": "Add to bracket",
   "knockout.lateEntry.tookBye": "{name} plays {holder}, who had a bye.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} takes {withdrawn}'s place against {opponent}.",

@@ -25,6 +25,7 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import type { KnockoutLateEntryResult, TableLateEntryResult } from "@/server/api-v1/schemas";
 import { withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { formatMaxGate } from "@/lib/format-max-entrants";
 import { isRootTableStage, tableLateEntryOffered } from "@/lib/open-entry-stages";
 import { isRrExtKey, rrLinesOfRows, type RrStoredRow } from "@/lib/roundrobin-reconcile";
 import {
@@ -40,7 +41,7 @@ import { DEPARTED_STATUSES } from "./entrants";
 import { fixtureStartedSql, stageHasStarted } from "./fixture-started-sql";
 import { insertFixtureRows } from "./fixture-insert";
 import { placeWaitingKnockoutEntrant } from "./knockout-late-entry";
-import { roundRobinRefusal } from "./roundrobin-refusal";
+import { formatMaxLateEntryRefusal, roundRobinRefusal } from "./roundrobin-refusal";
 import { afterScheduleWrite } from "./schedule/after-write";
 import {
   afterGenerateCommit,
@@ -339,6 +340,16 @@ async function placeInRootTable(
   // of lock slots. Global order `division:` -> stage seats -> `fixture:` -> `division-config:` -> rows: the caller holds
   // `division:`, and nothing after this takes a stage-seat or fixture lock.
   await tx`select pg_advisory_xact_lock(hashtext(${"division-config:" + divisionId}))`;
+  // B4 re-review N-3 (controller ruling 2026-11-21; plan-limits design §3.3 item 4): a late add is exempt from the PLAN cap, never from
+  // the format's technical max - this is where its catch-up lines are minted, in the organiser's request, and `createEntrants` takes
+  // up to 500 at once (one such add into a 100-entrant league minted ~174,000 lines). The field is the division's active roster with
+  // the newcomer in it, as Start counts it (`refuseFormatTooManyAtStart`); a batch is asked once per entrant, so the one that would
+  // pass the max rolls the whole request back. A running field already past the max (a Reinstate, an automatic arrival - which never
+  // reach here) is left as it is: only a write that would mint lines for one more is refused.
+  const [{ n: field }] = await tx<{ n: number }[]>`
+    select count(*)::int as n from entrants where division_id = ${divisionId} and status in ('registered', 'confirmed')`;
+  const overMax = formatMaxGate([stage], field);
+  if (overMax !== null) throw formatMaxLateEntryRefusal(overMax.max, overMax.entrants);
   const place = await readTableLatePlace(tx, stage, entrantId, opts.poolKey);
   const decision = decideRoundRobinLateEntry(place.input);
   if (decision.case === "refused") throw roundRobinRefusal(decision.code);

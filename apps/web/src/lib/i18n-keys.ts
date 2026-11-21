@@ -8132,6 +8132,7 @@ export type DictionaryKey =
   | "roundrobin.addToTable"
   | "roundrobin.lateEntry.catchUp.one"
   | "roundrobin.lateEntry.catchUp.other"
+  | "roundrobin.lateEntry.formatMax"
   | "roundrobin.lateEntry.joinedPool"
   | "roundrobin.lateEntry.rebuildOffered"
   | "roundrobin.lateEntry.rebuilt"

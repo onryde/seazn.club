@@ -277,7 +277,7 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
   const want = msgEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: msgEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) });
 
   it("Undo: the refusal reads its dictionary sentence", () => {
-    expect(undoRefusalMessage(own(), msgEs as never)).toBe(want);
+    expect(undoRefusalMessage(own(), msgEs as never, "es")).toBe(want);
   });
 
   it("Rebuild: the refusal reads its dictionary sentence; an unrecognised one keeps its message, a non-Error the generic", () => {

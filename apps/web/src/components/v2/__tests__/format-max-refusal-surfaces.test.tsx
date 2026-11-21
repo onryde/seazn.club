@@ -7,6 +7,10 @@
 //   - Generate / Complete, Rebuild and Add stage on the stage list          - the panel's exported readers (the panel passes its locale;
 //     the readers TAKE one, so tsc holds every caller to it)
 //   - a completion whose next stage's draw is refused (completion.ts's STAGE_COMPLETED_SEEDING_FAILED wrap)
+//   - an Undo / Redo / Restore re-pairing an unstarted Swiss (undo-redo.ts runs the draw) - the stage list's and the AI console's
+//     undo readers (B4 re-review N-1: they now take the locale)
+//   - a late add into a running table past the format's max (roundrobin-late-entry.ts, B4 re-review N-3) - the waiting strip's
+//     place tap through the harness, and the late-add reader the entrants panel shares (`lateEntryRefusalText`)
 //
 // "Through the real reply shape": every refusal is the SERVER's own error (`roundRobinRefusal`, `formatMaxPromotionRefusal`) sent
 // through the REAL v1 handler and read back by the REAL `apiV1` (fetch stubbed to answer the handler's Response) - so a field the
@@ -76,11 +80,11 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 });
 
 import { v1 } from "@/server/api-v1/http";
-import { formatMaxPromotionRefusal, roundRobinRefusal } from "@/server/usecases/roundrobin-refusal";
+import { formatMaxLateEntryRefusal, formatMaxPromotionRefusal, roundRobinRefusal } from "@/server/usecases/roundrobin-refusal";
 import { HttpError } from "@/lib/errors";
 import { ApiV1Error } from "@/lib/client-v1";
 import { formatMaxEntrants, START_LINE_BUDGET } from "@/lib/format-max-entrants";
-import { FORMAT_MAX_PROMOTION, ROUND_ROBIN_REFUSALS } from "@/lib/roundrobin-refusals";
+import { FORMAT_MAX_LATE_ENTRY, FORMAT_MAX_PROMOTION, ROUND_ROBIN_REFUSALS, lateEntryRefusalText } from "@/lib/roundrobin-refusals";
 import { completedSeedingFailedText, STAGE_COMPLETED_SEEDING_FAILED } from "@/lib/completed-seeding-failed";
 import { Modal } from "@/components/modal";
 import { LegsChoice } from "@/components/v2/legs-choice";
@@ -90,7 +94,9 @@ import { LaunchActions } from "@/components/v2/launch-actions";
 import { StartConfirmDialog } from "@/components/v2/start-confirm-dialog";
 import { useBoardActions, type BoardActions } from "@/components/v2/board/use-board-actions";
 import type { BoardDivision } from "@/components/v2/board/types";
-import { addStageErrorText, classifyActError, rebuildErrorText } from "@/components/v2/stages-panel";
+import { addStageErrorText, classifyActError, rebuildErrorText, undoRefusalMessage } from "@/components/v2/stages-panel";
+import { aiUndoErrorText } from "@/components/v2/board/ai-console-state";
+import { TableWaitingStrip } from "@/components/v2/desk/table-waiting-strip";
 import { buildTemplateStages, templatesForSport } from "@/lib/format-templates";
 import { engineEntrantKinds } from "@/lib/__tests__/_engine-entrant-kinds";
 
@@ -358,5 +364,83 @@ describe("the stage list's readers - Generate / Complete, Rebuild, Add stage - a
       }
     }
     expect(checked).toBe(8);
+  });
+});
+
+describe("B4 re-review N-1: the undo readers - the stage list's and the AI console's - say both draw refusals with grouped numbers", () => {
+  const msgIn = (locale: L) => (key: string, vars?: Record<string, string | number>) => t(DICTS[locale], key, vars);
+
+  it("undoRefusalMessage and aiUndoErrorText: 2 readers x 2 codes x 4 locales", async () => {
+    let checked = 0;
+    for (const r of DRAW_REFUSALS) {
+      const server = r.server();
+      const wire = await overTheWire(server);
+      for (const locale of LOCALES) {
+        const expected = said(locale, keyOf(r.code), r.vars);
+        expectSaid(undoRefusalMessage(wire, msgIn(locale) as never, locale), locale, expected, server.message, `stage-list Undo ${r.code}`);
+        expectSaid(aiUndoErrorText(wire.status, wire.code, wire.extra, msgIn(locale) as never, locale), locale, expected, server.message, `AI console Undo ${r.code}`);
+        checked += 2;
+      }
+    }
+    expect(checked).toBe(16);
+  });
+});
+
+describe("B4 re-review N-3: a late add past the format's max says it in the late add's own sentence, in the reader's language", () => {
+  const msgIn = (locale: L) => (key: string, vars?: Record<string, string | number>) => t(DICTS[locale], key, vars);
+  // A league at its max takes one more: the field the add would make, never one the division holds (the add is rolled back).
+  const VARS = { max: LEAGUE_MAX, entrants: LEAGUE_MAX + 1 };
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+
+  it("the server's English is the sentence's own en, not the draw doors' 'This division has {entrants}' (false: nothing was added)", () => {
+    const err = formatMaxLateEntryRefusal(VARS.max, VARS.entrants);
+    expect(err).toMatchObject({ status: ROUND_ROBIN_REFUSALS.FORMAT_TOO_MANY_ENTRANTS.status, code: "FORMAT_TOO_MANY_ENTRANTS", extra: VARS });
+    expect(err.message).toBe(t(DICTS.en, FORMAT_MAX_LATE_ENTRY.key, VARS));
+    expect(err.message, "not the draw doors' sentence").not.toBe(roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", VARS).message);
+  });
+
+  it("lateEntryRefusalText (the entrants panel's add): the late-add sentence for the max, every other code the table's own, 4 locales", async () => {
+    let checked = 0;
+    const late = formatMaxLateEntryRefusal(VARS.max, VARS.entrants);
+    const lateWire = await overTheWire(late);
+    const other = DRAW_REFUSALS[1];
+    const otherWire = await overTheWire(other.server());
+    for (const locale of LOCALES) {
+      expectSaid(lateEntryRefusalText("FORMAT_TOO_MANY_ENTRANTS", lateWire.extra, msgIn(locale) as never, locale), locale, said(locale, FORMAT_MAX_LATE_ENTRY.key, VARS), late.message, "late add");
+      expectSaid(lateEntryRefusalText(other.code, otherWire.extra, msgIn(locale) as never, locale), locale, said(locale, keyOf(other.code), other.vars), other.server().message, `late add ${other.code}`);
+      checked += 2;
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the waiting strip's place tap, refused at the max: the row says the late-add sentence, 4 locales", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      cur.locale = locale;
+      net.calls.length = 0;
+      const server = formatMaxLateEntryRefusal(VARS.max, VARS.entrants);
+      net.next.push(server);
+      const island = renderIsland(TableWaitingStrip, {
+        stageId: "stage-1",
+        waiting: [{ entrantId: "e-late", stageId: "stage-1", name: "Late Joiner", paid: false }],
+        names: {},
+        registrationsHref: "/o/club/c/open/registration",
+        onPlaced: () => {},
+      } as never);
+      const tap = island.tree().find((e) => propsOf(e)["data-testid"] === "table-waiting-place")!;
+      (propsOf(tap).onClick as () => void)();
+      let row: ReactElement | undefined;
+      for (let i = 0; i < 20 && row === undefined; i++) {
+        await flush();
+        row = island.tree().find((e) => propsOf(e)["data-testid"] === "table-waiting-outcome");
+      }
+      // By membership, not `.at(-1)`: the board case's advisory `/schedule/validate` (debounced) can land late from an earlier test.
+      expect(net.calls.filter((c) => /\/late-entrants\/e-late\/place$/.test(c)), `premise ${locale}: the place tap was sent once`).toHaveLength(1);
+      // The row's sentence: its first line (the Withdraw / refund buttons follow it in the same box).
+      const line = row ? ((propsOf(row).children as unknown[]).flat().find((c) => (c as ReactElement | null)?.type === "p") as ReactElement | undefined) : undefined;
+      expectSaid(line ? textOf(line) : null, locale, said(locale, FORMAT_MAX_LATE_ENTRY.key, VARS), server.message, "waiting strip");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

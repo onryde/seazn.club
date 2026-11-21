@@ -48,8 +48,7 @@ import {
 } from "@/lib/swiss-finish-plan";
 import { lateEntryNotice, lateEntryNoticeText, luckyLoserNotice, reinstateReplyNotice, type LateEntryNoticeLine } from "@/lib/swiss-late-entry-notice";
 import { knockoutRefusalText } from "@/lib/knockout-refusals";
-import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
-import { undoRefusalText } from "@/lib/undo-refusals";
+import { isRoundRobinRefusalCode, lateEntryRefusalText } from "@/lib/roundrobin-refusals";
 import type { LateEntryResult } from "@/server/api-v1/schemas";
 import type { TableLatePools } from "@/server/usecases/table-desk";
 import { poolPickerShown, TableLatePoolSelect } from "@/components/v2/table-late-pool-select";
@@ -408,9 +407,10 @@ export function EntrantsPanel({
         return;
       }
       // W5 T10 (R12): a round-robin refusal — a pair's partner changed after play has started (RR_SUBSTITUTE_PARTNER_REFUSED) — said by
-      // its code in the organiser's language, the pointer to Withdraw included, never the server's English.
+      // its code in the organiser's language, the pointer to Withdraw included, never the server's English. B4 re-review N-3: a late
+      // add past the format's max says it in the late add's own sentence (`lateEntryRefusalText`).
       if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
-        setError(undoRefusalText(err.code, err.extra, msg, locale));
+        setError(lateEntryRefusalText(err.code, err.extra, msg, locale));
         return;
       }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English

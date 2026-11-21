@@ -11,7 +11,7 @@ import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { Tip } from "@/components/ui/tip";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 // Zero imports of its own, so a client component may hold it. The CODE is the
 // contract between a schedule-lock refusal and this panel; the SENTENCE is not.
 import { SCHEDULE_LOCKED_CODE } from "@/lib/schedule-lock";
@@ -106,6 +106,7 @@ export function HistoryPanel({
   viewerPlan: ViewerPlan;
 }) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   const plural = useMsgPlural();
   const router = useRouter();
   const confirmDialog = useConfirm();
@@ -214,7 +215,8 @@ export function HistoryPanel({
       } else if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
         // W5 T5 (X-CU-13): an Undo, Redo or Restore across a late player added to a started league or group
         // (RR_LATE_ENTRY_NOT_UNDOABLE), said off the code in the reader's language, its fields filled from the envelope.
-        setError(undoRefusalText(err.code, err.extra, msg));
+        // B4 re-review N-1: with the reader's locale, so the sentence's numbers group their way.
+        setError(undoRefusalText(err.code, err.extra, msg, locale));
       } else {
         // Deliberately NOT blanket-suppressed. Every refusal this client can
         // recognise now has its own sentence; what is left is the unanticipated

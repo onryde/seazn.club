@@ -2951,6 +2951,7 @@
   "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE": "Deze aanpassing is al ongedaan gemaakt.",
   "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS": "Dit format staat hoogstens {max} deelnemers toe. Deze divisie heeft er {entrants}.",
   "roundrobin.refusal.DRAW_TOO_LARGE": "Dit schema heeft {lines} wedstrijden. Eén start kan er hoogstens {budget} maken.",
+  "roundrobin.lateEntry.formatMax": "Dit format staat hoogstens {max} deelnemers toe. Met deze toevoeging aan de lopende stand worden het er {entrants}.",
   "knockout.addToBracket": "Toevoegen aan schema",
   "knockout.lateEntry.tookBye": "{name} speelt tegen {holder}, die een bye had.",
   "knockout.lateEntry.tookWithdrawnSlot": "{name} neemt de plek van {withdrawn} in tegen {opponent}.",
