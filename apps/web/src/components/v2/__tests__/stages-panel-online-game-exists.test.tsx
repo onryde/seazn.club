@@ -1,6 +1,6 @@
 // T16 (T19 carry) — the panel's Unpair and Rebuild CALL the game-exists
 // classifier: a refused write over a board an online game stands behind paints
-// OnlineGameExistsNotice linking to the arbiter panel, not the generic
+// OnlineGameExistsNotice linking to Match Day, not the generic
 // "unpair failed" line or the server's English. Drives the real island (the
 // hook harness): the rail's Unpair, and the roster-drift banner's Rebuild.
 // The refusal's real producer is online-game-exists-route.test.tsx's.
@@ -12,6 +12,7 @@ import { StageRail } from "@/components/v2/desk/stage-rail";
 import { OnlineGameExistsNotice } from "@/components/v2/online-game-exists-notice";
 import { ApiV1Error } from "@/lib/client-v1";
 import { ONLINE_GAME_EXISTS_CODE } from "@/lib/open-round";
+import { routes } from "@/lib/routes";
 
 const apiV1Mock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/client-v1", async (importOriginal) => ({
@@ -28,7 +29,7 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 }));
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-const ARBITER = "/o/org/c/comp/d/div/arbiter";
+const MATCH_DAY = routes.competitionMatchDay("org", "comp");
 const props = {
   divisionId: "d1",
   competitionId: "c1",
@@ -46,7 +47,7 @@ const props = {
   stages: [{ id: "s1", seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 }, progression: null, status: "active" }],
   fixtures: [],
   rosterDrift: { s1: { ghosts: [{ id: "e9", display_name: "Gone Gus" }], unplaced: [] } },
-  arbiterHref: ARBITER,
+  arbiterHref: MATCH_DAY,
 };
 
 const notices = (tree: ReactElement[]) => tree.filter((el) => el.type === OnlineGameExistsNotice);
@@ -81,13 +82,13 @@ async function pressRebuild() {
 }
 
 describe("StagesPanel — a write refused over an online game", () => {
-  it("Unpair: the notice, linking to the arbiter panel — and no generic red line", async () => {
+  it("Unpair: the notice, linking to Match Day — and no generic red line", async () => {
     refuseWith(ONLINE_GAME_EXISTS_CODE, "/unpair");
     const island = await pressUnpair();
     expect(apiV1Mock.mock.calls.some(([p]) => String(p).endsWith("/stages/s1/unpair"))).toBe(true);
     const found = notices(island.tree());
     expect(found).toHaveLength(1);
-    expect(propsOf(found[0]!).arbiterHref).toBe(ARBITER);
+    expect(propsOf(found[0]!).arbiterHref).toBe(MATCH_DAY);
     expect(redLines(island.tree())).toHaveLength(0);
   });
 

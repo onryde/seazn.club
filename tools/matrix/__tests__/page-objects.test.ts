@@ -1101,19 +1101,19 @@ describe("the console, the run sheet and the public page", () => {
   it("every link a run-sheet row renders goes to the fixture console, so the identity link is a true fallback for a Set-time row", () => {
     const row = src(`${V2}/desk/run-sheet-row.tsx`);
     // Online chess (Lichess external play) adds links that leave the console ON PURPOSE, and only on an online-play
-    // row: the camera / connection / off-Seazn chips open the arbiter panel through `chipLink` (whose own `href`
-    // param is the arbiter's), and the held chip leads to the same panel when the page offers one (`arbiterHref`) and
+    // row: the camera / connection / off-Seazn chips open Match Day on the board through `chipLink` (whose own `href`
+    // param is Match Day's; the prop kept the name `arbiterHref`), and the held chip leads to the same place when the page offers it and
     // to the organiser queue on this page when it does not. Split them off by their own shapes first — `chipLink`'s
     // body is not the row's, and its calls must all pass `arbiterHref` under `onlinePlay` — then hold every remaining
     // link to the console rule.
     const body = row.slice(row.indexOf("export function RunSheetRow("));
     expect(row.slice(row.indexOf("function chipLink("), row.indexOf("export function RunSheetRow(")), "chipLink renders its own href").toContain("<Link href={href}");
     const chips = [...body.matchAll(/\{onlinePlay[^\n]*&&\s*\(\s*chipLink\(\{\s*href: (\w+)/g)].map((m) => m[1]);
-    expect(chips, "every arbiter chip, gated on onlinePlay").toEqual(["arbiterHref", "arbiterHref", "arbiterHref"]);
+    expect(chips, "every Match Day chip, gated on onlinePlay").toEqual(["arbiterHref", "arbiterHref", "arbiterHref"]);
     expect(body.match(/chipLink\(/g)?.length, "no chipLink call outside an onlinePlay gate").toBe(chips.length);
     expect(row, "the queue chip needs an online-play hold").toContain("const onlineHeld = !held && (onlinePlay?.held ?? null) !== null;");
-    expect(row, "arbiterHref is the arbiter panel's address, optional: a page that does not offer the panel hands none").toContain("arbiterHref?: string;");
-    // The held chip's target: the arbiter panel on this board when the page offers it, else the board's card in the queue.
+    expect(row, "arbiterHref is Match Day's address (the prop kept its name), optional: a page that does not offer it hands none").toContain("arbiterHref?: string;");
+    // The held chip's target: Match Day on this board when the page offers it, else the board's card in the queue.
     const ONLINE_HELD = "arbiterHref ?? `#${queueRowAnchor(fixture.id)}`";
     const hrefs = jsxHrefExpressions(body);
     // Match Day B2's "Find a court" leaves the console too, ON PURPOSE: a ghost sibling of Set time that opens the Match Day page

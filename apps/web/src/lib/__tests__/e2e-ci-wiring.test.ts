@@ -2108,19 +2108,29 @@ describe("the online-chess fixture servers' wiring", () => {
     for (const [name, body] of files) expect(body, `${name} no longer names the flag`).not.toContain(K);
     expect(files.length, "files checked").toBe(3);
     const runbook = files[1]![1];
+    // T10 review M12: a line a shell or YAML reader ignores is not a recipe. The positive pairs read the CODE of the file: whole-line comments and
+    // trailing ` # ...` comments are dropped first, so `# ONLINE_CHESS_ALWAYS=1 \` left in a recipe cannot keep this test green.
+    const codeOf = (text: string) =>
+      text
+        .split("\n")
+        .filter((line) => !/^\s*#/.test(line))
+        .map((line) => line.replace(/\s#.*$/, ""))
+        .join("\n");
+    expect(codeOf("# ONLINE_CHESS_ALWAYS=1 \\\nA=1 # ONLINE_CHESS_ALWAYS=1 \\\n"), "premise: the filter drops commented lines").not.toContain("ONLINE_CHESS_ALWAYS");
+    const recipe = codeOf(runbook);
     // Positive pairs, so an absent flag is not an absent recipe: the recipe's own vars are still there.
-    expect(runbook, "the recipe's ONLINE_CHESS_ALWAYS").toMatch(/^ONLINE_CHESS_ALWAYS=1 \\$/m);
-    expect(runbook, "the recipe's COURT_MIN_APP_VERSION").toMatch(/^COURT_MIN_APP_VERSION=\d+\.\d+\.\d+-\d+ \\$/m);
-    expect(runbook, "the var table names ONLINE_CHESS_ALWAYS").toContain("| `ONLINE_CHESS_ALWAYS=1` |");
-    expect(runbook, "the var table names COURT_MIN_APP_VERSION").toContain("| `COURT_MIN_APP_VERSION=");
+    expect(recipe, "the recipe's ONLINE_CHESS_ALWAYS").toMatch(/^ONLINE_CHESS_ALWAYS=1 \\$/m);
+    expect(recipe, "the recipe's COURT_MIN_APP_VERSION").toMatch(/^COURT_MIN_APP_VERSION=\d+\.\d+\.\d+-\d+ \\$/m);
+    expect(runbook, "the var table names ONLINE_CHESS_ALWAYS").toMatch(/^\| `ONLINE_CHESS_ALWAYS=1` \|/m);
+    expect(runbook, "the var table names COURT_MIN_APP_VERSION").toMatch(/^\| `COURT_MIN_APP_VERSION=/m);
     // e2e.yml: the three legs that start a server for the online specs all set the override (e2e-parallel also the build floor).
     let on = 0;
     for (const [name, next] of [["e2e-parallel", "e2e-serial"], ["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
-      expect(job(name, next), `${name} starts its server with ONLINE_CHESS_ALWAYS`).toMatch(/ONLINE_CHESS_ALWAYS: "1"/);
+      expect(job(name, next), `${name} starts its server with ONLINE_CHESS_ALWAYS`).toMatch(/^\s+ONLINE_CHESS_ALWAYS: "1"\s*$/m);
       on++;
     }
     expect(on, "jobs that carry it").toBe(3);
-    expect(job("e2e-parallel", "e2e-serial"), "e2e-parallel carries the court-stream build floor").toMatch(/COURT_MIN_APP_VERSION: "\d+\.\d+\.\d+-\d+"/);
+    expect(job("e2e-parallel", "e2e-serial"), "e2e-parallel carries the court-stream build floor").toMatch(/^\s+COURT_MIN_APP_VERSION: "\d+\.\d+\.\d+-\d+"\s*$/m);
   });
 
   // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray

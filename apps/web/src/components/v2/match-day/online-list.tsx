@@ -4,7 +4,8 @@
 // division's first row - a "Needs a decision" sub-group of the held or flagged boards no round lists (earlier rounds, or a cancelled board
 // of the listed round that still has a report), each with its round chip; the heading says "earlier rounds" only when that is true. The
 // rounds are in `orderOnlineRounds` order (check-in or in progress, then paired, then over). Nothing at all - no heading, no card - when
-// the day has no online round, so a day of courts is exactly the page it was.
+// the day has no online round, so a day of courts is exactly the page it was. A round the viewer plays on says so in one line after its
+// boards (spec §6.4: the board itself stays unlisted).
 import { useId } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
@@ -59,6 +60,14 @@ export function OnlineList({
                 onOpen={onOpenBoard}
               />
             )),
+          // Spec §6.4: an organiser who plays on a board does not see it listed - and ONE line says so, where they would look for it.
+          ...(r.own_boards > 0
+            ? [
+                <li key={`${r.key}:own`} data-testid="md-own-hidden" className="px-4 py-2 text-xs leading-[1.45] text-slate-600 [overflow-wrap:anywhere]">
+                  {t(dict, "matchDay.online.ownHidden")}
+                </li>,
+              ]
+            : []),
           ...(r.needs_decision.length === 0
             ? []
             : [

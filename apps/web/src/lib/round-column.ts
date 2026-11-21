@@ -279,6 +279,7 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "matchDay.cameras.viewBoard",
   "matchDay.cameras.viewCameras",
   "matchDay.focus.openMatch",
+  "matchDay.online.ownHidden",
   "runsheet.round.batchCloses",
   "runsheet.round.batchOpens",
   "runsheet.round.batchesLabel",

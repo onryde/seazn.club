@@ -495,3 +495,64 @@ describe("the words as data (online-copy.ts)", () => {
     expect(plural(dict, "matchDay.header.boards", 1, "en")).toBe("1 board playing");
   });
 });
+
+// Spec §6.4, row "An organizer who plays on a board": "that board is not listed; one line says so". The omission is the loader's own rule
+// (`own_boards` counts the boards it left out); the LINE was the half the port from the Arbiter Panel dropped (review T10 I-1).
+describe("an organiser who plays on a board: the board is not listed, and ONE line says so (spec §6.4)", () => {
+  const KEY = "matchDay.online.ownHidden";
+  const lineCount = (h: string) => h.split('data-testid="md-own-hidden"').length - 1;
+
+  it("EMPTY CASE FIRST: a night where nobody plays on a listed board prints no such line, in any locale", () => {
+    let looked = 0;
+    for (const locale of Object.keys(DICTS) as Locale[]) {
+      const h = list(night().rounds, { d: DICTS[locale], locale });
+      expect(lineCount(h), `${locale}: no own board, no line`).toBe(0);
+      expect(text(h), `${locale}: and none of the words either`).not.toContain(t(DICTS[locale], KEY));
+      looked++;
+    }
+    expect(looked, "anti-vacuity: four locales looked at").toBe(4);
+  });
+
+  it("a round with an own board says so once, in the reader's language, under that round's boards and before the next row", () => {
+    let looked = 0;
+    for (const locale of Object.keys(DICTS) as Locale[]) {
+      const d = DICTS[locale];
+      const n = night();
+      const h = list([n.paired, n.over, { ...n.inProgress, own_boards: 2 }], { d, locale });
+      expect(lineCount(h), `${locale}: exactly one line`).toBe(1);
+      const words = t(d, KEY);
+      expect(words, `${locale}: the key is in the dictionary and says something`).not.toBe(KEY);
+      expect(words.length, `${locale}: words, not a stub`).toBeGreaterThan(20);
+      // The markup escapes an apostrophe (French "s'en charge"), so the words are compared as the server paints them.
+      expect(text(h), `${locale}: the line is the dictionary's own words`).toContain(words.replaceAll("'", "&#x27;"));
+      // Where the organiser looks for the missing board: right after the boards of THAT round (the last is board 5), before the paired row.
+      const at = h.indexOf('data-testid="md-own-hidden"');
+      const lastBoard = h.indexOf('data-fixture-id="n-5"');
+      const nextRow = h.indexOf('data-key="stage-b:2"');
+      expect(lastBoard, "premise: the round's last board is listed").toBeGreaterThan(-1);
+      expect(nextRow, "premise: the paired round's row is listed").toBeGreaterThan(-1);
+      expect(at, `${locale}: after the round's boards`).toBeGreaterThan(lastBoard);
+      expect(at, `${locale}: before the next round's row`).toBeLessThan(nextRow);
+      // The board itself stays unlisted: the rows are exactly the ones the night has.
+      expect(rowsOf(h, "md-board-row"), `${locale}: no row stands in for the hidden board`).toHaveLength(7);
+      looked++;
+    }
+    expect(looked, "anti-vacuity: four locales looked at").toBe(4);
+  });
+
+  it("a round with no board on screen (every board the viewer's own) still says so - the line is what the empty round has instead of rows", () => {
+    const own = round("stage-1:3", "playing", arbiterRound([], { ownBoards: 2 }), { own_boards: 2 });
+    const h = list([own]);
+    expect(lineCount(h)).toBe(1);
+    expect(text(h)).toContain(t(dict, KEY));
+    expect(rowsOf(h, "md-board-row")).toHaveLength(0);
+  });
+
+  it("each round that has an own board carries its own line, and a round that has none carries none", () => {
+    const a = { ...playingRound("stage-1:3"), own_boards: 1 };
+    const b = playingRound("stage-2:1", { division_id: "div-b", stage_id: "stage-2" });
+    const c = { ...playingRound("stage-3:2", { division_id: "div-c", stage_id: "stage-3" }), own_boards: 3 };
+    const h = list([a, b, c]);
+    expect(lineCount(h), "two rounds with an own board, two lines").toBe(2);
+  });
+});

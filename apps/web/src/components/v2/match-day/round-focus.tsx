@@ -1021,6 +1021,12 @@ export function RoundFocus(p: RoundFocusProps) {
           {lines.sub !== null && <span className="ml-2 font-medium text-slate-600">{lines.sub}</span>}
         </p>
       )}
+      {/* Spec §6.4: the boards the viewer plays on are not shown here, and one line says so (the list's line, on the round's own panel). */}
+      {round.own_boards > 0 && (
+        <p data-testid="md-own-hidden" className="m-0 min-w-0 text-[13px] leading-[1.45] text-slate-600 [overflow-wrap:anywhere]">
+          {msg("matchDay.online.ownHidden")}
+        </p>
+      )}
       {body}
     </OnlineFocusFrame>
   );

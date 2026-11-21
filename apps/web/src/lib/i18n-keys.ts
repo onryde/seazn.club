@@ -4404,6 +4404,7 @@ export type DictionaryKey =
   | "matchDay.online.mark.off"
   | "matchDay.online.needsDecision"
   | "matchDay.online.needsDecisionPlain"
+  | "matchDay.online.ownHidden"
   | "matchDay.online.round"
   | "matchDay.online.roundN"
   | "matchDay.online.roundStage"

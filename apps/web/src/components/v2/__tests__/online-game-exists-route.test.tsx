@@ -24,6 +24,8 @@ import { ONLINE_GAME_EXISTS_KEY, isOnlineGameExists } from "@/lib/open-round";
 import { POST as unpairRoute } from "@/app/api/v1/stages/[id]/unpair/route";
 import { seedOnlineSwiss, type SeedOnlineSwissResult } from "@/server/usecases/__tests__/_external-play-seed";
 import { OnlineGameExistsNotice } from "../online-game-exists-notice";
+import { routes } from "@/lib/routes";
+const MATCH_DAY = routes.competitionMatchDay("club", "cup");
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -48,7 +50,7 @@ async function pressUnpair(stageId: string): Promise<{ ok: true } | { ok: false;
     return { ok: true };
   } catch (err) {
     const gameExists = isOnlineGameExists(err);
-    return { ok: false, gameExists, html: gameExists ? renderToStaticMarkup(<OnlineGameExistsNotice arbiterHref="/arbiter" />) : "" };
+    return { ok: false, gameExists, html: gameExists ? renderToStaticMarkup(<OnlineGameExistsNotice arbiterHref={MATCH_DAY} />) : "" };
   }
 }
 
@@ -64,7 +66,7 @@ async function gameOn(s: SeedOnlineSwissResult) {
 }
 
 describe.skipIf(!HAS_DB)("Unpair ← a board with an online game", () => {
-  it("the refusal reaches the organiser as the notice, linking to the arbiter panel", async () => {
+  it("the refusal reaches the organiser as the notice, linking to Match Day", async () => {
     const s = await seedOnlineSwiss({ players: 4, pairing: "fold" });
     authState.userId = s.ownerUserId;
     await gameOn(s);
@@ -73,7 +75,7 @@ describe.skipIf(!HAS_DB)("Unpair ← a board with an online game", () => {
     if (out.ok) return;
     expect(out.gameExists).toBe(true);
     expect(out.html).toContain(ONLINE_GAME_EXISTS_KEY);
-    expect(out.html).toContain('href="/arbiter"');
+    expect(out.html).toContain(`href="${MATCH_DAY}"`);
   });
 
   it("positive pair: the same round with no game unpairs", async () => {
