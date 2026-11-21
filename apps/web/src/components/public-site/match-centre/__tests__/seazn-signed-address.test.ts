@@ -88,6 +88,28 @@ describe("withToken: the request under the newest token", () => {
     expect(checked, "anti-vacuity").toBe(untouched.length);
   });
 
+  it("LOOK-ALIKE hosts are another host: a suffix, a userinfo trick, a port and credentials come back unchanged and never get the token", () => {
+    const bare = HOST.replace("https://", "");
+    const lookAlikes = [
+      `https://${bare}.evil.example/${OLD}/manifest/video.m3u8`, // the real host as a prefix of another
+      `https://${bare}.evil/${OLD}/video/seg_1.ts`,
+      `https://${bare}@evil.example/${OLD}/manifest/video.m3u8`, // userinfo: the browser would connect to evil.example
+      `https://${bare}:pw@evil.example/${OLD}/manifest/video.m3u8`,
+      `${HOST}:8443/${OLD}/manifest/video.m3u8`, // the real host on another port is another origin
+      `https://user:pw@${bare}/${OLD}/manifest/video.m3u8`, // credentials on the real host are not the held origin either
+      `https://x${bare}/${OLD}/manifest/video.m3u8`, // and the real host as a suffix
+    ];
+    let checked = 0;
+    for (const url of lookAlikes) {
+      const out = withToken(url, held);
+      expect(out, url).toBe(url);
+      expect(out, `${url}: the new token never reaches another host`).not.toContain(NEW);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every look-alike checked").toBe(7);
+    expect(withToken(`${HOST}/${OLD}/manifest/video.m3u8`, held), "premise: the real host IS rewritten").toBe(`${HOST}/${NEW}/manifest/video.m3u8`);
+  });
+
   it("round trip: what it returns is itself a signed address under the new token with the same tail", () => {
     const url = `${HOST}/${OLD}/manifest/stream_1/video.m3u8?_HLS_msn=3`;
     const out = parseSignedAddress(withToken(url, held));
