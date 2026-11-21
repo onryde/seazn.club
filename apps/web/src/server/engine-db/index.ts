@@ -13,6 +13,7 @@ export { hasFrozenCfg, resolveFixtureCfg } from "./fixture-cfg";
 export { rebuildState, verifyStateConsistency, type ConsistencyReport } from "./rebuild";
 export {
   recomputeStandings,
+  adjustmentTarget,
   completeStageIfReady,
   appendDivisionEvent,
   type CompleteResult,

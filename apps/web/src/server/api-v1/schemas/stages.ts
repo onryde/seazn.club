@@ -737,3 +737,43 @@ export const FromTemplateResult = z.object({
   templateVersion: z.number().int(),
 });
 export type FromTemplateResult = z.infer<typeof FromTemplateResult>;
+
+// W5 app PR B Task 7 (C5; X-ADJ-1..4; R24 pick 15 A): "Adjust points". `delta` is in the stage's RANKING unit (the engine's
+// `PointsAdjustment.delta`, RB5-T15): table points in the points rule's stored unit (half-points on a "half" rule), or matches
+// won where the cascade ranks wins first - `unit` on every adjustment says which. Zero, a non-finite number, a missing reason or
+// an entrant the table does not hold are refused by the engine's own reasons, mapped by name (RR_ADJUST_*).
+export const AdjustPointsInput = z.object({
+  entrant_id: z.string().uuid(),
+  delta: z.number(),
+  reason: z.string().max(200),
+});
+export type AdjustPointsInput = z.infer<typeof AdjustPointsInput>;
+
+export const PointsAdjustmentWire = z.object({
+  /** The ledger row's seq: what the Undo names. */
+  seq: z.number().int(),
+  stage_id: z.string(),
+  entrant_id: z.string(),
+  delta: z.number(),
+  reason: z.string(),
+  unit: z.enum(["points", "wins"]),
+  points_unit: z.enum(["whole", "half"]),
+  /** The ledger row's date (ISO). */
+  at: z.string(),
+  /** C8: the entrant is no member of the table now (unseated), so the fold does not hold it; it comes back when they are. */
+  held: z.boolean(),
+});
+export type PointsAdjustmentWire = z.infer<typeof PointsAdjustmentWire>;
+
+/** One entrant an adjustment can be made for now (C8: a member of the table), with its pool's key on a pooled stage. */
+export const PointsAdjustmentMember = z.object({ entrant_id: z.string(), pool: z.string().nullable() });
+export const PointsAdjustmentList = z.object({
+  /** What `delta` moves on this table (engine `adjustmentUnitOf`) and its points rule's stored unit: the desk's field label. */
+  unit: z.enum(["points", "wins"]),
+  points_unit: z.enum(["whole", "half"]),
+  members: z.array(PointsAdjustmentMember),
+  adjustments: z.array(PointsAdjustmentWire),
+});
+export type PointsAdjustmentList = z.infer<typeof PointsAdjustmentList>;
+export const PointsAdjustmentResult = z.object({ adjustment: PointsAdjustmentWire });
+export const PointsAdjustmentUndone = z.object({ undone: z.number().int(), voided_by: z.number().int() });

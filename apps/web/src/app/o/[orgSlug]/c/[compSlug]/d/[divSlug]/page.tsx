@@ -134,6 +134,8 @@ import { BestNthBasisNote } from "@/components/public-site/bestnth-basis-note";
 import { loadBestNthBases } from "@/server/public-site/bestnth-basis";
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
+import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
+import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
@@ -279,6 +281,8 @@ export default async function DivisionPage({
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // W5 T8 (RB5-W7): the league/group departure notes under each table.
   const tableWithdrawals = await loadTableWithdrawals(division.id);
+  // W5 app PR B T7 (X-ADJ-4): the points adjustments under each table, with their reason and date.
+  const pointsAdjustments = await loadPointsAdjustments(division.id);
   // W5 app PR B T4 (X-UP-3): the unequal-pool basis under each group stage whose best-Nth seats were compared across pools.
   const bestNthBases = await loadBestNthBases(division.id);
   // Entrants who have left the field. A withdrawal is a STATUS FLIP, not a
@@ -1246,6 +1250,7 @@ export default async function DivisionPage({
                         rules={stageOrder(stage.id)}
                         swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
                         withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, poolId)}
+                        adjustmentNotes={adjustmentNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), pointsAdjustments, entrantNames)}
                         stageKind={stage.kind}
                         locale={locale}
                         tz={scheduleSettings.tz}

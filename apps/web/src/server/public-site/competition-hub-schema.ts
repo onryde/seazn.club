@@ -317,6 +317,8 @@ export const TableView = z.object({
    *  applied ("P1 (withdrawn):" + "left after 2 of 5, ..."), in the org's language. Optional for the same cached-document
    *  reason as `swissRound`: absent reads as "no note". Empty for a table nobody left. */
   withdrawalNotes: z.array(z.object({ entrantId: z.string(), lead: z.string(), body: z.string() })).optional(),
+  /** W5 app PR B T7 (X-ADJ-4): THIS table's points adjustments, resolved in the org's language (`adjustmentNoteText`). */
+  adjustmentNotes: z.array(z.object({ key: z.string(), entrantId: z.string(), lead: z.string(), body: z.string() })).optional(),
   updatedAt: z.string(),
   fullHref: z.string(),
 });

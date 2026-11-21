@@ -39,7 +39,8 @@ import type { QualRowT } from "@/server/public-site/competition-hub-schema";
 import { bracketPlaceLabels, isBracketPlacement } from "@/lib/bracket-places";
 import { SHARED_PLACE_MSG_KEY } from "@/server/public-site/standings-view";
 import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
-import { WithdrawalFootnotes } from "./withdrawal-footnotes";
+import { TableFootnotes } from "./table-footnotes";
+import { adjustmentNoteText, type AdjustmentNote } from "@/lib/points-adjustment-note";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { StandingsPopover } from "./standings-popover";
 import { StandingsRowMarkers } from "./standings-row-markers";
@@ -100,6 +101,9 @@ interface Props {
   /** W5 T8 (RB5-W7; owner R24 pick 11 A): THIS table's departure notes (`withdrawalNotesFor`, its stage and its rows), one line
    *  each under the table naming the rule applied. Absent or empty: nothing renders. */
   withdrawalNotes?: readonly WithdrawalNote[];
+  /** W5 app PR B T7 (X-ADJ-4; R24 pick 15 A): THIS table's points adjustments (`adjustmentNotesFor`, its stage and its rows), one
+   *  line each under the departure notes, with the reason and the date. Absent or empty: nothing renders. */
+  adjustmentNotes?: readonly AdjustmentNote[];
 }
 
 export function StandingsTable({
@@ -118,6 +122,7 @@ export function StandingsTable({
   locale = "en",
   tz = "UTC",
   withdrawalNotes,
+  adjustmentNotes,
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
   const layout = tableLayoutFor(rules, stageKind);
@@ -425,7 +430,8 @@ export function StandingsTable({
   // W5 T8: the departure notes sit under the box (and under the legend), outside its sideways scroll, so a long name wraps
   // to the page's width rather than the table's.
   const notes = (withdrawalNotes ?? []).map((n) => withdrawalNoteText(n, msg));
-  if (!qualification && notes.length === 0) return region;
+  const adjustments = (adjustmentNotes ?? []).map((n) => adjustmentNoteText(n, msg, dateOf, locale));
+  if (!qualification && notes.length === 0 && adjustments.length === 0) return region;
   // The legend sits under the box, outside its sideways scroll, so it wraps
   // to the page's width rather than the table's.
   return (
@@ -434,7 +440,7 @@ export function StandingsTable({
       {/* One slot for both, as the hub's view: a further sibling would renumber every `useId` in the region above. */}
       <>
         {qualification ? <QualLegend legend={qualification.table.legend} /> : null}
-        <WithdrawalFootnotes items={notes} />
+        <TableFootnotes withdrawals={notes} adjustments={adjustments} />
       </>
     </div>
   );

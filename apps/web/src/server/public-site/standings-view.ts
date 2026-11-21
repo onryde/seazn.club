@@ -51,6 +51,7 @@ import type { RowMarkerT, TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 import type { SwissRowFacts } from "./swiss-row-facts";
 import { withdrawalNoteText, type WithdrawalNote } from "@/lib/table-withdrawal-note";
+import { adjustmentNoteText, type AdjustmentNote } from "@/lib/points-adjustment-note";
 import { DEPARTED_STATUS_CHIPS, type DepartedStatus } from "@/lib/departed-status-chips";
 
 /** The columns a phone shows without asking: played, won, lost, points.
@@ -614,6 +615,10 @@ export interface TableViewInput {
   /** W5 T8 (RB5-W7): THIS table's departure notes (`withdrawalNotesFor`), resolved here in the org's language like every
    *  other string the builder emits. Absent or empty: the view carries none. */
   withdrawalNotes?: readonly WithdrawalNote[];
+  /** W5 app PR B T7 (X-ADJ-4): THIS table's points adjustments (`adjustmentNotesFor`), resolved here in the org's language, dated
+   *  by `dateOf` and pluralised in `locale` (absent: en). Absent or empty: the view carries none. */
+  adjustmentNotes?: readonly AdjustmentNote[];
+  locale?: string;
   /** W5 T20 (ST-G20, X-SF-1): EVERY entrant's own `status` (`entrant_id` -> status), as `StandingsTable`'s `entrantStatuses` is - not a
    *  pre-filtered list of the departed. Which statuses count as left is decided once, by `DEPARTED_STATUS_CHIPS`; a departed row's
    *  view carries `status` and the client prints its chip. Absent or all-competing: no row carries the key. */
@@ -721,6 +726,9 @@ export function buildTableView(input: TableViewInput): TableViewT {
     // Only a table someone left carries the key (absent = no note, as a cached document reads it).
     ...((input.withdrawalNotes ?? []).length > 0
       ? { withdrawalNotes: input.withdrawalNotes!.map((n) => withdrawalNoteText(n, input.msg)) }
+      : {}),
+    ...((input.adjustmentNotes ?? []).length > 0
+      ? { adjustmentNotes: input.adjustmentNotes!.map((n) => adjustmentNoteText(n, input.msg, input.dateOf ?? (() => null), input.locale ?? "en")) }
       : {}),
   };
 }

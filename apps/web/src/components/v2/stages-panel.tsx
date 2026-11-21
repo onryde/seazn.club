@@ -29,6 +29,8 @@ import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode, swissRefusalKey } from "@/lib/swiss-refusals";
 import { isUndoRefusalCode, undoRefusalText } from "@/lib/undo-refusals";
 import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { pointsAdjustmentOffered } from "@/lib/points-adjustment-offer";
+import { PointsAdjustmentDialog, type AdjustmentsRead } from "@/components/v2/points-adjustment-dialog";
 import { completedSeedingFailedText } from "@/lib/completed-seeding-failed";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
 import { knockoutUpdateDrawOffered } from "@/lib/bracket-reconcile";
@@ -705,6 +707,8 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
   const locale = useLocaleOrDefault();
   const confirmDialog = useConfirm();
   const router = useRouter();
+  // W5 app PR B Task 7 (C5): the stage whose "Adjust points" dialog is open, from its More menu. One dialog per panel.
+  const [adjusting, setAdjusting] = useState<{ id: string; name: string } | null>(null);
   // P9 pass 4d: id -> venue-qualified display name, reusing the SAME
   // `resolveCourtNames`/`buildCourtDirectory` rule the board's own
   // `courtNamesById` applies (schedule-board.tsx) — never a second
@@ -1845,6 +1849,9 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
             }
             swissRounds={swissRoundsRail}
             updateDraw={updateDraw}
+            onAdjustPoints={
+              pointsAdjustmentOffered(stage, divisionStatus) ? () => setAdjusting({ id: stage.id, name: stage.name }) : undefined
+            }
             toolsSlot={
               settingsTools.length > 0 ? (
                 <div data-testid="stage-sheet-tools" className="flex flex-col gap-2 md:hidden">
@@ -2455,8 +2462,42 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
           onPaywall={setPaywallFeature}
         />
       )}
+      {adjusting !== null && (
+        <PointsAdjustmentDialog
+          msg={msg}
+          locale={locale}
+          stageName={adjusting.name}
+          names={entrantNames}
+          load={() => apiV1<AdjustmentsRead>(`/api/v1/stages/${adjusting.id}/adjustments`)}
+          apply={async (input) => {
+            try {
+              await apiV1(`/api/v1/stages/${adjusting.id}/adjustments`, { method: "POST", json: input });
+              router.refresh();
+              return { ok: true };
+            } catch (err) {
+              return { ok: false, message: adjustRefusalText(err, msg) };
+            }
+          }}
+          undo={async (seq) => {
+            try {
+              await apiV1(`/api/v1/stages/${adjusting.id}/adjustments/${seq}`, { method: "DELETE" });
+              router.refresh();
+              return { ok: true };
+            } catch (err) {
+              return { ok: false, message: adjustRefusalText(err, msg) };
+            }
+          }}
+          onClose={() => setAdjusting(null)}
+        />
+      )}
     </div>
   );
+}
+
+/** W5 app PR B Task 7: an Adjust points refusal in the reader's language (the round-robin refusal table), else the server's words. */
+function adjustRefusalText(err: unknown, msg: (key: MessageKey, vars?: Record<string, string | number>) => string): string {
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg);
+  return err instanceof Error ? err.message : String(err);
 }
 
 // Follow-up stage (e.g. finals after a league). Qualification resolves from

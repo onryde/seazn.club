@@ -15,6 +15,8 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import { loadRrLateJoins, rowFactsFor } from "@/server/public-site/table-row-facts";
 import { loadTableWithdrawals } from "@/server/public-site/table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
+import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
+import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { Schedule } from "@/components/public-site/schedule";
 import { publicScheduleCopy, publicSitsOutLines } from "@/server/public-site/schedule-copy";
 import { Bracket } from "@/components/public-site/bracket";
@@ -93,6 +95,8 @@ export default async function EmbedWidgetPage({ params }: Props) {
   const lateJoins = await loadRrLateJoins(division.id, fixtures);
   // W5 T8 (RB5-W7): the league/group departure notes under each table.
   const tableWithdrawals = await loadTableWithdrawals(division.id);
+  // W5 app PR B T7 (X-ADJ-4): the points adjustments under each table, with their reason and date.
+  const pointsAdjustments = await loadPointsAdjustments(division.id);
   // PROMPT-60: the entrant's own badge_url wins over the team logo.
   const entrantLogos = Object.fromEntries(
     entrants.map((e) => [
@@ -254,6 +258,7 @@ export default async function EmbedWidgetPage({ params }: Props) {
               rules={stage.table_rules}
               swissFacts={rowFactsFor(stage, fixtures, snap.rows as StandingsRow[], lateJoins, entrantStatuses)}
               withdrawalNotes={withdrawalNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), tableWithdrawals, entrantStatuses, entrantNames, snap.pool_id ?? null)}
+              adjustmentNotes={adjustmentNotesFor(stage.id, (snap.rows as StandingsRow[]).map((r) => r.entrantId), pointsAdjustments, entrantNames)}
               stageKind={stage.kind}
               locale={orgLocale}
               tz={tz}

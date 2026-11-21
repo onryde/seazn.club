@@ -43,22 +43,32 @@ const PLAN: Record<string, { status: 409 | 422; en: string }> = {
   // W5 stress fix F7: more pools than the pool-key alphabet holds (A-Z), at the create door and at Start. Typed here, from the
   // fix brief's "a named refusal with copy".
   RR_TOO_MANY_POOLS: { status: 422, en: "A group stage can have at most {max} pools, one for each letter from A to Z." },
+  // W5 app PR B Task 7 (C5; X-ADJ-3, X-ADJ-4): Adjust points - the stage gates, the engine's four reasons by name, an Undo repeated.
+  // Typed here from the task's copy.
+  RR_ADJUST_NOT_TABLE: { status: 422, en: "Points can only be adjusted on a league, group or Swiss table." },
+  RR_ADJUST_NOT_STARTED: { status: 422, en: "Points can be adjusted once the stage has started." },
+  RR_ADJUST_STAGE_COMPLETE: { status: 422, en: "This table has finished, so its points can't be adjusted." },
+  RR_ADJUST_ZERO: { status: 422, en: "An adjustment of 0 changes nothing. Enter the points to add or remove." },
+  RR_ADJUST_REASON_MISSING: { status: 422, en: "Give a reason. It's shown under the table for everyone." },
+  RR_ADJUST_NOT_FINITE: { status: 422, en: "Enter a number of points to add or remove." },
+  RR_ADJUST_UNKNOWN_ENTRANT: { status: 422, en: "That entrant isn't on this table." },
+  RR_ADJUST_ALREADY_UNDONE: { status: 409, en: "This adjustment has already been undone." },
 };
 
 const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;
 const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
 describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
-  it("holds exactly the plan's twelve codes plus the reviews' four and the stress fix's one, each with the plan's status and sentence", () => {
+  it("holds exactly the plan's twelve codes plus the reviews' four, the stress fix's one and Task 7's eight, each with the plan's status and sentence", () => {
     expect(Object.keys(ROUND_ROBIN_REFUSALS).sort()).toEqual(Object.keys(PLAN).sort());
-    expect(Object.keys(PLAN).length).toBe(17);
+    expect(Object.keys(PLAN).length).toBe(25);
     let checked = 0;
     for (const [code, want] of Object.entries(PLAN)) {
       const row = ROUND_ROBIN_REFUSALS[code as RoundRobinRefusalCode];
       expect({ status: row.status, en: row.en }, code).toEqual(want);
       checked++;
     }
-    expect(checked).toBe(17);
+    expect(checked).toBe(25);
   });
 
   it("every code has a key present, translated, in all 4 dictionaries, and en says what the server says", () => {
@@ -77,7 +87,7 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
       expect(en[row.key as keyof typeof en], `${code}: en/ui.json says what the server says`).toBe(row.en);
     }
     // Anti-vacuity: every (code, locale) pair. Zero checked is a failure, not a pass.
-    expect(checked, "(code, locale) pairs checked").toBe(17 * 4);
+    expect(checked, "(code, locale) pairs checked").toBe(25 * 4);
   });
 
   it("isRoundRobinRefusalCode: true for every code, false for any other wire code or a prototype name", () => {
@@ -86,7 +96,7 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
       expect(isRoundRobinRefusalCode(code), code).toBe(true);
       yes++;
     }
-    expect(yes).toBe(17);
+    expect(yes).toBe(25);
     const others = ["KO_GENERATE_AFTER_START", "SWISS_BYE_NOT_PLACEABLE", "rr_generate_after_start", "", "toString", "__proto__", "constructor", undefined, null, 409];
     for (const other of others) expect(isRoundRobinRefusalCode(other), String(other)).toBe(false);
     expect(others.length).toBe(10);

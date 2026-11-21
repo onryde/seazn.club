@@ -17,9 +17,17 @@ import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
 import { departedRankedLast } from "@/lib/table-withdrawal";
 import { TABLE_WITHDRAWAL_ROW, TABLE_WITHDRAWAL_VOIDED_ROW, activeTableWithdrawals } from "@/lib/table-withdrawal-note";
+import {
+  POINTS_ADJUSTMENT_ROW,
+  POINTS_ADJUSTMENT_VOIDED_ROW,
+  activePointsAdjustments,
+  type AdjustmentLedgerRow,
+  type PointsAdjustmentRecord,
+} from "@/lib/points-adjustment-note";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
   SETTLED_FIXTURE_STATUSES,
+  adjustmentUnitOf,
   decidedInFor,
   payout,
   setsToWinOf,
@@ -38,6 +46,7 @@ import {
   type DivisionEvent,
   type FixtureResult,
   type MembersKey,
+  type PointsAdjustment,
   type PointsRule,
   type StandingsRow,
   type StoredLotsDraw,
@@ -373,6 +382,25 @@ interface StageInputs {
    *  (`stageSeatingOf`) - handed to the fold as `TableStage.pools` when `seated`, so a pool's table lists its members from the
    *  first fold. `unpooled` and `held` (a stored seating the engine would refuse, C11) keep engine 9's membership. */
   seating: StageSeating;
+  /** W5 app PR B Task 7 (X-ADJ-1, X-ADJ-4; C5, C8): THIS stage's active `points_adjustment` rows, in ledger order
+   *  (`activePointsAdjustments`) - every one, held or not. `toTableStage` passes the ones the fold can hold
+   *  (`foldedAdjustments`). */
+  adjustments: readonly PointsAdjustmentRecord[];
+}
+
+/** W5 app PR B Task 7 (C8; engine `adjustment_unseated`, `adjustment_unknown_entrant`): the adjustments the fold is handed - each
+ *  one whose entrant is a member of the stage's table: SEATED in a pool when the stage is seated, else declared (holds a seat on
+ *  one of its lines). Any other is HELD: still listed (the history, the desk's list), never passed, because the engine refuses
+ *  the WHOLE fold for one such row - and one stale row must never block every score write of the stage. A held row comes back
+ *  the moment its entrant is a member again. */
+export function foldedAdjustments(
+  inputs: Pick<StageInputs, "adjustments" | "entrants" | "seating">,
+): PointsAdjustment[] {
+  const seated = inputs.seating.kind === "seated" ? inputs.seating.pools : undefined;
+  const declared = new Set(inputs.entrants);
+  return inputs.adjustments
+    .filter((a) => (seated === undefined ? declared.has(a.entrant_id) : seated.has(a.entrant_id)))
+    .map((a) => ({ entrantId: a.entrant_id, delta: a.delta, reason: a.reason, at: a.at }));
 }
 
 // Load a stage's fixtures and turn each decided fixture into a StandingsDelta
@@ -391,6 +419,12 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     from divisions where id = ${stage.division_id}
   `;
   if (!division) throw new EngineError("CONFIG_INVALID", "division not found", { stageId });
+
+  // W5 app PR B Task 7: the stage's points adjustments - the division's adjustment rows and their voids, folded to the active ones.
+  const adjustmentRows = await tx<AdjustmentLedgerRow[]>`
+    select seq::int as seq, type, payload, to_json(created_at) #>> '{}' as at from division_events
+     where division_id = ${stage.division_id} and type in (${POINTS_ADJUSTMENT_ROW}, ${POINTS_ADJUSTMENT_VOIDED_ROW})`;
+  const adjustments = activePointsAdjustments(adjustmentRows).filter((a) => a.stage_id === stageId);
 
   const sportModule = resolveModule(division.sport_key, division.module_version);
   const kind = parseStageKind(stage.kind, stageId);
@@ -587,6 +621,7 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     // case-(c) latecomer with no seat yet is not on the table and the engine refuses a key that is not.
     swissAbsentRounds: kind === "swiss" ? swissAbsentRounds(fixtures, entrants) : new Map(),
     seating,
+    adjustments,
   };
 }
 
@@ -639,6 +674,9 @@ function toTableStage(
   // W5 app PR B Task 1 (X-PO-1, ruling 279): a seated group's pools ride the fold - every fold of the stage goes through here
   // (the snapshot, completion, best-Nth's source, the Swiss score groups' points), so all of them rank the same members.
   const seating = inputs.seating.kind === "seated" ? inputs.seating.pools : undefined;
+  // W5 app PR B Task 7 (X-ADJ-1; C8): the adjustments the fold can hold, beside carry-over's `openingDeltas` (never through it:
+  // an opening has no reason and no footnote).
+  const adjustments = foldedAdjustments(inputs);
   const fields = {
     id: inputs.stage.id,
     // americano rides the league fold (Jul3/08 §3)
@@ -671,6 +709,7 @@ function toTableStage(
     scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),
     ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),
     ...(seating === undefined ? {} : { pools: seating }),
+    ...(adjustments.length === 0 ? {} : { adjustments }),
   };
   if (inputs.stage.kind !== "swiss") return fields;
   // W3 (ruling R4; X-SW-7; engine 2.0.0): a Swiss ledger stage names the sport's draw facts under the stage's merged cfg
@@ -691,6 +730,33 @@ function toTableStage(
       liveCfg(inputs.division.config, { kind: inputs.stage.kind, config: inputs.stage.config as Record<string, unknown> | null }, inputs.module),
     ),
     swissAbsentRounds: inputs.swissAbsentRounds,
+  };
+}
+
+/** W5 app PR B Task 7 (C5, C7, C8): what an "Adjust points" write needs of a stage, read in the caller's transaction (under the
+ *  division lock) from the same load every fold of the stage reads (`loadStageInputs`):
+ *  - `members`: the entrants an adjustment can be made for - the same predicate the fold passes them by (`foldedAdjustments`):
+ *    seated in a pool when the stage is seated, else declared (holds a seat on one of its lines, the engine's `entrants`);
+ *  - `poolOf`: each member's pool id on a seated stage (the desk's picker groups by it), null on an unseated one;
+ *  - `unit`: what an adjustment moves on this stage's table (`adjustmentUnitOf` over its rules' cascade, RB5-T15) and
+ *    `pointsUnit` its points rule's stored unit - the footnote's display facts, recorded on the row. */
+export async function adjustmentTarget(
+  tx: Tx,
+  stageId: string,
+): Promise<{
+  members: ReadonlySet<string>;
+  poolOf: ReadonlyMap<string, string> | null;
+  unit: "points" | "wins";
+  pointsUnit: "whole" | "half";
+}> {
+  const inputs = await loadStageInputs(tx, stageId);
+  const seated = inputs.seating.kind === "seated" ? inputs.seating.pools : undefined;
+  const declared = new Set(inputs.entrants);
+  return {
+    members: seated === undefined ? declared : new Set(seated.keys()),
+    poolOf: seated ?? null,
+    unit: adjustmentUnitOf(inputs.rules.tiebreakers),
+    pointsUnit: inputs.rules.points.unit,
   };
 }
 

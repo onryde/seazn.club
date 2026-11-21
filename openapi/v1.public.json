@@ -51964,6 +51964,33 @@
                                   "additionalProperties": false
                                 }
                               },
+                              "adjustmentNotes": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "key": {
+                                      "type": "string"
+                                    },
+                                    "entrantId": {
+                                      "type": "string"
+                                    },
+                                    "lead": {
+                                      "type": "string"
+                                    },
+                                    "body": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "key",
+                                    "entrantId",
+                                    "lead",
+                                    "body"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
                               "updatedAt": {
                                 "type": "string"
                               },

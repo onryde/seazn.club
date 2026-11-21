@@ -88,6 +88,10 @@ const TYPE_LABEL_KEYS: Record<string, MessageKey> = {
   // undo). Their per-line write-ahead rows are internal and never listed (`divisionHistory` leaves them out).
   table_withdrawal: "history.event.tableWithdrawal",
   table_withdrawal_voided: "history.event.tableWithdrawalReversed",
+  // W5 app PR B T7 (X-ADJ-4): an organiser's "Adjust points" and its own Undo — one line each, not undoable here (the adjustment's
+  // Undo is the reversal) and no barrier.
+  points_adjustment: "history.event.pointsAdjustment",
+  points_adjustment_voided: "history.event.pointsAdjustmentUndone",
 };
 
 export function HistoryPanel({

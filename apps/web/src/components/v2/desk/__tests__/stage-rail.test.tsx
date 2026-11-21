@@ -951,3 +951,68 @@ describe("StageRail — the rounds chip and Add a round (W3 T12 Phase 2)", () =>
     expect(checked, "anti-vacuity: rows").toBe(rows.length);
   });
 });
+
+// W5 app PR B Task 7 (C5; R24 pick 15 A): "Adjust points…" in More. The panel passes `onAdjustPoints` only where
+// `pointsAdjustmentOffered` says the write is allowed, so the rail's question is only "present?". The sequence the menu must hold:
+// a table with no late add (a fed league) still gets More for it; one with a late add holds both; a fed Swiss's own More is not
+// drawn a second time beside it.
+describe("StageRail — Adjust points in the More menu (W5 app PR B Task 7)", () => {
+  const HREF = "/o/acme/c/champs/d/open?tab=entrants#add-entrant";
+  const base = (extra: Partial<StageRailProps>, s: unknown = stage) =>
+    renderToStaticMarkup(
+      <StageRail stage={s as never} canEdit busy={null} fixtureCount={6} deletable={false}
+        onAct={async () => true} onDelete={() => {}} addingTo={null} onToggleAddMatch={() => {}}
+        adhoc={false} {...NEUTRAL} {...extra} />,
+    );
+  const count = (html: string, needle: string) => html.split(needle).length - 1;
+
+  it("present: one More holding the item and its hint; absent: no item, and no More without a late add", () => {
+    const on = base({ onAdjustPoints: () => {} });
+    expect(count(on, 'data-testid="stage-more"'), "one More").toBe(1);
+    expect(on).toContain('data-testid="stage-adjust-points"');
+    expect(on).toContain(en["stage.more.adjustPoints"]);
+    expect(on).toContain(en["stage.more.adjustPoints.hint"]);
+    expect(on, "no late add on a fed table").not.toContain("stage-add-late-player");
+    const off = base({});
+    expect(off).not.toContain("stage-adjust-points");
+    expect(off, "nothing else asked for More").not.toContain('data-testid="stage-more"');
+  });
+
+  it("beside the late add: both in one menu, the late add first", () => {
+    const html = base(
+      { onAdjustPoints: () => {}, swissHasUnseated: true, lateEntry: { divisionStatus: "active", roundSeated: true, href: HREF } },
+      { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", progression: null, config: { rounds: 3 } },
+    );
+    const late = html.indexOf('data-testid="stage-add-late-player"');
+    const adjust = html.indexOf('data-testid="stage-adjust-points"');
+    expect(late, "the late add rendered").toBeGreaterThan(-1);
+    expect(adjust).toBeGreaterThan(late);
+    expect(count(html, 'data-testid="stage-more"')).toBe(1);
+  });
+
+  it("a fed Swiss: its round items join the one More with Adjust points; never two Mores", () => {
+    const swiss = { id: "s1", name: "Swiss", kind: "swiss", seq: 1, status: "active", progression: null, config: { rounds: 3 } };
+    const swissRounds = {
+      control: {
+        started: true,
+        rounds: 3,
+        chess: false,
+        field: 6,
+        addRound: { canAddRound: true, refusal: null, field: 6, hardMax: 5 },
+        finish: { canFinish: true, refusal: null, finishedAfter: 2, inProgress: false, completeInstead: false },
+      },
+      fixtures: [],
+      onSave: async () => null,
+      onAddRound: async () => null,
+      onFinish: async () => null,
+    } as never;
+    const html = base({ onAdjustPoints: () => {}, swissRounds }, swiss);
+    expect(count(html, 'data-testid="stage-more"'), "one More").toBe(1);
+    for (const id of ["stage-adjust-points", "stage-add-round", "stage-finish-swiss"]) expect(html, id).toContain(`data-testid="${id}"`);
+    // the positive pair: without Adjust points the fed Swiss still has its own More, the two round items in it
+    const fed = base({ swissRounds }, swiss);
+    expect(count(fed, 'data-testid="stage-more"')).toBe(1);
+    expect(fed).toContain('data-testid="stage-add-round"');
+    expect(fed).not.toContain("stage-adjust-points");
+  });
+});

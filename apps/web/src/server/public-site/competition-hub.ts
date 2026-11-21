@@ -94,6 +94,8 @@ import { buildTableView } from "./standings-view";
 import { loadRrLateJoins, rowFactsFor } from "./table-row-facts";
 import { loadTableWithdrawals } from "./table-withdrawals";
 import { withdrawalNotesFor } from "@/lib/table-withdrawal-note";
+import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
+import { loadPointsAdjustments } from "./points-adjustments";
 import { cachedIfFound } from "./cache-found";
 import { divisionQualification, qualificationFixtures } from "./division-qualification";
 import { buildLeaderBoards, type LeaderDivisionConsent } from "./leaders";
@@ -1009,6 +1011,8 @@ export async function loadCompetitionHub(
     const rowFactStatuses = Object.fromEntries(entrants.map((e) => [e.id, e.status]));
     // W5 T8 (RB5-W7): the departure notes' rows, read only for a division with a league or group stage.
     const tableWithdrawals = stages.some((s) => s.kind === "league" || s.kind === "group") ? await loadTableWithdrawals(d.id) : [];
+    // W5 app PR B T7 (X-ADJ-4): the points adjustments' rows, read only for a division with a table stage.
+    const pointsAdjustments = stages.some((s) => s.kind === "league" || s.kind === "group" || s.kind === "swiss") ? await loadPointsAdjustments(d.id) : [];
     const qualificationFor = divisionQualification({
       module_,
       division: d,
@@ -1058,6 +1062,9 @@ export async function loadCompetitionHub(
             // W5 T20 (ST-G20, X-SF-1): every entrant's own status, so a withdrawn or disqualified row wears its chip on the hub as it
             // does on the division page. Handed over whole: who counts as departed is `DEPARTED_STATUS_CHIPS`' call, not this site's.
             statuses: rowFactStatuses,
+            // W5 app PR B T7 (X-ADJ-4): this table's points adjustments, with their reason and date
+            adjustmentNotes: adjustmentNotesFor(stage.id, (snap.rows as { entrantId: string }[]).map((r) => r.entrantId), pointsAdjustments, names),
+            locale,
           }),
         );
       }

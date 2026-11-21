@@ -48,7 +48,20 @@ export type RoundRobinRefusalCode =
   | "ENTRANT_FIXTURES_HAVE_RESULTS"
   // W5 stress fix F7: more pools than the pool-key alphabet holds (`POOL_COUNT_MAX`, A-Z) - the create door (the schema's ceiling,
   // mapped by name in api-v1/http.ts) and Start (generators.ts `poolCount`). Details: `max`, and at Start `pools`, the count asked.
-  | "RR_TOO_MANY_POOLS";
+  | "RR_TOO_MANY_POOLS"
+  // W5 app PR B Task 7 (C5; X-ADJ-3, X-ADJ-4): "Adjust points". The stage gates (preflight C5: a started, not-complete league,
+  // group or Swiss table), the engine's four `validatePointsAdjustments` reasons by name (`adjustment_zero`,
+  // `adjustment_reason_missing`, `adjustment_not_finite`, `adjustment_unknown_entrant`), and an Undo of a row already undone. The
+  // engine's `adjustment_unseated` has no code: every line-holder of a seated stage is seated (C10), so it never arises at the write,
+  // and the fold HOLDS a row whose entrant stops being a member (C8).
+  | "RR_ADJUST_NOT_TABLE"
+  | "RR_ADJUST_NOT_STARTED"
+  | "RR_ADJUST_STAGE_COMPLETE"
+  | "RR_ADJUST_ZERO"
+  | "RR_ADJUST_REASON_MISSING"
+  | "RR_ADJUST_NOT_FINITE"
+  | "RR_ADJUST_UNKNOWN_ENTRANT"
+  | "RR_ADJUST_ALREADY_UNDONE";
 
 export interface RoundRobinRefusalRow {
   status: 409 | 422;
@@ -143,6 +156,46 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     status: 422,
     en: "A group stage can have at most {max} pools, one for each letter from A to Z.",
     key: "roundrobin.refusal.RR_TOO_MANY_POOLS",
+  },
+  RR_ADJUST_NOT_TABLE: {
+    status: 422,
+    en: "Points can only be adjusted on a league, group or Swiss table.",
+    key: "roundrobin.refusal.RR_ADJUST_NOT_TABLE",
+  },
+  RR_ADJUST_NOT_STARTED: {
+    status: 422,
+    en: "Points can be adjusted once the stage has started.",
+    key: "roundrobin.refusal.RR_ADJUST_NOT_STARTED",
+  },
+  RR_ADJUST_STAGE_COMPLETE: {
+    status: 422,
+    en: "This table has finished, so its points can't be adjusted.",
+    key: "roundrobin.refusal.RR_ADJUST_STAGE_COMPLETE",
+  },
+  RR_ADJUST_ZERO: {
+    status: 422,
+    en: "An adjustment of 0 changes nothing. Enter the points to add or remove.",
+    key: "roundrobin.refusal.RR_ADJUST_ZERO",
+  },
+  RR_ADJUST_REASON_MISSING: {
+    status: 422,
+    en: "Give a reason. It's shown under the table for everyone.",
+    key: "roundrobin.refusal.RR_ADJUST_REASON_MISSING",
+  },
+  RR_ADJUST_NOT_FINITE: {
+    status: 422,
+    en: "Enter a number of points to add or remove.",
+    key: "roundrobin.refusal.RR_ADJUST_NOT_FINITE",
+  },
+  RR_ADJUST_UNKNOWN_ENTRANT: {
+    status: 422,
+    en: "That entrant isn't on this table.",
+    key: "roundrobin.refusal.RR_ADJUST_UNKNOWN_ENTRANT",
+  },
+  RR_ADJUST_ALREADY_UNDONE: {
+    status: 409,
+    en: "This adjustment has already been undone.",
+    key: "roundrobin.refusal.RR_ADJUST_ALREADY_UNDONE",
   },
 };
 
