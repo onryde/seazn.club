@@ -111,7 +111,8 @@ export type PublicOrgLiveT = z.infer<typeof PublicOrgLive>;
 const SignedPlayback = z.object({ src: z.url(), expiresAt: z.string().datetime() });
 
 /** What the match page's player reads (server/video/seazn-video.ts): the live, while the fixture's latest session is a Seazn
- *  session on air, and the replay parts, numbered from 1. `hls` is a signed HLS manifest (the interim Cloudflare recording,
+ *  session on air, and the replay parts in recording order, each numbered by its place among them all (a part left out, past the
+ *  recording host's own delete or not signable right now, leaves a gap, so a number never moves between polls). `hls` is a signed HLS manifest (the interim Cloudflare recording,
  *  recommendation 2026-11-21); `embed` is the replay host's player (Task 25). A fixture with no Seazn video, or one the
  *  public cannot see, answers `{ live: null, replay: [] }`. */
 export const PublicFixtureVideo = z.object({

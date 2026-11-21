@@ -13,7 +13,14 @@ import "server-only";
 // `live`: the fixture's LATEST session (by creation), when it is a Seazn session in state `live` — its programme input's signed
 // HLS (`signLivePlayback`). Warming, ending, ended, or an external destination: no live.
 // `replay` (G-B, the interim until Task 25's Bunny embed): every recording in `seazn_locked_videos` under the programme input of
-// one of the fixture's ENDED Seazn sessions, in `locked_at` order, numbered 1..n, each its signed HLS (`signRecordingPlayback`).
+// one of the fixture's ENDED Seazn sessions, each its signed HLS (`signRecordingPlayback`).
+//   ORDER and NUMBER: recording order. No recording time is stored (V540's row is uid, input, locked_at), so it is the session's
+//     (created_at, id), then, within one session, the lock (locked_at, cf_video_id). `partNo` is the recording's 1-based place
+//     among ALL the fixture's locked recordings in that order, given before anything is left out, so a part keeps its number
+//     from one poll to the next; a part that is left out leaves a gap. Task 25 must number its parts the same way.
+//   LEFT OUT: a recording whose session began DELETE_RECORDING_AFTER_DAYS or more before `now` (Cloudflare deletes a recording
+//     that long after it is ready, which is never before its session began, so this never lists a deleted one), and a part
+//     whose token cannot be minted right now (logged by uid, never a token). One part never fails the answer or the live.
 // Only a `seazn_locked_videos` uid is ever signed: Task 13 wrote that row after checking the recording names this input itself
 // (C6) and making it need a token (C3), so an unsigned recording, a uid from a listing and a uid from the request never reach
 // a viewer. A session still live has no part yet: its live plays.
@@ -27,6 +34,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import type { PublicFixtureVideo } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
+import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
 import { relayDrivers } from "@/server/relay/drivers";
 import { TERMINAL_STATES } from "@/server/relay/domain/session";
 import { type PlaybackDeps, processPlaybackTokenCache, signLivePlayback, signRecordingPlayback } from "./cf-playback";
@@ -56,6 +64,11 @@ export async function seaznFixtureVideoForOrg(orgId: string, fixtureId: string, 
 }
 
 interface LatestSession { id: string; state: string; destination_kind: string; programme_uid: string | null }
+interface LockedRecording { cf_video_id: string; session_id: string; session_created_at: Date | string }
+
+const DAY_MS = 86_400_000;
+/** What a rejected mint is logged as: its class alone. A message could quote a request, and a request can carry a token. */
+const errorClass = (e: unknown): string => (e instanceof Error ? e.name : typeof e);
 
 async function videoOf(fixtureId: string, orgId: string | null, now: Date, playback: PlaybackDeps | undefined): Promise<PublicFixtureVideo> {
   const inOrg = orgId === null ? sql`` : sql`and s.org_id = ${orgId}`;
@@ -69,14 +82,19 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
      where s.fixture_id = ${fixtureId} ${inOrg}
      order by s.created_at desc, s.id desc
      limit 1`;
-  const recordings = await sql<{ cf_video_id: string }[]>`
-    select v.cf_video_id
+  const recordings = await sql<LockedRecording[]>`
+    select v.cf_video_id, s.id as session_id, s.created_at as session_created_at
       from seazn_locked_videos v
       join fixture_stream_inputs i on i.id = v.input_row_id
       join fixture_stream_sessions s on s.id = i.session_id
      where s.fixture_id = ${fixtureId} ${inOrg}
        and s.destination_kind = 'seazn' and i.role = 'programme' and s.state in ${sql([...TERMINAL_STATES])}
-     order by v.locked_at, v.cf_video_id`;
+     order by s.created_at, s.id, v.locked_at, v.cf_video_id`;
+  // Numbered over every locked recording, THEN bounded by Cloudflare's own delete: a part keeps its number as older ones go.
+  const cutoff = now.getTime() - DELETE_RECORDING_AFTER_DAYS * DAY_MS;
+  const playable = recordings
+    .map((r, i) => ({ ...r, partNo: i + 1 }))
+    .filter((r) => new Date(r.session_created_at).getTime() > cutoff);
 
   const onAir = latest !== undefined && latest.destination_kind === "seazn" && latest.state === "live";
   const liveUid = onAir ? latest.programme_uid : null;
@@ -84,14 +102,24 @@ async function videoOf(fixtureId: string, orgId: string | null, now: Date, playb
     // A live Seazn session has a provisioned programme input; one without a uid has nothing to sign, so it shows no live.
     log.warn({ sessionId: latest.id }, "seazn video: a live Seazn session has no programme input uid; no live is shown");
   }
-  if (liveUid === null && recordings.length === 0) return EMPTY();
+  if (liveUid === null && playable.length === 0) return EMPTY();
 
   const deps = playback ?? { ingest: relayDrivers().ingest, tokenCache: processPlaybackTokenCache() };
-  const [live, replay] = await Promise.all([
+  // Each part is signed on its own: one that cannot be minted is left out of this answer, never the answer or the live.
+  const [live, signed] = await Promise.all([
     liveUid === null ? null : signLivePlayback(deps, liveUid, now),
-    Promise.all(
-      recordings.map(async (r, i) => ({ partNo: i + 1, player: "hls" as const, ...(await signRecordingPlayback(deps, r.cf_video_id, now)) })),
-    ),
+    Promise.allSettled(playable.map((r) => signRecordingPlayback(deps, r.cf_video_id, now))),
   ]);
+  const replay: PublicFixtureVideo["replay"] = [];
+  signed.forEach((s, i) => {
+    const r = playable[i]!;
+    if (s.status === "fulfilled") replay.push({ partNo: r.partNo, player: "hls", ...s.value });
+    else {
+      log.warn(
+        { sessionId: r.session_id, cfVideoId: r.cf_video_id, err: errorClass(s.reason) },
+        "seazn video: a replay part could not be signed; it is left out of this answer",
+      );
+    }
+  });
   return { live, replay };
 }

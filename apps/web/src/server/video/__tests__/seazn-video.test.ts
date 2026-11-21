@@ -1,7 +1,8 @@
 // Seazn-hosted video, Phase 1 Task 14 (spec G5, §5.1; recommendation 2026-11-21 G-B): a fixture's Seazn video, as the
 // player reads it. `live` is the fixture's LATEST session when it is a Seazn session in state `live`: its programme input's
 // signed HLS. `replay` (the interim, until Task 25's Bunny embed) is every recording Task 13 has LOCKED (`seazn_locked_videos`)
-// of the fixture's ENDED Seazn sessions, in `locked_at` order, numbered 1..n, each its signed HLS. The public read answers
+// of the fixture's ENDED Seazn sessions, each its signed HLS, in recording order (session, then lock) and numbered by its place
+// among them all; one past Cloudflare's own delete, or one that cannot be signed, is left out (review I1). The public read answers
 // nothing for a fixture the public cannot see (public_fixtures_v plus a division past setup: `replayParts`' redaction); the
 // organiser's read is org-scoped and covers private competitions. The flags are not read (controller ruling 2026-11-20).
 //
@@ -20,6 +21,8 @@ vi.mock("@/lib/sentry", () => ({ captureError: vi.fn() }));
 
 import { sql } from "@/lib/db";
 import { PublicFixtureVideo } from "@/server/api-v1/schemas";
+import { log } from "@/server/logger";
+import { DELETE_RECORDING_AFTER_DAYS } from "@/server/relay/config";
 import { RelayDriversDisabled, disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
@@ -214,6 +217,11 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect(await read(r, f), "not yet locked: never an unsigned recording").toEqual(EMPTY);
     expect(await lockPass(r)).toMatchObject({ locked: 1 });
     expect(await lockedIds(sid), "PREMISE: the pass wrote the row").toEqual([rec]);
+    // The OTHER fixture of the same org, after the lock: none of this fixture's parts, public or organiser, and nothing minted.
+    const minted = r.mint.mock.calls.length;
+    expect(await read(r, r.fixtureIds[1]), "another fixture lists none of this one's parts").toEqual(EMPTY);
+    expect(await readOrg(r, r.fixtureIds[1])).toEqual(EMPTY);
+    expect(r.mint.mock.calls.length, "nothing minted for the other fixture").toBe(minted);
     const answer = await read(r, f);
     expect(answer.live).toBeNull();
     expect(answer.replay).toHaveLength(1);
@@ -246,7 +254,7 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     expect((await read(r, f)).replay.map((p) => signedUid(p.src))).toEqual([rec]);
   });
 
-  it("parts follow locked_at, numbered 1..n — not the uid order and not the order the rows were written", async () => {
+  it("within ONE session, parts follow locked_at (no recording time is stored), numbered 1..n — not the uid order and not the order the rows were written", async () => {
     const r = await rig();
     const f = r.fixtureIds[0];
     const sid = await live(r, f, r.seazn);
@@ -262,6 +270,79 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     // Swap the times: the numbers follow.
     await sql`update seazn_locked_videos set locked_at = now() - interval '3 minutes' where cf_video_id = ${late}`;
     expect((await read(r, f)).replay.map((p) => [p.partNo, signedUid(p.src)])).toEqual([[1, late], [2, early]]);
+  });
+
+  it("parts follow SESSION order first: the first session's recording is Part 1 even when it was locked after the second's, and its uid sorts last", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    const second = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, second);
+    const a = await finishedRecording(r, first, `v-z-${randomUUID()}`);
+    const b = await finishedRecording(r, second, `v-a-${randomUUID()}`);
+    expect(await lockPass(r)).toMatchObject({ locked: 2 });
+    // A deferred pass: the first session's recording is locked AFTER the second's, so lock order alone would put it second.
+    await sql`update seazn_locked_videos set locked_at = now() - interval '1 minute' where cf_video_id = ${a}`;
+    await sql`update seazn_locked_videos set locked_at = now() - interval '2 minutes' where cf_video_id = ${b}`;
+    expect((await read(r, f)).replay.map((p) => [p.partNo, signedUid(p.src)])).toEqual([[1, a], [2, b]]);
+  });
+
+  it("a part is left out once Cloudflare's own delete has passed (DELETE_RECORDING_AFTER_DAYS from its session's start), exactly at the edge, minting nothing for it; the later part keeps its number", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    const second = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, second);
+    const a = await finishedRecording(r, first);
+    const b = await finishedRecording(r, second);
+    expect(await lockPass(r)).toMatchObject({ locked: 2 });
+    const began = async (sid: string) =>
+      new Date((await sql<{ created_at: Date }[]>`select created_at from fixture_stream_sessions where id = ${sid}`)[0]!.created_at).getTime();
+    const [c1, c2] = [await began(first), await began(second)];
+    expect(c2, "PREMISE: the second session began after the first").toBeGreaterThan(c1);
+    // Cloudflare's backstop, from the relay's own declaration (relay/config.ts, sent on every live input).
+    const KEEP_MS = DELETE_RECORDING_AFTER_DAYS * 24 * 60 * 60 * 1000;
+    // A cache of its own per read, so every listed part is minted afresh and the mint log says exactly what was signed.
+    const at = (ms: number) => seaznFixtureVideo(f, new Date(ms), { ingest: r.ingest, tokenCache: createPlaybackTokenCache() });
+    const parts = async (ms: number) => (await at(ms)).replay.map((p) => [p.partNo, signedUid(p.src)]);
+    expect(await parts(c1 + KEEP_MS - 1), "1 ms before the first session's recording is deleted").toEqual([[1, a], [2, b]]);
+    r.mint.mockClear();
+    expect(await parts(c1 + KEEP_MS), "at its delete: Part 2 alone, keeping its number").toEqual([[2, b]]);
+    expect(r.mint.mock.calls.map(([uid]) => uid), "the deleted recording is never signed").toEqual([b]);
+    r.mint.mockClear();
+    expect(await at(c2 + KEEP_MS), "both deleted: the empty video").toEqual(EMPTY);
+    expect(r.mint, "nothing to sign").not.toHaveBeenCalled();
+  });
+
+  it("one part whose token cannot be minted is left out of THIS answer, logged by uid and never a token, while the other part and the live still answer; the next answer has it back under its number", async () => {
+    const r = await rig();
+    const f = r.fixtureIds[0];
+    const first = await live(r, f, r.seazn);
+    await stopAndSettle(r, f, first);
+    const a = await finishedRecording(r, first, `v-a-${randomUUID()}`);
+    const b = await finishedRecording(r, first, `v-b-${randomUUID()}`);
+    expect(await lockPass(r)).toMatchObject({ locked: 2 });
+    await sql`update seazn_locked_videos set locked_at = now() - interval '2 minutes' where cf_video_id = ${a}`;
+    const second = await live(r, f, r.seazn);
+    const now = new Date(r.clock.now);
+    const fresh = () => ({ ingest: r.ingest, tokenCache: createPlaybackTokenCache() });
+    const real = FakeIngest.prototype.playbackToken;
+    r.mint.mockImplementation((uid, o) => (uid === a ? Promise.reject(new Error("Cloudflare refused the token")) : real.call(r.ingest, uid, o)));
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const answer = await seaznFixtureVideo(f, now, fresh());
+      expect(signedUid(answer.live!.src), "the live still answers").toBe((await programmeOf(second)).uid);
+      expect(answer.replay.map((p) => [p.partNo, signedUid(p.src)]), "Part 2 still answers, under its own number").toEqual([[2, b]]);
+      const partLogs = warn.mock.calls.filter(([o]) => typeof o === "object" && o !== null && "cfVideoId" in o);
+      expect(partLogs.map(([o]) => o), "one line, by uid and error class").toEqual([{ sessionId: first, cfVideoId: a, err: "Error" }]);
+      expect(JSON.stringify(warn.mock.calls), "no token and no error message in any log line").not.toMatch(/fake\.|refused/);
+      r.mint.mockImplementation((uid, o) => real.call(r.ingest, uid, o));
+      expect((await seaznFixtureVideo(f, now, fresh())).replay.map((p) => [p.partNo, signedUid(p.src)]), "recovered").toEqual([[1, a], [2, b]]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("a stop and restart: the first session completed with a locked recording and the second live gives BOTH the second's live and the first's part", async () => {
@@ -329,6 +410,8 @@ describe.skipIf(!HAS_DB)("seaznFixtureVideo — a fixture's Seazn video for the 
     for (const id of [randomUUID(), "not-a-uuid", "", "'; select 1; --"]) {
       expect(await read(r, id), JSON.stringify(id)).toEqual(EMPTY);
       expect(await readOrg(r, id), JSON.stringify(id)).toEqual(EMPTY);
+      // The ORGANISATION id is checked as well: a malformed one is the empty video, never a 22P02 and a 500.
+      expect(await seaznFixtureVideoForOrg(id, r.fixtureIds[0], new Date(r.clock.now), r.playback), `org ${JSON.stringify(id)}`).toEqual(EMPTY);
     }
     expect(r.mint).not.toHaveBeenCalled();
   });

@@ -58169,7 +58169,7 @@
     },
     "/api/v1/public/fixtures/{id}/video": {
       "get": {
-        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings numbered from 1; each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [] }`",
+        "summary": "A fixture's Seazn-hosted video for the match page's player: `live`, while the fixture's latest stream session is on air to Seazn, and `replay`, its finished recordings in recording order, each numbered by its place among them all (one past the recording host's own delete, or one that cannot be signed right now, is left out and leaves a gap); each a signed playback URL (the token is a path segment) with the time its token expires. Answered `Cache-Control: private, no-store`. A fixture with no Seazn video, or one the public cannot see, answers `{ live: null, replay: [] }`",
         "tags": [
           "public"
         ],
