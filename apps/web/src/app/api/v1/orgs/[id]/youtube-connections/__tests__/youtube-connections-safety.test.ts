@@ -25,7 +25,8 @@ const captured = vi.hoisted(() => ({ errors: [] as unknown[] }));
 vi.mock("@/lib/sentry", () => ({ captureError: (e: unknown) => { captured.errors.push(e); } }));
 
 import { sql } from "@/lib/db";
-import { YOUTUBE_SHORT_BROADCAST_MINUTES, YOUTUBE_YOUNG_CHANNEL_DAYS } from "@/lib/youtube";
+import { __setRateLimitCounterForTests } from "@/lib/rate-limit";
+import { YOUTUBE_SAFETY_CHECK_LIMIT, YOUTUBE_SHORT_BROADCAST_MINUTES, YOUTUBE_YOUNG_CHANNEL_DAYS } from "@/lib/youtube";
 import { revokeConnection } from "@/server/youtube/token-store";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import type { YoutubeErrorCode } from "@/server/youtube/port";
@@ -43,7 +44,7 @@ afterAll(() => {
     else process.env[k] = savedKeks[k];
   }
 });
-afterEach(() => { setYoutubeDriverForTest(null); captured.errors.length = 0; });
+afterEach(() => { setYoutubeDriverForTest(null); captured.errors.length = 0; __setRateLimitCounterForTests(null); });
 
 const DAY = 86_400_000;
 const MIN = 60_000;
@@ -126,6 +127,46 @@ describe.skipIf(!HAS_DB)("GET youtube-connections/{id}/safety", () => {
       expect(await statusOf(c.connectionId), "a read failure never moves the connection").toBe("connected");
     });
   }
+
+  it("m1: a STORED young date still warns when the YouTube read fails (fail-open only for what was not read)", async () => {
+    const o = await org();
+    signedInAs(o.userId);
+    const c = await channel(o);
+    await sql`update org_youtube_connections set channel_created_at = ${new Date(Date.now() - 2 * DAY)} where id = ${c.connectionId}`;
+    fake.failNext("accessToken", "youtube_unavailable");
+    const res = await safety(o.orgId, c.connectionId);
+    expect(res.status).toBe(200);
+    expect((await json(res)).data).toEqual({ warn: true, young: true, shortRecent: 0 });
+    expect(captured.errors, "the failure is still reported").toHaveLength(1);
+  });
+
+  it("I2: past the per-connection budget the answer is 200 warn:false with ZERO port calls; another connection keeps its own budget", async () => {
+    // A deterministic counter in place of Redis (the limiter is inert without one): the limiter's real code runs.
+    const counts = new Map<string, number>();
+    __setRateLimitCounterForTests(async (key) => {
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return { count, ttlMs: 30_000 };
+    });
+    const o = await org();
+    signedInAs(o.userId);
+    const c = await channel(o, { ageDays: 1 });   // young: every read inside the budget warns, so the over-budget answer is visibly different
+    for (let i = 1; i <= YOUTUBE_SAFETY_CHECK_LIMIT.max; i++) {
+      const before = portCalls();
+      expect((await json(await safety(o.orgId, c.connectionId))).data, `read ${i} inside the budget`).toEqual({ warn: true, young: true, shortRecent: 0 });
+      expect(portCalls(), `read ${i} asked YouTube`).toBeGreaterThan(before);
+    }
+    const before = portCalls();
+    const res = await safety(o.orgId, c.connectionId);
+    expect(res.status).toBe(200);
+    expect((await json(res)).data).toEqual({ warn: false, young: false, shortRecent: 0 });
+    expect(portCalls(), "over the budget: YouTube is asked nothing").toBe(before);
+
+    const o2 = await org();
+    signedInAs(o2.userId);
+    const other = await channel(o2, { ageDays: 1 });
+    expect((await json(await safety(o2.orgId, other.connectionId))).data?.warn, "another connection's budget is its own").toBe(true);
+  });
 
   it("a DEAD grant (token killed at YouTube) is still 200 warn:false and the status is unchanged (no mark reconnect_needed)", async () => {
     const o = await org();

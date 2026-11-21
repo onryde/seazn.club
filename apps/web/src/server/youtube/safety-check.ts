@@ -5,11 +5,12 @@ import "server-only";
 // A READ, and only a read. It never moves the connection: a dead grant is NOT marked reconnect_needed here (prepare.ts's
 // `markIfGrantDead` / token-store's `markReconnectNeeded` stay with the real Go live, which refuses on it), and it opens no automatic-start
 // backoff. Any failure at all answers "no warning", logged as a code only, so a notice that could not be computed never stands in the
-// organiser's way. One call per Go live tap (the panel's), never from a phone beat or the automatic start: 1 quota unit each for
+// organiser's way (a stored creation date still answers on its own). One call per Go live tap (the panel's), never from a phone beat or the automatic start: 1 quota unit each for
 // channels.list (only when the creation date is not already stored) and liveBroadcasts.list.
 import { sql } from "@/lib/db";
-import { YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS } from "@/lib/youtube";
+import { YOUTUBE_SAFETY_CHECK_LIMIT, YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS } from "@/lib/youtube";
 import { HttpError } from "@/lib/errors";
+import { rateLimit } from "@/lib/rate-limit";
 import { captureError } from "@/lib/sentry";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { YoutubeChannelSafety } from "@/server/api-v1/schemas";
@@ -30,11 +31,25 @@ export async function checkChannelSafety(
     select channel_id, channel_created_at, status from org_youtube_connections
      where id = ${connectionId} and org_id = ${orgId} and status <> 'revoked'`;
   if (!row || !row.channel_id) throw new HttpError(404, "youtube connection not found");
+  // Phase 0 review I2: each read spends Seazn's shared YouTube quota, so a connection gets YOUTUBE_SAFETY_CHECK_LIMIT reads a window;
+  // past it the answer is "no warning" (fail-open, as for any read that could not be made) and YouTube is not asked. Only the limit's
+  // own 429 is caught: the limiter answers it and nothing else (it fails open on a Redis outage).
+  try {
+    await rateLimit(`yt-safety:${connectionId}`, YOUTUBE_SAFETY_CHECK_LIMIT);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 429) return NO_WARNING;
+    throw err;
+  }
+  // m1 (Phase 0 review): a stored creation date needs no YouTube call, so a young channel it proves still warns when the network part
+  // fails; with no stored date a failure stays plain "no warning".
+  const stored = row.channel_created_at;
+  const fromStored = (): YoutubeChannelSafety =>
+    stored === null ? NO_WARNING : channelSafetyWarning({ createdAt: stored, broadcasts: [], now });
   try {
     const refresh = await openToken(sql, orgId, connectionId);
-    if (refresh === null) return NO_WARNING;
+    if (refresh === null) return fromStored();
     const at = await port.accessToken(refresh);
-    const createdAt = row.channel_created_at ?? (await port.channelCreatedAt(at, row.channel_id));
+    const createdAt = stored ?? (await port.channelCreatedAt(at, row.channel_id));
     const since = new Date(now.getTime() - YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS * 3_600_000);
     const broadcasts = await port.recentBroadcasts(at, since);
     return channelSafetyWarning({ createdAt, broadcasts, now });
@@ -44,6 +59,6 @@ export async function checkChannelSafety(
     captureError(new Error(`youtube channel safety check failed: ${failure}`), {
       orgId, route: "youtube.safety_check", extra: { connectionId, failure },
     });
-    return NO_WARNING;
+    return fromStored();
   }
 }

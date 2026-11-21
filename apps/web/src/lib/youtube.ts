@@ -55,7 +55,8 @@ export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
 /** The AUTOMATIC start's backoff on a channel (Phase 0, YouTube channel safety; V538): after a refusal in YOUTUBE_AUTO_BACKOFF_CODES
  *  the next automatic start waits BASE seconds, doubling with each refusal in a row, never more than MAX (server/youtube/auto-backoff.ts
  *  `backoffSeconds`). Inside the window an automatic start is refused with the stored code and no call to YouTube. A person's tap
- *  never reads it, and any successful prepare clears it. */
+ *  never reads it. A person's successful prepare clears it; an automatic start's clears it once its session has started (an automatic
+ *  start abandoned after a clean prepare reopens it as youtube_unavailable: Phase 0 review I1). */
 // Equal to AUTO_START_RETRY_SECONDS (relay/config.ts), so the first refusal's window ends exactly at the next scheduled retry: the backoff bites from the second refusal in a row (accepted).
 export const YOUTUBE_AUTO_BACKOFF_BASE_SECONDS = 60;
 export const YOUTUBE_AUTO_BACKOFF_MAX_SECONDS = 1800;
@@ -84,6 +85,11 @@ export const YOUTUBE_YOUNG_CHANNEL_DAYS = 30;
 export const YOUTUBE_SHORT_BROADCAST_MINUTES = 10;
 export const YOUTUBE_SHORT_BROADCAST_WARN_COUNT = 2;
 export const YOUTUBE_SHORT_BROADCAST_WINDOW_HOURS = 24;
+/** The safety read's budget per connection (Phase 0 review I2): each read spends Seazn's shared YouTube quota (liveBroadcasts.list, and
+ *  channels.list when no date is stored), so past MAX reads in WINDOW seconds the answer is "no warning" with no call to YouTube. A
+ *  person taps Go live far less often; this stops a loop. A rate-limit config (lib/rate-limit.ts `rateLimit`), kept here with Phase 0's
+ *  other numbers. */
+export const YOUTUBE_SAFETY_CHECK_LIMIT = { max: 6, windowSeconds: 60 } as const;
 
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
  *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
