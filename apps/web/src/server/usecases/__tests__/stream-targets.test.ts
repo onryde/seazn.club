@@ -843,6 +843,13 @@ describe.skipIf(!HAS_DB)("the Seazn destination in the list, rename, replace key
     expect(n).toBe(1);
   });
 
+  it("Task 10 review m1: a BLANK name on the Seazn row answers seazn_destination_fixed (the row is refused before the name is read); the same blank name on a pasted row is still DESTINATION_LABEL_EMPTY", async () => {
+    const { auth, a, seazn } = await orgWithTwoOlderKeys();
+    await expect(patchStreamTarget(auth, auth.orgId, seazn.id, { label: "   " })).rejects.toMatchObject({ status: 422, code: SEAZN_TARGET_FIXED });
+    await expect(patchStreamTarget(auth, auth.orgId, a.id, { label: "   " })).rejects.toMatchObject({ status: 422, code: DESTINATION_LABEL_EMPTY });
+    expect(await seaznRow(auth.orgId)).toEqual(seazn);
+  });
+
   it("the twin: a pasted row beside it still renames and removes, and another org's Seazn id is the plain 404", async () => {
     const { auth, a } = await orgWithTwoOlderKeys();
     const other = await orgWithTwoOlderKeys();
