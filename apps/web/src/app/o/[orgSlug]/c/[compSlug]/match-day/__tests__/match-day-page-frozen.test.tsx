@@ -44,6 +44,7 @@ vi.mock("@/server/usecases/match-day", () => ({
     results_owed: 0,
     fixtures_today: 0,
     venues_today: [],
+    online_rounds: [],
   }),
 }));
 vi.mock("@/server/usecases/divisions", () => ({ listDivisions: async () => [] }));
@@ -56,6 +57,8 @@ import type { Dict } from "@/lib/i18n-constants";
 import en from "@/dictionaries/en/ui.json";
 import { needsYouItems } from "@/components/v2/desk/needs-you";
 import { MatchDayShell } from "@/components/v2/match-day/match-day-shell";
+import { OnlineList } from "@/components/v2/match-day/online-list";
+import { NOW, checkinRound, earlier } from "@/components/v2/match-day/__tests__/_online-fixtures";
 import { FROZEN_NAMES_SHOWN, NO_FROZEN_NAMES, frozenNamesFor, type FrozenNames } from "@/lib/match-day/frozen-names";
 import type { CompetitionDesk } from "@/server/usecases/competition-desk";
 import type { Attention } from "@/lib/division-phase";
@@ -230,5 +233,66 @@ describe("G5 — a viewer's Match Day payload has no Needs-you rows", () => {
     expect(html).toContain('data-testid="md-read-only"');
     // The rest of the view is untouched: only the rows are withheld.
     expect(shell.props.initial.competition_id).toBe("comp-1");
+  });
+});
+
+// Match Day online, Task 6 (the flag it once handed over is retired, Task 10): the page hands the shell the two things only the page knows -
+// the `?board=` and `?round=` the address carries. The shell's half (a value opening what it names) is match-day-online-shell.test.tsx;
+// this is the seam between them, where a dropped param would compile, render and quietly leave a deep link opening nothing.
+describe("Match Day online - the page hands the shell the address's board and round", () => {
+  type Online = { focusBoardId?: string | null; focusRoundKey?: string | null; focusCourtId?: string | null };
+  const shellProps = async (search: Record<string, string | string[] | undefined> = {}) => {
+    const tree = (await Page({ params: Promise.resolve({ orgSlug: "riverside", compSlug: "summer-league" }), searchParams: Promise.resolve(search) })) as {
+      props: { children: { type: unknown; props: Online } };
+    };
+    expect(tree.props.children.type).toBe(MatchDayShell);
+    return tree.props.children.props;
+  };
+  beforeEach(() => {
+    h.frozen = false;
+    h.canEdit = true;
+    h.needs = [];
+  });
+
+  it("EMPTY CASE FIRST: no ?board= and no ?round= is none for both, and the shell is handed no online switch at all", async () => {
+    const p = await shellProps();
+    expect(p.focusBoardId).toBeNull();
+    expect(p.focusRoundKey).toBeNull();
+    expect("onlineEnabled" in p, "the flag is gone: nothing here can leave the online block off").toBe(false);
+  });
+
+  it("?board= and ?round= reach the shell as written, each in its own prop, beside ?court=", async () => {
+    const p = await shellProps({ board: "fx-9", round: "stage-1:3", court: "c-1" });
+    expect(p.focusBoardId).toBe("fx-9");
+    expect(p.focusRoundKey).toBe("stage-1:3");
+    expect(p.focusCourtId).toBe("c-1");
+  });
+
+  it("a repeated param (an array) is none, as ?court= is - the shell is never handed a list where it reads a string", async () => {
+    const p = await shellProps({ board: ["a", "b"], round: ["x:1", "y:2"] });
+    expect(p.focusBoardId).toBeNull();
+    expect(p.focusRoundKey).toBeNull();
+  });
+
+  it("the dictionary the island is handed carries EVERY online key (picked by prefix, so a key outside `matchDay.` would quietly render raw), and a block drawn from it has no raw key", async () => {
+    const picked = (await shellProps()) as unknown as { dict: Dict };
+    const wanted = Object.keys(en as Dict).filter((k) => k.startsWith("matchDay.online.") || k.startsWith("matchDay.header.boards"));
+    expect(wanted.length, "anti-vacuity: the keys of this task, counted from the dictionary itself").toBeGreaterThanOrEqual(27);
+    for (const k of wanted) expect(picked.dict[k], k).toBe((en as Dict)[k]);
+    // The three words a board row prints that live elsewhere in the dictionary (the sport-noun plural) are picked too.
+    expect(picked.dict["matchDay.header.places.board.one"]).toBeDefined();
+    const html = renderToStaticMarkup(
+      <OnlineList
+        rounds={[checkinRound("stage-1:3", { needs_decision: [earlier(2)] })]}
+        selected={null}
+        dict={picked.dict}
+        locale="en"
+        nowMs={NOW}
+        onOpenRound={() => {}}
+        onOpenBoard={() => {}}
+      />,
+    );
+    expect(html).toContain('data-testid="md-round-row"');
+    expect(html).not.toMatch(/matchDay\.[a-z]/);
   });
 });

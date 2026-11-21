@@ -17,16 +17,14 @@ import {
   seedRosteredFixture,
   overflowingIn,
   matchRoomPathBySql,
+  withDb,
 } from "../helpers";
-import { longName, roundGameSql, seedOnlineRound, uiEn } from "../match-room-kit";
+import { longName, roundGameSql, seedOnlineRound, seedSeatInvite, uiEn } from "../match-room-kit";
+import { backdateOpenSql, cancelFlaggedSql, holdNoShowSql } from "../match-day-online-kit";
+import { putArrival } from "../match-day-kit";
+import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../../src/server/external-play/window";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
-import {
-  HIT_TARGET_FLOOR_PX,
-  consentedAnonymousState,
-  dismissCookieBanner,
-  floorViolationLines,
-  hitTargetFloorReport,
-} from "../scorepad-a11y-kit";
+import { consentedAnonymousState, dismissCookieBanner } from "../scorepad-a11y-kit";
 import { openMatchActions } from "../helpers/match-actions";
 import { v3Sheet, assertTapFloor, padTile, dlDict, projectViewport, projectTag } from "./_shared";
 
@@ -722,223 +720,384 @@ test("rules-changed banner (W2c T15, X-SR-7): an open remote pad after a correct
   }
 });
 
-// The Arbiter Panel's round column (phase 2, spec 2026-10-24-arbiter-round-column-design.md §5.1, §7; C27): at this project's REAL
-// width. Below md the column is the first thing on the page, then the waiting seats, then the board picker; from md `main` is two
-// tracks and the column is the right-hand one, with the decision area under the camera and above the waiting list (Task 16 D4). Asserted as the order and the edges of what is
-// on screen, not as box sizes, so a groomed shrink of the desktop layout cannot pass for the phone composition. Every control in the
-// column and in the waiting list is at least 44px and HIT-TESTED (the paint box is not the tap area), nothing scrolls the page
-// sideways, and the visible control set of `main` is the one 1280 shows from the same seed, apart from the two controls that exist
-// at one width only: the picker (below lg) and the board list (lg and up). Nothing in the column is folded behind a disclosure.
-//
-// mobile.spec.ts is a SERIAL file (`describe.configure({ mode: "serial" })`): a red test aborts the rest of its project, so a CI
-// count for this file is a floor, not a total (AGENTS class 21). This test seeds its own round and reads nothing an earlier test left.
-test("arbiter round column: below md the column leads the page; from md it is the right-hand column; no horizontal scroll; 44px targets", async ({
+// Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; owner pick: mock Option A, boards are rows; no flag since Match Day all-in-one
+// Task 10 retired it - the arbiter round column test that stood above this one is the round panel test below): the online block of Match Day's list at this project's REAL width. One round,
+// four boards in four states (a game on file, two held for the organiser, one cancelled with a report to review), every player a realistic
+// 43-character name (a long name is what breaks a row). Asserted: the block is the third block of the list and has one round row and a row
+// per board; nothing scrolls the page sideways or clips inside it; every row is a 44px target that is HIT-TESTED; below md a tapped board
+// opens full-screen over the list with a way back that says where it goes, from md it opens beside the list; "left the list" is the
+// shell's driven suite's, the one poll it needs cannot be waited out here. The control set of the block is the one 1280 shows.
+test("match day online block: boards are rows of the list; a row opens its panel full-screen below md and beside the list from md; no horizontal scroll; 44px rows", async ({
   page,
   request,
 }) => {
-  test.setTimeout(240_000);
+  test.setTimeout(300_000);
   const vp = projectViewport();
   expect(vp, "a width project declares its viewport").not.toBeNull();
   const width = vp!.width;
   const phone = width < 768;
-  // Two boards, the first with two realistic 43-character names (a long name is what breaks a column), the second held by a mismatch so
-  // the queue has a card to review: the column has its queue, its hero and its waiting list at once. `camera: optional` puts the tile
-  // on screen with no camera duty.
-  const r = await seedOnlineRound(request, [longName(), longName(), `Mo Phone ${TAG}`, `Ny Width ${TAG}`], { camera: "optional" });
-  expect(r.boards.length, "premise: two boards").toBe(2);
-  const heldBoards = [r.boards[1]!];
-  for (const b of heldBoards) await roundGameSql(b, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
-  // The waiting list lists the boards still checking in: the ones not held. Derived from the seed, not read back from the page.
-  const waitingRows = r.boards.length - heldBoards.length;
-  expect(waitingRows, "premise: the seed leaves one board checking in").toBe(1);
+  const r = await seedOnlineRound(request, Array.from({ length: 8 }, () => longName()), { camera: "optional", stage: "swiss" });
+  // A Swiss stage pairs ONE round at a time: the list has this round and no other (a round-robin would list its paired later rounds too).
+  expect(r.boards.length, "premise: four boards").toBe(4);
+  const [playing, held, noShow, flagged] = r.boards as [typeof r.boards[number], typeof r.boards[number], typeof r.boards[number], typeof r.boards[number]];
+  await roundGameSql(playing, { moves: ["e2e4", "e7e5"] });
+  await roundGameSql(held, { moves: ["e2e4", "e7e5"], hold: "mismatch" });
+  await holdNoShowSql(noShow.fixtureId);
+  await cancelFlaggedSql(r.orgId, flagged.fixtureId);
 
-  await page.goto(r.arbiterPath, { waitUntil: "load" });
-  const col = page.getByTestId("arbiter-round-column");
-  const waiting = page.getByTestId("arbiter-waiting");
-  await expect(col).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
-  await expect(waiting, "premise: board 1 is waiting for its seats").toBeVisible({ timeout: 30_000 });
-  // Two scopes, not one: the panel mounts the waiting list in its board group, OUTSIDE the column's `aside` (spec §5.1). Every scan
-  // below names which of the two it reads, and each is proved non-empty for its own scope. The negative (nothing of the list inside the
-  // aside) is paired with the positive just above and the row count that follows.
-  await expect(col.getByTestId("arbiter-waiting"), "the waiting list is not inside the column").toHaveCount(0);
-  await expect(waiting.getByTestId("arbiter-waiting-row"), "one row for each board still checking in").toHaveCount(waitingRows);
-  await expect(col.getByTestId("arbiter-column-review"), "premise: the held board has a card to review").toBeVisible();
-  // The decision area is measured below (tablet: above the waiting list). It renders for the board on screen only when that board has
-  // something to offer; the panel opens on the FIRST board, which the seed leaves checking in with its round open, so "+5 min" (or the
-  // reason it is not offered) and "Settle the result now" are there. Said as a premise, so a seed that stops offering either fails here by
-  // name instead of as "the decision area is not on screen" at the measurement.
-  await expect(page.getByTestId("arbiter-decision"), "premise: the board on screen (board 1, checking in) has a decision area").toBeVisible();
-  // The panel's own `main`: the one that holds the column (the page has no other, but the scope is stated, not assumed).
-  const panelMain = page.locator('main:has([data-testid="arbiter-round-column"])');
-  await expect(panelMain.locator("figure"), "premise: the camera tile is on screen").toHaveCount(1);
-  const phase = await col.getAttribute("data-phase");
+  const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
+  await page.goto(matchDay, { waitUntil: "load" });
+  const block = page.getByTestId("md-online");
+  await expect(block, "the online block is on the page").toBeVisible({ timeout: 30_000 });
+  await expect(block.getByTestId("md-round-row"), "one round row").toHaveCount(1);
+  const rows = block.getByTestId("md-board-row");
+  await expect(rows, "a row for each board").toHaveCount(r.boards.length);
+  // The three blocks' order (spec §5.2): the online block is the LAST of the list column, and it is inside it.
+  await expect(page.getByTestId("md-list").getByTestId("md-online"), "the block is in the list column").toHaveCount(1);
+  const ids = await rows.evaluateAll((els) => els.map((e) => e.getAttribute("data-fixture-id")));
+  expect(new Set(ids), "each seeded board is one row, once").toEqual(new Set(r.boards.map((b) => b.fixtureId)));
 
-  // ── where things are ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-  await page.evaluate(() => window.scrollTo(0, 0));
-  const rects = await page.evaluate(() => {
-    const at = (el: Element | null | undefined) => {
-      if (!el) return null;
-      const b = el.getBoundingClientRect();
-      return { top: b.top + window.scrollY, bottom: b.bottom + window.scrollY, left: b.left, right: b.right };
-    };
-    return {
-      aside: at(document.querySelector('[data-testid="arbiter-round-column"]')),
-      waiting: at(document.querySelector('[data-testid="arbiter-waiting"]')),
-      picker: at(document.querySelector('[data-testid="arbiter-round-column"]')?.closest("main")?.querySelector("select")?.closest("label")),
-      decision: at(document.querySelector('[data-testid="arbiter-decision"]')),
-      camera: at(document.querySelector('[data-testid="arbiter-round-column"]')?.closest("main")?.querySelector("figure")),
-    };
-  });
-  function need<T>(v: T | null, what: string): T {
-    expect(v, `${what} is on screen at ${width}px`).not.toBeNull();
-    return v!;
-  }
-  const aside = need(rects.aside, "the column");
-  const wait = need(rects.waiting, "the waiting list");
-  const camera = need(rects.camera, "the camera tile");
-  const relations: string[] = [];
-  const holds = (ok: boolean, what: string) => {
-    expect(ok, `${what} at ${width}px`).toBe(true);
-    relations.push(what);
-  };
+  // ── the default: a phone shows the LIST (nothing was opened); from md the first row of the list is focused beside it ────────────
   if (phone) {
-    const picker = need(rects.picker, "the board picker");
-    holds(aside.top < picker.top, "the column's top is above the picker's top");
-    holds(wait.top >= aside.bottom - 1, "the waiting list starts below the column");
-    holds(wait.bottom <= picker.top + 1, "the waiting list ends above the picker");
+    await expect(page.getByTestId("md-focus"), "a phone opens on the list").toBeHidden();
   } else {
-    // 768 and 834 are md and not lg (lg is 1024): two tracks, the board then the decision then the waiting list in the first, the column in
-    // the second. (The panel's two groups are `display: contents` here and have no box to measure, so the boxes that are drawn are read:
-    // the camera, the decision area and the list. Task 16 D4: the decision area sits ABOVE the list, not below the whole of it.)
-    expect(width, "premise: the tablet widths are md, not lg").toBeLessThan(1024);
-    const decision = need(rects.decision, "the decision area");
-    holds(aside.left >= camera.right - 1, "the column is right of the camera");
-    holds(aside.left >= decision.right - 1, "the column is right of the decision area");
-    holds(decision.top >= camera.bottom - 1, "the decision area is below the camera");
-    holds(decision.bottom <= wait.top + 1, "the decision area is above the waiting list");
-    holds(wait.top >= camera.bottom - 1, "the waiting list is under the camera");
-    // The waiting list is in the board track, not the column's: its right edge stops short of the column's left (the relation the
-    // box-measuring version of this branch checked as "the column is right of the board group", which the list was part of).
-    holds(aside.left >= wait.right - 1, "the column is right of the waiting list");
+    await expect(page.getByTestId("md-focus"), "from md the first row is focused beside the list").toBeVisible();
+    await expect(page.getByTestId("md-focus")).toHaveAttribute("data-online", "round");
   }
-  const expectedRelations = phone ? 3 : 6;
-  expect(relations.length, "anti-vacuity: every relation of this branch was checked").toBe(expectedRelations);
 
-  // ── the sideways scroll, and what overflows inside the column ─────────────────────────────────────────────────────────────────────
-  // `expectNoHorizontalScroll` is the gate: it lifts `html, body { overflow-x: clip }` (globals.css) before it measures. A raw
-  // `documentElement.scrollWidth <= clientWidth` beside it was removed because it cannot fail under that clip, so it only looked
-  // like a second proof. What overflows INSIDE the column is the scan below.
+  // ── nothing scrolls sideways, nothing is clipped inside the block ────────────────────────────────────────────────────────────────
   await expectNoHorizontalScroll(page);
-  // A box whose extra content cannot be reached is a defect; one that scrolls is a feature that must be a tab stop (AGENTS class 23).
-  let scanned = 0;
-  for (const root of ['[data-testid="arbiter-round-column"]', '[data-testid="arbiter-waiting"]']) {
-    const { clipped, scrollable } = await overflowingIn(page, root, "button,a,p,span,li,h2,div", `${root} was not in the DOM`);
-    expect(clipped, `${root} clips content at ${width}px`).toEqual([]);
-    for (const box of scrollable) expect(box, `${root}: a scrolling box that is not keyboard-reachable`).toMatch(/tabindex=0$/);
-    scanned += 1;
-  }
-  expect(scanned, "anti-vacuity: the column and the waiting list were both scanned").toBe(2);
+  const { clipped, scrollable } = await overflowingIn(page, '[data-testid="md-online"]', "button,li,span,p,h2,div", "the online block was not in the DOM");
+  expect(clipped, `the online block clips content at ${width}px`).toEqual([]);
+  for (const box of scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
 
-  // ── 44px, measured and hit-tested ──────────────────────────────────────────────────────────────────────────────────────────────────
-  const tapTargets = (scope: string) =>
-    page.evaluate((sel) => {
-      const root = document.querySelector(sel);
-      if (!root) return null;
-      return Array.from(root.querySelectorAll<HTMLElement>("button, a[href]")).map((el) => {
-        el.scrollIntoView({ block: "center", inline: "nearest" });
-        const b = el.getBoundingClientRect();
-        const shown = b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== "hidden";
-        const hit = shown ? document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) : null;
-        return {
-          testid: el.getAttribute("data-testid"),
-          name: (el.getAttribute("aria-label") ?? el.innerText ?? "").trim().replace(/\s+/g, " ").slice(0, 60),
-          role: el.tagName.toLowerCase(),
-          disabled: (el as HTMLButtonElement).disabled === true,
-          width: Math.round(b.width * 100) / 100,
-          height: Math.round(b.height * 100) / 100,
-          shown,
-          reachable: hit !== null && (hit === el || el.contains(hit)),
-        };
-      });
-    }, scope);
-  const counts: string[] = [];
-  // [label, scope, the control that scope must offer, how many of it]: the hero's one press in the column, one board link per row in the list.
-  const scopes: [string, string, string, number][] = [
-    ["the column", '[data-testid="arbiter-round-column"]', "arbiter-column-reinvite", 1],
-    ["the waiting list", '[data-testid="arbiter-waiting"]', "arbiter-waiting-board", waitingRows],
-  ];
-  for (const [label, scope, mustHave, mustHaveCount] of scopes) {
-    const all = await tapTargets(scope);
-    expect(all, `${label} is in the DOM`).not.toBeNull();
-    const shown = all!.filter((t) => t.shown);
-    expect(shown.length, `anti-vacuity: ${label} has controls on screen at ${width}px`).toBeGreaterThan(0);
-    expect(shown.map((t) => t.testid), `${label} offers ${mustHave}`).toContain(mustHave);
-    expect(shown.filter((t) => t.testid === mustHave).length, `${label} offers ${mustHave} ${mustHaveCount} time(s) at ${width}px`).toBe(mustHaveCount);
-    const report = hitTargetFloorReport(shown.map((t) => ({ name: t.name, role: t.role, disabled: t.disabled, width: t.width, height: t.height })));
-    expect(report.operable.length, `anti-vacuity: ${label} has operable controls`).toBeGreaterThan(0);
-    expect(floorViolationLines(report), `${label}: every control is at least ${HIT_TARGET_FLOOR_PX}px at ${width}px`).toEqual([]);
-    const operable = shown.filter((t) => !t.disabled);
-    expect(
-      operable.filter((t) => !t.reachable).map((t) => t.name),
-      `${label}: every control's centre hits the control itself at ${width}px (nothing covers it)`,
-    ).toEqual([]);
-    counts.push(`${label} ${report.operable.length} controls, ${operable.filter((t) => t.reachable).length} hit-tested`);
-  }
-  // The column's own controls, by what they are: the queue's Review and the hero's press (both in the column), the row's board link.
-  await expect(col.getByTestId("arbiter-column-review")).toBeVisible();
+  // ── every row is a 44px target, hit-tested ───────────────────────────────────────────────────────────────────────────────────────
+  await assertTapFloor(block.getByTestId("md-round-row"), "the round row");
+  for (let i = 0; i < r.boards.length; i += 1) await assertTapFloor(rows.nth(i), `board row ${i + 1}`);
 
-  // ── the control set of `main`, against the same page at 1280 ─────────────────────────────────────────────────────────────────────
-  const controlSet = () =>
-    page.evaluate(() => {
-      const column = document.querySelector('[data-testid="arbiter-round-column"]');
-      const waiting = document.querySelector('[data-testid="arbiter-waiting"]');
-      const main = column?.closest("main") ?? null;
-      const nav = main?.querySelector("nav") ?? null;
-      if (!main) return null;
-      const keyOf = (el: HTMLElement) =>
-        el.getAttribute("data-testid") ??
-        el.getAttribute("aria-label") ??
-        `${el.tagName.toLowerCase()}:${(el.innerText ?? "").trim().replace(/\s+/g, " ").slice(0, 60)}`;
-      return Array.from(main.querySelectorAll<HTMLElement>('button, a[href], select, [role="button"], input, textarea'))
-        .filter((el) => {
-          const b = el.getBoundingClientRect();
-          return b.width > 0 && b.height > 0 && getComputedStyle(el).visibility !== "hidden";
-        })
-        .map((el) => ({ key: keyOf(el), picker: el.tagName === "SELECT", inNav: nav !== null && nav.contains(el), inColumn: column !== null && column.contains(el), inWaiting: waiting !== null && waiting.contains(el) }));
-    });
-  const here = await controlSet();
-  expect(here, "main is on screen").not.toBeNull();
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await expect(page.getByRole("navigation", { name: uiEn["arbiter.boardsHeading"] }), "at 1280 the board list is on screen").toBeVisible();
-  const desk = await controlSet();
-  expect(desk, "main is on screen at 1280").not.toBeNull();
-  await page.setViewportSize(vp!);
-  await expect(panelMain.locator("select"), "back at the project's width the picker is on screen").toBeVisible();
+  // ── a presence ring never stands alone on a line (controller finding V1): each ring is on the line of the LAST client rect of its name's last
+  // word. The 43-character names wrap at every phone width; before the fix the ring wrapped onto a line of its own. Read while the list is on screen.
+  const rings = await page.evaluate(() => {
+    const out: { name: string; ringTop: number; ringBottom: number; lastTop: number; lastBottom: number }[] = [];
+    for (const mark of document.querySelectorAll('[data-testid="md-online"] [data-testid="md-presence"]')) {
+      const tail = mark.previousElementSibling; // the name's last word, in the same nowrap unit as the ring
+      if (!(tail instanceof HTMLElement) || !tail.hasAttribute("data-md-name-tail")) { out.push({ name: "NO-TAIL", ringTop: 0, ringBottom: 0, lastTop: 1, lastBottom: 1 }); continue; }
+      const range = document.createRange();
+      range.selectNodeContents(tail);
+      const rects = [...range.getClientRects()];
+      const last = rects[rects.length - 1];
+      const ring = mark.getBoundingClientRect();
+      out.push({ name: tail.textContent ?? "", ringTop: ring.top, ringBottom: ring.bottom, lastTop: last?.top ?? NaN, lastBottom: last?.bottom ?? NaN });
+    }
+    return out;
+  });
+  expect(rings.length, "anti-vacuity: the seeded round draws presence rings (4 boards x 2 seats)").toBeGreaterThan(0);
+  for (const g of rings) {
+    expect(g.name, "every ring follows its name's last word").not.toBe("NO-TAIL");
+    expect(g.ringTop, `ring of "${g.name}" is above its word's last line`).toBeGreaterThanOrEqual(g.lastTop - 1);
+    expect(g.ringBottom, `ring of "${g.name}" stands alone below its word's last line`).toBeLessThanOrEqual(g.lastBottom + 1);
+  }
+
+  // ── a tap opens THAT board ───────────────────────────────────────────────────────────────────────────────────────────────────────
+  const target = page.locator(`[data-testid="md-board-row"][data-fixture-id="${held.fixtureId}"]`);
+  await target.scrollIntoViewIfNeeded();
+  await target.click();
+  const focus = page.getByTestId("md-focus");
+  await expect(focus).toBeVisible();
+  await expect(focus).toHaveAttribute("data-online", "board");
+  await expect(focus).toHaveAttribute("data-fixture-id", held.fixtureId);
+  await expect(target).toHaveAttribute("aria-current", "true");
+  const focusScan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div", "the board panel was not in the DOM");
+  expect(focusScan.clipped, `the board panel clips content at ${width}px`).toEqual([]);
   await expectNoHorizontalScroll(page);
+  const back = page.getByTestId("md-back");
+  if (phone) {
+    // Full-screen over the list: the list is hidden, and the way back is a 44px target that says where it goes.
+    await expect(page.getByTestId("md-list"), "below md the list gives way to the panel").toBeHidden();
+    await assertTapFloor(back, "the way back");
+    // Ruling MD-R27: a board is not a court, so a round or board panel's way back reads "Back to the list" on every day (this one has no court).
+    await expect(back).toContainText(uiEn["matchDay.back.list"]!);
+    await back.click();
+    await expect(page.getByTestId("md-list")).toBeVisible();
+    await expect(focus, "back on the list").toBeHidden();
+  } else {
+    // From md both are on screen: the list stays beside the panel.
+    await expect(page.getByTestId("md-list"), "from md the list stays beside the panel").toBeVisible();
+  }
 
-  const boardCount = r.boards.length;
-  expect(here!.filter((c) => c.picker).length, `the picker is in the set below lg (${width}px)`).toBe(1);
-  expect(here!.filter((c) => c.inNav).length, `the board list is not in the set below lg (${width}px)`).toBe(0);
-  expect(desk!.filter((c) => c.picker).length, "the picker is not in the set at 1280").toBe(0);
-  expect(desk!.filter((c) => c.inNav).length, "the board list has a button per board at 1280").toBe(boardCount);
-  // Everything else is the same controls with the same repeats: MEMBERSHIP and REPEATS, as sorted multisets. Visual order is not
-  // claimed here: it is the layout relations above, and with one DOM branched by Tailwind the source order is the same at both
-  // widths by construction, so comparing it would prove nothing a width change could move.
-  const multiset = (keys: string[]) => [...keys].sort();
-  const same = (list: NonNullable<typeof here>) => multiset(list.filter((c) => !c.picker && !c.inNav).map((c) => c.key));
-  expect(same(here!), `membership and repeats: the control set at ${width}px, less the picker, is the one 1280 shows, less its board list`).toEqual(same(desk!));
-  expect(same(here!).length, "anti-vacuity: the set has controls in it").toBeGreaterThan(0);
-  const inColumn = (list: NonNullable<typeof here>) => multiset(list.filter((c) => c.inColumn).map((c) => c.key));
-  expect(inColumn(here!), "membership and repeats: the column's controls are the same at both widths").toEqual(inColumn(desk!));
-  expect(inColumn(here!).length, "anti-vacuity: the column has controls at both widths").toBeGreaterThan(0);
-  // The waiting list is its own scope (outside the aside), so the column's comparison above says nothing about it: it gets its own.
-  const inWaiting = (list: NonNullable<typeof here>) => multiset(list.filter((c) => c.inWaiting).map((c) => c.key));
-  expect(inWaiting(here!), "membership and repeats: the waiting list's controls are the same at both widths").toEqual(inWaiting(desk!));
-  expect(inWaiting(here!).length, "anti-vacuity: the waiting list has controls at both widths").toBeGreaterThan(0);
-  expect(here!.filter((c) => c.inColumn && c.inWaiting).length, "the two scopes share no control").toBe(0);
+  console.log(`[match-day online ${width}px] ${r.boards.length} board rows + 1 round row; ${rings.length} rings on their word's line; clipped ${clipped.length}; ${phone ? "phone: full-screen panel and back" : "tablet: panel beside the list"}`);
+});
 
-  console.log(
-    `[arbiter-column ${width}px] data-phase=${phase}; ${relations.length}/${expectedRelations} layout relations held (${relations.join("; ")}); ${counts.join("; ")}; ` +
-      `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length}, waiting list ${inWaiting(here!).length} vs ${inWaiting(desk!).length})`,
+// Match Day online, Task 7 fix round (review M6): the ROUND PANEL at this project's real width, with the names that break a row. One Swiss
+// round open for check-in, three boards, every player a 43-character name (the same shape as the list cell above): the waiting list's rows
+// ("Not here yet" - a board's names, Resend, +5) and the link-hold block (a board held for a Lichess link: its names, its reason, "Open round N
+// again") are where a name meets a button. Asserted at 320..834: nothing scrolls the page sideways, nothing clips inside the panel, every
+// press is a 44px target hit-tested; with the window run out and another board bound, the closed sentence replaces the press, still clean.
+test("match day round panel: 43-character names on the check-in rows and the link-hold block do not clip or scroll sideways; presses are 44px targets", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(420_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const r = await seedOnlineRound(request, Array.from({ length: 6 }, () => longName()), { camera: "optional", stage: "swiss", open: true });
+  expect(r.boards.length, "premise: three boards in round 1").toBe(3);
+  const heldBoard = r.boards[0]!;
+  // What the open's own skip leaves on a board whose player has not linked Lichess (open-round.ts `heldBoards`).
+  await withDb(
+    (sql) => sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'lichess_unlinked', updated_at = now() where fixture_id = ${heldBoard.fixtureId}`,
   );
+  const url = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day?round=${r.stageId}:1`;
+  await page.goto(url, { waitUntil: "load" });
+  const panel = page.getByTestId("md-focus");
+  await expect(panel, "the round panel is on screen").toBeVisible({ timeout: 30_000 });
+  await expect(panel).toHaveAttribute("data-online", "round");
+  await expect(panel).toHaveAttribute("data-state", "checkin");
+
+  // ── the check-in rows: the two boards still waiting, each seat's name ────────────────────────────────────────────────────────────
+  const rows = page.getByTestId("arbiter-waiting-row");
+  await expect(rows, "the two boards that are not held are waited on").toHaveCount(2);
+  const checkinRows = await rows.count();
+  // ── the link-hold block: the held board, its reason, and the round's own press ───────────────────────────────────────────────────
+  const block = page.getByTestId("md-round-linkhold");
+  await expect(block).toBeVisible();
+  await expect(block.getByTestId("md-round-linkhold-board")).toHaveCount(1);
+  const again = page.getByTestId("md-round-reopen-cta");
+  await expect(again, "nobody is bound to the open: the press is offered, under the reason").toHaveCount(1);
+  await expect(block.getByTestId("md-round-reopen-cta"), "and it stands inside the block").toHaveCount(1);
+
+  const check = async (state: string): Promise<{ clipped: number }> => {
+    await expectNoHorizontalScroll(page);
+    const scan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div", "the round panel was not in the DOM");
+    expect(scan.clipped, `the round panel clips content at ${width}px (${state})`).toEqual([]);
+    for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+    return { clipped: scan.clipped.length };
+  };
+  const first = await check("check-in rows and a running link hold");
+  await assertTapFloor(again, "Open round 1 again");
+  await assertTapFloor(rows.first().getByTestId("arbiter-waiting-extend"), "a board's +5");
+  await assertTapFloor(page.getByTestId("arbiter-extend-round-cta"), "the round's +5");
+
+  // ── the window run out with another board bound: the closed sentence replaces the press ──────────────────────────────────────────
+  await seedSeatInvite(r.boards[1]!.fixtureId, "white", "sent");
+  await backdateOpenSql(r.stageId, 1, DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS + 120_000);
+  await page.reload({ waitUntil: "load" });
+  await expect(panel).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("md-round-linkhold-board")).toHaveAttribute("data-window-closed", "true");
+  await expect(page.getByTestId("md-round-linkhold-closed"), "the closed word is said").toBeVisible();
+  await expect(page.getByTestId("md-round-reopen-cta"), "and there is no press to loop on").toHaveCount(0);
+  const second = await check("the link hold's window closed");
+
+  console.log(`[match day round panel ${width}px] ${checkinRows} check-in rows, 1 link hold; clipped ${first.clipped}/${second.clipped}`);
+});
+
+// Match Day online, Task 8 (the board panel; plan 2026-11-05-match-day-all-in-one.md): the BOARD PANEL at this project's real width, with the names
+// that break a row. One Swiss round, two boards, every player a 43-character name: the live board draws the real chessground board with both
+// clocks (each a name beside a time), the held board draws its reason, two flag cards and the decisions (a name meets a button). Asserted at
+// 320..834: the board and the clocks stay inside the viewport, nothing scrolls the page sideways or clips inside the panel, and every press is a
+// 44px target hit-tested; from the live board a way back says where it goes.
+test("match day board panel: 43-character names on the clocks, the flag cards and the decisions do not clip or scroll sideways; the board fits the screen; presses are 44px targets", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(420_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const phone = width < 768;
+  const r = await seedOnlineRound(request, Array.from({ length: 4 }, () => longName()), { camera: "optional", stage: "swiss" });
+  expect(r.boards.length, "premise: two boards in round 1").toBe(2);
+  const [live, held] = r.boards as [typeof r.boards[number], typeof r.boards[number]];
+  const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5", "c2c3", "d7d6"];
+  await roundGameSql(live, { moves: LINE });
+  await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "mismatch" });
+  const from = new Date(Date.now() - 20 * 60_000);
+  from.setUTCMilliseconds(0);
+  const to = new Date(from.getTime() + 95_000);
+  const iso = (d: Date) => d.toISOString().replace(".000Z", "Z");
+  await withDb(async (sql) => {
+    await sql`
+      insert into fixture_play_flags (fixture_id, org_id, kind, person_id, note) values
+        (${held.fixtureId}, ${r.orgId}, 'out_of_band_play', null,
+         ${`plies 2-5 (${LINE.slice(1, 5).join(" ")}) played at Lichess, not through Seazn; camera required`}),
+        (${held.fixtureId}, ${r.orgId}, 'camera_lost', ${held.away.personId},
+         ${`camera off 95 s of 1800 s in the match: ${iso(from)} to ${iso(to)} (its own off/on events agree); from 2 camera connections over 1 session; camera required`})`;
+  });
+
+  const panel = page.getByTestId("md-focus");
+  const check = async (state: string): Promise<number> => {
+    await expectNoHorizontalScroll(page);
+    const scan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div,a", "the board panel was not in the DOM");
+    expect(scan.clipped, `the board panel clips content at ${width}px (${state})`).toEqual([]);
+    for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+    return scan.clipped.length;
+  };
+
+  // ── the live board: the real board and both clocks ─────────────────────────────────────────────────────────────────────────────
+  const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
+  await page.goto(`${matchDay}?board=${live.fixtureId}`, { waitUntil: "load" });
+  await expect(panel, "the board panel is on screen").toBeVisible({ timeout: 30_000 });
+  await expect(panel).toHaveAttribute("data-fixture-id", live.fixtureId);
+  const position = page.getByTestId("md-board-position");
+  await expect(position).toBeVisible({ timeout: 30_000 });
+  await expect(position.locator("cg-board piece"), "the real board mounted with every piece").toHaveCount(32);
+  const boardBox = await position.locator("cg-board").boundingBox();
+  expect(boardBox, "the board has a box").not.toBeNull();
+  expect(boardBox!.x, "the board starts inside the screen").toBeGreaterThanOrEqual(0);
+  expect(boardBox!.x + boardBox!.width, `the board ends inside the ${width}px screen`).toBeLessThanOrEqual(width + 1);
+  for (const colour of ["white", "black"]) {
+    const clock = position.getByTestId(`md-board-clock-${colour}`);
+    await expect(clock, `${colour}'s clock`).toBeVisible();
+    const box = (await clock.boundingBox())!;
+    expect(box.x + box.width, `${colour}'s clock ends inside the screen`).toBeLessThanOrEqual(width + 1);
+    expect(box.height, `${colour}'s clock is tall enough for its name and time`).toBeGreaterThanOrEqual(44);
+    await expect(position.getByTestId(`md-board-clock-${colour}-time`), `${colour}'s time is on screen`).toBeVisible();
+  }
+  const first = await check("the live board");
+  await assertTapFloor(page.getByTestId("md-open-pad"), "Open match");
+  const back = page.getByTestId("md-back");
+  if (phone) {
+    await assertTapFloor(back, "the way back");
+    await expect(back).toContainText(uiEn["matchDay.back.list"]!);
+  }
+
+  // ── the held board: its reason, two flag cards, the decisions ──────────────────────────────────────────────────────────────────
+  await page.goto(`${matchDay}?board=${held.fixtureId}`, { waitUntil: "load" });
+  await expect(panel).toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
+  await expect(page.getByTestId("md-board-hold")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
+  const goOn = page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.goOn"] });
+  const settle = page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.settle"] });
+  await expect(goOn).toHaveCount(1);
+  await expect(settle).toHaveCount(1);
+  const second = await check("the held board with flags and decisions");
+  await assertTapFloor(goOn, "Let the game go on");
+  await assertTapFloor(settle, "Settle the result now");
+  // The settle disclosure is the widest thing the decisions open: its outcomes name two 43-character players (a Swiss round offers three, with the
+  // refusal of "No result" said under them).
+  await settle.click();
+  await expect(page.getByTestId("arbiter-settle").getByRole("button")).toHaveCount(3);
+  await expect(page.getByTestId("arbiter-settle-guidance")).toHaveText(uiEn["arbiter.decide.swissNeedsResult"]!);
+  for (const choice of await page.getByTestId("arbiter-settle").getByRole("button").all()) await assertTapFloor(choice, "a settle outcome");
+  const third = await check("the settle outcomes open");
+
+  console.log(`[match day board panel ${width}px] live board (32 pieces, 2 clocks) + held board (reason, 2 flags, decisions, 3 outcomes + guidance); clipped ${first}/${second}/${third}`);
+});
+
+// Match Day online, Task 9 (both players' cameras in the board panel; plan 2026-11-05-match-day-all-in-one.md; design of record: the phone
+// composition, cameras AFTER the board and BEFORE the reason, a switch under lg). One Swiss round of 43-character names whose division REQUIRES
+// cameras, both players of both boards here. Every width of this matrix is below lg (1024), so the panel is ONE column with a Cameras / Board switch:
+// the live board opens on its cameras (the board hidden), the Board press swaps them, and the HELD board opens with its cameras folded to one
+// status line a player and a "Show video" press that unfolds them. Asserted at 320..834: no horizontal scroll, nothing clipped inside the panel,
+// every control a 44px target, the cameras in the DOM between the board and the reason, and a 43-character name truncated inside its tile.
+test("match day board panel, cameras: the switch, the folded held cameras and 43-character names hold at this width; presses are 44px targets; cameras sit after the board and before the reason", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(420_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const r = await seedOnlineRound(request, Array.from({ length: 4 }, () => longName()), { camera: "required", stage: "swiss" });
+  expect(r.boards.length, "premise: two boards in round 1").toBe(2);
+  const [live, held] = r.boards as [typeof r.boards[number], typeof r.boards[number]];
+  const LINE = ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "g8f6", "d2d3", "f8c5", "c2c3", "d7d6"];
+  await roundGameSql(live, { moves: LINE });
+  await roundGameSql(held, { moves: LINE.slice(0, 6), hold: "account_changed" });
+  for (const board of [live, held]) {
+    await putArrival(board.fixtureId, r.orgId, "home", board.home.personId);
+    await putArrival(board.fixtureId, r.orgId, "away", board.away.personId);
+  }
+
+  const panel = page.getByTestId("md-focus");
+  const cameras = page.getByTestId("md-cameras");
+  const position = page.getByTestId("md-board-position");
+  const check = async (state: string): Promise<void> => {
+    await expectNoHorizontalScroll(page);
+    const scan = await overflowingIn(page, '[data-testid="md-focus"]', "button,li,span,p,h2,div,a,figure", "the board panel was not in the DOM");
+    expect(scan.clipped, `the board panel clips content at ${width}px (${state})`).toEqual([]);
+    for (const box of scan.scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+  };
+  /** The test ids in document order: the order a phone reads them in. */
+  const domOrderNow = (ids: string[]) =>
+    page.evaluate((list) => list.map((id) => ({ id, el: document.querySelector(`[data-testid="${id}"]`) })).map((o, i, all) => ({ id: o.id, present: o.el !== null, before: all.slice(0, i).every((p) => p.el === null || o.el === null || (p.el.compareDocumentPosition(o.el) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0) })), ids);
+  /** T10 review M13: the blocks are read from the DOM the moment they exist, not the moment the page said `load` - a decision card or a hold
+   *  reason that mounts a poll later read as "not present" under load. Each is waited for (attached; visibility is what the fold denies) first. */
+  const domOrder = async (ids: string[]) => {
+    for (const id of ids) await expect(page.getByTestId(id).first(), `${id} is in the DOM`).toBeAttached({ timeout: 30_000 });
+    return domOrderNow(ids);
+  };
+
+  // ── the live board: cameras first, the board one press away ───────────────────────────────────────────────────────────────────
+  const matchDay = `/o/${r.slugs.org}/c/${r.slugs.comp}/match-day`;
+  await page.goto(`${matchDay}?board=${live.fixtureId}`, { waitUntil: "load" });
+  await expect(panel).toHaveAttribute("data-fixture-id", live.fixtureId, { timeout: 30_000 });
+  await expect(cameras, "the cameras are on the panel").toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId("md-camera-tile")).toHaveCount(2);
+  await expect(position, "below lg the cameras are the first view and the board is hidden").toBeHidden();
+  const buttons = page.getByTestId("md-camera-switch").getByRole("button");
+  await expect(buttons, "Cameras and Board").toHaveCount(2);
+  await expect(buttons.nth(0)).toContainText(uiEn["matchDay.cameras.viewCameras"]!);
+  await expect(buttons.nth(1)).toContainText(uiEn["matchDay.cameras.viewBoard"]!);
+  await expect(buttons.nth(0)).toHaveAttribute("aria-pressed", "true");
+  await assertTapFloor(buttons.nth(0), "the Cameras switch");
+  await assertTapFloor(buttons.nth(1), "the Board switch");
+  // White first, each tile names its player inside its own column (a 43-character name truncates, its full text in the title).
+  const tileBoxes: { x: number; right: number; width: number }[] = [];
+  for (const colour of ["white", "black"] as const) {
+    const tile = page.locator(`[data-testid="md-camera-tile"][data-colour="${colour}"]`);
+    await expect(tile).toBeVisible();
+    const name = colour === "white" ? live.home.name : live.away.name;
+    await expect(tile.locator(`[title="${name}"]`), `${colour}'s 43-character name is in the tile, whole in its title`).toHaveCount(1);
+    const box = (await tile.boundingBox())!;
+    expect(box.x, `${colour}'s tile starts inside the screen`).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width, `${colour}'s tile ends inside the ${width}px screen`).toBeLessThanOrEqual(width + 1);
+    tileBoxes.push({ x: box.x, right: box.x + box.width, width: box.width });
+  }
+  expect(tileBoxes[0]!.x, "White is the first tile").toBeLessThanOrEqual(tileBoxes[1]!.x);
+  await check("the live board, cameras");
+
+  // Board: the swap. The board is a real board again, the cameras are hidden, and the seat cards (the names the tiles carried) are back.
+  await buttons.nth(1).click();
+  await expect(buttons.nth(1)).toHaveAttribute("aria-pressed", "true");
+  await expect(position).toBeVisible();
+  await expect(position.locator("cg-board piece"), "the real board mounted with every piece").toHaveCount(32);
+  await expect(cameras, "the cameras give the phone up").toBeHidden();
+  await expect(page.getByTestId("md-cameras-toggle"), "and so does their fold press (it is on the state row, MD-R36)").toBeHidden();
+  await expect(page.getByTestId("md-board-seats"), "the seat cards name the players when the tiles are hidden").toBeVisible();
+  await check("the live board, board");
+  // And back: the cameras return without a reload.
+  await buttons.nth(0).click();
+  await expect(cameras).toBeVisible();
+  await expect(page.getByTestId("md-cameras-toggle")).toBeVisible();
+  await expect(position).toBeHidden();
+
+  // The order a phone reads in the DOM (the switch hides one of the two, it never reorders them): board, THEN cameras.
+  const order = await domOrder(["md-board-position", "md-board-cameras"]);
+  expect(order.every((o) => o.present), "both blocks are in the DOM").toBe(true);
+  expect(order.every((o) => o.before), "the board is before the cameras").toBe(true);
+
+  // ── the held board: cameras folded, the reason after them, the decision reachable ────────────────────────────────────────────
+  await page.goto(`${matchDay}?board=${held.fixtureId}`, { waitUntil: "load" });
+  await expect(panel).toHaveAttribute("data-fixture-id", held.fixtureId, { timeout: 30_000 });
+  await expect(page.getByTestId("md-board-hold")).toBeVisible({ timeout: 30_000 });
+  await expect(cameras, "a held board opens with its cameras folded").toHaveAttribute("data-folded", "true");
+  await expect(page.getByTestId("md-camera-tile")).toHaveCount(2);
+  const heldOrder = await domOrder(["md-board-position", "md-board-cameras", "md-board-hold", "arbiter-decision"]);
+  expect(heldOrder.every((o) => o.present), "the board, the cameras, the reason and the decision are all in the DOM").toBe(true);
+  expect(heldOrder.every((o) => o.before), "the DOM reads: board, cameras, reason, decision").toBe(true);
+  const toggle = page.getByTestId("md-cameras-toggle");
+  await assertTapFloor(toggle, "Show video");
+  await expect(toggle).toHaveText(uiEn["matchDay.cameras.show"]!);
+  await check("the held board, cameras folded");
+  await toggle.click();
+  await expect(cameras).toHaveAttribute("data-folded", "false");
+  await expect(toggle).toHaveText(uiEn["matchDay.cameras.hide"]!);
+  await check("the held board, cameras unfolded");
+  // This held board carries no flag, so "Let the game go on" is not offered; the decision it does offer is Resync and Settle.
+  await assertTapFloor(page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.resync"] }), "Resync from Lichess");
+  await assertTapFloor(page.getByTestId("arbiter-decision").getByRole("button", { name: uiEn["arbiter.decide.settle"] }), "Settle the result now");
+
+  console.log(`[match day cameras ${width}px] live (switch, 2 tiles, 43-char names) + held (folded, unfolded, reason after the cameras)`);
 });

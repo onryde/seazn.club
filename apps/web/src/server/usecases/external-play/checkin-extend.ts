@@ -73,6 +73,7 @@ import {
   extensionsLeft,
   windowFor,
 } from "@/server/external-play/window";
+import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { requireWatcher } from "./arbiter";
 import { ensureBridgeRow, loadOnlinePlayFixture, type OnlinePlayFixture } from "./guard";
 import { SeatsNeeded, boardSeats, requeueUnsentInvites } from "./invite";
@@ -276,6 +277,10 @@ export async function extendCheckin(auth: AuthCtx, fixtureId: string, deps: Exte
   if (await isSeatedOn(userId, fixtureId)) {
     throw new HttpError(403, "You play on this board, so another organiser must extend its check-in", "ARBITER_PLAYS_THIS_BOARD");
   }
+  // Match Day O4 (owner 2026-11-17): +5 STARTS time for people, so a billing-frozen competition refuses it with the freeze's 402 (the rule
+  // every write but scoring keeps; freeze-guard-sites.test.ts), before the board's window lock and any write. Outside the transaction
+  // `extendOneBoard` opens, as the guard requires (`frozenCompetitionIds`).
+  await assertCompetitionNotFrozen(f.orgId, f.competitionId);
   if ((await boardOpenFor(sql, fixtureId)) === null) throw new HttpError(409, "this board's round is not open yet", "ROUND_NOT_OPEN");
   const step = await extendOneBoard({ f, actorUserId: userId, scope: "board" }, deps);
   if (!step.ok) throw refused(step.refusal);
@@ -295,8 +300,13 @@ export async function extendRoundCheckin(
   deps: ExtendDeps = {},
 ): Promise<CheckinExtendRoundResult> {
   const userId = requireWatcher(auth);
-  const [stage] = await sql<{ orgId: string }[]>`select org_id as "orgId" from stages where id = ${a.stageId}`;
+  const [stage] = await sql<{ orgId: string; competitionId: string }[]>`
+    select s.org_id as "orgId", d.competition_id as "competitionId"
+      from stages s join divisions d on d.id = s.division_id where s.id = ${a.stageId}`;
   if (!stage || stage.orgId !== auth.orgId) throw new HttpError(404, "stage not found", "NOT_FOUND");
+  // Match Day O4 (owner 2026-11-17): the round-wide +5, refused as the single board's is. HERE, before the per-board loop below: that loop's
+  // catch counts a board whose step threw as `failed`, so a guard inside it would answer 200 with every board failed, not the 402.
+  await assertCompetitionNotFrozen(stage.orgId, stage.competitionId);
   if (!(await roundOpenAt(sql, a.stageId, a.roundNo))) throw new HttpError(409, "this round is not open yet", "ROUND_NOT_OPEN");
 
   const fixtures = await sql<{ id: string }[]>`

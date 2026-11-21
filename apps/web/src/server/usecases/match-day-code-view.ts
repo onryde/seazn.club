@@ -27,6 +27,7 @@ import { IN_PLAY, liveCallSql } from "./match-day-call";
 import { readMatchDayNames } from "./match-day-names";
 import { readRounds, roundOf } from "./match-day-rounds";
 import type { MatchDayCodeRow } from "./match-day-codes";
+import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { DECIDED } from "./stages";
 import type { MatchDayCourtState } from "@/lib/match-day/types";
 
@@ -371,7 +372,13 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
   const words = levelWords(await getDictionary(DEFAULT_LOCALE, "public"));
   return withTenant(code.orgId, async (tx) => {
     const board = await readBoard(tx, code.competitionId, now, { noCourt: code.scope.kind === "competition", finished: true });
-    const covers = (r: FixtureRow): boolean => inScope(code, scopeFixtureOf(code, board, r));
+    // Owner O3 (2026-11-17): online divisions stay OUT of this read. An online board is the web Match Day's to list (`online_rounds`), and
+    // the phone's code never lists one - on a court, off one, or in play. The division's sport and config are read here (a tenant table),
+    // and the one `covers` predicate drops them, so a code's scope and the online drop are a single filter.
+    const divisions = await tx<{ id: string; sport_key: string; config: unknown }[]>`
+      select id, sport_key, config from divisions where competition_id = ${code.competitionId}`;
+    const online = new Set(divisions.filter((d) => divisionPlaysOnline(d)).map((d) => d.id));
+    const covers = (r: FixtureRow): boolean => !online.has(r.division_id) && inScope(code, scopeFixtureOf(code, board, r));
     const scope = code.scope;
     const courts = board.courts
       .filter((c) => scope.kind === "competition" || (scope.kind === "venue" ? c.venue_id === scope.venueId : scope.courtIds.includes(c.court_id)))
@@ -405,8 +412,8 @@ export async function getMatchDayForCode(code: MatchDayCodeRow, now: Date): Prom
         finished: finished.map(rowView),
       })),
       no_court: noCourt.map(rowView),
-      // The web's all-in-one read model (2026-11-05) lists online chess boards with the hall; until it lands there is
-      // nothing to list here (§9: "follows the web's newer read model if it has landed by then").
+      // Owner O3 (2026-11-17): the code read never lists online boards - the web's all-in-one read model (`online_rounds`) is the web's
+      // alone, and `covers` above drops an online division's boards from the lists. So `online` stays [].
       online: [],
       approvals,
     };

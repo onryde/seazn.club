@@ -141,9 +141,9 @@ export function countedHeld(held: readonly NeedsOrganiserExternalPlayRow[]): Nee
 }
 
 /** C6: the number of DISTINCT fixture ids over the counted held rows (`countedHeld`) and the flagged boards. A held board with
- *  an open flag is in both lists and counts once; a cancelled flagged board counts. Two callers, one call shape
- *  (`attentionCount(held, flagged)`): the column's title (`round-queue-cards.tsx`) and the Fixtures tab's entry card (the division
- *  page hands `entryStatus` this number), so the tab and the panel cannot count differently. */
+ *  an open flag is in both lists and counts once; a cancelled flagged board counts. One call shape
+ *  (`attentionCount(held, flagged)`): the Fixtures tab's entry card (the division page hands `entryStatus` this number). The column's
+ *  own title (`round-queue-cards.tsx`) that shared it went with the Arbiter page. */
 export function attentionCount(held: readonly NeedsOrganiserExternalPlayRow[], flagged: readonly FlaggedBoard[]): number {
   const ids = new Set<string>();
   for (const row of countedHeld(held)) ids.add(row.fixtureId);
@@ -221,9 +221,10 @@ type PluralStem = DictionaryKey extends infer K ? (K extends `${infer S}.one` ? 
 /** A dictionary key, or the stem of a plural pair. tsc refuses a key that is not in the dictionary, and a stem with no `.one`. */
 export type ColumnKey = DictionaryKey | PluralStem;
 
-/** Every key the column's own files (every component in components/v2/arbiter/) pass as a LITERAL to `msg(`, `plural(`, `t(` or
- *  `f.t(` (plural keys by their stem). round-column-copy.test.ts reads those files as text, from the directory listing, and refuses a
- *  literal that is not here; it sweeps every key here through all four locales and for dashes and arrows. What it does NOT see is a
+/** Every key the column's own files (Match Day's round panel and board panel, `match-day/round-focus.tsx` and `board-focus.tsx`; they
+ *  were `components/v2/arbiter/` before the Arbiter page was retired into Match Day) pass as a LITERAL to `msg(`, `plural(`, `t(` or
+ *  `f.t(` (plural keys by their stem). round-column-copy.test.ts reads those files as text and refuses a
+ *  literal that is not here or in the helper list; it sweeps every key here through all four locales and for dashes and arrows. What it does NOT see is a
  *  key the column asks for through a variable (`msg(map[reason])`): each such call is pinned by its text in the test and tied to the
  *  table that supplies it (the `HELPER` keys below), so a new one fails until it is pinned. A key listed here that the column no
  *  longer asks for only widens the sweep. */
@@ -253,7 +254,12 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "arbiter.column.toFixtures",
   "arbiter.column.waiting",
   "arbiter.column.waitingToRestart",
+  "arbiter.flag.foundAt",
+  "arbiter.flag.pending.body",
+  "arbiter.flag.pending.chip",
   "arbiter.flagCount",
+  "arbiter.flags.headingThis",
+  "arbiter.flags.lede",
   "arbiter.invite.help",
   "arbiter.notice.settleOwnBoard",
   "arbiter.roundLine",
@@ -262,6 +268,17 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
   "externalPlay.openRound.startFirst",
   "externalPlay.queue.markReviewed",
   "externalPlay.queue.ownFlagged",
+  "externalPlay.room.board.blackToMove",
+  "externalPlay.room.board.final",
+  "externalPlay.room.board.whiteToMove",
+  "matchDay.board.flagsViewer",
+  "matchDay.board.loading",
+  "matchDay.board.noGame",
+  "matchDay.board.readFailed",
+  "matchDay.cameras.switch",
+  "matchDay.cameras.viewBoard",
+  "matchDay.cameras.viewCameras",
+  "matchDay.focus.openMatch",
   "runsheet.round.batchCloses",
   "runsheet.round.batchOpens",
   "runsheet.round.batchesLabel",
@@ -290,6 +307,11 @@ export const ROUND_COLUMN_KEYS: readonly ColumnKey[] = [
  *     the column, so only its two kinds are listed). The test scans `boardStateWord` for its words; `where()` and `noticeSentence()`
  *     are listed by hand and not scanned. */
 export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
+  // The chip a flag wears for a reader who is not an editor (`SUMMARY_CHIP` in match-day/board-focus.tsx, read from its declaration)
+  "arbiter.flag.cameraOff.chipPlain",
+  "arbiter.flag.connection.chipPlain",
+  "arbiter.flag.devices.chipPlain",
+  "arbiter.flag.outOfBand.chip",
   // OpenRoundConfirmBody, inviteState, the open's answer and the resend's
   "arbiter.column.confirmSeat",
   // The venue's name after a time of day (Task 16 D1): venue-clock.ts and useFmt's `named` ask for it
@@ -418,4 +440,17 @@ export const ROUND_COLUMN_HELPER_KEYS: readonly ColumnKey[] = [
   "externalPlay.queue.reviewed",
   "externalPlay.queue.reviewedNew",
   "externalPlay.queue.where",
+  // Match Day's round panel (Task 7, components/v2/match-day/round-focus.tsx - it carries the moved bodies and joins the swept helper files):
+  // the billing freeze's answer to an open, a resend and a +5; the "ready to open" line; the link hold's block and press; Pair next round
+  "runsheet.round.err.frozen",
+  "matchDay.round.ready",
+  "matchDay.round.readyGo",
+  "matchDay.round.openAgain",
+  "matchDay.round.openAgainTitle",
+  "matchDay.round.linkHold.title",
+  "matchDay.round.pairHint",
+  "matchDay.round.pairPlanLimit",
+  "matchDay.round.pairedNotice",
+  "matchDay.round.pairFailed",
+  "schedule.pairNext",
 ];

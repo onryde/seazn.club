@@ -19,6 +19,8 @@ import { HttpError } from "@/lib/errors";
 import { captureError } from "@/lib/sentry";
 import {
   boardMoveNo,
+  flagsForReader,
+  holdReasonForReader,
   parseCameraLostNote,
   parseMultipleDevicesNote,
   parseOutOfBandNote,
@@ -30,6 +32,7 @@ import {
   type ArbiterSideMeeting,
 } from "@/lib/arbiter-view";
 import { seatInviteWords, type SeatInviteWord } from "@/lib/invite-status";
+import type { BoardPosition, MatchDayBoard, MatchDayBoardRow } from "@/lib/match-day/types";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fixtureCameraPolicy } from "@/server/external-play/camera-policy";
 import type { CameraPolicy } from "@/lib/camera-policy";
@@ -51,20 +54,23 @@ import { linePool } from "@/server/external-play/seat-line";
 import { VIDEO_BUSY } from "@/lib/online-chess";
 import { anchorOfRow, boardExtraSql, boardOpenFor, boardRankSql, roundOpenAt } from "@/server/external-play/round-open";
 import { type BoardAnchor, bridgeGameOnFile, checkInCounts, extendRefusal, extensionsLeft, windowFor } from "@/server/external-play/window";
+import type { PublicExternalPlayStatus } from "@/server/external-play/public-view";
 import { latestEmailStatus, type EmailStatusRow } from "@/server/email-outbox/status";
 import type { CheckinExtendState } from "@/lib/checkin-extend";
-import { EDITOR_ROLES } from "@/lib/types";
+import { EDITOR_ROLES, isEditorRole } from "@/lib/types";
 import { ARBITER_JOIN_LIMIT, ARBITER_RESYNC_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { log } from "@/server/logger";
 import { decisiveResultFor, gameClocks, turnAfter, type DecisiveEvent } from "@/components/public-site/match-room/room-snapshot";
 import { checkedInAtOfBoards, countedCheckIns } from "./check-ins";
-import { loadOnlinePlayFixture, loadSides, whiteSideOf, type Side, type SidePlayer } from "./guard";
+import { loadOnlinePlayFixture, loadSides, onlinePlayDivisionWhere, type Side, type SidePlayer } from "./guard";
+import { whiteSideOfFold } from "@/server/external-play/colours";
 import { noResultOffer } from "./no-result";
 import { readNeedsReason } from "./queue";
 import { isPlayableFixtureStatus, organiserOverrideVideo } from "./preflight";
 import { reconcile, type ReconcileDeps } from "./reconcile";
 import { CHESS_SEAT_REF_TYPE, chessSeatRef, seatStampBound, type Colour } from "./seat-stamp";
 import { fixturesSeating, isSeatedOn } from "./seated";
+import { watchFromLedger } from "../external-play-read";
 
 // ---------------------------------------------------------------------------
 // The round in view
@@ -72,6 +78,8 @@ import { fixturesSeating, isSeatedOn } from "./seated";
 
 type BoardRow = {
   fixtureId: string;
+  /** The board's stage (Match Day's list read names a held or flagged board of an earlier round by it). */
+  stageId: string;
   fixtureNo: number | null;
   /** `fixtures.seq_in_round`, NOT NULL in the schema: every board has its own number (M4, T16 fix round 1 — the old
    *  `i + 1` fallback numbered across rounds, and could never run). */
@@ -102,6 +110,9 @@ type BoardRow = {
   roundOpenId: string | null;
   openId: string | null;
   whiteSide: Side | null;
+  /** The pairing card's colour in the board's fold (`match_states.state.colorOfHome`: "B" = Black on home), read with the row for the board
+   *  that has no game yet and so no `whiteSide` of its own (MD-R23: one read for the round, not an owner session and a fold read per board). */
+  colorOfHome: string | null;
   moveCount: number | null;
   whiteMs: number | null;
   blackMs: number | null;
@@ -128,6 +139,8 @@ type BoardRow = {
   stageKind: string | null;
   winnerToFixture: string | null;
   loserToFixture: string | null;
+  /** The bridge's move list (UCI), the focused board's position (`positionOf`). null: no bridge row. */
+  movesUci: string[] | null;
 };
 
 type FlagRow = {
@@ -175,7 +188,7 @@ export async function arbiterRequestedRound(auth: AuthCtx, divisionId: string, f
 export async function loadArbiterRound(
   auth: AuthCtx,
   divisionId: string,
-  opts: { round?: { stageId: string; roundNo: number }; now?: Date } = {},
+  opts: { round?: { stageId: string; roundNo: number }; now?: Date; flags?: FlagMode } = {},
 ): Promise<ArbiterRound | null> {
   const now = opts.now ?? new Date();
   const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
@@ -220,15 +233,8 @@ export async function loadArbiterRound(
 
   // M4: every board is read at once (its sides, its colours, its result, its
   // flags) — never one board after another. Promise.all keeps board order.
-  const listed = [...rows.entries()].filter(([, r]) => !own.has(r.fixtureId));
-  // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
-  // The facts every side's presence, camera and `joinable` read: ONE statement each over the boards in hand (never one per board).
-  const facts = await readBoardFacts(listed.map(([, r]) => r), now, { seats: true });
-  const built = await Promise.all(
-    listed.map(async ([, r]) => ({ row: r, ...(await boardWithSides(auth, r, { limitMs, policy, flagRows, now, facts })) })),
-  );
-  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins (the one the facts above hold) and ONE of its invite mail.
-  const boards = await withSeats(auth, built, facts.checkedInAt);
+  const listed = rows.filter((r) => !own.has(r.fixtureId));
+  const boards = await composeBoards(auth, listed, { limitMs, policyOf: async () => policy, flagRows, now, flags: opts.flags ?? "full" });
   return {
     stageId: round.stageId,
     stageName: round.stageName,
@@ -238,6 +244,170 @@ export async function loadArbiterRound(
     ownBoards: own.size,
     current,
     extendableBoards: boards.filter((b) => b.checkin?.canExtend === true).length,
+  };
+}
+
+/** How a board's flags are carried (Match Day's list read vs. the arbiter's own surfaces): `full` builds each flag's card
+ *  (`flagView`, which reads the guard's stamps for a connection-problems flag); `count` builds none - `flags` is [] and `flagCount` is
+ *  the open flags on file. The default of every reader is `full`. */
+export type FlagMode = "full" | "count";
+
+/** THE composition of a list of boards, one place for every reader that paints boards the way the arbiter does (MD-R1): the facts of
+ *  every side read once (`readBoardFacts`: presence, camera, check-in stamps), each board built with them (`boardWithSides`) and the
+ *  seats of the boards in check-in attached in a second pass (`withSeats`). The round view and Match Day's by-id read both end here, so
+ *  a board carries its presence, camera and `joinable` in either. `policyOf` is asked once per board (the round view answers from one
+ *  stage-wide policy; a by-id read, whose boards span stages, asks each). */
+async function composeBoards(
+  auth: AuthCtx,
+  listed: readonly BoardRow[],
+  ctx: { limitMs: number; policyOf: (r: BoardRow) => Promise<CameraPolicy>; flagRows: readonly FlagRow[]; now: Date; flags: FlagMode },
+): Promise<ArbiterBoard[]> {
+  // Pass 1 (C24): the boards, exactly as the Flagged list builds them, each with the two sides it resolved.
+  // The facts every side's presence, camera and `joinable` read: ONE statement each over the boards in hand (never one per board).
+  const facts = await readBoardFacts(listed, ctx.now, { seats: true });
+  const built = await Promise.all(
+    listed.map(async (r) => ({
+      row: r,
+      ...(await boardWithSides(auth, r, { limitMs: ctx.limitMs, policy: await ctx.policyOf(r), flagRows: ctx.flagRows, now: ctx.now, facts, flags: ctx.flags })),
+    })),
+  );
+  // Pass 2: the seats of the boards in check-in, from ONE read of the round's check-ins (the one the facts above hold) and ONE of its invite mail.
+  return withSeats(auth, built, facts.checkedInAt);
+}
+
+/**
+ * Boards by id, as the round view builds them (`boardRows` + `composeBoards`), for Match Day's held and flagged boards of earlier
+ * rounds: each carries the stage and round it sits in. Only this division's boards are read. The viewer's own boards are left out
+ * (`fixturesSeating`, the round view's own rule). A cancelled board is read only while it has an open flag (owner O1, 2026-11-17: the
+ * Flagged list's R4 rule - a settled one is nobody's to review). Flags are counted,
+ * never built (`flags: "count"`). Empty `fixtureIds`: [] and NO statement.
+ */
+export async function loadBoardsByIds(
+  auth: AuthCtx,
+  divisionId: string,
+  fixtureIds: readonly string[],
+  opts: { now: Date; flags: "count" },
+): Promise<MatchDayBoardRow[]> {
+  if (fixtureIds.length === 0) return [];
+  const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
+    select d.config from divisions d
+      join competitions c on c.id = d.competition_id
+     where d.id = ${divisionId} and c.org_id = ${auth.orgId}`;
+  if (!division) throw new HttpError(404, "division not found", "NOT_FOUND");
+
+  const rows = await boardRows(auth, sql`f.division_id = ${divisionId} and f.id in ${sql([...new Set(fixtureIds)])}`, { cancelled: true });
+  const flagRows = await openFlagRows(auth, rows.map((r) => r.fixtureId));
+  const flagged = new Set(flagRows.map((f) => f.fixtureId));
+  const own = auth.userId === null ? new Set<string>() : await fixturesSeating(auth.userId, rows.map((r) => r.fixtureId));
+  const listed = rows.filter((r) => !own.has(r.fixtureId) && (r.fixtureStatus !== "cancelled" || flagged.has(r.fixtureId)));
+  const policies = new Map<string, Promise<CameraPolicy>>();
+  // One stage, one policy: asked once per stage, by its first board.
+  const policyOf = (r: BoardRow): Promise<CameraPolicy> => {
+    const kept = policies.get(r.stageId) ?? fixtureCameraPolicy(r.fixtureId);
+    policies.set(r.stageId, kept);
+    return kept;
+  };
+  const boards = await composeBoards(auth, listed, {
+    limitMs: (division.config?.clock?.base ?? 0) * 1_000,
+    policyOf,
+    flagRows,
+    now: opts.now,
+    flags: opts.flags,
+  });
+  // `fixtures.round_no` is NOT NULL (V214): the row type is the loose one the round view's left joins share, the column never is null.
+  return boards.map((board, i) => ({ ...board, stage_id: listed[i]!.stageId, round_no: listed[i]!.roundNo! }));
+}
+
+/**
+ * The ONE board Match Day's panel has in focus, read by its id (Match Day online, Task 3): the board as the arbiter's round view paints it
+ * - `composeBoards`, so presence, camera, `joinable`, the seats of a board in check-in and the check-in window ride it exactly as they ride
+ * the round's boards (MD-R1) - with every open flag built in FULL (`flags: "full"`: the connection card's seconds and stamps), the board's
+ * `stage_id` and `round_no`, `hold_reason` (the bridge row's own word while the board is `on_hold`, null in any other state) and the
+ * position of its game. The position is the public read's own derivation (`watchFromLedger`: `fenAfter` over the bridge's moves, the last
+ * REPLAYED ply as the last move, the turn from the plies replayed) over the moves this loader reads from the bridge row it already joins -
+ * not through `loadOnlinePlayFixture`, a playability guard that answers null for a finished board, whose final position is wanted too.
+ *
+ * NOT FOUND (404) for a fixture that is not an online board of this club (another club's, another sport's, a division that does not play
+ * online, an unpaired seat, an id that is no uuid) and for a cancelled board with no open flag (owner O1: the Flagged list's rule - a settled
+ * one has left every list, so its read leaves with it). 403 ARBITER_PLAYS_THIS_BOARD for a board the viewer plays on (`isSeatedOn`, the
+ * join's own predicate and refusal). Also NOT FOUND for a board of a round nobody has opened (the empty check-in a left join of
+ * `stage_round_opens` would otherwise read as `checking_in`: no list shows such a board, so no link points here). No editor check to READ:
+ * any member who may read the competition may read the board and its state, and a key (no user) plays nowhere and is never asked - but the
+ * flags are evidence about a named player and travel whole to an editor's role only (MD-R13, `flagsForReader`): anyone else gets each
+ * flag's id, kind and opening time, `flagCount` unchanged. The hold's reason is the same kind of fact and goes the same way (MD-R21,
+ * `holdReasonForReader`): null for anyone else - the board is still `on_hold`, only WHY is withheld.
+ */
+export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: { now?: Date } = {}): Promise<MatchDayBoard> {
+  const now = opts.now ?? new Date();
+  const notFound = () => new HttpError(404, "board not found", "NOT_FOUND");
+  // A path value: a malformed id is "not here", never a 500 from Postgres' uuid cast.
+  if (!UUID.test(fixtureId)) throw notFound();
+  // This club's fixture of a division that plays online (the one home of that rule, guard.ts), with the division's clock. `f.org_id` here
+  // is the TWIN of the org filter in `boardRows` below, kept on purpose: each statement guards its own read, so neither depends on the
+  // other staying (dropping either alone changes nothing; the pair is the guard).
+  const [division] = await sql<{ config: { clock?: BoardgameClockInput } | null }[]>`
+    select d.config from fixtures f
+      join divisions d on d.id = f.division_id
+     where f.id = ${fixtureId} and f.org_id = ${auth.orgId} and ${onlinePlayDivisionWhere()}`;
+  if (!division) throw notFound();
+  const [row] = await boardRows(auth, sql`f.id = ${fixtureId}`, { cancelled: true });
+  if (!row) throw notFound();
+  const flagRows = await openFlagRows(auth, [fixtureId]);
+  // Owner O1: a cancelled board is read only while it has an open flag (`loadBoardsByIds`' twin guard, and the Flagged list's R4 rule).
+  if (row.fixtureStatus === "cancelled" && flagRows.length === 0) throw notFound();
+  // C1 (D7): a board the viewer plays on is not theirs to watch. A key has no user, so plays nowhere.
+  if (auth.userId !== null && (await isSeatedOn(auth.userId, fixtureId))) {
+    throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
+  }
+  const policy = await fixtureCameraPolicy(fixtureId);
+  // `composeBoards` answers one board per row it is given, in order (a `Promise.all` over `listed`, `withSeats` keeps them): one row in, one out.
+  const board = (
+    await composeBoards(auth, [row], {
+      limitMs: (division.config?.clock?.base ?? 0) * 1_000,
+      policyOf: async () => policy,
+      flagRows,
+      now,
+      flags: "full",
+    })
+  )[0]!;
+  // A round nobody opened has no board yet: `boardRows` left-joins the opens, so its fixtures are rows with `openId` null that read as an
+  // empty check-in. The round view, the Flagged list and Match Day list none of them, so nothing links here - the same 404 as a board that
+  // is not one. A held, settled or live board of such a round (a game or a hold on file) is not that empty check-in and reads.
+  if (row.openId === null && board.state.kind === "checking_in") throw notFound();
+  return {
+    ...board,
+    flags: flagsForReader(board.flags, isEditorRole(auth.role)),
+    stage_id: row.stageId,
+    // `fixtures.round_no` is NOT NULL (V214): the row type is the loose one the round view's left joins share, the column never is null.
+    round_no: row.roundNo!,
+    // The reason names the players' conduct: an editor's fact like the flags (MD-R21, `holdReasonForReader`).
+    hold_reason: holdReasonForReader(board.state.kind === "on_hold" ? readNeedsReason(row.needsReason) : null, isEditorRole(auth.role)),
+    position: positionOf(row),
+  };
+}
+
+/** The game's position as the focused board draws it, from the moves `boardRows` reads off the bridge row. One derivation with the public
+ *  read: `watchFromLedger` replays the ledger as far as chess.js can follow it, and says which ply that was (so the last move is the last
+ *  REPLAYED ply, never the list's tail) and whose turn it is. null while no game is on file (its own first rule: no challenge). */
+function positionOf(r: BoardRow): BoardPosition | null {
+  const watch = watchFromLedger({
+    // `over` is the only thing the status changes in a watch, and the position reads none of it.
+    status: (r.bridgeStatus ?? "pending") as PublicExternalPlayStatus,
+    challenge_id: r.challengeId,
+    white_side: r.whiteSide,
+    // A board with no bridge row has no moves (null) and no game: the ledger is never replayed for it.
+    moves_uci: r.movesUci ?? [],
+    move_count: r.moveCount ?? 0,
+    white_ms: r.whiteMs,
+    black_ms: r.blackMs,
+    last_move_at: r.lastMoveAt,
+  });
+  if (watch === null) return null;
+  return {
+    fen: watch.fen,
+    // A UCI move is its two squares plus an optional promotion piece: the squares are the move.
+    lastMove: watch.lastMove === null ? null : [watch.lastMove.slice(0, 2), watch.lastMove.slice(2, 4)],
+    turn: watch.turn,
   };
 }
 
@@ -305,11 +475,12 @@ function playerOnFile(side: Side) {
  *  still to review); the round in view does not. */
 function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: boolean }) {
   return sql<BoardRow[]>`
-    select f.id as "fixtureId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
+    select f.id as "fixtureId", f.stage_id as "stageId", f.fixture_no as "fixtureNo", f.seq_in_round as "seq",
            f.round_no as "roundNo", s.name as "stageName",
            f.status as "fixtureStatus",
            f.home_entrant_id as "homeEntrantId", f.away_entrant_id as "awayEntrantId",
            ep.status as "bridgeStatus", ep.needs_reason as "needsReason", ep.challenge_id as "challengeId", ep.white_side as "whiteSide",
+           ms.state->>'colorOfHome' as "colorOfHome",
            ep.create_sent_at as "createSentAt", ep.mint_claimed_at as "mintClaimedAt",
            o.opened_at as "openedAt", o.staggered, ${boardRankSql(sql)} as rank, ${boardExtraSql(sql)} as "extraMs",
            coalesce(ep.checkin_extensions, 0)::int as extensions,
@@ -325,10 +496,12 @@ function boardRows(auth: AuthCtx, where: postgres.Fragment, opts: { cancelled: b
            (ma.home_entrant_id, ma.away_entrant_id) is not distinct from (f.home_entrant_id, f.away_entrant_id) as "awaySamePair",
            ${playerOnFile("home")} as "homePlayer", ${playerOnFile("away")} as "awayPlayer",
            ma.ended_at as "awayEndedAt", ma.camera_evidence_at as "awayEvidenceAt",
-           s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture"
+           s.kind as "stageKind", f.winner_to_fixture as "winnerToFixture", f.loser_to_fixture as "loserToFixture",
+           ep.moves_uci as "movesUci"
       from fixtures f
       join stages s on s.id = f.stage_id
       left join fixture_external_play ep on ep.fixture_id = f.id
+      left join match_states ms on ms.fixture_id = f.id
       left join stage_round_opens o on o.stage_id = f.stage_id and o.round_no = f.round_no
       left join fixture_video_meetings mh on mh.fixture_id = f.id and mh.side = 'home'
       left join fixture_video_meetings ma on ma.fixture_id = f.id and ma.side = 'away'
@@ -576,13 +749,12 @@ async function boardOf(
 async function boardWithSides(
   auth: AuthCtx,
   r: BoardRow,
-  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts },
+  ctx: { limitMs: number; policy: CameraPolicy; flagRows: readonly FlagRow[]; now: Date | null; facts: BoardFacts; flags?: FlagMode },
 ): Promise<{ board: ArbiterBoard; white: SidePlayer; black: SidePlayer }> {
   const { limitMs, policy, flagRows } = ctx;
-  const [sides, whiteSide] = await Promise.all([
-    loadSides(r),
-    r.whiteSide ?? whiteSideOf({ fixtureId: r.fixtureId, orgId: auth.orgId }),
-  ] as const);
+  // The colours: the game's own record when there is one, else the pairing card's (the one rule, `whiteSideOfFold`, the creation and the public page read).
+  const whiteSide = r.whiteSide ?? whiteSideOfFold({ colorOfHome: r.colorOfHome });
+  const sides = await loadSides(r);
   const white = whiteSide === "home" ? sides.home : sides.away;
   const black = whiteSide === "home" ? sides.away : sides.home;
   const over = r.bridgeStatus === "finished" || r.gameOverAt !== null;
@@ -631,15 +803,18 @@ async function boardWithSides(
   // end alone.
   const sideOf = (personId: string | null): Side | null =>
     personId === null ? null : personId === sides.home.personId ? "home" : personId === sides.away.personId ? "away" : null;
-  const flags: ArbiterFlag[] = await Promise.all(
-    flagRows
-      .filter((x) => x.fixtureId === r.fixtureId)
-      .map((f) => {
-        const side = sideOf(f.personId);
-        const endedAt = side === null ? null : side === "home" ? (r.homeSamePair ? r.homeEndedAt : null) : r.awaySamePair ? r.awayEndedAt : null;
-        return flagView(f, { nameOf, side, times: { ...r, meetingEndedAt: endedAt } });
-      }),
-  );
+  const mine = flagRows.filter((x) => x.fixtureId === r.fixtureId);
+  // `count` (Match Day's list read) builds no card: no `flagView`, so no read of the guard's stamps - only the count is carried.
+  const flags: ArbiterFlag[] =
+    ctx.flags === "count"
+      ? []
+      : await Promise.all(
+          mine.map((f) => {
+            const side = sideOf(f.personId);
+            const endedAt = side === null ? null : side === "home" ? (r.homeSamePair ? r.homeEndedAt : null) : r.awaySamePair ? r.awayEndedAt : null;
+            return flagView(f, { nameOf, side, times: { ...r, meetingEndedAt: endedAt } });
+          }),
+        );
 
   const board: ArbiterBoard = {
     fixtureId: r.fixtureId,
@@ -676,6 +851,8 @@ async function boardWithSides(
     checkin: ctx.now === null ? null : checkinOf(r, ctx.now),
     seats: null,
     flags,
+    // Every read that builds the cards counts them here; Match Day's list read counts without building any.
+    flagCount: mine.length,
   };
   return { board, white, black };
 }

@@ -2900,7 +2900,7 @@
     },
     "/api/v1/competitions/{id}/match-day": {
       "get": {
-        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language — an unscheduled row of a division with a ready match and no court also carries `alt` (Find a court): the first free court one of those matches may be called onto (`court_id`), or null for the page's list; `results_owed`: matches past their time with no result (both are the organiser's: a reader without an editor's role — a view-only member, an API key — gets `needs_you` empty and `results_owed` 0); `fixtures_today`: this competition's matches today, plus any in play",
+        "summary": "Match Day: the competition's courts today. The courts are every division's candidate courts and every court holding one of its matches today (each match on its own division's day: the venue zone, else the organisation's; `date`, the header's label, is the organisation's day in `tz`). Archived divisions are left out. Each court's `state` comes from its matches' status, from any competition of the organisation: `playing` (this competition's match in play: `current`), `called` (called and not started: `current`), `in_use_elsewhere` (another competition's match playing or called: `in_use_by`), else `free` (`free_since`). `queue`: this competition's unstarted matches planned on the court today, in planned order, `estimated_at` = the later of `planned_at` and the end of the match before (another competition's planned matches on the court count; planned times are never written). `playing_no_court`: this competition's matches in play with no court (an untimed bracket match, an online board), in live divisions, in kick-off order (no recorded kick-off last), each carrying what a playing court's `current` carries. `needs_you`: the competition desk's Needs-you rows, in the reader's language — an unscheduled row of a division with a ready match and no court also carries `alt` (Find a court): the first free court one of those matches may be called onto (`court_id`), or null for the page's list; a held or flagged online chess board is one row each (`kind` `board_held` or `board_flagged`, carrying the board's `fixture_id`; a held board whose way back is its round's re-open, a player with no usable Lichess link, also carries `round_key`, the `?round=` value `stage_id:round_no`); `results_owed`: matches past their time with no result (both are the organiser's: a reader without an editor's role — a view-only member, an API key — gets `needs_you` empty and `results_owed` 0); `fixtures_today`: this competition's matches today, plus any in play, plus the boards of an online round that makes the day (the round was opened within the division's day, a check-in window of it is still live, or a game is on file for one of its boards; a bye and a cancelled board never count); `online_rounds`: this competition's online chess rounds (one row per division, stage and round to show: a round in check-in or in play, a paired round not yet opened, a division not yet started), empty when it has none. A round row carries `round` (the opened round whole: each board's state, clocks, check-in, seats, each side's presence, camera and `joinable`, its open-flag count as `flagCount` with `flags` empty, and `hold_reason` on a held board: why it is held, an owner's or an admin's to read - a view-only member or an API key gets null, the board still listed as held), `view` (the open-round reader's view, null when it has none) and `needs_decision` (the held and flagged boards of the division that are not in `round.boards`, each with its `stage_id`, `round_no` and `hold_reason`, read as in `round`; a cancelled board is listed only while it has an open flag); a board in play on no court that is listed in a round is not in `playing_no_court`",
         "tags": [
           "competitions"
         ],
@@ -4087,6 +4087,14 @@
                                   "court_id"
                                 ],
                                 "additionalProperties": false
+                              },
+                              "fixture_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "round_key": {
+                                "type": "string"
                               }
                             },
                             "required": [
@@ -4117,6 +4125,131 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           }
+                        },
+                        "online_rounds": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "division_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "division_name": {
+                                "type": "string"
+                              },
+                              "division_slug": {
+                                "type": "string"
+                              },
+                              "stage_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "stage_name": {
+                                "type": "string"
+                              },
+                              "round_no": {
+                                "type": "integer",
+                                "minimum": -9007199254740991,
+                                "maximum": 9007199254740991
+                              },
+                              "multi_stage": {
+                                "type": "boolean"
+                              },
+                              "phase": {
+                                "type": "string",
+                                "enum": [
+                                  "not_started",
+                                  "before",
+                                  "checkin",
+                                  "playing"
+                                ]
+                              },
+                              "offered": {
+                                "type": "boolean"
+                              },
+                              "tz": {
+                                "type": "string"
+                              },
+                              "view": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {},
+                                    "additionalProperties": {},
+                                    "description": "The open-round reader's view of this (stage, round) (OpenRoundView): `state` (paired | open), the press, the pairings and the check-in batches. Null when the reader has none for it, and for `not_started`."
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "round": {
+                                "anyOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {},
+                                    "additionalProperties": {},
+                                    "description": "The opened round whole (ArbiterRound): `boards` (each an ArbiterBoard with `state`, `seats`, `checkin`, `sides` - presence, camera, `joinable` - `flagCount`, an always-empty `flags`, and `hold_reason` - null for a view-only member or an API key), `ownBoards` and `current`. Null before the open."
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "needs_decision": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {},
+                                  "additionalProperties": {},
+                                  "description": "An ArbiterBoard (as in `round.boards`) with `stage_id`, `round_no` and `hold_reason` (null for a view-only member or an API key): a held or flagged board of the division that is not in `round.boards`. Carried on the division's FIRST row only."
+                                }
+                              },
+                              "own_boards": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 9007199254740991
+                              },
+                              "pair_next_round": {
+                                "anyOf": [
+                                  {
+                                    "type": "integer",
+                                    "exclusiveMinimum": 0,
+                                    "maximum": 9007199254740991
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The Swiss round this row's stage would pair next (the lowest round with an unseated board), the same on every row of the stage. Null for any other kind of stage and for a Swiss with every round seated."
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "division_id",
+                              "division_name",
+                              "division_slug",
+                              "stage_id",
+                              "stage_name",
+                              "round_no",
+                              "multi_stage",
+                              "phase",
+                              "offered",
+                              "tz",
+                              "view",
+                              "round",
+                              "needs_decision",
+                              "own_boards",
+                              "pair_next_round"
+                            ],
+                            "additionalProperties": false
+                          }
                         }
                       },
                       "required": [
@@ -4129,7 +4262,8 @@
                         "needs_you",
                         "results_owed",
                         "fixtures_today",
-                        "venues_today"
+                        "venues_today",
+                        "online_rounds"
                       ],
                       "additionalProperties": false
                     },
@@ -4306,6 +4440,28 @@
                     "fixtures_today": 0,
                     "venues_today": [
                       "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                    ],
+                    "online_rounds": [
+                      {
+                        "key": "example",
+                        "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "division_name": "example",
+                        "division_slug": "example",
+                        "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "stage_name": "example",
+                        "round_no": -9007199254740991,
+                        "multi_stage": true,
+                        "phase": "not_started",
+                        "offered": true,
+                        "tz": "example",
+                        "view": {},
+                        "round": {},
+                        "needs_decision": [
+                          {}
+                        ],
+                        "own_boards": 0,
+                        "pair_next_round": 1
+                      }
                     ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -46001,6 +46157,357 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/fixtures/{id}/match-day-board": {
+      "get": {
+        "summary": "Match Day: the board in focus, as the arbiter's round view paints it - `state`, `clock`, each side's presence, camera and `joinable`, the seats of a board in check-in, `checkin`, every open flag (`flags`, with `flagCount`) - plus `position` (the game's replayed position: `fen`, the last replayed ply's two squares as `lastMove`, `turn`; null while no game is on file), `stage_id`, `round_no` and `hold_reason` (why a board in `on_hold` is held; null otherwise). Reads only: any member who may read the competition, or a read-scope key; a caller of another club is refused at the door (401), as on every resource. The flags are evidence about a named player: an owner or an admin gets each flag whole, a view-only member or an API key gets its `id`, `kind` and `at` with every other field null (`flagCount` unchanged). `hold_reason` is the same kind of fact: an owner or an admin gets why the board is held, a view-only member or an API key gets null (the board is still `on_hold`). 404 NOT_FOUND for a fixture that is not an online board of this club - another sport's, a division that does not play online, an unpaired seat, a board of a round nobody has opened - and for a cancelled board with no open flag (it has left every list); 403 ARBITER_PLAYS_THIS_BOARD for a board the signed-in caller plays on",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "fixtureId": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "position": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "fen": {
+                                  "type": "string"
+                                },
+                                "lastMove": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "prefixItems": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "string"
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "turn": {
+                                  "type": "string",
+                                  "enum": [
+                                    "white",
+                                    "black"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "fen",
+                                "lastMove",
+                                "turn"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "round_no": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "hold_reason": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "enum": [
+                                "no_show_white",
+                                "no_show_black",
+                                "no_show_both",
+                                "not_started",
+                                "aborted",
+                                "mismatch",
+                                "provider_error",
+                                "token_revoked",
+                                "double_walkover_blocked",
+                                "create_outcome_unknown",
+                                "tiebreak_owed",
+                                "fair_play",
+                                "account_changed",
+                                "clock_flag_unsettled",
+                                "lichess_unlinked",
+                                "lichess_reconnect"
+                              ]
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "fixtureId",
+                        "position",
+                        "stage_id",
+                        "round_no",
+                        "hold_reason"
+                      ],
+                      "additionalProperties": {},
+                      "description": "An ArbiterBoard as the round view paints it (`state`, `clock`, `sides` - presence, camera, `joinable` - `seats`, `checkin`, `flags` - whole for an owner or an admin, kind and time only for a view-only member or a key - `flagCount`, ...) with `position`, `stage_id`, `round_no` and `hold_reason` (why the board is held: whole for an owner or an admin, null for a view-only member or a key)."
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "fixtureId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "position": {
+                      "fen": "example",
+                      "lastMove": [
+                        "example",
+                        "example"
+                      ],
+                      "turn": "white"
+                    },
+                    "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "round_no": -9007199254740991,
+                    "hold_reason": "no_show_white"
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
             "content": {
               "application/json": {
                 "schema": {

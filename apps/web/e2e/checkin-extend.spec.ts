@@ -10,8 +10,9 @@
  *  1. ONE board: the arbiter presses "+5 min (3 left)" on the panel - the board's closing time moves, the button counts down, the
  *     audit row names the organiser, and the PLAYER'S open room, with no reload, counts down from five minutes later. The other
  *     board's room does not move (the inert-seam class: a number stored on the row that the room never reads).
- *  2. The ROUND: "+5 min to the round" is the Arbiter Panel's round bar, in the round column's check-in hero (phase 2 moved the
- *     round's press off the Fixtures tab's Open round control, which is gone). The tab is asserted to carry no button or text with
+ *  2. The ROUND: "+5 min to the round" is the round bar in the check-in hero of MATCH DAY's round panel (`?round=`; the Arbiter page
+ *     it lived on was retired by Match Day all-in-one Task 10, and the board's press is on the BOARD panel, `?board=`: a board and its
+ *     round are two panels now, so an answer is read on the panel that gave it). The tab is asserted to carry no button or text with
  *     the round bar's label and no Open round button (queries that would find the old control's words if it came back; the retired
  *     testids are checked as well, but nothing in the source carries them now, so they alone prove nothing), with the run sheet and
  *     the entry card rendered beside them. The bar extends the open boards and says why it left one alone (a game is on it), and
@@ -21,11 +22,13 @@
  *     round), and the time a board's answer names is the time the board's own "Check-in closes" line names.
  *     At the cap the round bar's button goes and a REASON stands where it was (owner, 2026-10-19): here a game on one board and the other
  *     capped is a mix - "No board can be extended right now" - on the bar in the hero; with a game on every board the bar moves to
- *     the playing status and names the one cause.
+ *     the playing status and names the one cause. (The old page showed a board answer and a round answer on ONE screen and cleared
+ *     each when the other was pressed; on two panels each answer is its own panel's, so that clearing is not a thing to assert.)
  *  4. The window's edges, LIVE (owner, 2026-10-19: +5 only inside the check-in window): with no reload and no poll to lean on, the
  *     button arrives AT a board's opening and leaves AT its deadline, with the short reason ("Can't extend check-in: it hasn't opened
- *     yet" / "... it has closed") standing in its place, the column's clock flipping its kind (opens, closes, closed) at the same
- *     instants, and the waiting list's row "+5" arriving and leaving with them.
+ *     yet" / "... it has closed") standing in its place, the round panel's clock flipping its kind (opens, closes, closed) at the same
+ *     instants, and the waiting list's row "+5" arriving and leaving with them. The board panel and the round panel are two tabs of the
+ *     same browser, both watched across the same two instants.
  *
  * Expected copy comes from the dictionary and the numbers from lib/checkin-extend.ts - never from the code under test.
  */
@@ -163,13 +166,34 @@ async function barHolds(page: Page, buttons: () => Locator, label: string): Prom
   return checked;
 }
 
-/** The Arbiter Panel's round column; its check-in hero holds the round's "+5 min" bar. */
-const column = (page: Page) => page.getByTestId("arbiter-round-column");
-const hero = (page: Page) => column(page).getByTestId("arbiter-checkin-hero");
-/** The decision region (its accessible name is the heading's; the per-board heading is the phone's). */
-const decision = (page: Page) => page.getByRole("region", { name: uiEn["arbiter.decide.heading"] });
+/** Match Day's focus column: ONE panel at a time, the round's (`?round=`) or a board's (`?board=`). */
+const panel = (page: Page) => page.getByTestId("md-focus");
+/** The round panel's check-in hero holds the round's "+5 min" bar. */
+const hero = (page: Page) => panel(page).getByTestId("arbiter-checkin-hero");
+/** The board panel's decision area. */
+const decision = (page: Page) => page.getByTestId("arbiter-decision");
+/** Where Match Day opens a round's panel and a board's panel. */
+const roundUrl = (r: SeededRound, no = 1) => `${r.matchDayPath}?round=${r.stageId}:${no}`;
+const boardUrl = (r: SeededRound, fixtureId: string) => `${r.matchDayPath}?board=${fixtureId}`;
+/** Open a round's panel and wait for it (its phase is the panel's own `data-state`). */
+async function openRound(page: Page, r: SeededRound, phase?: string): Promise<void> {
+  await page.goto(roundUrl(r));
+  await expect(panel(page)).toHaveAttribute("data-online", "round", { timeout: 30_000 });
+  if (phase) await expect(panel(page)).toHaveAttribute("data-state", phase, { timeout: 30_000 });
+}
+/** Open a board's panel and wait for it. */
+async function openBoard(page: Page, r: SeededRound, fixtureId: string): Promise<void> {
+  await page.goto(boardUrl(r, fixtureId));
+  await expect(panel(page)).toHaveAttribute("data-fixture-id", fixtureId, { timeout: 30_000 });
+}
 
 test.describe("the check-in extension", () => {
+  test("the reason copy the absences below are read by exists (a missing key would let every one of them pass)", () => {
+    const keys = ["gameStarted", "capReached", "notOpen", "closed", "roundNoneOpen"] as const;
+    for (const k of keys) expect(typeof uiEn[`externalPlay.checkinExtend.why.${k}`], k).toBe("string");
+    expect(keys.length, "anti-vacuity: five reasons read").toBe(5);
+  });
+
   test("one board: +5 min on the panel moves the board's closing time, is audited, and the player's open room counts down from five minutes later", async ({
     page,
     browser,
@@ -185,13 +209,11 @@ test.describe("the check-in extension", () => {
     expect(before1, "premise: a countdown of a few minutes, inside the unextended window").toBeGreaterThan(0);
 
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(r.arbiterPath);
-    await expect(page.getByRole("heading", { level: 1, name: uiEn["arbiter.title"] })).toBeVisible();
+    await openBoard(page, r, b1.fixtureId);
     const press = page.getByTestId("arbiter-extend-board");
     await expect(press, "the check-in is open, nobody is on a game: a press is offered, counting its presses").toHaveText(boardLabel(CHECKIN_EXTEND_MAX));
     await expect(page.getByTestId("arbiter-extend-closes")).toHaveText(lineRe("externalPlay.checkinExtend.closesAt"));
     await expect(page.getByTestId("arbiter-extend-helper"), "under the button: what a press does and its limits").toHaveText(helperLine);
-    await expect(page.getByTestId("arbiter-extend-round-helper"), "and under the round button").toContainText(helperLine);
 
     const answer = page.waitForResponse((q) => q.request().method() === "POST" && q.url().endsWith(`/fixtures/${b1.fixtureId}/external-play/extend-checkin`));
     await press.click();
@@ -223,7 +245,7 @@ test.describe("the check-in extension", () => {
     expect(await countdownSeconds(room1)).toBeGreaterThan(before1 + CHECKIN_EXTEND_STEP_MS / 1000 - 90);
   });
 
-  test("the round: +5 min on the panel's bar extends the open boards and says why one was left alone, and stops at the cap; the Fixtures tab carries no round +5", async ({
+  test("the round: +5 min on the round panel's bar extends the open boards and says why one was left alone, and stops at the cap; the Fixtures tab carries no round +5", async ({
     page,
     request,
   }) => {
@@ -249,15 +271,12 @@ test.describe("the check-in extension", () => {
       await expect(page.getByTestId(gone), `${gone}: the retired testid is not on the Fixtures tab`).toHaveCount(0);
     }
 
-    // The arbiter panel: board 1 (a game is on it) offers no press; board 2 offers three, and the round bar in the hero presses it.
-    await page.goto(r.arbiterPath);
-    await expect(column(page)).toHaveAttribute("data-phase", "checkin", { timeout: 30_000 });
-    await expect(page.getByTestId("arbiter-extend-board"), "board 1 has a game on it: no per-board press").toHaveCount(0);
-    await expect(page.getByTestId("arbiter-extend-why"), "... and the reason stands in its place, not a silent gap").toHaveText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
+    // Match Day's round panel: the round bar in the hero presses every open board.
+    await openRound(page, r, "checkin");
     const bar = hero(page).getByTestId("arbiter-extend-round");
     await expect(bar.getByTestId("arbiter-extend-round-cta")).toHaveText(roundLabel);
     // The pair of the tab's absence above: the very query that found nothing there finds the press here.
-    await expect(page.getByRole("button", { name: roundLabel, exact: true }), "the panel carries the round +5 button the tab does not").toHaveCount(1);
+    await expect(page.getByRole("button", { name: roundLabel, exact: true }), "the round panel carries the round +5 button the tab does not").toHaveCount(1);
     await expect(bar.getByTestId("arbiter-extend-round-helper")).toContainText(fill("externalPlay.checkinExtend.roundHint.one", { count: 1 }));
     await bar.getByTestId("arbiter-extend-round-cta").click();
     const notice = bar.getByTestId("arbiter-extend-round-notice");
@@ -268,8 +287,15 @@ test.describe("the check-in extension", () => {
     expect((await auditRows(b2.fixtureId)).map((a) => a.note.scope)).toEqual(["round"]);
     expect(await auditRows(b1.fixtureId)).toHaveLength(0);
 
-    await page.goto(`${r.arbiterPath}?fixture=${b2.fixtureId}`);
+    // The board panels: board 1 (a game is on it) offers no press and says why; board 2 has one press used and offers the rest.
+    await openBoard(page, r, b1.fixtureId);
+    await expect(page.getByTestId("arbiter-extend-board"), "board 1 has a game on it: no per-board press").toHaveCount(0);
+    // Match Day prints no unprompted "can't extend" reason (Task 7 fix M5, owner sign-off): the missing press is the whole answer on a board panel.
+    // (The Arbiter Panel's board panel said why; it went with the page. The absence is read by the copy, so it cannot pass on a renamed test id.)
+    await expect(panel(page), "no reason stands in its place on Match Day").not.toContainText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
+    await openBoard(page, r, b2.fixtureId);
     await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 1));
+    await openRound(page, r, "checkin");
     for (let press = 2; press <= CHECKIN_EXTEND_MAX; press++) {
       await hero(page).getByTestId("arbiter-extend-round-cta").click();
       const lines = hero(page).getByTestId("arbiter-extend-round-notice");
@@ -277,18 +303,19 @@ test.describe("the check-in extension", () => {
       await expect(lines).toContainText(fill("externalPlay.checkinExtend.skip.gameStarted.one", { count: 1 }));
       expect(await extensionOf(b2.fixtureId)).toEqual({ ms: press * CHECKIN_EXTEND_STEP_MS, n: press });
     }
-    // At the cap nothing is left to extend: the bar and the per-board press go, the last answer stays.
+    // At the cap nothing is left to extend: the bar goes, the last answer stays.
     await expect(hero(page).getByTestId("arbiter-extend-round-cta")).toHaveCount(0);
-    await expect(page.getByTestId("arbiter-extend-board")).toHaveCount(0);
-    await expect(page.getByTestId("arbiter-extend-why"), "the press went, and says why").toHaveText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
     await expect(hero(page).getByTestId("arbiter-extend-round-notice")).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
     expect((await auditRows(b2.fixtureId)).length).toBe(CHECKIN_EXTEND_MAX);
     // The round bar's button went too, and the bar says why: a game on board 1 and no press left on board 2 are two causes, so the round's
     // own sentence - not either board's - and the last answer stays beside it.
-    const roundWhy = hero(page).getByTestId("arbiter-extend-round-why");
-    await expect(roundWhy, "the round bar's reason, in place of its button").toHaveText(uiEn["externalPlay.checkinExtend.why.roundNoneOpen"]!);
-    await expect(roundWhy).toHaveAttribute("data-why", "mixed");
+    // Match Day's round bar prints no unprompted reason either (Task 7 fix M5): the button went, the last answer stays.
+    await expect(hero(page), "no reason in place of the round bar's button").not.toContainText(uiEn["externalPlay.checkinExtend.why.roundNoneOpen"]!);
     await shoot(page, "arbiter-panel-round-reason");
+    // ... and the board's own press goes too, on ITS panel, with its reason.
+    await openBoard(page, r, b2.fixtureId);
+    await expect(page.getByTestId("arbiter-extend-board")).toHaveCount(0);
+    await expect(panel(page), "the press went, and Match Day does not say why (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
 
     // And the cap holds at the door, not only on the screen.
     const over = await apiJson(request, `/api/v1/fixtures/${b2.fixtureId}/external-play/extend-checkin`, "POST");
@@ -298,11 +325,9 @@ test.describe("the check-in extension", () => {
     // Put a game on the other board too: no board is checking in, so the column is in its playing phase, and the same bar now sits in the
     // playing status (the other place the column hosts it), with the ONE cause both boards give - a game started - instead of the mix.
     await roundGameSql(b2, { moves: LINE });
-    await page.goto(r.arbiterPath);
-    await expect(column(page)).toHaveAttribute("data-phase", "playing", { timeout: 30_000 });
-    const playingBar = column(page).getByTestId("arbiter-column-status").getByTestId("arbiter-extend-round-why");
-    await expect(playingBar, "the playing status hosts the bar").toHaveText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
-    await expect(column(page).getByTestId("arbiter-checkin-hero"), "and the hero is gone with the check-in").toHaveCount(0);
+    await openRound(page, r, "playing");
+    await expect(panel(page), "the playing status carries no reason line (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.gameStarted"]!);
+    await expect(panel(page).getByTestId("arbiter-checkin-hero"), "and the hero is gone with the check-in").toHaveCount(0);
   });
 
   test("the bar at 320, 768 and 1280: the panel's board press and the hero's round bar, buttons and answers painted - no sideways scroll, whole labels, 44px targets", async ({
@@ -315,15 +340,12 @@ test.describe("the check-in extension", () => {
     const r = await seedOnlineRound(request, [longName(), longName(), "Chen Wei", "Dara Okafor"]);
     const b1 = r.boards[0]!;
 
-    // The arbiter panel: a board press, then the round bar in the column's check-in hero (the Fixtures tab no longer has one). Each
-    // answer is ASSERTED, and only one is ever on screen: starting the other press clears the first (its counts and its time are about
-    // deadlines the second has just moved).
+    // Match Day: a board press on the BOARD panel, then the round bar in the ROUND panel's check-in hero (the Fixtures tab has none). Each
+    // answer is ASSERTED. The board's answer and the round's are two panels' now, so each is read on the panel that gave it.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
+    await openBoard(page, r, b1.fixtureId);
     const closes = page.getByTestId("arbiter-extend-closes");
     const boardNotice = decision(page).getByRole("status");
-    const roundNotice = hero(page).getByTestId("arbiter-extend-round-notice");
-    const roundCta = () => hero(page).getByTestId("arbiter-extend-round-cta");
     await expect(closes).toHaveAttribute("data-deadline-at", /.+/);
     const base = Date.parse((await closes.getAttribute("data-deadline-at"))!);
     const deadlineIs = (presses: number) => expect(closes, `board 1's closing time after ${presses} press(es)`).toHaveAttribute("data-deadline-at", new Date(base + presses * CHECKIN_EXTEND_STEP_MS).toISOString());
@@ -333,44 +355,49 @@ test.describe("the check-in extension", () => {
     await deadlineIs(1);
     // The time the answer names IS the time the board's own line names (the refresh may land a moment after the answer: wait for it).
     await expect.poll(async () => hm(await boardNotice.innerText()), { message: "the board's answer and its 'Check-in closes' line say the same time" }).toBe(hm(await closes.innerText()));
-    await expect(roundNotice, "no round answer yet").toHaveText("");
     await shoot(page, "arbiter-panel-extend-board");
     expect(
-      await barHolds(page, () => page.locator('[data-testid="arbiter-extend-board"], [data-testid="arbiter-checkin-hero"] [data-testid="arbiter-extend-round-cta"]'), "arbiter panel, board answer"),
-      "anti-vacuity: widths x (two buttons + page)",
-    ).toBe(WIDTHS.length * 3);
+      await barHolds(page, () => page.getByTestId("arbiter-extend-board"), "board panel, board answer"),
+      "anti-vacuity: widths x (one button + page)",
+    ).toBe(WIDTHS.length * 2);
 
-    // Board press, then ROUND press: only the round's answer is left, with its counts; the board's is gone.
+    // The ROUND press, on the round panel: both boards, with its counts (board 1 is at its second press, board 2 at its first).
     await page.setViewportSize({ width: 1280, height: 900 });
+    await openRound(page, r, "checkin");
+    const roundNotice = hero(page).getByTestId("arbiter-extend-round-notice");
+    const roundCta = () => hero(page).getByTestId("arbiter-extend-round-cta");
+    await expect(roundNotice, "no round answer yet").toHaveText("");
     await roundCta().click();
     await expect(roundNotice).toContainText(fill("externalPlay.checkinExtend.notice.round.other", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 2 }));
-    await expect(boardNotice, "the board's answer is cleared by the round press").toHaveText("");
-    await deadlineIs(2);
-    await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 2));
     await shoot(page, "arbiter-panel-extend");
     expect(
-      await barHolds(page, () => page.locator('[data-testid="arbiter-extend-board"], [data-testid="arbiter-checkin-hero"] [data-testid="arbiter-extend-round-cta"]'), "arbiter panel, round answer"),
-      "anti-vacuity: widths x (two buttons + page)",
-    ).toBe(WIDTHS.length * 3);
+      await barHolds(page, () => roundCta(), "round panel, round answer"),
+      "anti-vacuity: widths x (one button + page)",
+    ).toBe(WIDTHS.length * 2);
 
-    // ... and ROUND press, then BOARD press (the third: the cap): the board's answer, naming the board's LIVE closing time (five minutes
-    // past the line it read just before); the round's is gone, and the press, now spent, gives way to its reason.
+    // Back on board 1: the round press moved its deadline (a second press), and the board's own press counts down; the THIRD press is the
+    // cap: its answer names the board's LIVE closing time (five minutes past the line it read just before), and the spent press gives way
+    // to its reason.
     await page.setViewportSize({ width: 1280, height: 900 });
+    await openBoard(page, r, b1.fixtureId);
+    await deadlineIs(2);
+    await expect(page.getByTestId("arbiter-extend-board")).toHaveText(boardLabel(CHECKIN_EXTEND_MAX - 2));
     const closesBefore = hm(await closes.innerText());
     await page.getByTestId("arbiter-extend-board").click();
     await expect(boardNotice).toHaveText(lineRe("externalPlay.checkinExtend.notice.board", { minutes: CHECKIN_EXTEND_STEP_MINUTES, n: 1 }));
-    await expect(roundNotice, "the round's answer is cleared by the board press").toHaveText("");
     expect(plain(hm(await boardNotice.innerText())), "the answer names the board's closing time, five minutes past the line it read").toBe(plain(plusMinutes(closesBefore, CHECKIN_EXTEND_STEP_MINUTES)));
-    await expect(page.getByTestId("arbiter-extend-why"), "at the cap the press gives way to its reason").toHaveText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
+    await expect(page.getByTestId("arbiter-extend-board"), "at the cap the press is gone").toHaveCount(0);
+    await expect(panel(page), "and Match Day does not say why (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.capReached"]!);
     expect(await extensionOf(b1.fixtureId)).toEqual({ ms: 3 * CHECKIN_EXTEND_STEP_MS, n: 3 });
 
     // The round bar once more, with board 1 at the cap: the press reaches board 2 only (its second) and says why board 1 was left alone;
-    // the helper line stands under the button. This was the Fixtures tab control's leg; it is the hero's now.
+    // the helper line stands under the button. This was the Fixtures tab control's leg; it is the round panel's hero now.
     await page.setViewportSize({ width: 1280, height: 900 });
+    await openRound(page, r, "checkin");
     await expect(hero(page).getByTestId("arbiter-extend-round-helper")).toContainText(helperLine);
     await roundCta().click();
-    await expect(roundNotice).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
-    await expect(roundNotice).toContainText(fill("externalPlay.checkinExtend.skip.capReached.one", { count: 1 }));
+    await expect(hero(page).getByTestId("arbiter-extend-round-notice")).toContainText(fill("externalPlay.checkinExtend.notice.round.one", { minutes: CHECKIN_EXTEND_STEP_MINUTES, count: 1 }));
+    await expect(hero(page).getByTestId("arbiter-extend-round-notice")).toContainText(fill("externalPlay.checkinExtend.skip.capReached.one", { count: 1 }));
     expect(await extensionOf(r.boards[1]!.fixtureId)).toEqual({ ms: 2 * CHECKIN_EXTEND_STEP_MS, n: 2 });
     await shoot(page, "arbiter-panel-extend-capped");
     expect(
@@ -379,7 +406,7 @@ test.describe("the check-in extension", () => {
     ).toBe(WIDTHS.length * 2);
   });
 
-  test("the window's edges, live: the button arrives AT a board's opening and leaves AT its deadline, with no reload - and a reason stands in its place", async ({
+  test("the window's edges, live: the button arrives AT a board's opening and leaves AT its deadline, with no reload - and nothing stands in its place", async ({
     page,
     request,
   }) => {
@@ -390,56 +417,65 @@ test.describe("the check-in extension", () => {
       withDb(async (sql) => {
         await sql`update stage_round_opens set opened_at = ${openedAt} where stage_id = ${r.stageId} and round_no = 1`;
       });
-    const press = page.getByTestId("arbiter-extend-board");
+    // Two windows, both watched across the same two instants: the BOARD panel (the board's press) and the ROUND panel (the round's press, the
+    // check-in clock and the waiting list's rows). A board and its round are two panels now. A second TAB would hide the first (its clock stops
+    // in the background), so the board panel gets its own context, signed in as the same organiser.
+    const boardContext = await page.context().browser()!.newContext({
+      storageState: await page.context().storageState(),
+      baseURL: test.info().project.use.baseURL,
+    });
+    const boardTab = await boardContext.newPage();
+    await boardTab.setViewportSize({ width: 1280, height: 900 });
+    const press = boardTab.getByTestId("arbiter-extend-board");
+    const boardPanel = boardTab.getByTestId("md-focus");
     const roundPress = page.getByTestId("arbiter-extend-round-cta");
-    const why = page.getByTestId("arbiter-extend-why");
-    const roundWhy = page.getByTestId("arbiter-extend-round-why");
-    // The column's one clock and the waiting list's rows: they change kind, and gain and lose their "+5", at the same instants.
+    // The round panel's one clock and the waiting list's rows: they change kind, and gain and lose their "+5", at the same instants.
     const clock = hero(page).getByTestId("arbiter-checkin-clock");
     const rowPress = page.getByTestId("arbiter-waiting-extend");
     await page.setViewportSize({ width: 1280, height: 900 });
 
     // THE OPENING. Batch 0 opens WINDOW_OPEN_LEAD_MS before its anchor: stamp the round so that happens a few seconds after the page loads.
-    const OPENS_IN_MS = 20_000;
+    const OPENS_IN_MS = 35_000; // two page loads must fit before the opening
     const opensAt = Date.now() + OPENS_IN_MS;
     await stampOpenedAt(new Date(opensAt + WINDOW_OPEN_LEAD_MS));
-    await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
-    await expect(why, "before the opening: the reason, not a silent gap").toHaveText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
+    await openBoard(boardTab, r, b1.fixtureId);
+    await openRound(page, r);
+    // Before the opening there is no press, and Match Day (Task 7 M5) says nothing in its place: the clock below says when it opens.
     await expect(press).toHaveCount(0);
     await expect(roundPress).toHaveCount(0);
-    await expect(roundWhy, "the round's bar says the same, in the one cause both boards give").toHaveText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
+    await expect(boardPanel, "no unprompted reason on the board panel").not.toContainText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
+    await expect(page.getByTestId("md-focus"), "nor on the round panel").not.toContainText(uiEn["externalPlay.checkinExtend.why.notOpen"]!);
     await expect(clock, "before the opening the clock counts down to it").toHaveAttribute("data-kind", "opens");
     await expect(rowPress, "and no waiting row has a +5 yet: the window is not open").toHaveCount(0);
-    expect(Date.now(), "premise: the page loaded before the opening").toBeLessThan(opensAt);
+    expect(Date.now(), "premise: the pages loaded before the opening").toBeLessThan(opensAt);
     await expect(press, "the button arrives with the opening").toBeVisible({ timeout: OPENS_IN_MS + 15_000 });
     const arrived = Date.now();
     expect(arrived, "not before the opening").toBeGreaterThanOrEqual(opensAt - 50);
     expect(arrived - opensAt, "at the opening, not at the next 20 s poll").toBeLessThan(3_000);
-    await expect(why, "the reason went with it").toHaveCount(0);
     await expect(roundPress, "and the round's button came with it").toBeVisible();
-    await expect(roundWhy, "the round's reason went with it").toHaveCount(0);
     await expect(clock, "the clock flips to counting down to the closing, with no reload").toHaveAttribute("data-kind", "closes");
     await expect(rowPress, "and every waiting row has its +5 (both boards, nobody here)").toHaveCount(r.boards.length);
 
     // THE DEADLINE. Stamp the round so the board's deadline (DEADLINE_AFTER_MS after the anchor) is a few seconds ahead; reload to take
     // the new snapshot, then watch the button leave on its own.
-    const CLOSES_IN_MS = 20_000;
+    const CLOSES_IN_MS = 35_000;
     const closesAt = Date.now() + CLOSES_IN_MS;
     await stampOpenedAt(new Date(closesAt - DEADLINE_AFTER_MS));
-    await page.goto(`${r.arbiterPath}?fixture=${b1.fixtureId}`);
+    await openBoard(boardTab, r, b1.fixtureId);
+    await openRound(page, r);
     await expect(press, "inside the window: offered").toBeVisible();
     await expect(clock, "inside the window the clock counts down to the closing").toHaveAttribute("data-kind", "closes");
     await expect(rowPress, "and each waiting row has its +5").toHaveCount(r.boards.length);
-    expect(Date.now(), "premise: the page loaded before the deadline").toBeLessThan(closesAt - 3_000);
+    expect(Date.now(), "premise: the pages loaded before the deadline").toBeLessThan(closesAt - 3_000);
     await expect(press, "the button leaves with the deadline").toHaveCount(0, { timeout: CLOSES_IN_MS + 15_000 });
     const left = Date.now();
     expect(left, "not before the deadline").toBeGreaterThanOrEqual(closesAt - 50);
     expect(left - closesAt, "at the deadline, not at the next 20 s poll").toBeLessThan(3_000);
-    await expect(why).toHaveText(uiEn["externalPlay.checkinExtend.why.closed"]!);
+    await expect(boardPanel, "the board panel says nothing in the button's place (Task 7 M5)").not.toContainText(uiEn["externalPlay.checkinExtend.why.closed"]!);
     await expect(roundPress, "the round's button leaves with the last board's deadline").toHaveCount(0);
-    await expect(roundWhy, "and the round says why, in the cause both boards now give").toHaveText(uiEn["externalPlay.checkinExtend.why.closed"]!);
-    await expect(roundWhy).toHaveAttribute("data-why", "closed");
+    await expect(page.getByTestId("md-focus"), "and the round panel says nothing in its place").not.toContainText(uiEn["externalPlay.checkinExtend.why.closed"]!);
     await expect(clock, "the clock reads closed at the deadline, with no reload").toHaveAttribute("data-kind", "closed");
     await expect(rowPress, "and the waiting rows' +5 left with it").toHaveCount(0);
+    await boardContext.close();
   });
 });

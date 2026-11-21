@@ -18,10 +18,16 @@
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
 import { afterAll, describe, expect, it } from "vitest";
-import { sql, withTenant } from "@/lib/db";
+import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { competitionsFixturesToday, countFixturesToday } from "../match-day";
+import { needsYouHome } from "@/components/v2/desk/needs-you";
+import { CHECKIN_EXTEND_MAX, CHECKIN_EXTEND_STEP_MS, DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "@/server/external-play/window";
+import { getCompetitionDesk } from "../competition-desk";
+import { competitionFixturesToday, competitionsFixturesToday } from "../match-day";
+import { putScheduleSettings } from "../schedule";
+import { seedOnlineChessRound, type SeedOnlineChessRoundResult } from "./_external-play-seed";
 import { person, seedCompetition, setStatus, type Comp } from "./_match-day-seed";
+import { at, bridgeRow, openStamp, setFixtureStatus } from "./_match-day-online-seed";
 import { seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -62,7 +68,7 @@ async function deckAt(auth: AuthCtx, ids: string[], now: Date): Promise<{ member
   const read = await competitionsFixturesToday(auth, ids, now);
   let compared = 0;
   for (const id of ids) {
-    const page = await withTenant(auth.orgId, (tx) => countFixturesToday(tx, id, now));
+    const page = await competitionFixturesToday(auth, id, now);
     expect(read.counts.get(id) ?? 0, `competition ${id}: home and competition page agree`).toBe(page);
     compared++;
   }
@@ -227,5 +233,196 @@ describe.skipIf(!HAS_DB)("competitionsFixturesToday — the org home's today dec
     const read = await competitionsFixturesToday(mine, [own.id, foreign.id], SUN_EARLY);
     expect(read.counts.get(own.id)).toBe(1); // the positive pair: the read works for this organisation
     expect(read.counts.has(foreign.id)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Match Day online, Task 5: what makes an ONLINE night a match day (spec 2026-11-05 section 4; brief md-t5). An online board has no
+// planned time, so the day's own rule (a match planned within its division's day, or in play) never counts it. A round that has a
+// `stage_round_opens` row makes its boards today's when ANY of three things holds, each tested ALONE below:
+//   (a) it was opened in the division's day;
+//   (b) its window bound (`roundWindowBoundSql`: the round's last batch start plus the declared tail) has not passed at `now`;
+//   (c) the board has a game on file - a challenge and a bridge status that is not `finished`.
+// A board counts only as a board (both sides seated, not cancelled), so a bye is no match. Three surfaces read the number (the org
+// home's deck, the competition page's gate, the desk), and every case below holds them to ONE answer.
+//
+// The sport is chess: online play exists only for `boardgame` (`openRound` refuses any other sport), so a `stage_round_opens` row,
+// and with it every arm below, exists for no other sport. The day's own rule is covered for generic and football above, unchanged.
+// The expectations are seed values and the window's own declarations (the tail is summed here from the four constants it is made of).
+// ---------------------------------------------------------------------------------------------------------------------------
+const TAIL_MS = DEADLINE_AFTER_MS + LINE_DEADLINE_GRACE_MS + CHECKIN_EXTEND_MAX * CHECKIN_EXTEND_STEP_MS;
+const iso = (d: Date): string => d.toISOString();
+
+/** The competition's count at `now` as each surface reads it; they must agree, and the one number is returned. */
+async function nightCount(r: SeedOnlineChessRoundResult, now: Date): Promise<number> {
+  const home = (await competitionsFixturesToday(r.owner, [r.competitionId], now)).counts.get(r.competitionId) ?? 0;
+  const page = await competitionFixturesToday(r.owner, r.competitionId, now);
+  const desk = (await getCompetitionDesk(r.owner, r.competitionId, now)).fixtures_today;
+  expect({ home, page, desk }, `at ${iso(now)}: the org home, the competition page and the desk read one number`).toEqual({ home: page, page, desk: page });
+  return page;
+}
+
+/** One online round of `n` boards with no planned time: only the three arms can count them. */
+const unplanned = (n: number, extra: { bye?: boolean } = {}) => seedOnlineChessRound({ fixtures: n, scheduledAt: null, ...extra });
+
+describe.skipIf(!HAS_DB)("an online night: what makes an opened round a match day", () => {
+  it("the empty case first: a paired round nobody opened is no match day, though it is full of boards; opening it is the day", async () => {
+    const r = await unplanned(3);
+    expect(await nightCount(r, at(0))).toBe(0);
+    expect(needsYouHome(0)).toBe("competition");
+    await openStamp(r, 1, at(-5)); // the positive pair: the SAME round, once opened
+    const n = await nightCount(r, at(0));
+    expect(n).toBe(3);
+    expect(needsYouHome(n)).toBe("match_day");
+  });
+
+  it("(a) alone: opened today, every window long closed, no game on file - still the day's", async () => {
+    const r = await unplanned(3);
+    const opened = at(-180);
+    expect(180 * 60_000, "premise: the open is further back than the whole window tail").toBeGreaterThan(TAIL_MS);
+    expect(iso(opened).slice(0, 10), "premise: the open is on the read's UTC day").toBe(iso(at(0)).slice(0, 10));
+    await openStamp(r, 1, opened);
+    expect(await nightCount(r, at(0))).toBe(3);
+  });
+
+  it("(a)'s edge: an open at the very start of the division's day is the day's, one millisecond earlier is yesterday's", async () => {
+    const r = await unplanned(2);
+    const start = new Date("2026-11-19T00:00:00.000Z"); // the UTC organisation's midnight: the day [00:00Z, 24:00Z)
+    const now = at(0); // 12:00Z: twelve hours on, every window long over
+    await openStamp(r, 1, new Date(start.getTime() - 1));
+    expect(await nightCount(r, now), "23:59:59.999 the day before").toBe(0);
+    await sql`update stage_round_opens set opened_at = ${start} where stage_id = ${r.stageId} and round_no = 1`;
+    expect(await nightCount(r, now), "00:00:00.000, the day's first instant").toBe(2);
+  });
+
+  it("(b) alone: opened at 23:50, read at 00:10 the next day - the window is live, so the night goes on; at the bound it stops", async () => {
+    const r = await unplanned(3);
+    const opened = new Date("2026-11-18T23:50:00.000Z");
+    await openStamp(r, 1, opened);
+    const bound = opened.getTime() + TAIL_MS; // an unstaggered round: the open IS the last batch start
+    const midnightPast = new Date("2026-11-19T00:10:00.000Z");
+    expect(midnightPast.getTime(), "premise: 00:10 is inside the bound").toBeLessThan(bound);
+    expect(iso(opened).slice(0, 10), "premise: the open was yesterday, so arm (a) cannot be what counts").not.toBe(iso(midnightPast).slice(0, 10));
+    expect(await nightCount(r, midnightPast)).toBe(3);
+    expect(await nightCount(r, new Date(bound - 1_000))).toBe(3); // one second before the bound
+    expect(await nightCount(r, new Date(bound))).toBe(0); // at the bound the window is over: not counted
+    expect(await nightCount(r, new Date(bound + 1_000))).toBe(0);
+  });
+
+  it("the same round with every window closed and no game: not counted, and a second read says the same", async () => {
+    const r = await unplanned(3);
+    await openStamp(r, 1, new Date("2026-11-18T23:50:00.000Z"));
+    const late = new Date("2026-11-19T02:00:00.000Z");
+    expect(await nightCount(r, late)).toBe(0);
+    expect(await nightCount(r, late)).toBe(0);
+  });
+
+  it("(c) alone: a game on file keeps the night; a finished game, a hold and a board with no game do not - and each finish takes its board off", async () => {
+    const r = await unplanned(5);
+    const [live, ready, finished, hold, plain] = r.boards.map((b) => b.fixtureId) as [string, string, string, string, string];
+    await openStamp(r, 1, new Date("2026-11-18T09:00:00.000Z")); // yesterday, bound 09:30Z yesterday: closed by now
+    await bridgeRow(live, r.orgId, { status: "live", moves: 4 });
+    await bridgeRow(ready, r.orgId, { status: "ready" });
+    await bridgeRow(finished, r.orgId, { status: "finished", moves: 30 });
+    await setFixtureStatus(finished, "decided");
+    await bridgeRow(hold, r.orgId, { status: "needs_organiser", reason: "lichess_unlinked", hold: true }); // no challenge: no game on file
+    await bridgeRow(plain, r.orgId, { status: "pending" }); // invited, no game yet
+    const now = new Date("2026-11-19T10:00:00.000Z");
+    expect(now.getTime() - new Date("2026-11-18T09:00:00.000Z").getTime(), "premise: far past the bound").toBeGreaterThan(TAIL_MS);
+    expect(await nightCount(r, now)).toBe(2); // live and ready
+
+    await sql`update fixture_external_play set status = 'finished' where fixture_id = ${live}`;
+    await setFixtureStatus(live, "decided");
+    expect(await nightCount(r, now)).toBe(1);
+    await sql`update fixture_external_play set status = 'finished' where fixture_id = ${ready}`;
+    await setFixtureStatus(ready, "decided");
+    expect(await nightCount(r, now)).toBe(0);
+  });
+
+  it("(c) on a forfeited board: a live game still on file counts in an old round, one with no game does not, and closing the game takes it off", async () => {
+    // The ledger can call a board forfeited while its game is still on the bridge (the organiser closes the board first, the bridge row
+    // is closed after). Arm (c) reads the BRIDGE, not the fixture's own status: the only status the board rule refuses is cancelled.
+    const r = await unplanned(3);
+    const [withGame, noGame, control] = r.boards.map((b) => b.fixtureId) as [string, string, string];
+    const opened = new Date("2026-11-18T09:00:00.000Z"); // yesterday, bound 09:30Z yesterday: closed by the read
+    await openStamp(r, 1, opened);
+    await bridgeRow(withGame, r.orgId, { status: "ready" }); // a challenge on file, not finished
+    await setFixtureStatus(withGame, "forfeited");
+    await setFixtureStatus(noGame, "forfeited"); // no bridge row at all
+    const now = new Date("2026-11-19T10:00:00.000Z");
+    expect(now.getTime() - opened.getTime(), "premise: far past the window bound, so arm (b) is off").toBeGreaterThan(TAIL_MS);
+    expect(iso(opened).slice(0, 10), "premise: opened the day before the read, so arm (a) is off").not.toBe(iso(now).slice(0, 10));
+    expect(await nightCount(r, now), "only the forfeited board with a game on file: the other two have none").toBe(1);
+
+    await sql`update fixture_external_play set status = 'finished' where fixture_id = ${withGame}`;
+    expect(await nightCount(r, now), "its game is closed: the night is over").toBe(0);
+
+    // The positive pair: a board that is NOT forfeited but has the same open game counts the same way.
+    await bridgeRow(control, r.orgId, { status: "ready" });
+    expect(await nightCount(r, now), "a scheduled board with the same game on file").toBe(1);
+  });
+
+  it("a round paired after the opened one is no part of the day until it is opened itself", async () => {
+    const r = await unplanned(2);
+    await openStamp(r, 1, at(-5));
+    const second = await sql<{ id: string }[]>`
+      insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, ext_key, status, home_entrant_id, away_entrant_id, scheduled_at)
+      select stage_id, division_id, org_id, 2, seq_in_round, 'md5-r2-' || id::text, 'scheduled', away_entrant_id, home_entrant_id, null
+        from fixtures where stage_id = ${r.stageId} and round_no = 1
+      returning id`;
+    expect(second, "premise: round 2 has its two boards").toHaveLength(2);
+    expect(await nightCount(r, at(0))).toBe(2); // round 1's boards, not round 2's
+    await openStamp(r, 2, at(-1));
+    expect(await nightCount(r, at(0))).toBe(4);
+  });
+
+  it("only boards count: a bye is no match and a cancelled board never was one", async () => {
+    const r = await unplanned(3, { bye: true });
+    expect(r.bye, "premise: the seed made a bye row").not.toBeNull();
+    await openStamp(r, 1, at(-5));
+    expect(await nightCount(r, at(0))).toBe(3); // three boards; the bye row is the fourth fixture of the round
+    await setFixtureStatus(r.boards[2]!.fixtureId, "cancelled");
+    expect(await nightCount(r, at(0))).toBe(2);
+  });
+
+  it("a board both planned today and in an opened round is counted once", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 2, scheduledAt: at(-30) });
+    expect(await nightCount(r, at(0)), "premise: planned today, counted by the day's own rule before any open").toBe(2);
+    await openStamp(r, 1, at(-5));
+    expect(await nightCount(r, at(0))).toBe(2);
+  });
+
+  it("the day is the division's own: opened 00:30 Sunday in Amsterdam, read at 09:00 there - today in the club's zone, yesterday in UTC, today again in Auckland", async () => {
+    const r = await unplanned(2);
+    await sql`update organizations set timezone = ${ORG_TZ} where id = ${r.orgId}`;
+    const opened = new Date("2026-11-07T23:30:00.000Z"); // Sat 23:30 UTC; Sun 00:30 Amsterdam (UTC+1); Sun 12:30 Auckland (UTC+13)
+    const now = new Date("2026-11-08T08:00:00.000Z"); // Sun 08:00 UTC; 09:00 Amsterdam; 21:00 Auckland
+    await openStamp(r, 1, opened);
+    expect(now.getTime() - opened.getTime(), "premise: the window tail is long over, only the day can count it").toBeGreaterThan(TAIL_MS);
+    expect(await nightCount(r, now)).toBe(2); // the club's zone: the open is on Sunday's calendar
+    const settings = { startAt: "2026-11-01T00:00:00.000Z", matchMinutes: 30, gapMinutes: 0, courts: [], perEntrantMinRest: 0, blackouts: [], sessionWindows: [] };
+    await putScheduleSettings(r.owner, r.divisionId, { config: settings, tz: "UTC" });
+    expect(await nightCount(r, now)).toBe(0); // the venue declares UTC: the open was Saturday there
+    await putScheduleSettings(r.owner, r.divisionId, { config: settings, tz: "Pacific/Auckland" });
+    expect(await nightCount(r, now)).toBe(2); // Auckland: opened Sunday 12:30, read Sunday 21:00
+  });
+
+  it("an archived division's opened round is gone from the day, as every other count of it is", async () => {
+    const r = await unplanned(2);
+    await openStamp(r, 1, at(-5));
+    expect(await nightCount(r, at(0))).toBe(2);
+    await sql`update divisions set archived_at = now() where id = ${r.divisionId}`;
+    expect(await nightCount(r, at(0))).toBe(0);
+  });
+
+  it("the org home's headline for an online night is one of its boards, an upcoming one with both sides, as its row already qualifies", async () => {
+    const a = await unplanned(2);
+    await openStamp(a, 1, at(-5));
+    const read = await competitionsFixturesToday(a.owner, [a.competitionId], at(0));
+    expect(read.counts.get(a.competitionId)).toBe(2);
+    const headline = read.next.get(a.competitionId);
+    expect(headline, "an upcoming board with both sides qualifies, as its row already would").toBeDefined();
+    expect(a.boards.map((b) => b.fixtureId)).toContain(headline!.fixture_id);
+    expect(headline!.in_play).toBe(false);
   });
 });

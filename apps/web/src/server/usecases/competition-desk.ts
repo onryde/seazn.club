@@ -12,12 +12,19 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
+import { isEditorRole } from "@/lib/types";
+import { holdReasonForReader } from "@/lib/arbiter-view";
+import { latestOpenedRoundNos, mayPress } from "@/lib/match-day/online";
+import { isLinkHold } from "@/server/external-play/types";
+import { onlineChessOffered } from "./external-play/online-chess-flag";
+import { frozenCompetitionIds } from "./entitlement-freeze";
 import { resolveModule } from "@/server/engine-db";
 import { resolveVenueTz } from "@/lib/tz";
 import {
   fixtureAwaitsSeedDraw,
   resolveAttention,
   resolvePhase,
+  sortAttentions,
   type Attention,
   type SeedProposalState,
   type DivisionPhase,
@@ -126,8 +133,9 @@ export interface CompetitionDesk {
   /** Match Day B1 (spec 2026-10-31 §9): how many of this competition's matches are today — Match Day's own count, A2's
    *  `countFixturesToday` (match-day.ts), read in this desk's transaction at this desk's `now` (controller ruling R2: one count,
    *  two surfaces). Each match is today on its own division's day (venue zone, else the organisation's, else UTC); a match in
-   *  play counts whatever day it was planned for; a cancelled match and an archived division's never do. The competition
-   *  page's match-day gate: above zero, it shows Open Match Day and the Needs-you list lives in Match Day (`needsYouHome`). */
+   *  play counts whatever day it was planned for, and so does a board of an online round that makes the day (opened in it, a live
+   *  check-in window or a game on file: no planned time of its own); a cancelled match and an archived division's never do. The
+   *  competition page's match-day gate: above zero, it shows Open Match Day and the Needs-you list lives in Match Day (`needsYouHome`). */
   fixtures_today: number;
   divisions: Map<string, DeskDivision>;
   /** Same instant every division's phase was resolved against (SSR-stable).
@@ -327,6 +335,115 @@ function resolveDivisionNext(rows: FixtureRaw[], nowIso: string): DeskNextFixtur
   return { home: picked.home, away: picked.away, scheduled_at: picked.scheduled_at, in_play: picked.status === "in_play" };
 }
 
+/**
+ * Match Day online (T4, spec 2026-11-05 §5.4): the two PER-BOARD attentions of the online chess divisions `divisionIds`, by division.
+ * ONE ROW PER BOARD, read from the two listers the division page's Held | Flagged queue and Match Day read (`listNeedsOrganiserExternalPlay`,
+ * `listFlaggedExternalPlay`; owner O2: a second query for "which boards are held" would drift from them the day a rule changes, and
+ * `online-queue-one-source.test.ts` refuses one in this file). Both read on their own connections, so this runs OUTSIDE the desk's
+ * `withTenant` block, as `roundOpensOfDivisions(sql, …)` does.
+ *
+ * - `board_held` for each held board the viewer does not play on (a board they play on is another organiser's to settle, and the lister
+ *   says which). A fixture settled another way (a result, a void, a walkover) is no longer held: the lister's own rule, so a board is
+ *   never both this row and the desk's `needs_decision`.
+ * - `board_flagged` for each board with an open flag, any state - a report lands after the game, and a cancelled board is listed only
+ *   while a flag is open (owner O1). The listers leave out the viewer's own boards.
+ * - The desk is served to viewers and API keys too (`GET /competitions/{id}/desk`), so what a hold SAYS is an editor's: `reason` is null
+ *   for anyone whose role is not an editor's (a fair-play ending is an accusation about named players, ruling MD-R13; a key has no role).
+ * - Ruling MD-R2: `reopen` is set on a LINK hold (`isLinkHold`) only when this viewer may also press the round's Open round - an editor,
+ *   the club offered online chess, the competition not billing-frozen (`mayPress(…, "start")`, the ONE rule the panel's presses obey).
+ *   Otherwise the row opens the board's own decisions, which finish play whatever the freeze says.
+ * - Ruling MD-R22: AND only when the hold's round is its stage's LATEST opened round (`latestRound`): that is the one round of a stage Match
+ *   Day lists, so only it has a round panel for the row's `?round=` to open. A hold left in an earlier round (a league whose next round has
+ *   opened) opens its board, where the abandon settle is offered.
+ * - ISOLATED (the rule MD-R9 gave Match Day's own online read): the competition page must not die because the chess queue could not be
+ *   read, so a division whose read throws is logged at error and has no board attentions in this read, the rest of the desk whole.
+ *
+ * Division-level `onlineIds` only: a division switched off online play keeps its old held boards on the division page alone (ruling MD-R11).
+ */
+async function onlineBoardAttentions(
+  auth: AuthCtx,
+  competitionId: string,
+  divisionIds: readonly string[],
+  /** Each stage's latest opened round (`latestOpenedRoundNos` of the opened-round read): the one round of a stage a re-open can name. */
+  latestRound: ReadonlyMap<string, number>,
+): Promise<Map<string, Attention[]>> {
+  const out = new Map<string, Attention[]>();
+  // Ruling MD-R18 (flag retired, Task 10): Match Day always draws its online rows now, so a row's button always lands on a Match Day with an
+  // online block - the board and round panels read `?board=` / `?round=` from it. The division page's Held | Flagged queue carries the same
+  // boards too, each with its own "Open in Match Day" (owner O2).
+  if (divisionIds.length === 0) return out;
+  // A dynamic import: the arbiter loader pulls the video stack, which every other read of the desk has no use for.
+  const [{ listNeedsOrganiserExternalPlay }, { listFlaggedExternalPlay }] = await Promise.all([
+    import("./external-play/queue"),
+    import("./external-play/arbiter"),
+  ]);
+  const editor = isEditorRole(auth.role);
+  const read = await Promise.all(
+    divisionIds.map(async (divisionId) => {
+      try {
+        const [held, flagged] = await Promise.all([
+          listNeedsOrganiserExternalPlay(auth, divisionId),
+          listFlaggedExternalPlay(auth, divisionId),
+        ]);
+        return { divisionId, held: held.filter((h) => !h.seated), flagged: flagged.boards };
+      } catch (err) {
+        log.error(
+          { event: "competition_desk_boards_failed", competitionId, divisionId, err },
+          "competition_desk_boards_failed: the held and flagged boards could not be read; this desk answers without them",
+        );
+        return { divisionId, held: [], flagged: [] };
+      }
+    }),
+  );
+  // The START rule is asked only when a row could use it: an editor, and a link hold on the list. The club's flag is a cached remote
+  // call and the freeze a read of the organisation, so a desk with nothing held pays for neither. Not isolated (ruling MD-R19, as the
+  // desk's other organisation-wide reads are not, MD-R17): a throw here is the desk's, like the freeze lookup of any other read.
+  let start = false;
+  if (editor && read.some((r) => r.held.some((h) => isLinkHold(h.reason)))) {
+    const [offered, frozen] = await Promise.all([onlineChessOffered(auth), frozenCompetitionIds(auth.orgId)]);
+    start = mayPress({ editor, offered, frozen: frozen.has(competitionId) }, "start");
+  }
+  for (const r of read) {
+    const list: Attention[] = [];
+    try {
+      for (const h of r.held) {
+        list.push({
+          kind: "board_held",
+          fixtureId: h.fixtureId,
+          stageId: h.stageId,
+          roundNo: h.roundNo,
+          boardNo: boardNoOf(h.boardNo, h.fixtureId),
+          home: h.homeName,
+          away: h.awayName,
+          reason: holdReasonForReader(h.reason, editor),
+          reopen: start && isLinkHold(h.reason) && latestRound.get(h.stageId) === h.roundNo,
+        });
+      }
+      for (const b of r.flagged) {
+        // The board names its players by COLOUR; the desk names a fixture's sides by seat, home first (`fixture_names`).
+        const home = b.whiteSide === "home" ? b.white.name : b.black.name;
+        const away = b.whiteSide === "home" ? b.black.name : b.white.name;
+        list.push({ kind: "board_flagged", fixtureId: b.fixtureId, roundNo: b.roundNo, boardNo: b.boardNo, home, away, flags: b.flagCount });
+      }
+    } catch (err) {
+      log.error(
+        { event: "competition_desk_boards_failed", competitionId, divisionId: r.divisionId, err },
+        "competition_desk_boards_failed: a held or flagged board could not be named; this desk answers without this division's",
+      );
+      continue;
+    }
+    out.set(r.divisionId, list);
+  }
+  return out;
+}
+
+/** A held board's number. `fixtures.seq_in_round` is NOT NULL, so the lister's `number | null` is its loose type, not a state a board
+ *  can be in; a drift refuses loudly (the lister's own precedent for a column outside its vocabulary) rather than naming "Board null". */
+function boardNoOf(boardNo: number | null, fixtureId: string): number {
+  if (boardNo === null) throw new Error(`held board ${fixtureId} has no board number (fixtures.seq_in_round is NOT NULL)`);
+  return boardNo;
+}
+
 export async function getCompetitionDesk(
   auth: AuthCtx,
   competitionId: string,
@@ -344,8 +461,10 @@ export async function getCompetitionDesk(
   const ids = divisions.map((d) => d.id);
   // A dynamic import, not a static one: match-day.ts reads this desk (`getMatchDay` → `getCompetitionDesk`), so a static import
   // here would close a module cycle — and a test mocking this module through `importOriginal` would wait on itself.
-  const { countFixturesToday } = await import("./match-day");
-  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed } = await withTenant(auth.orgId, async (tx) => {
+  const { countFixturesToday, withRoundOpensToday } = await import("./match-day");
+  // `withRoundOpensToday`, not `withTenant`: the count of today's matches reads the sealed round opens in this transaction's
+  // privileged prelude (an online night is a match day), so its `fixtures_today` is the same number Match Day and the org home read.
+  const { orgTz, stages, fixtures, settings, fixturesWithOfficial, fixturesWithLink, fixturesToday, lateWaiting, lateUnplaced, withdrawalOwed } = await withRoundOpensToday(auth.orgId, now, async (tx, opens) => {
     const [org] = await tx<{ timezone: string | null }[]>`select timezone from organizations where id = ${auth.orgId}`;
     const stages = ids.length
       ? await tx<StageRaw[]>`
@@ -500,7 +619,7 @@ export async function getCompetitionDesk(
              and dl.revoked_at is null
              and (dl.expires_at is null or dl.expires_at > ${now})`
       : [];
-    const fixturesToday = await countFixturesToday(tx, competitionId, now);
+    const fixturesToday = await countFixturesToday(tx, competitionId, now, opens);
     // W4 T11 (X-LE-10, K7): late players waiting to join a started root knockout — entrants still in the field whose
     // marker names a stage not yet complete (a complete stage has no round 1 left to join), counted per stage.
     // W5 T6 (X-CU-8): and those waiting to join a running root league or group (`table_waiting_stage_id`, V535) — `table`
@@ -588,6 +707,8 @@ export async function getCompetitionDesk(
     divisions.filter((d) => supportsOnlinePlay(d.sport_key) && readOnlinePlay(d.config) === "lichess").map((d) => d.id),
   );
   const openedRounds = await roundOpensOfDivisions(sql, [...onlineIds]);
+  // Match Day online (T4): the per-board attentions of those divisions, appended to each one's list below.
+  const boardAttentions = await onlineBoardAttentions(auth, competitionId, [...onlineIds], latestOpenedRoundNos(openedRounds.keys()));
 
   const nowIso = now.toISOString();
   const out = new Map<string, DeskDivision>();
@@ -713,7 +834,10 @@ export async function getCompetitionDesk(
       lateUnplaced: lateUnplaced.filter((u) => u.division_id === d.id).map((u) => ({ stageName: u.stage_name, names: u.names })),
       withdrawalOwed: withdrawalOwed.filter((w) => w.division_id === d.id).map((w) => w.name),
     };
-    const attention = resolveAttention(input);
+    // The two per-board kinds (online divisions only) join the list `resolveAttention` built, and the whole is put in the ledger's
+    // order again (`sortAttentions`, the comparator `resolveAttention` itself ends with): the phase above is unmoved by them -
+    // phase and attention are orthogonal, and a red one outranks the phase on a pill, not in the phase.
+    const attention = sortAttentions([...resolveAttention(input), ...(boardAttentions.get(d.id) ?? [])]);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");
     const inPlayRows = rows.filter((x) => x.status === "in_play");
     const inPlay = inPlayRows.length;

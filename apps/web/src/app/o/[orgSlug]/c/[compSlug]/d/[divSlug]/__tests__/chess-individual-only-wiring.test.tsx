@@ -4,6 +4,7 @@
 // for every other sport. Same scaffold as division-header-sport-label.test.tsx beside it (the async server component
 // called directly, its returned tree walked); the expected models come from the engine's own declarations.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -86,7 +87,7 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: async () => ({}) }));

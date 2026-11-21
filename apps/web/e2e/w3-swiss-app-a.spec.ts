@@ -16,6 +16,7 @@ import { closeOpenContexts } from "./spectator-public-helpers";
 import { openFormatDialog } from "./helpers/rules-strip";
 import { spectator } from "./spectator-w2-kit";
 import { fill, seedOnlineRound, uiEn } from "./match-room-kit";
+import { openRoundPanel } from "./match-day-online-kit";
 import type { Page } from "@playwright/test";
 import { swissColourLot, swissDrawSeed, swissRoundOneOrder } from "../src/lib/swiss-draw";
 import {
@@ -640,8 +641,8 @@ test.describe("X-SW-28 Undo clears a paired round", () => {
 
 // W3 T8 (spec §12; X-SW-22 SW-L6 RB3-16, BG-SW-1 SW-H3 RB3-10). Two halves, each through the real desk:
 //   BG-SW-1 — a boardgame Swiss created now is a chess Swiss, and round 1's colours are by lot: board 1's upper player
-//             takes the lot's colour and the boards alternate. Read where the arbiter reads it: the Arbiter Panel's
-//             round column names White first.
+//             takes the lot's colour and the boards alternate. Read where the arbiter reads it: Match Day's
+//             round panel names White first.
 //   X-SW-22 — an unseeded round 1 is the stage's seeded random draw. The organiser is told so in the Pair next menu,
 //             and the Pair seats the draw (the stage's own seed over the field in the order the server reads it).
 // Expected values come from the rulebook (the fold: position k meets position k + n/2, the upper at home; the lot's
@@ -677,11 +678,9 @@ test.describe("X-SW-22 / BG-SW-1", () => {
     }
     expect(flips, "anti-vacuity: every adjacent pair of boards compared").toBe(half - 1);
 
-    // On the arbiter's screen: White first on every board, before the round is opened.
+    // On Match Day's round panel: White first on every board, before the round is opened.
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto(r.arbiterPath);
-    const column = page.getByTestId("arbiter-round-column");
-    await expect(column, "paired, not opened").toHaveAttribute("data-phase", "before", { timeout: 30_000 });
+    await openRoundPanel(page, r, "before");
     for (const [i, b] of r.boards.entries()) {
       const sides = page.getByTestId(`arbiter-column-pairing-${b.fixtureId}`).locator('[data-field="names"] > span');
       await expect(sides.nth(0), `board ${i + 1}: White`).toHaveText(expected[i]!.white);

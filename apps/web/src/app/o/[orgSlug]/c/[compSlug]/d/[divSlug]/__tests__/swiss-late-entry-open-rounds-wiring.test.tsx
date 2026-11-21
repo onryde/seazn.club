@@ -10,6 +10,7 @@
 // reader is refused exactly as Postgres refuses it. Same scaffold as chess-individual-only-wiring.test.tsx beside it
 // (the async server component called directly, its returned tree walked).
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -98,7 +99,7 @@ vi.mock("@/server/usecases/discipline", () => ({
 }));
 vi.mock("@/lib/db", () => ({
   sql: db.privileged,
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(db.tenantTx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(db.tenantTx, fn, opts),
   statementCount: () => 0,
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: async () => ({}) }));

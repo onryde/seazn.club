@@ -52,8 +52,8 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
     const s = await seeded();
     await bridge(s.fixtureId, s.orgId, "needs_organiser", "not_started", "lichess answered 503");
     // The board's place, read from the database itself.
-    const [at] = await sql<{ round_no: number; seq_in_round: number; name: string }[]>`
-      select f.round_no, f.seq_in_round, s.name from fixtures f join stages s on s.id = f.stage_id where f.id = ${s.fixtureId}`;
+    const [at] = await sql<{ round_no: number; seq_in_round: number; name: string; stage_id: string }[]>`
+      select f.round_no, f.seq_in_round, s.name, s.id as stage_id from fixtures f join stages s on s.id = f.stage_id where f.id = ${s.fixtureId}`;
     expect(await listNeedsOrganiserExternalPlay(s.auth, s.divisionId)).toEqual([
       {
         fixtureId: s.fixtureId,
@@ -68,6 +68,7 @@ describe.skipIf(!HAS_DB)("listNeedsOrganiserExternalPlay", () => {
         revokedSeat: null,
         roundNo: at!.round_no,
         boardNo: at!.seq_in_round,
+        stageId: at!.stage_id,
         stageName: at!.name,
         canResync: false,
         seated: false,

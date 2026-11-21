@@ -14,6 +14,12 @@ import "server-only";
 // branch is unreachable from here. The job leaves no ended room behind: it only creates, and an unadopted room that a later
 // sweep ends is that sweep's (Task 8) to delete, never this job's.
 //
+// A billing-FROZEN competition's rows are deferred, not made (Match Day O4, ruling MD-R16 2026-11-20): its round cannot be opened
+// (`openRound` refuses it with the freeze's 402), so a room made for it is vendor spend on a round that cannot start. The pass asks
+// `frozenCompetitionIds` once per org, in the pass - NOT a `frozen_at` predicate in the candidate SQL, because the mark is stored
+// lazily (the first read that finds the org over its limit chooses and stores it). The rows stay candidates (the sweep's teardown
+// must not end the rooms already made for them) and keep their place: the first pass after the freeze lifts makes them.
+//
 // The pass is OFF unless EXTERNAL_PLAY_PREMINT is exactly "1": a flag-off environment reports `disabled` (not a failure) BEFORE
 // the lock is taken, so a minute with the flag off can never report `skipped` (a failure counter for the cron Worker) because
 // some other pass held the lock. With the flag on it is one pass at a time (the sweep's lock shape), and it shares the cron
@@ -36,6 +42,7 @@ import {
 } from "@/server/external-play/video/realtimekit";
 import type { CallBudget } from "@/server/external-play/video/budget";
 import { onlinePlayDivisionWhere } from "./guard";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import { onlineChessOffered } from "./online-chess-flag";
 import { PLAYABLE_STATUSES, codeOf } from "./sweep/pass";
 
@@ -72,8 +79,8 @@ export type PremintReport = {
   scanned: number;
   /** Rooms the pass made (a successful `ensureMeeting`: a claim that made the same room first would be counted too). */
   roomsMade: number;
-  /** Rows NOT started: the call cap, the pass budget or the platform's bucket ran out, or the club is not offered online
-   *  chess. They keep their place; the next pass reaches them. Never a failure. */
+  /** Rows NOT started: the call cap, the pass budget or the platform's bucket ran out, the club is not offered online
+   *  chess, or the competition is billing-frozen (MD-R16). They keep their place; the next pass reaches them. Never a failure. */
   deferred: number;
   /** `failures.length`, derived ONCE as the pass returns. */
   failed: number;
@@ -84,7 +91,7 @@ export type PremintReport = {
   failures: { fixtureId: string; side: "home" | "away"; code: string }[];
 };
 
-export type PremintCandidate = { fixtureId: string; orgId: string; side: "home" | "away" };
+export type PremintCandidate = { fixtureId: string; orgId: string; competitionId: string; side: "home" | "away" };
 
 export type PremintDeps = {
   /** TEST SEAM - scope the pass to these orgs. Production passes none and serves every org; an EMPTY list matches nothing. */
@@ -164,7 +171,7 @@ export async function premintCandidates(orgIds?: readonly string[]): Promise<Pre
   const scope = orgIds === undefined ? sql`` : sql`and c.org_id in ${sql(orgIds as string[])}`;
   return sql<PremintCandidate[]>`
     with boards as (
-      select f.id, f.stage_id, f.round_no, f.seq_in_round, c.org_id,
+      select f.id, f.stage_id, f.round_no, f.seq_in_round, c.org_id, c.id as competition_id,
              min(f.scheduled_at) over (partition by f.stage_id, f.round_no) as round_at
         from fixtures f
         join stages s on s.id = f.stage_id
@@ -173,7 +180,7 @@ export async function premintCandidates(orgIds?: readonly string[]): Promise<Pre
        where ${premintBoardWhere()}
          ${scope}
     )
-    select b.id as "fixtureId", b.org_id as "orgId", sd.side
+    select b.id as "fixtureId", b.org_id as "orgId", b.competition_id as "competitionId", sd.side
       from boards b
      cross join (values ('home'), ('away')) as sd(side)
      where not exists (select 1 from fixture_video_meetings m where m.fixture_id = b.id and m.side = sd.side)
@@ -271,6 +278,24 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
     return answer;
   };
 
+  // MD-R16: the org's frozen competitions, read once per org the pass reaches (`frozenCompetitionIds` may choose and store the freeze on
+  // its first read, and is asked outside any `withTenant`: this pass holds none). MD-R20: a read that FAILS is that org's alone - logged
+  // once (the answer is kept for the pass, so its rows share the one catch), and `null` here means "unknown": the org's rows are deferred,
+  // FAIL CLOSED (a competition that might be frozen gets no vendor call), while every other org's rooms are still made. The org then
+  // mints on demand at its open, as before the pre-mint, if the read keeps failing.
+  const frozenByOrg = new Map<string, Promise<Set<string> | null>>();
+  const frozenIn = (orgId: string): Promise<Set<string> | null> => {
+    let set = frozenByOrg.get(orgId);
+    if (set === undefined) {
+      set = frozenCompetitionIds(orgId).catch((err: unknown) => {
+        log.error({ orgId, err }, "external-play premint: an organisation's freeze could not be read; its rows are deferred");
+        return null;
+      });
+      frozenByOrg.set(orgId, set);
+    }
+    return set;
+  };
+
   let vendorErrorsInARow = 0;
   for (let i = 0; i < rows.length; i++) {
     // The pass's wall-clock budget, before the row's flag ask: that ask is a remote call outside `premintBudget`, and a club it
@@ -282,6 +307,13 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
       break;
     }
     const row = rows[i]!;
+    // A frozen competition cannot open its round, so no room is made for it; the row keeps its place for the pass after the thaw.
+    // An org whose freeze could not be read (`null`) is held the same way.
+    const frozen = await frozenIn(row.orgId);
+    if (frozen === null || frozen.has(row.competitionId)) {
+      report.deferred += 1;
+      continue;
+    }
     if (!(await offeredTo(row.orgId))) {
       report.deferred += 1;
       continue;

@@ -3,8 +3,8 @@
 // T16 (D12, canvas OpenRoundPhone / OpenRoundConfirmPhone / OpenRoundDesktop) - what the organiser reads when a round is opened:
 // the confirmation's body (how many players and which pairings the press reaches), the invite state of each pairing, the
 // check-in groups of a staggered round, and the words of the open's and the resend's answers. The CONTROL that used to mount
-// these on each stage card is gone (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8): the round is opened in the Arbiter
-// Panel's column (arbiter/round-column.tsx), which reads the very same helpers from here, so the two never word a press differently.
+// these on each stage card is gone (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8): the round is opened on Match Day
+// (match-day/round-focus.tsx, the round's panel), which reads the very same helpers from here, so the two never word a press differently.
 //
 // What a press will do (`round.press`) is the reader's prediction of the server's own decision (open-round-view.ts), so nothing
 // offers a press the server refuses as already open. The counts here are of the UNINVITED - never "is anyone invited?" - so a
@@ -18,6 +18,7 @@ import { SEAT_WORD_KEYS, seatWords } from "@/lib/invite-status";
 import type { MessageKey } from "@/lib/messages";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
 import {
+  BILLING_FROZEN_CODE,
   ONLINE_GAME_EXISTS_CODE,
   OPEN_ROUND_ALREADY_OPEN_KEY,
   OPEN_ROUND_INVITED_KEY,
@@ -177,6 +178,7 @@ export function OpenRoundConfirmBody({ round, tz, seats }: { round: OpenRoundVie
 
 export function openNoticeText(n: OpenRoundNotice, round: OpenRoundView, msg: Msg, plural: Plural): string[] {
   if (n.kind === "failed") {
+    if (n.code === BILLING_FROZEN_CODE) return [msg("runsheet.round.err.frozen")];
     if (n.code === ONLINE_CHESS_DISABLED_CODE) return [msg("runsheet.round.err.disabled")];
     if (n.code === "ROUND_CHANGED") return [msg("runsheet.round.err.roundChanged")];
     if (n.code === "ROUND_NOT_ONLINE") return [msg("runsheet.round.err.notOnline")];
@@ -211,6 +213,7 @@ export function resendNoticeText(n: ResendNotice, msg: Msg, plural: Plural): str
     ];
     return lines.length > 0 ? lines.join(" ") : msg("runsheet.round.resentNone");
   }
+  if (n.code === BILLING_FROZEN_CODE) return msg("runsheet.round.err.frozen");
   if (n.code === "WINDOW_CLOSED" || n.code === "BOARD_HELD") return msg(RESEND_REFUSAL_KEYS[n.code] as MessageKey);
   if (n.code === ONLINE_GAME_EXISTS_CODE) return msg("externalPlay.resend.gameExists");
   if (n.code === "ROUND_CHANGED") return msg("externalPlay.resend.roundChanged");

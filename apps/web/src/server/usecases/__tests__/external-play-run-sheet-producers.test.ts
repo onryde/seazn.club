@@ -71,7 +71,7 @@ async function rowFor(r: SeedOnlineChessRoundResult, fixtureId: string, panelOff
     entrantNames: { [fx!.home_entrant_id]: "Ada Okonkwo", [fx!.away_entrant_id]: "Tomasz Wieczorek" },
     onlinePlay: entry,
     // The page hands the per-fixture panel link only where it offers the panel (`arbiterHrefFor`); otherwise nothing.
-    arbiterHref: panelOffered ? `/o/org/c/comp/d/div/arbiter?fixture=${fixtureId}` : undefined,
+    arbiterHref: panelOffered ? `/o/org/c/comp/match-day?board=${fixtureId}` : undefined,
   }).tree();
   const heldChips = [...new Set(tree.filter((el) => propsOf(el)["data-testid"] === "run-sheet-online-held-chip"))];
   return { entry, heldChips };
@@ -100,7 +100,7 @@ describe.runIf(HAS_DB)("a fair-play ending reaches the run sheet from its real p
     expect(heldChips, "the row: one held chip").toHaveLength(1);
     expect(propsOf(heldChips[0]!)["data-reason"]).toBe("fair_play");
     expect(propsOf(heldChips[0]!).href, "offered: the panel opened on this board, not an anchor nothing on the tab carries").toBe(
-      `/o/org/c/comp/d/div/arbiter?fixture=${fixtureId}`,
+      `/o/org/c/comp/match-day?board=${fixtureId}`,
     );
     expect(textOf(heldChips[0]!)).toBe(messages["score.status.needs_decision"]);
     // The pair: no panel offered -> the queue is on the tab, and the chip scrolls to this board's card in it.

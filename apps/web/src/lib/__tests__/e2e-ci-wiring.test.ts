@@ -2092,6 +2092,46 @@ describe("the online-chess fixture servers' wiring", () => {
     for (const k of FLAGS) expect(spec, `the walkthrough names ${k} where a disabled pass is reported`).toContain(k);
   });
 
+  // Match Day all-in-one, Task 10: the Match Day online flag (Task 6) is GONE - Match Day draws its online rounds, the per-board Needs-you rows and
+  // the board and round panels whenever a division plays online, so no server recipe switches anything on. Two halves: the flag is named nowhere
+  // that used to carry it (a leftover export would read as a dead switch somebody must keep in step), and the recipe still carries what the
+  // online specs' seeds need beside it (a server started from the recipe alone must run match-day-online.spec.ts and match-day.spec.ts).
+  it("the retired Match Day online flag is named in no workflow, runbook or local-gate script, and the server recipe still carries the online chess override and the court-stream build floor", () => {
+    // Built, not typed: the repo-wide "the flag is gone" grep then finds this file clean, and a leftover anywhere else still reds the test below.
+    const K = ["MATCH_DAY", "ONLINE"].join("_");
+    const files: [string, string][] = [
+      [".github/workflows/e2e.yml", readFileSync(join(REPO_ROOT, ".github/workflows/e2e.yml"), "utf8")],
+      ["docs/runbooks/e2e-local.md", readFileSync(join(REPO_ROOT, "docs/runbooks/e2e-local.md"), "utf8")],
+      ["scripts/ci-local.sh", readFileSync(join(REPO_ROOT, "scripts/ci-local.sh"), "utf8")],
+    ];
+    for (const [name, body] of files) expect(body, `${name} no longer names the flag`).not.toContain(K);
+    expect(files.length, "files checked").toBe(3);
+    const runbook = files[1]![1];
+    // T10 review M12: a line a shell or YAML reader ignores is not a recipe. The positive pairs read the CODE of the file: whole-line comments and
+    // trailing ` # ...` comments are dropped first, so `# ONLINE_CHESS_ALWAYS=1 \` left in a recipe cannot keep this test green.
+    const codeOf = (text: string) =>
+      text
+        .split("\n")
+        .filter((line) => !/^\s*#/.test(line))
+        .map((line) => line.replace(/\s#.*$/, ""))
+        .join("\n");
+    expect(codeOf("# ONLINE_CHESS_ALWAYS=1 \\\nA=1 # ONLINE_CHESS_ALWAYS=1 \\\n"), "premise: the filter drops commented lines").not.toContain("ONLINE_CHESS_ALWAYS");
+    const recipe = codeOf(runbook);
+    // Positive pairs, so an absent flag is not an absent recipe: the recipe's own vars are still there.
+    expect(recipe, "the recipe's ONLINE_CHESS_ALWAYS").toMatch(/^ONLINE_CHESS_ALWAYS=1 \\$/m);
+    expect(recipe, "the recipe's COURT_MIN_APP_VERSION").toMatch(/^COURT_MIN_APP_VERSION=\d+\.\d+\.\d+-\d+ \\$/m);
+    expect(runbook, "the var table names ONLINE_CHESS_ALWAYS").toMatch(/^\| `ONLINE_CHESS_ALWAYS=1` \|/m);
+    expect(runbook, "the var table names COURT_MIN_APP_VERSION").toMatch(/^\| `COURT_MIN_APP_VERSION=/m);
+    // e2e.yml: the three legs that start a server for the online specs all set the override (e2e-parallel also the build floor).
+    let on = 0;
+    for (const [name, next] of [["e2e-parallel", "e2e-serial"], ["e2e-serial", "e2e-mobile"], ["e2e-mobile", null]] as const) {
+      expect(job(name, next), `${name} starts its server with ONLINE_CHESS_ALWAYS`).toMatch(/^\s+ONLINE_CHESS_ALWAYS: "1"\s*$/m);
+      on++;
+    }
+    expect(on, "jobs that carry it").toBe(3);
+    expect(job("e2e-parallel", "e2e-serial"), "e2e-parallel carries the court-stream build floor").toMatch(/^\s+COURT_MIN_APP_VERSION: "\d+\.\d+\.\d+-\d+"\s*$/m);
+  });
+
   // T17 review M7: the legs that start no fixture still point Lichess at the fixture's (closed) port, so a stray
   // reconcile — a future mobile test that resigns, say — is refused on the runner instead of sending an
   // unauthenticated export read to lichess.org. Video stays unconfigured there (no credentials ⇒ no call at all), which

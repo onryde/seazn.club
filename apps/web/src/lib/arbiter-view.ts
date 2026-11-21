@@ -4,7 +4,7 @@
 // player's tile at a time, a switch between the two, plus that fixture's flags).
 //
 // Shared by the server loader (usecases/external-play/arbiter.ts) and the
-// client panel (components/v2/arbiter-panel.tsx), so it imports nothing that
+// client panels (components/v2/match-day/), so it imports nothing that
 // is server-only. The two note readers below read the evidence notes the
 // flags' PRODUCERS write — reconcile (out_of_band_play) and the sweep's job 5
 // (camera_lost, and multiple_devices — T17B fix 2, D9). They are strict: a note they cannot read is null and the
@@ -12,6 +12,7 @@
 // `camera_connection_problems` flag is NEVER read from its note (controller
 // addendum 2026-10-12): the loader reads it from fixture_video_guard_faults.
 
+import type { NeedsReason } from "@/server/external-play/types";
 import type { CheckinExtendState } from "./checkin-extend.ts";
 import type { SeatInviteWord } from "./invite-status.ts";
 
@@ -123,6 +124,37 @@ export type ArbiterFlag =
       report: MultipleDevicesReport | null;
     };
 
+/** A flag as a reader WITHOUT an editor's role may have it (Match Day online, ruling MD-R13): which kind of flag it is, when it was opened
+ *  and its id, and nothing of what it found or whom it names - an accusation about a named player (out-of-band play, one player on two
+ *  devices) is the organiser's, as the arbiter page always kept it. Every other field is null: the same shape the card has, so a card
+ *  reads a null where an editor's reads the evidence. A null here is therefore NOT "the note could not be read" - the viewer's page
+ *  knows it is a viewer's and says a flag was raised, no more. A kind added to `ArbiterFlag` fails this switch at compile time. */
+function flagSummary(f: ArbiterFlag): ArbiterFlag {
+  switch (f.kind) {
+    case "out_of_band_play":
+      return { id: f.id, kind: f.kind, at: f.at, plies: null };
+    case "camera_lost":
+      return { id: f.id, kind: f.kind, at: f.at, personName: null, report: null, windowFrom: null };
+    case "camera_connection_problems":
+      return { id: f.id, kind: f.kind, at: f.at, personName: null, seconds: null, stamps: null };
+    case "multiple_devices":
+      return { id: f.id, kind: f.kind, at: f.at, personName: null, report: null };
+  }
+}
+
+/** The ONE strip of a board's flags for a reader (MD-R13): an editor's role gets the cards whole, anyone else (a view-only member, an
+ *  API key) `flagSummary`'s. Pure: the input is never changed. */
+export function flagsForReader(flags: ArbiterFlag[], canEdit: boolean): ArbiterFlag[] {
+  return canEdit ? flags : flags.map(flagSummary);
+}
+
+/** The ONE strip of WHY a board is held for a reader (MD-R21): the reason names the players' conduct (`fair_play`, the no-shows), so it is an
+ *  editor's fact like the flags' evidence (MD-R13) - an editor's role gets it as it is, anyone else (a view-only member, an API key) gets
+ *  null. Every door that carries a hold's reason goes through here: the focused board, Match Day's online rounds, the competition desk. */
+export function holdReasonForReader(reason: NeedsReason | null, canEdit: boolean): NeedsReason | null {
+  return canEdit ? reason : null;
+}
+
 /** The sweep's job-5 multiple_devices note, as it states it (D9). */
 export type MultipleDevicesReport = {
   /** The most connections at one instant: always 2 or more. */
@@ -174,6 +206,9 @@ export type ArbiterBoard = {
   seats: { white: ArbiterSeatCheckin; black: ArbiterSeatCheckin } | null;
   /** Open flags only: a flag the organiser closed has had its review. */
   flags: ArbiterFlag[];
+  /** How many open flags the board has, counted even when `flags` is [] (Match Day's list read carries the count and not the cards;
+   *  the board in focus reads its cards through its own route). Always equal to `flags.length` where the cards are read. */
+  flagCount: number;
 };
 
 /** One seat of a board in check-in: has its player checked in inside the board's window (`checkInCounts`), and what the seat's

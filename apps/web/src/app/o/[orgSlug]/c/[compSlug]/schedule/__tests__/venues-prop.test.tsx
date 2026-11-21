@@ -17,6 +17,7 @@
 // straight to a component in a unit test would pass even if the page never
 // threaded it through.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const spies = vi.hoisted(() => ({ listVenues: vi.fn() }));
@@ -64,7 +65,7 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: vi.fn(async () => "en") 
 
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
 }));
 
 import CompetitionSchedulePage from "../page";

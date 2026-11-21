@@ -69,6 +69,7 @@ const view = (courts: MatchDayCourt[], now: string, playing_no_court: MatchDayFi
   results_owed: 0,
   fixtures_today: 0,
   venues_today: [],
+  online_rounds: [],
 });
 
 const C1 = court("c-1", "Court 1");

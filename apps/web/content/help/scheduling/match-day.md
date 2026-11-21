@@ -1,11 +1,11 @@
 ---
 title: Match Day
-description: Run the day from one page. See every court and call the next match onto a free one.
+description: Run the day from one page. See every court, call the next match onto a free one and run online chess rounds and boards.
 order: 10
 related: scheduling/match-day-scorers, scheduling/match-day-stream, scheduling/board, scoring/device-links, scheduling/undo
 ---
 
-**Match Day** is the page you keep open while the matches are on. It lists every court and lets you call the next match onto a free one.
+**Match Day** is the page you keep open while the matches are on. It lists every court and lets you call the next match onto a free one. A division that plays its chess online adds its rounds and boards under the courts.
 
 ![Match Day on a phone-width screen with six courts. One match is playing with No scorer, one court is Called, three are Free (one with a match queued and two folded into a line), and one is Closed for the rest of today.](/help/scheduling/match-day.webp "Match Day with a match playing, a court called, a free court and a closed court.")
 
@@ -56,6 +56,18 @@ A warning never stops a call. The sheet warns you when:
 ## Scorers, codes and streams
 
 A playing court shows **No scorer** while nobody has started scoring it, no official is assigned to it and it has no scoring link. To give a scorer a link, or to make a Match Day code for the Seazn Club app, see [scorers and Match Day codes](/help/scheduling/match-day-scorers). To stream every match on a court from one phone, see [streaming a court](/help/scheduling/match-day-stream).
+
+## Online chess rounds and boards
+
+A division that plays its chess online adds an **Online** block under the courts. Each round has a row with its state: **closes 19:58** over **9 of 12 here** while players check in, then for example **3 of 6 playing**, and at the ends **Not started**, **Paired, not opened** and **Finished**. Its boards are listed under it, each with its own state, such as **Checking in**, **Live · move 12**, **On hold** or the result. **Boards you are playing on are not listed here.**
+
+Select a round or a board to open its panel next to the list. On a phone the panel fills the screen, and **Back to the list** takes you back.
+
+- The round panel follows the round. Once the division has started and the round is paired, it lists the pairings and, for an organiser, has **Open round**. A confirmation says how many players it invites and that their clocks start now. While players check in the panel shows the countdown, how many have checked in and **Waiting on 2 boards**, with **Resend invite** and **+5 min (3 left)** on each row (see [adding time to check-in](/help/sports/chess)). When every board of a Swiss round is over it offers **Pair next round**, and once the next round is paired it says **Round 4 is ready to open**.
+- The board panel shows who plays White and Black, where the game stands, the flags raised on the board and, for a board on hold, why it is held. Under **Your decision** it offers what applies to the board: **Resync from Lichess**, **Let the game go on** while it has flags, and **Settle the result now…**. During a video outage a card offers to let the board play without video.
+- Cameras: when the division asks for cameras, the board panel shows one tile for each player, with the video or a line saying why there is none. **Hide video** folds the tiles to one line each and **Show video** brings them back. A tile that could not load has **Try again**. On a narrow screen a **Cameras** and **Board** switch picks which of the two shows.
+
+A held board or a board with a report also appears in the **Needs you** list behind the header button, with an action such as **Review board 4** that opens its panel. A Viewer sees the rounds and boards and has no buttons that change anything.
 
 ## Common questions
 

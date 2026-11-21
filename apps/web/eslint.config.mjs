@@ -131,7 +131,7 @@ const eslintConfig = defineConfig([
   },
 
   {
-    // `lib/round-column.ts` (the Arbiter Panel's round column model) and `lib/invite-status.ts` (its invite words) are pure
+    // `lib/round-column.ts` (the round model Match Day's round panel reads) and `lib/invite-status.ts` (its invite words) are pure
     // and client-imported: a client component reaches them. Each names a few SERVER types for its arguments (`FlaggedBoard`,
     // `NeedsOrganiserExternalPlayRow`, `OutboxStatus`), which is safe because a type-only import is erased. A VALUE import of
     // anything under `@/server/**` (or of `server-only`) is a BUILD FAILURE in this app, so it is refused here, in the same

@@ -29,6 +29,9 @@ export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   needs_fixtures: "desk.pill.needs_fixtures",
   needs_decision: "desk.pill.needs_decision",
   final_decided: "desk.pill.final_decided",
+  // Match Day online (T4): an online board on hold names itself on its division's pill, as `needs_decision` does - the same red,
+  // the same "a decision is owed before play can go on".
+  board_held: "desk.pill.board_held",
   no_scorer: "desk.pill.no_scorer",
   // `null` because it is amber, not red — the pill keeps showing the phase.
   // Pinned against ATTENTION_SEVERITY by desk-ssr.test.tsx, so this cannot
@@ -42,6 +45,8 @@ export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   late_players_waiting: null,
   late_unplaced: null,
   withdrawal_owed: null,
+  // Amber (Match Day online, T4): a report to review never stops a game; the Needs-you row says it and the pill keeps the phase.
+  board_flagged: null,
   registrations_waiting: null,
 };
 

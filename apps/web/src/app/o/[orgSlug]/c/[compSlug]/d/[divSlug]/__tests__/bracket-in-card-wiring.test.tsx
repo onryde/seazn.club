@@ -3,6 +3,7 @@
 // to draw with - so it is driven here through the real async page, the way `chess-individual-only-wiring.test.tsx` beside it does
 // (the server component called directly, its returned tree walked). Fixtures are the ENGINE'S OWN generator output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -88,7 +89,7 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: async () => ({}) }));

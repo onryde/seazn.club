@@ -71,6 +71,15 @@ export type SeatHoldReason = (typeof SEAT_HOLD_REASONS)[number];
 export const isSeatHold = (reason: string | null): reason is SeatHoldReason =>
   reason !== null && (SEAT_HOLD_REASONS as readonly string[]).includes(reason);
 
+/** The holds `openRound` writes for a board whose player has no usable Lichess link (V536): nobody was invited and the board is NO
+ *  no-show, so its only way back to play is the round's RE-OPEN once the player has linked (open-round.ts deletes such a row and
+ *  invites; a decision cannot clear it). ONE list, read by the re-open and by the Needs-you row that routes to it (ruling MD-R2,
+ *  competition-desk.ts), so the two cannot disagree about which holds are these. */
+export const LINK_HOLD_REASONS = ["lichess_unlinked", "lichess_reconnect"] as const satisfies readonly NeedsReason[];
+export type LinkHoldReason = (typeof LINK_HOLD_REASONS)[number];
+export const isLinkHold = (reason: string | null): reason is LinkHoldReason =>
+  reason !== null && (LINK_HOLD_REASONS as readonly string[]).includes(reason);
+
 /** Lichess challenge clock: `limit` is initial time in seconds. */
 export type LichessClock = { limit: number; increment: number };
 

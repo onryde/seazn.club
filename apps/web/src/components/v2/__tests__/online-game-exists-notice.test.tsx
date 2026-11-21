@@ -1,7 +1,7 @@
 // T16 (T19 carry) — Unpair, Rebuild and deleting an entrant refuse 409
 // ONLINE_GAME_EXISTS on a board an online game stands behind
 // (usecases/stages/swiss-boards.ts lockBoardsRefusingOnlineGames). The organiser's way out is the
-// arbiter panel's settle, so the refusal says so and links there.
+// Match Day's settle, so the refusal says so and links there.
 //
 // The copy is checked for TRUTH, not only presence: settling a board decides
 // it, and a Swiss round with a decided board can never be unpaired
@@ -31,8 +31,9 @@ vi.mock("@/components/i18n/dict-provider", () => ({
 }));
 
 import { OnlineGameExistsNotice } from "../online-game-exists-notice";
+import { routes } from "@/lib/routes";
 
-const ARBITER = "/o/club/c/cup/d/open/arbiter";
+const MATCH_DAY = routes.competitionMatchDay("club", "cup");
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
 const esc = (x: string) => x.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;");
 
@@ -60,15 +61,15 @@ describe("OnlineGameExistsNotice", () => {
     return renderToStaticMarkup(<OnlineGameExistsNotice arbiterHref={href} />);
   };
 
-  it("says why and links to the arbiter panel, where the board is settled", () => {
-    const h = notice(ARBITER);
+  it("says why and links to Match Day, where the board is settled", () => {
+    const h = notice(MATCH_DAY);
     expect(h).toContain('data-testid="online-game-exists"');
     expect(h).toContain(esc(s("en", ONLINE_GAME_EXISTS_KEY)));
-    expect(h).toMatch(new RegExp(`data-testid="online-game-exists-link"[^>]*href="${ARBITER}"|href="${ARBITER}"[^>]*data-testid="online-game-exists-link"`));
+    expect(h).toMatch(new RegExp(`data-testid="online-game-exists-link"[^>]*href="${MATCH_DAY}"|href="${MATCH_DAY}"[^>]*data-testid="online-game-exists-link"`));
     expect(h).toContain(`>${esc(s("en", "externalPlay.gameExistsCta"))}</a>`);
   });
 
-  it("the empty case: with no arbiter panel to link to (none on this page), the sentence alone — never a dead link", () => {
+  it("the empty case: with no Match Day to link to (none on this page), the sentence alone — never a dead link", () => {
     const h = notice(null);
     expect(h).toContain(esc(s("en", ONLINE_GAME_EXISTS_KEY)));
     expect(h).not.toContain("<a");
@@ -83,7 +84,7 @@ describe("OnlineGameExistsNotice", () => {
         expect(text.trim().length, `${loc} ${key}`).toBeGreaterThan(0);
         if (loc !== "en") expect(text, `${loc} ${key}`).not.toBe(s("en", key));
         expect(text, `${loc} ${key}`).not.toMatch(RETRY);
-        expect(notice(ARBITER, loc), `${loc} ${key}`).toContain(esc(text));
+        expect(notice(MATCH_DAY, loc), `${loc} ${key}`).toContain(esc(text));
         checked += 1;
       }
     }

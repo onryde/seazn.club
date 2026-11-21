@@ -323,8 +323,8 @@ export function NoCourtFocus({
   );
 }
 
-/** "‹ All courts": a phone's way back to the list. */
-function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
+/** "‹ All courts": a phone's way back to the list. Shared with the online panels (online-focus.tsx). */
+export function BackButton({ label, onBack }: { label: string; onBack: () => void }) {
   return (
     <button
       type="button"

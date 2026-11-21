@@ -6,12 +6,13 @@
 // The division page hands the stage cards `onlineAwaitsStart`: an organiser who can act on a chess division's fixtures tab,
 // online play = Lichess now, the club offered online chess, plus the shared "not started" predicate (`divisionScoringClosed`,
 // division-phase.ts - what the Start button, the scoring door and the open-round guard ask). Phase 2 (spec
-// 2026-10-24-arbiter-round-column-design.md §8) moved the Open round control into the Arbiter Panel, so the cards no longer
+// 2026-10-24-arbiter-round-column-design.md §8) moved the Open round control into the Arbiter Panel (now Match Day's round panel), so the cards no longer
 // get the rounds map; the hint STAYS, because the Start button is on this tab. This suite drives the REAL page with each gate
 // flipped alone, and the start itself. Same scaffold as online-chess-flag-wiring.test.tsx beside it: no jsdom, the async
 // server component called directly, its returned tree walked, the flag asked through the real helper with PostHog doubled at
 // its boundary.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -104,7 +105,7 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 vi.mock("@/server/usecases/stream-sessions", () => ({ openStreamStates: async () => ({}) }));

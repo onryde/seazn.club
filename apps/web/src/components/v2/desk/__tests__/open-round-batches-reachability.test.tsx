@@ -41,7 +41,7 @@ beforeEach(() => stubOutboxEnv());
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { listOpenRounds } from "@/server/usecases/external-play/open-round-view";
 import { seedOnlineChessRoundWithRankedBoard } from "@/server/usecases/__tests__/_external-play-seed";
-import { CheckinHero } from "../../arbiter/round-column";
+import { CheckinHero } from "../../match-day/round-focus";
 import { initialOpenRoundUi } from "../open-round-state";
 import type { OpenRoundHandle } from "../use-open-round";
 
@@ -73,7 +73,7 @@ async function drawn(r: Seeded, now: Date): Promise<{ view: OpenRoundView; html:
   const round: ArbiterRound = { stageId: r.stageId, stageName: view.stageName, roundNo: 1, timeControl: null, boards: [], ownBoards: 0, current: true, extendableBoards: 0 };
   const html = renderToStaticMarkup(
     <DictProvider dict={enUi as unknown as Dict} locale="en">
-      <CheckinHero round={round} view={view} tz={TZ} nowMs={now.getTime()} openRound={HANDLE} roundExtend={null} />
+      <CheckinHero round={round} view={view} tz={TZ} nowMs={now.getTime()} openRound={HANDLE} roundExtend={null} mayPress />
     </DictProvider>,
   );
   return { view, html };

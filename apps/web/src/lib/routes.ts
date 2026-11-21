@@ -81,6 +81,10 @@ export const routes = {
   /** Match Day (spec 2026-10-31): running the competition's day court by court. Organisers with edit rights run it; a view-only
    *  member opens the same page read-only, with nothing that writes (task B4, owner ruling Q1b). */
   competitionMatchDay: (org: Slug, comp: Slug) => `/o/${org}/c/${comp}/match-day`,
+  /** Match Day with one online chess board open in its panel (`?board=<fixture id>`): where every held, flagged or run-sheet board link
+   *  goes now that the Arbiter page is gone. A board not on the day's list opens nothing (the page ignores it, no notice). */
+  competitionMatchDayBoard: (org: Slug, comp: Slug, fixtureId: string) =>
+    `/o/${org}/c/${comp}/match-day?board=${encodeURIComponent(fixtureId)}`,
   /** Competition-level Registration hub (design §5) — replaces the
    *  division-level `divisionRegistrations` route RS001 deleted. Settings is
    *  the landing tab; `?tab=registrants` switches panels
@@ -129,12 +133,6 @@ export const routes = {
     tab ? `/o/${org}/c/${comp}/d/${div}?tab=${tab}` : `/o/${org}/c/${comp}/d/${div}`,
   divisionSchedule: (org: Slug, comp: Slug, div: Slug) =>
     `/o/${org}/c/${comp}/d/${div}/schedule`,
-  /** T15 — the arbiter panel for the division's open round, optionally on one
-   *  board (a fixture id: the panel is a live surface, not a quotable page). */
-  divisionArbiter: (org: Slug, comp: Slug, div: Slug, fixtureId?: string) =>
-    fixtureId
-      ? `/o/${org}/c/${comp}/d/${div}/arbiter?fixture=${encodeURIComponent(fixtureId)}`
-      : `/o/${org}/c/${comp}/d/${div}/arbiter`,
   /** Fixtures are addressed by per-division ordinal — human-quotable ("match 14"). */
   fixture: (org: Slug, comp: Slug, div: Slug, no: number) =>
     `/o/${org}/c/${comp}/d/${div}/f/${no}`,

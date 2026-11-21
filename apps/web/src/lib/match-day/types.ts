@@ -2,7 +2,10 @@
 // read model (server/usecases/match-day.ts), its two GET routes and the Match Day UI share them, and client code must not
 // import from server/**. Type-only imports only (eslint.config.mjs refuses a value import of @/server/** here).
 import type { NeedsYouItem } from "@/components/v2/desk/needs-you";
+import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
 import type { Attention } from "@/lib/division-phase";
+import type { OpenRoundView } from "@/lib/open-round";
+import type { NeedsReason } from "@/server/external-play/types";
 import type { VenueNoun } from "@/lib/venue";
 
 export type { NeedsYouItem, VenueNoun };
@@ -187,6 +190,84 @@ export interface MatchDayFindCourt {
   noun: VenueNoun;
 }
 
+// ---- online chess rounds in Match Day (spec 2026-11-05-match-day-all-in-one-design.md §4, §5, §7) -------------------------------
+
+/** Where an online round is, as the list says it. `not_started`: the division has not started (its panel says to start it first);
+ *  `before`: paired, not opened; `checkin`: opened and some board still checking in; `playing`: opened, none checking in. The
+ *  server's word at the poll (`readOnlineRounds`); `onlineRoundPhase` (lib/match-day/online.ts) re-reads it from the round's boards
+ *  (their states, never the clock: a deadline passing flips nothing). */
+export type OnlineRoundPhase = "not_started" | "before" | "checkin" | "playing";
+
+/** A board as the list carries it: a whole ArbiterBoard (so lib/round-column.ts's rules, which take ArbiterBoard[], apply unchanged;
+ *  `flags` is [] and `flagCount` the count on the list read) plus where it sits. */
+export interface MatchDayBoardRow extends ArbiterBoard {
+  stage_id: string;
+  round_no: number;
+  /** Why a held board is held (`fixture_external_play.needs_reason`): stamped by `readOnlineRounds` on EVERY board of the row, in
+   *  `round.boards` and in `needs_decision` alike (ruling MD-R6/R8) - the reason for a board in `on_hold`, null for any other. Optional
+   *  in the type only because a board that did not come through `readOnlineRounds` (a fixture's own) has none. Needs you routes on it
+   *  (ruling MD-R2: a link hold, `lichess_unlinked` / `lichess_reconnect`, goes to the round panel's Open round, not the board's
+   *  decisions); the row's WORD never reads it (`boardRowWord`: a hold is a hold). */
+  hold_reason?: NeedsReason | null;
+}
+
+/** One row of the online block: one (division, stage, round) to show. */
+export interface MatchDayOnlineRound {
+  /** `${stage_id}:${round_no}` - the same spelling as `roundKey` (server/external-play/round-open.ts), the `?round=` param's value. */
+  key: string;
+  division_id: string;
+  division_name: string;
+  division_slug: string;
+  stage_id: string;
+  stage_name: string;
+  round_no: number;
+  /** The division has more than one round row on the page: the row names the stage. */
+  multi_stage: boolean;
+  phase: OnlineRoundPhase;
+  /** The club's online-chess flag (`onlineChessOffered`). */
+  offered: boolean;
+  /** The venue zone the column printed times in. */
+  tz: string;
+  /** `listOpenRounds`' view for this (stage, round) (OpenRoundView, lib/open-round.ts): the press, the pairings, the batches. Null
+   *  when the reader has none for it (an opened round whose window has closed reads null, as the column handles it) and for
+   *  `not_started`. */
+  view: OpenRoundView | null;
+  /** The opened round whole (`loadArbiterRound` with flags "count"): its boards carry `seats`, `checkin` and `sides`, which the round
+   *  panel's rules read. Null before the open. `round.boards` is the row's board list. */
+  round: ArbiterRound | null;
+  /** Held or flagged boards of the division NOT in the `round.boards` of ANY of its rows (`round.boards` is each row's own stage's
+   *  latest opened round), any round, each with its round. They are carried on the division's FIRST row only (the division page lists
+   *  them once), whichever stage the board is in; every other row has []. A cancelled board is here only while it has an open flag
+   *  (owner O1, 2026-11-17). */
+  needs_decision: MatchDayBoardRow[];
+  /** Boards the viewer plays on that no list shows: the row's own round's (the loader's count) and, on the division's FIRST row, the
+   *  held boards of earlier rounds the viewer plays on. A board that is only FLAGGED in an earlier round and the viewer's own is in no
+   *  count at all (the flagged list gives a count, not ids): such a board is simply not shown. */
+  own_boards: number;
+  /** The Swiss round this row's stage would pair next (`nextUnseatedSwissRound`, the one rule the stage rail's "Pair next round" reads): the
+   *  round the panel's "Pair next round" would seat once this round is over (owner MD-R15, 2026-11-20). Null for any other kind of stage and
+   *  for a Swiss stage with every round seated; a stage-level fact, stamped on every row of the stage by `readOnlineRounds`. Optional in the
+   *  type only, so a row built without the producer (a test fixture) reads as null - the way `hold_reason` is. */
+  pair_next_round?: number | null;
+}
+
+/** The focused board's position, from the bridge's moves (`fenAfter`): the read-only chess board's whole input. */
+export interface BoardPosition {
+  fen: string;
+  lastMove: [string, string] | null;
+  turn: "white" | "black";
+}
+
+/** The focused board, as GET /api/v1/fixtures/{id}/match-day-board answers it (`loadMatchDayBoard`): the board as the arbiter's round
+ *  view paints it - the same composition, so its sides carry presence, camera and `joinable` and a board in check-in its seats - with
+ *  every open flag built in full (`flags`, not a count) and the position of its game: null while no game is on file. `stage_id` and
+ *  `round_no` say where it sits; `hold_reason` is stamped on EVERY read (the reason of a board in `on_hold`, null otherwise: ruling
+ *  MD-R8), where the list's boards carry it optionally. */
+export interface MatchDayBoard extends MatchDayBoardRow {
+  hold_reason: NeedsReason | null;
+  position: BoardPosition | null;
+}
+
 /** GET /api/v1/competitions/{id}/match-day. */
 export interface MatchDayView {
   competition_id: string;
@@ -207,11 +288,15 @@ export interface MatchDayView {
   needs_you: NeedsYouItem[];
   /** How many matches owe a result: the desk's `result_missing` attentions, summed (`resultsOwedOf`); 0 when not a match day. */
   results_owed: number;
-  /** This competition's matches today, each on its own division's day, plus those in play (`countFixturesToday`, read once per
-   *  poll: the competition desk's own `fixtures_today`). */
+  /** This competition's matches today, each on its own division's day, plus those in play, plus the boards of an online round that
+   *  makes the day (opened in it, a live check-in window, or a game on file: an online board has no planned time) (`countFixturesToday`,
+   *  read once per poll: the competition desk's own `fixtures_today`). */
   fixtures_today: number;
   /** The venues where THIS competition has a match today (Match Day E2 item 5): the venue of every court one of its matches today
    *  is on — played, playing, queued or called — whatever the match's state. The venue filter's default selection; empty when
    *  none of today's matches has a court. */
   venues_today: string[];
+  /** The competition's online chess rounds (one per division, stage and round to show), after the courts in the list; empty when it
+   *  has none. Read by `readOnlineRounds` (server/usecases/match-day-online.ts). */
+  online_rounds: MatchDayOnlineRound[];
 }

@@ -11,6 +11,7 @@
 // dir: no jsdom in this workspace, so this calls the async server component
 // directly and walks the returned element tree.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { tenantRunningPrelude, type TenantOpts } from "@/lib/__tests__/_with-tenant-mock";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
@@ -93,7 +94,7 @@ vi.mock("@/server/usecases/discipline", () => ({
 const tx = () => Promise.resolve([]);
 vi.mock("@/lib/db", () => ({
   sql: () => Promise.resolve([]),
-  withTenant: (_orgId: string, fn: (t: unknown) => unknown) => fn(tx),
+  withTenant: (_orgId: string, fn: (t: unknown) => unknown, opts?: TenantOpts) => tenantRunningPrelude(tx, fn, opts),
   statementCount: () => 0,
 }));
 // Spec 2026-09-30 §2 (T6): the fixtures tab's one stream read is `openStreamStates` (the run sheet's chip) — this page

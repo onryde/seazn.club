@@ -1,5 +1,5 @@
 // Owner rule (2026-10-19): +5 is offered ONLY INSIDE a board's check-in window - not before it opens, not from its deadline on, to the
-// millisecond - and a screen keeps that true on a TICKING clock, not on the snapshot it was drawn from (the arbiter panel's poll is up to
+// millisecond - and a screen keeps that true on a TICKING clock, not on the snapshot it was drawn from (Match Day's poll is up to
 // 20 s apart). The rule itself is the server's `extendRefusal` (window.ts); `liveExtendRefusal` and `liveExtendableCount` re-ask only the
 // CLOCK of a snapshot's own refusal and windows. Three things are proven here:
 //   1. THE EDGES, written from the rule and the constants: the opening included, the deadline excluded, on a batch-0 board, on a later
@@ -312,7 +312,7 @@ describe("liveRoundRefusals - the Open round control's reading of its two facts,
   });
 });
 
-describe("the arbiter panel's reading and the Open round control's reading of the same round are one reading, and both are the server's", () => {
+describe("Match Day's reading and the Open round control's reading of the same round are one reading, and both are the server's", () => {
   type B = { batch: number; extensions: number; playable: boolean; gameOnFile: boolean };
   const open: B = { batch: 0, extensions: 0, playable: true, gameOnFile: false };
   const ROUNDS: Record<string, B[]> = {
@@ -345,7 +345,7 @@ describe("the arbiter panel's reading and the Open round control's reading of th
       }
       const grid = [O.getTime() - 3 * WINDOW_OPEN_LEAD_MS, ...[...edges].sort((a, b) => a - b), O.getTime() + 2 * 60 * 60_000];
       // The snapshot: drawn at the first instant, as the server's `extendReach` draws it (windows for what only the clock decides, the
-      // rest counted by the reason given); the arbiter's panel is handed each board's own state.
+      // rest counted by the reason given); Match Day's board panel is handed each board's own state.
       const snapAt = new Date(grid[0]!);
       const states = boards.map((b) => snapshot(b, snapAt));
       const windows: ExtendWindow[] = [];
@@ -362,7 +362,7 @@ describe("the arbiter panel's reading and the Open round control's reading of th
         const want = roundWhy(boards.map((b) => truth(b, now)));
         const arbiter = roundWhy(states.map((c) => liveExtendRefusal(c, t)));
         const control = roundWhy(liveRoundRefusals(tally, windows, t));
-        expect(arbiter, `${name} @ ${now.toISOString()}: the arbiter panel`).toEqual(want);
+        expect(arbiter, `${name} @ ${now.toISOString()}: Match Day's panel`).toEqual(want);
         expect(control, `${name} @ ${now.toISOString()}: the Open round control`).toEqual(want);
         seen.add(want === null ? "none" : want.code);
         checked += 1;

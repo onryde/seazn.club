@@ -58,6 +58,7 @@ import type { OpenRoundResult, OpenRoundSkip } from "@/lib/open-round";
 import { EDITOR_ROLES } from "@/lib/types";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { readOnlinePlay, supportsOnlinePlay } from "@/server/external-play/online-play";
+import { LINK_HOLD_REASONS, type LinkHoldReason } from "@/server/external-play/types";
 import { stageCameraPolicy } from "@/server/external-play/camera-policy";
 import { boardExtraSql, boardRankSql, roundOpenAt, type RoundOpenRow } from "@/server/external-play/round-open";
 import { assertTimeControl } from "@/server/external-play/time-controls";
@@ -69,6 +70,7 @@ import { audit } from "../audit";
 import { lichessLinkStatesByUser } from "../external-accounts";
 import { loadOnlinePlayFixture, resetStaleBridge, type OnlinePlayFixture } from "./guard";
 import { attachToOpen, boardSeats, dispatchAndClassify, queueFixtureInvite, type InviteSeat } from "./invite";
+import { assertCompetitionNotFrozen } from "../entitlement-freeze";
 import { assertOnlineChessOffered } from "./online-chess-flag";
 import { isPlayableFixtureStatus } from "./preflight";
 import {
@@ -248,8 +250,8 @@ type Decision =
       closedSkips: OpenRoundSkip[];
     };
 
-type LinkHold = "lichess_unlinked" | "lichess_reconnect";
-const LINK_HOLDS: readonly LinkHold[] = ["lichess_unlinked", "lichess_reconnect"];
+type LinkHold = LinkHoldReason;
+const LINK_HOLDS: readonly LinkHold[] = LINK_HOLD_REASONS;
 
 /** The boards this open holds back for a link, by why: a one-account seat with no resolvable Lichess link is
  *  `lichess_unlinked` (a team seat or a person with no account is not judged: nobody to ask); a link `lichessGrantPlays` refuses (identity-only, short of a play scope - the seat gate's own verdict, via
@@ -330,6 +332,10 @@ export async function openRound(
   // chess (the PostHog flag `online-chess`; 403 ONLINE_CHESS_DISABLED). A re-open invites too, so it is gated alike.
   // After the two refusals above: a stranger learns nothing about the club's flag, and an offline round asks nothing.
   await assertOnlineChessOffered({ orgId: st.orgId, userId: a.actorUserId });
+  // Match Day O4 (owner 2026-11-17): an open STARTS play, so a billing-frozen competition (over `competitions.max_active`) refuses it with
+  // the freeze's 402 - the rule every write but scoring keeps (freeze-guard-sites.test.ts). Before ANY write below: the stale-bridge
+  // reset, a link hold's row, the stamp, the invites. Outside every transaction, as the guard requires (`frozenCompetitionIds`).
+  await assertCompetitionNotFrozen(st.orgId, st.competitionId);
   // The guard serves no board of a division that has not started.
   if (st.divisionStatus === "setup" || st.divisionStatus === "scheduled") {
     return { opened: false, reason: "division_not_started" };

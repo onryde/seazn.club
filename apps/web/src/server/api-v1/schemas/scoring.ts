@@ -113,8 +113,9 @@ export const CompetitionDesk = z.object({
   // always (competition-desk.test.ts's Task 6 case pins this).
   in_play_fixtures: z.array(DeskInPlayFixture),
   up_next: DeskNextFixture.nullable(),
-  // Match Day B1: how many of the competition's matches are today, each on its own division's day, plus any in play — Match
-  // Day's own count (`countFixturesToday`). Above zero, the competition is on its match day.
+  // Match Day B1: how many of the competition's matches are today, each on its own division's day, plus any in play, plus the
+  // boards of an online round that makes the day (opened in it, a check-in window still live, or a game on file) — Match Day's
+  // own count (`countFixturesToday`). Above zero, the competition is on its match day.
   fixtures_today: z.number().int().nonnegative(),
   // The usecase's own type is `Map<string, DeskDivision>` — a bare Map
   // serialises to `{}` over JSON (no own enumerable properties), so the

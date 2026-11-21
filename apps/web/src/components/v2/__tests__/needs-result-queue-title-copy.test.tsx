@@ -40,7 +40,7 @@ const HELD: HeldRow = {
 function headingOf(locale: Locale): string {
   const h = renderToStaticMarkup(
     <DictProvider dict={LOCALES[locale] as unknown as Dict} locale={locale}>
-      <ExternalPlayNeedsResultQueue held={[HELD]} flagged={[]} ownFlagged={0} venueTz="UTC" />
+      <ExternalPlayNeedsResultQueue held={[HELD]} flagged={[]} ownFlagged={0} venueTz="UTC" orgSlug="o" compSlug="c" />
     </DictProvider>,
   );
   const m = /<h2 id="external-play-queue-title"[^>]*>([^<]*)<\/h2>/.exec(h);
