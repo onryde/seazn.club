@@ -310,4 +310,8 @@ export interface MatchDayView {
    *  `needs_you` because they were not read, NOT because nothing is held there. A page that holds an answer keeps its last per-board rows
    *  of exactly these divisions and takes every other row, the count and the rounds from the poll (`viewAfterPoll`). */
   boards_unread: string[];
+  /** The competition is billing-frozen as of this poll (`frozenCompetitionIds`, the set every START write is refused by). The page's own `frozen` flag is
+   *  read when it loads and a 402 only ever adds to it (MD-R30, `freezeSeen`); this is what lets a press come back without a reload - a poll that was
+   *  asked AFTER the 402 and answers `false` lifts it (`freezeSeenAfterPoll`). */
+  frozen: boolean;
 }

@@ -66,6 +66,7 @@ import {
   venueOptions,
   venueParamOf,
   viewAfterPoll,
+  freezeSeenAfterPoll,
   withVenueParam,
   type Opened,
 } from "@/lib/match-day/view";
@@ -180,15 +181,20 @@ export function MatchDayShell({
   // One read of the day for the poll, the Refresh button and a court's tail countdown reaching 0 (use-day-refresh.ts).
   // A poll whose online rounds read failed keeps the online rounds the page holds, and one whose held or flagged read failed for a division keeps
   // that division's board rows (`viewAfterPoll`): the board panel open on a game stays open, and nothing else of the list is held.
-  const takeView = useCallback((next: MatchDayView) => setView((prev) => viewAfterPoll(prev, next)), []);
+  // B5: `freezeSeen` (below) is lifted by a poll asked after the 402 that says the competition is no longer frozen; the poll's own `startedAt` orders it.
+  const [freezeSeen, setFreezeSeen] = useState<number | null>(null);
+  const takeView = useCallback((next: MatchDayView, startedAt: number) => {
+    setView((prev) => viewAfterPoll(prev, next));
+    setFreezeSeen((seenAt) => freezeSeenAfterPoll(seenAt, next.frozen, startedAt));
+  }, []);
   const { refresh, busy: refreshing, failed: refreshFailed, lastOkAt } = useDayRefresh(competitionId, takeView);
   const refreshNow = useCallback(() => void refresh({ manual: true }), [refresh]);
   /** A press in the round panel changed the day: the quiet read, with a stable identity (the panel's runners are built over it). */
   const refreshQuiet = useCallback(() => void refresh(), [refresh]);
-  /** MD-R30: a press in the round panel was answered 402. The `frozen` prop is read when the page loads and never lifts, so a freeze that lands under an
-   *  open page would leave every press standing until a reload; this keeps what the server just said and folds it into the reader (`readerOf`). */
-  const [freezeSeen, setFreezeSeen] = useState(false);
-  const onFrozen = useCallback(() => setFreezeSeen(true), []);
+  /** MD-R30: a press in the round panel was answered 402. The `frozen` prop is read when the page loads, so a freeze that lands under an open page would
+   *  leave every press standing until a reload; this keeps what the server just said (the browser's clock at that 402) and folds it into the reader
+   *  (`readerOf`). B5: it is no longer for good - a poll asked after it that says `frozen: false` takes it back (`freezeSeenAfterPoll`). */
+  const onFrozen = useCallback(() => setFreezeSeen(Date.now()), []);
   /** A court's tail countdown ended: quiet, and one read per second however many countdowns end on the same tick. */
   const lastTailRead = useRef(0);
   const tailTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -267,7 +273,7 @@ export function MatchDayShell({
         : null;
   /** What the online panels read for who may press what (`mayPress`): the viewer's role, the club's flag (the round's own) and the
    *  competition's billing freeze (the `frozen` prop, the flag that hides Call and Undo). */
-  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozen || freezeSeen });
+  const readerOf = (r: MatchDayOnlineRound): Reader => ({ editor: !readOnly, offered: r.offered, frozen: frozen || freezeSeen !== null });
   /** The board in focus's cameras (Task 9): the joins live HERE, keyed on the focused board's watchable sides and the day's own poll, so a poll
    *  that hands the panel a new board object keeps the same keys and re-joins nothing, and leaving the board leaves both meetings. */
   const cameraKeys = focusedBoard === null ? [] : meetingKeysOf(focusedBoard.board, readerOf(focusedBoard.round));

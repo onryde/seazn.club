@@ -1192,10 +1192,13 @@ function PairNextBlock({
 function LinkHoldsBlock({ holds, onOpenBoard, press }: { holds: readonly LinkHold[]; onOpenBoard(fixtureId: string): void; press: RoundPress }) {
   const msg = useMsg();
   if (holds.length === 0) return null;
-  // M1: "the time to take a seat has passed" is only said where there is NO press under it. While "Open round N again" is offered, that press starts the
-  // window again, so the sentence beside it would contradict the page; to a reader who may not press (a frozen competition, a viewer) there is no press
-  // and the sentence is what explains why the board waits.
-  const sayClosed = press.button === null;
+  // M1 + B5: "the time to take a seat has passed" is said of the BOARD whose own window has run out - except beside the press that starts the window
+  // again for everyone. The server has two branches (open-round.ts): a RE-OPEN (`reopen`: nobody is bound to the open) restarts the window, so no board
+  // is past its time and the sentence beside that press would contradict the page; a RE-INVITE (`reinvite`: a board still plays inside the running
+  // window) invites only the boards whose own batch window has not closed and answers `window_closed` for the rest (`closedSkips`), so the press
+  // cannot help THAT board and the page says so, never a press that loops silently. To a reader who may not press (a frozen competition, a viewer)
+  // there is no press, so the sentence is what explains why the board waits.
+  const restartsWindow = press.button !== null && press.owedView?.press === "reopen";
   return (
     <section aria-labelledby="md-round-linkhold-heading" data-testid="md-round-linkhold" className={`flex min-w-0 flex-col gap-2 ${CARD_BOX}`}>
       <h3 id="md-round-linkhold-heading" className={`m-0 min-w-0 text-base font-semibold break-words ${INK}`}>
@@ -1227,7 +1230,7 @@ function LinkHoldsBlock({ holds, onOpenBoard, press }: { holds: readonly LinkHol
             <p data-testid="md-round-linkhold-reason" className={`m-0 text-[13px] leading-[1.45] ${SOFT}`}>
               {msg(OPEN_ROUND_SKIP_KEYS[reason] as MessageKey)}
             </p>
-            {windowClosed && sayClosed && (
+            {windowClosed && !restartsWindow && (
               <p data-testid="md-round-linkhold-closed" className="m-0 text-[13px] font-semibold leading-[1.45] text-[#713f12]">
                 {msg(OPEN_ROUND_SKIP_KEYS.window_closed as MessageKey)}
               </p>

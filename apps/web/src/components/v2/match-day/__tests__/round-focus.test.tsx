@@ -699,32 +699,61 @@ describe("RoundFocus: MD-R30 - a 402 on a guarded press tells the shell the comp
   });
 });
 
-describe("RoundFocus: M1 - the window's closed sentence is never said beside the press that restarts the window", () => {
+describe("RoundFocus: M1 - the window's closed sentence is said of the BOARD whose own window ran out, unless the press restarts the window for everyone (B5)", () => {
+  // The server's two branches (open-round.ts): a RE-OPEN ("reopen": nobody is bound to the open) starts the window again for every board, so no
+  // board is "past its time" beside that press; a RE-INVITE ("reinvite": some board still plays inside the running window) invites only the
+  // boards whose OWN batch window has not closed and answers `window_closed` for the rest (`closedSkips`). The sentence follows the board.
   const closed = { ...openWindow(), canExtend: false, refusal: "closed" as const, deadlineAt: iso(NOW - 60_000) };
-  const heldRow = (press: OpenRoundView["press"]) => {
-    const b = withState({ kind: "on_hold" }, { fixtureId: "h-1", boardNo: 7, checkin: closed });
+  const heldBoard = (fixtureId: string, boardNo: number, checkin: typeof closed | ReturnType<typeof openWindow>) => {
+    const b = withState({ kind: "on_hold" }, { fixtureId, boardNo, checkin });
     (b as { hold_reason?: string }).hold_reason = "lichess_unlinked";
-    return round("stage-1:3", "playing", arbiterRound([live(), b]), { view: VIEW({ state: "open", press, pairings: [P(1), P(7, { fixtureId: "h-1" })] }) });
+    return b;
+  };
+  const heldRow = (press: OpenRoundView["press"]) =>
+    round("stage-1:3", "playing", arbiterRound([live(), heldBoard("h-1", 7, closed)]), { view: VIEW({ state: "open", press, pairings: [P(1), P(7, { fixtureId: "h-1" })] }) });
+  /** Two boards held for a link in one round: board 7's own window has run out, board 8's still runs. */
+  const twoHeldRow = (press: OpenRoundView["press"]) =>
+    round("stage-1:3", "playing", arbiterRound([live(), heldBoard("h-1", 7, closed), heldBoard("h-2", 8, openWindow())]), {
+      view: VIEW({ state: "open", press, pairings: [P(1), P(7, { fixtureId: "h-1" }), P(8, { fixtureId: "h-2" })] }),
+    });
+  const blockOf = (h: string, fixtureId: string) => {
+    const at = h.indexOf(`data-fixture-id="${fixtureId}"`);
+    expect(at, `${fixtureId} is in the block`).toBeGreaterThan(-1);
+    const from = h.lastIndexOf("<li", at);
+    return h.slice(from, h.indexOf("</li>", at) + 5);
   };
 
-  it("no press (server none, or a reader who may not press): the sentence is said; the press offered: it is not (the board's own flag stays true)", () => {
+  it("no press (server none, or a reader who may not press): the sentence is said; a RE-OPEN offered: it is not (the window starts again for everyone)", () => {
     const sentence = en[OPEN_ROUND_SKIP_KEYS.window_closed]!;
     const none = html(heldRow("none"));
     expect(textIn(none, "md-round-linkhold-closed")).toBe(sentence);
     expect(count(none, "md-round-reopen-cta")).toBe(0);
-    let checked = 0;
-    for (const press of ["reopen", "reinvite"] as const) {
-      const h = html(heldRow(press));
-      expect(tagOf(h, "md-round-linkhold-board"), press).toContain('data-window-closed="true"');
-      expect(count(h, "md-round-linkhold-closed"), `${press}: the sentence would contradict the press`).toBe(0);
-      expect(count(h, "md-round-reopen-cta"), `${press}: positive pair, the press is offered`).toBe(1);
-      checked += 1;
-    }
-    expect(checked).toBe(2);
+    const h = html(heldRow("reopen"));
+    expect(tagOf(h, "md-round-linkhold-board"), "reopen").toContain('data-window-closed="true"');
+    expect(count(h, "md-round-linkhold-closed"), "reopen: the sentence would contradict the press").toBe(0);
+    expect(count(h, "md-round-reopen-cta"), "reopen: positive pair, the press is offered").toBe(1);
     // a reader who may not press (frozen) is offered no press, so the sentence is what tells them why the board waits
     const frozen = html(heldRow("reopen"), { reader: FROZEN });
     expect(count(frozen, "md-round-reopen-cta"), "frozen: no press").toBe(0);
     expect(textIn(frozen, "md-round-linkhold-closed"), "frozen: no press, so the sentence stays").toBe(sentence);
+  });
+
+  it("a RE-INVITE offered: the press cannot invite a board whose own window has closed, so THAT board says so and the board whose window runs does not", () => {
+    const sentence = en[OPEN_ROUND_SKIP_KEYS.window_closed]!;
+    const h = html(twoHeldRow("reinvite"));
+    expect(count(h, "md-round-reopen-cta"), "the press is offered").toBe(1);
+    const a = blockOf(h, "h-1");
+    const b = blockOf(h, "h-2");
+    expect(a, "board 7: its own window has closed").toContain('data-window-closed="true"');
+    expect(textIn(a, "md-round-linkhold-closed"), "board 7 is told it cannot be invited, press or no press").toBe(sentence);
+    expect(b, "board 8: its window still runs").toContain('data-window-closed="false"');
+    expect(count(b, "md-round-linkhold-closed"), "board 8 is not").toBe(0);
+    expect(count(h, "md-round-linkhold-closed"), "exactly one sentence in the block").toBe(1);
+    // and the same two boards beside a RE-OPEN: the window starts again for both, so neither is told it has passed
+    const reopen = html(twoHeldRow("reopen"));
+    expect(count(reopen, "md-round-reopen-cta")).toBe(1);
+    expect(count(reopen, "md-round-linkhold-closed"), "reopen: nobody is past their time").toBe(0);
+    expect(count(reopen, "md-round-linkhold-board"), "anti-vacuity: both boards are in the block").toBe(2);
   });
 });
 

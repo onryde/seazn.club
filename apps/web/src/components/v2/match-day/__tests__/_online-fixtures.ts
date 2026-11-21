@@ -112,5 +112,6 @@ export const onlineView = (online_rounds: MatchDayOnlineRound[], over: Partial<M
   online_rounds,
   online_failed: false,
   boards_unread: [],
+  frozen: false,
   ...over,
 });

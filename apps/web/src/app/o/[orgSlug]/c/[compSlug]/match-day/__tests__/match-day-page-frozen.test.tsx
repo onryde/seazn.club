@@ -47,6 +47,7 @@ vi.mock("@/server/usecases/match-day", () => ({
     online_rounds: [],
     online_failed: false,
     boards_unread: [],
+    frozen: false,
   }),
 }));
 vi.mock("@/server/usecases/divisions", () => ({ listDivisions: async () => [] }));

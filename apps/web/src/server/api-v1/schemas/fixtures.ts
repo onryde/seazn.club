@@ -282,6 +282,8 @@ export const MatchDayView = z.object({
   // `board_flagged`) are missing from `needs_you` because they were not read, not because nothing is held. A page that holds a last answer
   // keeps its last per-board rows of exactly these divisions. Empty when every read answered.
   boards_unread: z.array(Uuid),
+  // Whether the competition is billing-frozen as of this poll: a page that saw a 402 takes the freeze back only from a poll that says false.
+  frozen: z.boolean(),
 });
 
 /** The focused board's position (lib/match-day/types.ts `BoardPosition`): the replayed ledger as FEN, the last REPLAYED ply as its two

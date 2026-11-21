@@ -72,6 +72,7 @@ const view = (courts: MatchDayCourt[], now: string, playing_no_court: MatchDayFi
   online_rounds: [],
   online_failed: false,
   boards_unread: [],
+  frozen: false,
 });
 
 const C1 = court("c-1", "Court 1");

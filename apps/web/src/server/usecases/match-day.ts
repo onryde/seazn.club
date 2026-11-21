@@ -45,6 +45,7 @@ import { venueNoun } from "@/lib/venue";
 import { needsYouAt, needsYouHome, needsYouItems, resultsOwedOf } from "@/components/v2/desk/needs-you";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { defaultMatchMinutes, getCompetitionDesk } from "./competition-desk";
+import { frozenCompetitionIds } from "./entitlement-freeze";
 import { resolveCandidateCourts } from "./court-candidates";
 import { listDivisions } from "./divisions";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
@@ -900,7 +901,7 @@ export async function getMatchDay(
   // The two queue listers are asked once per online division for the whole poll: the desk's per-board attentions and the online rounds
   // read the same held and flagged boards, so they share the one answer (MD-R23). One object per poll, never kept past it.
   const queue = sharedQueueReads(auth);
-  const [streams, desk, divisions, courtStreams, onlineRounds] = await Promise.all([
+  const [streams, desk, divisions, courtStreams, onlineRounds, frozenIds] = await Promise.all([
     openStreamStates(auth, ids),
     getCompetitionDesk(auth, competitionId, now, { queue }),
     divisionsRead,
@@ -917,6 +918,9 @@ export async function getMatchDay(
         return null;
       }),
     ),
+    // B5: whether this competition is billing-frozen NOW, read OUTSIDE the tenant transaction above (`frozenCompetitionIds` queries the pool: nesting
+    // it in `withTenant` is the self-deadlock its header names). One read of the org per poll, the one the page's own load and every START write make.
+    frozenCompetitionIds(auth.orgId),
   ]);
   // A board is listed once, under its round (design 5.2): an online board in play on no court is no no-court row. Dropped here, after
   // `readBoard` and never inside it (the code read and the call preview read the same board and keep their own lists).
@@ -992,6 +996,8 @@ export async function getMatchDay(
     // read never asks about (not started) can fail in the desk alone: its rounds answered (`online_failed` false), its board rows did not.
     // The page holds its last board rows of exactly these divisions, never the whole list and never the count.
     boards_unread: queue.unreadDivisions(),
+    // B5: the freeze as of THIS poll. A page that was told "frozen" by a 402 (MD-R30) takes it back only from a poll that says otherwise.
+    frozen: frozenIds.has(competitionId),
   };
 }
 

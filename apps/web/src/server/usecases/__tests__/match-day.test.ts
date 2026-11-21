@@ -34,6 +34,8 @@ import { defaultLineupPair, goldenCorpora } from "@seazn/engine/testkit";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
+import { frozenCompetitionIds } from "../entitlement-freeze";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import enPublic from "@/dictionaries/en/public.json";
@@ -281,6 +283,29 @@ const queueOf = (c: MatchDayCourt): [string, number, number][] =>
   c.queue.map((q) => [q.id, (Date.parse(q.planned_at) - at(0).getTime()) / 60_000, (Date.parse(q.estimated_at) - at(0).getTime()) / 60_000]);
 
 describe.skipIf(!HAS_DB)("getMatchDay", () => {
+  it("B5 - the poll says whether the competition is billing-frozen NOW: false, then true under the ceiling, then false again when room appears (the page lifts a 402 it saw only from this)", async () => {
+    const day = await seedDay();
+    const limit = async (n: number) => {
+      await sql`
+        insert into org_entitlement_overrides (org_id, feature_key, int_value)
+        values (${day.orgId}, 'competitions.max_active', ${n})
+        on conflict (org_id, feature_key) do update set int_value = ${n}, bool_value = null`;
+      await invalidateOrgEntitlements(day.orgId);
+    };
+    await limit(50);
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: nothing frozen").toEqual([]);
+    const before = await getMatchDay(day.auth, day.comp.id, at(0));
+    expect(before.frozen, "within the ceiling").toBe(false);
+    await limit(0);
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: exactly this competition is frozen").toEqual([day.comp.id]);
+    const during = await getMatchDay(day.auth, day.comp.id, at(0));
+    expect(during.frozen, "over the ceiling").toBe(true);
+    expect(MatchDayViewSchema.parse(JSON.parse(JSON.stringify(during))).frozen, "the wire keeps it (a plain z.object strips an undeclared key)").toBe(true);
+    await limit(50);
+    expect([...(await frozenCompetitionIds(day.orgId))], "premise: room again").toEqual([]);
+    expect((await getMatchDay(day.auth, day.comp.id, at(0))).frozen, "thawed").toBe(false);
+  });
+
   it("the court list: every division's candidate courts, and every court holding one of this competition's matches today — not tomorrow's, not another competition's", async () => {
     const day = await seedDay();
     const { p1, p2, p3, p4 } = pairs(day);

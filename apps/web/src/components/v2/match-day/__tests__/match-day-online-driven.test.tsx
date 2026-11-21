@@ -7,7 +7,7 @@
 // Where an expected value comes from: the freeze rule (O4) and the viewer rule are typed in the cell table below (start needs an
 // editor, an offered club and no freeze; a view-only member can press nothing); the "left the list" name is the board's own
 // "Board N · White v Black"; a count is the boards of the rounds the list was handed. Anti-vacuity: sweeps count their cells.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
 
@@ -442,32 +442,98 @@ describe("the reader the shell builds for the panels (O4, MD-R21): {editor, offe
   });
 });
 
-describe("MD-R30: a 402 seen by the round panel lifts every press that starts play, for good (until the page reloads)", () => {
+describe("MD-R30 + B5: a 402 seen by the round panel lifts every press that starts play - until a poll ASKED AFTER it says the competition is not frozen", () => {
   // `frozen` is read when the page loads; a freeze that lands under an open page is only learned from a press answered 402. The panel tells the shell
-  // (`onFrozen`), the shell keeps it and folds it into the reader every panel is handed - so the press goes inert without waiting for a reload.
-  it("onFrozen flips the round panel's AND the board panel's reader to frozen: start is gone, the decisions that finish play stay; a poll does not take it back", async () => {
-    const v = { ...night(), online_rounds: [round("stage-1:3", "playing", arbiterRound([live(5, { fixtureId: "b-9" })]))] };
-    const island = renderIsland(MatchDayShell, props(v, { focusRoundKey: "stage-1:3" }));
-    const roundReader = () => parts(island.tree()).round!.reader as Reader;
-    expect(roundReader(), "before: not frozen, and start is offered").toEqual({ editor: true, offered: true, frozen: false });
-    expect(mayPress(roundReader(), "start")).toBe(true);
+  // (`onFrozen`), the shell keeps it and folds it into the reader every panel is handed - so the press goes inert without waiting for a reload. A poll now
+  // carries the freeze as of ITS read (`MatchDayView.frozen`): the one that is asked after the 402 and answers false takes it back (B5).
+  const clock = { now: 1_000 };
+  let dateSpy: { mockRestore(): void } | null = null;
+  const v = () => ({ ...night(), frozen: false, online_rounds: [round("stage-1:3", "playing", arbiterRound([live(5, { fixtureId: "b-9" })]))] });
+  const open = () => {
+    dateSpy = vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+    clock.now = 1_000;
+    return renderIsland(MatchDayShell, props(v(), { focusRoundKey: "stage-1:3" }));
+  };
+  const roundReader = (island: ReturnType<typeof renderIsland>) => parts(island.tree()).round!.reader as Reader;
+  const freeze = (island: ReturnType<typeof renderIsland>) => (parts(island.tree()).round!.onFrozen as () => void)();
+  afterEach(() => {
+    dateSpy?.mockRestore();
+    dateSpy = null;
+  });
+
+  it("onFrozen flips the round panel's AND the board panel's reader to frozen: start is gone, the decisions that finish play stay; a poll that says frozen does not take it back", async () => {
+    const island = open();
+    expect(roundReader(island), "before: not frozen, and start is offered").toEqual({ editor: true, offered: true, frozen: false });
+    expect(mayPress(roundReader(island), "start")).toBe(true);
     expect(typeof parts(island.tree()).round!.onFrozen, "anti-vacuity: the shell hands the panel the callback").toBe("function");
-    (parts(island.tree()).round!.onFrozen as () => void)();
-    expect(roundReader(), "after: frozen").toEqual({ editor: true, offered: true, frozen: true });
-    expect(mayPress(roundReader(), "start"), "no press that starts play").toBe(false);
-    expect(mayPress(roundReader(), "finish"), "the decisions that finish play stay (the freeze exempts results)").toBe(true);
-    // the same callback again is harmless; a poll whose page still says `frozen: false` does not lift it
-    (parts(island.tree()).round!.onFrozen as () => void)();
-    net.next = { ...v, now: at(1) };
+    clock.now = 2_000;
+    freeze(island);
+    expect(roundReader(island), "after: frozen").toEqual({ editor: true, offered: true, frozen: true });
+    expect(mayPress(roundReader(island), "start"), "no press that starts play").toBe(false);
+    expect(mayPress(roundReader(island), "finish"), "the decisions that finish play stay (the freeze exempts results)").toBe(true);
+    // the same callback again is harmless; a poll asked later that still says frozen keeps it
+    freeze(island);
+    clock.now = 3_000;
+    net.next = { ...v(), frozen: true, now: at(1) };
     poll.tick!();
     await settle();
-    expect(roundReader(), "a poll cannot say the competition is unfrozen: only a reload can").toEqual({ editor: true, offered: true, frozen: true });
+    expect(net.calls.length, "anti-vacuity: the poll was taken").toBe(1);
+    expect(roundReader(island), "a poll that says frozen is no lift").toEqual({ editor: true, offered: true, frozen: true });
     // a board opened afterwards is the same competition: its panel reads the freeze too
     (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-9");
     expect(parts(island.tree()).board!.reader, "the board panel's reader").toEqual({ editor: true, offered: true, frozen: true });
     // and a page that loads frozen=false and never saw a 402 is not frozen (the flag is state of THIS page, not of the module)
-    const fresh = renderIsland(MatchDayShell, props(v, { focusRoundKey: "stage-1:3" }));
+    const fresh = renderIsland(MatchDayShell, props(v(), { focusRoundKey: "stage-1:3" }));
     expect(parts(fresh.tree()).round!.reader).toMatchObject({ frozen: false });
+  });
+
+  it("a poll ASKED AFTER the 402 that says 'not frozen' lifts it - the press and the board panel's start come back with no reload; the old server's poll (no flag) does not", async () => {
+    const island = open();
+    clock.now = 2_000;
+    freeze(island);
+    expect(mayPress(roundReader(island), "start")).toBe(false);
+    // an older server's poll carries no flag: no evidence either way
+    clock.now = 3_000;
+    const { frozen: _f, ...legacy } = { ...v(), now: at(1) };
+    net.next = legacy;
+    poll.tick!();
+    await settle();
+    expect(net.calls.length, "anti-vacuity: the legacy poll was taken").toBe(1);
+    expect(mayPress(roundReader(island), "start"), "no flag, no lift").toBe(false);
+    // the poll that says not frozen, asked after the 402
+    clock.now = 4_000;
+    net.next = { ...v(), frozen: false, now: at(2) };
+    poll.tick!();
+    await settle();
+    expect(net.calls.length, "anti-vacuity: the second poll was taken").toBe(2);
+    expect(roundReader(island), "lifted").toEqual({ editor: true, offered: true, frozen: false });
+    expect(mayPress(roundReader(island), "start"), "the press is offered again").toBe(true);
+    (parts(island.tree()).list!.onOpenBoard as (id: string) => void)("b-9");
+    expect(parts(island.tree()).board!.reader, "the board panel reads the lifted freeze too").toEqual({ editor: true, offered: true, frozen: false });
+    // and a SECOND 402 after the lift freezes it again (the lift is not a one-way latch)
+    clock.now = 5_000;
+    (parts(island.tree()).board!.onFrozen as () => void)();
+    expect(parts(island.tree()).board!.reader, "frozen again").toEqual({ editor: true, offered: true, frozen: true });
+  });
+
+  it("the race: a poll that was ASKED before the 402 and answers after it (not frozen) describes the competition as it was - it does not lift", async () => {
+    const island = open();
+    net.next = { ...v(), frozen: false, now: at(1) };
+    clock.now = 1_500;
+    poll.tick!(); // the read starts here: `startedAt` 1500, awaiting the network
+    clock.now = 2_000;
+    freeze(island); // the 402 lands while it is in flight
+    clock.now = 2_500; // the answer arrives later still: ordered by when it was ASKED, not when it landed
+    await settle();
+    expect(net.calls.length, "anti-vacuity: the in-flight poll was taken").toBe(1);
+    expect(mayPress(roundReader(island), "start"), "a stale 'not frozen' is not a lift").toBe(false);
+    // the next poll, asked after, lifts
+    clock.now = 3_000;
+    net.next = { ...v(), frozen: false, now: at(2) };
+    poll.tick!();
+    await settle();
+    expect(net.calls.length).toBe(2);
+    expect(mayPress(roundReader(island), "start"), "the poll asked after the 402 lifts it").toBe(true);
   });
 });
 

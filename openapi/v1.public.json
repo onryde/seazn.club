@@ -4261,6 +4261,9 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           }
+                        },
+                        "frozen": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
@@ -4276,7 +4279,8 @@
                         "venues_today",
                         "online_rounds",
                         "online_failed",
-                        "boards_unread"
+                        "boards_unread",
+                        "frozen"
                       ],
                       "additionalProperties": false
                     },
@@ -4479,7 +4483,8 @@
                     "online_failed": true,
                     "boards_unread": [
                       "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
-                    ]
+                    ],
+                    "frozen": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

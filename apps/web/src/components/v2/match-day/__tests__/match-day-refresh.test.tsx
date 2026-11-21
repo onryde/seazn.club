@@ -46,7 +46,7 @@ const court = (id: string): MatchDayCourt => ({
 });
 const view = (now: string): MatchDayView => ({
   competition_id: "comp-1", date: "2026-11-17", tz: "Europe/London", now, courts: [court("1")], playing_no_court: [], needs_you: [],
-  results_owed: 0, fixtures_today: 0, venues_today: [], online_rounds: [], online_failed: false, boards_unread: [],
+  results_owed: 0, fixtures_today: 0, venues_today: [], online_rounds: [], online_failed: false, boards_unread: [], frozen: false,
 });
 const shellProps = {
   competitionId: "comp-1", competitionName: "Westway Open", orgSlug: "acme", compSlug: "westway-open", locale: "en" as const, divisions: [],

@@ -21,16 +21,18 @@ export interface DayRefresh {
   lastOkAt: number | null;
 }
 
-export function useDayRefresh(competitionId: string, onView: (v: MatchDayView) => void, clock: () => number = Date.now): DayRefresh {
+/** `startedAt` is the browser's clock when the read was ASKED, not when it answered: the page orders an answer against a 402 it saw by it (B5). */
+export function useDayRefresh(competitionId: string, onView: (v: MatchDayView, startedAt: number) => void, clock: () => number = Date.now): DayRefresh {
   const inflight = useRef<Promise<void> | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   const [lastOkAt, setLastOkAt] = useState<number | null>(null);
   const read = useCallback(async () => {
+    const startedAt = clock();
     try {
       const next = await apiV1<unknown>(`/api/v1/competitions/${competitionId}/match-day`);
       if (!isMatchDayView(next)) throw new Error("not a view");
-      onView(next);
+      onView(next, startedAt);
       setLastOkAt(clock());
       // `=== true`: a server older than the page sends no marker, and an absent one is no failure.
       setFailed(next.online_failed === true);
