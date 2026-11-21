@@ -281,6 +281,14 @@ export function MatchDayShell({
   const needsTone = needsYouTone(needsYou);
   const date = fmtPublicDate(locale, "UTC", `${view.date}T12:00:00Z`, { weekday: "long", day: "numeric", month: "short" });
 
+  /** The phone's Back from a BOARD (MD-R35): the list again, AND the board out of focus. A board's meetings are joined for as long as it is the focus
+   *  (`cameraKeys` above), and a phone that went back to the list hides its panel without closing it, so its cameras would stay joined behind the
+   *  list, holding the vendor's capacity for nobody. The control is the phone's own (`md:hidden`): a desktop has no Back, and its focus is untouched. */
+  const leaveBoard = () => {
+    setPhoneOpen(false);
+    setOpened(null);
+  };
+
   const toTop = () => {
     if (typeof window !== "undefined" && window.matchMedia("(max-width: 767.98px)").matches) window.scrollTo({ top: 0 });
   };
@@ -614,7 +622,7 @@ export function MatchDayShell({
               refreshKey={lastOkAt}
               joins={joins}
               backLabel={onlineBackLabel}
-              onBack={() => setPhoneOpen(false)}
+              onBack={leaveBoard}
               onChanged={refreshQuiet}
               onFrozen={onFrozen}
               hiddenOnPhone={!phoneCourt}

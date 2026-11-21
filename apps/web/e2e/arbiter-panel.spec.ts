@@ -453,7 +453,8 @@ test.describe("arbiter panel", () => {
     await expect(outage(page)).toBeVisible();
     await shoot(page, "arbiter-outage");
     await page.setViewportSize({ width: 1280, height: 900 });
-    await outage(page).getByRole("button", { name: uiEn["arbiter.outage.cta"] }).click();
+    // Board 1 has a game on file (gameOn above), so the card offers to let it CARRY ON (MD-R37), not the seating words.
+    await outage(page).getByRole("button", { name: uiEn["arbiter.outage.ctaStarted"] }).click();
     await expect(status(page)).toHaveText(uiEn["arbiter.notice.overridden"]);
     await expect(outage(page)).toHaveCount(0);
     await expect(tiles(page).getByText(uiEn["arbiter.tile.overridden"], { exact: true })).toHaveCount(1);

@@ -14,8 +14,10 @@
 //    IS the cadence.
 //  - VIDEO_BUSY is not an error. The tile reads `busy`, the join is asked again on `retryMs` (ARBITER_RETRY_MS: 500, 1000, 2000, 4000, 8000 ms),
 //    and once the ladder is spent the key stays `busy` and is re-opened by the next poll only - one attempt per poll, the ladder does not restart,
-//    so a busy vendor costs at most 5 + 3 POSTs a minute per side at LIVE_POLL_MS, inside ARBITER_JOIN_LIMIT's 12 per (fixture, side, user). The
-//    pane's own "Try again" starts a fresh ladder.
+//    so a busy vendor costs the ladder's 5 POSTs plus one per poll. At LIVE_POLL_MS (20 s) that is about 5 + 3 a minute per side - but the poll
+//    key also moves on every Refresh and on every press that re-reads the day, so that figure is the quiet-hands floor, not a ceiling the
+//    client keeps; ARBITER_JOIN_LIMIT's 12 per (fixture, side, user) in a minute is the server's own. The pane's own "Try again" starts a
+//    fresh ladder.
 //  - "Try again" (`retry`) is the pane's own press for an `error` or a `fault`: one POST per press, never one per poll.
 import { useEffect, useMemo, useState } from "react";
 import { apiV1 } from "@/lib/client-v1";

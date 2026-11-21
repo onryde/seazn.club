@@ -28,7 +28,8 @@
  *   9. VIDEO_BUSY (the join route answered in the browser - the local server has no vendor budget, so it cannot answer BUSY itself): the tile
  *      waits ("Waiting for capacity"), is never an error, and the client's own ladder asks again until the route answers something else.
  *  10. Board A, then B, then A: each visit asks once per meeting, and nothing is asked for a board that has been left.
- *  11. MD-R33 with cameras: a HELD board with cameras, flags and a 168-character reason still has its whole decision on a 1280 x 800 screen.
+ *  11. MD-R33 with cameras: a HELD board with cameras, flags and a 168-character reason still has its whole decision on a 1280 x 800 screen -
+ *      in English AND in Dutch (the longest words), the cameras' fold press on the state row (MD-R36) and the folded strip ONE line.
  *
  * Expected copy comes from the dictionaries and the declared constants, never from the page. Not covered here, on purpose: the phone widths
  * (e2e/mobile/match-surfaces.spec.ts), and a SUCCESSFUL video join (RealtimeKit is unreachable locally; the unit suites run the real join chain
@@ -487,7 +488,10 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
     // The vendor being down is not retried by the ladder (only a busy vendor is): two seconds later, still two POSTs.
     await page.waitForTimeout(2_000);
     expect(posts, "no ladder for an unavailable vendor").toHaveLength(2);
-    await outage.getByRole("button", { name: uiEn["arbiter.outage.cta"] }).click();
+    // The board is at move 6: a game is on file, so the card says CARRY ON without video and that camera evidence stops here (MD-R37).
+    await expect(outage).toContainText(uiEn["arbiter.outage.bodyStarted"]!);
+    await expect(outage).not.toContainText(uiEn["arbiter.outage.body"]!);
+    await outage.getByRole("button", { name: uiEn["arbiter.outage.ctaStarted"] }).click();
     // The board is let go without video: the panel re-reads, and no cameras are offered for it any more.
     await expect(page.getByTestId("md-board-cameras"), "let go without video: no cameras").toHaveCount(0, { timeout: 30_000 });
     await expect(outage).toHaveCount(0);
@@ -574,56 +578,89 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
     expect(seen(), "two seconds later: no extra ask").toHaveLength(6);
   });
 
-  test("(MD-R33 with cameras) a HELD board with cameras, two flags and a LONG reason - the 168-character account change as well as the short mismatch - keeps its whole decision on a 1280 x 800 screen, the cameras at the right column's top", async ({ page }) => {
-    test.setTimeout(budget(4, 4));
-    const day = await seedDay(page, `mdc5${TAG}`.slice(0, 14), { stage: "swiss", camera: "required" });
-    const [longHeld, shortHeld] = day.round.boards as [RoundBoard, RoundBoard];
-    let flagged = 0;
-    for (const [board, hold] of [[longHeld, "account_changed"], [shortHeld, "mismatch"]] as const) {
-      await roundGameSql(board, { moves: LINE.slice(0, 6), hold });
-      await flagBoard(day.orgId, board);
-      await putArrival(board.fixtureId, day.orgId, "home", board.home.personId);
-      await putArrival(board.fixtureId, day.orgId, "away", board.away.personId);
-      flagged += 1;
-    }
-    expect(flagged).toBe(2);
-    const box = (id: string) =>
-      page.getByTestId(id).first().evaluate((el) => {
-        const b = el.getBoundingClientRect();
-        return { left: b.left + window.scrollX, top: b.top + window.scrollY, right: b.right + window.scrollX, bottom: b.bottom + window.scrollY, scrollY: window.scrollY };
-      });
-    let checked = 0;
-    for (const [board, label] of [[longHeld, "a 168-character reason"], [shortHeld, "a short reason"]] as const) {
-      await page.goto(`${day.matchDay}?board=${board.fixtureId}`);
-      await expect(panel(page)).toHaveAttribute("data-fixture-id", board.fixtureId, { timeout: 30_000 });
-      await expect(page.getByTestId("md-board-position")).toBeVisible({ timeout: 30_000 });
-      await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
-      await expect(decision(page)).toBeVisible();
-      await expect(cameras(page), `${label}: the cameras are on the board`).toBeVisible();
-      await expect(cameras(page), "a held board opens with its cameras folded").toHaveAttribute("data-folded", "true");
-      await expectNoHorizontalScroll(page);
-      if (board === longHeld) {
-        const reason = await page.getByTestId("md-board-hold").innerText();
-        expect(reason.length, "premise: the reason is the long one").toBeGreaterThan(160);
-      }
-      const dec = await box("arbiter-decision");
-      expect(dec.scrollY, "measured from the top of the page").toBe(0);
-      expect(dec.bottom, `${label}: the decision ends inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800);
-      // The right column reads: state, cameras, why it is held, the decision, the flags - each starts below the one before.
-      const left = await box("md-board-left");
-      const rows = [await box("md-online-state"), await box("md-board-cameras"), await box("md-board-hold"), await box("arbiter-decision"), await box("md-board-flags")];
-      expect(rows.map((r) => Math.round(r.top)), `${label}: state, cameras, why, decision, flags`).toEqual([...rows.map((r) => Math.round(r.top))].sort((x, y) => x - y));
-      expect(new Set(rows.map((r) => Math.round(r.top))).size, "five distinct rows").toBe(5);
-      expect(rows[1]!.left, "the cameras are in the right column, beside the board").toBeGreaterThanOrEqual(left.right - 1);
-      checked += 1;
-    }
-    expect(checked, "both reasons were measured").toBe(2);
-    // The toggle: unfolded the tiles are video boxes; folded again they are status lines.
-    await page.getByTestId("md-cameras-toggle").click();
-    await expect(cameras(page)).toHaveAttribute("data-folded", "false");
-    await page.getByTestId("md-cameras-toggle").click();
-    await expect(cameras(page)).toHaveAttribute("data-folded", "true");
+  test("(MD-R37) the outage card on a board with NO game yet (both players arrived, the vendor down) offers to let it START without video - the seating sentence; the live board of the first test says CARRY ON", async ({ page }) => {
+    test.setTimeout(budget(1, 2));
+    const day = await seedDay(page, `mdc6${TAG}`.slice(0, 14), { stage: "swiss", camera: "required" });
+    const pre = day.round.boards[0]!;
+    await putArrival(pre.fixtureId, day.orgId, "home", pre.home.personId);
+    await putArrival(pre.fixtureId, day.orgId, "away", pre.away.personId);
+    await page.goto(`${day.matchDay}?board=${pre.fixtureId}`);
+    await expect(panel(page)).toHaveAttribute("data-fixture-id", pre.fixtureId, { timeout: 30_000 });
+    await expect(page.getByTestId("md-board-position"), "premise: no game is on file, so no board is drawn").toHaveCount(0);
+    const outage = page.getByTestId("arbiter-outage");
+    await expect(outage, "the real route answered VIDEO_UNAVAILABLE for the arrived players").toBeVisible({ timeout: 30_000 });
+    await expect(outage).toHaveAttribute("data-game", "none");
+    await expect(outage).toContainText(uiEn["arbiter.outage.body"]!);
+    await expect(outage).not.toContainText(uiEn["arbiter.outage.bodyStarted"]!);
+    await expect(outage.getByRole("button", { name: uiEn["arbiter.outage.cta"] })).toBeVisible();
+    await expect(outage.getByRole("button", { name: uiEn["arbiter.outage.ctaStarted"] })).toHaveCount(0);
   });
+
+  // MD-R36: English AND Dutch (its words are the longest in the folded strip and in the reason), the 168-character account change in both and
+  // the short mismatch in English. The measured bottoms are attached to the run (annotation "MD-R33 measure"), not printed.
+  for (const locale of ["en", "nl"] as const) {
+    test(`(MD-R33 with cameras, ${locale}) a HELD board with cameras, two flags and a LONG reason - the 168-character account change${locale === "en" ? " as well as the short mismatch" : ""} - keeps its whole decision on a 1280 x 800 screen, the cameras at the right column's top, their fold press on the state row`, async ({ page }) => {
+      test.setTimeout(budget(4, 4));
+      await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url() === "about:blank" ? (process.env.PLAYWRIGHT_BASE ?? "http://localhost:3000") : page.url()).origin }]);
+      const day = await seedDay(page, `${locale === "en" ? "mdc5" : "mdc7"}${TAG}`.slice(0, 14), { stage: "swiss", camera: "required" });
+      const [longHeld, shortHeld] = day.round.boards as [RoundBoard, RoundBoard];
+      let flagged = 0;
+      for (const [board, hold] of [[longHeld, "account_changed"], [shortHeld, "mismatch"]] as const) {
+        await roundGameSql(board, { moves: LINE.slice(0, 6), hold });
+        await flagBoard(day.orgId, board);
+        await putArrival(board.fixtureId, day.orgId, "home", board.home.personId);
+        await putArrival(board.fixtureId, day.orgId, "away", board.away.personId);
+        flagged += 1;
+      }
+      expect(flagged).toBe(2);
+      const box = (id: string) =>
+        page.getByTestId(id).first().evaluate((el) => {
+          const b = el.getBoundingClientRect();
+          return { left: b.left + window.scrollX, top: b.top + window.scrollY, right: b.right + window.scrollX, bottom: b.bottom + window.scrollY, scrollY: window.scrollY };
+        });
+      let checked = 0;
+      const measured = locale === "en" ? ([[longHeld, "a 168-character reason"], [shortHeld, "a short reason"]] as const) : ([[longHeld, "a 168-character reason"]] as const);
+      for (const [board, label] of measured) {
+        await page.goto(`${day.matchDay}?board=${board.fixtureId}`);
+        await expect(panel(page)).toHaveAttribute("data-fixture-id", board.fixtureId, { timeout: 30_000 });
+        await expect(page.getByTestId("md-board-position")).toBeVisible({ timeout: 30_000 });
+        await expect(page.getByTestId("md-board-flag"), "both flags are cards").toHaveCount(2, { timeout: 30_000 });
+        await expect(decision(page)).toBeVisible();
+        await expect(cameras(page), `${label}: the cameras are on the board`).toBeVisible();
+        await expect(cameras(page), "a held board opens with its cameras folded").toHaveAttribute("data-folded", "true");
+        await expectNoHorizontalScroll(page);
+        if (board === longHeld) {
+          const reason = await page.getByTestId("md-board-hold").innerText();
+          expect(reason.length, "premise: the reason is the long one").toBeGreaterThan(160);
+        }
+        const dec = await box("arbiter-decision");
+        expect(dec.scrollY, "measured from the top of the page").toBe(0);
+        test.info().annotations.push({ type: "MD-R33 measure", description: `${locale} / ${label}: decision bottom ${Math.round(dec.bottom)}` });
+        expect(dec.bottom, `${locale} / ${label}: the decision ends inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800);
+        // MD-R36: the fold's press is on the state row (not in the strip), and the folded strip is ONE line in every language.
+        await expect(cameras(page).getByTestId("md-cameras-toggle"), "the strip carries no toggle of its own").toHaveCount(0);
+        const state = await box("md-online-state");
+        const toggle = await box("md-cameras-toggle");
+        expect(toggle.top, `${locale}: the press shares the state word's row`).toBeLessThan(state.bottom);
+        expect(toggle.bottom, `${locale}: ... and does not sit below it`).toBeGreaterThan(state.top);
+        const strip = await box("md-cameras");
+        expect(strip.bottom - strip.top, `${locale}: the folded strip is one line (it is ${Math.round(strip.bottom - strip.top)}px)`).toBeLessThanOrEqual(24);
+        // The right column reads: state, cameras, why it is held, the decision, the flags - each starts below the one before.
+        const left = await box("md-board-left");
+        const rows = [await box("md-online-state"), await box("md-board-cameras"), await box("md-board-hold"), await box("arbiter-decision"), await box("md-board-flags")];
+        expect(rows.map((r) => Math.round(r.top)), `${label}: state, cameras, why, decision, flags`).toEqual([...rows.map((r) => Math.round(r.top))].sort((x, y) => x - y));
+        expect(new Set(rows.map((r) => Math.round(r.top))).size, "five distinct rows").toBe(5);
+        expect(rows[1]!.left, "the cameras are in the right column, beside the board").toBeGreaterThanOrEqual(left.right - 1);
+        checked += 1;
+      }
+      expect(checked, "every reason was measured").toBe(measured.length);
+      // The toggle: unfolded the tiles are video boxes; folded again they are status lines.
+      await page.getByTestId("md-cameras-toggle").click();
+      await expect(cameras(page)).toHaveAttribute("data-folded", "false");
+      await page.getByTestId("md-cameras-toggle").click();
+      await expect(cameras(page)).toHaveAttribute("data-folded", "true");
+    });
+  }
 });
 
 /** A view-only member of the organisation, signed in on a page of their own (match-day.spec.ts `viewerPage`, here by org id). `close()` frees the seat. */

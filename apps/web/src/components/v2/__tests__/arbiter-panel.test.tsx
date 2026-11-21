@@ -1705,8 +1705,9 @@ describe("the outage card", () => {
             const b = { ...ROUND.boards[2]!, cameraPolicy, videoOverridden, playable };
             const expected = cameraPolicy === "required" && playable && !videoOverridden && video.kind === "unavailable";
             expect(showsOutageCard(b, video), JSON.stringify({ cameraPolicy, videoOverridden, playable, v: video.kind })).toBe(expected);
-            const t = text(html(props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f3"), video })));
-            expect(t.includes("Let this board play without video")).toBe(expected);
+            const markup = html(props({ round: { ...ROUND, boards: [b] }, decision: initialArbiterDecision("f3"), video }));
+            // The card itself (its words are the next two tests'): f3 has a game on file, so it carries the carry-on words, not the start ones.
+            expect(markup.includes('data-testid="arbiter-outage"'), JSON.stringify({ cameraPolicy, videoOverridden, playable, v: video.kind })).toBe(expected);
             cells++;
             if (expected) shown++;
           }
@@ -1714,11 +1715,24 @@ describe("the outage card", () => {
     expect(shown, "exactly one cell of the table").toBe(1);
   });
 
-  it("the card's words are the canvas's", () => {
-    const t = text(html(props({ video: { kind: "unavailable" } })));
+  it("the card's words are the canvas's while NO game is on file: it is about seating, and the button lets the board START without video", () => {
+    const f3 = ROUND.boards[2]!;
+    const t = text(html(props({ round: { ...ROUND, boards: [{ ...f3, canResync: false, state: { kind: "checking_in" }, clock: null }] }, video: { kind: "unavailable" } })));
     expect(t).toContain("Only during a video outage");
     expect(t).toContain("Video is unavailable right now");
     expect(t).toContain("Players can't take a seat while a camera is required. You can let this board start without video. This is written to the audit log.");
+    expect(t).toContain("Let this board play without video");
+    expect(t, "not the carry-on words").not.toContain("camera evidence stops here");
+  });
+
+  it("MD-R37: once a game is on file (f3 is live) the same card says CARRY ON without video and that camera evidence stops here - the seating sentence is gone", () => {
+    expect(ROUND.boards[2]!.canResync, "premise: f3 has a game on file").toBe(true);
+    const t = text(html(props({ video: { kind: "unavailable" } })));
+    expect(t).toContain("Only during a video outage");
+    expect(t).toContain("This game is already under way. You can let this board carry on without video; camera evidence stops here. This is written to the audit log.");
+    expect(t).toContain("Let this board carry on without video");
+    expect(t, "not the seating sentence").not.toContain("take a seat");
+    expect(t, "and not the start button").not.toContain("Let this board play without video");
   });
 });
 

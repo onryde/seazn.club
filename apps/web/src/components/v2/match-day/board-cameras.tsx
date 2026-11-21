@@ -9,12 +9,12 @@
 // (present, camera off), "Waiting for capacity" (VIDEO_BUSY: the check-in line has first call on the vendor), "Video closed with the game".
 // Chess only: every state here is a state of a player's camera meeting.
 //
-// Height is the scarce thing on a held board (MD-R33: "Your decision" above the fold at 1280x800 - measured, the whole strip may cost ~40px
-// beside a 168-character reason), so a HELD board opens FOLDED to ONE line: each side's colour, presence mark and word, with the "Show video"
-// press on the same line (the player's name is the tile's title and its screen-reader text; the board's own title carries both names).
-// Every other board opens unfolded: a video box per player, the name and mark under it. Folding is only a view: the joins stay (a fold that
-// left the meeting would cost a join to unfold, and the token is kept either way).
-import { useId, useState } from "react";
+// Height is the scarce thing on a held board (MD-R33: "Your decision" above the fold at 1280x800), so a HELD board opens FOLDED to ONE line:
+// each side's colour (a white or a dark square), presence mark and word - at 425px the longest English word, twice, still fits one line. The
+// "Show video" press is NOT in this strip: it sits on the state row (`CamerasToggle`, MD-R36), where the room is. The player's name is the
+// tile's title and its screen-reader text; the board's own title carries both names. Every other board opens unfolded: a video box per
+// player, the name and mark under it. Folding is only a view: the joins stay (a fold that left the meeting would cost a join to unfold, and
+// the token is kept either way). The fold is the PANEL's state (board-focus.tsx), shared by this strip and its toggle.
 import type { Dict } from "@/lib/i18n-constants";
 import { boardIsOver, type ArbiterBoard } from "@/lib/arbiter-view";
 import { presenceMark } from "@/lib/match-day/online";
@@ -90,12 +90,31 @@ export function anyUnavailable(board: Pick<ArbiterBoard, "fixtureId" | "cameraPo
   return (["home", "away"] as const).some((side) => tileView(board, side, views).kind === "unavailable");
 }
 
+/** The fold's press: "Show video" while folded, "Hide video" while open. On the state row of the board's head (MD-R36), `controlsId` the strip's
+ *  `bodyId`. A phone's tap floor (44px) below lg, a small link from lg. */
+export function CamerasToggle({ folded, onToggle, controlsId, f, className = "" }: { folded: boolean; onToggle(): void; controlsId: string; f: Fmt; className?: string }) {
+  return (
+    <button
+      type="button"
+      data-testid="md-cameras-toggle"
+      aria-expanded={!folded}
+      aria-controls={controlsId}
+      onClick={onToggle}
+      className={`shrink-0 rounded-md px-1 text-xs font-semibold text-[#5b21b6] underline underline-offset-2 max-lg:min-h-11 max-lg:py-2.5 lg:py-0.5${className === "" ? "" : ` ${className}`}`}
+    >
+      {f.t(folded ? "matchDay.cameras.show" : "matchDay.cameras.hide")}
+    </button>
+  );
+}
+
 export function BoardCameras({
   board,
   views,
   f,
   dict,
   onRetry,
+  folded,
+  bodyId,
 }: {
   board: MatchDayBoardRow;
   views: JoinViews;
@@ -103,10 +122,11 @@ export function BoardCameras({
   dict: Dict;
   /** "Try again" on a tile whose join failed. */
   onRetry(key: MeetingKey): void;
+  /** Folded to one status line (a held board opens so), or open: the panel's state, pressed on the state row's `CamerasToggle`. */
+  folded: boolean;
+  /** The id the toggle's `aria-controls` names. */
+  bodyId: string;
 }) {
-  const bodyId = useId();
-  // A held board opens folded: the decision is what its organiser came for. The state is the panel's own, so a poll never refolds it.
-  const [folded, setFolded] = useState(() => board.state.kind === "on_hold");
   const blackSide: ArbiterSide = board.whiteSide === "home" ? "away" : "home";
   // White first, so White is the left tile: the meeting is the SIDE's, the colour only says which side that is now (a pairing card can swap it).
   const seats = [
@@ -116,15 +136,14 @@ export function BoardCameras({
 
   const colourWord = (colour: "white" | "black") => f.t(colour === "white" ? "arbiter.colour.white" : "arbiter.colour.black");
 
-  // Folded, the section is one wrapping row and the body drops out of the box tree (`contents`), so the two tiles and the toggle are siblings in
-  // that row; the toggle keeps ONE place in the tree either way, so folding never moves focus off it.
+  // Folded, the section is one wrapping row and the body drops out of the box tree (`contents`), so the two tiles are siblings in that row.
   return (
     <section
       data-testid="md-cameras"
       data-folded={folded ? "true" : "false"}
       role="group"
       aria-label={f.t("matchDay.cameras.group")}
-      className={folded ? "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" : "flex min-w-0 flex-col gap-1.5"}
+      className={folded ? "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" : "min-w-0"}
     >
       <div id={bodyId} className={folded ? "contents" : "grid min-w-0 gap-2 sm:grid-cols-2"}>
         {seats.map(({ colour, side }) => {
@@ -151,14 +170,18 @@ export function BoardCameras({
               data-colour={colour}
               data-side={side}
               data-view={view.kind}
-              title={folded ? player.name : undefined}
+              title={folded ? `${colourWord(colour)} · ${player.name}` : undefined}
               className={folded ? "m-0 flex min-w-0 items-center gap-1.5 text-xs leading-5" : "m-0 flex min-w-0 flex-col gap-1"}
             >
               {folded ? (
                 <>
-                  <span className="shrink-0 font-semibold text-[#2e1065]">
-                    <span className="sr-only">{player.name} · </span>
-                    {colourWord(colour)}
+                  <span
+                    aria-hidden
+                    data-testid="md-camera-colour"
+                    className={`h-2.5 w-2.5 shrink-0 rounded-[2px] border ${colour === "white" ? "border-slate-500 bg-white" : "border-slate-900 bg-slate-900"}`}
+                  />
+                  <span className="sr-only">
+                    {colourWord(colour)} · {player.name} ·{" "}
                   </span>
                   <Mark mark={mark} dict={dict} />
                   <span data-testid="md-camera-word" aria-live="polite" className={`min-w-0 [overflow-wrap:anywhere] ${WORD_ON_LIGHT[word.tone]}`}>
@@ -191,16 +214,6 @@ export function BoardCameras({
           );
         })}
       </div>
-      <button
-        type="button"
-        data-testid="md-cameras-toggle"
-        aria-expanded={!folded}
-        aria-controls={bodyId}
-        onClick={() => setFolded((v) => !v)}
-        className={`rounded-md px-1 text-xs font-semibold text-[#5b21b6] underline underline-offset-2 max-lg:min-h-11 max-lg:py-2.5 lg:py-0.5 ${folded ? "self-center" : "self-start"}`}
-      >
-        {f.t(folded ? "matchDay.cameras.show" : "matchDay.cameras.hide")}
-      </button>
     </section>
   );
 }

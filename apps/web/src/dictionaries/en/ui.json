@@ -7879,6 +7879,8 @@
   "arbiter.outage.title": "Video is unavailable right now",
   "arbiter.outage.body": "Players can't take a seat while a camera is required. You can let this board start without video. This is written to the audit log.",
   "arbiter.outage.cta": "Let this board play without video",
+  "arbiter.outage.bodyStarted": "This game is already under way. You can let this board carry on without video; camera evidence stops here. This is written to the audit log.",
+  "arbiter.outage.ctaStarted": "Let this board carry on without video",
   "arbiter.empty.title": "No round is open yet",
   "arbiter.empty.body": "Boards appear here once you open a round. Flags are recorded whether or not anyone is watching.",
   "arbiter.emptyBoards": "This round has no boards to watch.",

@@ -7879,6 +7879,8 @@
   "arbiter.outage.title": "El vídeo no está disponible ahora",
   "arbiter.outage.body": "Los jugadores no pueden sentarse mientras se exija cámara. Puedes dejar que este tablero empiece sin vídeo. Esto se anota en el registro de auditoría.",
   "arbiter.outage.cta": "Dejar que este tablero se juegue sin vídeo",
+  "arbiter.outage.bodyStarted": "Esta partida ya está en juego. Puedes dejar que este tablero siga sin vídeo; las pruebas de cámara terminan aquí. Esto se anota en el registro de auditoría.",
+  "arbiter.outage.ctaStarted": "Dejar que este tablero siga sin vídeo",
   "arbiter.empty.title": "Aún no hay ninguna ronda abierta",
   "arbiter.empty.body": "Los tableros aparecen aquí cuando abres una ronda. Las señales se registran tanto si alguien observa como si no.",
   "arbiter.emptyBoards": "Esta ronda no tiene tableros que observar.",

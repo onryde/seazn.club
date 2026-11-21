@@ -134,6 +134,8 @@ const viewProps = (b: ArbiterBoard, over: Partial<BoardPanelViewProps> = {}): Bo
   onBack: noop,
   cameraMode: "board",
   onCameraMode: noop,
+  camerasFolded: false,
+  onCamerasFolded: noop,
   ...over,
 });
 const underEnglish = (node: ReactElement) => renderToStaticMarkup(<DictProvider dict={dict} locale="en">{node}</DictProvider>);
@@ -524,6 +526,30 @@ describe("BoardPanelView: who is offered which decision", () => {
     expect(count(html(notHere, { answer: answerOf(notHere, { hold_reason: "clock_flag_unsettled" }), joins: joinsFor(notHere, { home: WATCHING, away: UNAVAILABLE }) }), "arbiter-outage"), "a stale answer for a side that is not watchable does not count").toBe(0);
   });
 
+  it("(MD-R37) the outage card's words follow the GAME: a board with a game on file offers to let it CARRY ON (camera evidence stops here), one with none offers to let it START - the whole state table, never both sets of words", () => {
+    // `canResync` is the loader's own "a game is on file at Lichess and the board is not over" - set per state as the loader sets it.
+    const STATES: { label: string; state: ArbiterBoard["state"]; gameOnFile: boolean }[] = [
+      { label: "checking in: no game yet", state: { kind: "checking_in" }, gameOnFile: false },
+      { label: "starting: a game exists, nobody has moved", state: { kind: "starting" }, gameOnFile: true },
+      { label: "live", state: { kind: "live", moveNo: 7 }, gameOnFile: true },
+      { label: "held with a game on file", state: { kind: "on_hold" }, gameOnFile: true },
+      { label: "held with no game (a link hold)", state: { kind: "on_hold" }, gameOnFile: false },
+    ];
+    const started = [t("arbiter.outage.bodyStarted"), t("arbiter.outage.ctaStarted")];
+    const before = [t("arbiter.outage.body"), t("arbiter.outage.cta")];
+    expect(new Set([...started, ...before]).size, "the two sets of words are different words").toBe(4);
+    let checked = 0;
+    for (const { label, state, gameOnFile } of STATES) {
+      const b = withState(state, { ...deciding, state, canResync: gameOnFile, seats: null, checkin: null });
+      const h = html(b, { answer: answerOf(b, state.kind === "on_hold" ? { hold_reason: "clock_flag_unsettled" } : {}), reader: EDITOR, joins: joinsFor(b, { home: UNAVAILABLE, away: UNAVAILABLE }) });
+      expect(count(h, "arbiter-outage"), `${label}: the card is offered`).toBe(1);
+      for (const w of gameOnFile ? started : before) expect(has(h, w), `${label}: has "${w}"`).toBe(true);
+      for (const w of gameOnFile ? before : started) expect(has(h, w), `${label}: lacks "${w}"`).toBe(false);
+      checked += 1;
+    }
+    expect(checked, "every state was read").toBe(STATES.length);
+  });
+
   it("a board that is not held: the go-on press is the flag's, and a finished board's is 'mark as reviewed' (words by state)", () => {
     const over = withState({ kind: "result", score: "1-0", noResult: false }, { fixtureId: "b-done", white: ADA, black: BEN, flags: [camera()], flagCount: 1 });
     const h = html(over, { answer: answerOf(over) });
@@ -717,6 +743,42 @@ describe("BoardPanelView: cameras and the board share the screen (Task 9)", () =
     expect(hasClass(h, "md-board-left", "max-lg:hidden")).toBe(false);
   });
 
+  it("(MD-R36) the fold's press is on the STATE ROW, not in the strip: one toggle, in the head beside the state word, before the switch; it names the strip's body and says what it will do", () => {
+    const headOf = (h: string) => innerOf(h, "md-board-head")!;
+    let checked = 0;
+    for (const folded of [true, false]) {
+      const h = cam({ camerasFolded: folded });
+      expect(count(h, "md-cameras-toggle"), `folded=${folded}: exactly one toggle`).toBe(1);
+      expect(innerOf(h, "md-board-cameras"), `folded=${folded}: none inside the strip`).not.toContain("md-cameras-toggle");
+      const head = headOf(h);
+      expect(head.indexOf("md-online-state"), "after the state word").toBeLessThan(head.indexOf("md-cameras-toggle"));
+      expect(head.indexOf("md-cameras-toggle"), "before the Cameras / Board switch (so it is on the state row, not under it)").toBeLessThan(head.indexOf("md-camera-switch"));
+      const tag = tagOf(h, "md-cameras-toggle")!;
+      expect(tag).toContain(`aria-expanded="${!folded}"`);
+      const controls = /aria-controls="([^"]+)"/.exec(tag)![1]!;
+      expect(h.split(`id="${controls}"`).length - 1, "aria-controls names exactly one element - the strip's body").toBe(1);
+      expect(innerOf(h, "md-board-cameras")).toContain(`id="${controls}"`);
+      expect(has(headOf(h), t(folded ? "matchDay.cameras.show" : "matchDay.cameras.hide")), `folded=${folded}: the words`).toBe(true);
+      expect(tagOf(h, "md-cameras")).toContain(`data-folded="${folded}"`);
+      checked += 1;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("(MD-R36) the toggle goes with the strip: hidden below lg when the BOARD is picked (nothing to fold there), shown otherwise; with no switch (no board drawn) it is always there; and no cameras = no toggle", () => {
+    const hidden = (h: string) => classOf(h, "md-cameras-toggle").split(/\s+/).includes("max-lg:hidden");
+    expect(hidden(cam({ cameraMode: "board" })), "board picked: the strip is hidden below lg, so is its toggle").toBe(true);
+    expect(hidden(cam({ cameraMode: "cameras" })), "cameras picked").toBe(false);
+    expect(hidden(cam({ cameraMode: "board" })) === hasClass(cam({ cameraMode: "board" }), "md-board-cameras", "max-lg:hidden"), "the toggle follows the strip").toBe(true);
+    const noPos = withState({ kind: "on_hold" }, { fixtureId: "b-nopos3", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    for (const mode of ["cameras", "board"] as const) {
+      const h = html(noPos, { answer: answerOf(noPos), joins: joinsFor(noPos, { home: WATCHING, away: WATCHING }), cameraMode: mode });
+      expect(count(h, "md-cameras-toggle"), mode).toBe(1);
+      expect(hidden(h), `${mode}: no board to switch to, so the cameras (and the toggle) are the panel`).toBe(false);
+    }
+    expect(count(html(LIVE, { answer: answerOf(LIVE, { position: POSITION }) }), "md-cameras-toggle"), "a panel without cameras").toBe(0);
+  });
+
   it("the switch buttons are phone-sized taps (44px); their press is the e2e's (a click needs a DOM, which this workspace's vitest does not have)", () => {
     const h = cam();
     let checked = 0;
@@ -875,6 +937,32 @@ describe("BoardFocus: the read rides the poll, the decisions are the runner's", 
     expect(viewOf(ui).cameraMode, "the poll moved the board on; the picked view stays").toBe("board");
     viewOf(ui).onCameraMode("cameras");
     expect(viewOf(ui).cameraMode).toBe("cameras");
+  });
+
+  it("(MD-R36) the cameras' fold is the PANEL's: a held board opens FOLDED, any other OPEN; the press flips it, and a poll or a new row never refolds it", async () => {
+    const mk = (state: ArbiterBoard["state"]) => withState(state, { fixtureId: "b-fold", white: ADA, black: BEN, cameraPolicy: "required", sides: { home: joinable(), away: joinable() } });
+    const joinsOf = (b: ArbiterBoard) => joinsFor(b, { home: WATCHING, away: WATCHING });
+    let checked = 0;
+    for (const [state, folded] of [[{ kind: "on_hold" }, true], [{ kind: "live", moveNo: 3 }, false], [{ kind: "checking_in" }, false], [{ kind: "starting" }, false]] as const) {
+      const b = mk(state);
+      expect(viewOf(renderIsland(BoardFocus, focusProps(b, { joins: joinsOf(b) }))).camerasFolded, state.kind).toBe(folded);
+      checked += 1;
+    }
+    expect(checked).toBe(4);
+    // The press: folded -> open -> folded; and the poll that follows (a new refreshKey, the board moved off hold) does not put it back.
+    const held = mk({ kind: "on_hold" });
+    const ui = renderIsland(BoardFocus, focusProps(held, { joins: joinsOf(held), refreshKey: 1 }));
+    expect(viewOf(ui).camerasFolded).toBe(true);
+    viewOf(ui).onCamerasFolded(false);
+    expect(viewOf(ui).camerasFolded, "the press opened it").toBe(false);
+    const live = mk({ kind: "live", moveNo: 4 });
+    ui.rerender(focusProps(live, { joins: joinsOf(live), refreshKey: 2 }));
+    await flush();
+    expect(viewOf(ui).camerasFolded, "a poll never refolds it").toBe(false);
+    viewOf(ui).onCamerasFolded(true);
+    ui.rerender(focusProps(held, { joins: joinsOf(held), refreshKey: 3 }));
+    await flush();
+    expect(viewOf(ui).camerasFolded, "nor opens it again when a board goes back on hold").toBe(true);
   });
 
   it("the answer reaches the view, whole", async () => {
