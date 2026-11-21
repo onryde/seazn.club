@@ -55,12 +55,13 @@ import { seedSecondOnlineRound } from "../../__tests__/_second-online-round-seed
 
 // MD-R20: the freeze read, switchable per org. It is the REAL `frozenCompetitionIds` unless an org is named here, in which case it rejects
 // as a failing database read would; every other test in this file reads the real one.
-const freezeRead = vi.hoisted(() => ({ failOrgs: new Set<string>() }));
+const freezeRead = vi.hoisted(() => ({ failOrgs: new Set<string>(), asked: [] as string[] }));
 vi.mock("../../entitlement-freeze", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../entitlement-freeze")>();
   return {
     ...actual,
     frozenCompetitionIds: async (orgId: string) => {
+      freezeRead.asked.push(orgId);
       if (freezeRead.failOrgs.has(orgId)) throw new Error("the freeze read failed (test)");
       return actual.frozenCompetitionIds(orgId);
     },
@@ -1135,6 +1136,32 @@ describe.skipIf(!DB)("premint pass - a billing-frozen competition's unopened rou
       freezeRead.failOrgs.clear();
       expect(await run([a.orgId, b.orgId]), "the next pass").toMatchObject({ scanned: 2, roomsMade: 2, deferred: 0, failed: 0 });
       expect(createsFor(aIds).sort(), "A's rooms are made once the read works").toEqual(titles(aIds));
+    } finally {
+      logged.mockRestore();
+    }
+  }, 120_000);
+
+  // Fix round 1 (m6): the club's offer is asked BEFORE its freeze, so a club that is not offered online chess is never paged for a freeze it
+  // would not have minted through anyway - and its freeze is not even read. (Paging that club every minute would be a fault nobody can act on:
+  // there is nothing of it to pre-mint.)
+  it("MD-R20: a club NOT offered online chess is not paged when its freeze read fails - its rows are deferred, no failure, and its freeze is never read; the offered club beside it is paged", async () => {
+    const a = await seedRound(1); // not offered; its freeze read would fail
+    const b = await seedRound(1); // offered; its freeze read fails too: the positive pair
+    await unseat([...ids(a), ...ids(b)]);
+    freezeRead.asked.length = 0;
+    const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
+    try {
+      freezeRead.failOrgs.add(a.orgId);
+      freezeRead.failOrgs.add(b.orgId);
+      const report = await run([a.orgId, b.orgId], { offered: async ({ orgId }) => orgId === b.orgId });
+
+      expect(report, "A's 2 rows deferred (not offered); B's first row the one failure, its other deferred").toMatchObject({ scanned: 4, roomsMade: 0, deferred: 3, failed: 1 });
+      expect(report.failures, "the one failure is B's: an offered club whose freeze cannot be read").toEqual([{ fixtureId: expect.any(String), side: expect.stringMatching(/^(home|away)$/), code: "freeze_unreadable" }]);
+      expect(ids(b), "premise: the failure names a board of B").toContain(report.failures[0]!.fixtureId);
+      expect(report.scanned, "the ledger adds up").toBe(report.roomsMade + report.failed + report.deferred);
+      expect(freezeRead.asked, "A's freeze was never read: the club is not offered").not.toContain(a.orgId);
+      expect(freezeRead.asked, "the positive pair: B's was").toContain(b.orgId);
+      expect(logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === a.orgId), "nothing logged for A").toEqual([]);
     } finally {
       logged.mockRestore();
     }

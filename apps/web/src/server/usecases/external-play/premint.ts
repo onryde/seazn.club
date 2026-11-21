@@ -317,6 +317,12 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
       break;
     }
     const row = rows[i]!;
+    // The club's offer is asked FIRST (gaps wave A fix round 1, m6): a club that is not offered online chess mints nothing whatever its
+    // freeze says, so its freeze is not read and an unreadable one pages nobody - there is nothing of it to pre-mint.
+    if (!(await offeredTo(row.orgId))) {
+      report.deferred += 1;
+      continue;
+    }
     // A frozen competition cannot open its round, so no room is made for it; the row keeps its place for the pass after the thaw.
     // An org whose freeze could not be read (`null`) is held the same way.
     const frozen = await frozenIn(row.orgId);
@@ -326,10 +332,6 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
       continue;
     }
     if (frozen === null || frozen.has(row.competitionId)) {
-      report.deferred += 1;
-      continue;
-    }
-    if (!(await offeredTo(row.orgId))) {
       report.deferred += 1;
       continue;
     }
