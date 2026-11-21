@@ -132,6 +132,47 @@ describe.skipIf(!HAS_DB)("FX-G5 groups feed a knockout with no pool-mates in rou
     expect(r1.byes.map((id) => b.seedOf.get(id)).sort(), "byes to the top seeds").toEqual([1, 2]);
   });
 
+  it("X-PD-5 round two follows the fold: the drawn bracket feeds round two exactly as an undrawn one does", async () => {
+    // The draw moves entrants between round-one seats; it never rewires the bracket. Round-one line k (seq_in_round order) feeds
+    // round-two line ceil(k/2), slot 1 from the odd line and slot 2 from the even one - the standard bracket geometry - so pool-mates
+    // may meet from round two on. The witness: a group-fed 6-into-8 drawn at setup (a confirmed proposal) and at on_complete
+    // (`config.qualified`), each against a league-fed 6-into-8 (no pools, no draw).
+    const wiring = async (koId: string) => {
+      const rows = await sql<{ id: string; round_no: number; seq_in_round: number; winner_to_fixture: string | null; winner_to_slot: number | null }[]>`
+        select id, round_no, seq_in_round, winner_to_fixture, winner_to_slot from fixtures where stage_id = ${koId} order by round_no, seq_in_round`;
+      const first = Math.min(...rows.map((r) => r.round_no));
+      const seqOf = new Map(rows.map((r) => [r.id, r.seq_in_round]));
+      return rows.filter((r) => r.round_no === first).map((r) => [r.seq_in_round, r.winner_to_fixture ? seqOf.get(r.winner_to_fixture) : null, r.winner_to_slot]);
+    };
+    const drawn = await build({ entrants: 12, pools: 3, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive });
+    expect((await completeStage(drawn.auth, drawn.srcId)).completed).toBe(true);
+    const p = await getSeedProposal(drawn.auth, drawn.koId);
+    expect(p!.computed.crossPoolDraw?.seed, "the premise: this bracket was drawn").toEqual(expect.any(Number));
+    await confirmSeedProposal(drawn.auth, drawn.koId, { proposalId: p!.id });
+    const plain = await build({ entrants: 6, pools: "league", kind: "knockout", take: [{ kind: "rankRange", from: 1, to: 6 }], score: decisive });
+    expect((await completeStage(plain.auth, plain.srcId)).completed).toBe(true);
+    const q = await getSeedProposal(plain.auth, plain.koId);
+    expect(q!.computed.crossPoolDraw, "the premise: the league-fed bracket was not drawn").toBeUndefined();
+    await confirmSeedProposal(plain.auth, plain.koId, { proposalId: q!.id });
+
+    const late = await build({ entrants: 12, pools: 3, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive, timing: "on_complete" });
+    expect((await completeStage(late.auth, late.srcId)).completed).toBe(true);
+    const [{ n: lines }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${late.koId}`;
+    expect(lines, "the premise: the on_complete bracket was generated at completion").toBeGreaterThan(0);
+
+    const undrawn = await wiring(plain.koId);
+    expect(undrawn, "round one -> round two: line k feeds line ceil(k/2), odd line slot 1, even line slot 2").toEqual(
+      [1, 2, 3, 4].map((k) => [k, Math.ceil(k / 2), k % 2 === 1 ? 1 : 2]),
+    );
+    let checked = 0;
+    for (const [path, b] of [["setup", drawn], ["on_complete", late]] as const) {
+      const got = await wiring(b.koId);
+      expect(got, `${path}: the drawn bracket is wired as the undrawn one`).toEqual(undrawn);
+      checked += got.length;
+    }
+    expect(checked, "round-one lines checked across both drawn paths (4 each)").toBe(8);
+  });
+
   it("X-PD-2 two pools top two: rank then rotation - A1 v B2, B1 v A2 (pin; the fold already gives it)", async () => {
     const b = await build({ entrants: 8, pools: 2, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive });
     await completeStage(b.auth, b.srcId);
