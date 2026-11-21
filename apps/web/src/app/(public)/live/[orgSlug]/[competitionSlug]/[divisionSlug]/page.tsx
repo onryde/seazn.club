@@ -33,7 +33,8 @@ import { adjustmentNotesFor } from "@/lib/points-adjustment-note";
 import { loadPointsAdjustments } from "@/server/public-site/points-adjustments";
 import { inTheField } from "@/lib/entrant-field";
 import { Bracket } from "@/components/public-site/bracket";
-import { ResultsMatrix } from "@/components/public-site/results-matrix";
+import { resultsGridData } from "@/components/public-site/results-matrix";
+import { ResultsGridDisclosure } from "@/components/public-site/results-grid";
 import { SuspensionsStrip } from "@/components/public-site/suspensions-strip";
 import { publicSuspensions } from "@/server/usecases/discipline";
 import type { MetricSpecLike } from "@/lib/public-site";
@@ -355,30 +356,30 @@ export default async function DivisionHomePage({ params }: Props) {
                     locale={orgLocale}
                     tz={tz}
                   />
-                  {poolFixtures.length > 0 && (
-                    <details>
-                      {/* `min-h-11 py-3.5` is the 44px tap floor (W2 contact
-                          sheet img-135, owner approved): the toggle was plain
-                          text, 16px tall at 320. The padding rather than a
-                          `flex` is deliberate — a `<summary>` is `display:
-                          list-item`, and changing its display takes the
-                          disclosure triangle with it. */}
-                      <summary className="min-h-11 cursor-pointer py-3.5 text-xs font-medium text-ink-muted hover:text-ink">
-                        {t(dict, "division.resultsGrid")}
-                      </summary>
-                      <div className="mt-2">
-                        <ResultsMatrix
-                          entrantIds={ranked.map((r) => r.entrantId)}
-                          entrantNames={entrantNames}
-                          entrantStatuses={entrantStatuses}
-                          entrantLogos={entrantLogos}
-                          fixtures={poolFixtures}
-                          fixtureHref={(id) => `${basePath}/fixtures/${id}`}
-                          dict={dict}
+                  {poolFixtures.length > 0 &&
+                    (() => {
+                      // W5 B4 (stress S4): the grid's makings only (one line per played pairing); the n x n table is drawn
+                      // in the browser when the disclosure first opens, not sent with every load of the page.
+                      const grid = resultsGridData({
+                        entrantIds: ranked.map((r) => r.entrantId),
+                        entrantNames,
+                        entrantStatuses,
+                        entrantLogos,
+                        fixtures: poolFixtures,
+                        fixtureHref: (id) => `${basePath}/fixtures/${id}`,
+                        dict,
+                      });
+                      return grid === null ? null : (
+                        <ResultsGridDisclosure
+                          data={grid}
+                          label={t(dict, "division.resultsGrid")}
+                          // `min-h-11 py-3.5` is the 44px tap floor (W2 contact sheet img-135, owner approved): the toggle was
+                          // plain text, 16px tall at 320. The padding rather than a `flex` is deliberate — a `<summary>` is
+                          // `display: list-item`, and changing its display takes the disclosure triangle with it.
+                          summaryClassName="min-h-11 cursor-pointer py-3.5 text-xs font-medium text-ink-muted hover:text-ink"
                         />
-                      </div>
-                    </details>
-                  )}
+                      );
+                    })()}
                 </div>
               );
             })}

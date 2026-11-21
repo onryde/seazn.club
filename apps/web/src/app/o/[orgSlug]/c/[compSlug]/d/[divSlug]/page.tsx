@@ -108,7 +108,8 @@ import { arbiterPanelOffered } from "@/server/arbiter-panel-offered";
 import { ProgressionPanel } from "@/components/v2/progression-panel";
 import { LaunchActions } from "@/components/v2/launch-actions";
 import { StandingsTable } from "@/components/public-site/standings-table";
-import { ResultsMatrix } from "@/components/public-site/results-matrix";
+import { resultsGridData } from "@/components/public-site/results-matrix";
+import { ResultsGridDisclosure } from "@/components/public-site/results-grid";
 import { StatsPanel } from "@/components/v2/stats-panel";
 import { LadderPanel } from "@/components/v2/ladder-panel";
 import { AmericanoPanel } from "@/components/v2/americano-panel";
@@ -309,6 +310,8 @@ export default async function DivisionPage({
   // else. Ids, not a count: a swiss stage carrying `config.qualified`
   // pairs only the qualifiers still in the field, which is an intersection.
   const activeEntrantIds = entrants.filter((e) => !DEPARTED_STATUSES.has(e.status)).map((e) => e.id);
+  // W5 B4 (stress S4): fixture id -> its number, once, for the results grid's links (a per-cell `fixtures.find` was O(n² x lines)).
+  const fixtureNoById = new Map(fixtures.map((f) => [f.id, f.fixture_no]));
   // Swiss round-1 pairing, review ruling R1: the menu's hint prints seed
   // NUMBERS only when the field's seeds really are 1..N in pairing order, so
   // it needs each entrant's seed. `listEntrants` already selects `seed`.
@@ -1257,28 +1260,30 @@ export default async function DivisionPage({
                         locale={locale}
                         tz={scheduleSettings.tz}
                       />
-                      {poolFixtures.length > 0 && (
-                        <details>
-                          <summary className="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700">
-                            {t(dict, "div.detail.resultsGrid")}
-                          </summary>
-                          <div className="mt-2">
-                            <ResultsMatrix
-                              entrantIds={ranked.map((r) => r.entrantId)}
-                              entrantNames={entrantNames}
-                              entrantLogos={entrantLogos}
-                              fixtures={poolFixtures as never}
-                              fixtureHref={(fid) => {
-                                const row = fixtures.find((f) => f.id === fid);
-                                return row
-                                  ? routes.fixture(orgSlug, compSlug, divSlug, row.fixture_no)
-                                  : "#";
-                              }}
-                              dict={publicDict}
+                      {poolFixtures.length > 0 &&
+                        (() => {
+                          // W5 B4 (stress S4): the grid's makings only; the n x n table is drawn in the browser when the
+                          // disclosure first opens. Each line's href from the one fixture-number map (it was a scan of every
+                          // fixture per cell: O(n² x lines) on a 500-entrant Swiss).
+                          const grid = resultsGridData({
+                            entrantIds: ranked.map((r) => r.entrantId),
+                            entrantNames,
+                            entrantLogos,
+                            fixtures: poolFixtures as never,
+                            fixtureHref: (fid) => {
+                              const no = fixtureNoById.get(fid);
+                              return no === undefined ? "#" : routes.fixture(orgSlug, compSlug, divSlug, no);
+                            },
+                            dict: publicDict,
+                          });
+                          return grid === null ? null : (
+                            <ResultsGridDisclosure
+                              data={grid}
+                              label={t(dict, "div.detail.resultsGrid")}
+                              summaryClassName="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700"
                             />
-                          </div>
-                        </details>
-                      )}
+                          );
+                        })()}
                     </div>
                   );
                 })}
