@@ -139,7 +139,7 @@ async function onlineEntrantCap(owner: Session): Promise<void> {
   await insertEntitlementOverride(owner, orgId, "competitions.max_active", 50);
   const compMade = await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `OCD cap ${tag}`, visibility: "private" });
   const comp = v1data<{ id: string }>(compMade);
-  check(`online entrant cap: a competition to build in (got ${compMade.status} ${compMade.json.error?.code ?? ""} ${compMade.json.error?.feature_key ?? ""})`, !!comp?.id);
+  check(`online entrant cap: a competition to build in (got ${compMade.status} ${compMade.json.error?.code ?? ""})`, !!comp?.id);
   if (!comp?.id) return;
   const divisionIn = (name: string, online: boolean) =>
     v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
