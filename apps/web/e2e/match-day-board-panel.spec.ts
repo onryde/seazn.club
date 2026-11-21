@@ -606,8 +606,11 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
   // MD-R36: English AND Dutch (its words are the longest in the folded strip and in the reason), the 168-character account change in both and
   // the short mismatch in English. The measured bottoms are attached to the run (annotation "MD-R33 measure"), not printed.
   const DECISION_HEADROOM = 40;
+  /** CI's fonts wrap the long Dutch reason about 24px taller than this machine's (CI run 44950623241: the decision ended at 762.7 where it measured 739 here, the B10
+   *  class). The pin below is therefore taken against the screen minus that allowance too, so a local pass predicts CI's instead of sitting 21px from it. */
+  const CI_WRAP_ALLOWANCE = 24;
   /** Fix round 2: Settle at 1024 x 768 keeps real headroom too (the long Dutch reason measured 764 against 768 = 4px, and CI's fonts wrap a line differently: the B10
-   *  class). 20px is the least the review asked for; from lg to xl the right column's gaps and card padding are tighter to buy it, never the type. */
+   *  class). 20px is the least the review asked for; the right column's gaps and the hold and decision cards' padding are tighter from lg up to buy it (and the 1280 pin's CI allowance below), never the type. */
   const SETTLE_HEADROOM_1024 = 20;
   for (const locale of ["en", "nl"] as const) {
     test(`(MD-R33 with cameras, ${locale}) a HELD board with cameras, two flags and a LONG reason - the 168-character account change${locale === "en" ? " as well as the short mismatch" : ""} - keeps its whole decision on a 1280 x 800 screen, the cameras at the right column's top, their fold press on the state row`, async ({ page }) => {
@@ -649,7 +652,7 @@ test.describe("Match Day online - the cameras in the board panel (Task 9)", () =
         test.info().annotations.push({ type: "MD-R33 measure", description: `${locale} / ${label}: decision bottom ${Math.round(dec.bottom)}` });
         // B7: real headroom, not 9px. The two quiet decisions share a row from lg, which took ~50px off the column; the pin keeps 40 of them, so a taller font
         // (CI's, an older Dutch translation) moves the line without breaking it - and a change that eats the headroom is told at once, before it eats the screen.
-        expect(dec.bottom, `${locale} / ${label}: the decision ends ${DECISION_HEADROOM}px inside the 800px screen (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800 - DECISION_HEADROOM);
+        expect(dec.bottom, `${locale} / ${label}: the decision ends ${DECISION_HEADROOM}px inside the 800px screen, and a CI wrap (${CI_WRAP_ALLOWANCE}px) more still fits (it ended at ${Math.round(dec.bottom)})`).toBeLessThanOrEqual(800 - DECISION_HEADROOM - CI_WRAP_ALLOWANCE);
         // MD-R36: the fold's press is on the state row (not in the strip), and the folded strip is ONE line in every language.
         await expect(cameras(page).getByTestId("md-cameras-toggle"), "the strip carries no toggle of its own").toHaveCount(0);
         const state = await box("md-online-state");
