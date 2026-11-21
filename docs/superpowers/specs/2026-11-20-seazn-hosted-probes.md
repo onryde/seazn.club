@@ -40,21 +40,54 @@ one recording it created, each by the uid it captured (C6). It prints an `OBSERV
 The stream key is passed to ffmpeg as argv, so it is visible to local `ps` on the machine running the probe for the
 feed's duration (it never reaches a log, the report or a commit).
 
-**Status (2026-11-21): NOT RUN.** The run was held before any Cloudflare write: the only Cloudflare account the local
-credentials can reach is the one account staging AND production share (`seazn-club-stg` and `seazn-club-prod` carry
-identical `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_STREAM_TOKEN` secret digests on Fly, 2026-11-21). There is no
-staging-only Cloudflare account, so the "staging account only" condition the run was cleared under cannot be met as
-written. The owner rules on whether the probe may run on the shared account (it only creates, touches and deletes its
-own input and recording by uid; it never lists the account).
+**Run 1 (2026-11-21, owner-approved on the account staging and production share; run by the owner).** EXIT=1 after
+224 s. One input (`6d49e895…`) and its one recording (`52d5189c…`) were created, and both were deleted by uid (200 each).
+No foreign items were seen and nothing was skipped. Raw values are from the probe's `OBSERVED` line. Tokens were never
+logged.
 
-- **C7. Lock on an in-progress recording.** NOT RUN. To record: the lock echo (`requireSignedURLs`), live HLS through a
-  fresh input-uid token before and after the lock, the unsigned `/{video_uid}/manifest/video.m3u8` status after the
-  lock, and `requireSignedURLs` on `GET /stream/{video_uid}` once the recording has finished. If the lock does not hold
-  in progress, Task 13 locks only finished recordings and C3's open window grows to the whole match.
-- **C8. PUT keeps `requireSignedURLs`.** NOT RUN. To record: the `PUT /live_inputs/{uid}` echo of
-  `recording.requireSignedURLs` when the same `recording` is re-sent with `enabled: false`, and the re-read after it.
-- **C9. Token `exp` honoured.** NOT RUN. To record: the status of a token minted with `exp` = now + 60 s at once and at
-  now + 90 s (with a fresh-token control at + 90 s, to tell an expired token from a stream that ended).
+**The live side never played.** Every live-HLS read through an input-uid token answered **204** (no content), never 200.
+That includes the baseline before the lock, which the probe re-polled for 90 s, the read after the lock, and a fresh-token
+control 90 s later. The 204 is not an auth refusal. At the same URL form and the same moment, an expired token answered
+401 while a fresh one answered 204, so host, path and token were all accepted and there was nothing to serve. The rest of
+the run fits that reading:
+- ffmpeg had already exited before the +90 s mark, although its own cap was 300 s.
+- The recording's final state was `error`, not `ready`.
+
+The test feed broke, and Cloudflare had no playable live rendition. The probe did not capture the cause: ffmpeg's stderr
+and the video's error reason were not recorded in run 1. A wrong URL form is ruled out by the 401/204 differential.
+
+- **C7. Lock on an in-progress recording.** PARTLY MEASURED.
+  - *Measured:*
+    - Before any lock, the in-progress recording already read `requireSignedURLs: true` (state `live-inprogress`).
+    - `POST /stream/{video_uid} {requireSignedURLs:true}` answered 200 and echoed `true` while the recording was
+      `live-inprogress`.
+    - After the lock, the unsigned `/{video_uid}/manifest/video.m3u8` answered **401**.
+    - After the feed stopped, the video read `requireSignedURLs: true`. Its end state was `error`, though, not `ready`.
+  - *Not measured:* whether live HLS keeps answering 200 after the lock (there was no 200 baseline), and whether the flag
+    survives a recording that ends `ready`.
+  - *Against C3:* C3 saw a FINISHED recording of a signed input read `false`. Here the in-progress recording read `true`
+    before anything set it. Whether Cloudflare flips it to `false` when the recording finishes is still open. That is the
+    case Task 13 must cover, and it should keep signing on appearance AND re-check after `ready`.
+- **C8. PUT keeps `requireSignedURLs`.** MEASURED.
+  - A `PUT /live_inputs/{uid}` that re-sent the create's `recording` with `enabled: false` answered 200 and echoed
+    `recording.requireSignedURLs: true`, `allowedOrigins: ["seazn.club"]`, `mode: automatic`, `timeoutSeconds: 180` and
+    `enabled: false`.
+  - A fresh GET read `enabled: false`, `requireSignedURLs: true`.
+  - The input was off air at the time, as `ingest-cf.ts:10-15` requires.
+- **C9. Token `exp` honoured.** MEASURED, using the 401/204 differential.
+  - A token minted with `exp` = now + 60 s was accepted at once (204, the same answer as every valid token in this run).
+  - At now + 90 s that token answered **401**, while a freshly minted token at the same moment answered 204.
+  - The 200-at-once half could not be shown, for the 204 reason above.
+
+**Re-run owed for:** live HLS still playing after an in-progress lock, and the lock surviving a `ready` end. The probe
+now waits up to 180 s for a 200 baseline. If none comes, it stops before the lock and records `baselineDiagnostics`:
+- the video's state and error reason
+- the input's state and reason
+- ffmpeg's exit code and stderr tail, with the key redacted
+
+The feed now sends stereo 48 kHz AAC with a capped bitrate. Re-run with
+`cd apps/web && DATABASE_URL= CF_LIVE_PROBE=1 npx vitest run src/server/relay/__tests__/cf-signed-live.live.test.ts`
+and paste the `OBSERVED` and `LEDGER` lines.
 
 ## Task 20: Bunny, what remained open
 

@@ -97,7 +97,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
 
   const httpStatus = async (url: string) => (await fetch(url, { redirect: "manual" })).status;
 
-  type Video = { uid: string; liveInput?: string | null; requireSignedURLs?: boolean; status?: { state?: string }; playback?: { hls?: string } };
+  type Video = { uid: string; liveInput?: string | null; requireSignedURLs?: boolean; status?: { state?: string; errorReasonCode?: string; errorReasonText?: string }; playback?: { hls?: string } };
 
   /** The input's OWN videos, each checked against the input (C6): a foreign item is skipped and counted. */
   async function ownVideos(): Promise<Video[]> {
@@ -189,7 +189,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
       "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
       "-t", String(FEED_MAX_SECONDS),
       "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-g", "60", "-b:v", "2500k",
-      "-c:a", "aac", "-b:a", "128k", "-f", "flv", target,
+      "-maxrate", "2500k", "-bufsize", "5000k", "-c:a", "aac", "-ac", "2", "-ar", "48000", "-b:a", "128k", "-f", "flv", target,
     ], { stdio: ["ignore", "ignore", "pipe"] });
     // The key is redacted from each chunk BEFORE the tail is kept, so a slice can never cut it into an unredacted piece.
     const streamKey = created.result!.rtmps.streamKey;
@@ -217,14 +217,31 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     const host = new URL(before.playback!.hls!).origin;
 
     // Live HLS through a fresh input-uid token must answer 200 before the lock (C1), or the after-lock read means nothing.
-    deadline = Date.now() + 90_000;
+    // Run 1 (2026-11-21) answered 204 for 90 s while the recording sat in live-inprogress and later ended in `error`:
+    // the token was accepted (an expired one answered 401 at the same URL) but there was nothing to serve. So the
+    // baseline now waits up to 180 s, and if it never reaches 200 the run stops HERE with the feed's diagnostics
+    // instead of locking a recording whose live side was never playable.
+    deadline = Date.now() + 180_000;
     let liveBefore = 0;
+    const baselineSeen: number[] = [];
     for (;;) {
       liveBefore = await httpStatus(`${host}/${await mint(inputUid)}/manifest/video.m3u8`);
+      baselineSeen.push(liveBefore);
       if (liveBefore === 200 || Date.now() > deadline) break;
       await sleep(5_000);
     }
     obs.liveHlsBeforeLock = liveBefore;
+    obs.liveHlsBaselineSeen = [...new Set(baselineSeen)];
+    if (liveBefore !== 200) {
+      const v = await readVideo();
+      const inp = await cf<{ status?: { current?: { state?: string; reason?: string } } }>("GET", `/live_inputs/${inputUid}`);
+      obs.baselineDiagnostics = {
+        videoState: v.status?.state, errorReasonCode: v.status?.errorReasonCode, errorReasonText: v.status?.errorReasonText,
+        inputState: inp.result?.status?.current?.state, inputReason: inp.result?.status?.current?.reason,
+        ffmpegExit: ffmpeg.exitCode, ffmpegSignal: ffmpeg.signalCode, ffmpegStderrTail: ffErr.slice(-500),   // key already redacted
+      };
+      throw new Error(`live HLS never answered 200 within 180 s (saw ${JSON.stringify(obs.liveHlsBaselineSeen)}); lock not attempted — see OBSERVED.baselineDiagnostics`);
+    }
 
     // 4. Lock the in-progress recording.
     const lock = await cf<Video>("POST", `/${videoUid}`, { requireSignedURLs: true });
@@ -243,6 +260,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
     obs.expiryAtPlus90 = await httpStatus(shortUrl);
     obs.liveHlsFreshTokenAtPlus90 = await httpStatus(`${host}/${await mint(inputUid)}/manifest/video.m3u8`);   // control: still live
     obs.feedStillRunningAtPlus90 = ffmpeg.exitCode === null;
+    if (ffmpeg.exitCode !== null) obs.ffmpegEarlyExit = { code: ffmpeg.exitCode, stderrTail: ffErr.slice(-500) };   // key already redacted
 
     // 6. Stop the feed; wait for the recording to finish (timeoutSeconds 180 after the disconnect), then re-read the lock.
     stopFeed();
@@ -253,7 +271,7 @@ describe.skipIf(!GATE.enabled)("Cloudflare Stream — signed recording lock, PUT
       await sleep(15_000);
       after = await readVideo();
     }
-    obs.videoAfterEnd = { state: after.status?.state, requireSignedURLs: after.requireSignedURLs };
+    obs.videoAfterEnd = { state: after.status?.state, requireSignedURLs: after.requireSignedURLs, errorReasonCode: after.status?.errorReasonCode, errorReasonText: after.status?.errorReasonText };
 
     // 7. PUT re-sending the create's recording with enabled:false — only on this run's input, now off air.
     const put = await cf<{ recording?: { requireSignedURLs?: boolean; allowedOrigins?: string[]; mode?: string; timeoutSeconds?: number }; enabled?: boolean }>(
