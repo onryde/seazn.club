@@ -22,7 +22,7 @@ export async function putArrival(fixtureId: string, orgId: string, side: "home" 
           values (${fixtureId}, ${side}, ${personId}, 'player', ${participantId})`;
     expect(player.count, `the ${side} player on file for ${fixtureId}`).toBe(1);
     // The join admits a side by the server's flag: the counted check-in (EXTERNAL_PLAY_PRESENCE_PROOF unset, the local recipe) or the presence row
-    // (set, CI's server). A seeded arrival carries both, so `joinable` holds in either state (the same pair e2e/arbiter-panel.spec.ts `putRoom` writes).
+    // (set, CI's server). A seeded arrival carries both, so `joinable` holds in either state (the same pair the Arbiter Panel's old spec wrote, and what a real check-in leaves).
     const checkIn = await sql`
       insert into fixture_availability (fixture_id, person_id, org_id, status, checked_in_at)
       values (${fixtureId}, ${personId}, ${orgId}, 'in', now())

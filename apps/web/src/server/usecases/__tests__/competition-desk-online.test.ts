@@ -78,9 +78,6 @@ afterAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("RESEND_API_KEY", "");
-  // Ruling MD-R18: the desk's board rows wait for the flag that gates Match Day's own online block (T10 removes both). Every test below
-  // reads them, so the flag is on; the one test of the flag OFF sets it itself. `afterEach` restores the process env.
-  vi.stubEnv("MATCH_DAY_ONLINE", "1");
   stubOutboxEnv();
   forgetOnlineChessFlagCache();
 });
@@ -706,50 +703,6 @@ async function createDivisionWithHold(r: SeedOnlineChessRoundResult): Promise<{ 
   await bridgeRow(fx!.id, r.orgId, { status: "needs_organiser", reason: "no_show_black" });
   return { divisionId: division.id };
 }
-
-// ---------------------------------------------------------------------------------------------------------------------------
-describe.runIf(HAS_DB)("ruling MD-R18: board rows wait for Match Day's own online flag (a red row's button must land on a Match Day that can open it)", () => {
-  it("the SAME seeded hold and flag: flag ON raises one row of each kind; flag OFF (unset, empty, '0', anything but '1') raises neither, and a link hold's re-open flag is gone with it", async () => {
-    const r = await round(3);
-    await hold(r, r.boards[0]!, "lichess_unlinked");
-    await flaggedBoard(r, r.boards[1]!);
-
-    const on = attentionsOf(await deskOf(r.owner, r.competitionId), r.divisionId);
-    expect(heldIds(on), "positive pair: flag on, the held board").toEqual([r.boards[0]!.fixtureId]);
-    expect(flaggedIds(on), "positive pair: flag on, the flagged board").toEqual([r.boards[1]!.fixtureId]);
-
-    const off: Array<string | undefined> = [undefined, "", "0", "true", "yes"];
-    for (const value of off) {
-      vi.stubEnv("MATCH_DAY_ONLINE", value);
-      const desk = await deskOf(r.owner, r.competitionId);
-      const list = attentionsOf(desk, r.divisionId);
-      expect(heldOf(list), `MATCH_DAY_ONLINE=${JSON.stringify(value)}: no held row`).toEqual([]);
-      expect(flaggedOf(list), `MATCH_DAY_ONLINE=${JSON.stringify(value)}: no flagged row`).toEqual([]);
-      // The desk's Needs-you list is built from the same read: no row of either kind, no pill word for them either.
-      expect(rowsOf(desk, r).filter((i) => i.kind === "board_held" || i.kind === "board_flagged"), `MATCH_DAY_ONLINE=${JSON.stringify(value)}: list`).toEqual([]);
-    }
-    expect(off.length, "anti-vacuity: off-values swept").toBe(5);
-    // The lister the rows come from still sees both boards (the division page's Held | Flagged queue is where they stay until T10).
-    expect((await listNeedsOrganiserExternalPlay(r.owner, r.divisionId)).map((x) => x.fixtureId), "premise: the held lister still lists it").toEqual([r.boards[0]!.fixtureId]);
-  });
-
-  it("flag OFF reads neither lister at all (the gate is before the work, not a filter after it)", async () => {
-    const r = await round(2);
-    await hold(r, r.boards[0]!);
-    vi.stubEnv("MATCH_DAY_ONLINE", undefined);
-    vi.mocked(listNeedsOrganiserExternalPlay).mockClear();
-    vi.mocked(listFlaggedExternalPlay).mockClear();
-
-    await deskOf(r.owner, r.competitionId);
-
-    expect(listNeedsOrganiserExternalPlay).not.toHaveBeenCalled();
-    expect(listFlaggedExternalPlay).not.toHaveBeenCalled();
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
-    await deskOf(r.owner, r.competitionId);
-    expect(listNeedsOrganiserExternalPlay, "positive pair: flag on asks the held lister").toHaveBeenCalled();
-    expect(listFlaggedExternalPlay, "positive pair: flag on asks the flagged lister").toHaveBeenCalled();
-  });
-});
 
 // ---------------------------------------------------------------------------------------------------------------------------
 describe.runIf(HAS_DB)("who gets board rows: online divisions only (ruling MD-R11 pinned, and every other sport of the registry)", () => {

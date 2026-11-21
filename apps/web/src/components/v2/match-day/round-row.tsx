@@ -38,7 +38,7 @@ export function RoundRow({
         data-state={onlineRoundPhase(round, nowMs)}
         aria-current={selected ? "true" : undefined}
         onClick={() => onOpen(round.key)}
-        className={`grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left text-slate-900 transition hover:bg-purple-50/60 ${
+        className={`grid min-h-14 w-full min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-4 py-3 text-left text-slate-900 transition hover:bg-purple-50/60 cursor-pointer ${
           selected ? "md:bg-purple-50 md:shadow-[inset_3px_0_0_var(--color-purple-600)]" : ""
         }`}
       >

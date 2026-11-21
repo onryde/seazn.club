@@ -46,7 +46,7 @@ export function latestOpenedRoundNos(keys: Iterable<string>): Map<string, number
 
 /** The server's `phase`, re-read from `round.boards` (the poll is up to 20 s apart): a division not started stays `not_started`; every
  *  other row takes `roundColumnPhase`'s ladder over its boards (lib/round-column.ts, the one authority the arbiter column used and the
- *  e2e contract in arbiter-panel.spec.ts pins): no round on screen is `before` (nothing can be checking in, whatever else the producer
+ *  e2e contract in match-day-online.spec.ts pins): no round on screen is `before` (nothing can be checking in, whatever else the producer
  *  called it), `checkin` while ANY board is `checking_in`, else `playing` (every board over included, and a round every board of which
  *  is the viewer's own). The phase follows the BOARDS and never the clock: a deadline passing flips nothing (a board stays
  *  `checking_in` until the sweep turns it), a board leaving check-in does. What a closed or not-yet-open window says is the panel's

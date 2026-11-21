@@ -11,7 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
 import { DivisionRulesStrip, expandRules, stripPropsOf } from "./_rules-strip";
-import { BANNED_RE } from "@/components/v2/arbiter/__tests__/_banned-copy";
+import { BANNED_RE } from "@/components/v2/match-day/__tests__/_banned-copy";
 import { LINK_GAP_NAMES_SHOWN } from "@/lib/online-link-gaps";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";

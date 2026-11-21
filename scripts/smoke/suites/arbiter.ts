@@ -2,15 +2,15 @@
 import { BASE, type Session, newSession, cookieHeader, call, check, signIn, tag, v1, v1data } from "../harness.ts";
 
 /**
- * Chess in-page board T15 — the arbiter panel, keyless (no Lichess, no
- * RealtimeKit). The organiser's panel and its four routes answer only an
+ * Chess in-page board T15 — the arbiter's routes, keyless (no Lichess, no
+ * RealtimeKit). The four routes (join, leave, video override, resync) answer only an
  * organiser of an ONLINE chess board: on an over-the-board chess fixture the
  * join, the leave, the video override and the resync are NOT FOUND (there is
  * no online game; T15 fix round 1, M3); with no identity every route is 401, and so with a
- * signed-in stranger (not a member of the fixture's org); the panel page 404s on the
- * over-the-board division, with a signed-out visitor sent to sign in. The real
- * panel (boards, flags, the outage and its audit record) is
- * e2e/arbiter-panel.spec.ts. SMOKE_ONLY=arbiter runs it alone.
+ * signed-in stranger (not a member of the fixture's org). The Arbiter PAGE is gone (Match Day online, Task 10;
+ * owner MD-R3: no redirect): its old address is a plain 404 for the organiser and for a signed-out visitor alike - not a
+ * sign-in redirect, which only a page that exists can answer. The real surfaces (boards, flags, the outage and its audit
+ * record) are Match Day's, in e2e/match-day-online.spec.ts. SMOKE_ONLY=arbiter runs it alone.
  */
 export async function arbiterSuite(): Promise<void> {
   const owner = newSession();
@@ -86,13 +86,19 @@ export async function arbiterSuite(): Promise<void> {
   }
   check("arbiter API: anti-vacuity, fourteen calls", answered === calls.length + leaves.length && answered === 14);
 
-  // The page: the division's slugs from the organiser's own links.
+  // The retired page's address: the division's slugs from the organiser's own links. The division's own page, read the same way, is the
+  // positive pair - it answers 200 for the same organiser, so the 404 below is the address and not a dead session or a wrong slug chain.
   const orgs = (await call(owner, "/api/orgs")) as { id: string; slug: string }[] | { orgs?: { slug: string }[] };
   const orgSlug = Array.isArray(orgs) ? orgs[0]?.slug : orgs.orgs?.[0]?.slug;
-  const page = `/o/${orgSlug}/c/${comp.slug}/d/${div.slug}/arbiter`;
-  const asOwner = await fetch(`${BASE}${page}`, { redirect: "manual", headers: { cookie: cookieHeader(owner) } });
-  check(`arbiter page, the organiser, over the board: 404 (got ${asOwner.status})`, asOwner.status === 404);
-  const asAnon = await fetch(`${BASE}${page}`, { redirect: "manual" });
-  const to = asAnon.headers.get("location") ?? "";
-  check(`arbiter page, signed out: sent to sign in (got ${asAnon.status} ${to})`, asAnon.status >= 300 && asAnon.status < 400 && to.includes("/login"));
+  const divisionPage = `/o/${orgSlug}/c/${comp.slug}/d/${div.slug}`;
+  const own = await fetch(`${BASE}${divisionPage}`, { redirect: "manual", headers: { cookie: cookieHeader(owner) } });
+  check(`the division's own page, the organiser: 200 (got ${own.status})`, own.status === 200);
+  const retired = `${divisionPage}/arbiter`;
+  const asOwner = await fetch(`${BASE}${retired}`, { redirect: "manual", headers: { cookie: cookieHeader(owner) } });
+  check(`the retired arbiter address, the organiser: 404 (got ${asOwner.status})`, asOwner.status === 404);
+  const asAnon = await fetch(`${BASE}${retired}`, { redirect: "manual" });
+  check(
+    `the retired arbiter address, signed out: 404 and no redirect (got ${asAnon.status} ${asAnon.headers.get("location") ?? ""})`,
+    asAnon.status === 404 && asAnon.headers.get("location") === null,
+  );
 }

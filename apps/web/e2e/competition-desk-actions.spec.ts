@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ATTENTION_SEVERITY, DRAW_DOORS, NOT_RECORDING_GRACE_MINUTES, type Attention } from "../src/lib/division-phase";
 import { needsYouInMatchDay, needsYouOnCompetitionPage } from "./needs-you-home";
-import { cancelFlaggedSql, holdNoShowSql } from "./arbiter-column-kit";
+import { cancelFlaggedSql, holdNoShowSql } from "./match-day-online-kit";
 import { seedOnlineRound } from "./match-room-kit";
 
 /** The SHIPPED English strings, read the way `board-v3.spec.ts` reads them —
@@ -573,9 +573,10 @@ const ROWS: Row[] = [
       await assertUsable(page, '[data-testid="entrant-row-withdraw"]', "the entrants tab offers Withdraw on the rows");
     },
   },
-  // Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; MATCH_DAY_ONLINE=1 on the server, e2e.yml / the runbook): the two per-board
-  // kinds, from a REAL online round (the product's own seed: a public competition, a chess division played online, Start, the open) with the
-  // hold and the flag written by SQL where no API writes them (arbiter-column-kit.ts says why for each). The row's action opens the board in
+  // Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; the online boards are on whenever the club has online chess, no
+  // separate flag): the two per-board kinds, from a REAL online round (the product's own seed: a public competition, a chess division
+  // played online, Start, the open) with the hold and the flag written by SQL where no API writes them (match-day-online-kit.ts says why
+  // for each). The row's action opens the board in
   // Match Day's own focus column - `md-focus` of THAT fixture - and the list's row for it is the current one.
   {
     // A board held for the organiser, DATED in the past: the round's open already makes today a match day, and a board that should have been

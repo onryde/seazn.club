@@ -4,7 +4,7 @@
 // the org's is a 404 on the wire.
 //
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { VENUE_NOUNS } from "@/lib/venue";
 import { MatchDayCandidate, MatchDayCourt, MatchDayFixture, MatchDayOnlineRound, MatchDayView } from "@/server/api-v1/schemas";
@@ -100,10 +100,7 @@ describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day", () => {
 // Match Day online (Task 2): the poll answers `online_rounds`, and the published schema declares it. `MatchDayView` is a plain z.object, so a
 // parse STRIPS a key it does not name: an `online_rounds` the schema forgot would be served by the usecase and gone from the wire.
 describe.skipIf(!HAS_DB)("/api/v1/competitions/{id}/match-day - online_rounds", () => {
-  afterEach(() => vi.unstubAllEnvs());
-
   it("a seeded online round: online_rounds survives the parse with the usecase's rows, every key of a row is declared, and a held board of an earlier round rides needs_decision", async () => {
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
     const day = await seedDay();
     const online = await seedOnlineDivisionIn(day.auth, day.comp.id, { name: "Rapid", fixtures: 1 });
     const minutes = (m: number): Date => new Date(Date.now() + m * 60_000);

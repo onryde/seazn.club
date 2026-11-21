@@ -3,8 +3,8 @@
 // T16 (D12, canvas OpenRoundPhone / OpenRoundConfirmPhone / OpenRoundDesktop) - what the organiser reads when a round is opened:
 // the confirmation's body (how many players and which pairings the press reaches), the invite state of each pairing, the
 // check-in groups of a staggered round, and the words of the open's and the resend's answers. The CONTROL that used to mount
-// these on each stage card is gone (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8): the round is opened in the Arbiter
-// Panel's column (arbiter/round-column.tsx), which reads the very same helpers from here, so the two never word a press differently.
+// these on each stage card is gone (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8): the round is opened on Match Day
+// (match-day/round-focus.tsx, the round's panel), which reads the very same helpers from here, so the two never word a press differently.
 //
 // What a press will do (`round.press`) is the reader's prediction of the server's own decision (open-round-view.ts), so nothing
 // offers a press the server refuses as already open. The counts here are of the UNINVITED - never "is anyone invited?" - so a

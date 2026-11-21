@@ -1,6 +1,6 @@
-// The Fixtures tab's one card for the Arbiter Panel (spec 2026-10-24-arbiter-round-column-design.md §8, controller ruling 1,
-// option C). The round is opened and watched in the panel now, so this tab keeps a single card: the link into the panel and ONE
-// sentence that answers "do I need to go there now?". Which sentence is `entryLine`'s decision (lib/round-column.ts, the same
+// The Fixtures tab's one card for Match Day's online boards (spec 2026-10-24-arbiter-round-column-design.md §8, controller ruling 1,
+// option C; the Arbiter page it once led to is retired). The round is opened and watched on Match Day, so this tab keeps a single card:
+// the "Open Match Day" link and ONE sentence that answers "do I need to go there now?". Which sentence is `entryLine`'s decision (lib/round-column.ts, the same
 // pure module the column reads); this component only says it. A server component: the page hands it the dictionary it already
 // loaded, like every other line it prints.
 //

@@ -38,14 +38,6 @@ const GUARANTEE = {
   fr: "Votre adversaire ne peut pas voir votre caméra.",
   nl: "Je tegenstander kan je camera niet zien.",
 } as const satisfies Record<Locale, string>;
-/** The arbiter's watch-only line says the same thing about the players (§5.6.7: "The arbiter's watch-only line and the
- *  privacy page say the same thing"): its second sentence is the guarantee. */
-const ARBITER_GUARANTEE = {
-  en: "Players can't see or hear you, and can't see each other.",
-  es: "Los jugadores no pueden verte ni oírte, ni verse entre sí.",
-  fr: "Les joueurs ne peuvent ni vous voir ni vous entendre, ni se voir entre eux.",
-  nl: "Spelers kunnen je niet zien of horen, en elkaar niet zien.",
-} as const satisfies Record<Locale, string>;
 /** The line with its excepted sentence taken out - and the proof it was in there to take out. */
 function withoutSentence(line: string, sentence: string): string {
   expect(line, "the excepted sentence is in the line").toContain(sentence);
@@ -133,63 +125,35 @@ describe("check-in privacy line — the configuration, never a guarantee (fix ro
   });
 });
 
-// T17B fix 2 (controller ruling, folded into D4): the arbiter's watch-only line made the same kind of promise — "they
-// never see each other" — that nothing proved, so it was hedged to what the rooms are SET UP to do. D16 (§5.6.7) makes
-// it true: a meeting per player means no player is in a room with the other, and the arbiter publishes nothing. The line
-// now says it, and says what the pane is (ONE player's camera at a time, with the switch).
-const ARBITER_RULED = {
-  en: "You're watching one player's camera at a time. Players can't see or hear you, and can't see each other.",
-  es: "Estás viendo la cámara de un jugador a la vez. Los jugadores no pueden verte ni oírte, ni verse entre sí.",
-  fr: "Vous regardez la caméra d'un joueur à la fois. Les joueurs ne peuvent ni vous voir ni vous entendre, ni se voir entre eux.",
-  nl: "Je bekijkt de camera van één speler tegelijk. Spelers kunnen je niet zien of horen, en elkaar niet zien.",
+// The division page's entry card (Fixtures tab) into Match Day. D16 review M2 once had to stop it promising BOTH cameras while the
+// Arbiter panel showed one at a time; Match Day's board panel shows both players' cameras (receive-only, editors only), so the line says
+// what the card leads to now, and must never again promise the one-at-a-time view that is gone. Ruled text, typed from the copy ruling
+// (rounds, cameras, held boards), not read back from the dictionary.
+const ENTRY_RULED = {
+  en: "Open rounds, watch the cameras and decide held boards on Match Day.",
+  es: "Abre rondas, mira las cámaras y resuelve los tableros retenidos en el Día de partidos.",
+  fr: "Ouvrez les rondes, regardez les caméras et réglez les échiquiers en attente dans Jour de match.",
+  nl: "Open rondes, bekijk de camera's en beslis over borden die wachten op een beslissing in de Wedstrijddag.",
 } as const satisfies Record<Locale, string>;
+/** The one-at-a-time promise the Arbiter panel's line made, per locale: gone with the panel, never to return on this card. */
+const ONE_AT_A_TIME = { en: /one player's camera/i, es: /un jugador a la vez/i, fr: /un joueur à la fois/i, nl: /één speler tegelijk/i } as const;
 
-describe("the arbiter's watch-only line — the same rule as the check-in's (T17B fix 2)", () => {
-  it("says, in each locale, what the pane is and that the players cannot see or hear the arbiter or each other — and makes no other absolute claim: no never, no only, no guarantee — counted", () => {
-    let lines = 0;
-    let words = 0;
-    for (const locale of LOCALES) {
-      const line = DICTS[locale]["arbiter.watchOnly"];
-      expect(line, locale).toBe(ARBITER_RULED[locale]);
-      const rest = withoutSentence(line!, ARBITER_GUARANTEE[locale]);
-      for (const word of ABSOLUTES[locale]) {
-        expect(rest.toLowerCase(), `${locale}: "${word}"`).not.toMatch(new RegExp(`(^|[^\\p{L}])${word}([^\\p{L}]|$)`, "u"));
-        words++;
-      }
-      lines++;
-    }
-    expect(lines).toBe(LOCALES.length);
-    expect(words).toBe(Object.values(ABSOLUTES).flat().length);
-  });
-
-  it("is the line the panel draws, in its header and in its body — counted from the panel's source", () => {
-    const src = readFileSync(join(__dirname, "..", "..", "..", "v2", "arbiter-panel.tsx"), "utf8");
-    expect(src.split('f.t("arbiter.watchOnly")').length - 1, "header (desktop) and body (below lg)").toBe(2);
-  });
-});
-
-// D16 review M2: the division page's entry line to the arbiter panel said "Watch BOTH players' cameras" after the panel became one
-// camera at a time (§5.6.4). Ruled text, typed from the rulebook (one at a time, and the flags), not read back from the dictionary.
-const ARBITER_ENTRY_RULED = {
-  en: "Watch one player's camera at a time and review each board's flags.",
-  es: "Mira la cámara de un jugador a la vez y revisa las señales de cada tablero.",
-  fr: "Regardez la caméra d'un joueur à la fois et examinez les signalements de chaque échiquier.",
-  nl: "Bekijk de camera van één speler tegelijk en beoordeel de meldingen per bord.",
-} as const satisfies Record<Locale, string>;
-
-describe("the division page's arbiter entry line says what the panel does now: one player's camera at a time (D16 review M2)", () => {
-  it("is the ruled line in every locale, and never promises both cameras - counted", () => {
+describe("the division page's entry card says what Match Day does now (no one-camera-at-a-time promise)", () => {
+  it("is the ruled line in every locale, and never promises the old one-at-a-time view - counted", () => {
     let checked = 0;
     for (const locale of LOCALES) {
-      expect(DICTS[locale]["arbiter.entry.body"], locale).toBe(ARBITER_ENTRY_RULED[locale]);
+      expect(DICTS[locale]["arbiter.entry.body"], locale).toBe(ENTRY_RULED[locale]);
+      expect(DICTS[locale]["arbiter.entry.body"], `${locale}: no one-at-a-time promise`).not.toMatch(ONE_AT_A_TIME[locale]);
       checked++;
     }
     expect(checked, "anti-vacuity: every locale").toBe(LOCALES.length);
+    // The probe is not blind: the retired line trips it.
+    expect("Watch one player's camera at a time and review each board's flags.").toMatch(ONE_AT_A_TIME.en);
   });
 
-  // The line is drawn by `ArbiterEntryCard` since the Fixtures tab handed the round to the Arbiter Panel (15e6658e88); the division
-  // page only mounts that card. So the guard is two counted facts, in the two files that now carry it: the card draws the key exactly
-  // once, and the page mounts the card exactly once. Either one moving away again reds this, instead of the line vanishing silently.
+  // The line is drawn by `ArbiterEntryCard`; the division page only mounts that card. So the guard is two counted facts, in the two files
+  // that carry it: the card draws the key exactly once, and the page mounts the card exactly once. Either one moving away reds this,
+  // instead of the line vanishing silently.
   it("is the line the division page draws: the entry card draws the key once, and the page mounts the card once - counted from the sources", () => {
     const card = readFileSync(join(__dirname, "..", "..", "..", "v2", "arbiter-entry-card.tsx"), "utf8");
     expect(card.split('t(dict, "arbiter.entry.body")').length - 1, "the card draws the line").toBe(1);

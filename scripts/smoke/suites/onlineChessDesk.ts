@@ -17,11 +17,12 @@ import {
  *   a NOT FOUND (no online board, no flag) rather than writing anything;
  * - the player's door (GET …/lobby) refuses no identity (401) and is the
  *   room's one 404 for a signed-in non-player, never cached.
- * - arbiter round column, phase 2: an ONLINE chess division read as the pages an
- *   organiser opens (`onlineChessDivisionPages`, below): the panel's column, the
- *   Fixtures tab's one entry card and its absent Open round, the stranger's 404.
- * The real surfaces (the watch panel, the queue, the run sheet, Open round) are
- * e2e/online-chess-desk.spec.ts. SMOKE_ONLY=onlineChessDesk runs it alone.
+ * - Match Day online, Task 10: an ONLINE chess division read as the pages an
+ *   organiser opens (`onlineChessDivisionPages`, below): Match Day's round row and
+ *   round panel, the Fixtures tab's one entry card and its absent Open round, the
+ *   stranger's 404.
+ * The real surfaces (the board panel, the queue, the run sheet, Open round) are
+ * e2e/online-chess-desk.spec.ts and e2e/match-day-online.spec.ts. SMOKE_ONLY=onlineChessDesk runs it alone.
  */
 export async function onlineChessDeskSuite(): Promise<void> {
   const owner = newSession();
@@ -119,24 +120,25 @@ export async function onlineChessDeskSuite(): Promise<void> {
 }
 
 /**
- * Arbiter round column, phase 2 (spec 2026-10-24-arbiter-round-column-design.md §7, §8) — an ONLINE chess division, read as
- * the pages an organiser opens. The panel answers a division that plays online and the Fixtures tab no longer opens rounds: it
- * shows ONE entry card into the panel (`arbiter-entry`), and only where the panel would answer. Three divisions, in one
- * competition, each CREATED with the config it plays under (`config.onlinePlay: "lichess"` asks only the online-chess flag), read
- * as server-rendered HTML:
- * - an online one with a stage and no fixtures: the panel answers it (the column's "before" phase, the start line) and the
- *   Fixtures tab says to start the division but has no card, because the hint does not need fixtures and the card does (§8);
- * - one over the board, with a league: the panel is a 404 and the tab has no card, no hint and no Open round (§7, online play);
- * - an online one with a league, read before and after Start: the column, the card's fixed line and the tab's start hint
- *   first; then the column's Open round press, ON THE PANEL AND NOWHERE ELSE, and the card saying the round is ready. A
- *   signed-in stranger and a signed-out visitor are refused in the last state.
+ * Match Day online, Task 10 (plan 2026-11-05-match-day-all-in-one.md; it replaces the Arbiter page's phase-2 probes, spec
+ * 2026-10-24-arbiter-round-column-design.md §7, §8) — an ONLINE chess division, read as the pages an organiser opens. Match Day
+ * answers a division that plays online and the Fixtures tab no longer opens rounds: it shows ONE entry card into Match Day
+ * (`arbiter-entry`), and only where Match Day would answer. Three divisions, in one competition, each CREATED with the config it
+ * plays under (`config.onlinePlay: "lichess"` asks only the online-chess flag), read as server-rendered HTML:
+ * - an online one with a stage and no fixtures: Match Day has no round of it (no online block) and the Fixtures tab says to start
+ *   the division but has no card, because the hint does not need fixtures and the card does (§8);
+ * - one over the board, with a league: Match Day has no online block and the tab has no card, no hint and no Open round (§7);
+ * - an online one with a league, read before and after Start: the round's row and its panel (`?round=`, "start the division
+ *   first" and no press), the card's fixed line and the tab's start hint first; then the panel's Open round press, ON THE PANEL
+ *   AND NOWHERE ELSE, and the card saying the round is ready. A signed-in stranger and a signed-out visitor are refused in the
+ *   last state.
  * Neither league has a player in it. An online division demands a Lichess link only of an entrant that HAS members
  * (entrants.ts: `members.length > 0`) and `members` defaults to [], so two member-less individual entrants make a fixture, and
  * nothing here needs the Lichess consent no smoke can give. What a round needs once opened (seated, linked players) is the e2e's.
  * The flag is ONLINE_CHESS_ALWAYS=1 on the smoke server (ci.yml, smoke-e2e). A create or a start it refuses FAILS here with the
  * server's own code, and the first refused setup step ends the suite there: one cause is one red, not a cascade of reds.
  * Every probe is anchored on `="`, and every absence rides a presence on the same response.
- * The real column, with players and a round, is e2e/arbiter-panel.spec.ts and the online-chess walkthrough.
+ * The real round panel, with players and a round, is e2e/match-day-online.spec.ts and the online-chess walkthrough.
  */
 async function onlineChessDivisionPages(owner: Session, stranger: Session): Promise<void> {
   // Every expected word is read from the en dictionary on disk (this runner cannot import the JSON-backed `@/lib/messages`).
@@ -149,9 +151,12 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   const openLabel = word("runsheet.round.openCta");
 
   // The markers, each a whole attribute (`="` anchored): a bare `data-*` probe would match React's `"$undefined"` too.
-  const COLUMN = `data-testid="arbiter-round-column"`;
-  const START_LINE = `data-testid="arbiter-column-start-first"`;
-  const OPEN_PRESS = `data-testid="arbiter-column-open-cta"`;
+  const HEADER = `data-testid="md-header"`;
+  const ONLINE_BLOCK = `data-testid="md-online"`;
+  const ROUND_ROW = `data-testid="md-round-row"`;
+  const FOCUS = `data-testid="md-focus"`;
+  const START_LINE = `data-testid="md-round-start-first"`;
+  const OPEN_PRESS = `data-testid="md-round-open-cta"`;
   const ENTRY = `data-testid="arbiter-entry"`;
   const START_HINT = `data-testid="online-start-hint"`;
   // The Fixtures tab's old control. Task 10 deleted it, so its absence is vacuous alone: it is kept, and `>Open round<` (the
@@ -243,13 +248,14 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
       config: { variant: "classical", clock, ...(onlinePlay ? { onlinePlay: "lichess" } : {}) },
     });
   const at = (div: { slug: string }, tail: string): string => `/o/${orgSlug}/c/${comp.slug}/d/${div.slug}${tail}`;
-  const arbiter = (div: { slug: string }): string => at(div, "/arbiter");
+  const matchDay = `/o/${orgSlug}/c/${comp.slug}/match-day`;
+  const roundPanel = (stageId: string, roundNo: number): string => `${matchDay}?round=${stageId}:${roundNo}`;
   const fixturesTab = (div: { slug: string }): string => at(div, "?tab=fixtures");
   const codeOf = (r: V1Res): string => r.json.error?.code ?? "";
 
   /** Two member-less individual entrants, one league stage and its fixtures. Records each step and answers the generated fixtures'
-   *  round numbers, or null once a step is refused (the caller returns: one cause, one red). */
-  const buildLeague = async (div: { id: string }, label: string): Promise<number[] | null> => {
+   *  round numbers and its stage id, or null once a step is refused (the caller returns: one cause, one red). */
+  const buildLeague = async (div: { id: string }, label: string): Promise<{ rounds: number[]; stageId: string } | null> => {
     const ents = await v1(owner, `/api/v1/divisions/${div.id}/entrants`, "POST", [
       { kind: "individual", display_name: `${label} A ${tag}` },
       { kind: "individual", display_name: `${label} B ${tag}` },
@@ -263,7 +269,7 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
     const generated = await v1(owner, `/api/v1/stages/${stage.id}/generate`, "POST");
     const rounds = (v1data<{ fixtures?: { round_no: number }[] }>(generated)?.fixtures ?? []).map((f) => f.round_no);
     check(`online division, ${label}: the league has at least one fixture (got ${generated.status} ${codeOf(generated)}; ${rounds.length} fixtures)`, generated.status < 300 && rounds.length >= 1);
-    return generated.status < 300 && rounds.length >= 1 ? rounds : null;
+    return generated.status < 300 && rounds.length >= 1 ? { rounds, stageId: stage.id } : null;
   };
 
   // 1. CREATED playing online, with a stage and nothing generated: no entrant, so no fixture.
@@ -280,15 +286,8 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   check(`online division: a league stage and no Generate (got ${emptyStaged.status} ${codeOf(emptyStaged)})`, emptyStaged.status < 300);
   if (emptyStaged.status >= 300) return;
   await run("created online, a stage and no fixtures", [
-    {
-      what: "the arbiter page, the organiser",
-      who: owner,
-      path: arbiter(empty),
-      want: 200,
-      has: [COLUMN, START_LINE],
-      lacks: [OPEN_PRESS, OPEN_LABEL],
-      attrs: [["arbiter-round-column", "data-phase", "before"]],
-    },
+    // Match Day answers the competition whose online division has a stage and no fixture: the page is there (its header).
+    { what: "Match Day, the organiser", who: owner, path: matchDay, want: 200, has: [HEADER] },
     {
       what: "the Fixtures tab, the organiser",
       who: owner,
@@ -308,9 +307,12 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   const otb = v1data<{ id: string; slug: string; config?: { onlinePlay?: string } }>(otbMade);
   check(`online division: it has no onlinePlay (got ${JSON.stringify(otb?.config?.onlinePlay)})`, otb?.config?.onlinePlay === undefined);
   if (otbMade.status !== 201 || !otb?.id || otb.config?.onlinePlay !== undefined) return;
-  if ((await buildLeague(otb, "over the board")) === null) return;
+  const otbBuilt = await buildLeague(otb, "over the board");
+  if (otbBuilt === null) return;
   await run("over the board, with fixtures", [
-    { what: "the arbiter page, the organiser", who: owner, path: arbiter(otb), want: 404 },
+    // Over the board: Match Day is the competition's page and answers 200, but the division's stage has no online round (a round row's key
+    // is `<stage id>:<round no>`); the page's header is the presence beside the absence.
+    { what: "Match Day, the organiser", who: owner, path: matchDay, want: 200, has: [HEADER], lacks: [`data-key="${otbBuilt.stageId}:`] },
     {
       what: "the Fixtures tab, the organiser",
       who: owner,
@@ -331,23 +333,26 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
     online?.config?.onlinePlay === "lichess",
   );
   if (onlineMade.status !== 201 || !online?.id || online.config?.onlinePlay !== "lichess") return;
-  const rounds = await buildLeague(online, "online");
-  if (rounds === null) return;
-  const firstRound = Math.min(...rounds);
+  const built = await buildLeague(online, "online");
+  if (built === null) return;
+  const firstRound = Math.min(...built.rounds);
   check(`online division: its first round is a number (got ${firstRound})`, Number.isInteger(firstRound));
   if (!Number.isInteger(firstRound)) return;
 
-  // Spec §5.2, §5.4: no round is opened, so the column is "before"; not started, so it says to start first and offers no press.
+  // Spec §5.2, §5.4: not started, so Match Day lists the round, its panel says to start first and offers no press.
   // Spec §8 rule 1: nothing to say yet, so the card reads its fixed body (kind "default").
   await run("online, not started", [
     {
-      what: "the arbiter page, the organiser",
+      what: "Match Day's round panel, the organiser",
       who: owner,
-      path: arbiter(online),
+      path: roundPanel(built.stageId, firstRound),
       want: 200,
-      has: [COLUMN, START_LINE],
+      has: [ONLINE_BLOCK, ROUND_ROW, FOCUS, START_LINE],
       lacks: [OPEN_PRESS, OPEN_LABEL],
-      attrs: [["arbiter-round-column", "data-phase", "before"]],
+      attrs: [
+        ["md-focus", "data-online", "round"],
+        ["md-focus", "data-state", "not_started"],
+      ],
     },
     {
       what: "the Fixtures tab, the organiser",
@@ -364,17 +369,20 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   check(`online division: started (got ${started.status} ${codeOf(started)})`, started.status < 300);
   if (started.status >= 300) return;
 
-  // Started, a league has paired round 1 and none is opened: the column is still "before" but now holds the press, and the card
+  // Started, a league has paired round 1 and none is opened: the round's panel is "before" and now holds the press, and the card
   // says the round is ready (§8 rule 4). The press is the panel's: the tab has the card and not the label.
   await run("online, started, nothing opened", [
     {
-      what: "the arbiter page, the organiser",
+      what: "Match Day's round panel, the organiser",
       who: owner,
-      path: arbiter(online),
+      path: roundPanel(built.stageId, firstRound),
       want: 200,
-      has: [COLUMN, OPEN_PRESS, OPEN_LABEL, `>${onlineName}<`],
+      has: [ONLINE_BLOCK, ROUND_ROW, FOCUS, OPEN_PRESS, OPEN_LABEL],
       lacks: [START_LINE],
-      attrs: [["arbiter-round-column", "data-phase", "before"]],
+      attrs: [
+        ["md-focus", "data-online", "round"],
+        ["md-focus", "data-state", "before"],
+      ],
     },
     {
       what: "the Fixtures tab, the organiser",
@@ -387,10 +395,10 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
       text: [["arbiter-entry-status", word("arbiter.entry.status.ready", { round: firstRound })]],
     },
     // Not a member of the division's org: both pages are the one 404 and carry nothing of the division. The organiser's 200 above, on
-    // the same two URLs, has the column, the card and the name these bodies lack.
-    { what: "the arbiter page, a signed-in stranger", who: stranger, path: arbiter(online), want: 404, lacks: [COLUMN, `>${onlineName}<`] },
+    // the same two URLs, has the round row, the card and the name these bodies lack.
+    { what: "Match Day, a signed-in stranger", who: stranger, path: roundPanel(built.stageId, firstRound), want: 404, lacks: [FOCUS, ROUND_ROW, `>${onlineName}<`] },
     { what: "the Fixtures tab, a signed-in stranger", who: stranger, path: fixturesTab(online), want: 404, lacks: [ENTRY, `>${onlineName}<`] },
-    { what: "the arbiter page, signed out", who: null, path: arbiter(online), want: "login" },
+    { what: "Match Day, signed out", who: null, path: roundPanel(built.stageId, firstRound), want: "login" },
   ]);
 
   const expectedAsserted = allProbes.reduce((n, p) => n + assertionsOf(p), 0);
@@ -398,6 +406,6 @@ async function onlineChessDivisionPages(owner: Session, stranger: Session): Prom
   // turns the run red; the table-derived count alone would shrink with it). Move the literal on purpose, with the table.
   check(
     `online division: anti-vacuity, ${fetched} pages read and ${asserted} assertions made`,
-    fetched === allProbes.length && fetched === 11 && asserted === expectedAsserted && asserted === 53,
+    fetched === allProbes.length && fetched === 11 && asserted === expectedAsserted && asserted === 57,
   );
 }

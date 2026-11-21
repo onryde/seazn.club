@@ -41,7 +41,7 @@ beforeEach(() => stubOutboxEnv());
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { listOpenRounds } from "@/server/usecases/external-play/open-round-view";
 import { seedOnlineChessRoundWithRankedBoard } from "@/server/usecases/__tests__/_external-play-seed";
-import { CheckinHero } from "../../arbiter/round-column";
+import { CheckinHero } from "../../match-day/round-focus";
 import { initialOpenRoundUi } from "../open-round-state";
 import type { OpenRoundHandle } from "../use-open-round";
 

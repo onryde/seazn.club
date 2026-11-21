@@ -227,7 +227,7 @@ describe("needs-a-result queue: nothing on it starts play, so it takes no flag",
     noResultOffer: { kind: "void" as const },
   };
   it("no Resend at all; the four settle buttons and Resync — the controls that FINISH a board", () => {
-    const tree = renderIsland(ExternalPlayNeedsResultQueue, { held: [ROW], flagged: [], ownFlagged: 0, venueTz: "UTC" }).tree();
+    const tree = renderIsland(ExternalPlayNeedsResultQueue, { held: [ROW], flagged: [], ownFlagged: 0, venueTz: "UTC", orgSlug: "o", compSlug: "c" }).tree();
     expect(byTestId(tree, "external-play-resend")).toHaveLength(0);
     const resolves = new Set(tree.filter((n) => String(propsOf(n)["data-testid"] ?? "").startsWith("external-play-resolve-")));
     expect(resolves.size, "resolving finishes a board").toBe(4);

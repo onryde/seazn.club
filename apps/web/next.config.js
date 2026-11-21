@@ -6,8 +6,8 @@ import { LEGACY_PUBLIC_HUB_ROOT, PUBLIC_HUB_ROOT } from "./src/lib/public-hub-ro
 // Permissions-Policy. The camera is off everywhere but one document: the
 // player's match room, which joins its board's meeting with the player's own
 // camera (RealtimeKit's getUserMedia, called in the page itself — no iframe —
-// with `audio: false`: players have no audio). The arbiter panel only
-// receives, so it keeps camera=() too. The room's rule sits LAST in headers()
+// with `audio: false`: players have no audio). Match Day's board
+// panel only receives, so it keeps camera=() too. The room's rule sits LAST in headers()
 // and uses the same key, so it REPLACES the catch-all's value (Next's
 // resolve-routes: `resHeaders[key] = value`) — never a second header beside
 // it, which a browser would combine into the stricter policy and still block.

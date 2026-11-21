@@ -1,6 +1,6 @@
 // Match Day online (Task 2): the view carries the online chess rounds. `readOnlineRounds` (server/usecases/match-day-online.ts) is the
-// producer of `MatchDayView.online_rounds`; `getMatchDay` places it, drops what it lists from `playing_no_court`, and gates it behind
-// MATCH_DAY_ONLINE. Spec docs/superpowers/specs/2026-11-05-match-day-all-in-one-design.md section 4 and 5.2; owner O1 (a cancelled board is
+// producer of `MatchDayView.online_rounds`; `getMatchDay` places it and drops what it lists from `playing_no_court` (always, since the flag
+// that gated it is retired, Task 10). Spec docs/superpowers/specs/2026-11-05-match-day-all-in-one-design.md section 4 and 5.2; owner O1 (a cancelled board is
 // listed only while it has an open flag), O2 (the held and flagged boards come from the two listers, nowhere else).
 //
 // Chess-only by construction (online play exists only for `boardgame`, guard.ts); the one test that varies the sport is the registry
@@ -132,17 +132,15 @@ describe.runIf(HAS_DB)("readOnlineRounds - the empty case first", () => {
     expect(issued.filter((t) => t.includes("stage_round_opens")).length, "no statement names the sealed table").toBe(0);
   });
 
-  it("with the flag on, getMatchDay of that competition is the flag-off view with online_rounds [] - nothing else moves", async () => {
+  it("getMatchDay of an in-hall competition carries online_rounds [] and no board row of any kind - the same view twice, nothing online moves", async () => {
     const day = await seedDay();
     const now = new Date(T0);
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
-    const on = await getMatchDay(day.auth, day.comp.id, now);
-    vi.stubEnv("MATCH_DAY_ONLINE", undefined);
-    const off = await getMatchDay(day.auth, day.comp.id, now);
-    expect(on.online_rounds).toEqual([]);
-    expect(off.online_rounds).toEqual([]);
-    expect(on).toEqual(off);
-    expect(on.courts.length, "premise: the view is the in-hall competition's, not an empty shell").toBe(3);
+    const first = await getMatchDay(day.auth, day.comp.id, now);
+    const second = await getMatchDay(day.auth, day.comp.id, now);
+    expect(first.online_rounds).toEqual([]);
+    expect(first.needs_you.filter((i) => i.kind === "board_held" || i.kind === "board_flagged"), "no per-board row for a day with no online division").toEqual([]);
+    expect(first).toEqual(second);
+    expect(first.courts.length, "premise: the view is the in-hall competition's, not an empty shell").toBe(3);
   });
 });
 
@@ -576,7 +574,7 @@ describe.runIf(HAS_DB)("the loader's seams (arbiter.ts): count mode and loadBoar
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------
-describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each board once (MATCH_DAY_ONLINE)", () => {
+describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each board once", () => {
   async function mixedDay() {
     const day = await seedDay();
     // One in-hall match in play on no court (an untimed bracket match: the no-court list's own kind of row).
@@ -591,22 +589,18 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
     return { day, inHall, online };
   }
 
-  it("an online board in play on no court is under its round and not in playing_no_court; the in-hall no-court match stays; the flag off keeps today's list", async () => {
+  it("an online board in play on no court is under its round and not in playing_no_court; the in-hall no-court match stays", async () => {
     const { day, inHall, online } = await mixedDay();
     const now = new Date(T0);
+    // The premise the move rests on, from the seed and not from the view: two online boards and one in-hall match are in play with no court.
+    expect(await sql`select id from fixtures where id in ${sql([inHall, ...idsOf(online.boards)])} and status = 'in_play' and court_id is null`, "premise: three rows are in play on no court").toHaveLength(3);
 
-    vi.stubEnv("MATCH_DAY_ONLINE", undefined);
-    const off = await getMatchDay(day.auth, day.comp.id, now);
-    expect(off.online_rounds).toEqual([]);
-    expect(off.playing_no_court.map((m) => m.id).sort(), "flag off: the online boards are still no-court rows, today's behaviour").toEqual([inHall, ...idsOf(online.boards)].sort());
-
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
     const on = await getMatchDay(day.auth, day.comp.id, now);
     expect(on.online_rounds).toHaveLength(1);
     expect(idsOf(roundBoards(on.online_rounds[0]!)).sort()).toEqual(idsOf(online.boards).sort());
     // The count against the seed: one in-hall match in play on no court, and the two online boards moved under their round.
     expect(on.playing_no_court.map((m) => m.id)).toEqual([inHall]);
-    expect(off.playing_no_court.length - on.playing_no_court.length).toBe(online.boards.length);
+    expect(on.playing_no_court.length + online.boards.length, "the two online boards moved under their round: three rows in play, one left on no court").toBe(3);
     // Every board is listed once across the whole view (design 5.2).
     const everywhere = [...on.playing_no_court.map((m) => m.id), ...on.courts.flatMap((c) => (c.current ? [c.current.id] : [])), ...idsOf(roundBoards(on.online_rounds[0]!))];
     expect(new Set(everywhere).size).toBe(everywhere.length);
@@ -620,7 +614,6 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
     await addRound({ stageId: online.stageId, divisionId: online.divisionId, orgId: day.orgId }, 2, online.boards.map((b) => ({ home: b.home, away: b.away })));
     await openStamp({ stageId: online.stageId, orgId: day.orgId, ownerUserId: day.auth.userId! }, 2, t0at(-5));
     await sql`update fixture_external_play set status = 'needs_organiser', needs_reason = 'tiebreak_owed' where fixture_id = ${held.fixtureId}`;
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
 
     const view = await getMatchDay(day.auth, day.comp.id, new Date(T0));
 
@@ -632,7 +625,6 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
 
   it("a second poll after a board's result is written: the board moves from live to result, the row stays while a board is held", async () => {
     const { day, online } = await mixedDay();
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
     const now = new Date(T0);
     const first = (await getMatchDay(day.auth, day.comp.id, now)).online_rounds[0]!;
     expect(roundBoards(first).map((b) => b.state.kind)).toEqual(["live", "live"]);
@@ -647,10 +639,11 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
   it("MD-R9: the online read throwing is logged at error with the competition id, and the poll still answers - exactly the view without online rounds; the next poll reads them again", async () => {
     const { day, inHall, online } = await mixedDay();
     const now = new Date(T0);
-    vi.stubEnv("MATCH_DAY_ONLINE", undefined);
+    // The view of a day whose online read answers nothing: the baseline a FAILED read must equal (the read mocked to an empty answer, once).
+    vi.mocked(readOnlineRounds).mockResolvedValueOnce([]);
     const withoutOnline = await getMatchDay(day.auth, day.comp.id, now);
     expect(withoutOnline.courts.length, "premise: the in-hall day has its courts").toBe(3);
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
+    expect(withoutOnline.online_rounds, "premise: the baseline carries no rounds").toEqual([]);
     const logged = vi.spyOn(log, "error").mockImplementation(() => undefined);
     try {
       vi.mocked(readOnlineRounds).mockClear();
@@ -659,7 +652,7 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
       const down = await getMatchDay(day.auth, day.comp.id, now);
 
       expect(vi.mocked(readOnlineRounds), "premise: the forced throw was reached").toHaveBeenCalledTimes(1);
-      expect(down, "a failed online read leaves the day exactly as the flag-off day reads: courts, no-court list, needs-you, all of it").toEqual(withoutOnline);
+      expect(down, "a failed online read leaves the day exactly as a day with no online rounds reads: courts, no-court list, needs-you, all of it").toEqual(withoutOnline);
       expect(down.playing_no_court.map((m) => m.id).sort(), "nothing was listed under a round, so the online boards stay no-court rows").toEqual([inHall, ...idsOf(online.boards)].sort());
       expect(logged, "logged once, loud").toHaveBeenCalledTimes(1);
       const [fields] = logged.mock.calls[0]! as [{ err: Error; competitionId: string }, string];
@@ -674,21 +667,22 @@ describe.runIf(HAS_DB)("getMatchDay - the view places the rounds and lists each 
     }
   });
 
-  it("I2: a poll lists the competition's divisions once - with the online read on, as often as with it off - and a read called alone lists them itself", async () => {
+  it("I2: a poll lists the competition's divisions once - with the online read, as often as without it - and a read called alone lists them itself", async () => {
     const { day } = await mixedDay();
     const now = new Date(T0);
     const listed = vi.mocked(listDivisions);
-    const countFor = async (flagValue: string | undefined): Promise<number> => {
-      vi.stubEnv("MATCH_DAY_ONLINE", flagValue);
+    // `without`: the online read answers nothing once (mocked), so only the poll's own list is counted; `with`: the real read runs beside it.
+    const countFor = async (online: "real" | "empty"): Promise<number> => {
+      if (online === "empty") vi.mocked(readOnlineRounds).mockResolvedValueOnce([]);
       listed.mockClear();
       await getMatchDay(day.auth, day.comp.id, now);
       return listed.mock.calls.length;
     };
 
-    const off = await countFor(undefined);
-    const on = await countFor("1");
-    expect(off, "premise: the poll lists divisions (the counter sees the call)").toBeGreaterThan(0);
-    expect(on, "the online read adds no second list").toBe(off);
+    const without = await countFor("empty");
+    const withOnline = await countFor("real");
+    expect(without, "premise: the poll lists divisions (the counter sees the call)").toBeGreaterThan(0);
+    expect(withOnline, "the online read adds no second list").toBe(without);
 
     listed.mockClear();
     expect(await readOnlineRounds(day.auth, day.comp.id, now)).toHaveLength(1);
@@ -875,7 +869,6 @@ describe.runIf(HAS_DB)("the wire: online_rounds through the v1 poll route's sche
   const real = (minutes: number): Date => new Date(Date.now() + minutes * MIN);
 
   it("a link-held board (real open) and a board with live presence and camera: presence, camera and joinable survive the parse, and a key reads the board held without WHY (MD-R21)", async () => {
-    vi.stubEnv("MATCH_DAY_ONLINE", "1");
     const r = await seedOnlineChessRound({ fixtures: 2 });
     const [held, here] = r.boards as [SeedRoundBoard, SeedRoundBoard];
     await sql`delete from user_external_accounts where user_id = ${held.away.userId} and provider = 'lichess'`;

@@ -483,15 +483,16 @@ interface Props {
    *  an organiser), threaded to the run sheet's chips. Optional: none by default. */
   onlinePlay?: Record<string, RunSheetOnlinePlay>;
   /** The division plays online and has not been started, so no round can be opened yet (`listOpenRounds` answers
-   *  none until it starts). The page sets it from the SAME gates as the Arbiter Panel's entry (an organiser who can act, a chess
+   *  none until it starts). The page sets it from the SAME gates as the Fixtures tab's Match Day entry (an organiser who can act, a chess
    *  division that plays online now, the club offered online chess) plus the shared not-started predicate
    *  (`divisionScoringClosed`); true ⇒ the first stage card says to start the division - the Start button is on this tab, while the
-   *  round itself is opened in the panel (phase 2, spec 2026-10-24-arbiter-round-column-design.md §8). Optional: absent ⇒ no hint. */
+   *  round itself is opened on Match Day. Optional: absent ⇒ no hint. */
   onlineAwaitsStart?: boolean;
-  /** Where the Arbiter Panel is, or null when it would not answer (online play off, the club not offered online chess; the page
-   *  decides, with `canEdit`). T16 (T19 carry): a refused Unpair / Rebuild sends the organiser there when an online game stands
-   *  behind a board it would clear (409 ONLINE_GAME_EXISTS) - null ⇒ the notice alone. Phase 2: it also decides whether the run
-   *  sheet's online chips are links into the panel at all (null ⇒ plain text, never a link to a 404). */
+  /** Where the competition's Match Day is, or null when it has no online boards to offer (online play off, the club not offered
+   *  online chess; the page decides, with `canEdit`). T16 (T19 carry): a refused Unpair / Rebuild sends the organiser there when an
+   *  online game stands behind a board it would clear (409 ONLINE_GAME_EXISTS) - null ⇒ the notice alone. It also decides whether
+   *  the run sheet's online chips are links into a board's panel at all (null ⇒ plain text, never a link to a page with nothing
+   *  to show). The prop keeps the name it had when the link went to the Arbiter page. */
   arbiterHref?: string | null;
   /** W3 T10 — the division's own status (`divisions.status`), for the rail's "Add late player" gate
    *  (`swissLateEntryOffered`: offered only once the division has started). Optional: absent ⇒ never offered. */
@@ -1250,7 +1251,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
     streamStates,
     awaitingSettle,
     onlinePlay,
-    arbiterHrefFor: arbiterHref === null ? undefined : (fixtureId: string) => routes.divisionArbiter(orgSlug, compSlug, divSlug, fixtureId),
+    arbiterHrefFor: arbiterHref === null ? undefined : (fixtureId: string) => routes.competitionMatchDayBoard(orgSlug, compSlug, fixtureId),
     matchDayHref: matchDayHref ?? undefined,
     /* Fix round 1 (I1): "Find a pitch / table / board / rink", by the division's sport (an absent one is the court). */
     venueNoun: venueNoun(sportKey),
@@ -2363,7 +2364,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                 )}
 
                 {/* An online division that has not started: one line, on the first stage only (the start is the division's, not a
-                    stage's). The Start button is on this tab; the round itself is opened in the Arbiter Panel. */}
+                    stage's). The Start button is on this tab; the round itself is opened on Match Day. */}
                 {canEdit && onlineAwaitsStart && stage.seq === Math.min(...stages.map((s) => s.seq)) && (
                   <p className="px-4 py-3 text-xs text-slate-500" data-testid="online-start-hint">
                     {msg("externalPlay.openRound.startFirst")}

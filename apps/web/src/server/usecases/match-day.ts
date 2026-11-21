@@ -879,16 +879,14 @@ export async function getMatchDay(
     getCompetitionDesk(auth, competitionId, now),
     divisionsRead,
     courtStreamsForDay(auth.orgId, board.courts.map((c) => c.court_id), ids, now),
-    // Match Day's online chess rounds, behind MATCH_DAY_ONLINE until the arbiter page is gone (Task 10 removes the flag). Sealed tables,
-    // so it reads on its own connections, here and never inside the tenant transaction above. ISOLATED (ruling MD-R9): the day screen is
-    // the organiser's lifeline, so chess failing must not take the courts down with it - the throw is logged loud and this poll answers
-    // without the online rounds.
-    process.env.MATCH_DAY_ONLINE === "1"
-      ? readOnlineRounds(auth, competitionId, now, divisionsRead).catch((err: unknown): MatchDayOnlineRound[] => {
-          log.error({ err, competitionId }, "match-day: the online rounds could not be read; this poll answers without them");
-          return [];
-        })
-      : Promise.resolve<MatchDayOnlineRound[]>([]),
+    // Match Day's online chess rounds (the Arbiter page's replacement; always read since Task 10 retired the flag that kept this off). Sealed
+    // tables, so it reads on its own connections, here and never inside the tenant transaction above. ISOLATED (ruling MD-R9): the day
+    // screen is the organiser's lifeline, so chess failing must not take the courts down with it - the throw is logged loud and this poll
+    // answers without the online rounds.
+    readOnlineRounds(auth, competitionId, now, divisionsRead).catch((err: unknown): MatchDayOnlineRound[] => {
+      log.error({ err, competitionId }, "match-day: the online rounds could not be read; this poll answers without them");
+      return [];
+    }),
   ]);
   // A board is listed once, under its round (design 5.2): an online board in play on no court is no no-court row. Dropped here, after
   // `readBoard` and never inside it (the code read and the call preview read the same board and keep their own lists).

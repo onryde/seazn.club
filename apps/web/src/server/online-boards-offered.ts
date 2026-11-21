@@ -1,9 +1,8 @@
 import "server-only";
-// server/arbiter-panel-offered.ts - THE statement of when the Arbiter Panel answers (spec 2026-10-24-arbiter-round-column-design.md
-// §7, §8; pre-flight C18). Two pages read it, and neither may keep its own copy of the predicate:
-//   - the arbiter page (`/arbiter`) 404s unless it holds - the panel's own door;
-//   - the division page's Fixtures tab offers the panel (its entry card and every link into it) only where it holds, so the tab
-//     never links to a page that would 404 - the tab adds its own "has fixtures" on top.
+// server/online-boards-offered.ts - THE statement of when a division's online boards are offered to the viewer: the Fixtures tab's
+// "Open Match Day" card and every link from the run sheet into Match Day's board and round panels are drawn only where it holds, so
+// the tab never offers a way into a panel that has nothing to show. (It was the Arbiter Panel's 404 predicate until the Arbiter page
+// was retired into Match Day; the predicate itself did not change, and its name moved with the page it no longer guards.)
 //
 // The predicate, cheapest part first: the viewer can edit the page (`canEdit`, never the billing-frozen `editable`: a frozen
 // organiser keeps a working panel), the division plays online (`divisionPlaysOnline`: a sport that can, set to Lichess - the
@@ -18,7 +17,7 @@ import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { onlineChessOffered } from "@/server/usecases/external-play";
 
 /** What the predicate reads of a page: whether the viewer may edit it, and the division's sport and config. */
-export type ArbiterPanelSubject = { canEdit: boolean; sport_key: string; config: unknown };
+export type OnlineBoardsSubject = { canEdit: boolean; sport_key: string; config: unknown };
 
 /** `beforeFlag` is the caller's own cheap condition(s), checked after the static parts and BEFORE the flag is asked (the tab's
  *  "this division has fixtures, or has not started so the start hint is wanted"). It is never a way to skip a static part.
@@ -26,9 +25,9 @@ export type ArbiterPanelSubject = { canEdit: boolean; sport_key: string; config:
  *  `flag` is how the club's answer is read. It defaults to asking the helper for `auth`; a caller whose render has OTHER readers of
  *  the same answer (the division page's Division rules strip) passes ONE memoised reader so the whole render asks once - the 60 s
  *  PostHog cache inside the helper would hide a second ask, but the second ask is still a second ask. */
-export async function arbiterPanelOffered(
+export async function onlineBoardsOffered(
   auth: AuthCtx,
-  d: ArbiterPanelSubject,
+  d: OnlineBoardsSubject,
   beforeFlag: () => boolean = () => true,
   flag: () => Promise<boolean> = () => onlineChessOffered(auth),
 ): Promise<boolean> {

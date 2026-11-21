@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useReducer, type ReactNode } from "react";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { ArbiterBoard, ArbiterRound } from "@/lib/arbiter-view";
+import { extendEdgesOf, watchedWindows } from "@/lib/checkin-extend";
 import { apiV1 } from "@/lib/client-v1";
 import { INVITE_WORD_KEYS, seatWords, type SeatInviteWord } from "@/lib/invite-status";
 import { linkHolds, mayPress, onlineRoundPhase, pairNextRound, roundRowWord, type LinkHold, type Reader } from "@/lib/match-day/online";
@@ -54,6 +55,7 @@ import { ConfirmDialog } from "../confirm-dialog";
 import { OpenRoundConfirmBody, openNoticeText, owedPlayers, resendNoticeText, timedBatches, type BoardSeats } from "../desk/open-round-control";
 import type { OpenRoundUiState } from "../desk/open-round-state";
 import { useOpenRoundWith, type OpenRoundHandle } from "../desk/use-open-round";
+import { useExtendClock } from "../use-extend-clock";
 import { useVenueClock } from "../venue-clock";
 import type { MatchDayCtx } from "./court-focus";
 import { OnlineFocusFrame } from "./online-focus";
@@ -810,7 +812,13 @@ function extendCopyOf(msg: Msg, plural: Plural, hm: (iso: string) => string | nu
 }
 
 export function RoundFocus(p: RoundFocusProps) {
-  const { ctx, round, next, reader, nowMs } = p;
+  const { ctx, round, next, reader } = p;
+  // The check-in clock's digits and the "+5 min" press arriving and leaving AT a window's edge need a finer clock than the shell's minute: the
+  // panel's own, as the board panel runs it, while a check-in window is still to be watched. Without it the countdown froze at the instant of the
+  // last poll and the round's press waited for the next one.
+  const edges = extendEdgesOf(watchedWindows((round.round?.boards ?? []).map((b) => b.checkin)));
+  const ticking = useExtendClock(edges.length > 0, edges, true);
+  const nowMs = ticking ?? p.nowMs;
   const msg = useMsg();
   const plural = useMsgPlural();
   const venueAt = useVenueClock(round.tz);
@@ -1031,8 +1039,8 @@ function boardExtendNotice(state: BoardExtendState, round: ArbiterRound | null, 
 /** Spec §3.2.2: "+5 min to the round" - one press gives every board of the round whose check-in is open five more minutes, and the answer
  *  says how many and why the rest were left alone. Offered while at least one board would accept it (the server's own reading of each board,
  *  re-asked of the TICKING clock) and, once pressed, for as long as its answer is on screen. The press is `canPress`'s; the reason and the
- *  answer say what they say to a reader who may not press. (The Arbiter Panel's own bar is `RoundExtend` in arbiter-panel.tsx, deleted with
- *  that panel in Task 10; the test ids are its, unchanged.) */
+ *  answer say what they say to a reader who may not press. (The Arbiter Panel's own bar, `RoundExtend`, went with that page in Task 10; the
+ *  test ids are its, unchanged.) */
 function RoundExtendBar({
   round,
   state,

@@ -25,7 +25,7 @@
 //  - Needs you's unscheduled row carries "Find a court": the first free court's candidates, opened in place (`?court=` when
 //    the link is opened another way), or back to the list when no court is free.
 //
-// Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; behind `onlineEnabled`, the page's MATCH_DAY_ONLINE flag): the
+// Match Day online (plan 2026-11-05-match-day-all-in-one.md Task 6; always on since Task 10 retired the flag and the Arbiter page): the
 // view's online chess rounds are a third block of the list after the courts and the no-court rows (online-list.tsx), and a round or a
 // board opens in the focus column exactly as a court does - on a phone full-screen, with the merged back label, and "left the list"
 // (never another row) when a poll takes it away. `?board=` and `?round=` read like `?court=`: a value naming a listed row opens it, any
@@ -82,9 +82,6 @@ import { MatchDayCodeSheet } from "./match-day-code-sheet";
 import { RefreshLine } from "./refresh-line";
 import { useDayRefresh } from "./use-day-refresh";
 
-/** The online rounds of a page with the flag off: one array, so what is memoised on it does not re-run. */
-const NO_ONLINE: MatchDayOnlineRound[] = [];
-
 /** How often the page re-reads the closures against its clock: a break is minutes, so a minute is exact enough (m1). */
 const CLOCK_TICK_MS = 60_000;
 
@@ -117,9 +114,6 @@ export interface MatchDayShellProps {
   focusCourtId?: string | null;
   /** `?venue=`: the venue filter's choice as the URL wrote it ("all", or venue ids), absent for the default (E2 item 5). */
   venueParam?: string | readonly string[] | null;
-  /** Match Day online (MATCH_DAY_ONLINE, until Task 10 removes it): the view's online rounds are listed and their rows open. Off, the
-   *  page is the page it was, whatever the view carries. */
-  onlineEnabled?: boolean;
   /** `?board=<fixture id>`: the board to open first, read as `focusCourtId` is. Ignored when not on the list. */
   focusBoardId?: string | null;
   /** `?round=<stage id>:<round no>`: the round to open first (`onlineRoundKey`), read as `focusCourtId` is. Ignored when not on the list. */
@@ -146,7 +140,6 @@ export function MatchDayShell({
   frozenNames,
   focusCourtId = null,
   venueParam = null,
-  onlineEnabled = false,
   focusBoardId = null,
   focusRoundKey = null,
 }: MatchDayShellProps) {
@@ -156,7 +149,7 @@ export function MatchDayShell({
   const [opened, setOpened] = useState<Opened | null>(() =>
     openedFromParams(
       dict,
-      { courts: initial.courts, online_rounds: onlineEnabled ? initial.online_rounds : [] },
+      { courts: initial.courts, online_rounds: initial.online_rounds },
       { court: focusCourtId, board: focusBoardId, round: focusRoundKey },
     ),
   );
@@ -215,8 +208,8 @@ export function MatchDayShell({
     };
   }, []);
 
-  /** The online rounds the page may draw: the view's own, only behind the flag. */
-  const online = onlineEnabled ? view.online_rounds : NO_ONLINE;
+  /** The online rounds the page draws: the view's own (empty when no division of the competition plays online). */
+  const online = view.online_rounds;
   const live = isLive({ courts: view.courts, playing_no_court: view.playing_no_court, online_rounds: online });
   useEffect(() => startBandPolling(live, () => void refresh(), browserBandPollDeps()), [live, refresh]);
 
@@ -463,22 +456,14 @@ export function MatchDayShell({
                 dict={dict}
                 items={needsYouOrder(needsYou)}
                 onAlt={(it) => findCourt(it.alt?.court_id ?? null)}
-                onOpenBoard={
-                  onlineEnabled
-                    ? (fixtureId) => {
-                        setNeedsOpen(false);
-                        openBoard(fixtureId);
-                      }
-                    : undefined
-                }
-                onOpenRound={
-                  onlineEnabled
-                    ? (key) => {
-                        setNeedsOpen(false);
-                        openRound(key);
-                      }
-                    : undefined
-                }
+                onOpenBoard={(fixtureId) => {
+                  setNeedsOpen(false);
+                  openBoard(fixtureId);
+                }}
+                onOpenRound={(key) => {
+                  setNeedsOpen(false);
+                  openRound(key);
+                }}
               />
             )}
           </div>

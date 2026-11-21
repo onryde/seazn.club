@@ -217,7 +217,7 @@ export function RunSheetRow({
   /** T16 — this online chess board's camera policy, OPEN flags by kind, and hold (`listRunSheetOnlinePlay`, read by
    *  the division page for an organiser; a viewer is never handed one). Absent = not an online board. */
   onlinePlay?: RunSheetOnlinePlay;
-  /** T16 — the arbiter panel opened on this board: where a flag chip leads. */
+  /** T16 — Match Day's panel opened on this board: where a flag chip leads. */
   arbiterHref?: string;
   /** W3 T15 ruling 2 — entrant id → status (the division page's roster read): a DISQUALIFIED entrant's cascade walkover
    *  is worded as the disqualification where the row states the reason (its tag's expansion), never as a withdrawal.
@@ -757,7 +757,7 @@ export function RunSheetRow({
             </Link>
           )}
           {/* T16 (canvas RunSheet): an online board's camera and flags. A flag is evidence for the organiser, so its
-              chip leads to the arbiter panel on this board; "Camera ok" is a fact, not a control. */}
+              chip leads to Match Day's panel for this board; "Camera ok" is a fact, not a control. */}
           {onlinePlay && onlinePlay.cameraFlagCount > 0 && (
             chipLink({
               href: arbiterHref,
@@ -807,7 +807,7 @@ export function RunSheetRow({
             })
           )}
           {/* D12 (T16): a round nobody has opened — nobody invited, nobody can take a seat. A fact, not a control:
-              the round is opened in the Arbiter Panel (the Fixtures tab's entry card leads there). */}
+              the round is opened on Match Day (the Fixtures tab's entry card leads there). */}
           {onlinePlay?.unopened && (
             <span
               data-testid="run-sheet-round-unopened"
@@ -816,10 +816,10 @@ export function RunSheetRow({
               {msg("runsheet.round.notOpenedChip")}
             </span>
           )}
-          {/* Where "Needs a decision" leads depends on where the board's card is. The page offers the Arbiter Panel (`arbiterHref`
-              set): the queue lives in the panel's column and is not on this tab, so the chip opens the panel ON this board
-              (`?fixture=`), where the card and its Settle are. No panel offered: the queue is on this tab, so the chip scrolls to
-              the board's card in it. Never the anchor beside the panel: nothing on the page carries it, so the tap would do nothing. */}
+          {/* Where "Needs a decision" leads: the page offers Match Day (`arbiterHref` set), so the chip opens the board's panel there
+              (`?board=`), where its decision card and Settle are. Not offered: the queue is on this tab, so the chip scrolls to the
+              board's card in it. (The queue is on this tab beside Match Day's link too, since the Arbiter page left, but the chip
+              takes the primary place to decide.) */}
           {onlineHeld && (
             <Link
               href={arbiterHref ?? `#${queueRowAnchor(fixture.id)}`}

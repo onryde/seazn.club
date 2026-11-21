@@ -27,7 +27,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { DEADLINE_AFTER_MS, LINE_DEADLINE_GRACE_MS } from "../src/server/external-play/window";
 import { TAG, apiJson, expectNoHorizontalScroll, invalidateOrgEntitlements, setEntitlementOverrideSql, setOrgPlanBySql, withDb } from "./helpers";
 import { dismissConsent, freshOrg } from "./directory-kit";
-import { backdateOpenSql, openAnswerOf, openRoundSent } from "./arbiter-column-kit";
+import { backdateOpenSql, openAnswerOf, openRoundSent } from "./match-day-online-kit";
 import { fill, seedOnlineRound, seedSeatInvite, uiEn, type SeededRound } from "./match-room-kit";
 
 // ── budget (class 20): a derived ceiling, never one flat number ──────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ test.describe("Match Day online - the round panel", () => {
     const rows = page.getByTestId("arbiter-waiting-row");
     await expect(rows, "nobody has checked in: both boards are waited on").toHaveCount(2);
     await expect(page.getByTestId("arbiter-waiting-heading")).toHaveText(fill("arbiter.column.waiting.other", { count: 2 }));
-    // The e2e server sends no mail, so no seat holds one and no row offers Resend (arbiter-panel.spec.ts says the same); one seat per board
+    // The e2e server sends no mail, so no seat holds one and no row offers Resend (match-day-online.spec.ts says the same); one seat per board
     // is written the way the provider's hook leaves a sent mail, and the page is read again (a new document: the no-reload mark is done).
     for (const b of r.boards) await seedSeatInvite(b.fixtureId, "white", "sent");
     await page.reload();
