@@ -1,4 +1,7 @@
 import { test, expect, type APIRequestContext } from "@playwright/test";
+import { EngineError, type StandingsDelta } from "@seazn/engine/core";
+import { foldResults, resolveProgression, type FixtureResult, type ProgressionSpec, type SourceTables } from "@seazn/engine/competition";
+import { buildTemplateStages } from "../src/lib/format-templates";
 import { TAG, apiJson, competitionPath, divisionPath, expectInViewUnderHeader, expectNoHorizontalScroll, pickBuilderSport, seedVenueWithCourts, showAllFormats, activeOrgIdFromRequest } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { waitForHydration } from "./directory-kit";
@@ -15,6 +18,33 @@ import { saveRoster, seedPair, seedPlayer, stagePartnerSwap, storedMembers, uiEn
 // calls, and read back on the run sheet itself, not only the API.
 
 const GENERIC_CONFIG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+
+/** B3 fix (review I-2): the ENGINE decides whether a cut is supplied - `resolveProgression` over pools of `sizes`, each a full round
+ *  robin the higher-listed member wins (the oracle's shape in lib/__tests__/field-cut-gate.test.ts), so no expected number below is
+ *  read off the gate under test. */
+function engineResolves(progression: unknown, sizes: readonly number[], destKind: string): boolean {
+  const side = (entrantId: string, won: boolean): StandingsDelta => ({ entrantId, played: 1, won: won ? 1 : 0, drawn: 0, lost: won ? 0 : 1, points: won ? 3 : 0, metrics: {} });
+  const tables: SourceTables = {
+    pools: sizes.map((size, p) => {
+      const ids = Array.from({ length: size }, (_, i) => `e${p}-${i + 1}`);
+      const results: FixtureResult[] = ids.flatMap((a, i) => ids.slice(i + 1).map((b): FixtureResult => [side(a, true), side(b, false)]));
+      return { pool: "ABCDEFGH"[p]!, rows: foldResults(ids, results).map((r) => ({ ...r, rank: ids.indexOf(r.entrantId) + 1 })), results };
+    }),
+  };
+  try {
+    resolveProgression(progression as ProgressionSpec, [{ poolKeys: sizes.map((_, i) => "ABCDEFGH"[i]!) }], [tables], destKind);
+    return true;
+  } catch (e) {
+    if (EngineError.is(e)) return false;
+    throw e;
+  }
+}
+
+/** The groups + knockout template's cut of `qualified` over pools of `sizes`, as the builder writes it, asked of the engine. */
+const groupsKoResolves = (sizes: readonly number[], qualified: number): boolean => {
+  const drafts = buildTemplateStages("groups_ko", { qualified, swissRounds: 3, poolCount: sizes.length, legs: 1 });
+  return engineResolves(drafts[1]!.progression, sizes, drafts[1]!.kind);
+};
 
 type Seeded = { divisionId: string; stageId: string; ids: string[] };
 
@@ -1220,7 +1250,7 @@ test.describe("X-BD-1 the builder refuses 7 into 4 and offers 3", () => {
 test.describe("X-BD-8 the builder refuses a cut the field cannot supply and names the largest that works", () => {
   // differential: the builder judged only the Top N's bounds (2..32), so a Top 8 of a plan of 6 passed Next and the server met it at Complete.
   // Now Next refuses first with the numbers the server's Start refuses with (RB5-E6): a Top 8 of 6 names 6; two pools of 4 and 3 supply a top 6.
-  test("a Top 8 of a plan of 6 stops Next naming 6; 6 of 6 lets it go on; a best-Nth cut no pool can supply names the pool shape's maximum, at every width", async ({ page, request }) => {
+  test("a Top 8 of a plan of 6 stops Next naming 6; 6 of 6 lets it go on; groups of 4 and 3 take a Top 7 (the best 4th is the 4-pool's) and a Top 8 of 7 names 7, at every width", async ({ page, request }) => {
     test.setTimeout(180_000);
     const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `X-BD-8 cut ${TAG}`, visibility: "private" });
     expect(comp.status, JSON.stringify(comp.error)).toBe(201);
@@ -1236,8 +1266,6 @@ test.describe("X-BD-8 the builder refuses a cut the field cannot supply and name
     const error = page.getByTestId("division-builder-error");
     const exceeds = (have: number, top: number, max: number) =>
       uiEn["wizard.err.cutExceedsField"]!.replace("{field}", uiEn["wizard.qualify"]!).replace("{qualified}", String(top)).replace("{entrants}", String(have)).replaceAll("{max}", String(max));
-    const bestNth = (pools: number, top: number, max: number) =>
-      uiEn["wizard.err.cutBestNth"]!.replace("{field}", uiEn["wizard.qualify"]!).replace("{pools}", String(pools)).replace("{qualified}", String(top)).replaceAll("{max}", String(max));
     const pick = async (template: string) => {
       const card = page.locator(`label[data-template="${template}"]`);
       if (!(await card.isVisible())) await showAllFormats(page);
@@ -1266,17 +1294,29 @@ test.describe("X-BD-8 the builder refuses a cut the field cannot supply and name
     await page.getByTestId("division-builder-next").click();
     await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
 
-    // Groups + knockout: 7 into two pools (4 and 3) cannot supply a best 4th, so a Top 7 names the shape's maximum, 6.
+    // Groups + knockout, 7 snaked into two pools of 4 and 3. Under RB5-U7 (ruling 286) a pool too short for the nth is left out of the
+    // best-Nth comparison, so a Top 7 (three a pool and the best 4th - the 4-pool's own) resolves: no refusal. A Top 8 (four a pool)
+    // asks a 4th of the 3-pool: refused, naming the largest cut the engine resolves at or below it. Both answers are the engine's.
+    const POOLS = [4, 3] as const;
+    expect(groupsKoResolves(POOLS, 7), "the engine resolves a Top 7 over pools of 4 and 3").toBe(true);
+    expect(groupsKoResolves(POOLS, 8), "the engine refuses a Top 8 over pools of 4 and 3").toBe(false);
+    const largest = [7, 6, 5, 4, 3, 2].find((q) => groupsKoResolves(POOLS, q))!;
     await page.getByTestId("division-builder-step-format").click();
     await pick("groups_ko");
     await plan.fill("7");
     await page.locator('input[data-format-bound="pools"]').fill("2");
+    await qualify.fill("8");
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.getByTestId("division-builder-next").click();
+      await expect(page.getByTestId("division-builder"), `${width}: Next did not move`).toHaveAttribute("data-step", "format");
+      await expect(error, `${width}: the refusal names ${largest}`).toHaveText(exceeds(7, 8, largest));
+      await expect(error).toBeVisible();
+      await expectNoHorizontalScroll(page);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
     await qualify.fill("7");
-    await page.getByTestId("division-builder-next").click();
-    await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "format");
-    await expect(error).toHaveText(bestNth(2, 7, 6));
-    await qualify.fill("6");
-    await expect(error).toHaveCount(0);
+    await expect(error, "a Top 7 is supplied").toHaveCount(0);
     await page.getByTestId("division-builder-next").click();
     await expect(page.getByTestId("division-builder")).toHaveAttribute("data-step", "rules");
   });
@@ -1550,9 +1590,10 @@ test.describe("X-SF-1 the hub marks the leaver", () => {
 
 // B5 owner fix-now (e), n1: Complete from the open-stages warning (competition settings, Status -> Completed) on a stage whose OWN
 // completion commits but whose next stage cannot be seeded (STAGE_COMPLETED_SEEDING_FAILED: 7 into pools of 4 and 3, the knockout
-// asks for three per pool and the best 4th - the 4th of a pool of three does not exist, RB5-E6). The stage rail says "Stage completed
-// - but ..." in amber with the cut's own sentence and refreshes; the warning said "Couldn't complete this stage" in red and kept listing
-// a completed stage. Expected words: the en catalog's sentences with the numbers the rulebook gives (7 asked, 6 suppliable).
+// asks for four per pool - pool B has no 4th, RB5-E6). The stage rail says "Stage completed - but ..." in amber with the cut's own
+// sentence and refreshes; the warning said "Couldn't complete this stage" in red and kept listing a completed stage. Expected words:
+// the en catalog's sentences with the engine's numbers (8 asked, 6 suppliable: the largest per-pool take it resolves, times the pools).
+// B3 fix (I-2): the cut was three a pool and the best 4th, which RB5-U7 now resolves (the 4-pool's own 4th) - so no refusal at all.
 test.describe("n1 the open-stages warning says completed, but", () => {
   test("Complete stage on a group whose knockout cannot be seeded: the amber 'completed, but' line with the cut's sentence, the stage complete and gone from the list; no page scroll at 1280/768/320", async ({ page, request }) => {
     test.setTimeout(300_000);
@@ -1565,12 +1606,20 @@ test.describe("n1 the open-stages warning says completed, but", () => {
       Array.from({ length: 7 }, (_, i) => ({ kind: "individual", display_name: `n1 P${i + 1} ${TAG}`, seed: i + 1 })));
     expect(added.status, JSON.stringify(added.error)).toBe(201);
     const seedOf = new Map(added.data!.map((e, i) => [e.id, i + 1]));
+    // The engine's numbers: four a pool over pools of 4 and 3 is refused (pool B has no 4th); the largest per-pool take it resolves
+    // there, times the two pools, is what the field can supply.
+    const POOLS = [4, 3] as const;
+    const TAKE_PER_POOL = 4;
+    const perPool = (n: number) => ({ sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n }] }], placement: "rank_order" });
+    expect(engineResolves(perPool(TAKE_PER_POOL), POOLS, "knockout"), "premise: the engine refuses four a pool").toBe(false);
+    const suppliable = POOLS.length * [3, 2, 1].find((n) => engineResolves(perPool(n), POOLS, "knockout"))!;
+    const asked = POOLS.length * TAKE_PER_POOL;
     const groups = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", { seq: 1, kind: "group", name: "Groups", config: { legs: 1, pools: { count: 2 } } });
     expect(groups.status, JSON.stringify(groups.error)).toBe(201);
     expect((await apiJson(request, `/api/v1/stages/${groups.data!.id}/generate`, "POST")).status).toBe(200);
     expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
     // The cut gate holds BEFORE Start only (W5 T12b fix round 1, 974988a947): with this knockout already in place Start itself is
-    // refused (422 RR_CUT_EXCEEDS_FIELD, 7 asked of 6). So the knockout is added after Start, where neither its creation nor its
+    // refused (422 RR_CUT_EXCEEDS_FIELD, 8 asked of 6). So the knockout is added after Start, where neither its creation nor its
     // Generate is gated, and the shortfall reaches the completion's proposal (the resolve backstop) - the path this test is about.
     const finals = await apiJson<{ id: string }>(request, `/api/v1/divisions/${divisionId}/stages`, "POST", {
       seq: 2,
@@ -1578,7 +1627,7 @@ test.describe("n1 the open-stages warning says completed, but", () => {
       name: "Finals",
       config: {},
       progression: {
-        sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: 3 }, { kind: "bestNth", nth: 4, count: 1, normaliseUnequalPools: true }] }],
+        sources: [{ stage: "previous", take: [{ kind: "topNPerGroup", n: TAKE_PER_POOL }] }],
         placement: "rank_order",
         timing: "setup",
       },
@@ -1608,7 +1657,7 @@ test.describe("n1 the open-stages warning says completed, but", () => {
     await waitForHydration(complete);
     await complete.click();
 
-    const reason = uiEn["roundrobin.refusal.RR_CUT_EXCEEDS_FIELD"]!.replace("{qualified}", "7").replace("{max}", "6");
+    const reason = uiEn["roundrobin.refusal.RR_CUT_EXCEEDS_FIELD"]!.replace("{qualified}", String(asked)).replace("{max}", String(suppliable));
     const want = uiEn["schedule.error.completedSeedingFailed"]!.replace("{reason}", reason);
     const notice = warning.locator('[data-notice-tone="warning"]');
     await expect(notice, "the amber 'completed, but' line with the cut's own sentence").toHaveText(want, { timeout: 30_000 });
