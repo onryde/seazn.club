@@ -16,6 +16,7 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, statementTexts } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
 import { HttpError } from "@/lib/errors";
 import { FIXTURE_STATUSES } from "@/lib/fixture-status";
 import { ARBITER_JOIN_LIMIT, __setRateLimitCounterForTests } from "@/lib/rate-limit";
@@ -397,6 +398,36 @@ describe.runIf(HAS_DB)("loadArbiterRound — the boards of the opened round", ()
   });
 });
 
+// MD-R23 (Match Day online Task 10): which side has White is read WITH the board rows, not once per board. A board with no game yet has no
+// `white_side` on its bridge row, so the colours come from the pairing card in the fold; reading that per board (the owner's session,
+// then the fold's own transaction) cost six statements a board on a 32-board poll. The rule is unchanged - `whiteSideOfFold` - and
+// what moved is where its input is read.
+describe.runIf(HAS_DB)("loadArbiterRound - the colours of a board with no game are read with its row (MD-R23)", () => {
+  it("a round of boards with no game reads no owner session and no per-board fold, and the pairing card still decides White", async () => {
+    const r = await seedOnlineChessRound({ fixtures: 4 });
+    await openRound(r);
+    const [, b2, , b4] = r.boards;
+    // Board 2: a pairing card made home Black. Board 4: a card that made home White explicitly. The others: no card at all (home).
+    await appendEvent(r.orgId, b2!.fixtureId, 0, { type: "boardgame.pairing", payload: { white: b2!.away.entrantId } });
+    await appendEvent(r.orgId, b4!.fixtureId, 0, { type: "boardgame.pairing", payload: { white: b4!.home.entrantId } });
+
+    const before = statementTexts().length;
+    const view = (await loadArbiterRound(r.owner, r.divisionId))!;
+    const issued = statementTexts().slice(before);
+
+    expect(issued.length, "anti-vacuity: the read ran and the counter is live").toBeGreaterThan(0);
+    expect(view.boards.length, "anti-vacuity: four boards were read").toBe(4);
+    expect(issued.filter((t) => /role = 'owner'/.test(t)), "no owner session is minted for a board's colours").toEqual([]);
+    expect(issued.filter((t) => /select f\.status, f\.outcome, m\.last_seq/.test(t)), "no per-board fold read").toEqual([]);
+    // White by the pairing card, from the rule's own words: Black on home makes the AWAY player White.
+    expect(view.boards.find((x) => x.fixtureId === b2!.fixtureId)!.white.personId, "board 2: the away player has White").toBe(b2!.away.personId);
+    expect(view.boards.find((x) => x.fixtureId === b4!.fixtureId)!.white.personId, "board 4: home has White").toBe(b4!.home.personId);
+    for (const b of [r.boards[0]!, r.boards[2]!]) {
+      expect(view.boards.find((x) => x.fixtureId === b.fixtureId)!.white.personId, "no card: home has White").toBe(b.home.personId);
+    }
+  });
+});
+
 describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): each board ONCE, whatever its rows", () => {
   type Row = { evidence?: boolean; ended?: boolean };
   type Case = {
@@ -486,7 +517,7 @@ describe.runIf(HAS_DB)("loadArbiterRound - a meeting per player (D16, §5.6.4): 
 
   // Check-in capacity plan 2 Task 10 (found by the walkthrough's CI run): the pre-mint job makes a PAIRED board's rooms, stamped for the
   // board's current pairing, before any player has come - so "a room exists for this pairing" no longer means "the player has arrived".
-  // `open` is what the panel joins (arbiter-panel.tsx `joinKey`), and joining mints an arbiter participant at the vendor into a room
+  // `open` is what the panel joins (Match Day's `joinKey`, match-day/online/arbiter-joins.ts), and joining mints an arbiter participant at the vendor into a room
   // nobody is in. A side is `open` only once a PLAYER participant is on file for it (the player's first claim writes it, as it always did
   // when the claim also made the room). PINS TODAY'S READING; plan 3 Tasks 1 and 3 replace the rule with the presence/check-in one.
   it("a PRE-MINTED room (a room for this pairing, no player participant on file) is not open: its side reads `none` until a player participant is on file; the arrived sibling is open; an ENDED room keeps `ended`", async () => {
@@ -966,7 +997,7 @@ describe.runIf(HAS_DB)("joinAsArbiter — receive-only, its own participant, nev
 
   // Check-in capacity plan 2 Task 10 (found by the walkthrough's CI run): the pre-mint job makes a PAIRED board's rooms, stamped for the
   // board's current pairing, before any player has come - so "a room exists for this pairing" no longer means "the player has arrived".
-  // `open` is what the panel joins (arbiter-panel.tsx `joinKey`), and joining mints an arbiter participant at the vendor into a room
+  // `open` is what the panel joins (Match Day's `joinKey`, match-day/online/arbiter-joins.ts), and joining mints an arbiter participant at the vendor into a room
   // nobody is in. A side is `open` only once a PLAYER participant is on file for it (the player's first claim writes it, as it always did
   // when the claim also made the room). PINS TODAY'S READING; plan 3 Tasks 1 and 3 replace the rule with the presence/check-in one.
   it("a PRE-MINTED room (a room for this pairing, no player participant on file) is not open: its side reads `none` until a player participant is on file; the arrived sibling is open; an ENDED room keeps `ended`", async () => {
@@ -2872,7 +2903,9 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - what one read costs (a per-call stat
     expect((await census(keyOf(r), b.fixtureId)).n, "a key is never asked whom it plays for").toBe(7);
   });
 
-  it("a board in check-in with both players arrived and a connection flag: 17 statements, each fact read ONCE - presence, cameras, check-ins, the invite mail", async () => {
+  // 17 until MD-R23 (Match Day online Task 10): a board with no game yet had its colours read through an owner session and a fold read of
+  // its own (six statements); they now ride the board's own row, so the census is 11.
+  it("a board in check-in with both players arrived and a connection flag: 11 statements, each fact read ONCE - presence, cameras, check-ins, the invite mail", async () => {
     const r = await seedOnlineChessRound({ fixtures: 1, cameraPolicy: "required" });
     await openRound(r);
     const b = r.boards[0]!;
@@ -2882,7 +2915,7 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - what one read costs (a per-call stat
     }
     await openFlag(r.orgId, b.fixtureId, { kind: "camera_connection_problems", personId: b.home.personId });
     const c = await census(r.owner, b.fixtureId);
-    expect(c.n, c.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(17);
+    expect(c.n, c.texts.map((t) => t.replace(/\s+/g, " ").slice(0, 60)).join("\n")).toBe(11);
     expect(c.naming("fixture_video_presence"), "ONE presence statement").toBe(1);
     expect(c.naming("camera_reported"), "ONE camera statement").toBe(1);
     expect(c.naming("checked_in_at"), "ONE check-in statement, shared with the seats").toBe(1);
