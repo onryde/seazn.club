@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest";
 import { crossPoolDraw, nextPowerOfTwo, seedPositions } from "@seazn/engine/scheduling";
 import type { ProgressionSpec, SourceTables, StandingsRow } from "@seazn/engine/competition";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
+import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
+import { buildTemplateStages } from "@/lib/format-templates";
 import type { CrossPoolEntry } from "@/lib/cross-pool-ties";
 import { drawAcrossPools } from "../stages/cross-pool-draw";
 import type { Tx } from "../stages/types";
@@ -77,7 +79,7 @@ describe("a cross-pool draw answers in time: refused before the search, or refus
     [8, 3, "H"],
   ];
 
-  it(`every slow refused field of the builder's space is refused by name in under ${BUDGET_MS} ms, and the engine is never asked`, async () => {
+  it(`every slow refused field of the builder's space is refused by name in under ${BUDGET_MS} ms, the engine is never asked, and the builder warned`, async () => {
     let checked = 0;
     for (const [pools, full, partial] of SLOW_REFUSALS) {
       const f = field(pools, full, partial);
@@ -88,6 +90,14 @@ describe("a cross-pool draw answers in time: refused before the search, or refus
       expect(out?.qualifiers.map((q) => q.seed), `${name}: a refused draw keeps the fold's seats`).toEqual(f.qualifiers.map((q) => q.seed));
       expect(engineCalls, `${name}: settled before the engine's search`).toBe(0);
       expect(ms, `${name}: in time`).toBeLessThan(BUDGET_MS);
+      // Review m-1: the builder warned before Start for this very field - groups_ko over `pools` pools, Top n, takes `full` places
+      // per pool and one best (full+1)th, the field above.
+      const stages = buildTemplateStages("groups_ko", { qualified: f.qualifiers.length, poolCount: pools, swissRounds: 3, legs: 1 });
+      expect(stages[1]?.progression?.sources[0]?.take, `${name}: the premise - the builder's drafts take this field`).toEqual([
+        { kind: "topNPerGroup", n: full },
+        expect.objectContaining({ kind: "bestNth", nth: full + 1, count: 1 }),
+      ]);
+      expect(crossPoolDrawCanRefuse(stages), `${name}: the builder warns before Start`).toBe(true);
       checked++;
     }
     expect(checked, "anti-vacuity").toBe(SLOW_REFUSALS.length);

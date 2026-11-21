@@ -7,7 +7,7 @@
 //   never warns.
 // Pure: no DB, no DOM.
 import { describe, expect, it } from "vitest";
-import { DRAW_SEARCH_BUDGET, crossPoolDrawCanRefuse, drawSearchSpace } from "@/lib/cross-pool-draw-risk";
+import { crossPoolDrawCanRefuse } from "@/lib/cross-pool-draw-risk";
 import { FORMAT_BOUNDS } from "@/lib/format-bounds";
 import { STAGE_TEMPLATES, buildTemplateStages, type StageDraft } from "@/lib/format-templates";
 
@@ -49,14 +49,22 @@ describe("crossPoolDrawCanRefuse: the builder's RB5-D10 warning, asked of the en
     expect(crossPoolDrawCanRefuse(six as StageDraft[])).toBe(false);
   });
 
-  it("the builder never waits on the engine's longest searches: past DRAW_SEARCH_BUDGET it stays silent, at once", () => {
-    // 5 pools Top 31: every pool's top six and one best seventh - five later tiers of five seats, (5!)^5 orderings (measured: one
-    // engine call past 190 s). The named case sits far inside the budget (one later tier of one seat).
-    expect(drawSearchSpace(new Map([[1, 2], [2, 1]])), "two pools' winners and one best runner-up").toBe(1);
-    expect(drawSearchSpace(new Map([[1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [6, 5], [7, 1]]))).toBeGreaterThan(DRAW_SEARCH_BUDGET);
-    const started = Date.now();
-    expect(crossPoolDrawCanRefuse(drafts("groups_ko", 5, 31))).toBe(false);
-    expect(Date.now() - started, "answered without asking the engine").toBeLessThan(1000);
+  it("D-B2-2's six slow refusals warn (review m-1): 3 pools Top 31 ... 8 pools Top 25, each answered in time", () => {
+    // The fields whose engine search took 20 ms to past 25 min to refuse, all offered by the builder (usecases/__tests__/
+    // cross-pool-draw-time.test.ts pins the rulebook's reason - the lone last seat meets its own pool's winner - and the confirm's
+    // refusal of each). The warning used to stay silent past a search budget; it now asks the engine's rule before the search.
+    const SLOW_REFUSALS: [number, number][] = [[3, 31], [4, 29], [5, 31], [6, 31], [7, 29], [8, 25]];
+    let checked = 0;
+    for (const [p, q] of SLOW_REFUSALS) {
+      const stages = drafts("groups_ko", p, q);
+      expect(hasBestNth(stages), `${p} pools Top ${q}: the premise - one best-Nth seat`).toBe(true);
+      const cpu0 = process.threadCpuUsage();
+      expect(crossPoolDrawCanRefuse(stages), `${p} pools Top ${q} warns`).toBe(true);
+      const cpu = process.threadCpuUsage(cpu0);
+      expect((cpu.user + cpu.system) / 1000, `${p} pools Top ${q}: the builder answers while the organiser types`).toBeLessThan(500);
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(6);
   });
 
   it("sweep: every template x pools x Top the builder offers - a warning only where a best-Nth seat is taken (X-PD-2), counted", () => {

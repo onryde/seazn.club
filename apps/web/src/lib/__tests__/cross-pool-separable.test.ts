@@ -86,6 +86,39 @@ describe("crossPoolSeparable: the engine's own answer, before its search (D-B2-2
     expect(maxNodes, "the oracle's own search stays small").toBeLessThan(100);
   });
 
+  it("agrees on two single-seat best-Nth tiers that can face each other (review m-2): winners, one best 2nd, one best 3rd", () => {
+    // The builder offers one partial tier only, so its two tight tiers never meet in round one; an API field can: every pool's winner,
+    // then a best 2nd from pool X and a best 3rd from pool Y. On a stepladder the last two seeds always meet (the 2nd's and the 3rd's
+    // tiers face each other); in a single elimination they do at 3 pools (5 into 8 plays only 4 v 5). Each answer is the engine's.
+    let checked = 0;
+    let facing = 0;
+    const facingAnswers = new Set<boolean>();
+    for (const shape of ["single_elim", "stepladder"] as const) {
+      for (let pools = 2; pools <= 8; pools++) {
+        const keys = [...POOL_KEYS.slice(0, pools)];
+        for (const x of keys) {
+          for (const y of keys) {
+            const seeded: PooledSeed[] = [...keys.map((pool) => ({ entrantId: `${pool}1`, pool, tier: 1 })), { entrantId: `${x}2`, pool: x, tier: 2 }, { entrantId: `${y}3`, pool: y, tier: 3 }];
+            const answer = engine(seeded, shape, 7);
+            const oracle = crossPoolSeparable(seeded, shape, 7);
+            expect(oracle.separable, `${shape} ${pools} pools, best 2nd ${x}, best 3rd ${y}`).toBe(answer);
+            const n = seeded.length;
+            if (firstRoundPairs(shape, n).some(([a, b]) => Math.min(a, b) === n - 2 && Math.max(a, b) === n - 1)) {
+              facing++;
+              facingAnswers.add(answer);
+              expect(oracle.places, `${shape} ${pools} pools: both tight places searched`).toBe(2);
+            }
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked, "anti-vacuity: every pair of pools, both shapes").toBe(2 * [2, 3, 4, 5, 6, 7, 8].reduce((t, p) => t + p * p, 0));
+    // The branch under test: two tight tiers facing each other, met with both answers (A2 v A3 refused; A2 v B3 drawn).
+    expect(facing, "fields whose two tight tiers meet in round one").toBeGreaterThan(0);
+    expect([...facingAnswers].sort(), "both answers met where they meet").toEqual([false, true]);
+  });
+
   it("agrees where the stored seed decides it: tied runs, seeds 1-6, every field of up to 16 qualifiers", () => {
     let checked = 0;
     const bothAnswers = new Set<boolean>();

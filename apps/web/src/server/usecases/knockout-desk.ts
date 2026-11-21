@@ -64,8 +64,9 @@ export async function listStageDrawSeeds(auth: AuthCtx, divisionId: string): Pro
 
 /** W5 app PR B T5 (FX-G5, ruling 281; R24 pick 18 A): each stage whose live seed proposal drew its seats across the source's
  *  pools - the stored draw seed it used (`computed.crossPoolDraw.seed`, `drawAcrossPools`) and, when the engine refused the draw
- *  (RB5-D4/D10), the named refusal with its numbers. The card shows "Cross-pool draw · #…", or the refusal as a red band. A stage
- *  fed from one pool, a league, or nothing is absent. */
+ *  (RB5-D4/D10), the named refusal with its numbers; for a stage seeded `on_complete` (no proposal), the seed its `stage_seeded`
+ *  ledger row recorded (B2 review m-3). The card shows "Cross-pool draw · #…", or the refusal as a red band. A stage fed from one
+ *  pool, a league, or nothing is absent. */
 export interface CrossPoolDrawRead {
   seed: number;
   refused?: { code: string; vars: Record<string, string | number> };
@@ -86,6 +87,15 @@ export async function listCrossPoolDraws(auth: AuthCtx, divisionId: string): Pro
         ...(typeof refused?.code === "string" ? { refused: { code: refused.code, vars: (refused.vars ?? {}) as Record<string, string | number> } } : {}),
       };
     }
+    // B2 review m-3: a knockout seeded `on_complete` is never proposed - its draw records the seed on the stage's `stage_seeded`
+    // ledger row (`seedNextStage`, stages/carry-over.ts). The newest such row stands for a stage no live proposal speaks for; a
+    // refused on_complete draw seeds nothing (completion answers STAGE_COMPLETED_SEEDING_FAILED), so this read only ever has a seed.
+    const seeded = await tx<{ stage_id: string; seed: unknown }[]>`
+      select distinct on (e.payload->>'stageId') e.payload->>'stageId' as stage_id, e.payload->'crossPoolDraw'->'seed' as seed
+        from division_events e
+       where e.division_id = ${divisionId} and e.type = 'stage_seeded'
+       order by e.payload->>'stageId', e.seq desc`;
+    for (const r of seeded) if (out[r.stage_id] === undefined && typeof r.seed === "number") out[r.stage_id] = { seed: r.seed };
     return out;
   });
 }

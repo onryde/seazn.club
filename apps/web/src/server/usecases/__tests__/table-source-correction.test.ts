@@ -21,6 +21,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
+import { crossPoolDraw } from "@seazn/engine/scheduling";
 import { STAGE_TEMPLATES } from "@/lib/format-templates";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { appendEvent } from "@/server/engine-db";
@@ -446,10 +447,25 @@ describe.runIf(HAS_DB)("W5 T11 a correction inside a completed league or group s
     const r = await rig(GROUPS4);
     const poolOf = (seed: number) => rowsOf(r.srcId).then((rows) => rows.find((f) => [f.home_entrant_id, f.away_entrant_id].includes(r.idOf.get(seed)!))!.pool_id);
     expect(await poolOf(4), "premise: E4 and E5 share a pool").toBe(await poolOf(5));
-    // premise: top two of each pool, wave-major (A1, B1, A2, B2). The two winners are level across the pools, so their order is the
-    // knockout's stored draw seed's (ruling 281, W5 app PR B T5): each wave is compared as a set.
-    const slate = await slateOf(r, r.confirmedId);
-    expect([new Set(slate.slice(0, 2)), new Set(slate.slice(2))], "premise: top two of each pool, wave-major (A1, B1 | A2, B2)").toEqual([new Set([1, 2]), new Set([4, 3])]);
+    // premise: top two of each pool, wave-major. Every line is 2-0 to the better seed, so the winners (E1, E2: 3-0, 6-0 each) are
+    // level on every key across the pools, and so are the runners-up (E4, E3: 2-1, 4-2) - each wave a tied run in the fold's pool
+    // order (A, then B). Their seats are the ENGINE's draw over that field with the knockout's stored draw seed (ruling 281, RB5-D3:
+    // the seed orders the level winners, then 1 v 4 and 2 v 3 must cross the pools) - exactly, not as sets (B2 review m-7).
+    const [stored] = await sql<{ seed: unknown }[]>`select computed->'crossPoolDraw'->'seed' as seed from stage_seed_proposals where id = ${r.confirmedId}`;
+    expect(stored?.seed, "premise: the draft carries its stored draw seed").toEqual(expect.any(Number));
+    const [poolA, poolB] = [await poolOf(1), await poolOf(2)];
+    expect([await poolOf(4), await poolOf(3)], "premise: A's and B's runners-up").toEqual([poolA, poolB]);
+    const drawn = crossPoolDraw(
+      [
+        { entrantId: "1", pool: poolA!, tier: 1 },
+        { entrantId: "2", pool: poolB!, tier: 1, tied: true },
+        { entrantId: "4", pool: poolA!, tier: 2 },
+        { entrantId: "3", pool: poolB!, tier: 2, tied: true },
+      ],
+      "single_elim",
+      stored!.seed as number,
+    ).order.map(Number);
+    expect(await slateOf(r, r.confirmedId), "premise: the engine's draw over the two waves, seat for seat").toEqual(drawn);
     await correct(r, 4, 5, 5); // pool A: E1 9, E5 6, E4 3, E8 0: E5 goes through instead of E4
     expect(await statusOf(r.confirmedId)).toBe("stale");
     await expectDayOne(r);

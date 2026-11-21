@@ -260,7 +260,7 @@ describe.runIf(HAS_DB)("B3 m-3/m-1: a Reinstate's reverse that throws", () => {
     control.passVoids = 1;
     control.failVoids = 1;
     const back = await patchEntrant(r.auth, r.leaver, { status: "registered" });
-    expect([control.passVoids, control.failVoids]).toEqual([0, 0]); // one void landed, then the failure was reached
+    expect([control.passVoids, control.failVoids]).toEqual([0, 0]); // one void was written, then rolled back with the failure
     expect(back.status).toBe("registered");
     expect(await herStatuses(r.stageId, r.leaver)).toEqual(before);
     expect(await activeExpunges(r.stageId, r.leaver)).toBe(0);

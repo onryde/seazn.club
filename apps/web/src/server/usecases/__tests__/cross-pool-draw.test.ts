@@ -20,6 +20,7 @@ import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
+import { listCrossPoolDraws } from "../knockout-desk";
 import { buildTemplateStages } from "@/lib/format-templates";
 import { post } from "./_groups-ko-scene";
 import { seedOrg } from "./_seed";
@@ -393,6 +394,29 @@ describe.skipIf(!HAS_DB)("FX-G5 on_complete: the knockout seeded at the source's
     const p = await getSeedProposal(set.auth, set.koId);
     expect(p!.computed.crossPoolDraw, "setup: no draw").toBeUndefined();
     expect((await seats(set)).map((id) => set.seedOf.get(id)), "setup: the listed order").toEqual(listed);
+  });
+
+  it("m-3 the stage card reads an on_complete knockout's draw seed from the seeding ledger, a setup one's from its proposal; one pool, none", async () => {
+    // B2 review m-3: the on_complete path draws and records its seed on `stage_seeded` (no proposal is ever made), and the card's
+    // read took proposals only - so the destination's header said nothing. Expected: what each producer recorded.
+    const on = await build({ entrants: 12, pools: 3, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive, timing: "on_complete" });
+    expect((await completeStage(on.auth, on.srcId)).completed).toBe(true);
+    expect(await getSeedProposal(on.auth, on.koId), "the premise: on_complete makes no proposal").toBeNull();
+    const [ev] = await sql<{ payload: { crossPoolDraw?: { seed?: unknown } } }[]>`
+      select payload from division_events where division_id = ${on.divId} and type = 'stage_seeded' and payload->>'stageId' = ${on.koId}`;
+    const recorded = ev?.payload.crossPoolDraw?.seed;
+    expect(recorded, "the premise: the on_complete draw recorded its seed").toEqual(expect.any(Number));
+    expect(recorded, "the premise: it is the stage's minted seed (W4 K5) - no proposal or Generate stored another").toBe(swissDrawSeed(on.koId));
+    expect(await listCrossPoolDraws(on.auth, on.divId), "on_complete: the ledger's seed").toEqual({ [on.koId]: { seed: recorded } });
+    // The setup path: the draft's stored seed, as before.
+    const setup = await build({ entrants: 12, pools: 3, kind: "knockout", take: [{ kind: "topNPerGroup", n: 2 }], score: decisive });
+    await completeStage(setup.auth, setup.srcId);
+    const draft = (await getSeedProposal(setup.auth, setup.koId))!;
+    expect(await listCrossPoolDraws(setup.auth, setup.divId), "setup: the proposal's seed").toEqual({ [setup.koId]: { seed: draft.computed.crossPoolDraw!.seed } });
+    // The empty case: a one-pool source records no draw (K23), so the card shows none.
+    const one = await build({ entrants: 6, pools: 1, kind: "knockout", take: [{ kind: "rankRange", from: 1, to: 4 }], score: decisive, timing: "on_complete" });
+    expect((await completeStage(one.auth, one.srcId)).completed).toBe(true);
+    expect(await listCrossPoolDraws(one.auth, one.divId), "one pool: nothing drawn, nothing shown").toEqual({});
   });
 
   it("K23 a one-pool group seeded on_complete keeps today's order (no draw, no seed recorded)", async () => {

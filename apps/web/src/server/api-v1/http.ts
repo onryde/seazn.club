@@ -388,18 +388,21 @@ async function v1Inner<T>(
     }
     Sentry.captureException(err);
     // W5 stress fix F1: a database driver's or the socket's own failure (Postgres' message names relations and constraints;
-    // the driver's names its limits; a connection error names the host and port) is logged and paged above, and never
-    // read to the caller: the body says only that the server failed, and the request id ties it to the log line.
+    // the driver's names its limits; a connection error names the host and port) - and any other error carrying a string code
+    // (`isDriverError`) - is logged and paged, and never read to the caller: the body says only that the server failed, and the
+    // request id ties it to the log line. A plain app error keeps its message.
     const message = err instanceof Error && !isDriverError(err) ? err.message : "Server error";
     log.error({ err }, "v1: unhandled error");
     return errorResponse(requestId, 500, "INTERNAL", message);
   }
 }
 
-/** W5 stress fix F1: an error the database driver or the socket raised, never an error this app wrote (those reach the
- *  catch-all only as plain `Error`s with no code; HttpError and EngineError are answered above). A Postgres refusal is a
- *  `PostgresError`; the driver's own failures (`MAX_PARAMETERS_EXCEEDED`, `CONNECTION_CLOSED`, ...) and a socket's
- *  (`ECONNREFUSED`) are `Error`s carrying a string `code`. */
+/** W5 stress fix F1: an error the database driver or the socket raised. A Postgres refusal is a `PostgresError`; the driver's own
+ *  failures (`MAX_PARAMETERS_EXCEEDED`, `CONNECTION_CLOSED`, ...) and a socket's (`ECONNREFUSED`) are `Error`s carrying a string
+ *  `code`. Read broadly on purpose (B2 review m-4): an error THIS app wrote can carry a string `code` too (email-outbox/enqueue.ts,
+ *  youtube/end-step.ts, youtube/port.ts) and is scrubbed alike - its sentence stays in the log under the request id, never in the
+ *  body; an enumerated driver/socket code list would leak whatever code it missed. A plain app `Error` (no code) keeps its message
+ *  (fixture-insert-batches.test.ts pins both). HttpError and EngineError are answered above and never reach this. */
 function isDriverError(err: Error): boolean {
   return err instanceof postgres.PostgresError || typeof (err as { code?: unknown }).code === "string";
 }

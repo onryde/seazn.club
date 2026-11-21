@@ -3,6 +3,7 @@ import { TAG, apiJson, competitionPath, divisionPath, expectNoHorizontalScroll, 
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { buildTemplateStages } from "../src/lib/format-templates";
 import { crossPoolDraw } from "@seazn/engine/scheduling";
+import { swissDrawSeed } from "../src/lib/swiss-draw";
 import { dictString, uiString } from "./spectator-w2-kit";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -149,7 +150,7 @@ const fillErr = (key: string, vars: Record<string, string | number>) => ERRORS_E
  *  to the higher seed, so each pool finishes in seed order. Pools are lettered by their best seed (snake: A holds seed 1), and each wins
  *  by its own margin (A 4-0, B 3-0, C 2-0): a winner is +3m and a runner-up +m, so the cross-pool order is A1, B1, C1, A2, B2, C2 with no
  *  tie. A uniform score ties the winners across pools and the stored seed draws their order (X-PD-3) - another test's question. */
-async function seedThreePools(request: APIRequestContext) {
+async function seedThreePools(request: APIRequestContext, timing: "setup" | "on_complete" = "setup") {
   const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `XPD1 ${TAG}`, visibility: "private" });
   expect(comp.status).toBe(201);
   const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", { name: "Open", sport_key: "generic", variant_key: "score", config: GENERIC_CONFIG });
@@ -161,12 +162,13 @@ async function seedThreePools(request: APIRequestContext) {
   const seedOf = new Map(field.data!.map((e, i) => [e.id, i + 1]));
   const nameOf = new Map(field.data!.map((e) => [e.id, e.display_name]));
   const drafts = buildTemplateStages("groups_ko", { qualified: 6, poolCount: 3, swissRounds: 3, legs: 1 });
+  // on_complete (B2 review m-3): the knockout has no lines until the groups complete; completion seeds and draws it.
   const stages = await apiJson<{ id: string; kind: string }[]>(request, `/api/v1/divisions/${divisionId}/stages`, "POST",
-    drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression })));
+    drafts.map((d, i) => ({ seq: i + 1, kind: d.kind, name: d.name, config: d.config, progression: d.progression === null ? null : { ...d.progression, timing } })));
   expect(stages.status).toBe(201);
   const groupId = stages.data!.find((s) => s.kind === "group")!.id;
   const koId = stages.data!.find((s) => s.kind === "knockout")!.id;
-  expect((await apiJson(request, `/api/v1/stages/${koId}/generate`, "POST")).status).toBe(200);
+  if (timing === "setup") expect((await apiJson(request, `/api/v1/stages/${koId}/generate`, "POST")).status).toBe(200);
   expect((await apiJson(request, `/api/v1/stages/${groupId}/generate`, "POST")).status).toBe(200);
   expect((await apiJson(request, `/api/v1/divisions/${divisionId}/start`, "POST")).status).toBe(200);
   const lines = ((await apiJson<Fx[]>(request, `/api/v1/divisions/${divisionId}/fixtures`)).data ?? []).filter((f) => f.stage_id === groupId);
@@ -244,6 +246,36 @@ test.describe("X-PD-1 the quarter-finals cross the pools", () => {
       await expect(seedLine).toBeVisible();
       await expectNoHorizontalScroll(page);
       if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/xpd1-seed-line-${width}.png` });
+      widths++;
+    }
+    expect(widths).toBe(3);
+  });
+
+  test("m-3 a knockout seeded on_complete shows its cross-pool draw seed on the card too, at 1280, 768 and 320", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    // B2 review m-3: completion seeds the knockout itself (no proposal), and its draw records the seed on the seeding ledger.
+    const { divisionId, koId, poolOf, nameOf } = await seedThreePools(request, "on_complete");
+    const ko = ((await apiJson<KoFx[]>(request, `/api/v1/divisions/${divisionId}/fixtures`)).data ?? []).filter((f) => f.stage_id === koId);
+    const first = Math.min(...ko.map((f) => f.round_no));
+    const pairs = ko.filter((f) => f.round_no === first && f.home_entrant_id !== null && f.away_entrant_id !== null);
+    expect(pairs, "completion drew the knockout: two real quarter-finals").toHaveLength(2);
+    for (const f of pairs) expect(poolOf.get(f.home_entrant_id!), `${nameOf.get(f.home_entrant_id!)} v ${nameOf.get(f.away_entrant_id!)}`).not.toBe(poolOf.get(f.away_entrant_id!));
+    // The stored seed: minted from the stage id (W4 K5) - nothing else stored one for a knockout that was never proposed.
+    const drawSeed = swissDrawSeed(koId);
+    await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"));
+    await dismissCookieBanner(page);
+    const card = page.locator(`section[data-stage-id="${koId}"]`);
+    const seedLine = card.getByTestId("stage-cross-pool-draw-seed");
+    await expect(seedLine).toHaveText(uiString("en", "knockout.crossPoolDrawSeed", { seed: drawSeed }));
+    await expect(seedLine).toHaveAttribute("data-draw-seed", String(drawSeed));
+    await expect(card.getByTestId("stage-cross-pool-draw-seed-hint")).toHaveText(uiString("en", "knockout.crossPoolDrawSeedHint"));
+    let widths = 0;
+    for (const width of [1280, 768, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      await seedLine.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await expect(seedLine).toBeVisible();
+      await expectNoHorizontalScroll(page);
+      if (process.env.W5B_SHOTS) await page.screenshot({ path: `${process.env.W5B_SHOTS}/m3-on-complete-seed-line-${width}.png` });
       widths++;
     }
     expect(widths).toBe(3);

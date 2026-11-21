@@ -307,6 +307,24 @@ describe.skipIf(!HAS_DB)("F1: no driver message reaches a 500's body", () => {
     expect(json.error.message).toBe("Server error");
   });
 
+  // B2 review m-4: the positive pair. A plain app error keeps its sentence - the scrub is the driver's and the socket's, not every
+  // 500's. An app error that carries a string `code` is read like theirs and scrubbed too (the predicate's documented cost: its
+  // sentence is in the log under the request id, not in the body).
+  it("a plain app error keeps its message through the 500 (the scrub is the driver's only)", async () => {
+    const { status, json } = await bodyOf(new Error("the outbox could not render the receipt"));
+    expect(status).toBe(500);
+    expect(json.error.code).toBe("INTERNAL");
+    expect(json.error.message).toBe("the outbox could not render the receipt");
+  });
+
+  it("an app error that carries a string code is read as the driver's: scrubbed, named by the request id", async () => {
+    const coded = Object.assign(new Error("enqueue refused: template missing"), { code: "EMAIL_TEMPLATE_MISSING" });
+    const { status, json } = await bodyOf(coded);
+    expect(status).toBe(500);
+    expect(json.error.message).toBe("Server error");
+    expect(typeof json.requestId).toBe("string");
+  });
+
   it("a connection failure (the driver's or the socket's own code) answers without its host and port", async () => {
     const dead = postgres("postgres://nobody@127.0.0.1:1/none", { connect_timeout: 2, max: 1, onnotice: () => {} });
     const err = await dead`select 1`.then(
