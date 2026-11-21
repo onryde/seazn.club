@@ -3186,6 +3186,7 @@
   "reg.promote.overCapacity.label": "Toch doorschuiven",
   "reg.promote.planLimit.one": "Je abonnement staat {limit} deelnemer per divisie toe en deze divisie heeft die al. Upgrade je abonnement om er meer door te schuiven.",
   "reg.promote.planLimit.other": "Je abonnement staat {limit} deelnemers per divisie toe en deze divisie heeft er al zoveel. Upgrade je abonnement om er meer door te schuiven.",
+  "reg.promote.formatMax": "Dit format staat hoogstens {max} deelnemers toe en deze divisie heeft er al {entrants}, dus er kan niemand meer doorschuiven.",
   "reg.stripeOffline.pre": "Kaartbetalingen zijn offline — deelnemers kunnen niet betalen totdat Stripe opnieuw is verbonden onder ",
   "reg.stripeOffline.link": "Instellingen → Connect",
   "reg.stripeOffline.post": ". De openbare pagina toont de divisie als tijdelijk niet beschikbaar.",

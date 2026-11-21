@@ -186,7 +186,7 @@ export function DivisionFormatDialog({
 
   function refused(err: unknown) {
     if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") setPaywall(String(err.extra.feature_key ?? ""));
-    else setError(formatChangeRefusalText(err, msg, msg("divset.failed")));
+    else setError(formatChangeRefusalText(err, msg, msg("divset.failed"), locale));
     // Fix round 1 (review m6b): a first result landed while the dialog was open. The page re-reads the lock, so the
     // Format button behind the dialog greys with its reason instead of staying live until a reload.
     if (err instanceof ApiV1Error && err.code === "FORMAT_LOCKED") router.refresh();

@@ -1201,7 +1201,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
       } else if (blocked) {
         setWarning(blocked);
       } else {
-        setError(rebuildErrorText(err, msg, msgPlural));
+        setError(rebuildErrorText(err, msg, msgPlural, locale));
       }
     }
   }
@@ -2575,6 +2575,7 @@ export function AddStageForm({
   onPaywall: (featureKey: string) => void;
 }) {
   const msg = useMsg();
+  const locale = useLocaleOrDefault();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("Finals");
   const [kind, setKind] = useState<string>("knockout");
@@ -2616,7 +2617,7 @@ export function AddStageForm({
       if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
         onPaywall(String(err.extra.feature_key ?? ""));
       } else {
-        onError(addStageErrorText(err, msg));
+        onError(addStageErrorText(err, msg, locale));
       }
     } finally {
       setBusy(false);
@@ -2988,14 +2989,16 @@ export function classifyActError(
   // setup-timing completion whose proposal trips it arrives wrapped as STAGE_COMPLETED_SEEDING_FAILED, carrying the code as `cause`
   // (B4 fix wave), and is said by the wrap's branch above.
   if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
-    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg, locale), refresh: true };
   }
   // W5 T23 (B2 batch M2): every other round-robin refusal a stage action meets — Generate after Start (RR_GENERATE_AFTER_START, which
   // points at the waiting strip's "Add to the table"), a redraw that would clear setup or drop an Add match row — in the reader's
   // language, never the server's English. Amber: the stage stands; the sentence says what to do. A refresh: the strip it points at
   // may hold someone the desk's last read did not.
+  // W5 B4 (F8): a first draw past its format's max entrants (FORMAT_TOO_MANY_ENTRANTS) or past the line budget (DRAW_TOO_LARGE)
+  // says its numbers the reader's way (review I-1).
   if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
-    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg), refresh: true };
+    return { tone: "warning", text: undoRefusalText(err.code, err.extra, msg, locale), refresh: true };
   }
   const precondition = generatePreconditionMessage(err, msg, stageName, matchName);
   if (precondition) return { tone: "warning", text: precondition, refresh: false };
@@ -3062,17 +3065,23 @@ function ruleRefusalOf(err: unknown, msg: Msg): string | null {
  *  the reason `classifyActError` is: the panel's tests never fire the handler. A Swiss refusal (W3 T11 review I1: a
  *  Rebuild mints again, so SWISS_ROUNDS_ABOVE_MAX against today's field) is said in the reader's language with what to
  *  do next — never the server's English sentence. */
-export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural): string {
+export function rebuildErrorText(err: unknown, msg: Msg, msgPlural: MsgPlural, locale: Locale): string {
   if (err instanceof ApiV1Error && isSwissRefusalCode(err.code)) return swissRefusalText(err.code, err.extra, msg, msgPlural);
   // W4 T15 (X-PL-1, X-QM-5): a Rebuild draws the root again, so it can be refused for the field's size.
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
+  // W5 B4 review I-1: and for the format's max entrants or the line budget (FORMAT_TOO_MANY_ENTRANTS, DRAW_TOO_LARGE) - or any other
+  // round-robin refusal a redraw meets - in the reader's language, its numbers grouped their way.
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return ruleRefusalOf(err, msg) ?? (err instanceof Error ? err.message : msg("schedule.error.failed"));
 }
 
 /** Add stage's red line, exported pure for the reason `rebuildErrorText` is. A Top N from a knockout that is no whole round (W4 T15,
  *  X-QM-2) is said in the reader's language; any other refusal keeps its own message. */
-export function addStageErrorText(err: unknown, msg: Msg): string {
+export function addStageErrorText(err: unknown, msg: Msg, locale: Locale): string {
   if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) return knockoutRefusalText(err.code, err.extra, msg);
+  // W5 B4 review I-1: a division's first stage on a field past its max entrants (FORMAT_TOO_MANY_ENTRANTS, the create door), and the
+  // Generate that follows the add (FORMAT_TOO_MANY_ENTRANTS / DRAW_TOO_LARGE at the first draw), in the reader's language.
+  if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) return undoRefusalText(err.code, err.extra, msg, locale);
   return err instanceof Error ? err.message : msg("schedule.error.failed");
 }
 

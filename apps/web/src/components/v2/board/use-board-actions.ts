@@ -11,9 +11,10 @@ import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { PLAYED_REFUSAL_CODE } from "@/lib/played-fixture-statuses";
 import { isSwissRefusalCode } from "@/lib/swiss-refusals";
 import { isKnockoutRefusalCode, knockoutRefusalText } from "@/lib/knockout-refusals";
+import { isRoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
 import { undoRefusalText } from "@/lib/undo-refusals";
 import { swissRefusalText } from "@/lib/swiss-refusal-text";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { dayKey, PUBLISH_BLOCKED, PUBLISH_UNACKNOWLEDGED } from "@/lib/schedule-board";
 import type { FeedLabelPair } from "@/lib/schedule-board";
@@ -203,6 +204,7 @@ export function useBoardActions(
   // `useMsgPlural`, not the throwing `usePlural`: this hook is mounted by board
   // components that several suites render with no DictProvider in the tree.
   const plural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const [overrides, setOverrides] = useState<Record<string, Override>>({});
   const [conflicts, setConflicts] = useState<BoardConflict[]>([]);
@@ -394,9 +396,11 @@ export function useBoardActions(
       } else if (err instanceof ApiV1Error && err.code === "STAGE_NOT_READY" && err.extra.reason === "group_too_few_entrants") {
         // C38 review I1: Start / Publish all draws the first stage; its group-size refusal in the reader's language.
         setError(tooFewGroupEntrantsText(err.extra, msg));
-      } else if (err instanceof ApiV1Error && err.code === "RR_CUT_EXCEEDS_FIELD") {
+      } else if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
         // W5 T12b (X-BD-8): Start refuses a cut the field cannot supply, naming the largest cut that works, in the reader's language.
-        setError(undoRefusalText(err.code, err.extra, msg));
+        // W5 B4 review I-1: and a field past its format's max entrants or a draw past the line budget (FORMAT_TOO_MANY_ENTRANTS,
+        // DRAW_TOO_LARGE) - every round-robin refusal - its numbers grouped the reader's way.
+        setError(undoRefusalText(err.code, err.extra, msg, locale));
       } else if (err instanceof ApiV1Error && isKnockoutRefusalCode(err.code)) {
         // W4 B1a review #1: a knockout refusal (BYE_LINE_NOT_PLACEABLE — a drag onto a bye line) in the reader's
         // language, from the refusal table's own key (lib/knockout-refusals.ts), never the server's English sentence.
@@ -409,7 +413,7 @@ export function useBoardActions(
       }
       return false;
     },
-    [board, entrantNames, feedLabels, msg, plural, router],
+    [board, entrantNames, feedLabels, msg, plural, router, locale],
   );
 
   const moveCard = useCallback(

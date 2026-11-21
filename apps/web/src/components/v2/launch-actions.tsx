@@ -163,7 +163,7 @@ export function LaunchActions({
       } else if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
         // W5 stress fix F7: a round-robin refusal (a stored group stage of more pools than A-Z holds, RR_TOO_MANY_POOLS, or a
         // redraw Start would make over setup) - the table's sentence in the reader's language, never the server's English.
-        setError(undoRefusalText(err.code, err.extra, msg));
+        setError(undoRefusalText(err.code, err.extra, msg, locale));
       } else {
         setError(err instanceof Error ? err.message : msg("launch.failedStart"));
       }

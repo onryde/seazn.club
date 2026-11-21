@@ -18,6 +18,7 @@ import { publicRegistrationInfo, putRegistrationSettings } from "../registration
 import { promoteFromWaitlist } from "../registration-approval";
 import { submitRegistrationGroup } from "../registration-submit";
 import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration } from "./_registration-fixtures";
+import { FORMAT_MAX_PROMOTION } from "@/lib/roundrobin-refusals";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => {
@@ -108,6 +109,9 @@ describe.skipIf(!HAS_DB)("sign-up closes at the format's max entrants (W5 B4, F8
     const json = (await res.json()) as { error?: { code: string; message?: string; max?: number; entrants?: number } };
     expect(res.status, JSON.stringify(json.error)).toBe(422);
     expect(json.error).toMatchObject({ code: "FORMAT_TOO_MANY_ENTRANTS", max, entrants: max });
+    // B4 review m-8: the promotion's own sentence - "already has {entrants}" - never the draw doors' "up to 100 ... has 100", which
+    // contradicts itself at the max. Expected from the table's English (en/ui.json pins it), filled by hand.
+    expect(json.error?.message).toBe(FORMAT_MAX_PROMOTION.en.replace("{max}", String(max)).replace("{entrants}", String(max)));
     expect((await sql<{ status: string }[]>`select status from registrations where id = ${waiting.id}`)[0]!.status).toBe("waitlisted");
   });
 });

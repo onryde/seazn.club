@@ -3186,6 +3186,7 @@
   "reg.promote.overCapacity.label": "Promote anyway",
   "reg.promote.planLimit.one": "Your plan allows {limit} entrant per division and this division already has that one. Raise your plan to promote more.",
   "reg.promote.planLimit.other": "Your plan allows {limit} entrants per division and this division already has that many. Raise your plan to promote more.",
+  "reg.promote.formatMax": "This format allows up to {max} entrants and this division already has {entrants}, so no one else can be promoted.",
   "reg.stripeOffline.pre": "Card payments are offline — registrants can't pay until Stripe is reconnected under ",
   "reg.stripeOffline.link": "Settings → Connect",
   "reg.stripeOffline.post": ". The public page shows the division as temporarily unavailable.",

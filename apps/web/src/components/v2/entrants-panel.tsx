@@ -410,7 +410,7 @@ export function EntrantsPanel({
       // W5 T10 (R12): a round-robin refusal — a pair's partner changed after play has started (RR_SUBSTITUTE_PARTNER_REFUSED) — said by
       // its code in the organiser's language, the pointer to Withdraw included, never the server's English.
       if (err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)) {
-        setError(undoRefusalText(err.code, err.extra, msg));
+        setError(undoRefusalText(err.code, err.extra, msg, locale));
         return;
       }
       // An online-play division refuses a player without a Lichess link that can play: the server's words are English

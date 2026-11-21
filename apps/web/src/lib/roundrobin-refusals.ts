@@ -234,3 +234,31 @@ export function isRoundRobinRefusalCode(code: unknown): code is RoundRobinRefusa
 export function roundRobinRefusalKey(code: RoundRobinRefusalCode): MessageKey {
   return ROUND_ROBIN_REFUSALS[code].key;
 }
+
+/** The sentence a screen shows for `code`, in the reader's language, its fields filled from the envelope's `extra` under the
+ *  same names the server sends (`roundRobinRefusal(code, details)`). A number is grouped the reader's way (`Intl.NumberFormat`:
+ *  4,096 / 4 096 / 4.096) — the max entrants and line counts run into the thousands. Without a locale it is written bare, never
+ *  grouped the English way for a reader of another language (B4 review I-1: "4096" beside a pre-click reason reading "4,096"). */
+export function roundRobinRefusalText(
+  code: RoundRobinRefusalCode,
+  extra: Readonly<Record<string, unknown>> | undefined,
+  msg: (key: MessageKey, vars?: Record<string, string | number>) => string,
+  locale: string | undefined,
+): string {
+  const grouping = locale === undefined ? null : new Intl.NumberFormat(locale);
+  const vars: Record<string, string | number> = {};
+  for (const [k, v] of Object.entries(extra ?? {})) {
+    if (typeof v === "number") vars[k] = grouping === null ? v : grouping.format(v);
+    else if (typeof v === "string") vars[k] = v;
+  }
+  return msg(ROUND_ROBIN_REFUSALS[code].key, vars);
+}
+
+/** B4 review m-8: an organiser's promotion refused at the format's max (`FORMAT_TOO_MANY_ENTRANTS`) says it in the promotion's own
+ *  sentence. The draw doors' "This division has {entrants}" read "up to 100 ... has 100" at the max itself, which contradicts
+ *  itself; the promotion is refused AT the max, so it says the division already holds that many. Same code, status and fields
+ *  (`max`, `entrants` = the field as it stands); the server's English is this row's `en`, the screen's is `key`. */
+export const FORMAT_MAX_PROMOTION: { en: string; key: MessageKey } = {
+  en: "This format allows up to {max} entrants and this division already has {entrants}, so no one else can be promoted.",
+  key: "reg.promote.formatMax",
+};

@@ -29,30 +29,30 @@ describe.each(["es", "fr"] as const)("rebuildErrorText — a Rebuild refused abo
 
   it("says the refusal and the field's guidance in the reader's language, never the server's English", () => {
     const err = new ApiV1Error(english, 422, "SWISS_ROUNDS_ABOVE_MAX", { rounds: 5, field: 4, hardMax: 3, canFinish: false });
-    const line = rebuildErrorText(err, msg as never, msgPlural);
+    const line = rebuildErrorText(err, msg as never, msgPlural, "en");
     expect(line).toBe(`${D["swiss.refusal.SWISS_ROUNDS_ABOVE_MAX"]} ${fill(D["swiss.rounds.guidance.other"]!, { n: 4, count: 2, hardMax: 3 })}`);
     expect(line).not.toContain(english);
   });
 
   it("W4 T15: a Rebuild refused by the field's size says the bound in the reader's language (X-PL-1, X-QM-5)", () => {
     const plate = KNOCKOUT_REFUSALS.KO_PLATE_TOO_FEW;
-    expect(rebuildErrorText(new ApiV1Error(plate.en, plate.status, "KO_PLATE_TOO_FEW", { min: 4 }), msg as never, msgPlural)).toBe(D[plate.key]);
+    expect(rebuildErrorText(new ApiV1Error(plate.en, plate.status, "KO_PLATE_TOO_FEW", { min: 4 }), msg as never, msgPlural, "en")).toBe(D[plate.key]);
     const main = KNOCKOUT_REFUSALS.QUALIFYING_MAIN_TOO_FEW;
-    const line = rebuildErrorText(new ApiV1Error(main.en.replace("{min}", "8"), main.status, "QUALIFYING_MAIN_TOO_FEW", { min: 8 }), msg as never, msgPlural);
+    const line = rebuildErrorText(new ApiV1Error(main.en.replace("{min}", "8"), main.status, "QUALIFYING_MAIN_TOO_FEW", { min: 8 }), msg as never, msgPlural, "en");
     expect(line).toBe(fill(D[main.key]!, { min: 8 }));
     expect(line).not.toContain("{min}");
   });
 
   it("W4 T15: Add stage after a knockout, with a Top N that is no whole round, says so in the reader's language (X-QM-2)", () => {
     const row = KNOCKOUT_REFUSALS.KO_CUT_NOT_WHOLE_ROUND;
-    const line = addStageErrorText(new ApiV1Error(row.en, row.status, "KO_CUT_NOT_WHOLE_ROUND", { width: 3 }), msg as never);
+    const line = addStageErrorText(new ApiV1Error(row.en, row.status, "KO_CUT_NOT_WHOLE_ROUND", { width: 3 }), msg as never, "en");
     expect(line).toBe(D[row.key]);
     expect(line).not.toBe(row.en);
-    expect(addStageErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg as never), "the negative pair").toBe("division is mid-solve");
-    expect(addStageErrorText("not an error", msg as never), "the unknown throw").toBe(D["schedule.error.failed"]);
+    expect(addStageErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg as never, "en"), "the negative pair").toBe("division is mid-solve");
+    expect(addStageErrorText("not an error", msg as never, "en"), "the unknown throw").toBe(D["schedule.error.failed"]);
   });
 
   it("the negative pair: an unrecognised refusal keeps its own message", () => {
-    expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg as never, msgPlural)).toBe("division is mid-solve");
+    expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg as never, msgPlural, "en")).toBe("division is mid-solve");
   });
 });

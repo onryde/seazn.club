@@ -23,7 +23,7 @@ import { issuePayLink, recordPayToken } from "./pay-token";
 import { queueRegistrationPromotionSkippedMail } from "./lifecycle-mail";
 import { promotionVerdict } from "./places-left";
 import { divisionFormatMaxes } from "./format-max";
-import { roundRobinRefusal } from "../roundrobin-refusal";
+import { formatMaxPromotionRefusal } from "../roundrobin-refusal";
 
 /** The waitlist's queue order, the ONE statement of it: oldest first by `coalesce(waitlisted_at, created_at)`, then `id` (V378/RS007 -
  *  see `promoteOldestWaitlisted`'s doc comment for why a lapsed promotion sorts by `waitlisted_at`). A comma list of `alias`'s keys,
@@ -104,7 +104,8 @@ export async function assertOrganiserPromotionHasRoom(
   const formatMax = (await divisionFormatMaxes(tx, [divisionId])).get(divisionId) ?? null;
   const verdict = promotionVerdict({ capacity: settings?.capacity ?? null, planLimit: opts.planLimit, formatMax, active });
   // W5 B4 (F8): the format's max entrants - no plan and no confirmation lifts it, so it is refused by the name the draw doors use.
-  if (verdict.kind === "format_max") throw roundRobinRefusal("FORMAT_TOO_MANY_ENTRANTS", { max: verdict.max, entrants: verdict.active });
+  // B4 review m-8: in the promotion's own sentence ("already has {entrants}"), never the draw's "has 100" beside "up to 100".
+  if (verdict.kind === "format_max") throw formatMaxPromotionRefusal(verdict.max, verdict.active);
   if (verdict.kind === "plan_limit") {
     throw new HttpError(
       422,

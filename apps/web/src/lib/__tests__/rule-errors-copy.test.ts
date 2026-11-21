@@ -285,9 +285,9 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
     const noPlural = () => {
       throw new Error("a rule refusal needs no plural");
     };
-    expect(rebuildErrorText(own(), msgEs as never, noPlural)).toBe(want);
-    expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, noPlural)).toBe("division is mid-solve");
-    expect(rebuildErrorText("nope", msg, noPlural)).toBe(say("schedule.error.failed"));
+    expect(rebuildErrorText(own(), msgEs as never, noPlural, "es")).toBe(want);
+    expect(rebuildErrorText(new ApiV1Error("division is mid-solve", 409, "BUSY"), msg, noPlural, "en")).toBe("division is mid-solve");
+    expect(rebuildErrorText("nope", msg, noPlural, "en")).toBe(say("schedule.error.failed"));
   });
 
   it("a generate/complete/delete refusal (classifyActError) reads it too, and an unrecognised one keeps its message", () => {

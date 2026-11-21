@@ -7362,6 +7362,7 @@ export type DictionaryKey =
   | "reg.hub.title"
   | "reg.hub.toast.dismiss"
   | "reg.loading"
+  | "reg.promote.formatMax"
   | "reg.promote.overCapacity.body.one"
   | "reg.promote.overCapacity.body.other"
   | "reg.promote.overCapacity.label"

@@ -98,7 +98,7 @@ export function TableWaitingStrip({
   const nameMap: Record<string, string> = { ...names, ...Object.fromEntries(waiting.map((w) => [w.entrantId, w.name])) };
   const refusalOf = (err: unknown, name: string): string =>
     err instanceof ApiV1Error && isRoundRobinRefusalCode(err.code)
-      ? undoRefusalText(err.code, err.extra, msg)
+      ? undoRefusalText(err.code, err.extra, msg, locale)
       : err instanceof ApiV1Error && err.code === "STAGE_HAS_RESULTS"
         ? msg("roundrobin.waiting.rebuildRefused", { name })
         : msg("knockout.waiting.failed");

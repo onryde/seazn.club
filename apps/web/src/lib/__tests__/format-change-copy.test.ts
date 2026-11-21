@@ -66,7 +66,7 @@ describe("FORMAT_CHANGE_REFUSALS (FMT5)", () => {
 describe("formatChangeRefusalText: every refusal the dialog can meet, in words (FMT5)", () => {
   const msg = (key: MessageKey, vars?: Record<string, string | number>) => tRuntime(en as never, key, vars);
   const said = (code: string, extra: Record<string, unknown> = {}) =>
-    formatChangeRefusalText(new ApiV1Error("the wire's English", 409, code, extra), msg, "FALLBACK");
+    formatChangeRefusalText(new ApiV1Error("the wire's English", 409, code, extra), msg, "FALLBACK", "en");
   const D = en as Record<string, string>;
 
   it("each code's own sentence, never the wire's English (counted)", () => {
@@ -95,7 +95,7 @@ describe("formatChangeRefusalText: every refusal the dialog can meet, in words (
   });
 
   it("anything else falls to the Settings saves' one reader (settingsSaveErrorText): a non-Error says the fallback", () => {
-    expect(formatChangeRefusalText(undefined, msg, "FALLBACK")).toBe("FALLBACK");
-    expect(formatChangeRefusalText("boom", msg, "FALLBACK")).toBe("FALLBACK");
+    expect(formatChangeRefusalText(undefined, msg, "FALLBACK", "en")).toBe("FALLBACK");
+    expect(formatChangeRefusalText("boom", msg, "FALLBACK", "en")).toBe("FALLBACK");
   });
 });

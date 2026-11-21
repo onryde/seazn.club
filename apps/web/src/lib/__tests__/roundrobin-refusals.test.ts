@@ -7,7 +7,8 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { HttpError } from "@/lib/errors";
-import { ROUND_ROBIN_REFUSALS, isRoundRobinRefusalCode, roundRobinRefusalKey, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { FORMAT_MAX_PROMOTION, ROUND_ROBIN_REFUSALS, isRoundRobinRefusalCode, roundRobinRefusalKey, roundRobinRefusalText, type RoundRobinRefusalCode } from "@/lib/roundrobin-refusals";
+import { t } from "@/lib/i18n-runtime";
 import { roundRobinRefusal } from "@/server/usecases/roundrobin-refusal";
 
 // The plan's table (Task 2, `lib/roundrobin-refusals.ts`), typed here rather than read from the table under test: a code
@@ -117,5 +118,38 @@ describe("ROUND_ROBIN_REFUSALS (W5 app PR A, Task 2)", () => {
     expect(cut).toMatchObject({ status: 422, code: "RR_CUT_EXCEEDS_FIELD", message: "8 can't qualify from this field: it can supply at most 6." });
     expect(() => roundRobinRefusal("RR_CUT_EXCEEDS_FIELD")).toThrow(/RR_CUT_EXCEEDS_FIELD.*qualified/);
     expect(() => roundRobinRefusal("RR_CUT_EXCEEDS_FIELD", { qualified: 8 })).toThrow(/max/);
+  });
+
+  // W5 B4 review m-8: the promotion's own sentence for FORMAT_TOO_MANY_ENTRANTS, held to the same bar as a table row.
+  it("the promotion's FORMAT_TOO_MANY_ENTRANTS sentence: present and translated in all 4 locales with the same slots; en is the server's", () => {
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const text = dict[FORMAT_MAX_PROMOTION.key];
+      expect(typeof text === "string" && text.trim() !== "", `${locale}/ui.json has ${FORMAT_MAX_PROMOTION.key}`).toBe(true);
+      expect(placeholders(text!), `${locale} placeholders`).toEqual(["entrants", "max"]);
+      if (locale !== "en") expect(text, `${locale} is translated`).not.toBe(FORMAT_MAX_PROMOTION.en);
+      checked++;
+    }
+    expect(en[FORMAT_MAX_PROMOTION.key as keyof typeof en]).toBe(FORMAT_MAX_PROMOTION.en);
+    expect(checked).toBe(4);
+  });
+
+  // W5 B4 review I-1: a refusal's numbers are grouped the reader's way, and with no locale they are written bare - never grouped the
+  // English way for a reader of another language (a French "4,096" reads as four point zero nine six).
+  it("roundRobinRefusalText: numbers grouped per locale; no locale writes them bare; strings pass through; other values are dropped", () => {
+    const extra = { max: 4096, entrants: 12000, stageId: "s1", attachments: { officials: 3 } };
+    const msgIn = (dict: Record<string, string>) => (key: string, vars?: Record<string, string | number>) => t(dict, key, vars);
+    let checked = 0;
+    for (const [locale, dict] of Object.entries(LOCALES)) {
+      const g = new Intl.NumberFormat(locale);
+      expect(roundRobinRefusalText("FORMAT_TOO_MANY_ENTRANTS", extra, msgIn(dict) as never, locale), locale).toBe(
+        t(dict, "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", { max: g.format(4096), entrants: g.format(12000) }),
+      );
+      expect(roundRobinRefusalText("FORMAT_TOO_MANY_ENTRANTS", extra, msgIn(dict) as never, undefined), `${locale} bare`).toBe(
+        t(dict, "roundrobin.refusal.FORMAT_TOO_MANY_ENTRANTS", { max: "4096", entrants: "12000" }),
+      );
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

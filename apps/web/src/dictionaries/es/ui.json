@@ -3186,6 +3186,7 @@
   "reg.promote.overCapacity.label": "Promover de todos modos",
   "reg.promote.planLimit.one": "Tu plan permite {limit} participante por división y esta división ya lo tiene. Mejora tu plan para promover a más.",
   "reg.promote.planLimit.other": "Tu plan permite {limit} participantes por división y esta división ya los tiene. Mejora tu plan para promover a más.",
+  "reg.promote.formatMax": "Este formato admite como máximo {max} participantes y esta división ya tiene {entrants}, así que no se puede promover a nadie más.",
   "reg.stripeOffline.pre": "Los pagos con tarjeta están desconectados: los inscritos no pueden pagar hasta que Stripe se reconecte en ",
   "reg.stripeOffline.link": "Configuración → Connect",
   "reg.stripeOffline.post": ". La página pública muestra la división como temporalmente no disponible.",

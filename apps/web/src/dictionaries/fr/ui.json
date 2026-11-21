@@ -3186,6 +3186,7 @@
   "reg.promote.overCapacity.label": "Promouvoir quand même",
   "reg.promote.planLimit.one": "Votre offre autorise {limit} participant par division et cette division l'a déjà atteint. Passez à une offre supérieure pour en promouvoir davantage.",
   "reg.promote.planLimit.other": "Votre offre autorise {limit} participants par division et cette division les a déjà atteints. Passez à une offre supérieure pour en promouvoir davantage.",
+  "reg.promote.formatMax": "Ce format accepte au maximum {max} participants et cette division en compte déjà {entrants} : impossible d'en promouvoir davantage.",
   "reg.stripeOffline.pre": "Les paiements par carte sont hors ligne — les inscrits ne peuvent pas payer tant que Stripe n'est pas reconnecté sous ",
   "reg.stripeOffline.link": "Paramètres → Connect",
   "reg.stripeOffline.post": ". La page publique affiche la division comme temporairement indisponible.",
