@@ -17,7 +17,6 @@ import { COUNTRY_SEPARATION_NOT_OFFERED_MESSAGE } from "../../../lib/knockout-re
 // Match Day D1: the format fields' bounds, shared with the division builder and the Format dialog (FMT5). Import-free,
 // so the standalone generator loads it like the files above.
 import { FORMAT_BOUNDS, POOL_COUNT_MAX } from "../../../lib/format-bounds.ts";
-import { TOO_MANY_POOLS_ISSUE } from "../../../lib/roundrobin-refusals.ts";
 import { ADJUST_DELTA_MAX } from "../../../lib/points-adjustment-offer.ts";
 import { DEPARTED_STATUS_KEYS } from "../../../lib/departed-status-keys.ts";
 // W2c Task 13b finish-up (R-13b-1) — the deciders a stage config refuses at its top level, the engine's own set (shared
@@ -251,8 +250,11 @@ export const StageConfig = z
     // (LegsChoice). The three-leg format itself is gone (ruling 287: a league with legs 3 has no template of its own and
     // reads back as a league), but the legs VALUE is not: the door must not refuse a count a stored division already holds.
     legs: z.number().int().min(FORMAT_BOUNDS.legs.min).max(8).optional(),
-    // W5 stress fix F7: one pool per key letter A-Z; past it the door refuses by name (RR_TOO_MANY_POOLS, api-v1/http.ts).
-    pools: z.strictObject({ count: z.number().int().min(1).max(POOL_COUNT_MAX, { error: TOO_MANY_POOLS_ISSUE }) }).optional(),
+    // W5 stress fix F7: one pool per key letter A-Z (`POOL_COUNT_MAX`). The ceiling is NOT this schema's: a whole count past it is
+    // a well-formed request the product refuses, by name (RR_TOO_MANY_POOLS, 422), in the stage writers' shared gate
+    // (usecases/stages/stage-graph.ts `assertStageBatchGates`) - so the ZodError branch keeps answering 400 only (the matrix
+    // harness's `zodBranchFlaws` pin).
+    pools: z.strictObject({ count: z.number().int().min(1).meta({ description: `One pool per key letter, A to Z: at most ${POOL_COUNT_MAX}. Past it the write is refused 422 RR_TOO_MANY_POOLS.` }) }).optional(),
     // Knockout shape. `byes` are entrant ids; `slotOrder` is a draw order with
     // `null` for an empty slot — the two fields §18.2 was raised about.
     thirdPlace: z.boolean().optional(),

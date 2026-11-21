@@ -46,8 +46,9 @@ export type RoundRobinRefusalCode =
   // Final fix wave (m1): deleting a setup-phase entrant whose line holds recorded match data (a team sheet, match rules, a result
   // voided since). A code from W5's own row set, kept without the RR_ prefix: it is the wire code the reconcile has always thrown.
   | "ENTRANT_FIXTURES_HAVE_RESULTS"
-  // W5 stress fix F7: more pools than the pool-key alphabet holds (`POOL_COUNT_MAX`, A-Z) - the create door (the schema's ceiling,
-  // mapped by name in api-v1/http.ts) and Start (generators.ts `poolCount`). Details: `max`, and at Start `pools`, the count asked.
+  // W5 stress fix F7: more pools than the pool-key alphabet holds (`POOL_COUNT_MAX`, A-Z) - the stage writers (create and the
+  // Format dialog's replace: `assertStageBatchGates`) and Start (generators.ts `poolCount`). Details: `max` and `pools`, the count
+  // asked; at a writer also `seq`, the stage's.
   | "RR_TOO_MANY_POOLS"
   // W5 app PR B Task 7 (C5; X-ADJ-3, X-ADJ-4): "Adjust points". The stage gates (preflight C5: a started, not-complete league,
   // group or Swiss table), the engine's four `validatePointsAdjustments` reasons by name (`adjustment_zero`,
@@ -219,10 +220,6 @@ export const ROUND_ROBIN_REFUSALS: Record<RoundRobinRefusalCode, RoundRobinRefus
     key: "roundrobin.refusal.DRAW_TOO_LARGE",
   },
 };
-
-/** The stage schema's issue message for a pool count past `POOL_COUNT_MAX` (`config.pools.count`): api-v1/http.ts finds the issue
- *  by this exact message and answers RR_TOO_MANY_POOLS by name, the way it finds COUNTRY_SEPARATION_NOT_OFFERED's. */
-export const TOO_MANY_POOLS_ISSUE = "pools.count is past the pool-key alphabet (RR_TOO_MANY_POOLS)";
 
 /** Whether a wire code is one of this table's — a client's branch to say a round-robin refusal in the reader's language.
  *  Own keys only: a prototype name is no code. */

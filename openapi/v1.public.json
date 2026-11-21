@@ -17872,7 +17872,8 @@
                               "count": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 26
+                                "maximum": 9007199254740991,
+                                "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                               }
                             },
                             "required": [
@@ -18356,7 +18357,8 @@
                                 "count": {
                                   "type": "integer",
                                   "minimum": 1,
-                                  "maximum": 26
+                                  "maximum": 9007199254740991,
+                                  "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                                 }
                               },
                               "required": [
@@ -19376,7 +19378,8 @@
                               "count": {
                                 "type": "integer",
                                 "minimum": 1,
-                                "maximum": 26
+                                "maximum": 9007199254740991,
+                                "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                               }
                             },
                             "required": [
@@ -19860,7 +19863,8 @@
                                 "count": {
                                   "type": "integer",
                                   "minimum": 1,
-                                  "maximum": 26
+                                  "maximum": 9007199254740991,
+                                  "description": "One pool per key letter, A to Z: at most 26. Past it the write is refused 422 RR_TOO_MANY_POOLS."
                                 }
                               },
                               "required": [
