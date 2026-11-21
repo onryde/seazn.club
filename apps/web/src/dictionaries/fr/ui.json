@@ -8496,7 +8496,7 @@
   "matchDay.online.versus": "contre",
   "matchDay.online.needsDecision": "À décider · rondes précédentes",
   "matchDay.online.needsDecisionPlain": "À décider",
-  "matchDay.online.ownHidden": "Les échiquiers où vous jouez ne sont pas affichés ici : un autre organisateur s'en charge.",
+  "matchDay.online.ownHidden": "Les échiquiers où vous jouez ne sont pas affichés ici.",
   "matchDay.online.word.closes": "ferme à {time}",
   "matchDay.online.word.here": "{here} sur {seats} présents",
   "matchDay.online.word.playing": "{playing} sur {total} en jeu",

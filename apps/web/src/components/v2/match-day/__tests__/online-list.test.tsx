@@ -523,6 +523,9 @@ describe("an organiser who plays on a board: the board is not listed, and ONE li
       const words = t(d, KEY);
       expect(words, `${locale}: the key is in the dictionary and says something`).not.toBe(KEY);
       expect(words.length, `${locale}: words, not a stub`).toBeGreaterThan(20);
+      // T10 review NEW-2: the line states what is true of the viewer's own boards and promises nothing about anyone else - a club with ONE
+      // organiser has nobody to "look after" them, and a seated viewer need not be an organiser. No locale names an organiser.
+      expect(words, `${locale}: the line names no other organiser`).not.toMatch(/organi[sz]/i);
       // The markup escapes an apostrophe (French "s'en charge"), so the words are compared as the server paints them.
       expect(text(h), `${locale}: the line is the dictionary's own words`).toContain(words.replaceAll("'", "&#x27;"));
       // Where the organiser looks for the missing board: right after the boards of THAT round (the last is board 5), before the paired row.

@@ -39,7 +39,7 @@ export type Fmt = {
   list(items: string[]): string;
 };
 
-/** `venueTz`: the zone every time of day is read in, STATED by every caller (the arbiter panel and the Fixtures tab's online queue pass the venue's,
+/** `venueTz`: the zone every time of day is read in, STATED by every caller (Match Day's panels and the Fixtures tab's online queue pass the venue's,
  *  Task 16 D1 and the owner's 2026-10-25 ruling). It is never optional: a formatter handed no zone used to read the viewer's own, unlabelled,
  *  which is the bug that ruling fixed. `null` is for a caller that draws no time of day, and the types accept it only beside a `null` clock; a
  *  live clock with a `null` zone is refused by the types, and if one gets here anyway the formatter paints no time (`hm`/`hms` answer `null`) rather

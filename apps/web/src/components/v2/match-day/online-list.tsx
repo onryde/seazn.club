@@ -5,7 +5,7 @@
 // of the listed round that still has a report), each with its round chip; the heading says "earlier rounds" only when that is true. The
 // rounds are in `orderOnlineRounds` order (check-in or in progress, then paired, then over). Nothing at all - no heading, no card - when
 // the day has no online round, so a day of courts is exactly the page it was. A round the viewer plays on says so in one line after its
-// boards (spec §6.4: the board itself stays unlisted).
+// boards (spec §6.4: the board itself stays unlisted; the line is the List column's only - no panel repeats it).
 import { useId } from "react";
 import type { Dict, Locale } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";

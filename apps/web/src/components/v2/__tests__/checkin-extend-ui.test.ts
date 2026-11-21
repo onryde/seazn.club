@@ -115,7 +115,7 @@ describe("the words", () => {
   });
 });
 
-describe("the round press (arbiter panel)", () => {
+describe("the round press (Match Day's round panel)", () => {
   const s0 = initialRoundExtend();
   const run = (...a: RoundExtendAction[]) => a.reduce(roundExtendUi, s0);
   const ANSWER: RoundExtendAction = { type: "extendDone", outcome: { ok: true, result: R({ extended: 3 }) } };
