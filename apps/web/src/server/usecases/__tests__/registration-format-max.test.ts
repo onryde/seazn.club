@@ -68,7 +68,7 @@ describe("premise: the league's max is the engine's", () => {
 });
 
 describe.skipIf(!HAS_DB)("sign-up closes at the format's max entrants (W5 B4, F8)", () => {
-  it("no capacity set: sign-up number max takes a place, number max + 1 waits; the panel counts down to 0", { timeout: 180_000 }, async () => {
+  it("no capacity set: sign-up number max takes a place, number max + 1 waits; the panel counts down to 0", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const t = await setup(null);
     await t.fill(max - 1);
@@ -78,7 +78,7 @@ describe.skipIf(!HAS_DB)("sign-up closes at the format's max entrants (W5 B4, F8
     expect(await t.signUp(), `sign-up number ${max + 1}`).toBe("waitlisted");
   });
 
-  it("a capacity above the format's max is clamped to it; one below it still binds first", { timeout: 180_000 }, async () => {
+  it("a capacity above the format's max is clamped to it; one below it still binds first", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const above = await setup(max + 50);
     await above.fill(max);
@@ -90,7 +90,7 @@ describe.skipIf(!HAS_DB)("sign-up closes at the format's max entrants (W5 B4, F8
     expect(await below.signUp(), "the organiser's capacity, smaller, binds first").toBe("waitlisted");
   });
 
-  it("no format yet: the division takes sign-ups past any format's max (the empty case), to the plan's own limit", { timeout: 180_000 }, async () => {
+  it("no format yet: the division takes sign-ups past any format's max (the empty case), to the plan's own limit", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const t = await setup(null, null);
     const plan = await t.planLimit();
@@ -100,7 +100,7 @@ describe.skipIf(!HAS_DB)("sign-up closes at the format's max entrants (W5 B4, F8
     expect(PLACE_HOLDING).toContain(await t.signUp());
   });
 
-  it("an organiser's promotion at the format's max is refused by name, even confirmed past capacity; nothing is written", { timeout: 180_000 }, async () => {
+  it("an organiser's promotion at the format's max is refused by name, even confirmed past capacity; nothing is written", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const t = await setup(null);
     await t.fill(max);

@@ -76,7 +76,7 @@ describe("F8: the maxes these doors read are the engine's", () => {
 });
 
 describe.skipIf(!HAS_DB)("F8: Start refuses a field past its format's max, by name, before it writes", () => {
-  it("league at max + 1: 422 FORMAT_TOO_MANY_ENTRANTS with the max and the field; no line, the division unstarted", { timeout: 180_000 }, async () => {
+  it("league at max + 1: 422 FORMAT_TOO_MANY_ENTRANTS with the max and the field; no line, the division unstarted", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const r = await rig(max + 1, LEAGUE);
     const before = await statusOf(r.divisionId);
@@ -89,7 +89,7 @@ describe.skipIf(!HAS_DB)("F8: Start refuses a field past its format's max, by na
     expect(await statusOf(r.divisionId)).toBe(before);
   });
 
-  it("league at max: starts, drawing the engine's round robin of the field", { timeout: 180_000 }, async () => {
+  it("league at max: starts, drawing the engine's round robin of the field", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const r = await rig(max, LEAGUE);
     const out = await routed(() => startDivision(r.auth, r.divisionId));
@@ -98,7 +98,7 @@ describe.skipIf(!HAS_DB)("F8: Start refuses a field past its format's max, by na
     expect(await statusOf(r.divisionId)).toBe("active");
   });
 
-  it("four pools at max + 1: refused by the same name; at max: starts, its pools' lines landing exactly on the budget", { timeout: 180_000 }, async () => {
+  it("four pools at max + 1: refused by the same name; at max: starts, its pools' lines landing exactly on the budget", async () => {
     const max = formatMaxEntrants(FOUR_POOLS)!;
     const over = await rig(max + 1, FOUR_POOLS);
     const refused = await routed(() => startDivision(over.auth, over.divisionId));
@@ -119,7 +119,7 @@ describe.skipIf(!HAS_DB)("F8: Start refuses a field past its format's max, by na
     expect(lines).toBe(START_LINE_BUDGET);
   });
 
-  it("a Generate before Start is the same door: league at max + 1 refused, nothing drawn", { timeout: 180_000 }, async () => {
+  it("a Generate before Start is the same door: league at max + 1 refused, nothing drawn", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const r = await rig(max + 1, LEAGUE);
     const out = await routed(() => generateStageFixtures(r.auth, r.stageId!));
@@ -130,7 +130,7 @@ describe.skipIf(!HAS_DB)("F8: Start refuses a field past its format's max, by na
 });
 
 describe.skipIf(!HAS_DB)("F8: the create door refuses a format the division's field is already past", () => {
-  it("a league as the first stage of a field of max + 1: refused, no stage written; at max: created", { timeout: 120_000 }, async () => {
+  it("a league as the first stage of a field of max + 1: refused, no stage written; at max: created", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const over = await rig(max + 1);
     const out = await routed(() => createStages(over.auth, over.divisionId, { seq: 1, name: "League", progression: null, ...LEAGUE } as never));
@@ -142,7 +142,7 @@ describe.skipIf(!HAS_DB)("F8: the create door refuses a format the division's fi
     expect((await routed(() => createStages(at.auth, at.divisionId, { seq: 1, name: "League", progression: null, ...LEAGUE } as never))).status).toBe(200);
   });
 
-  it("a league added AFTER a knockout first stage is not asked: the format still starts with the knockout", { timeout: 120_000 }, async () => {
+  it("a league added AFTER a knockout first stage is not asked: the format still starts with the knockout", async () => {
     const leagueMax = formatMaxEntrants(LEAGUE)!;
     const knockoutMax = formatMaxEntrants({ kind: "knockout", config: {} })!;
     expect(knockoutMax, "premise: the knockout takes the field the league cannot").toBeGreaterThan(leagueMax + 1);
@@ -169,7 +169,7 @@ describe.skipIf(!HAS_DB)("F8: a draw no field bounds is held to the budget by it
     return target === "at" ? lo : lo + 1;
   };
 
-  it("past the budget: 422 DRAW_TOO_LARGE with the lines and the budget, nothing written; at it: drawn", { timeout: 180_000 }, async () => {
+  it("past the budget: 422 DRAW_TOO_LARGE with the lines and the budget, nothing written; at it: drawn", async () => {
     expect(formatMaxEntrants({ kind: "americano", config: {} }), "premise: no field max bounds an americano").toBeNull();
     const past = roundsTo("past");
     const over = await rig(8, { kind: "americano", config: { mode: "americano", courtCount: 2, rounds: past } }, true);
@@ -227,7 +227,7 @@ describe.skipIf(!HAS_DB)("F8: only a STARTED division's passes are exempt (B4 re
   // max - here by a Reinstate) is reconciled, never refused for its size - a Swiss's next Pair rides the same condition
   // (`existing.length === 0 || not started`, generate-tx.ts); a 666-entrant Swiss with a decided round 1 is too costly for this suite,
   // the league is its witness.
-  it("a league started past its max (a Reinstate): a Generate on the running table is never FORMAT_TOO_MANY_ENTRANTS", { timeout: 240_000 }, async () => {
+  it("a league started past its max (a Reinstate): a Generate on the running table is never FORMAT_TOO_MANY_ENTRANTS", async () => {
     const r = await startedPastMax();
     // Generate on the running table: a reconcile, never a refusal for the field's size, and nothing redrawn.
     const gen = await routed(() => generateStageFixtures(r.auth, r.stageId!));
@@ -240,7 +240,7 @@ describe.skipIf(!HAS_DB)("F8: only a STARTED division's passes are exempt (B4 re
   // B4 re-review N-2: the gate's OTHER term. Rebuild deletes the draw first, so its redraw is a FIRST draw (`existing.length === 0`)
   // even in a started division: a field past the max is refused by name there. Without that term the started-division exemption
   // lets it through to the line backstop, which refuses the same field as DRAW_TOO_LARGE - the wrong name and the wrong sentence.
-  it("a Rebuild of a started table past its max is FORMAT_TOO_MANY_ENTRANTS (a first draw), never DRAW_TOO_LARGE; the draw untouched", { timeout: 240_000 }, async () => {
+  it("a Rebuild of a started table past its max is FORMAT_TOO_MANY_ENTRANTS (a first draw), never DRAW_TOO_LARGE; the draw untouched", async () => {
     const r = await startedPastMax();
     expect(roundRobinFixtureCount(r.max + 1, 8), "premise: the redraw would also pass the line budget (the backstop's case)").toBeGreaterThan(START_LINE_BUDGET);
     const out = await routed(() => rebuildStageFixtures(r.auth, r.stageId!));
@@ -255,7 +255,7 @@ describe.skipIf(!HAS_DB)("F8: only a STARTED division's passes are exempt (B4 re
   // one under the max, and two sign-ups keep it even: a pool that is odd, or flips parity, is redrawn from scratch (`roundRobinShape`,
   // a first draw, which the gate always asked), so only an even-to-even arrival reaches the in-place PATCH - the path this case exists
   // for (premise below: the max is odd, so max - 1 and max + 1 are both even).
-  it("drawn before Start under its max, then two sign-ups past it: Generate and Start refused by name, the draw untouched; back under it starts", { timeout: 240_000 }, async () => {
+  it("drawn before Start under its max, then two sign-ups past it: Generate and Start refused by name, the draw untouched; back under it starts", async () => {
     const max = formatMaxEntrants(LEAGUE_8)!;
     expect(max % 2, "premise: the max is odd, so max - 1 and max + 1 are both even (the patch path)").toBe(1);
     const r = await rig(max - 1, LEAGUE_8);
@@ -288,7 +288,7 @@ describe.skipIf(!HAS_DB)("F8: only a STARTED division's passes are exempt (B4 re
 // Start counts it; a batch is asked per entrant, so the one that would pass the max rolls the whole request back. The max is the
 // engine's (`roundRobinFixtureCount` pinned at the top of this file); the line counts here are the engine's too.
 describe.skipIf(!HAS_DB)("N-3: a late add into a running table is held to the format's max", () => {
-  it("a league started at max - 1: a 2-entrant add is refused by name, nothing written; 1 joins; one more is refused", { timeout: 240_000 }, async () => {
+  it("a league started at max - 1: a 2-entrant add is refused by name, nothing written; 1 joins; one more is refused", async () => {
     const max = formatMaxEntrants(LEAGUE)!;
     const r = await rig(max - 1, LEAGUE);
     expect((await routed(() => startDivision(r.auth, r.divisionId))).status).toBe(200);
@@ -341,7 +341,7 @@ describe.skipIf(!HAS_DB)("F8: every door that draws a stage in one request holds
     },
   ];
 
-  it("a setup league's placeholder draw past the budget is DRAW_TOO_LARGE, nothing written; one under it draws every line", { timeout: 240_000 }, async () => {
+  it("a setup league's placeholder draw past the budget is DRAW_TOO_LARGE, nothing written; one under it draws every line", async () => {
     // 72 into 8 pools of 9: the top 9 of each is 72 seats (72 x 71 = 5,112 lines over two legs); the top 8 is 64 (4,032).
     const over = roundRobinFixtureCount(72, 2);
     const under = roundRobinFixtureCount(64, 2);
@@ -366,7 +366,7 @@ describe.skipIf(!HAS_DB)("F8: every door that draws a stage in one request holds
     expect(checked, "anti-vacuity: one past the budget, one under").toBe(2);
   });
 
-  it("a Swiss's rounds edit after Start whose new shells pass the budget is DRAW_TOO_LARGE, nothing written; one round fewer goes through", { timeout: 240_000 }, async () => {
+  it("a Swiss's rounds edit after Start whose new shells pass the budget is DRAW_TOO_LARGE, nothing written; one round fewer goes through", async () => {
     // 101 entrants: 51 shells a round (50 boards and the bye). Rounds 1 -> 100 adds 99 rounds (5,049 shells); 1 -> 99 adds 98 (4,998).
     const n = 101;
     const perRound = Math.ceil(n / 2);

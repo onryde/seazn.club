@@ -121,7 +121,7 @@ async function table(rig: Rig): Promise<Map<string, { played: number; won: numbe
 }
 
 describe.skipIf(!HAS_DB)("F3: the cost of a Reinstate grows by one append per line, not one score write", () => {
-  it("each extra line costs at most two appends' worth of statements (badminton, 6 vs 12 entrants, every line expunged)", { timeout: 180_000 }, async () => {
+  it("each extra line costs at most two appends' worth of statements (badminton, 6 vs 12 entrants, every line expunged)", async () => {
     // The append path's own cost for one void, measured on a rig of its own and rolled back.
     const probe = await league(3);
     await withdrawEntrantCascade(probe.auth, probe.leaver);
@@ -162,7 +162,7 @@ describe.skipIf(!HAS_DB)("F3: the cost of a Reinstate grows by one append per li
 });
 
 describe.skipIf(!HAS_DB)("F3: expunge -> Reinstate -> result -> withdraw again -> Reinstate (badminton)", () => {
-  it("each step leaves the ledger and the table it owes", { timeout: 180_000 }, async () => {
+  it("each step leaves the ledger and the table it owes", async () => {
     const n = 6;
     const rig = await league(n);
     const mine = await hers(rig);
@@ -227,7 +227,7 @@ describe.skipIf(!HAS_DB)("F3: expunge -> Reinstate -> result -> withdraw again -
 });
 
 describe.skipIf(!HAS_DB)("F3: the empty case and a retry, in another sport", () => {
-  it("the first team sport: a leaver with no result has only abandons voided; a second Reinstate writes nothing", { timeout: 180_000 }, async () => {
+  it("the first team sport: a leaver with no result has only abandons voided; a second Reinstate writes nothing", async () => {
     const n = 5;
     const rig = await league(n, teamSport(), "team");
     const mine = await hers(rig);
@@ -269,7 +269,7 @@ describe.skipIf(!HAS_DB)("F3: voidLineEvents' own guards (assumptions it writes 
     expect(statementCount() - before).toBe(0);
   });
 
-  it("a target already voided is skipped: the second batch writes nothing, the line holds one void", { timeout: 60_000 }, async () => {
+  it("a target already voided is skipped: the second batch writes nothing, the line holds one void", async () => {
     const { rig, line, abandon } = await expunged();
     const v = [{ fixtureId: line.id, eventId: abandon.id }];
     expect(await voidLineEvents(rig.auth, rig.divisionId, v, { writer: "withdrawal_cascade" })).toEqual([line.id]);
@@ -277,7 +277,7 @@ describe.skipIf(!HAS_DB)("F3: voidLineEvents' own guards (assumptions it writes 
     expect(await voidsOn(line.id)).toBe(1);
   });
 
-  it("an event that is not the named line's is refused, and the batch's other void rolls back with it", { timeout: 60_000 }, async () => {
+  it("an event that is not the named line's is refused, and the batch's other void rolls back with it", async () => {
     const { rig, line, other, abandon } = await expunged();
     const otherAbandon = (await ledgerOf(other.id)).find((e) => e.type === "core.abandon")!;
     const v = [
@@ -289,7 +289,7 @@ describe.skipIf(!HAS_DB)("F3: voidLineEvents' own guards (assumptions it writes 
     expect(abandon.id).not.toBe(otherAbandon.id);
   });
 
-  it("a line of another division is refused", { timeout: 60_000 }, async () => {
+  it("a line of another division is refused", async () => {
     const a = await expunged();
     const b = await league(3, "badminton", "individual", a.rig.auth); // same org: only the division differs
     await expect(
@@ -298,7 +298,7 @@ describe.skipIf(!HAS_DB)("F3: voidLineEvents' own guards (assumptions it writes 
     expect(await voidsOn(a.line.id)).toBe(0);
   });
 
-  it("a line that FEEDS a match (a knockout's) is refused: its void would take the stage lock after its fixture lock", { timeout: 60_000 }, async () => {
+  it("a line that FEEDS a match (a knockout's) is refused: its void would take the stage lock after its fixture lock", async () => {
     const { auth } = await seedOrg("pro");
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "F3 ko " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const d = await createDivision(auth, comp.id, { name: "Cup", slug: "f3k-" + randomUUID().slice(0, 6), sport_key: "badminton", variant_key: variantOf("badminton"), config: {} });
@@ -315,7 +315,7 @@ describe.skipIf(!HAS_DB)("F3: voidLineEvents' own guards (assumptions it writes 
     expect(await voidsOn(semi!.id)).toBe(0);
   });
 
-  it("a division whose scoring is closed is refused WRONG_PHASE, as the scoring door refuses it", { timeout: 60_000 }, async () => {
+  it("a division whose scoring is closed is refused WRONG_PHASE, as the scoring door refuses it", async () => {
     const { rig, line, abandon } = await expunged();
     await sql`update divisions set status = 'scheduled' where id = ${rig.divisionId}`;
     await expect(

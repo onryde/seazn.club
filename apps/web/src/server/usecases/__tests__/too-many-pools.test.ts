@@ -125,7 +125,7 @@ async function groupStage(entrants: number, pools: number) {
 }
 
 describe.skipIf(!HAS_DB)("F7: Start refuses a stored stage past the alphabet by name", () => {
-  it("27 pools: RR_TOO_MANY_POOLS 422 with max 26 and the count asked for; nothing is written", { timeout: 120_000 }, async () => {
+  it("27 pools: RR_TOO_MANY_POOLS 422 with max 26 and the count asked for; nothing is written", async () => {
     const rig = await groupStage(54, 27);
     const e = await startDivision(rig.auth, rig.divisionId).then(
       () => null,
@@ -138,7 +138,7 @@ describe.skipIf(!HAS_DB)("F7: Start refuses a stored stage past the alphabet by 
     expect((await sql`select 1 from fixtures where stage_id = ${rig.stageId}`).length).toBe(0);
   });
 
-  it("the boundary: 26 pools of 2 start, 26 x C(2,2) = 26 lines, one per pool key A..Z", { timeout: 120_000 }, async () => {
+  it("the boundary: 26 pools of 2 start, 26 x C(2,2) = 26 lines, one per pool key A..Z", async () => {
     const rig = await groupStage(52, 26);
     await startDivision(rig.auth, rig.divisionId);
     const lines = await sql<{ pool_id: string }[]>`select pool_id from fixtures where stage_id = ${rig.stageId}`;

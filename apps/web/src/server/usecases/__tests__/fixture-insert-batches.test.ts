@@ -135,7 +135,7 @@ describe.skipIf(!HAS_DB)("F1: the driver's bind-parameter ceiling", () => {
 });
 
 describe.skipIf(!HAS_DB)("F1: Start writes a stage past the old one-statement wall", () => {
-  it("a badminton league of 89 starts: n(n-1)/2 lines, every pair once, numbered 1..N", { timeout: 300_000 }, async () => {
+  it("a badminton league of 89 starts: n(n-1)/2 lines, every pair once, numbered 1..N", async () => {
     const n = 89;
     const total = (n * (n - 1)) / 2;
     expect(total * 17, "premise: past the one-statement ceiling (17 columns a line)").toBeGreaterThan(MAX_BIND_PARAMETERS);
@@ -150,7 +150,7 @@ describe.skipIf(!HAS_DB)("F1: Start writes a stage past the old one-statement wa
     await assertFixtureNumbersContiguous(rig.divisionId, total);
   });
 
-  it("another sport and shape: the first team sport, two groups of 45 over two legs, starts with every in-pool pair twice", { timeout: 300_000 }, async () => {
+  it("another sport and shape: the first team sport, two groups of 45 over two legs, starts with every in-pool pair twice", async () => {
     const sport = teamSport();
     const perPool = 45;
     const legs = 2;
@@ -195,7 +195,7 @@ function shellRows(stageId: string, divisionId: string, count: number) {
 }
 
 describe.skipIf(!HAS_DB)("F1: insertFixtureRows", () => {
-  it("all or nothing: a failure in a LATER chunk rolls back every row, the earlier chunk's included", { timeout: 120_000 }, async () => {
+  it("all or nothing: a failure in a LATER chunk rolls back every row, the earlier chunk's included", async () => {
     const rig = await emptyStage();
     const size = rowsPerInsert(8);
     const rows = shellRows(rig.stageId, rig.divisionId, size + 5);
@@ -253,7 +253,7 @@ describe.skipIf(!HAS_DB)("F1: insertFixtureRows", () => {
   // carry in `outcome` (generate-tx.ts), so every knockout with a bye failed to generate. A json helper is ONE bind (the
   // driver's `Parameter`; its `stringifyValue` sends it through `handleValue`, one `$n`), though it carries the same `then` a
   // query does. Across a chunk boundary so the arithmetic is exercised with it.
-  it("a json value (`tx.json`, the driver's one-bind Parameter) goes through, across a chunk boundary", { timeout: 120_000 }, async () => {
+  it("a json value (`tx.json`, the driver's one-bind Parameter) goes through, across a chunk boundary", async () => {
     const rig = await emptyStage();
     const size = rowsPerInsert(9);
     let sent = 0;
@@ -292,7 +292,7 @@ function unnumberedRows(stageId: string, divisionId: string, count: number, tag:
 }
 
 describe.skipIf(!HAS_DB)("F8: insertFixtureRows numbers the lines once per call", () => {
-  it("numbers as the trigger does: max+1 onward in row order, across a chunk boundary; a second call continues", { timeout: 120_000 }, async () => {
+  it("numbers as the trigger does: max+1 onward in row order, across a chunk boundary; a second call continues", async () => {
     const rig = await emptyStage();
     // Three lines numbered by the TRIGGER itself, one statement each (V263: the division's max + 1): the rule's own witness.
     for (const row of unnumberedRows(rig.stageId, rig.divisionId, 3, "pre")) await withTenant(rig.auth.orgId, (tx) => tx`insert into fixtures ${tx(row as never)}`);
@@ -317,7 +317,7 @@ describe.skipIf(!HAS_DB)("F8: insertFixtureRows numbers the lines once per call"
     expect(sent, "the rows' own chunks, plus the lock and the one max() read").toBe(2 + 2);
   });
 
-  it("reads the division's fixtures once per call, not once per line (the per-row max() made Start quadratic)", { timeout: 120_000 }, async () => {
+  it("reads the division's fixtures once per call, not once per line (the per-row max() made Start quadratic)", async () => {
     const rig = await emptyStage();
     const rows = unnumberedRows(rig.stageId, rig.divisionId, 600, "scan");
     const scans = (tx: Parameters<Parameters<typeof withTenant>[1]>[0]) =>
@@ -393,7 +393,7 @@ describe.skipIf(!HAS_DB)("F8: insertFixtureRows numbers the lines once per call"
 // uncommitted row instead (a transactionid lock), and fails on the unique index once the first commits.
 describe.skipIf(!HAS_DB)("F8: the batch and the trigger number under ONE key (m-4)", () => {
   type T = Parameters<Parameters<typeof withTenant>[1]>[0];
-  it("a writer holding the numbering key makes the other WAIT, then number after it - batch first and trigger first", { timeout: 120_000 }, async () => {
+  it("a writer holding the numbering key makes the other WAIT, then number after it - batch first and trigger first", async () => {
     let checked = 0;
     for (const order of ["batch first", "trigger first"] as const) {
       const rig = await emptyStage();
@@ -430,7 +430,9 @@ describe.skipIf(!HAS_DB)("F8: the batch and the trigger number under ONE key (m-
             if (secondPid === 0 || rows.length === 0) throw new Error("the second writer is not blocked yet");
             return rows.map((r) => r.locktype);
           },
-          { timeout: 30_000, interval: 50 },
+          // Two orders x 10 s stays inside the suite's 30 s test default (vitest.config.ts), so a red reads as this wait's own
+          // message rather than the test's clock.
+          { timeout: 10_000, interval: 50 },
         );
         expect(waitingOn, `${order}: the second writer waits on the numbering key itself`).toEqual(["advisory"]);
       } finally {

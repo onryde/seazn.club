@@ -60,7 +60,7 @@ async function refusal(p: Promise<unknown>): Promise<HttpError> {
 }
 
 describe.skipIf(!HAS_DB)("F5: a draft a newer one replaced says so", () => {
-  it("the empty case first: a stale draft with NO newer one still says the standings changed (no reason)", { timeout: 60_000 }, async () => {
+  it("the empty case first: a stale draft with NO newer one still says the standings changed (no reason)", async () => {
     const r = await rig();
     // The state the standings-change marker (seed-stale.ts) writes: the draft stale, nothing newer.
     await sql`update stage_seed_proposals set status = 'stale' where id = ${r.first}`;
@@ -70,7 +70,7 @@ describe.skipIf(!HAS_DB)("F5: a draft a newer one replaced says so", () => {
     expect(e.message).toMatch(/standings changed/);
   });
 
-  it("A, then B: confirming A names B; B confirms; A asked again still names B", { timeout: 60_000 }, async () => {
+  it("A, then B: confirming A names B; B confirms; A asked again still names B", async () => {
     const r = await rig();
     const b = await computeSeedProposal(r.auth, r.koId); // the POST /seed-proposal the organiser's Recompute sends
     expect(b.id).not.toBe(r.first);
@@ -84,7 +84,7 @@ describe.skipIf(!HAS_DB)("F5: a draft a newer one replaced says so", () => {
     expect(e2.extra).toEqual({ reason: PROPOSAL_STALE_SUPERSEDED, newer: b.id });
   });
 
-  it("A, B, C: A names the NEWEST draft, C", { timeout: 60_000 }, async () => {
+  it("A, B, C: A names the NEWEST draft, C", async () => {
     const r = await rig();
     await computeSeedProposal(r.auth, r.koId);
     const c = await computeSeedProposal(r.auth, r.koId);
