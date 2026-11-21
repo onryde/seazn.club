@@ -522,3 +522,108 @@ describe("Seazn-hosted flags and settings (Task 8)", () => {
     expect(config.SEAZN_TOKEN_REFRESH_BEFORE_SECONDS).toBe(300);
   });
 });
+
+describe("replayDriverMode — REPLAY_DRIVER, which replay host this process talks to (Task 21)", () => {
+  it("fake and bunny are taken as set, trimmed, whatever the relay driver is", () => {
+    const rows: [Record<string, string>, "fake" | "bunny"][] = [
+      [{ REPLAY_DRIVER: "fake" }, "fake"],
+      [{ REPLAY_DRIVER: " bunny " }, "bunny"],
+      [{ REPLAY_DRIVER: "bunny", RELAY_DRIVERS: "fake", ENV_NAME: "local" }, "bunny"],
+      [{ REPLAY_DRIVER: "bunny", RELAY_DRIVERS: "live", ENV_NAME: "stg" }, "bunny"],
+    ];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const [env, want] of rows) expect(config.replayDriverMode(env), JSON.stringify(env)).toBe(want);
+  });
+
+  it("unset or blank is fake exactly when the relay driver is fake (outside production a process not told otherwise fakes)", () => {
+    const fakeRelay: Record<string, string>[] = [{}, { REPLAY_DRIVER: "" }, { REPLAY_DRIVER: "  " }, { RELAY_DRIVERS: "fake", ENV_NAME: "ci" }, { NODE_ENV: "test" }];
+    for (const env of fakeRelay) expect(config.replayDriverMode(env), JSON.stringify(env)).toBe("fake");
+    expect(fakeRelay).toHaveLength(5);
+  });
+
+  it("unset under a live or disabled relay driver throws naming REPLAY_DRIVER, so a deployment cannot serve fake replays by omission", () => {
+    const rows: Record<string, string>[] = [
+      { RELAY_DRIVERS: "live", ENV_NAME: "stg" },
+      { RELAY_DRIVERS: "live", ENV_NAME: "prod", REPLAY_DRIVER: "" },
+      { NODE_ENV: "production" }, // no RELAY_DRIVERS under production = disabled
+    ];
+    for (const env of rows) expect(() => config.replayDriverMode(env), JSON.stringify(env)).toThrow(/REPLAY_DRIVER/);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("anything else throws naming the variable and the values it takes", () => {
+    for (const bad of ["live", "Bunny", "FAKE", "1", "cloudflare"]) {
+      expect(() => config.replayDriverMode({ REPLAY_DRIVER: bad }), bad).toThrow(/REPLAY_DRIVER must be "fake" or "bunny"/);
+    }
+  });
+});
+
+describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
+  const SECRETS = {
+    BUNNY_STREAM_API_KEY: "ZZ-fake-api-key-5c1e",
+    BUNNY_STREAM_READONLY_KEY: "ZZ-fake-readonly-key-77d0",
+    BUNNY_TOKEN_KEY: "ZZ-fake-token-key-a93b",
+  };
+  const FULL = { BUNNY_STREAM_LIBRARY_ID: "424242", BUNNY_STREAM_CDN_HOST: "vz-fake000.b-cdn.net", ...SECRETS };
+  const NAMES = Object.keys(FULL);
+
+  it("reads the five settings, trimmed", () => {
+    const padded = Object.fromEntries(Object.entries(FULL).map(([k, v]) => [k, ` ${v} `]));
+    expect(config.bunnyConfig(padded)).toEqual({
+      libraryId: "424242",
+      apiKey: SECRETS.BUNNY_STREAM_API_KEY,
+      readOnlyKey: SECRETS.BUNNY_STREAM_READONLY_KEY,
+      cdnHost: "vz-fake000.b-cdn.net",
+      tokenKey: SECRETS.BUNNY_TOKEN_KEY,
+    });
+  });
+
+  it("with nothing set it throws naming every variable", () => {
+    expect(() => config.bunnyConfig({})).toThrow(/BUNNY_STREAM_API_KEY/);
+    const message = (() => { try { config.bunnyConfig({}); return ""; } catch (e) { return (e as Error).message; } })();
+    for (const name of NAMES) expect(message, name).toContain(name);
+    expect(NAMES).toHaveLength(5);
+  });
+
+  it("names only the variable that is missing, and a blank one counts as missing", () => {
+    for (const missing of NAMES) {
+      const env: Record<string, string> = { ...FULL };
+      delete env[missing];
+      const fn = () => config.bunnyConfig(env);
+      expect(fn, missing).toThrow(new RegExp(`\\b${missing}\\b`));
+      for (const other of NAMES.filter((n) => n !== missing)) expect(fn, `${missing} missing, ${other} named`).not.toThrow(new RegExp(`\\b${other}\\b`));
+      expect(() => config.bunnyConfig({ ...FULL, [missing]: "   " }), `${missing} blank`).toThrow(new RegExp(`\\b${missing}\\b`));
+    }
+  });
+
+  it("never puts a value in its message: a set secret, a set id and host, and a malformed host all stay out", () => {
+    const messageOf = (env: Record<string, string>) => { try { config.bunnyConfig(env); return null; } catch (e) { return (e as Error).message; } };
+    const withoutTokenKey: Record<string, string> = { ...FULL };
+    delete withoutTokenKey.BUNNY_TOKEN_KEY;
+    const missing = messageOf(withoutTokenKey);
+    expect(missing).toMatch(/BUNNY_TOKEN_KEY/);
+    const badHost = messageOf({ ...FULL, BUNNY_STREAM_CDN_HOST: "https://secret-host.example/path" });
+    expect(badHost).toMatch(/BUNNY_STREAM_CDN_HOST/);
+    const values = [...Object.values(FULL), "https://secret-host.example/path", "secret-host.example"];
+    let checked = 0;
+    for (const message of [missing, badHost]) {
+      for (const value of values) {
+        expect(message, `a value leaked: ${value.slice(0, 6)}…`).not.toContain(value);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(2 * values.length);
+  });
+
+  it("the CDN host must be a bare hostname: a scheme, port or path throws", () => {
+    for (const bad of ["https://vz-fake000.b-cdn.net", "vz-fake000.b-cdn.net:443", "vz-fake000.b-cdn.net/x", "vz fake"]) {
+      expect(() => config.bunnyConfig({ ...FULL, BUNNY_STREAM_CDN_HOST: bad }), bad).toThrow(/BUNNY_STREAM_CDN_HOST/);
+    }
+  });
+});
+
+describe("REPLAY_EMBED_TOKEN_TTL_SECONDS (Task 21)", () => {
+  it("is one hour; an embed that has loaded keeps playing past it (probe B8), so the number stays", () => {
+    expect(config.REPLAY_EMBED_TOKEN_TTL_SECONDS).toBe(3600);
+  });
+});

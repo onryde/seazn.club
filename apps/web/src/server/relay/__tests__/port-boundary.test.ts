@@ -63,3 +63,34 @@ describe("A23 + m2: the application layer and the domain never import a provider
     expect(offenders, `walked ${files.length} files`).toEqual([]);
   });
 });
+
+// Task 21: the replay port is vendor-neutral. The application layer speaks ReplayHost; Bunny's names live in the adapter (Task 22)
+// and nowhere else. The port file is read WHOLE, comments included, so a vendor's vocabulary cannot leak in through a doc line,
+// and it imports nothing at all: a port that imported its fake or its adapter would be a port in name only.
+const BUNNY_VOCABULARY = /bunny|b-cdn|bcdn|mediadelivery|accesskey|availableresolutions|videoguid|\bguid\b/i;
+/** Every way a module is pulled in: `import … from`, `export … from`, a side-effect `import "x"`, a dynamic `import(`, `require(`. */
+const ANY_IMPORT = /^\s*(?:import|export)\b[^\n]*\bfrom\b|^\s*import\s*["']|\bimport\s*\(|\brequire\s*\(/m;
+
+describe("Task 21: replay-ports.ts names no Bunny vocabulary and imports nothing", () => {
+  it("both detectors fire on each kind of leak (positive twins) and stay quiet on the port's own words", () => {
+    const vocabulary = [
+      "https://iframe.mediadelivery.net/embed/1/2", "headers: { AccessKey: key }", "class BunnyReplayHost", "bcdn_token=abc",
+      "https://vz-1.b-cdn.net/x", "availableResolutions: '240p'", "body.VideoGuid", "the video's guid",
+    ];
+    for (const leak of vocabulary) expect(leak, leak).toMatch(BUNNY_VOCABULARY);
+    const imports = [`import { x } from "./replay-fake";`, `export type { A } from "./b";`, `import "./c";`, `const m = await import("./d");`, `const m = require("./e");`];
+    for (const form of imports) expect(form, form).toMatch(ANY_IMPORT);
+    expect([vocabulary.length, imports.length]).toEqual([8, 5]);
+    const quiet = "export interface ReplayHost { video(videoId: string): Promise<ReplayVideo> } // a host's own id";
+    expect(quiet).not.toMatch(BUNNY_VOCABULARY);
+    expect(quiet).not.toMatch(ANY_IMPORT);
+  });
+
+  it("replay-ports.ts (read whole, comments included) holds no Bunny word and no import", () => {
+    const source = readFileSync(join(SERVER, "video", "replay-ports.ts"), "utf8");
+    expect(source, "the wrong file was read").toContain("export interface ReplayHost");
+    expect(source.length).toBeGreaterThan(500);
+    expect(source.split("\n").filter((line) => BUNNY_VOCABULARY.test(line))).toEqual([]);
+    expect(source).not.toMatch(ANY_IMPORT);
+  });
+});

@@ -379,6 +379,55 @@ export function seaznVideoOrigins(env: Record<string, string | undefined> = proc
  *  24 h cap); the server re-mints it, and the client island re-reads it, this many seconds before expiry. */
 export const SEAZN_LIVE_TOKEN_TTL_SECONDS = 3600;
 export const SEAZN_TOKEN_REFRESH_BEFORE_SECONDS = 300;
+
+// ---- Seazn-hosted replays (Phase 2, Task 21): the replay host and its settings -------------------------------------
+/** How long a replay's player URL (its embed) is valid for. Probe B8: an embed that has already loaded keeps playing for about
+ *  10 h whatever its own expiry, so this gates the page load only; a viewer who reloads after it asks the route for a fresh URL. */
+export const REPLAY_EMBED_TOKEN_TTL_SECONDS = 3600;
+
+/** `REPLAY_DRIVER=fake|bunny`: which replay host this process talks to. Unset or blank is `fake` only where the relay driver
+ *  is `fake` (a process not told it may spend money, or delete a recording once "moved", does not): under a live or disabled
+ *  relay driver it THROWS, because a deployment that forgot the variable would otherwise move recordings into a fake host and
+ *  delete the originals. Anything but fake/bunny throws, naming the variable. Read per call, never cached. */
+export type ReplayDriverMode = "fake" | "bunny";
+export function replayDriverMode(env: Record<string, string | undefined> = process.env): ReplayDriverMode {
+  const v = env.REPLAY_DRIVER?.trim();
+  if (v === "fake" || v === "bunny") return v;
+  if (v === undefined || v === "") {
+    if (relayDriverMode(env) === "fake") return "fake";
+    throw new Error('REPLAY_DRIVER is not set (the relay driver is not fake, so a replay host must be named): "bunny", or "fake" where fakes are honoured');
+  }
+  throw new Error(`REPLAY_DRIVER must be "fake" or "bunny", got ${JSON.stringify(v)}`);
+}
+
+/** The five Bunny settings, each an env variable held on the server only (never `NEXT_PUBLIC_`, never a database column).
+ *  The two keys and the token key are secrets; the library id and the CDN host are config, held the same way. */
+const BUNNY_ENV = {
+  libraryId: "BUNNY_STREAM_LIBRARY_ID",
+  apiKey: "BUNNY_STREAM_API_KEY",
+  readOnlyKey: "BUNNY_STREAM_READONLY_KEY",
+  cdnHost: "BUNNY_STREAM_CDN_HOST",
+  tokenKey: "BUNNY_TOKEN_KEY",
+} as const;
+/** The env variable names above, for a test that must prove none of them leaks in from a developer's file. */
+export const BUNNY_ENV_NAMES: readonly string[] = Object.values(BUNNY_ENV);
+type BunnyKey = keyof typeof BUNNY_ENV;
+export type BunnyConfig = { [K in BunnyKey]: string };
+/** Every Bunny setting, trimmed. A missing or blank one throws NAMING every variable that is missing; a CDN host that is not a
+ *  bare hostname throws naming its variable. No message here carries a VALUE: a secret must not reach a log through an error. */
+export function bunnyConfig(env: Record<string, string | undefined> = process.env): BunnyConfig {
+  const found: Partial<BunnyConfig> = {};
+  const missing: string[] = [];
+  for (const key of Object.keys(BUNNY_ENV) as BunnyKey[]) {
+    const value = env[BUNNY_ENV[key]]?.trim();
+    if (value) found[key] = value;
+    else missing.push(BUNNY_ENV[key]);
+  }
+  if (missing.length) throw new Error(`${missing.join(", ")} not set: REPLAY_DRIVER=bunny needs every Bunny setting, held as server env`);
+  const config = found as BunnyConfig; // every key was set: `missing` is empty
+  if (!HOST_RE.test(config.cdnHost)) throw new Error(`${BUNNY_ENV.cdnHost} must be a bare hostname (no scheme, port or path)`);
+  return config;
+}
 /** C9: simulcast outputs bill as delivery; Cloudflare caps 5 per input. */
 export const MAX_OUTPUTS_PER_INPUT = 5;
 

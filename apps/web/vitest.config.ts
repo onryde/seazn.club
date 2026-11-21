@@ -53,6 +53,13 @@ const fileOnly = (k: string) => !preexisting.has(k) && k in process.env;
 //               REAL refund instead of throwing a config error.
 //               Kept only under BILLING_LIVE=1, because billing-proration.live
 //               documents an invocation that sources the key from this file.
+//
+//   BUNNY_* / REPLAY_DRIVER — the Bunny Stream settings (Seazn-hosted replays). .env.local holds a real
+//               BUNNY_STREAM_API_KEY, and the replay host reads its settings from the env at the call: with a key present a
+//               unit test could fetch, delete or sign against the real library, and REPLAY_DRIVER=bunny would put the real
+//               adapter where the fake belongs. Unit tests run the fake. The one gated live probe
+//               (video/__tests__/bunny.live.test.ts, BUNNY_LIVE_PROBE=1) takes its values from the SHELL
+//               (`set -a; . ~/.config/seazn/bunny-poc.env; set +a`), which `fileOnly` below never touches.
 const wantsLiveBilling = process.env.BILLING_LIVE === "1";
 
 // Anything exported by hand survives this — it's only the file's values we drop.
@@ -69,6 +76,12 @@ for (const key of [
   // returns early. Suites that exercise publishing stub both themselves.
   "NEXT_PUBLIC_SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "BUNNY_STREAM_LIBRARY_ID",
+  "BUNNY_STREAM_API_KEY",
+  "BUNNY_STREAM_READONLY_KEY",
+  "BUNNY_STREAM_CDN_HOST",
+  "BUNNY_TOKEN_KEY",
+  "REPLAY_DRIVER",
   ...(wantsLiveBilling ? [] : ["STRIPE_SECRET_KEY"]),
 ]) {
   if (fileOnly(key)) delete process.env[key];
