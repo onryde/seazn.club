@@ -73,7 +73,7 @@ export async function lockBoardsRefusingOnlineGames(tx: Tx, ids: readonly string
   if (game) {
     throw new HttpError(
       409,
-      "An online game exists on a board this would clear, so it cannot be cleared. Settle that board in the arbiter panel.",
+      "An online game exists on a board this would clear, so it cannot be cleared. Settle that board in Match Day.",
       ONLINE_GAME_EXISTS_CODE,
     );
   }
