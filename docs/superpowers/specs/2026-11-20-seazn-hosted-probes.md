@@ -1,7 +1,7 @@
 # Seazn-hosted video: Cloudflare and Bunny probes
 
 Plan: `docs/superpowers/plans/2026-11-20-seazn-hosted-video.md`. Spec: `docs/superpowers/specs/2026-11-20-seazn-hosted-video-design.md`.
-Cite results by ID: C1–C6 and B1–B6 from the POC, C7–C9 for Task 7. Task 20 adds its own IDs when it records its results.
+Cite results by ID: C1–C6 and B1–B6 from the POC, C7–C9 for Task 7, B7–B10 for Task 20.
 
 ## POC results (2026-11-20), copied from the plan
 
@@ -58,4 +58,78 @@ own input and recording by uid; it never lists the account).
 
 ## Task 20: Bunny, what remained open
 
-Not yet probed (Task 20).
+Probe: `apps/web/src/server/video/__tests__/bunny.live.test.ts`. It is gated on `BUNNY_LIVE_PROBE=1` plus the four
+`BUNNY_*` values, read from the environment only (the POC credentials file, never `.env.local`). Run:
+`cd apps/web && set -a; . ~/.config/seazn/bunny-poc.env; set +a; DATABASE_URL= BUNNY_LIVE_PROBE=1 npx vitest run src/server/video/__tests__/bunny.live.test.ts`
+
+What it does:
+
+- Creates one collection and fetches two public samples into it: `long` (1280×720, 183 s) and `hd` (1920×1080, 28 s,
+  which tests the cap).
+- Deletes only those three items, each by the id its own answer carried, after re-reading it by id.
+- Never calls a list endpoint.
+- Prints an `OBSERVED` line and a `LEDGER` line.
+- Drives the embed in headless Google Chrome 157.
+
+In this section `{lib}`, `{cdn}` and `{guid}` stand for real values, and `<token>` for a token that was never written down.
+
+**Status (2026-11-21): RUN twice, on the owner's Bunny POC library.**
+
+- Each run created 3 items and deleted 3 (two videos, then the collection, each answering 200). Nothing was skipped.
+- Run 2 is the committed probe. It ends red on exactly one assertion: the B9 cap.
+
+- **B7. Collections work.**
+  - `POST /library/{lib}/collections {name}` answers 200, with a `guid` and the name echoed back.
+  - `POST /videos/fetch?collectionId={guid}` with body `{url, title}` answers 200. Its body keys are `id`, `message`,
+    `statusCode` and `success` (as in B1).
+  - `GET /videos/{id}` names the collection in `collectionId` and echoes the title that was sent, so Task 27's `title`
+    read works.
+  - `GET /collections/{guid}` reads `videoCount: 2`. `DELETE /collections/{guid}` answers 200.
+  - Encoding was quicker than in B2: 51 s for the 183 s video and 31 s for the 28 s one, timed from the fetch to
+    status 4. Polled every 10 s, the statuses ran 0 → 3 → 4 in run 1 and 0 → 2 → 3 → 4 in run 2.
+- **B8. An embed keeps playing past its `expires`.**
+  - Setup: the embed was loaded with `expires` = now + 60 s. The page was served as `https://stg.seazn.club/` by
+    request interception, so no request reached seazn.club.
+  - Result: in both runs it autoplayed and played the 183 s video to its end (`ended: true`), with about 129 s of
+    playback after the expiry and no media error.
+  - Control: the same embed with `expires` 120 s in the past shows Bunny's "403" page and no video. So the embed
+    token is checked when the page loads.
+  - A caveat on that result: the player buffers far ahead (136 s at 16 s, and the whole 183 s by about 75 s). Only one
+    segment was fetched after the expiry (it answered 200).
+  - What settles it is the CDN token the embed hands its own player:
+    - It is the path form, `bcdn_token=<token>&expires=…&token_path=…`.
+    - Its `expires` is the embed's `expires` + 35 941 s. That is 10 h (36 000 s) after the embed page rendered,
+      whatever the embed's own `expires` was.
+    - At expiry + 127 s, the embed's playlist and last segment URLs still answer 200 with the iframe's `Referer`
+      (`https://iframe.mediadelivery.net/`), and 403 with no `Referer`.
+  - **So the embed token gates only the page load. Once a replay has loaded, it can keep playing for about 10 h.**
+    Task 25 needs no `src` swap, and `REPLAY_EMBED_TOKEN_TTL_SECONDS = 3600` stands. A viewer who reloads after the
+    expiry needs a fresh embed URL from the route, as the control shows.
+  - The embed also calls Bunny's own hosts: `fonts.bunny.net`, the `edgezone-*.bunnyinfra.net` edge probes,
+    `metrics-bunny.net`, `rum-metrics.bunny.net` and `bunnycdn-video-assets.b-cdn.net`. Those are the iframe's own
+    requests, governed by the iframe's CSP, so our page still needs only `frame-src https://iframe.mediadelivery.net`.
+- **B9. The MP4 file name is as planned, but the library is NOT capped at 720p.**
+  - Every video read `hasMP4Fallback: true`.
+  - `https://{cdn}/bcdn_token=<token>&expires=…&token_path=%2F{guid}%2F/{guid}/play_{h}p.mp4`, with the B5 token,
+    answers:
+    - 200 `video/mp4` with `Referer: https://stg.seazn.club/`;
+    - 403 with no `Referer`;
+    - 403 with `Referer: https://example.com/`.
+  - That holds for the highest `h` listed, and every listed height answers 200 with the allowed `Referer`.
+    `stg.seazn.club` was the first referrer tried and it was accepted, so `seazn.club` and `www.seazn.club` were not
+    tried.
+  - The name is `play_{h}p.mp4`, so Task 22's `openDownload` keeps it.
+  - **The cap failed.** The 1080p source encoded to `availableResolutions` = `360p,480p,720p,240p,1080p`, and
+    `play_1080p.mp4` answered 200. The library is not capped at 720p, which contradicts B2 and the operator setup's
+    "resolutions capped at 720p". (The 720p source listed `240p` to `720p` only.) The list comes back unordered, so it
+    must be parsed and the maximum taken, not the last item.
+  - The probe stays red until the owner caps the library or the plan accepts 1080p replays.
+  - File sizes:
+    - 183 s at 720p was 66.7 to 69.0 MB, about 3 Mbit/s. A 3 h match is then about 4 GB, more than the 2–3 GB
+      Task 26 assumes.
+    - 28 s at 1080p was 25.7 MB, about 7.3 Mbit/s. A 3 h match is then about 10 GB.
+- **B10. A delete answers 200 every time.**
+  - `DELETE /videos/{id}` answers 200, and `GET /videos/{id}` reads 404 immediately afterwards.
+  - A second `DELETE` also answers **200, not 404** (both videos, both runs). Bunny's delete is idempotent.
+  - So `remove()` (Tasks 21 and 22) cannot tell `absent` from a DELETE's status. It must either read with `GET` first
+    (404 → `absent`) or report a 200 as `deleted` in both cases.
