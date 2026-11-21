@@ -355,6 +355,12 @@ export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: 
   const flagRows = await openFlagRows(auth, [fixtureId]);
   // Owner O1: a cancelled board is read only while it has an open flag (`loadBoardsByIds`' twin guard, and the Flagged list's R4 rule).
   if (row.fixtureStatus === "cancelled" && flagRows.length === 0) throw notFound();
+  // A round nobody opened has no board yet: `boardRows` left-joins the opens, so its fixtures are rows with `openId` null that would read as an
+  // empty check-in. The round view, the Flagged list and Match Day list none of them, so nothing links here - the same 404 as a board that is
+  // not one, answered from the row alone, before the sides, the camera policy, the seat lookup and the presence reads a composed board costs.
+  // A held, settled or live board of such a round (a game or a hold on file) is not that empty check-in and reads. `inCheckIn(row)` IS the
+  // composed board's `checking_in` (its doc comment); the "round nobody has opened" sweep pins the two together, state by state.
+  if (row.openId === null && inCheckIn(row)) throw notFound();
   // C1 (D7): a board the viewer plays on is not theirs to watch. A key has no user, so plays nowhere.
   if (auth.userId !== null && (await isSeatedOn(auth.userId, fixtureId))) {
     throw new HttpError(403, "You play on this board, so another organiser must watch it", "ARBITER_PLAYS_THIS_BOARD");
@@ -370,10 +376,6 @@ export async function loadMatchDayBoard(auth: AuthCtx, fixtureId: string, opts: 
       flags: "full",
     })
   )[0]!;
-  // A round nobody opened has no board yet: `boardRows` left-joins the opens, so its fixtures are rows with `openId` null that read as an
-  // empty check-in. The round view, the Flagged list and Match Day list none of them, so nothing links here - the same 404 as a board that
-  // is not one. A held, settled or live board of such a round (a game or a hold on file) is not that empty check-in and reads.
-  if (row.openId === null && board.state.kind === "checking_in") throw notFound();
   return {
     ...board,
     flags: flagsForReader(board.flags, isEditorRole(auth.role)),

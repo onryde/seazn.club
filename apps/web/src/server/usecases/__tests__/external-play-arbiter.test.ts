@@ -2459,6 +2459,70 @@ describe.runIf(HAS_DB)("loadMatchDayBoard - a board of a round nobody has opened
     }
   });
 
+  it("A4: the refusal comes BEFORE the board is composed - a never-opened board costs what any other early NOT FOUND costs, and the same board once opened reads in full", async () => {
+    // The early NOT FOUND of the same function whose cost is the yardstick: a cancelled board with no open flag stops after the division, the board's
+    // row and its flags. The refusal for a round nobody opened must stop there too, not after the sides, the camera policy, the seat lookup and the
+    // presence and camera reads that a composed board costs (a link that points at it is never drawn, but a stale one or a guess still asks).
+    const cancelled = await seedOnlineChessRound({ fixtures: 2 });
+    await openRound(cancelled);
+    await sql`update fixtures set status = 'cancelled' where id = ${cancelled.boards[1]!.fixtureId}`;
+    const unopened = await seedOnlineChessRound({ fixtures: 1 });
+    const statementsOf = async (read: Promise<unknown>): Promise<number> => {
+      const before = statementTexts().length;
+      expect(await codeOf(read)).toEqual([404, "NOT_FOUND"]);
+      return statementTexts().length - before;
+    };
+    const yardstick = await statementsOf(loadMatchDayBoard(cancelled.owner, cancelled.boards[1]!.fixtureId));
+    expect(yardstick, "premise: the cancelled board's refusal reads something (the counter is live)").toBeGreaterThan(1);
+    const before = statementTexts().length;
+    const never = await statementsOf(loadMatchDayBoard(unopened.owner, unopened.boards[0]!.fixtureId));
+    expect(never, "a never-opened board's refusal is as cheap as the cancelled board's").toBe(yardstick);
+    expect(textsNaming(before, "fixture_video_presence") + textsNaming(before, "camera_reported"), "no presence or camera read for a board that is not one").toBe(0);
+    // The positive pair, and what the early refusal must NOT swallow: once opened, the very board reads, and the read costs more than the refusal.
+    await openRound(unopened);
+    const after = statementTexts().length;
+    expect(await loadMatchDayBoard(unopened.owner, unopened.boards[0]!.fixtureId)).toMatchObject({ state: { kind: "checking_in" } });
+    expect(statementTexts().length - after, "the opened board is composed: it costs more than the refusal did").toBeGreaterThan(never);
+  });
+
+  it("A4: the refusal is the EMPTY check-in and nothing else - every state of a never-opened round's board, from the row alone, agrees with the board it would compose", async () => {
+    // The row-level refusal (`inCheckIn`) replaced a check on the composed board, so the two must agree for every state a board can be in.
+    // Expected: the state chain's own words (a board with no game, held or finished is read; only the one with nothing on file at all is the
+    // empty check-in), typed here per case - never read back from the code under test.
+    const r = await seedOnlineChessRound({ fixtures: 8 });
+    const at = (n: number) => r.boards[n]!.fixtureId;
+    await bridge(at(1), r.orgId, { status: "pending" });
+    await bridge(at(2), r.orgId, { status: "needs_organiser", reason: "lichess_unlinked" });
+    await bridge(at(3), r.orgId, { status: "live", moves: 0 });
+    await bridge(at(4), r.orgId, { status: "live", moves: RUY_12 });
+    await bridge(at(5), r.orgId, { status: "finished", moves: RUY_12 });
+    await sql`update fixtures set status = 'abandoned' where id = ${at(6)}`;
+    await sql`update fixtures set status = 'cancelled' where id = ${at(7)}`;
+    await openFlag(r.orgId, at(7), { kind: "camera_connection_problems", personId: r.boards[7]!.home.personId, openedAt: new Date("2026-10-12T19:42:00Z") });
+    const expected: [string, number, string | null][] = [
+      ["no bridge row at all", 0, null],
+      ["a bridge row with no game on file (pending)", 1, null],
+      ["held for the organiser", 2, "on_hold"],
+      ["a game on file, no move yet", 3, "starting"],
+      ["a game in play", 4, "live"],
+      ["a finished game", 5, "result"],
+      ["an abandoned fixture", 6, "result"],
+      ["a cancelled fixture with an open flag", 7, "cancelled"],
+    ];
+    let refused = 0;
+    let read = 0;
+    for (const [why, n, kind] of expected) {
+      if (kind === null) {
+        expect(await codeOf(loadMatchDayBoard(r.owner, at(n))), `${why}: the empty check-in of a round nobody opened`).toEqual([404, "NOT_FOUND"]);
+        refused++;
+      } else {
+        expect((await loadMatchDayBoard(r.owner, at(n))).state.kind, `${why}: reads, as ${kind}`).toBe(kind);
+        read++;
+      }
+    }
+    expect([refused, read], "anti-vacuity: both sides of the refusal are exercised").toEqual([2, 6]);
+  });
+
   it("a key reads the same refusal; a HELD board of an unopened round still reads - the refusal is the empty check-in of a round nobody opened, not the missing stamp", async () => {
     const r = await seedOnlineChessRound({ fixtures: 2 });
     const key = { orgId: r.orgId, via: "api_key", userId: null, role: null, keyId: randomUUID(), keyScopes: ["read"] } as AuthCtx;
