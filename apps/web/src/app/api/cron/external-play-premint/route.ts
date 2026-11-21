@@ -13,9 +13,12 @@ import type { PremintReport } from "@/server/usecases/external-play/premint";
  *  EXTERNAL_PLAY_PREMINT is exactly "1" (premint.ts): with the flag off the pass answers `disabled: 1` and makes no vendor
  *  call. Answers the pass's report (counts, and failures by code - never a message). The cron Worker counts `failed` (a
  *  board's room that could not be made; a vendor that is down is at most PREMINT_FAILURES_BEFORE_BREAK of them a pass,
- *  then the rest is deferred) and `skipped` (1 when another pass held the lock: a pass that overlaps the next firing ran
- *  for a minute) as failures; `disabled`, `windowsOpen` and `deferred` (a budget or the platform's bucket ran out) are
- *  not. The report is returned as it is: a failed pass is a 200 whose body the Worker reads, never swallowed here.
+ *  then the rest is deferred; and an organisation whose freeze could not be read is ONE of them, code `freeze_unreadable`, with
+ *  the rest of its rows deferred) and `skipped` (1 when another pass held the lock: a pass that overlaps the next firing ran
+ *  for a minute) as failures; `disabled`, `windowsOpen` and `deferred` are not. `deferred` is rows that wait for the next pass
+ *  and keep their place: a budget or the platform's bucket ran out, the club is not offered online chess, the competition is
+ *  billing-frozen, or an open window. The report is returned as it is: a failed pass is a 200 whose body the Worker reads, never
+ *  swallowed here.
  *  Schedule: apps/cron-worker/src/schedule.ts, EVERY firing of the env's fast trigger (every minute on prod, every 5
  *  minutes on stg), never retried (the next firing is the retry; the pass's lock answers an overlap with `skipped`).
  *  Cron-shaped like /api/cron/external-play: x-cron-secret header (CRON_SECRET), 503 when it is unset BEFORE 401 on a

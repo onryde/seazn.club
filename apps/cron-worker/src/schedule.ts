@@ -213,10 +213,11 @@ export const JOBS: readonly Job[] = [
   // EXTERNAL_PLAY_PREMINT is "1" on the app, so a flag-off pass is healthy here, not a failure. While ANY board of the platform
   // is inside a check-in window the pass makes nothing and reports `windowsOpen: 1` (Task 8, owner ruling R3). Never retried:
   // the next firing IS the retry, and the pass's lock answers an overlapping re-send with `skipped`. `failed` counts boards
-  // whose room could not be made (a down vendor is at most three of them a pass, then the rest is deferred) and `skipped` is 1
+  // whose room could not be made (a down vendor is at most three of them a pass, then the rest is deferred; an organisation whose
+  // freeze could not be read is one of them, code `freeze_unreadable`, its other rows deferred) and `skipped` is 1
   // when another pass held the lock - a pass that overlaps the next firing ran for a minute; both are failures and a held lock
-  // keeps paging (Task 8 decision, carry item 6). `deferred` (a budget, the platform's bucket or an open window), `disabled`
-  // and `windowsOpen` are not: the next firing reaches those rows.
+  // keeps paging (Task 8 decision, carry item 6). `deferred` (a budget, the platform's bucket, a club not offered online chess, a
+  // billing-frozen competition or an open window), `disabled` and `windowsOpen` are not: the next firing reaches those rows.
   {
     id: "external-play-premint",
     path: "/api/cron/external-play-premint",

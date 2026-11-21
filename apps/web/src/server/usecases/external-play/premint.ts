@@ -66,6 +66,10 @@ export const PREMINT_FAILURES_BEFORE_BREAK = 3;
 /** The one-pass-at-a-time advisory lock's name (`hashtext`). */
 export const PREMINT_LOCK = "external-play-premint";
 
+/** The `failures` code of an organisation whose freeze could not be read (MD-R20, gaps wave A7): a fault that must page, unlike a frozen
+ *  competition (a billing state) and a spent budget, which only defer. */
+export const PREMINT_FREEZE_UNREADABLE = "freeze_unreadable";
+
 /** The cron Worker reads `data.failed` and `data.skipped` as its failure counters (apps/cron-worker/src/schedule.ts), and
  *  apps/cron-worker/test/drift.test.ts finds each field's numeric declaration in this module's CODE. */
 export type PremintReport = {
@@ -80,14 +84,17 @@ export type PremintReport = {
   /** Rooms the pass made (a successful `ensureMeeting`: a claim that made the same room first would be counted too). */
   roomsMade: number;
   /** Rows NOT started: the call cap, the pass budget or the platform's bucket ran out, the club is not offered online
-   *  chess, or the competition is billing-frozen (MD-R16). They keep their place; the next pass reaches them. Never a failure. */
+   *  chess, or the competition is billing-frozen (MD-R16) - and the rows of an organisation whose freeze could not be read, but its
+   *  FIRST row (MD-R20: that one is the org's one failure, `PREMINT_FREEZE_UNREADABLE`). They keep their place; the next pass reaches
+   *  them. A deferral is never a failure of its own: `scanned = roomsMade + failed + deferred`. */
   deferred: number;
   /** `failures.length`, derived ONCE as the pass returns. */
   failed: number;
   /** 1: a check-in window was open (R3: any round of the scope opened up to ROUND_WINDOW_TAIL_MS ago), so the pass made no vendor
    *  call and counted every candidate `deferred`. Informational, not a failure. */
   windowsOpen: 0 | 1;
-  /** One per row whose `ensureMeeting` threw: a code, never a message (the report is returned to the cron caller). */
+  /** One per row whose `ensureMeeting` threw, and one per organisation whose freeze could not be read (on that org's first row, code
+   *  `PREMINT_FREEZE_UNREADABLE`): a code, never a message (the report is returned to the cron caller). */
   failures: { fixtureId: string; side: "home" | "away"; code: string }[];
 };
 
@@ -280,9 +287,12 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
 
   // MD-R16: the org's frozen competitions, read once per org the pass reaches (`frozenCompetitionIds` may choose and store the freeze on
   // its first read, and is asked outside any `withTenant`: this pass holds none). MD-R20: a read that FAILS is that org's alone - logged
-  // once (the answer is kept for the pass, so its rows share the one catch), and `null` here means "unknown": the org's rows are deferred,
+  // once (the answer is kept for the pass, so its rows share the one catch), and `null` here means "unknown": the org's rows are held,
   // FAIL CLOSED (a competition that might be frozen gets no vendor call), while every other org's rooms are still made. The org then
-  // mints on demand at its open, as before the pre-mint, if the read keeps failing.
+  // mints on demand at its open, as before the pre-mint, if the read keeps failing. A read that keeps failing is a fault, so it is also
+  // reported: ONE failure per org per pass (its first row, `PREMINT_FREEZE_UNREADABLE`, which the Worker counts in `data.failed`), the
+  // rest of its rows deferred - a quiet deferral every minute would never be seen. A frozen competition (a billing state) stays a deferral.
+  const freezeFailureReported = new Set<string>();
   const frozenByOrg = new Map<string, Promise<Set<string> | null>>();
   const frozenIn = (orgId: string): Promise<Set<string> | null> => {
     let set = frozenByOrg.get(orgId);
@@ -310,6 +320,11 @@ async function runPass(deps: PremintDeps): Promise<PremintReport> {
     // A frozen competition cannot open its round, so no room is made for it; the row keeps its place for the pass after the thaw.
     // An org whose freeze could not be read (`null`) is held the same way.
     const frozen = await frozenIn(row.orgId);
+    if (frozen === null && !freezeFailureReported.has(row.orgId)) {
+      freezeFailureReported.add(row.orgId);
+      report.failures.push({ fixtureId: row.fixtureId, side: row.side, code: PREMINT_FREEZE_UNREADABLE });
+      continue;
+    }
     if (frozen === null || frozen.has(row.competitionId)) {
       report.deferred += 1;
       continue;

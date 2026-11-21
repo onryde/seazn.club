@@ -1110,13 +1110,26 @@ describe.skipIf(!DB)("premint pass - a billing-frozen competition's unopened rou
     try {
       freezeRead.failOrgs.add(a.orgId);
       const report = await run([a.orgId, b.orgId]);
-      expect(report, "the pass ran to its end: A deferred, B made, nothing a failure").toEqual({ skipped: 0, disabled: 0, scanned: 4, roomsMade: 2, deferred: 2, failed: 0, windowsOpen: 0, failures: [] });
+      // A7 (gaps wave A): an org whose freeze cannot be read is a FAULT, not a quiet deferral - a competition that is merely frozen is a billing
+      // state and stays `failed: 0`, but a read that keeps failing would defer an org's rooms for ever and page nobody. So it is ONE failure for
+      // the org (its first row, code `freeze_unreadable`, which the Worker counts in `data.failed`) and the org's other rows are deferred;
+      // `scanned = made + failed + deferred` still holds (4 = 2 + 1 + 1).
+      expect(report, "the pass ran to its end: A's first row a failure and the rest deferred, B made").toMatchObject({ skipped: 0, disabled: 0, scanned: 4, roomsMade: 2, deferred: 1, failed: 1, windowsOpen: 0 });
+      expect(report.failures, "ONE failure for the org, by code and never a message").toEqual([{ fixtureId: aIds[0], side: expect.stringMatching(/^(home|away)$/), code: "freeze_unreadable" }]);
+      expect(report.scanned, "the ledger adds up").toBe(report.roomsMade + report.failed + report.deferred);
       expect(createsFor(aIds), "A: fail closed, no vendor call").toEqual([]);
       expect(await roomsOf(aIds), "A: no room on file").toEqual([]);
       expect(createsFor(bIds).sort(), "B: made").toEqual(titles(bIds));
       const own = logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === a.orgId);
       expect(own, "the error is logged ONCE for A (a row of the org each, memoised per pass), with its orgId").toHaveLength(1);
       expect(logged.mock.calls.filter(([fields]) => (fields as { orgId?: string } | undefined)?.orgId === b.orgId), "and not for B").toEqual([]);
+
+      // the SEQUENCE: the read is still down - the next pass is the same one failure for A (it keeps paging until the read works), B's
+      // rooms exist already so B has nothing to make
+      const again = await run([a.orgId, b.orgId]);
+      expect(again, "a second pass with the read still down").toMatchObject({ scanned: 2, roomsMade: 0, deferred: 1, failed: 1 });
+      expect(again.failures.map((f) => f.code), "still the one failure, the same code").toEqual(["freeze_unreadable"]);
+      expect(createsFor(aIds), "and still no vendor call for A").toEqual([]);
 
       // the read recovers: the deferred rows kept their place, the next pass makes them
       freezeRead.failOrgs.clear();
