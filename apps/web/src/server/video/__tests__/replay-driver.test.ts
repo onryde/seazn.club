@@ -1,14 +1,19 @@
 // Task 21: which ReplayHost a process talks to, and how a stream session's deps reach it. The fake is ONE instance per process
 // (a Go-live on one copy of a module and a webhook on another must see the same videos); `bunny` mode never falls back to it.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { defaultDeps, replayOf } from "@/server/usecases/stream-sessions/deps";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BUNNY_ENV_NAMES } from "@/server/relay/config";
+import { setRelayDriversForTest } from "@/server/relay/drivers";
+import { defaultDeps, replayOf, type SessionDeps } from "@/server/usecases/stream-sessions/deps";
 import { replayDriver, setReplayDriverForTest } from "../replay-driver";
 import { FakeReplayHost } from "../replay-fake";
 import type { ReplayHost } from "../replay-ports";
 
+// An explicit REPLAY_DRIVER=fake is honoured only where ENV_NAME is local or ci, and a developer's .env.local may name another.
+beforeEach(() => { vi.stubEnv("ENV_NAME", "local"); });
 afterEach(() => {
   vi.unstubAllEnvs();
   setReplayDriverForTest(null);
+  setRelayDriversForTest(null);
 });
 
 const BUNNY_ENV = {
@@ -48,7 +53,9 @@ describe("replayDriver", () => {
   it("bunny mode names every missing Bunny variable and never answers the fake", () => {
     noBunnyEnv();
     setEnv({ REPLAY_DRIVER: "bunny" });
-    expect(() => replayDriver()).toThrow(/BUNNY_STREAM_API_KEY/);
+    const message = (() => { try { replayDriver(); return ""; } catch (e) { return (e as Error).message; } })();
+    for (const name of BUNNY_ENV_NAMES) expect(message, name).toContain(name);
+    expect(BUNNY_ENV_NAMES).toHaveLength(5);
   });
 
   it("bunny mode with its settings present still never answers the fake", () => {
@@ -65,18 +72,24 @@ describe("replayDriver", () => {
 });
 
 describe("SessionDeps.replay", () => {
-  it("defaultDeps reads the process driver, lazily: building deps never fails on a replay setting, reading it does", () => {
-    setEnv({ REPLAY_DRIVER: "bunnny" });
-    const deps = defaultDeps("https://seazn.test"); // a Stop or a heartbeat on a pasted-key match builds these
-    expect(() => deps.replay).toThrow(/REPLAY_DRIVER/);
-    vi.stubEnv("REPLAY_DRIVER", "fake");
-    expect(deps.replay).toBe(replayDriver());
+  const APP = "https://seazn.test";
+
+  it("defaultDeps carries no `replay`, so spreading it reads nothing: a live relay with REPLAY_DRIVER unset does not throw", () => {
+    const deps = defaultDeps(APP);
+    setRelayDriversForTest(deps.drivers); // pin the relay pair, so the live setting below builds no real driver
+    setEnv({ RELAY_DRIVERS: "live", ENV_NAME: "stg", REPLAY_DRIVER: "" }); // stg today: the relay is live, Phase 2 is not set up
+    expect(() => replayDriver()).toThrow(/REPLAY_DRIVER/); // the setting itself IS refused…
+    let copy: SessionDeps | undefined;
+    expect(() => { copy = { ...defaultDeps(APP), now: () => new Date(0) }; }).not.toThrow(); // …but a copy of the deps is not
+    expect(copy!.replay).toBeUndefined();
+    expect(() => replayOf(copy!)).toThrow(/REPLAY_DRIVER/); // and the one call that needs the host still refuses, by name
   });
 
   it("replayOf takes the deps' own host, else the process driver", () => {
     setEnv({ REPLAY_DRIVER: "fake" });
-    const base = { drivers: defaultDeps("https://seazn.test").drivers, now: () => new Date(), appUrl: "https://seazn.test" };
+    const base = { drivers: defaultDeps(APP).drivers, now: () => new Date(), appUrl: APP };
     expect(replayOf(base)).toBe(replayDriver());
+    expect(replayOf(defaultDeps(APP))).toBe(replayDriver());
     const mine = new FakeReplayHost();
     expect(replayOf({ ...base, replay: mine })).toBe(mine);
     expect(replayOf({ ...base, replay: mine })).not.toBe(replayDriver());

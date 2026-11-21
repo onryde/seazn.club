@@ -551,6 +551,24 @@ describe("replayDriverMode — REPLAY_DRIVER, which replay host this process tal
     expect(rows).toHaveLength(3);
   });
 
+  it("an explicit fake is honoured only where the relay's own fake is: ENV_NAME local or ci, or unset outside production", () => {
+    expect(config.FAKE_DRIVER_ENV_NAMES.length).toBeGreaterThan(0);
+    for (const name of config.FAKE_DRIVER_ENV_NAMES) {
+      expect(config.replayDriverMode({ REPLAY_DRIVER: "fake", ENV_NAME: name }), name).toBe("fake");
+      expect(config.replayDriverMode({ REPLAY_DRIVER: "fake", ENV_NAME: ` ${name} `, NODE_ENV: "production" }), `${name} in production`).toBe("fake");
+    }
+    expect(config.replayDriverMode({ REPLAY_DRIVER: "fake", NODE_ENV: "development" })).toBe("fake");
+    const refused: Record<string, string>[] = [
+      { REPLAY_DRIVER: "fake", ENV_NAME: "stg" },
+      { REPLAY_DRIVER: "fake", ENV_NAME: "prod", NODE_ENV: "production" },
+      { REPLAY_DRIVER: "fake", ENV_NAME: "staging" },
+      { REPLAY_DRIVER: "fake", NODE_ENV: "production" }, // an unnamed production server: what a missing ENV_NAME looks like
+      { REPLAY_DRIVER: "fake", ENV_NAME: "  ", NODE_ENV: "production" },
+    ];
+    for (const env of refused) expect(() => config.replayDriverMode(env), JSON.stringify(env)).toThrow(/REPLAY_DRIVER=fake/);
+    expect(refused).toHaveLength(5);
+  });
+
   it("anything else throws naming the variable and the values it takes", () => {
     for (const bad of ["live", "Bunny", "FAKE", "1", "cloudflare"]) {
       expect(() => config.replayDriverMode({ REPLAY_DRIVER: bad }), bad).toThrow(/REPLAY_DRIVER must be "fake" or "bunny"/);
@@ -623,7 +641,7 @@ describe("bunnyConfig — the Bunny settings, from env only (Task 21)", () => {
 });
 
 describe("REPLAY_EMBED_TOKEN_TTL_SECONDS (Task 21)", () => {
-  it("is one hour; an embed that has loaded keeps playing past it (probe B8), so the number stays", () => {
+  it("is pinned at one hour (probe B8 left the number standing)", () => {
     expect(config.REPLAY_EMBED_TOKEN_TTL_SECONDS).toBe(3600);
   });
 });

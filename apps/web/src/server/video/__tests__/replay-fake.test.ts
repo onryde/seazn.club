@@ -21,8 +21,8 @@ const readAll = async (body: ReadableStream<Uint8Array>): Promise<Uint8Array> =>
   for (const c of chunks) { out.set(c, at); at += c.length; }
   return out;
 };
-const fetchOne = (fake: FakeReplayHost, title = "Court 1 part 1") =>
-  fake.fetchFromUrl({ collectionId: "col-1", title, url: "https://cf.example.invalid/tok/downloads/default.mp4" });
+const fetchOne = (fake: FakeReplayHost, title = "Court 1 part 1", url = "https://cf.example.invalid/tok/downloads/default.mp4") =>
+  fake.fetchFromUrl({ collectionId: "col-1", title, url });
 
 describe("FakeReplayHost: collections and ids", () => {
   it("names a collection org:<orgId>; a second call makes a second collection, as the vendor does", async () => {
@@ -37,11 +37,19 @@ describe("FakeReplayHost: collections and ids", () => {
 
   it("answers a different id for every fetch, even of one title, and reads the title and collection it was sent", async () => {
     const fake = new FakeReplayHost();
-    const ids = [await fetchOne(fake, "Same title"), await fetchOne(fake, "Same title"), await fetchOne(fake, "Other title")];
+    const ids = [
+      await fetchOne(fake, "Same title", "https://cf.example.invalid/one/downloads/default.mp4"),
+      await fetchOne(fake, "Same title", "https://cf.example.invalid/two/downloads/default.mp4"),
+      await fetchOne(fake, "Other title"),
+    ];
     expect(new Set(ids).size).toBe(3);
     expect((await fake.video(ids[0])).title).toBe("Same title");
     expect((await fake.video(ids[2])).title).toBe("Other title");
     expect(fake.collectionOf(ids[0])).toBe("col-1");
+    // which recording was moved is readable, so a caller's "only this input's recording" test need not spy
+    expect(fake.sourceOf(ids[0])).toBe("https://cf.example.invalid/one/downloads/default.mp4");
+    expect(fake.sourceOf(ids[1])).toBe("https://cf.example.invalid/two/downloads/default.mp4");
+    expect(fake.sourceOf("never-stored")).toBeNull();
   });
 
   it("is deterministic: two fresh fakes issue the same ids in the same order", async () => {
@@ -144,22 +152,38 @@ describe("FakeReplayHost: remove", () => {
   });
 });
 
-describe("FakeReplayHost: signedEmbed is pure", () => {
+describe("FakeReplayHost: signedEmbed is pure and has the real URL's shape", () => {
   const now = new Date("2026-11-21T10:00:00.000Z");
-  it("expires ttlSeconds after now, names the video, carries the expiry as epoch seconds, and calls nothing", async () => {
+  // The shape Task 25's tests assert on: https://<embed host>/embed/<library>/<video>?token=<64 hex>&expires=<epoch seconds>.
+  // The host is the one Task 25's CSP adds to frame-src under the fake driver (plan Task 25, step 1).
+  const SHAPE = /^https:\/\/embed\.fake\.invalid\/embed\/(\d+)\/([^/?]+)\?token=([0-9a-f]{64})&expires=(\d+)$/;
+  const parse = (src: string) => {
+    const m = SHAPE.exec(src);
+    expect(m, src).not.toBeNull();
+    return { library: m![1], video: m![2], token: m![3], expires: m![4] };
+  };
+  it("answers the full shape, expires ttlSeconds after now, and calls nothing", async () => {
     const fake = new FakeReplayHost();
     const a = fake.signedEmbed("vid-1", now, 3600);
     expect(a.expiresAt).toBe("2026-11-21T11:00:00.000Z");
-    const url = new URL(a.src);
-    expect(url.pathname).toContain("vid-1");
-    expect(url.searchParams.get("expires")).toBe(String(Date.parse("2026-11-21T11:00:00.000Z") / 1000));
-    expect(url.searchParams.get("token")).toBeTruthy();
+    const parts = parse(a.src);
+    expect(parts.video).toBe("vid-1");
+    expect(parts.expires).toBe(String(Date.parse("2026-11-21T11:00:00.000Z") / 1000));
     expect(fake.videoIds()).toEqual([]); // it stored nothing and did not need the video to exist
     expect(fake.signedEmbed("vid-1", now, 3600)).toEqual(a);
+  });
+
+  it("a later call, another video or another ttl changes the URL, and the library segment stays", () => {
+    const fake = new FakeReplayHost();
+    const a = fake.signedEmbed("vid-1", now, 3600);
     const later = fake.signedEmbed("vid-1", new Date("2026-11-21T10:30:00.000Z"), 3600);
     expect(later.expiresAt).toBe("2026-11-21T11:30:00.000Z");
-    expect(later.src).not.toBe(a.src);
-    expect(fake.signedEmbed("vid-2", now, 3600).src).not.toBe(a.src);
+    expect(parse(later.src).token).not.toBe(parse(a.src).token);
+    const other = parse(fake.signedEmbed("vid-2", now, 3600).src);
+    expect(other.video).toBe("vid-2");
+    expect(other.token).not.toBe(parse(a.src).token);
+    expect(fake.signedEmbed("vid-1", now, 60).expiresAt).toBe("2026-11-21T10:01:00.000Z");
+    expect(other.library).toBe(parse(a.src).library);
   });
 });
 
@@ -191,8 +215,8 @@ describe("FakeReplayHost: openDownload", () => {
   });
 });
 
-describe("FakeReplayHost: watchMinutes (Phase 3)", () => {
-  it("reads 0 until a test sets it, then the number it was given, for any window", async () => {
+describe("FakeReplayHost: watchMinutes (Phase 3, unmeasured against the real host)", () => {
+  it("reads 0 until a test sets it, then the number it was given, and logs each window it was asked", async () => {
     const fake = new FakeReplayHost();
     const id = await fetchOne(fake);
     const from = new Date("2026-11-01T00:00:00.000Z");
@@ -200,7 +224,8 @@ describe("FakeReplayHost: watchMinutes (Phase 3)", () => {
     expect(await fake.watchMinutes(id, from, to)).toBe(0);
     fake.setWatchMinutes(id, 42.5);
     expect(await fake.watchMinutes(id, from, to)).toBe(42.5);
-    await expect(fake.watchMinutes(id, to, from)).rejects.toThrow(/backwards/);
+    expect(fake.watchWindows(id)).toEqual([{ from, to }, { from, to }]);
+    expect(fake.watchWindows("never-asked")).toEqual([]);
   });
 });
 

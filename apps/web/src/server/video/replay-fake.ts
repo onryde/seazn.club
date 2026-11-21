@@ -7,17 +7,21 @@
 //   * `heights` never exceed 720 and are NOT in order, as the real list is not: the best rendition is the maximum.
 //   * `remove` reads the fake's own state, never a status: after it the video reads `absent`, and a second remove says so.
 //   * Ids are a counter (`fake-video-1`, …), so a run is the same every time.
+import { createHash } from "node:crypto";
 import type { ReplayDownload, ReplayHost, ReplayVideo } from "./replay-ports";
 
-/** `.invalid` never resolves, so no fake URL can be followed by accident. */
-export const FAKE_REPLAY_HOST = "replay.fake.invalid";
+/** The host the fake's embed URLs sit on (`.invalid` never resolves, so no fake URL can be followed by accident). Task 25's CSP
+ *  adds exactly this to `frame-src` under the fake driver. */
+export const FAKE_REPLAY_EMBED_HOST = "embed.fake.invalid";
+/** The library segment of an embed URL: digits, as the real one is. */
+export const FAKE_REPLAY_LIBRARY_ID = "1";
 export const FAKE_REPLAY_LENGTH_SECONDS = 120;
 /** Unordered on purpose (the real host lists them unordered), and never above the 720 ceiling. */
 export const FAKE_REPLAY_HEIGHTS: readonly number[] = [360, 480, 720, 240];
 const FAKE_REPLAY_FILE = new TextEncoder().encode("fake replay: not a real mp4");
 
 type Held = "processing" | "playable" | "failed";
-interface Stored { collectionId: string; title: string; state: Held }
+interface Stored { collectionId: string; title: string; url: string; state: Held }
 /** The transition table: what each test-driven move does from each state. A state a move has no entry for refuses it. */
 const MOVES: Record<"advance" | "fail", Partial<Record<Held, Held>>> = {
   advance: { processing: "playable", playable: "playable" },
@@ -29,6 +33,7 @@ export class FakeReplayHost implements ReplayHost {
   private readonly collections = new Map<string, string>(); // id -> name
   private readonly videos = new Map<string, Stored>();
   private readonly watched = new Map<string, number>();
+  private readonly watchReads: { videoId: string; from: Date; to: Date }[] = [];
 
   async createCollection(orgId: string): Promise<string> {
     const id = `fake-collection-${this.nextId++}`;
@@ -38,7 +43,7 @@ export class FakeReplayHost implements ReplayHost {
 
   async fetchFromUrl(a: { collectionId: string; title: string; url: string }): Promise<string> {
     const id = `fake-video-${this.nextId++}`;
-    this.videos.set(id, { collectionId: a.collectionId, title: a.title, state: "processing" });
+    this.videos.set(id, { collectionId: a.collectionId, title: a.title, url: a.url, state: "processing" });
     return id;
   }
 
@@ -55,15 +60,16 @@ export class FakeReplayHost implements ReplayHost {
   }
 
   async remove(videoId: string): Promise<"deleted" | "absent"> {
-    this.watched.delete(videoId);
     return this.videos.delete(videoId) ? "deleted" : "absent";
   }
 
   signedEmbed(videoId: string, now: Date, ttlSeconds: number): { src: string; expiresAt: string } {
     const expires = new Date(now.getTime() + ttlSeconds * 1000);
     const epoch = Math.floor(expires.getTime() / 1000);
+    // The shape of the real URL: `/embed/<library>/<video>?token=<64 hex>&expires=<epoch seconds>`. The token is a stand-in digest.
+    const token = createHash("sha256").update(`${videoId}:${epoch}`).digest("hex");
     return {
-      src: `https://${FAKE_REPLAY_HOST}/embed/${encodeURIComponent(videoId)}?token=fake-${epoch}&expires=${epoch}`,
+      src: `https://${FAKE_REPLAY_EMBED_HOST}/embed/${FAKE_REPLAY_LIBRARY_ID}/${encodeURIComponent(videoId)}?token=${token}&expires=${epoch}`,
       expiresAt: expires.toISOString(),
     };
   }
@@ -78,9 +84,10 @@ export class FakeReplayHost implements ReplayHost {
     };
   }
 
-  // The number a test sets is the answer for any window that runs forwards (Task 30 may make it windowed).
+  // UNMEASURED: the number a test sets is the answer for any window and any video, removed or not, and every read is logged
+  // (`watchWindows`). Task 30 settles what the real statistics read does with a backwards window or a deleted video.
   async watchMinutes(videoId: string, from: Date, to: Date): Promise<number> {
-    if (from.getTime() > to.getTime()) throw new Error(`the watch window runs backwards (${from.toISOString()} > ${to.toISOString()})`);
+    this.watchReads.push({ videoId, from, to });
     return this.watched.get(videoId) ?? 0;
   }
 
@@ -91,11 +98,17 @@ export class FakeReplayHost implements ReplayHost {
   /** processing -> failed (a repeat is harmless). Throws on a playable video or an id the fake does not hold. */
   fail(videoId: string): void { this.move(videoId, "fail"); }
   setWatchMinutes(videoId: string, minutes: number): void { this.watched.set(videoId, minutes); }
+  /** The windows `watchMinutes` was asked about for a video, in call order. */
+  watchWindows(videoId: string): { from: Date; to: Date }[] {
+    return this.watchReads.filter((r) => r.videoId === videoId).map(({ from, to }) => ({ from, to }));
+  }
   /** The ids of the videos it holds, sorted. */
   videoIds(): string[] { return [...this.videos.keys()].sort(); }
   collectionName(collectionId: string): string | null { return this.collections.get(collectionId) ?? null; }
   /** The collection a video was fetched into, null for an id it does not hold. */
   collectionOf(videoId: string): string | null { return this.videos.get(videoId)?.collectionId ?? null; }
+  /** The source URL a video was fetched from, null for an id it does not hold. */
+  sourceOf(videoId: string): string | null { return this.videos.get(videoId)?.url ?? null; }
 
   private move(videoId: string, move: keyof typeof MOVES): void {
     const v = this.videos.get(videoId);

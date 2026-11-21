@@ -381,18 +381,31 @@ export const SEAZN_LIVE_TOKEN_TTL_SECONDS = 3600;
 export const SEAZN_TOKEN_REFRESH_BEFORE_SECONDS = 300;
 
 // ---- Seazn-hosted replays (Phase 2, Task 21): the replay host and its settings -------------------------------------
-/** How long a replay's player URL (its embed) is valid for. Probe B8: an embed that has already loaded keeps playing for about
- *  10 h whatever its own expiry, so this gates the page load only; a viewer who reloads after it asks the route for a fresh URL. */
+/** How long a replay's player URL (its embed) is valid for. Probe B8: an embed loaded 60 s before its expiry played on for
+ *  129 s past it, and one loaded after its expiry was refused, so the token is checked when the page loads. A viewer who reloads
+ *  after it asks the route for a fresh URL. (How long a loaded embed can play is inferred, not measured: see the probes doc.) */
 export const REPLAY_EMBED_TOKEN_TTL_SECONDS = 3600;
 
 /** `REPLAY_DRIVER=fake|bunny`: which replay host this process talks to. Unset or blank is `fake` only where the relay driver
  *  is `fake` (a process not told it may spend money, or delete a recording once "moved", does not): under a live or disabled
  *  relay driver it THROWS, because a deployment that forgot the variable would otherwise move recordings into a fake host and
- *  delete the originals. Anything but fake/bunny throws, naming the variable. Read per call, never cached. */
+ *  delete the originals. An EXPLICIT `fake` is refused exactly where the relay refuses its own (controller ruling, Task 21
+ *  review): honoured only with ENV_NAME `local` or `ci`, or unset outside production. Anything but fake/bunny throws, naming
+ *  the variable. Read per call, never cached. */
 export type ReplayDriverMode = "fake" | "bunny";
 export function replayDriverMode(env: Record<string, string | undefined> = process.env): ReplayDriverMode {
   const v = env.REPLAY_DRIVER?.trim();
-  if (v === "fake" || v === "bunny") return v;
+  if (v === "bunny") return v;
+  if (v === "fake") {
+    const name = envNameOf(env);
+    if (name === null && env.NODE_ENV === "production") {
+      throw new Error(`REPLAY_DRIVER=fake under NODE_ENV=production needs ENV_NAME ${FAKE_DRIVER_ENV_NAMES.map((n) => JSON.stringify(n)).join(" or ")} (it is unset): an unnamed production server is what a deployment missing its ENV_NAME looks like — name a developer's machine or CI, or set REPLAY_DRIVER=bunny`);
+    }
+    if (name !== null && !FAKE_DRIVER_ENV_NAMES.includes(name)) {
+      throw new Error(`REPLAY_DRIVER=fake is refused on ENV_NAME=${JSON.stringify(name)}: a named deployment would move recordings into a fake host and delete the originals — set REPLAY_DRIVER=bunny`);
+    }
+    return "fake";
+  }
   if (v === undefined || v === "") {
     if (relayDriverMode(env) === "fake") return "fake";
     throw new Error('REPLAY_DRIVER is not set (the relay driver is not fake, so a replay host must be named): "bunny", or "fake" where fakes are honoured');
